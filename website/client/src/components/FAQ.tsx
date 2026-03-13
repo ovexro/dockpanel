@@ -11,7 +11,7 @@ const faqs = [
   },
   {
     q: 'How does Docker-native work? Are sites in containers?',
-    a: 'Sites run on the host with Nginx, which keeps things fast and simple. Docker is used for databases (MySQL/PostgreSQL containers), one-click app deployments (WordPress, Ghost, Redis, etc.), and Docker Compose imports. You get the isolation benefits of containers where it matters, without the overhead for static sites.',
+    a: 'Sites run on the host with Nginx, which keeps things fast and simple. Docker is used for databases (MySQL/PostgreSQL containers), 34 one-click app templates (WordPress, Ghost, Grafana, Nextcloud, n8n, and more), and Docker Compose imports. Containers get health monitoring, CPU/memory limits, and auto reverse proxy with SSL.',
   },
   {
     q: 'What happens if DockPanel goes down?',
@@ -23,7 +23,7 @@ const faqs = [
   },
   {
     q: 'How is this different from CloudPanel, RunCloud, or cPanel?',
-    a: 'DockPanel is fully self-hosted (no SaaS dependency), Docker-native (databases and apps run in containers), and built in Rust (~10MB binary, 12MB RAM vs 250-800MB for PHP panels). It includes features other panels charge for: unlimited servers, scheduled backups, uptime monitoring, alert rules, security scanning, and team management. All free.',
+    a: 'DockPanel is fully self-hosted (no SaaS dependency), Docker-native (databases and apps run in containers), and built in Rust (~10MB binary, 12MB RAM vs 250-800MB for PHP panels). It includes features other panels charge for: 2FA authentication, developer CLI, infrastructure as code (YAML export/import), smart diagnostics with one-click fixes, auto-healing engine, 34 app templates, and more. All free.',
   },
   {
     q: 'Can I manage multiple servers?',

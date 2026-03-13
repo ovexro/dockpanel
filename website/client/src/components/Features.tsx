@@ -6,7 +6,7 @@ const features = [
       </svg>
     ),
     title: 'Site Management',
-    description: 'Create and manage websites with automatic Nginx configuration. Support for PHP (multiple versions), Node.js, static sites, and reverse proxies.',
+    description: 'Create and manage websites with automatic Nginx configuration. Support for PHP (multiple versions), Node.js, static sites, and reverse proxies. Custom Nginx directives per site with validation.',
     iconBg: 'bg-brand-500/10',
     iconColor: 'text-brand-400',
   },
@@ -42,7 +42,6 @@ const features = [
     description: 'Full-featured dockpanel command for all operations. Manage sites, databases, apps, SSL, backups, and more from your terminal. Scriptable and composable.',
     iconBg: 'bg-violet-500/10',
     iconColor: 'text-violet-400',
-    badge: 'Coming soon',
   },
   {
     icon: (
@@ -51,7 +50,7 @@ const features = [
       </svg>
     ),
     title: 'Docker Apps & Compose',
-    description: 'One-click app templates (WordPress, Ghost, Redis, Portainer, n8n, and more). Import and deploy docker-compose.yml files with auto reverse proxy and SSL.',
+    description: '34 one-click app templates across 10 categories — databases, CMS, monitoring, analytics, and more. Auto reverse proxy with SSL, container health checks, and CPU/memory resource limits.',
     iconBg: 'bg-emerald-500/10',
     iconColor: 'text-emerald-400',
   },
@@ -65,7 +64,6 @@ const features = [
     description: 'Export your entire server config as YAML. Version control it, review diffs, apply to new servers. Reproducible infrastructure with dry-run support.',
     iconBg: 'bg-amber-500/10',
     iconColor: 'text-amber-400',
-    badge: 'Coming soon',
   },
   {
     icon: (
@@ -88,7 +86,6 @@ const features = [
     description: 'Pattern-based log analysis, misconfiguration detection, and resource bottleneck identification. One-click fixes for common server issues.',
     iconBg: 'bg-rose-500/10',
     iconColor: 'text-rose-400',
-    badge: 'Coming soon',
   },
   {
     icon: (
@@ -133,6 +130,28 @@ const features = [
     description: 'Runs on Raspberry Pi, Oracle Cloud free-tier ARM instances, and any ARM64 server. Same ~10MB binary, same features, same performance.',
     iconBg: 'bg-emerald-500/10',
     iconColor: 'text-emerald-400',
+  },
+  {
+    icon: (
+      <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+      </svg>
+    ),
+    title: '2FA / TOTP Authentication',
+    description: 'Two-factor authentication with QR code setup, TOTP verification, and 10 one-time recovery codes. Protect your panel with industry-standard 2FA.',
+    iconBg: 'bg-rose-500/10',
+    iconColor: 'text-rose-400',
+  },
+  {
+    icon: (
+      <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M11.42 15.17l-5.385-1.08a.5.5 0 01-.358-.713l.217-.38a.5.5 0 01.525-.247l2.78.556a.5.5 0 00.576-.329l.966-2.9a.5.5 0 01.584-.33l2.78.556m-1.713 4.867l2.78.556M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+    ),
+    title: 'Auto-Healing Engine',
+    description: 'Automatic remediation of crashed services, disk space recovery, and SSL renewal. Runs silently in the background with full audit trail and opt-in control.',
+    iconBg: 'bg-amber-500/10',
+    iconColor: 'text-amber-400',
   },
 ];
 
