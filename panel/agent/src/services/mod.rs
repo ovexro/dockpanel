@@ -1,6 +1,7 @@
 pub mod backups;
 pub mod compose;
 pub mod deploy;
+pub mod diagnostics;
 pub mod remote_backup;
 pub mod database;
 pub mod docker_apps;
