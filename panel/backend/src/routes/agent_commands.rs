@@ -3,6 +3,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
+use std::time::Instant;
 use uuid::Uuid;
 
 use crate::error::{err, ApiError};
@@ -51,6 +52,21 @@ pub async fn poll(
 ) -> Result<Json<Vec<AgentCommand>>, ApiError> {
     let server_id = auth_agent(&state, &headers).await?;
 
+    // Rate limit: max 120 requests per minute per server_id
+    {
+        let mut limits = state.agent_rate_limits.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        let entry = limits.entry(server_id).or_insert((0, now));
+        if now.duration_since(entry.1).as_secs() >= 60 {
+            *entry = (1, now);
+        } else {
+            entry.0 += 1;
+            if entry.0 > 120 {
+                return Err(err(StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded"));
+            }
+        }
+    }
+
     // Fetch and claim pending commands atomically
     let commands: Vec<AgentCommand> = sqlx::query_as(
         "UPDATE agent_commands SET status = 'running', picked_at = NOW() \
@@ -83,6 +99,21 @@ pub async fn report_result(
     Json(body): Json<CommandResult>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let server_id = auth_agent(&state, &headers).await?;
+
+    // Rate limit: max 120 requests per minute per server_id
+    {
+        let mut limits = state.agent_rate_limits.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        let entry = limits.entry(server_id).or_insert((0, now));
+        if now.duration_since(entry.1).as_secs() >= 60 {
+            *entry = (1, now);
+        } else {
+            entry.0 += 1;
+            if entry.0 > 120 {
+                return Err(err(StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded"));
+            }
+        }
+    }
 
     let status = match body.status.as_str() {
         "completed" | "failed" => body.status.as_str(),

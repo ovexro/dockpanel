@@ -1,4 +1,4 @@
-import { useState, FormEvent } from "react";
+import { useState, useEffect, useMemo, FormEvent } from "react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
@@ -6,8 +6,26 @@ import { api } from "../api";
 export default function ResetPassword() {
   const { user, loading } = useAuth();
   const [params] = useSearchParams();
-  const token = params.get("token") || "";
+  const token = useMemo(() => params.get("token") || "", []);
   const [password, setPassword] = useState("");
+
+  // Prevent token from leaking via Referer header and clear it from URL
+  useEffect(() => {
+    if (token) {
+      // Add no-referrer meta to prevent token leaking via Referer header
+      const meta = document.createElement("meta");
+      meta.name = "referrer";
+      meta.content = "no-referrer";
+      document.head.appendChild(meta);
+
+      // Clear the token from the URL bar
+      window.history.replaceState({}, "", "/reset-password");
+
+      return () => {
+        document.head.removeChild(meta);
+      };
+    }
+  }, [token]);
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);

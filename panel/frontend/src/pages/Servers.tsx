@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, FormEvent } from "react";
+import { Navigate } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 import { formatDate } from "../utils/format";
 
@@ -61,6 +63,7 @@ function formatUptime(secs: number): string {
 }
 
 export default function Servers() {
+  const { user } = useAuth();
   const [servers, setServers] = useState<Server[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -92,6 +95,8 @@ export default function Servers() {
     intervalRef.current = setInterval(fetchServers, 30000);
     return () => clearInterval(intervalRef.current);
   }, []);
+
+  if (user?.role !== "admin") return <Navigate to="/" replace />;
 
   const handleCreate = async (e: FormEvent) => {
     e.preventDefault();

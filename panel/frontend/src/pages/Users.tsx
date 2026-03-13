@@ -1,4 +1,6 @@
 import { useState, useEffect } from "react";
+import { Navigate } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 
 interface User {
@@ -10,6 +12,7 @@ interface User {
 }
 
 export default function Users() {
+  const { user: authUser } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -37,6 +40,8 @@ export default function Users() {
   useEffect(() => {
     loadUsers();
   }, []);
+
+  if (authUser?.role !== "admin") return <Navigate to="/" replace />;
 
   const handleCreate = async () => {
     setCreating(true);

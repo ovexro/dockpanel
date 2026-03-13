@@ -146,6 +146,7 @@ async fn stream_handler(
             let mut validation =
                 jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
             validation.set_required_spec_claims(&["exp", "sub"]);
+            validation.validate_exp = true;
             jsonwebtoken::decode::<StreamTicket>(
                 t,
                 &jsonwebtoken::DecodingKey::from_secret(state.token.as_bytes()),

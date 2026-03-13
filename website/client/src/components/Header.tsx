@@ -23,11 +23,13 @@ export default function Header() {
           </span>
         </a>
 
-        <nav className="hidden items-center gap-8 md:flex">
+        <nav className="hidden items-center gap-6 md:flex">
           <a href="#features" className="text-sm text-surface-200/70 transition hover:text-white">Features</a>
           <a href="#how-it-works" className="text-sm text-surface-200/70 transition hover:text-white">How it works</a>
           <a href="#pricing" className="text-sm text-surface-200/70 transition hover:text-white">Pricing</a>
           <a href="#faq" className="text-sm text-surface-200/70 transition hover:text-white">FAQ</a>
+          <a href="https://github.com/ovexro/dockpanel#readme" className="text-sm text-surface-200/70 transition hover:text-white">Docs</a>
+          <a href="https://github.com/ovexro/dockpanel/releases" className="text-sm text-surface-200/70 transition hover:text-white">Changelog</a>
           <a href="https://panel.example.com" className="text-sm text-surface-200/70 transition hover:text-white">Demo</a>
           <a
             href="https://github.com/ovexro/dockpanel"
@@ -62,6 +64,8 @@ export default function Header() {
             <a href="#how-it-works" onClick={() => setMobileOpen(false)} className="text-sm text-surface-200/70 transition hover:text-white">How it works</a>
             <a href="#pricing" onClick={() => setMobileOpen(false)} className="text-sm text-surface-200/70 transition hover:text-white">Pricing</a>
             <a href="#faq" onClick={() => setMobileOpen(false)} className="text-sm text-surface-200/70 transition hover:text-white">FAQ</a>
+            <a href="https://github.com/ovexro/dockpanel#readme" onClick={() => setMobileOpen(false)} className="text-sm text-surface-200/70 transition hover:text-white">Docs</a>
+            <a href="https://github.com/ovexro/dockpanel/releases" onClick={() => setMobileOpen(false)} className="text-sm text-surface-200/70 transition hover:text-white">Changelog</a>
             <a href="https://panel.example.com" onClick={() => setMobileOpen(false)} className="text-sm text-surface-200/70 transition hover:text-white">Demo</a>
             <a
               href="https://github.com/ovexro/dockpanel"

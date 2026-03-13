@@ -12,10 +12,19 @@ pub async fn run(pool: PgPool, agent: AgentClient) {
     // Initial delay (90s offset from alert engine's 30s)
     tokio::time::sleep(Duration::from_secs(90)).await;
 
+    // Track when we last ran retention cleanup (once per day)
+    let mut last_retention = std::time::Instant::now() - Duration::from_secs(86400);
+
     loop {
         tokio::time::sleep(Duration::from_secs(120)).await;
 
-        // Only run if auto-healing is enabled globally
+        // Data retention cleanup runs daily regardless of auto-heal setting
+        if last_retention.elapsed() >= Duration::from_secs(86400) {
+            run_retention_cleanup(&pool).await;
+            last_retention = std::time::Instant::now();
+        }
+
+        // Only run auto-healing if enabled globally
         let enabled = is_enabled(&pool).await;
         if !enabled {
             continue;
@@ -218,5 +227,57 @@ async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
             None,
         )
         .await;
+    }
+}
+
+/// Periodic data retention cleanup: removes old records to keep the database lean.
+async fn run_retention_cleanup(pool: &PgPool) {
+    tracing::info!("Running data retention cleanup...");
+
+    // Delete monitor_checks older than 7 days
+    match sqlx::query("DELETE FROM monitor_checks WHERE checked_at < NOW() - INTERVAL '7 days'")
+        .execute(pool)
+        .await
+    {
+        Ok(r) => {
+            if r.rows_affected() > 0 {
+                tracing::info!(
+                    "Retention: deleted {} old monitor_checks",
+                    r.rows_affected()
+                );
+            }
+        }
+        Err(e) => tracing::warn!("Retention cleanup (monitor_checks) failed: {e}"),
+    }
+
+    // Delete resolved alerts older than 90 days
+    match sqlx::query(
+        "DELETE FROM alerts WHERE status = 'resolved' AND created_at < NOW() - INTERVAL '90 days'",
+    )
+    .execute(pool)
+    .await
+    {
+        Ok(r) => {
+            if r.rows_affected() > 0 {
+                tracing::info!("Retention: deleted {} old resolved alerts", r.rows_affected());
+            }
+        }
+        Err(e) => tracing::warn!("Retention cleanup (alerts) failed: {e}"),
+    }
+
+    // Delete activity_logs older than 1 year
+    match sqlx::query("DELETE FROM activity_logs WHERE created_at < NOW() - INTERVAL '1 year'")
+        .execute(pool)
+        .await
+    {
+        Ok(r) => {
+            if r.rows_affected() > 0 {
+                tracing::info!(
+                    "Retention: deleted {} old activity_logs",
+                    r.rows_affected()
+                );
+            }
+        }
+        Err(e) => tracing::warn!("Retention cleanup (activity_logs) failed: {e}"),
     }
 }

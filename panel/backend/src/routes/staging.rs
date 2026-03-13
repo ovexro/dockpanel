@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{err, ApiError};
+use crate::error::{err, agent_error, ApiError};
 use crate::models::Site;
 use crate::routes::is_valid_domain;
 use crate::services::activity;
@@ -126,10 +126,7 @@ pub async fn create(
             .execute(&state.db)
             .await
             .ok();
-        return Err(err(
-            StatusCode::BAD_GATEWAY,
-            &format!("Failed to configure staging: {e}"),
-        ));
+        return Err(agent_error("Staging configuration", e));
     }
 
     // Clone files from production to staging
@@ -251,7 +248,7 @@ pub async fn sync_to_staging(
             })),
         )
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Sync failed: {e}")))?;
+        .map_err(|e| agent_error("Staging sync", e))?;
 
     // Update synced_at timestamp
     sqlx::query("UPDATE sites SET synced_at = NOW(), updated_at = NOW() WHERE id = $1")
@@ -302,7 +299,7 @@ pub async fn push_to_prod(
             })),
         )
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Push failed: {e}")))?;
+        .map_err(|e| agent_error("Staging push", e))?;
 
     tracing::info!("Pushed {} → {}", staging.domain, parent.domain);
     activity::log_activity(
@@ -342,7 +339,7 @@ pub async fn destroy(
         .agent
         .delete(&agent_path)
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Failed to remove staging config: {e}")))?;
+        .map_err(|e| agent_error("Staging removal", e))?;
 
     // Delete site files
     state

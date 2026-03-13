@@ -22,7 +22,7 @@ pub mod wordpress;
 
 use axum::{
     extract::Request,
-    http::StatusCode,
+    http::{Method, StatusCode},
     middleware::Next,
     response::Response,
 };
@@ -98,4 +98,51 @@ pub async fn auth_middleware(
         }
         _ => Err(StatusCode::UNAUTHORIZED),
     }
+}
+
+/// Audit logging middleware — logs all state-modifying requests (POST, PUT, DELETE).
+pub async fn audit_middleware(
+    request: Request,
+    next: Next,
+) -> Response {
+    let method = request.method().clone();
+
+    // Only audit state-modifying methods
+    if method != Method::POST && method != Method::PUT && method != Method::DELETE {
+        return next.run(request).await;
+    }
+
+    let path = request.uri().path().to_string();
+    let source_ip = request
+        .headers()
+        .get("x-forwarded-for")
+        .or_else(|| request.headers().get("x-real-ip"))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let response = next.run(request).await;
+    let status = response.status().as_u16();
+
+    if status < 400 {
+        tracing::info!(
+            target: "audit",
+            method = %method,
+            path = %path,
+            source_ip = %source_ip,
+            status = status,
+            "Request completed"
+        );
+    } else {
+        tracing::warn!(
+            target: "audit",
+            method = %method,
+            path = %path,
+            source_ip = %source_ip,
+            status = status,
+            "Request failed"
+        );
+    }
+
+    response
 }

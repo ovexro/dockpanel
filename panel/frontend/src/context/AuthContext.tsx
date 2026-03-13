@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
 import { api, ApiError } from "../api";
+import { logger } from "../utils/logger";
 
 interface User {
   id: string;
@@ -58,7 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = () => {
-    api.post("/auth/logout").catch((e) => console.error("Logout error:", e));
+    api.post("/auth/logout").catch((e) => logger.error("Logout error:", e));
     setUser(null);
   };
 

@@ -5,8 +5,8 @@ use axum::{
 };
 use jsonwebtoken::{encode, EncodingKey, Header};
 
-use crate::auth::AuthUser;
-use crate::error::{err, require_admin, ApiError};
+use crate::auth::{AuthUser, AdminUser};
+use crate::error::{err, agent_error, ApiError};
 use crate::AppState;
 
 #[derive(serde::Deserialize)]
@@ -42,11 +42,9 @@ struct StreamTicket {
 /// GET /api/logs — System-wide logs (admin only).
 pub async fn system_logs(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    AdminUser(_claims): AdminUser,
     Query(q): Query<LogQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&claims.role)?;
-
     let log_type = q.log_type.as_deref().unwrap_or("nginx_access");
     if !["nginx_access", "nginx_error", "syslog", "auth", "php_fpm"].contains(&log_type) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid log type"));
@@ -61,7 +59,7 @@ pub async fn system_logs(
         .agent
         .get(&agent_path)
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Agent error: {e}")))?;
+        .map_err(|e| agent_error("System logs", e))?;
 
     Ok(Json(result))
 }
@@ -97,7 +95,7 @@ pub async fn site_logs(
         .agent
         .get(&agent_path)
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Agent error: {e}")))?;
+        .map_err(|e| agent_error("Site logs", e))?;
 
     Ok(Json(result))
 }
@@ -105,11 +103,9 @@ pub async fn site_logs(
 /// GET /api/logs/search — Search system logs with grep/regex (admin only).
 pub async fn search_system_logs(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    AdminUser(_claims): AdminUser,
     Query(q): Query<SearchQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&claims.role)?;
-
     let log_type = q.log_type.as_deref().unwrap_or("nginx_access");
     if !["nginx_access", "nginx_error", "syslog", "auth", "php_fpm"].contains(&log_type) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid log type"));
@@ -132,7 +128,7 @@ pub async fn search_system_logs(
         .agent
         .get(&agent_path)
         .await
-        .map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &format!("Search error: {e}")))?;
+        .map_err(|e| agent_error("System log search", e))?;
 
     Ok(Json(result))
 }
@@ -178,7 +174,7 @@ pub async fn search_site_logs(
         .agent
         .get(&agent_path)
         .await
-        .map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &format!("Search error: {e}")))?;
+        .map_err(|e| agent_error("Site log search", e))?;
 
     Ok(Json(result))
 }
@@ -242,15 +238,13 @@ pub async fn stream_token(
 /// GET /api/system/processes — Top processes (admin only).
 pub async fn processes(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    AdminUser(_claims): AdminUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&claims.role)?;
-
     let result = state
         .agent
         .get("/system/processes")
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Agent error: {e}")))?;
+        .map_err(|e| agent_error("System processes", e))?;
 
     Ok(Json(result))
 }
@@ -258,15 +252,13 @@ pub async fn processes(
 /// GET /api/system/network — Network I/O stats (admin only).
 pub async fn network(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    AdminUser(_claims): AdminUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&claims.role)?;
-
     let result = state
         .agent
         .get("/system/network")
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Agent error: {e}")))?;
+        .map_err(|e| agent_error("Network stats", e))?;
 
     Ok(Json(result))
 }

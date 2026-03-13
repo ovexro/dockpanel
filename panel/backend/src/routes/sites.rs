@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{err, paginate, ApiError};
+use crate::error::{err, agent_error, paginate, ApiError};
 use crate::models::Site;
 use crate::routes::is_valid_domain;
 use crate::services::activity;
@@ -151,10 +151,7 @@ pub async fn create(
                 .await
                 .ok();
 
-            Err(err(
-                StatusCode::BAD_GATEWAY,
-                &format!("Failed to configure site: {e}"),
-            ))
+            Err(agent_error("Site configuration", e))
         }
     }
 }
@@ -246,7 +243,7 @@ pub async fn switch_php(
         .agent
         .put(&agent_path, agent_body)
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Failed to update nginx: {e}")))?;
+        .map_err(|e| agent_error("Nginx update", e))?;
 
     // Update DB
     let updated: Site = sqlx::query_as(
@@ -276,7 +273,7 @@ pub async fn php_versions(
         .agent
         .get("/php/versions")
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Agent error: {e}")))?;
+        .map_err(|e| agent_error("Site agent operation", e))?;
 
     Ok(Json(result))
 }
@@ -303,7 +300,7 @@ pub async fn php_install(
             Some(serde_json::json!({ "version": body.version })),
         )
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Install failed: {e}")))?;
+        .map_err(|e| agent_error("PHP install", e))?;
 
     Ok(Json(result))
 }
@@ -414,7 +411,7 @@ pub async fn update_limits(
         .agent
         .put(&agent_path, agent_body)
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Failed to apply limits: {e}")))?;
+        .map_err(|e| agent_error("Resource limits", e))?;
 
     tracing::info!("Resource limits updated for {}", site.domain);
     activity::log_activity(
@@ -444,7 +441,7 @@ pub async fn remove(
     // Call agent to remove nginx config (must succeed before DB deletion)
     let agent_path = format!("/nginx/sites/{}", site.domain);
     state.agent.delete(&agent_path).await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Failed to remove site config: {e}")))?;
+        .map_err(|e| agent_error("Site removal", e))?;
 
     // Delete from DB
     sqlx::query("DELETE FROM sites WHERE id = $1")

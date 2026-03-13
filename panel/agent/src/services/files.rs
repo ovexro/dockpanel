@@ -68,7 +68,9 @@ pub fn ensure_site_root(domain: &str) -> Result<PathBuf, String> {
 }
 
 /// List directory contents.
-pub async fn list_directory(path: &Path) -> Result<Vec<FileEntry>, String> {
+/// The `site_root` parameter is used to strip absolute paths to relative paths in the response.
+/// If `None`, paths are returned relative to the listed directory.
+pub async fn list_directory(path: &Path, site_root: Option<&Path>) -> Result<Vec<FileEntry>, String> {
     let mut entries = Vec::new();
     let mut reader = fs::read_dir(path)
         .await
@@ -92,9 +94,21 @@ pub async fn list_directory(path: &Path) -> Result<Vec<FileEntry>, String> {
             .unwrap_or_default();
 
         let name = entry.file_name().to_string_lossy().to_string();
+        let abs_path = format!("{}/{}", path.display(), &name);
+
+        // Return paths relative to the site root to avoid leaking server paths
+        let relative_path = if let Some(root) = site_root {
+            let root_str = format!("{}/", root.display());
+            abs_path
+                .strip_prefix(&root_str)
+                .unwrap_or(&abs_path)
+                .to_string()
+        } else {
+            name.clone()
+        };
 
         entries.push(FileEntry {
-            path: format!("{}/{}", path.display(), &name),
+            path: relative_path,
             name,
             is_dir,
             size,

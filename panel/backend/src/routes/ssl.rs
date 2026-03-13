@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{err, ApiError};
+use crate::error::{err, agent_error, ApiError};
 use crate::models::Site;
 use crate::AppState;
 
@@ -65,7 +65,7 @@ pub async fn provision(
         .agent
         .post(&agent_path, Some(agent_body))
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("SSL provisioning failed: {e}")))?;
+        .map_err(|e| agent_error("SSL provisioning", e))?;
 
     // Parse expiry from agent response
     let ssl_expiry = result

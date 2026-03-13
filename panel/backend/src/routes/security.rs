@@ -4,23 +4,21 @@ use axum::{
     Json,
 };
 
-use crate::auth::AuthUser;
-use crate::error::{err, require_admin, ApiError};
+use crate::auth::AdminUser;
+use crate::error::{err, agent_error, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
 /// GET /api/security/overview — Security overview.
 pub async fn overview(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    AdminUser(_claims): AdminUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&claims.role)?;
-
     let result = state
         .agent
         .get("/security/overview")
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Agent error: {e}")))?;
+        .map_err(|e| agent_error("Security overview", e))?;
 
     Ok(Json(result))
 }
@@ -28,15 +26,13 @@ pub async fn overview(
 /// GET /api/security/firewall — Firewall status and rules.
 pub async fn firewall_status(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    AdminUser(_claims): AdminUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&claims.role)?;
-
     let result = state
         .agent
         .get("/security/firewall")
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Agent error: {e}")))?;
+        .map_err(|e| agent_error("Firewall status", e))?;
 
     Ok(Json(result))
 }
@@ -52,11 +48,9 @@ pub struct FirewallRuleRequest {
 /// POST /api/security/firewall/rules — Add firewall rule.
 pub async fn add_firewall_rule(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    AdminUser(claims): AdminUser,
     Json(body): Json<FirewallRuleRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&claims.role)?;
-
     if body.port == 0 {
         return Err(err(StatusCode::BAD_REQUEST, "Port must be between 1 and 65535"));
     }
@@ -82,7 +76,7 @@ pub async fn add_firewall_rule(
         .agent
         .post("/security/firewall/rules", Some(agent_body))
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Failed to add rule: {e}")))?;
+        .map_err(|e| agent_error("Add firewall rule", e))?;
 
     let rule_name = format!("{port}/{proto}");
     activity::log_activity(
@@ -96,17 +90,15 @@ pub async fn add_firewall_rule(
 /// DELETE /api/security/firewall/rules/{number} — Delete firewall rule.
 pub async fn delete_firewall_rule(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    AdminUser(claims): AdminUser,
     Path(number): Path<usize>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&claims.role)?;
-
     let agent_path = format!("/security/firewall/rules/{}", number);
     state
         .agent
         .delete(&agent_path)
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Failed to delete rule: {e}")))?;
+        .map_err(|e| agent_error("Delete firewall rule", e))?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "firewall.delete",
@@ -119,15 +111,13 @@ pub async fn delete_firewall_rule(
 /// GET /api/security/fail2ban — Fail2ban status.
 pub async fn fail2ban_status(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    AdminUser(_claims): AdminUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&claims.role)?;
-
     let result = state
         .agent
         .get("/security/fail2ban")
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Agent error: {e}")))?;
+        .map_err(|e| agent_error("Fail2ban status", e))?;
 
     Ok(Json(result))
 }

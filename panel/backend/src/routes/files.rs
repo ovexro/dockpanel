@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{err, ApiError};
+use crate::error::{err, agent_error, ApiError};
 use crate::routes::is_safe_relative_path;
 use crate::AppState;
 
@@ -66,7 +66,7 @@ pub async fn list_dir(
         .agent
         .get(&agent_path)
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Agent error: {e}")))?;
+        .map_err(|e| agent_error("File manager", e))?;
 
     Ok(Json(result))
 }
@@ -97,7 +97,7 @@ pub async fn read_file(
         .agent
         .get(&agent_path)
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Agent error: {e}")))?;
+        .map_err(|e| agent_error("File manager", e))?;
 
     Ok(Json(result))
 }
@@ -122,7 +122,7 @@ pub async fn write_file(
             serde_json::json!({ "path": body.path, "content": body.content }),
         )
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Agent error: {e}")))?;
+        .map_err(|e| agent_error("File manager", e))?;
 
     Ok(Json(result))
 }
@@ -158,7 +158,7 @@ pub async fn create_entry(
         .agent
         .post(&agent_path, None)
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Agent error: {e}")))?;
+        .map_err(|e| agent_error("File manager", e))?;
 
     Ok(Json(result))
 }
@@ -183,7 +183,7 @@ pub async fn rename_entry(
             Some(serde_json::json!({ "from": body.from, "to": body.to })),
         )
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Agent error: {e}")))?;
+        .map_err(|e| agent_error("File manager", e))?;
 
     Ok(Json(result))
 }
@@ -214,7 +214,7 @@ pub async fn delete_entry(
         .agent
         .delete(&agent_path)
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Agent error: {e}")))?;
+        .map_err(|e| agent_error("File manager", e))?;
 
     Ok(Json(result))
 }

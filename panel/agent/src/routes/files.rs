@@ -55,7 +55,8 @@ async fn list_dir(
         return Err(err(StatusCode::BAD_REQUEST, "Not a directory"));
     }
 
-    let entries = files::list_directory(&safe)
+    let site_root = std::path::PathBuf::from(format!("/var/www/{domain}"));
+    let entries = files::list_directory(&safe, Some(&site_root))
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
     Ok(Json(entries))
