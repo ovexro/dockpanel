@@ -65,6 +65,10 @@ jobs:
           cp panel/cli/target/${{ matrix.target }}/release/dockpanel release/dockpanel-cli-linux-${{ matrix.arch }}
           chmod +x release/*
 
+          # Report binary sizes
+          echo "Binary sizes (${{ matrix.arch }}):"
+          ls -lh release/
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -120,6 +124,9 @@ jobs:
           # Create checksums
           cd release
           sha256sum * > checksums.txt
+
+          echo "Release contents:"
+          ls -lh
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

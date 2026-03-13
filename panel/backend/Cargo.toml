@@ -3,6 +3,11 @@ name = "dockpanel-api"
 version = "0.1.0"
 edition = "2024"
 
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
 axum-extra = { version = "0.10", features = ["cookie"] }
