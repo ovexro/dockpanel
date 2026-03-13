@@ -6,6 +6,7 @@ pub mod php;
 pub mod docker_apps;
 pub mod files;
 pub mod health;
+pub mod iac;
 pub mod logs;
 pub mod nginx;
 pub mod remote_backup;
