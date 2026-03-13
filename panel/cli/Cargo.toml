@@ -1,0 +1,15 @@
+[package]
+name = "dockpanel"
+version = "1.0.0"
+edition = "2024"
+description = "CLI for DockPanel — self-hosted server management"
+
+[[bin]]
+name = "dockpanel"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full", "net"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
