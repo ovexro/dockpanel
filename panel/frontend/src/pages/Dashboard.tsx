@@ -1,7 +1,16 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { formatSize, formatUptime } from "../utils/format";
+
+interface OnboardingStep {
+  id: string;
+  label: string;
+  description: string;
+  link: string;
+  check: () => boolean;
+}
+
 
 interface SystemInfo {
   cpu_count: number;
@@ -103,6 +112,13 @@ export default function Dashboard() {
   const [network, setNetwork] = useState<NetworkIface[]>([]);
   const [error, setError] = useState("");
   const [intel, setIntel] = useState<Intelligence | null>(null);
+  const [appCount, setAppCount] = useState(0);
+  const [dismissed, setDismissed] = useState(() => localStorage.getItem("dp-onboarding-dismissed") === "1");
+
+  const dismissOnboarding = useCallback(() => {
+    setDismissed(true);
+    localStorage.setItem("dp-onboarding-dismissed", "1");
+  }, []);
 
   const fetchData = () => {
     api
@@ -134,6 +150,10 @@ export default function Dashboard() {
       .get<Intelligence>("/dashboard/intelligence")
       .then(setIntel)
       .catch((e) => console.error("Failed to load intelligence:", e));
+    api
+      .get<{ container_id: string }[]>("/apps")
+      .then((list) => setAppCount(list.length))
+      .catch(() => {});
   };
 
   useEffect(() => {
@@ -144,13 +164,77 @@ export default function Dashboard() {
 
   return (
     <div className="p-6 lg:p-8">
-      <h1 className="text-2xl font-bold text-dark-50 mb-6">Dashboard</h1>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-bold text-dark-50">Dashboard</h1>
+        <div className="flex items-center gap-2">
+          <Link to="/apps" className="px-3 py-1.5 bg-dark-800 border border-dark-500 rounded-lg text-xs font-medium text-dark-100 hover:bg-dark-700 hover:text-dark-50 flex items-center gap-1.5">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
+            Deploy App
+          </Link>
+          <Link to="/sites" className="px-3 py-1.5 bg-dark-800 border border-dark-500 rounded-lg text-xs font-medium text-dark-100 hover:bg-dark-700 hover:text-dark-50 flex items-center gap-1.5">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
+            Add Site
+          </Link>
+          <Link to="/diagnostics" className="px-3 py-1.5 bg-dark-800 border border-dark-500 rounded-lg text-xs font-medium text-dark-100 hover:bg-dark-700 hover:text-dark-50 flex items-center gap-1.5">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5" /></svg>
+            Diagnostics
+          </Link>
+        </div>
+      </div>
 
       {error && (
         <div className="bg-red-500/10 text-red-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-6">
           {error}
         </div>
       )}
+
+      {/* Getting Started */}
+      {!dismissed && system && (() => {
+        const steps: OnboardingStep[] = [
+          { id: "site", label: "Create your first site", description: "Set up a website with Nginx, PHP, or reverse proxy", link: "/sites", check: () => sites.total > 0 },
+          { id: "app", label: "Deploy a Docker app", description: "One-click deploy from 34 templates", link: "/apps", check: () => appCount > 0 },
+          { id: "2fa", label: "Enable 2FA", description: "Protect your panel with two-factor authentication", link: "/settings", check: () => false },
+          { id: "backup", label: "Set up backups", description: "Configure scheduled backups for your sites", link: "/sites", check: () => false },
+          { id: "diagnostics", label: "Run diagnostics", description: "Check your server health and fix issues", link: "/diagnostics", check: () => false },
+        ];
+        const completed = steps.filter(s => s.check()).length;
+        if (completed >= 3) return null; // Auto-hide after 3+ steps done
+        return (
+          <div className="mb-6 bg-dark-800 rounded-xl border border-dark-500 p-5">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <svg className="w-5 h-5 text-rust-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312m-2.24 2.39a4.493 4.493 0 00-1.757 4.306 4.493 4.493 0 004.306-1.758M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z" /></svg>
+                <h3 className="text-sm font-semibold text-dark-50">Getting Started</h3>
+                <span className="text-[10px] text-dark-300">{completed}/{steps.length}</span>
+              </div>
+              <button onClick={dismissOnboarding} className="text-dark-400 hover:text-dark-200 text-xs">Dismiss</button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
+              {steps.map(step => (
+                <Link
+                  key={step.id}
+                  to={step.link}
+                  className={`rounded-lg border p-3 transition-colors ${
+                    step.check()
+                      ? "border-emerald-500/30 bg-emerald-500/5"
+                      : "border-dark-500 bg-dark-900/50 hover:border-dark-400"
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 mb-1">
+                    {step.check() ? (
+                      <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                    ) : (
+                      <div className="w-3.5 h-3.5 rounded-full border-2 border-dark-400" />
+                    )}
+                    <span className={`text-xs font-medium ${step.check() ? "text-emerald-400" : "text-dark-100"}`}>{step.label}</span>
+                  </div>
+                  <p className="text-[10px] text-dark-300 leading-relaxed">{step.description}</p>
+                </Link>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       {!system ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" role="status" aria-live="polite">
