@@ -125,6 +125,13 @@ async fn main() {
         services::alert_engine::run(alert_db, alert_agent).await;
     });
 
+    // Spawn auto-healer
+    let healer_db = state.db.clone();
+    let healer_agent = state.agent.clone();
+    tokio::spawn(async move {
+        services::auto_healer::run(healer_db, healer_agent).await;
+    });
+
     let app = Router::new()
         .merge(routes::router())
         .layer(cors)

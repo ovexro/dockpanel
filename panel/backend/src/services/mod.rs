@@ -1,6 +1,7 @@
 pub mod activity;
 pub mod agent;
 pub mod alert_engine;
+pub mod auto_healer;
 pub mod backup_scheduler;
 pub mod email;
 pub mod notifications;
