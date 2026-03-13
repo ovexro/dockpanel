@@ -1,0 +1,95 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: dockpanel_panel
+      POSTGRES_USER: dockpanel
+      POSTGRES_PASSWORD: ${PANEL_DB_PASSWORD}
+    volumes:
+      - panel-pgdata:/var/lib/postgresql/data
+    networks:
+      - panel
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dockpanel -d dockpanel_panel"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  api:
+    build: ./backend
+    ports:
+      - "127.0.0.1:3062:3000"
+    environment:
+      DATABASE_URL: postgres://dockpanel:${PANEL_DB_PASSWORD}@db:5432/dockpanel_panel
+      JWT_SECRET: ${PANEL_JWT_SECRET}
+      AGENT_SOCKET: /var/run/dockpanel/agent.sock
+      AGENT_TOKEN: ${AGENT_TOKEN}
+      RUST_LOG: info
+    volumes:
+      - /var/run/dockpanel:/var/run/dockpanel:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - panel
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "1.0"
+    cap_drop:
+      - ALL
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "127.0.0.1:3063:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - panel
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+      - NET_BIND_SERVICE
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  panel-pgdata:
+
+networks:
+  panel:
