@@ -74,6 +74,7 @@ async fn main() {
         .merge(routes::staging::router())
         .merge(routes::services::router())
         .merge(routes::iac::router())
+        .merge(routes::diagnostics::router())
         .layer(middleware::from_fn_with_state(state.clone(), routes::auth_middleware))
         .merge(routes::terminal::router())
         .merge(routes::logs::stream_router())

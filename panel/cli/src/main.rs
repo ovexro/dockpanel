@@ -75,6 +75,8 @@ enum Commands {
         #[command(subcommand)]
         command: Option<PhpCmd>,
     },
+    /// Run server diagnostics (nginx, resources, SSL, security, logs)
+    Diagnose,
     /// Export server configuration as YAML (Infrastructure as Code)
     Export {
         /// Output file (default: stdout)
@@ -394,6 +396,7 @@ async fn main() {
             None => cmd_php_list(&token).await,
             Some(PhpCmd::Install { version }) => cmd_php_install(&token, &version).await,
         },
+        Commands::Diagnose => cmd_diagnose(&token).await,
         Commands::Export { output } => cmd_export(&token, output.as_deref()).await,
         Commands::Apply { file, dry_run, email } => cmd_apply(&token, &file, dry_run, email.as_deref()).await,
     };
@@ -1465,6 +1468,90 @@ async fn cmd_php_install(token: &str, version: &str) -> Result<(), String> {
         let msg = result["message"].as_str().unwrap_or("Unknown error");
         return Err(format!("Failed to install PHP {version}: {msg}"));
     }
+
+    Ok(())
+}
+
+// ── Diagnostics ──────────────────────────────────────────────────────────
+
+async fn cmd_diagnose(token: &str) -> Result<(), String> {
+    println!("Running diagnostics...\n");
+    let report = client::agent_get("/diagnostics", token).await?;
+
+    let summary = &report["summary"];
+    let critical = summary["critical"].as_u64().unwrap_or(0);
+    let warning = summary["warning"].as_u64().unwrap_or(0);
+    let info = summary["info"].as_u64().unwrap_or(0);
+    let total = summary["total"].as_u64().unwrap_or(0);
+
+    if total == 0 {
+        println!("\x1b[32m✓ All checks passed — no issues detected.\x1b[0m");
+        return Ok(());
+    }
+
+    // Summary line
+    print!("Found ");
+    if critical > 0 {
+        print!("\x1b[31m{critical} critical\x1b[0m");
+    }
+    if warning > 0 {
+        if critical > 0 { print!(", "); }
+        print!("\x1b[33m{warning} warning\x1b[0m");
+    }
+    if info > 0 {
+        if critical > 0 || warning > 0 { print!(", "); }
+        print!("\x1b[34m{info} info\x1b[0m");
+    }
+    println!(" ({total} total)\n");
+
+    // Group findings by category
+    let findings = report["findings"].as_array().unwrap_or(&Vec::new()).clone();
+    let categories = ["nginx", "resources", "services", "ssl", "logs", "security"];
+    let category_labels = [
+        ("nginx", "NGINX"),
+        ("resources", "RESOURCES"),
+        ("services", "SERVICES"),
+        ("ssl", "SSL CERTIFICATES"),
+        ("logs", "LOG ANALYSIS"),
+        ("security", "SECURITY"),
+    ];
+
+    for (cat, label) in &category_labels {
+        let cat_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f["category"].as_str() == Some(cat))
+            .collect();
+
+        if cat_findings.is_empty() {
+            continue;
+        }
+
+        println!("\x1b[1m{label}\x1b[0m");
+        for f in &cat_findings {
+            let severity = f["severity"].as_str().unwrap_or("info");
+            let title = f["title"].as_str().unwrap_or("");
+            let desc = f["description"].as_str().unwrap_or("");
+            let fix = f["fix_available"].as_bool() == Some(true);
+
+            let icon = match severity {
+                "critical" => "\x1b[31m✗\x1b[0m",
+                "warning" => "\x1b[33m!\x1b[0m",
+                _ => "\x1b[34mi\x1b[0m",
+            };
+
+            println!("  {icon} {title}");
+            println!("    {desc}");
+            if fix {
+                if let Some(fix_id) = f["fix_id"].as_str() {
+                    println!("    \x1b[2m(fixable: {fix_id})\x1b[0m");
+                }
+            }
+        }
+        println!();
+    }
+
+    // Drop unused binding
+    let _ = categories;
 
     Ok(())
 }
