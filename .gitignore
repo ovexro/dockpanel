@@ -1,0 +1,28 @@
+# Rust build artifacts
+panel/agent/target/
+panel/backend/target/
+
+# Node.js
+panel/frontend/node_modules/
+panel/frontend/dist/
+website/client/node_modules/
+website/client/dist/
+website/server/node_modules/
+
+# Environment files
+.env
+*.env
+!api.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log

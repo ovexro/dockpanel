@@ -1,0 +1,130 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            arch: amd64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            arch: arm64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (ARM64)
+        if: matrix.arch == 'arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Configure cross-compilation (ARM64)
+        if: matrix.arch == 'arm64'
+        run: |
+          mkdir -p .cargo
+          cat >> .cargo/config.toml << 'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          EOF
+
+      - name: Build agent
+        run: cargo build --release --target ${{ matrix.target }} --manifest-path panel/agent/Cargo.toml
+
+      - name: Build API
+        run: cargo build --release --target ${{ matrix.target }} --manifest-path panel/backend/Cargo.toml
+
+      - name: Package binaries
+        run: |
+          mkdir -p release
+          cp panel/agent/target/${{ matrix.target }}/release/dockpanel-agent release/dockpanel-agent-linux-${{ matrix.arch }}
+          cp panel/backend/target/${{ matrix.target }}/release/dockpanel-api release/dockpanel-api-linux-${{ matrix.arch }}
+          chmod +x release/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.arch }}
+          path: release/
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build frontend
+        run: |
+          cd panel/frontend
+          npm ci
+          npx vite build
+
+      - name: Package frontend
+        run: |
+          cd panel/frontend
+          tar czf ../../dockpanel-frontend.tar.gz dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend
+          path: dockpanel-frontend.tar.gz
+
+  release:
+    needs: [build, frontend]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          cp artifacts/binaries-amd64/* release/
+          cp artifacts/binaries-arm64/* release/
+          cp artifacts/frontend/dockpanel-frontend.tar.gz release/
+
+          # Create checksums
+          cd release
+          sha256sum * > checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release/dockpanel-agent-linux-amd64
+            release/dockpanel-agent-linux-arm64
+            release/dockpanel-api-linux-amd64
+            release/dockpanel-api-linux-arm64
+            release/dockpanel-frontend.tar.gz
+            release/checksums.txt

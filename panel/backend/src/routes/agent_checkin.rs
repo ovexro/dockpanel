@@ -1,0 +1,158 @@
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    Json,
+};
+
+use crate::error::{err, ApiError};
+use crate::AppState;
+
+#[derive(serde::Deserialize)]
+pub struct CheckinRequest {
+    pub server_id: String,
+    pub os_info: Option<String>,
+    pub hostname: Option<String>,
+    pub cpu_cores: Option<i32>,
+    pub ram_mb: Option<i32>,
+    pub disk_gb: Option<i32>,
+    pub agent_version: Option<String>,
+    pub disk_used_gb: Option<i32>,
+    pub disk_usage_pct: Option<f32>,
+    // Live metrics (stored in server record for dashboard display)
+    pub cpu_usage: Option<f32>,
+    pub mem_used_mb: Option<i64>,
+    pub uptime_secs: Option<i64>,
+}
+
+/// POST /api/agent/checkin — Agent reports system info and heartbeat.
+/// Authenticated via Bearer token matching the server's agent_token.
+pub async fn checkin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<CheckinRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Extract Bearer token
+    let token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "Missing authorization"))?;
+
+    // Parse server ID
+    let server_id: uuid::Uuid = body
+        .server_id
+        .parse()
+        .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid server_id"))?;
+
+    // Verify token matches server record
+    let existing: Option<(String,)> =
+        sqlx::query_as("SELECT agent_token FROM servers WHERE id = $1")
+            .bind(server_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let (stored_token,) =
+        existing.ok_or_else(|| err(StatusCode::NOT_FOUND, "Server not found"))?;
+
+    if stored_token != token {
+        return Err(err(StatusCode::UNAUTHORIZED, "Invalid token"));
+    }
+
+    // Extract client IP
+    let ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(|s| s.trim().to_string())
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+        });
+
+    // Compute memory usage percentage
+    let mem_usage_pct = match (body.mem_used_mb, body.ram_mb) {
+        (Some(used), Some(total)) if total > 0 => {
+            Some((used as f32 / total as f32) * 100.0)
+        }
+        _ => None,
+    };
+
+    // Update server record
+    sqlx::query(
+        "UPDATE servers SET \
+         status = 'online', \
+         last_seen_at = NOW(), \
+         ip_address = COALESCE($2, ip_address), \
+         os_info = COALESCE($3, os_info), \
+         cpu_cores = COALESCE($4, cpu_cores), \
+         ram_mb = COALESCE($5, ram_mb), \
+         disk_gb = COALESCE($6, disk_gb), \
+         agent_version = COALESCE($7, agent_version), \
+         cpu_usage = COALESCE($8, cpu_usage), \
+         mem_used_mb = COALESCE($9, mem_used_mb), \
+         uptime_secs = COALESCE($10, uptime_secs), \
+         disk_used_gb = COALESCE($11, disk_used_gb), \
+         disk_usage_pct = COALESCE($12, disk_usage_pct), \
+         mem_usage_pct = COALESCE($13, mem_usage_pct) \
+         WHERE id = $1",
+    )
+    .bind(server_id)
+    .bind(&ip)
+    .bind(&body.os_info)
+    .bind(body.cpu_cores)
+    .bind(body.ram_mb)
+    .bind(body.disk_gb)
+    .bind(&body.agent_version)
+    .bind(body.cpu_usage)
+    .bind(body.mem_used_mb)
+    .bind(body.uptime_secs)
+    .bind(body.disk_used_gb)
+    .bind(body.disk_usage_pct)
+    .bind(mem_usage_pct)
+    .execute(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    // Store performance metrics time-series data
+    if let Some(cpu) = body.cpu_usage {
+        let _ = sqlx::query(
+            "INSERT INTO metrics (server_id, metric_type, value) VALUES ($1, 'cpu', $2)",
+        )
+        .bind(server_id)
+        .bind(cpu as f64)
+        .execute(&state.db)
+        .await;
+    }
+    if let Some(mem) = body.mem_used_mb {
+        let _ = sqlx::query(
+            "INSERT INTO metrics (server_id, metric_type, value) VALUES ($1, 'memory_mb', $2)",
+        )
+        .bind(server_id)
+        .bind(mem as f64)
+        .execute(&state.db)
+        .await;
+    }
+    if let Some(disk_pct) = body.disk_usage_pct {
+        let _ = sqlx::query(
+            "INSERT INTO metrics (server_id, metric_type, value) VALUES ($1, 'disk_pct', $2)",
+        )
+        .bind(server_id)
+        .bind(disk_pct as f64)
+        .execute(&state.db)
+        .await;
+    }
+
+    // Resolve any offline alert state (server just checked in = it's online)
+    let _ = sqlx::query(
+        "UPDATE alert_state SET current_state = 'ok', fired_at = NULL, last_notified_at = NULL \
+         WHERE server_id = $1 AND alert_type = 'offline' AND current_state = 'firing'",
+    )
+    .bind(server_id)
+    .execute(&state.db)
+    .await;
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}

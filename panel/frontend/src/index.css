@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+@theme {
+  /* Rust Orange accent */
+  --color-rust-50: #fff7ed;
+  --color-rust-100: #ffedd5;
+  --color-rust-200: #fed7aa;
+  --color-rust-300: #fdba74;
+  --color-rust-400: #ff7a18;
+  --color-rust-500: #f74c00;
+  --color-rust-600: #dc4500;
+  --color-rust-700: #b83a00;
+  --color-rust-800: #952f00;
+  --color-rust-900: #7a2700;
+
+  /* Dark panel surfaces — GitHub-style */
+  --color-dark-950: #0b0f14;
+  --color-dark-900: #0d1117;
+  --color-dark-800: #161b22;
+  --color-dark-700: #1c2128;
+  --color-dark-600: #21262d;
+  --color-dark-500: #30363d;
+  --color-dark-400: #484f58;
+  --color-dark-300: #6e7681;
+  --color-dark-200: #8b949e;
+  --color-dark-100: #c9d1d9;
+  --color-dark-50: #e6edf3;
+}
+
+/* Base dark theme */
+body {
+  background-color: var(--color-dark-900);
+  color: var(--color-dark-50);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Form elements on dark backgrounds */
+input, select, textarea {
+  background-color: var(--color-dark-900);
+  color: var(--color-dark-50);
+  border-color: var(--color-dark-500);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--color-dark-300);
+}
+
+/* Scrollbar styling for dark theme */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-dark-900);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-dark-500);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-dark-400);
+}
+
+/* Selection color */
+::selection {
+  background: var(--color-rust-500);
+  color: white;
+}

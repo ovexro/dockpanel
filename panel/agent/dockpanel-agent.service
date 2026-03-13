@@ -1,0 +1,17 @@
+[Unit]
+Description=DockPanel Agent
+After=network.target nginx.service
+Wants=nginx.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/dockpanel-agent
+Restart=always
+RestartSec=3
+Environment=RUST_LOG=info
+
+# Security hardening (agent needs host access for nginx/ssl/docker)
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

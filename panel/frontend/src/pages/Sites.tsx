@@ -1,0 +1,230 @@
+import { useState, useEffect, FormEvent } from "react";
+import { Link } from "react-router-dom";
+import { api } from "../api";
+import { formatDate } from "../utils/format";
+import { statusColors, runtimeLabels } from "../constants";
+
+interface Site {
+  id: string;
+  domain: string;
+  runtime: string;
+  status: string;
+  ssl_enabled: boolean;
+  parent_site_id: string | null;
+  created_at: string;
+}
+
+export default function Sites() {
+  const [sites, setSites] = useState<Site[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [error, setError] = useState("");
+
+  // Form state
+  const [domain, setDomain] = useState("");
+  const [runtime, setRuntime] = useState("static");
+  const [proxyPort, setProxyPort] = useState("");
+  const [phpVersion, setPhpVersion] = useState("8.4");
+  const [submitting, setSubmitting] = useState(false);
+
+  const fetchSites = () => {
+    api
+      .get<Site[]>("/sites")
+      .then(setSites)
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(fetchSites, []);
+
+  const handleCreate = async (e: FormEvent) => {
+    e.preventDefault();
+    setError("");
+    setSubmitting(true);
+    try {
+      const body: Record<string, unknown> = { domain, runtime };
+      if (runtime === "proxy") body.proxy_port = parseInt(proxyPort);
+      if (runtime === "php") body.php_version = phpVersion;
+
+      await api.post("/sites", body);
+      setShowForm(false);
+      setDomain("");
+      setRuntime("static");
+      setProxyPort("");
+      fetchSites();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create site");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="p-6 lg:p-8">
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-bold text-dark-50">Sites</h1>
+        <button
+          onClick={() => setShowForm(!showForm)}
+          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
+        >
+          {showForm ? "Cancel" : "Create Site"}
+        </button>
+      </div>
+
+      {error && (
+        <div role="alert" className="bg-red-500/10 text-red-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-4">
+          {error}
+          <button onClick={() => setError("")} className="float-right font-bold" aria-label="Close error">&times;</button>
+        </div>
+      )}
+
+      {/* Create form */}
+      {showForm && (
+        <form
+          onSubmit={handleCreate}
+          className="bg-dark-800 rounded-xl border border-dark-500 p-5 mb-6 space-y-4"
+        >
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="site-domain" className="block text-sm font-medium text-dark-100 mb-1">Domain</label>
+              <input
+                id="site-domain"
+                type="text"
+                value={domain}
+                onChange={(e) => setDomain(e.target.value)}
+                required
+                placeholder="example.com"
+                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none text-sm"
+              />
+            </div>
+            <div>
+              <label htmlFor="site-runtime" className="block text-sm font-medium text-dark-100 mb-1">Runtime</label>
+              <select
+                id="site-runtime"
+                value={runtime}
+                onChange={(e) => setRuntime(e.target.value)}
+                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none text-sm bg-dark-800"
+              >
+                <option value="static">Static (HTML/CSS/JS)</option>
+                <option value="php">PHP</option>
+                <option value="proxy">Reverse Proxy (Docker/Node)</option>
+              </select>
+            </div>
+          </div>
+
+          {runtime === "proxy" && (
+            <div>
+              <label htmlFor="site-proxy-port" className="block text-sm font-medium text-dark-100 mb-1">Proxy Port</label>
+              <input
+                id="site-proxy-port"
+                type="number"
+                value={proxyPort}
+                onChange={(e) => setProxyPort(e.target.value)}
+                required
+                placeholder="3000"
+                min="1"
+                max="65535"
+                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none text-sm max-w-xs"
+              />
+            </div>
+          )}
+
+          {runtime === "php" && (
+            <div>
+              <label htmlFor="site-php-version" className="block text-sm font-medium text-dark-100 mb-1">PHP Version</label>
+              <select
+                id="site-php-version"
+                value={phpVersion}
+                onChange={(e) => setPhpVersion(e.target.value)}
+                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none text-sm bg-dark-800 max-w-xs"
+              >
+                <option value="8.4">PHP 8.4</option>
+                <option value="8.3">PHP 8.3</option>
+                <option value="8.2">PHP 8.2</option>
+                <option value="8.1">PHP 8.1</option>
+              </select>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={submitting}
+            className="px-6 py-2.5 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
+          >
+            {submitting ? "Creating..." : "Create Site"}
+          </button>
+        </form>
+      )}
+
+      {/* Sites list */}
+      {loading ? (
+        <div className="bg-dark-800 rounded-xl border border-dark-500 animate-pulse">
+          {[...Array(3)].map((_, i) => (
+            <div key={i} className="px-5 py-4 border-b border-dark-600 last:border-0">
+              <div className="h-5 bg-dark-600 rounded w-48" />
+            </div>
+          ))}
+        </div>
+      ) : sites.length === 0 ? (
+        <div className="bg-dark-800 rounded-xl border border-dark-500 p-12 text-center">
+          <svg className="w-12 h-12 mx-auto text-gray-300 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0 1 12 16.5a17.92 17.92 0 0 1-8.716-2.247m0 0A9 9 0 0 1 3 12c0-1.47.353-2.856.978-4.082" />
+          </svg>
+          <p className="text-dark-200 font-medium">No sites yet</p>
+          <p className="text-dark-300 text-sm mt-1">Create your first site to get started</p>
+        </div>
+      ) : (
+        <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-dark-500 bg-dark-900">
+                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3">Domain</th>
+                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3">Runtime</th>
+                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3">Status</th>
+                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3">SSL</th>
+                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3">Created</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-dark-600">
+              {sites.filter((s) => !s.parent_site_id).map((site) => (
+                <tr key={site.id} className="hover:bg-dark-800 transition-colors">
+                  <td className="px-5 py-4">
+                    <Link
+                      to={`/sites/${site.id}`}
+                      className="text-sm font-medium text-rust-500 hover:text-rust-700"
+                    >
+                      {site.domain}
+                    </Link>
+                  </td>
+                  <td className="px-5 py-4 text-sm text-dark-200">
+                    {runtimeLabels[site.runtime] || site.runtime}
+                  </td>
+                  <td className="px-5 py-4">
+                    <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${statusColors[site.status] || "bg-dark-700 text-dark-200"}`}>
+                      {site.status}
+                    </span>
+                  </td>
+                  <td className="px-5 py-4">
+                    {site.ssl_enabled ? (
+                      <span className="inline-flex items-center gap-1 text-xs text-emerald-600">
+                        <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M10 1a4.5 4.5 0 0 0-4.5 4.5V9H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-.5V5.5A4.5 4.5 0 0 0 10 1Zm3 8V5.5a3 3 0 1 0-6 0V9h6Z" clipRule="evenodd" />
+                        </svg>
+                        Secure
+                      </span>
+                    ) : (
+                      <span className="text-xs text-dark-300">None</span>
+                    )}
+                  </td>
+                  <td className="px-5 py-4 text-sm text-dark-200">
+                    {formatDate(site.created_at)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
