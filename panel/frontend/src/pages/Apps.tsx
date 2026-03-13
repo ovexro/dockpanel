@@ -204,6 +204,11 @@ export default function Apps() {
   const [logAutoScroll, setLogAutoScroll] = useState(true);
   const logEndRef = useRef<HTMLDivElement>(null);
   const logIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Env vars state
+  const [envTarget, setEnvTarget] = useState<string | null>(null);
+  const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([]);
+  const [envLoading, setEnvLoading] = useState(false);
+
   // Compose import state
   const [showCompose, setShowCompose] = useState(false);
   const [composeYaml, setComposeYaml] = useState("");
@@ -334,6 +339,20 @@ export default function Apps() {
       logEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [logLines, logAutoScroll]);
+
+  const handleEnv = async (containerId: string) => {
+    setEnvTarget(containerId);
+    setEnvLoading(true);
+    try {
+      const data = await api.get<{ env: { key: string; value: string }[] }>(`/apps/${containerId}/env`);
+      setEnvVars(data.env || []);
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : "Failed to load env vars", type: "error" });
+      setEnvTarget(null);
+    } finally {
+      setEnvLoading(false);
+    }
+  };
 
   const downloadLogs = () => {
     const appName = apps.find(a => a.container_id === logsTarget)?.name || "container";
@@ -524,6 +543,12 @@ export default function Apps() {
                           }`}
                         >
                           Logs
+                        </button>
+                        <button
+                          onClick={() => handleEnv(app.container_id)}
+                          className="px-2 py-1 rounded text-xs font-medium bg-purple-50 text-purple-600 hover:bg-purple-100"
+                        >
+                          Env
                         </button>
                         {deleteTarget === app.container_id ? (
                           <>
@@ -836,6 +861,58 @@ export default function Apps() {
               >
                 {deploying ? "Deploying..." : "Deploy"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Env Vars Modal */}
+      {envTarget && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          role="dialog"
+          aria-labelledby="env-dialog-title"
+          onKeyDown={(e) => { if (e.key === "Escape") setEnvTarget(null); }}
+        >
+          <div className="bg-dark-800 rounded-xl shadow-xl p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto border border-dark-500">
+            <div className="flex items-center justify-between mb-4">
+              <h3 id="env-dialog-title" className="text-lg font-semibold text-dark-50">
+                Environment Variables
+              </h3>
+              <button onClick={() => setEnvTarget(null)} className="text-dark-300 hover:text-dark-50">
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+            <p className="text-xs text-dark-300 mb-3">
+              {apps.find(a => a.container_id === envTarget)?.name}
+            </p>
+            {envLoading ? (
+              <div className="flex items-center justify-center py-8 text-dark-300">
+                <svg className="w-5 h-5 animate-spin mr-2" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                Loading...
+              </div>
+            ) : envVars.length === 0 ? (
+              <div className="text-center py-8 text-dark-300 text-sm">No environment variables set</div>
+            ) : (
+              <div className="space-y-2">
+                {envVars.map((ev, i) => (
+                  <div key={i} className="flex gap-2 items-start">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-mono text-dark-200 truncate">{ev.key}</div>
+                      <div className="text-xs font-mono text-dark-100 break-all bg-dark-900 rounded px-2 py-1 mt-0.5 border border-dark-600">
+                        {ev.key.toLowerCase().includes("password") || ev.key.toLowerCase().includes("secret") || ev.key.toLowerCase().includes("token") || ev.key.toLowerCase().includes("key")
+                          ? "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
+                          : ev.value}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="mt-4 pt-3 border-t border-dark-600">
+              <p className="text-[10px] text-dark-400">
+                Environment variables are set at deploy time. To change them, redeploy the app with updated values.
+              </p>
             </div>
           </div>
         </div>

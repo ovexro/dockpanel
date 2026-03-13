@@ -154,6 +154,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/apps/{container_id}/start", post(docker_apps::start_app))
         .route("/api/apps/{container_id}/restart", post(docker_apps::restart_app))
         .route("/api/apps/{container_id}/logs", get(docker_apps::app_logs))
+        .route("/api/apps/{container_id}/env", get(docker_apps::app_env))
         // Security (admin)
         .route("/api/security/overview", get(security::overview))
         .route("/api/security/firewall", get(security::firewall_status))
