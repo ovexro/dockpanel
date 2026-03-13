@@ -224,6 +224,11 @@ pub async fn switch_php(
         "php_socket": format!("unix:/run/php/php{version}-fpm.sock"),
     });
 
+    // Preserve custom nginx directives
+    if let Some(ref custom) = site.custom_nginx {
+        agent_body["custom_nginx"] = serde_json::json!(custom);
+    }
+
     // Preserve SSL state
     if site.ssl_enabled {
         agent_body["ssl"] = serde_json::json!(true);
@@ -310,6 +315,7 @@ pub struct UpdateLimitsRequest {
     pub max_upload_mb: Option<i32>,    // client_max_body_size
     pub php_memory_mb: Option<i32>,    // PHP memory_limit
     pub php_max_workers: Option<i32>,  // PHP-FPM pm.max_children
+    pub custom_nginx: Option<String>,  // custom nginx directives
 }
 
 pub async fn update_limits(
@@ -347,15 +353,27 @@ pub async fn update_limits(
         return Err(err(StatusCode::BAD_REQUEST, "PHP workers must be between 1 and 100"));
     }
 
+    // Validate custom_nginx
+    if let Some(ref custom) = body.custom_nginx {
+        if custom.len() > 10240 {
+            return Err(err(StatusCode::BAD_REQUEST, "Custom nginx directives must be under 10KB"));
+        }
+        if custom.contains('\0') {
+            return Err(err(StatusCode::BAD_REQUEST, "Custom nginx directives contain invalid characters"));
+        }
+    }
+
     // Update DB
+    let custom_nginx = body.custom_nginx.as_deref();
     let updated: Site = sqlx::query_as(
-        "UPDATE sites SET rate_limit = $1, max_upload_mb = $2, php_memory_mb = $3, php_max_workers = $4, updated_at = NOW() \
-         WHERE id = $5 RETURNING *",
+        "UPDATE sites SET rate_limit = $1, max_upload_mb = $2, php_memory_mb = $3, php_max_workers = $4, \
+         custom_nginx = $5, updated_at = NOW() WHERE id = $6 RETURNING *",
     )
     .bind(body.rate_limit)
     .bind(max_upload)
     .bind(php_memory)
     .bind(php_workers)
+    .bind(custom_nginx)
     .bind(id)
     .fetch_one(&state.db)
     .await
@@ -369,6 +387,11 @@ pub async fn update_limits(
         "php_memory_mb": php_memory,
         "php_max_workers": php_workers,
     });
+    if let Some(ref custom) = body.custom_nginx {
+        agent_body["custom_nginx"] = serde_json::json!(custom);
+    } else if let Some(ref existing) = site.custom_nginx {
+        agent_body["custom_nginx"] = serde_json::json!(existing);
+    }
 
     if let Some(port) = site.proxy_port {
         agent_body["proxy_port"] = serde_json::json!(port);

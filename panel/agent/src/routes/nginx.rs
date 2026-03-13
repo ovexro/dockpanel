@@ -34,6 +34,8 @@ pub struct SiteConfig {
     pub php_memory_mb: Option<u32>,
     /// PHP-FPM pm.max_children
     pub php_max_workers: Option<u32>,
+    /// Custom nginx directives injected into server block
+    pub custom_nginx: Option<String>,
 }
 
 #[derive(Serialize)]
