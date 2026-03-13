@@ -54,11 +54,15 @@ jobs:
       - name: Build API
         run: cargo build --release --target ${{ matrix.target }} --manifest-path panel/backend/Cargo.toml
 
+      - name: Build CLI
+        run: cargo build --release --target ${{ matrix.target }} --manifest-path panel/cli/Cargo.toml
+
       - name: Package binaries
         run: |
           mkdir -p release
           cp panel/agent/target/${{ matrix.target }}/release/dockpanel-agent release/dockpanel-agent-linux-${{ matrix.arch }}
           cp panel/backend/target/${{ matrix.target }}/release/dockpanel-api release/dockpanel-api-linux-${{ matrix.arch }}
+          cp panel/cli/target/${{ matrix.target }}/release/dockpanel release/dockpanel-cli-linux-${{ matrix.arch }}
           chmod +x release/*
 
       - name: Upload artifacts
@@ -126,5 +130,7 @@ jobs:
             release/dockpanel-agent-linux-arm64
             release/dockpanel-api-linux-amd64
             release/dockpanel-api-linux-arm64
+            release/dockpanel-cli-linux-amd64
+            release/dockpanel-cli-linux-arm64
             release/dockpanel-frontend.tar.gz
             release/checksums.txt
