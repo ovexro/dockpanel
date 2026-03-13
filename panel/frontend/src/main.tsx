@@ -32,6 +32,7 @@ const Logs = lazy(() => import("./pages/Logs"));
 const Users = lazy(() => import("./pages/Users"));
 const Apps = lazy(() => import("./pages/Apps"));
 const Security = lazy(() => import("./pages/Security"));
+const Diagnostics = lazy(() => import("./pages/Diagnostics"));
 const Settings = lazy(() => import("./pages/Settings"));
 const Alerts = lazy(() => import("./pages/Alerts"));
 const Activity = lazy(() => import("./pages/Activity"));
@@ -63,6 +64,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/logs" element={<Logs />} />
               <Route path="/apps" element={<Apps />} />
               <Route path="/security" element={<Security />} />
+              <Route path="/diagnostics" element={<Diagnostics />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/activity" element={<Activity />} />
               <Route path="/users" element={<Users />} />
