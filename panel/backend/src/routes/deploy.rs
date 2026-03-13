@@ -1,12 +1,14 @@
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     Json,
 };
+use sha2::{Sha256, Digest};
+use std::time::Instant;
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{err, paginate, ApiError};
+use crate::error::{err, agent_error, paginate, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -185,7 +187,7 @@ pub async fn keygen(
         .agent
         .post("/deploy/keygen", Some(serde_json::json!({ "domain": domain })))
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Keygen failed: {e}")))?;
+        .map_err(|e| agent_error("Deploy key generation", e))?;
 
     let public_key = result.get("public_key").and_then(|v| v.as_str()).unwrap_or("");
     let key_path = result.get("key_path").and_then(|v| v.as_str()).unwrap_or("");
@@ -233,18 +235,67 @@ pub async fn logs(
 /// POST /api/webhooks/deploy/{site_id}/{secret} — Webhook endpoint (no auth).
 pub async fn webhook(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path((site_id, secret)): Path<(Uuid, String)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // Verify secret
+    // Validate Content-Type
+    let content_type = headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !content_type.is_empty() && !content_type.contains("application/json") {
+        return Err(err(StatusCode::BAD_REQUEST, "Content-Type must be application/json"));
+    }
+
+    // Rate limit: max 10 attempts per site per hour
+    {
+        let mut attempts = state.webhook_attempts.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        let entry = attempts.entry(site_id).or_insert((0, now));
+        if now.duration_since(entry.1).as_secs() >= 3600 {
+            // Window expired, reset
+            *entry = (0, now);
+        }
+        if entry.0 >= 10 {
+            return Err(err(StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded. Try again later."));
+        }
+    }
+
+    // Fetch the deploy config by site_id only (we'll compare the secret in constant time)
     let config: DeployConfig = sqlx::query_as(
-        "SELECT * FROM deploy_configs WHERE site_id = $1 AND webhook_secret = $2 AND auto_deploy = true",
+        "SELECT * FROM deploy_configs WHERE site_id = $1 AND auto_deploy = true",
     )
     .bind(site_id)
-    .bind(&secret)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Invalid webhook"))?;
+
+    // Constant-time secret comparison: hash both and compare the hashes
+    let provided_hash = {
+        let mut h = Sha256::new();
+        h.update(secret.as_bytes());
+        h.finalize()
+    };
+    let stored_hash = {
+        let mut h = Sha256::new();
+        h.update(config.webhook_secret.as_bytes());
+        h.finalize()
+    };
+    if provided_hash != stored_hash {
+        // Record failed attempt
+        {
+            let mut attempts = state.webhook_attempts.lock().unwrap_or_else(|e| e.into_inner());
+            let now = Instant::now();
+            let entry = attempts.entry(site_id).or_insert((0, now));
+            if now.duration_since(entry.1).as_secs() >= 3600 {
+                *entry = (1, now);
+            } else {
+                entry.0 += 1;
+            }
+        }
+        return Err(err(StatusCode::NOT_FOUND, "Invalid webhook"));
+    }
 
     // Get domain
     let domain: Option<(String,)> = sqlx::query_as("SELECT domain FROM sites WHERE id = $1")
@@ -285,7 +336,7 @@ async fn execute_deploy(
         .agent
         .post("/deploy/run", Some(agent_body))
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Deploy failed: {e}")))?;
+        .map_err(|e| agent_error("Deploy execution", e))?;
 
     let success = result.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
     let output = result.get("output").and_then(|v| v.as_str()).unwrap_or("");

@@ -20,6 +20,11 @@ use crate::models::User;
 use crate::services::{activity, email};
 use crate::AppState;
 
+/// A zero-valued UUID used for activity logging when there is no authenticated user.
+fn zero_uuid() -> uuid::Uuid {
+    uuid::Uuid::nil()
+}
+
 /// Generate a secure random token and its SHA-256 hash.
 fn generate_token() -> (String, String) {
     let token = uuid::Uuid::new_v4().to_string().replace('-', "");
@@ -154,19 +159,29 @@ pub async fn login(
         Some(u) => {
             let parsed = PasswordHash::new(&u.password_hash)
                 .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Password hash error"))?;
-            Argon2::default()
-                .verify_password(body.password.as_bytes(), &parsed)
-                .map_err(|_| {
+            match Argon2::default().verify_password(body.password.as_bytes(), &parsed) {
+                Ok(()) => u,
+                Err(_) => {
                     record_login_attempt(&state.login_attempts, &ip);
-                    err(StatusCode::UNAUTHORIZED, "Invalid credentials")
-                })?;
-            u
+                    // Log failed login attempt (never log password)
+                    activity::log_activity(
+                        &state.db, u.id, &u.email, "auth.login_failed",
+                        None, None, None, Some(&ip),
+                    ).await;
+                    return Err(err(StatusCode::UNAUTHORIZED, "Invalid credentials"));
+                }
+            }
         }
         None => {
             // Run dummy verify to equalize timing, then fail
             let parsed = PasswordHash::new(dummy_hash).unwrap();
             let _ = Argon2::default().verify_password(body.password.as_bytes(), &parsed);
             record_login_attempt(&state.login_attempts, &ip);
+            // Log failed login with email only (no user ID available)
+            activity::log_activity(
+                &state.db, zero_uuid(), &body.email, "auth.login_failed",
+                None, None, Some("unknown_user"), Some(&ip),
+            ).await;
             return Err(err(StatusCode::UNAUTHORIZED, "Invalid credentials"));
         }
     };
@@ -221,12 +236,14 @@ pub async fn login(
 /// Issue a JWT session token + cookie for a user.
 fn issue_session(state: &AppState, user: &User) -> Result<(String, String), ApiError> {
     let now = chrono::Utc::now();
+    let jti = uuid::Uuid::new_v4().to_string();
     let claims = Claims {
         sub: user.id,
         email: user.email.clone(),
         role: user.role.clone(),
         iat: now.timestamp() as usize,
-        exp: (now + chrono::Duration::hours(24)).timestamp() as usize,
+        exp: (now + chrono::Duration::hours(2)).timestamp() as usize,
+        jti: Some(jti),
     };
 
     let token = encode(
@@ -237,7 +254,7 @@ fn issue_session(state: &AppState, user: &User) -> Result<(String, String), ApiE
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     let cookie = format!(
-        "token={token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=86400"
+        "token={token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=7200"
     );
     Ok((token, cookie))
 }
@@ -251,8 +268,19 @@ fn record_login_attempt(
     }
 }
 
-/// POST /api/auth/logout — Clear the auth cookie.
-pub async fn logout() -> (StatusCode, [(header::HeaderName, String); 1], Json<serde_json::Value>) {
+/// POST /api/auth/logout — Clear the auth cookie and blacklist the token JTI.
+pub async fn logout(
+    State(state): State<AppState>,
+    auth: Result<AuthUser, StatusCode>,
+) -> (StatusCode, [(header::HeaderName, String); 1], Json<serde_json::Value>) {
+    // Blacklist the token's JTI so it cannot be reused
+    if let Ok(AuthUser(claims)) = auth {
+        if let Some(jti) = claims.jti {
+            let mut blacklist = state.token_blacklist.write().await;
+            blacklist.insert(jti);
+        }
+    }
+
     let cookie = "token=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0".to_string();
     (
         StatusCode::OK,
@@ -701,8 +729,26 @@ pub async fn twofa_verify(
         return Err(err(StatusCode::UNAUTHORIZED, "Invalid token purpose"));
     }
 
+    let user_id = token_data.claims.sub;
+
+    // Rate limit: max 5 failed 2FA attempts per 5 minutes
+    {
+        let mut attempts = state.twofa_attempts.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        if let Some((count, window_start)) = attempts.get(&user_id) {
+            if now.duration_since(*window_start).as_secs() < 300 && *count >= 5 {
+                let remaining = 300 - now.duration_since(*window_start).as_secs();
+                let mins = (remaining + 59) / 60;
+                return Err(err(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    &format!("Too many attempts. Try again in {mins} minutes."),
+                ));
+            }
+        }
+    }
+
     let user: User = sqlx::query_as("SELECT * FROM users WHERE id = $1")
-        .bind(token_data.claims.sub)
+        .bind(user_id)
         .fetch_one(&state.db)
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -725,8 +771,26 @@ pub async fn twofa_verify(
         // Try recovery codes
         let used_recovery = try_recovery_code(&state.db, &user, &body.code).await?;
         if !used_recovery {
+            // Record failed attempt
+            {
+                let mut attempts = state.twofa_attempts.lock().unwrap_or_else(|e| e.into_inner());
+                let now = Instant::now();
+                let entry = attempts.entry(user_id).or_insert((0, now));
+                if now.duration_since(entry.1).as_secs() >= 300 {
+                    // Window expired, reset
+                    *entry = (1, now);
+                } else {
+                    entry.0 += 1;
+                }
+            }
             return Err(err(StatusCode::UNAUTHORIZED, "Invalid 2FA code"));
         }
+    }
+
+    // Successful verification — clear rate limit
+    {
+        let mut attempts = state.twofa_attempts.lock().unwrap_or_else(|e| e.into_inner());
+        attempts.remove(&user_id);
     }
 
     let (_token, cookie) = issue_session(&state, &user)?;

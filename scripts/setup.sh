@@ -50,7 +50,28 @@ NC='\033[0m'
 log()    { echo -e "${GREEN}[+]${NC} $1"; }
 warn()   { echo -e "${YELLOW}[!]${NC} $1"; }
 error()  { echo -e "${RED}[x]${NC} $1" >&2; }
+info()   { echo -e "${CYAN}[i]${NC} $1"; }
 header() { echo -e "\n${CYAN}${BOLD}── $1 ──${NC}\n"; }
+
+# ── Pre-flight Checks ───────────────────────────────────────────────────
+preflight_checks() {
+    info "Running pre-flight checks..."
+
+    # Check disk space (need at least 3GB)
+    FREE_KB=$(df /opt 2>/dev/null | awk 'NR==2 {print $4}')
+    if [ -n "$FREE_KB" ] && [ "$FREE_KB" -lt 3145728 ]; then
+        error "Less than 3GB free disk space. Need at least 3GB."
+        exit 1
+    fi
+
+    # Check available memory (need at least 512MB)
+    FREE_MEM=$(free -m | awk '/^Mem:/ {print $7}')
+    if [ -n "$FREE_MEM" ] && [ "$FREE_MEM" -lt 256 ]; then
+        warn "Less than 256MB available memory. Performance may be degraded."
+    fi
+
+    info "Pre-flight checks passed."
+}
 
 # ── Package manager ──────────────────────────────────────────────────────
 detect_pkg_manager() {
@@ -249,7 +270,7 @@ install_node() {
 create_directories() {
     header "Creating Directories"
 
-    mkdir -p "$CONFIG_DIR"
+    mkdir -p -m 0700 "$CONFIG_DIR"
     mkdir -p /var/run/dockpanel
     mkdir -p /etc/dockpanel/ssl
     mkdir -p /var/backups/dockpanel
@@ -455,9 +476,14 @@ Type=simple
 ExecStart=/usr/local/bin/dockpanel-agent
 ExecStartPost=/bin/sh -c 'sleep 1 && chgrp www-data /var/run/dockpanel/agent.sock 2>/dev/null; chmod 660 /var/run/dockpanel/agent.sock 2>/dev/null; true'
 Restart=always
-RestartSec=3
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
 Environment=RUST_LOG=info
 ReadWritePaths=/etc/nginx /etc/dockpanel /var/run/dockpanel /var/backups/dockpanel /var/www /var/log
+PrivateTmp=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
 
 [Install]
 WantedBy=multi-user.target
@@ -474,9 +500,18 @@ Wants=dockpanel-agent.service
 Type=simple
 ExecStart=/usr/local/bin/dockpanel-api
 Restart=always
-RestartSec=3
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
 Environment=RUST_LOG=info
 EnvironmentFile=/etc/dockpanel/api.env
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectSystem=strict
+ReadWritePaths=/var/run/dockpanel /tmp
 
 [Install]
 WantedBy=multi-user.target
@@ -619,6 +654,9 @@ server {
     add_header X-Frame-Options "DENY" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' wss:; frame-ancestors 'none';" always;
+    add_header X-XSS-Protection "1; mode=block" always;
 }
 NGINXEOF
 
@@ -694,12 +732,38 @@ print_summary() {
     echo ""
 }
 
+# ── PostgreSQL Backup ────────────────────────────────────────────────────
+setup_db_backup() {
+    header "PostgreSQL Backup"
+
+    local BACKUP_SCRIPT="/opt/dockpanel/scripts/db-backup.sh"
+    mkdir -p /opt/dockpanel/scripts
+
+    cat > "$BACKUP_SCRIPT" << 'BKEOF'
+#!/bin/bash
+BACKUP_DIR="/var/backups/dockpanel/db"
+mkdir -p "$BACKUP_DIR"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+docker exec dockpanel-postgres pg_dump -U dockpanel -d dockpanel | gzip > "$BACKUP_DIR/dockpanel_$TIMESTAMP.sql.gz"
+# Keep last 7 days
+find "$BACKUP_DIR" -name "*.sql.gz" -mtime +7 -delete
+BKEOF
+    chmod +x "$BACKUP_SCRIPT"
+
+    # Install cron job (daily at 3 AM)
+    (crontab -l 2>/dev/null | grep -v "$BACKUP_SCRIPT"; echo "0 3 * * * $BACKUP_SCRIPT") | crontab -
+
+    log "Database backup script installed ($BACKUP_SCRIPT)"
+    log "Cron job: daily at 3:00 AM, 7-day retention"
+}
+
 # ── Main ─────────────────────────────────────────────────────────────────
 main() {
     print_banner
     check_root
     detect_pkg_manager
     detect_os
+    preflight_checks
 
     # Auto-detect: if no source available, use release binaries
     if [ "$INSTALL_FROM_RELEASE" != "1" ] && [ ! -d "$AGENT_SRC/src" ]; then
@@ -726,6 +790,7 @@ main() {
     create_services
     configure_nginx
     wait_for_health
+    setup_db_backup
     print_summary
 }
 

@@ -6,7 +6,7 @@ use axum::{
 use std::collections::HashMap;
 
 use crate::auth::AuthUser;
-use crate::error::{err, require_admin, ApiError};
+use crate::error::{err, agent_error, require_admin, ApiError};
 use crate::routes::{is_valid_container_id, is_valid_name};
 use crate::services::activity;
 use crate::AppState;
@@ -30,7 +30,7 @@ pub async fn list_templates(
         .agent
         .get("/apps/templates")
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Agent error: {e}")))?;
+        .map_err(|e| agent_error("Docker apps", e))?;
 
     Ok(Json(result))
 }
@@ -77,7 +77,7 @@ pub async fn deploy(
         .agent
         .post("/apps/deploy", Some(agent_body))
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Deploy failed: {e}")))?;
+        .map_err(|e| agent_error("Docker deploy", e))?;
 
     tracing::info!("App deployed: {} ({})", body.name, body.template_id);
     activity::log_activity(
@@ -99,7 +99,7 @@ pub async fn list_apps(
         .agent
         .get("/apps")
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Agent error: {e}")))?;
+        .map_err(|e| agent_error("Docker apps", e))?;
 
     Ok(Json(result))
 }
@@ -120,7 +120,7 @@ pub async fn stop_app(
         .agent
         .post(&agent_path, None)
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Stop failed: {e}")))?;
+        .map_err(|e| agent_error("Container stop", e))?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -141,7 +141,7 @@ pub async fn start_app(
         .agent
         .post(&agent_path, None)
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Start failed: {e}")))?;
+        .map_err(|e| agent_error("Container start", e))?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -162,7 +162,7 @@ pub async fn restart_app(
         .agent
         .post(&agent_path, None)
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Restart failed: {e}")))?;
+        .map_err(|e| agent_error("Container restart", e))?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -183,7 +183,7 @@ pub async fn app_logs(
         .agent
         .get(&agent_path)
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Logs failed: {e}")))?;
+        .map_err(|e| agent_error("Container logs", e))?;
 
     Ok(Json(result))
 }
@@ -204,7 +204,7 @@ pub async fn update_app(
         .agent
         .post(&agent_path, None)
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Update failed: {e}")))?;
+        .map_err(|e| agent_error("Container update", e))?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "app.update",
@@ -230,7 +230,7 @@ pub async fn app_env(
         .agent
         .get(&agent_path)
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Env failed: {e}")))?;
+        .map_err(|e| agent_error("Container env", e))?;
 
     Ok(Json(result))
 }
@@ -255,7 +255,7 @@ pub async fn compose_parse(
         .agent
         .post("/apps/compose/parse", Some(serde_json::json!({ "yaml": yaml })))
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Parse failed: {e}")))?;
+        .map_err(|e| agent_error("Compose parse", e))?;
 
     Ok(Json(result))
 }
@@ -280,7 +280,7 @@ pub async fn compose_deploy(
         .agent
         .post("/apps/compose/deploy", Some(serde_json::json!({ "yaml": yaml })))
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Deploy failed: {e}")))?;
+        .map_err(|e| agent_error("Docker deploy", e))?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "app.compose_deploy",
@@ -307,7 +307,7 @@ pub async fn remove_app(
         .agent
         .delete(&agent_path)
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Remove failed: {e}")))?;
+        .map_err(|e| agent_error("Container removal", e))?;
 
     tracing::info!("App removed: {}", container_id);
     activity::log_activity(

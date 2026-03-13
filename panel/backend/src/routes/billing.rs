@@ -6,7 +6,7 @@ use axum::{
 };
 
 use crate::auth::AuthUser;
-use crate::error::{err, ApiError};
+use crate::error::{err, agent_error, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -90,10 +90,10 @@ pub async fn create_checkout(
             .form(&[("email", &user.1), ("metadata[user_id]", &claims.sub.to_string())])
             .send()
             .await
-            .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Stripe error: {e}")))?;
+            .map_err(|e| agent_error("Stripe request", e))?;
 
         let body: serde_json::Value = resp.json().await
-            .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Stripe parse error: {e}")))?;
+            .map_err(|e| agent_error("Stripe response parse", e))?;
 
         let cid = body["id"].as_str()
             .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "Stripe: missing customer id"))?
@@ -143,13 +143,13 @@ pub async fn create_checkout(
         ])
         .send()
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Stripe error: {e}")))?;
+        .map_err(|e| agent_error("Stripe request", e))?;
 
     let session: serde_json::Value = resp.json().await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Stripe parse error: {e}")))?;
+        .map_err(|e| agent_error("Stripe response parse", e))?;
 
     if let Some(err_msg) = session.get("error") {
-        return Err(err(StatusCode::BAD_GATEWAY, &format!("Stripe: {err_msg}")));
+        return Err(agent_error("Stripe checkout", err_msg));
     }
 
     let url = session["url"].as_str()
@@ -189,10 +189,10 @@ pub async fn customer_portal(
         ])
         .send()
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Stripe error: {e}")))?;
+        .map_err(|e| agent_error("Stripe request", e))?;
 
     let session: serde_json::Value = resp.json().await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Stripe parse error: {e}")))?;
+        .map_err(|e| agent_error("Stripe response parse", e))?;
 
     let url = session["url"].as_str()
         .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "Stripe: missing portal URL"))?;
@@ -231,6 +231,14 @@ pub async fn webhook(
 
     if timestamp.is_empty() || signature.is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid signature format"));
+    }
+
+    // Validate timestamp freshness (reject events older than 5 minutes)
+    let ts: i64 = timestamp.parse()
+        .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid timestamp"))?;
+    let now = chrono::Utc::now().timestamp();
+    if (now - ts).abs() > 300 {
+        return Err(err(StatusCode::BAD_REQUEST, "Webhook event too old"));
     }
 
     // Compute expected signature

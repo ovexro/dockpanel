@@ -23,6 +23,7 @@ export default function Settings() {
   const [healthLoading, setHealthLoading] = useState(true);
   const [message, setMessage] = useState({ text: "", type: "" });
   const healthTimer = useRef<ReturnType<typeof setInterval>>(undefined);
+  const qrRef = useRef<HTMLDivElement>(null);
 
   // Form state
   const [panelName, setPanelName] = useState("");
@@ -110,7 +111,7 @@ export default function Settings() {
       const data = await api.get<BackupDestination[]>("/backup-destinations");
       setDestinations(data);
     } catch {
-      // ignore
+      setMessage({ text: "Failed to load backup destinations", type: "error" });
     }
   };
 
@@ -142,6 +143,19 @@ export default function Settings() {
     healthTimer.current = setInterval(loadHealth, 30000);
     return () => clearInterval(healthTimer.current);
   }, []);
+
+  // Safely render QR SVG without dangerouslySetInnerHTML
+  useEffect(() => {
+    if (qrRef.current && twoFaSetup?.qr_svg) {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(twoFaSetup.qr_svg, "image/svg+xml");
+      const svg = doc.querySelector("svg");
+      if (svg) {
+        qrRef.current.innerHTML = "";
+        qrRef.current.appendChild(svg);
+      }
+    }
+  }, [twoFaSetup?.qr_svg]);
 
   const saveGeneral = async () => {
     setSaving("general");
@@ -625,7 +639,7 @@ export default function Settings() {
             ) : twoFaSetup ? (
               <div className="space-y-4">
                 <p className="text-sm text-dark-100">Scan this QR code with your authenticator app:</p>
-                <div className="flex justify-center bg-white rounded-lg p-4 w-fit mx-auto" dangerouslySetInnerHTML={{ __html: twoFaSetup.qr_svg }} />
+                <div ref={qrRef} className="flex justify-center bg-white rounded-lg p-4 w-fit mx-auto" />
                 <p className="text-xs text-dark-300 text-center font-mono break-all">
                   Manual entry: {twoFaSetup.secret}
                 </p>

@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{err, ApiError};
+use crate::error::{err, agent_error, ApiError};
 use crate::AppState;
 
 #[derive(serde::Serialize, serde::Deserialize, sqlx::FromRow, Clone)]
@@ -207,7 +207,7 @@ pub async fn test_connection(
         .agent
         .post("/backups/test-destination", Some(agent_body))
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Test failed: {e}")))?;
+        .map_err(|e| agent_error("Backup destination test", e))?;
 
     Ok(Json(result))
 }

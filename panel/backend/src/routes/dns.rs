@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{err, ApiError};
+use crate::error::{err, agent_error, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -148,12 +148,12 @@ pub async fn create_zone(
         .headers(headers)
         .send()
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Cloudflare API error: {e}")))?;
+        .map_err(|e| agent_error("Cloudflare API", e))?;
 
     let cf_resp: serde_json::Value = resp
         .json()
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Invalid CF response: {e}")))?;
+        .map_err(|e| agent_error("Cloudflare response", e))?;
 
     if !cf_resp.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
         let errors = cf_resp.get("errors").cloned().unwrap_or_default();
@@ -234,12 +234,12 @@ pub async fn list_records(
         .headers(headers)
         .send()
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("CF API error: {e}")))?;
+        .map_err(|e| agent_error("Cloudflare API", e))?;
 
     let cf_resp: serde_json::Value = resp
         .json()
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Invalid CF response: {e}")))?;
+        .map_err(|e| agent_error("Cloudflare response", e))?;
 
     if !cf_resp.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
         return Err(err(StatusCode::BAD_GATEWAY, "Failed to fetch DNS records from Cloudflare"));
@@ -293,12 +293,12 @@ pub async fn create_record(
         .json(&cf_body)
         .send()
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("CF API error: {e}")))?;
+        .map_err(|e| agent_error("Cloudflare API", e))?;
 
     let cf_resp: serde_json::Value = resp
         .json()
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Invalid CF response: {e}")))?;
+        .map_err(|e| agent_error("Cloudflare response", e))?;
 
     if !cf_resp.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
         let errors = cf_resp.get("errors").cloned().unwrap_or_default();
@@ -353,12 +353,12 @@ pub async fn update_record(
         .json(&cf_body)
         .send()
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("CF API error: {e}")))?;
+        .map_err(|e| agent_error("Cloudflare API", e))?;
 
     let cf_resp: serde_json::Value = resp
         .json()
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Invalid CF response: {e}")))?;
+        .map_err(|e| agent_error("Cloudflare response", e))?;
 
     if !cf_resp.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
         let errors = cf_resp.get("errors").cloned().unwrap_or_default();
@@ -395,12 +395,12 @@ pub async fn delete_record(
         .headers(headers)
         .send()
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("CF API error: {e}")))?;
+        .map_err(|e| agent_error("Cloudflare API", e))?;
 
     let cf_resp: serde_json::Value = resp
         .json()
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Invalid CF response: {e}")))?;
+        .map_err(|e| agent_error("Cloudflare response", e))?;
 
     if !cf_resp.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
         let errors = cf_resp.get("errors").cloned().unwrap_or_default();

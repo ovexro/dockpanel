@@ -12,9 +12,38 @@ pub struct DeployResult {
     pub duration_ms: u64,
 }
 
-/// Build GIT_SSH_COMMAND for deploy key authentication.
-fn ssh_command(key_path: &str) -> String {
-    format!("ssh -i {key_path} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null")
+/// Validate and build GIT_SSH_COMMAND for deploy key authentication.
+/// Only allows keys stored under the deploy-keys directory. Uses strict host key checking
+/// with the system known_hosts file instead of blindly accepting all hosts.
+fn ssh_command(key_path: &str) -> Result<String, String> {
+    // Reject paths containing ".."
+    if key_path.contains("..") {
+        return Err("Deploy key path must not contain '..'".into());
+    }
+
+    // Validate the key_path starts with the allowed directory
+    if !key_path.starts_with(DEPLOY_KEYS_DIR) {
+        return Err(format!(
+            "Deploy key must be under {DEPLOY_KEYS_DIR}/, got: {key_path}"
+        ));
+    }
+
+    // Canonicalize the path and verify it's still under the allowed directory
+    let canon = Path::new(key_path)
+        .canonicalize()
+        .map_err(|e| format!("Deploy key not found: {e}"))?;
+    let canon_base = Path::new(DEPLOY_KEYS_DIR)
+        .canonicalize()
+        .map_err(|e| format!("Deploy keys directory not found: {e}"))?;
+
+    if !canon.starts_with(&canon_base) {
+        return Err("Deploy key path resolved outside the allowed directory".into());
+    }
+
+    let canon_str = canon.to_string_lossy();
+    Ok(format!(
+        "ssh -i {canon_str} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/etc/dockpanel/known_hosts"
+    ))
 }
 
 /// Clone or pull a git repository to the site's webroot.
@@ -29,7 +58,10 @@ pub async fn clone_or_pull(
     let git_dir = format!("{site_dir}/.git");
     let mut output_buf = String::new();
 
-    let env_ssh = key_path.map(|k| ssh_command(k));
+    let env_ssh = match key_path {
+        Some(k) => Some(ssh_command(k)?),
+        None => None,
+    };
 
     if Path::new(&git_dir).exists() {
         // Git pull (fetch + reset to match remote)
@@ -124,7 +156,9 @@ pub async fn clone_or_pull(
     })
 }
 
-/// Run a deploy script in the site directory.
+/// Run a deploy script file from the site directory.
+/// The `script` parameter is treated as a relative path within the site dir
+/// (e.g., ".dockpanel/deploy.sh"), NOT as arbitrary bash code.
 pub async fn run_script(domain: &str, script: &str) -> Result<(bool, String), String> {
     if script.trim().is_empty() {
         return Ok((true, String::new()));
@@ -132,10 +166,40 @@ pub async fn run_script(domain: &str, script: &str) -> Result<(bool, String), St
 
     let site_dir = format!("{WEBROOT}/{domain}");
 
+    // Treat the script parameter as a relative file path within the site directory
+    let script_path = Path::new(&site_dir).join(script.trim_start_matches('/'));
+
+    // Canonicalize to prevent path traversal
+    let canon_site = Path::new(&site_dir)
+        .canonicalize()
+        .map_err(|e| format!("Site directory not found: {e}"))?;
+    let canon_script = script_path
+        .canonicalize()
+        .map_err(|e| format!("Deploy script not found: {e}"))?;
+
+    // Verify the script is within the site directory
+    if !canon_script.starts_with(&canon_site) {
+        return Err("Deploy script must be within the site directory".into());
+    }
+
+    // Reject paths containing ".." for extra safety
+    if script.contains("..") {
+        return Err("Deploy script path must not contain '..'".into());
+    }
+
+    // Verify the script file exists and is a regular file
+    let meta = std::fs::metadata(&canon_script)
+        .map_err(|e| format!("Deploy script not accessible: {e}"))?;
+    if !meta.is_file() {
+        return Err("Deploy script path is not a regular file".into());
+    }
+
+    let script_str = canon_script.to_string_lossy().to_string();
+
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(300),
         Command::new("bash")
-            .args(["-c", script])
+            .arg(&script_str)
             .current_dir(&site_dir)
             .env("HOME", &site_dir)
             .env("NODE_ENV", "production")

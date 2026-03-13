@@ -651,10 +651,10 @@ pub async fn deploy_app(
         binds.push(format!("{host_dir}:{vol}"));
     }
 
-    // Portainer needs the Docker socket mounted
-    if template.id == "portainer" {
-        binds.push("/var/run/docker.sock:/var/run/docker.sock".to_string());
-    }
+    // NOTE: Portainer Docker socket auto-mount was removed for security.
+    // Mounting the host Docker socket gives full host escape capabilities.
+    // If Portainer needs Docker access, the admin should configure it separately
+    // via docker-compose or manual volume mounts outside of DockPanel.
 
     let mut host_config = bollard::service::HostConfig {
         port_bindings: Some(port_bindings),

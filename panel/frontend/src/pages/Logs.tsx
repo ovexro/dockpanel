@@ -39,9 +39,10 @@ export default function Logs() {
   const streamLinesRef = useRef<string[]>([]);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const userStoppedRef = useRef(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.get<Site[]>("/sites").then(setSites).catch((e) => console.error("Failed to load sites:", e));
+    api.get<Site[]>("/sites").then(setSites).catch(() => setError("Failed to load sites. Please try again."));
   }, []);
 
   const scrollToBottom = () => {
@@ -136,6 +137,7 @@ export default function Logs() {
       const resp = await api.get<{ token: string; domain?: string; type: string }>(tokenUrl);
 
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      // WebSocket API doesn't support Authorization headers; token is short-lived and same-origin
       let wsUrl = `${proto}//${window.location.host}/agent/logs/stream?token=${resp.token}&type=${resp.type}`;
       if (resp.domain) {
         wsUrl += `&domain=${resp.domain}`;
@@ -418,6 +420,12 @@ export default function Logs() {
           </div>
         )}
       </div>
+
+      {error && (
+        <div className="px-6 py-3 bg-red-500/10 border-b border-red-500/20 text-red-400 text-sm">
+          {error}
+        </div>
+      )}
 
       {/* Log content */}
       <div

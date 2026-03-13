@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::error::{err, ApiError};
+use crate::services::activity;
 use crate::AppState;
 
 #[derive(serde::Deserialize)]
@@ -84,6 +85,11 @@ pub async fn create(
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "api_key.created",
+        Some("api_key"), Some(name), None, None,
+    ).await;
+
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({
@@ -101,6 +107,19 @@ pub async fn revoke(
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Fetch key name before deleting for activity log
+    let key_info: Option<(String,)> =
+        sqlx::query_as("SELECT name FROM api_keys WHERE id = $1 AND user_id = $2")
+            .bind(id)
+            .bind(claims.sub)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let key_name = key_info
+        .map(|(n,)| n)
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "API key not found"))?;
+
     let result = sqlx::query("DELETE FROM api_keys WHERE id = $1 AND user_id = $2")
         .bind(id)
         .bind(claims.sub)
@@ -111,6 +130,11 @@ pub async fn revoke(
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "API key not found"));
     }
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "api_key.revoked",
+        Some("api_key"), Some(&key_name), None, None,
+    ).await;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }

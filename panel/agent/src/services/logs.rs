@@ -133,12 +133,13 @@ pub async fn search_log(
 
     let max_results = max_results.min(5000);
 
-    // Use grep -iE for case-insensitive extended regex, -m to cap results
+    // Use grep -iF for case-insensitive fixed-string matching (no regex).
+    // Fixed-string matching eliminates ReDoS risk from user-supplied patterns.
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(15),
         Command::new("grep")
             .args([
-                "-iE",
+                "-iF",
                 pattern,
                 &path,
                 "-m",

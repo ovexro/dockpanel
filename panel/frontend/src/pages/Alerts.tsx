@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { api } from "../api";
+import { logger } from "../utils/logger";
 
 interface Alert {
   id: string;
@@ -60,7 +61,7 @@ export default function Alerts() {
       setAlerts(data);
       setSummary(sum);
     } catch (e) {
-      console.error("Failed to load alerts:", e);
+      logger.error("Failed to load alerts:", e);
     } finally {
       setLoading(false);
     }
@@ -79,7 +80,7 @@ export default function Alerts() {
       await api.put(`/alerts/${id}/acknowledge`, {});
       fetchAlerts();
     } catch (e) {
-      console.error("Failed to acknowledge alert:", e);
+      logger.error("Failed to acknowledge alert:", e);
     }
   };
 
@@ -88,7 +89,7 @@ export default function Alerts() {
       await api.put(`/alerts/${id}/resolve`, {});
       fetchAlerts();
     } catch (e) {
-      console.error("Failed to resolve alert:", e);
+      logger.error("Failed to resolve alert:", e);
     }
   };
 

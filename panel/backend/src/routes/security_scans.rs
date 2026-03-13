@@ -5,7 +5,7 @@ use axum::{
 };
 
 use crate::auth::AuthUser;
-use crate::error::{err, require_admin, ApiError};
+use crate::error::{err, agent_error, require_admin, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -54,7 +54,7 @@ pub async fn trigger_scan(
         .agent
         .post("/security/scan", None::<serde_json::Value>)
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Scan failed: {e}")))?;
+        .map_err(|e| agent_error("Security scan", e))?;
 
     // Process findings from agent response
     let findings = result["findings"].as_array();

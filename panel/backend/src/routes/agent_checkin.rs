@@ -3,6 +3,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
+use std::time::Instant;
 
 use crate::error::{err, ApiError};
 use crate::AppState;
@@ -57,6 +58,21 @@ pub async fn checkin(
 
     if stored_token != token {
         return Err(err(StatusCode::UNAUTHORIZED, "Invalid token"));
+    }
+
+    // Rate limit: max 120 requests per minute per server_id
+    {
+        let mut limits = state.agent_rate_limits.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        let entry = limits.entry(server_id).or_insert((0, now));
+        if now.duration_since(entry.1).as_secs() >= 60 {
+            *entry = (1, now);
+        } else {
+            entry.0 += 1;
+            if entry.0 > 120 {
+                return Err(err(StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded"));
+            }
+        }
     }
 
     // Extract client IP

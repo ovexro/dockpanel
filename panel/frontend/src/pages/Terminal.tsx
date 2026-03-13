@@ -24,7 +24,7 @@ export default function Terminal() {
 
   // Load sites for selector
   useEffect(() => {
-    api.get<Site[]>("/sites").then(setSites).catch((e) => console.error("Failed to load sites:", e));
+    api.get<Site[]>("/sites").then(setSites).catch(() => setError("Failed to load sites"));
   }, []);
 
   const connect = async (siteIdParam?: string) => {
@@ -91,6 +91,7 @@ export default function Terminal() {
       const domain = data.domain || "";
       const cols = term.cols;
       const rows = term.rows;
+      // WebSocket API doesn't support Authorization headers; token is short-lived and same-origin
       const wsUrl = `${proto}//${window.location.host}/agent/terminal/ws?token=${data.token}&domain=${encodeURIComponent(domain)}&cols=${cols}&rows=${rows}`;
 
       const ws = new WebSocket(wsUrl);

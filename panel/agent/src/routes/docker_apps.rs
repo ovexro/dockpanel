@@ -321,9 +321,25 @@ async fn get_env(
             )
         })?;
 
+    // Sensitive env var name patterns — mask values containing these substrings
+    const SENSITIVE_PATTERNS: &[&str] = &[
+        "PASSWORD", "SECRET", "KEY", "TOKEN", "CREDENTIAL", "AUTH",
+    ];
+
     let env_map: Vec<serde_json::Value> = env
         .into_iter()
-        .map(|(k, v)| serde_json::json!({ "key": k, "value": v }))
+        .map(|(k, v)| {
+            let upper = k.to_uppercase();
+            let is_sensitive = SENSITIVE_PATTERNS
+                .iter()
+                .any(|pat| upper.contains(pat));
+            let masked_value = if is_sensitive {
+                "********".to_string()
+            } else {
+                v
+            };
+            serde_json::json!({ "key": k, "value": masked_value })
+        })
         .collect();
 
     Ok(Json(serde_json::json!({ "env": env_map })))

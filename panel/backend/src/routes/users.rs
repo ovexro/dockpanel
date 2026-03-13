@@ -10,8 +10,8 @@ use argon2::{
     Argon2, PasswordHasher,
 };
 
-use crate::auth::AuthUser;
-use crate::error::{err, require_admin, ApiError};
+use crate::auth::AdminUser;
+use crate::error::{err, ApiError};
 use crate::models::User;
 use crate::services::activity;
 use crate::AppState;
@@ -41,9 +41,8 @@ pub struct UserResponse {
 /// GET /api/users — List all users (admin only).
 pub async fn list(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    AdminUser(claims): AdminUser,
 ) -> Result<Json<Vec<UserResponse>>, ApiError> {
-    require_admin(&claims.role)?;
 
     let users: Vec<UserResponse> = sqlx::query_as(
         "SELECT u.id, u.email, u.role, u.created_at, \
@@ -60,10 +59,9 @@ pub async fn list(
 /// POST /api/users — Create a new user (admin only).
 pub async fn create(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    AdminUser(claims): AdminUser,
     Json(body): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    require_admin(&claims.role)?;
 
     if body.email.is_empty() || !body.email.contains('@') {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid email"));
@@ -127,11 +125,10 @@ pub async fn create(
 /// PUT /api/users/{id} — Update user role or password (admin only).
 pub async fn update(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    AdminUser(claims): AdminUser,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateUserRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&claims.role)?;
 
     // Verify user exists
     let _user: User = sqlx::query_as("SELECT * FROM users WHERE id = $1")
@@ -185,10 +182,9 @@ pub async fn update(
 /// DELETE /api/users/{id} — Delete a user (admin only, cannot delete self).
 pub async fn remove(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    AdminUser(claims): AdminUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&claims.role)?;
 
     if id == claims.sub {
         return Err(err(StatusCode::BAD_REQUEST, "Cannot delete your own account"));
