@@ -11,7 +11,12 @@ pub fn load_token() -> Result<String, String> {
         .map_err(|e| format!("Cannot read agent token at {TOKEN_PATH}: {e}\nAre you running as root?"))
 }
 
-pub async fn agent_get(path: &str, token: &str) -> Result<serde_json::Value, String> {
+async fn agent_request(
+    method: &str,
+    path: &str,
+    body: Option<&serde_json::Value>,
+    token: &str,
+) -> Result<serde_json::Value, String> {
     if !Path::new(SOCKET_PATH).exists() {
         return Err(format!(
             "Agent socket not found at {SOCKET_PATH}\nIs dockpanel-agent running? Check: systemctl status dockpanel-agent"
@@ -22,15 +27,33 @@ pub async fn agent_get(path: &str, token: &str) -> Result<serde_json::Value, Str
         .await
         .map_err(|e| format!("Cannot connect to agent: {e}"))?;
 
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n"
+    let body_bytes = body.map(|b| serde_json::to_vec(b).unwrap_or_default());
+
+    let mut request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n"
     );
+
+    if let Some(ref bytes) = body_bytes {
+        request.push_str(&format!(
+            "Content-Type: application/json\r\nContent-Length: {}\r\n",
+            bytes.len()
+        ));
+    }
+
+    request.push_str("\r\n");
+
     stream
         .write_all(request.as_bytes())
         .await
         .map_err(|e| format!("Failed to send request: {e}"))?;
 
-    // Read response (Connection: close means server will close when done)
+    if let Some(bytes) = &body_bytes {
+        stream
+            .write_all(bytes)
+            .await
+            .map_err(|e| format!("Failed to send body: {e}"))?;
+    }
+
     let mut buf = Vec::with_capacity(8192);
     let mut tmp = [0u8; 4096];
     loop {
@@ -41,7 +64,6 @@ pub async fn agent_get(path: &str, token: &str) -> Result<serde_json::Value, Str
         }
     }
 
-    // Find \r\n\r\n separator between headers and body
     let separator = b"\r\n\r\n";
     let sep_pos = buf
         .windows(4)
@@ -49,22 +71,38 @@ pub async fn agent_get(path: &str, token: &str) -> Result<serde_json::Value, Str
         .ok_or_else(|| "Invalid HTTP response: no header/body separator".to_string())?;
 
     let headers = String::from_utf8_lossy(&buf[..sep_pos]);
-    let body = &buf[sep_pos + 4..];
+    let body_raw = &buf[sep_pos + 4..];
 
-    // Check status line
     let first_line = headers.lines().next().unwrap_or("");
-    if !first_line.contains("200") {
+    if !first_line.contains("200") && !first_line.contains("201") {
+        let is_chunked = headers.to_lowercase().contains("transfer-encoding: chunked");
+        let err_bytes = if is_chunked {
+            decode_chunked(body_raw)
+        } else {
+            body_raw.to_vec()
+        };
+        if let Ok(err_json) = serde_json::from_slice::<serde_json::Value>(&err_bytes) {
+            if let Some(msg) = err_json["error"].as_str() {
+                return Err(msg.to_string());
+            }
+            if let Some(msg) = err_json["message"].as_str() {
+                return Err(msg.to_string());
+            }
+        }
         return Err(format!("Agent returned: {first_line}"));
     }
 
-    // Check for chunked encoding
     let is_chunked = headers.to_lowercase().contains("transfer-encoding: chunked");
 
     let json_bytes = if is_chunked {
-        decode_chunked(body)
+        decode_chunked(body_raw)
     } else {
-        body.to_vec()
+        body_raw.to_vec()
     };
+
+    if json_bytes.is_empty() {
+        return Ok(serde_json::json!({"success": true}));
+    }
 
     serde_json::from_slice(&json_bytes).map_err(|e| {
         let preview = String::from_utf8_lossy(&json_bytes[..json_bytes.len().min(200)]);
@@ -72,12 +110,39 @@ pub async fn agent_get(path: &str, token: &str) -> Result<serde_json::Value, Str
     })
 }
 
+pub async fn agent_get(path: &str, token: &str) -> Result<serde_json::Value, String> {
+    agent_request("GET", path, None, token).await
+}
+
+pub async fn agent_post(
+    path: &str,
+    body: &serde_json::Value,
+    token: &str,
+) -> Result<serde_json::Value, String> {
+    agent_request("POST", path, Some(body), token).await
+}
+
+pub async fn agent_post_empty(path: &str, token: &str) -> Result<serde_json::Value, String> {
+    agent_request("POST", path, None, token).await
+}
+
+pub async fn agent_put(
+    path: &str,
+    body: &serde_json::Value,
+    token: &str,
+) -> Result<serde_json::Value, String> {
+    agent_request("PUT", path, Some(body), token).await
+}
+
+pub async fn agent_delete(path: &str, token: &str) -> Result<serde_json::Value, String> {
+    agent_request("DELETE", path, None, token).await
+}
+
 fn decode_chunked(data: &[u8]) -> Vec<u8> {
     let mut result = Vec::new();
     let mut pos = 0;
 
     loop {
-        // Find end of chunk size line
         let line_end = match data[pos..]
             .windows(2)
             .position(|w| w == b"\r\n")
@@ -100,7 +165,6 @@ fn decode_chunked(data: &[u8]) -> Vec<u8> {
         let chunk_end = (chunk_start + size).min(data.len());
         result.extend_from_slice(&data[chunk_start..chunk_end]);
 
-        // Skip chunk data + trailing \r\n
         pos = chunk_end + 2;
         if pos >= data.len() {
             break;
