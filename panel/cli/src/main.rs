@@ -81,6 +81,17 @@ enum Commands {
         #[arg(long, short = 'o')]
         output: Option<String>,
     },
+    /// Apply server configuration from YAML file
+    Apply {
+        /// Path to YAML config file
+        file: String,
+        /// Show what would change without applying
+        #[arg(long)]
+        dry_run: bool,
+        /// Email for Let's Encrypt SSL provisioning
+        #[arg(long)]
+        email: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -384,6 +395,7 @@ async fn main() {
             Some(PhpCmd::Install { version }) => cmd_php_install(&token, &version).await,
         },
         Commands::Export { output } => cmd_export(&token, output.as_deref()).await,
+        Commands::Apply { file, dry_run, email } => cmd_apply(&token, &file, dry_run, email.as_deref()).await,
     };
 
     if let Err(e) = result {
@@ -1481,6 +1493,341 @@ async fn cmd_export(token: &str, output: Option<&str>) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+// ── Apply (IaC) ────────────────────────────────────────────────────────
+
+async fn cmd_apply(token: &str, file: &str, dry_run: bool, email: Option<&str>) -> Result<(), String> {
+    let yaml_content = std::fs::read_to_string(file)
+        .map_err(|e| format!("Cannot read {file}: {e}"))?;
+
+    let desired: serde_json::Value = serde_yaml::from_str(&yaml_content)
+        .map_err(|e| format!("Invalid YAML: {e}"))?;
+
+    // Get current state
+    let current = client::agent_get("/iac/export", token).await?;
+
+    let mut plan_create = Vec::new();
+    let mut plan_skip = Vec::new();
+    let mut applied = 0;
+    let mut errors = 0;
+
+    // ── Sites ───────────────────────────────────────────────────────
+    let desired_sites = desired["sites"].as_array();
+    let current_domains: Vec<&str> = current["sites"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|s| s["domain"].as_str()).collect())
+        .unwrap_or_default();
+
+    if let Some(sites) = desired_sites {
+        for site in sites {
+            let domain = site["domain"].as_str().unwrap_or("");
+            if domain.is_empty() {
+                continue;
+            }
+            let runtime = site["runtime"].as_str().unwrap_or("static");
+
+            if current_domains.contains(&domain) {
+                plan_skip.push(format!("site: {domain} (already exists)"));
+                continue;
+            }
+
+            let desc = match runtime {
+                "proxy" => {
+                    let port = site["proxy_port"].as_u64().unwrap_or(3000);
+                    format!("site: {domain} (proxy → port {port})")
+                }
+                "php" => {
+                    let ver = site["php_version"].as_str().unwrap_or("8.3");
+                    format!("site: {domain} (php {ver})")
+                }
+                _ => format!("site: {domain} (static)"),
+            };
+
+            if dry_run {
+                plan_create.push(desc);
+            } else {
+                print!("  Creating site {domain}... ");
+                let mut body = json!({ "runtime": runtime });
+                if let Some(port) = site["proxy_port"].as_u64() {
+                    body["proxy_port"] = json!(port);
+                }
+                if let Some(root) = site["root"].as_str() {
+                    body["root"] = json!(root);
+                }
+                if let Some(ver) = site["php_version"].as_str() {
+                    body["php_socket"] = json!(format!("unix:/run/php/php{ver}-fpm.sock"));
+                }
+
+                match client::agent_put(&format!("/nginx/sites/{domain}"), &body, token).await {
+                    Ok(_) => {
+                        println!("\x1b[32m✓\x1b[0m");
+                        applied += 1;
+
+                        // SSL provisioning
+                        if site["ssl"].as_bool() == Some(true) {
+                            if let Some(em) = email {
+                                print!("  Provisioning SSL for {domain}... ");
+                                let ssl_body = json!({
+                                    "email": em,
+                                    "runtime": runtime,
+                                    "proxy_port": site["proxy_port"].as_u64(),
+                                });
+                                match client::agent_post(&format!("/ssl/provision/{domain}"), &ssl_body, token).await {
+                                    Ok(_) => println!("\x1b[32m✓\x1b[0m"),
+                                    Err(e) => {
+                                        println!("\x1b[33mskipped\x1b[0m ({e})");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        println!("\x1b[31m✗\x1b[0m ({e})");
+                        errors += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Databases ───────────────────────────────────────────────────
+    let desired_dbs = desired["databases"].as_array();
+    let current_db_names: Vec<&str> = current["databases"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|d| d["name"].as_str()).collect())
+        .unwrap_or_default();
+
+    if let Some(dbs) = desired_dbs {
+        for db in dbs {
+            let name = db["name"].as_str().unwrap_or("");
+            if name.is_empty() {
+                continue;
+            }
+            let engine = db["engine"].as_str().unwrap_or("postgres");
+            let port = db["port"].as_u64().unwrap_or(5432) as u16;
+
+            // Match by name (strip "dockpanel-db-" prefix from current names)
+            let exists = current_db_names.iter().any(|n| {
+                n.strip_prefix("dockpanel-db-").unwrap_or(n) == name
+            });
+
+            if exists {
+                plan_skip.push(format!("database: {name} (already exists)"));
+                continue;
+            }
+
+            let desc = format!("database: {name} ({engine}, port {port})");
+
+            if dry_run {
+                plan_create.push(desc);
+            } else {
+                let password: String = (0..16)
+                    .map(|_| {
+                        let idx = (rand_byte() % 62) as usize;
+                        b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[idx] as char
+                    })
+                    .collect();
+
+                print!("  Creating database {name}... ");
+                let body = json!({
+                    "name": name,
+                    "engine": engine,
+                    "password": password,
+                    "port": port,
+                });
+                match client::agent_post("/databases", &body, token).await {
+                    Ok(_) => {
+                        println!("\x1b[32m✓\x1b[0m (password: {password})");
+                        applied += 1;
+                    }
+                    Err(e) => {
+                        println!("\x1b[31m✗\x1b[0m ({e})");
+                        errors += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Docker Apps ─────────────────────────────────────────────────
+    let desired_apps = desired["apps"].as_array();
+    let current_app_names: Vec<String> = current["apps"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|app| {
+                    app["name"].as_str().map(|n| {
+                        n.strip_prefix("dockpanel-app-").unwrap_or(n).to_string()
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if let Some(apps) = desired_apps {
+        for app in apps {
+            let name = app["name"].as_str().unwrap_or("");
+            if name.is_empty() {
+                continue;
+            }
+            let template = app["template"].as_str().unwrap_or("");
+            let port = app["port"].as_u64().unwrap_or(0) as u16;
+
+            if current_app_names.iter().any(|n| n == name) {
+                plan_skip.push(format!("app: {name} (already exists)"));
+                continue;
+            }
+
+            let desc = format!("app: {name} (template: {template}, port {port})");
+
+            if dry_run {
+                plan_create.push(desc);
+            } else {
+                print!("  Deploying app {name}... ");
+                let mut body = json!({
+                    "template_id": template,
+                    "name": name,
+                    "port": port,
+                });
+                if let Some(domain) = app["domain"].as_str() {
+                    body["domain"] = json!(domain);
+                    if let Some(em) = email {
+                        body["ssl_email"] = json!(em);
+                    }
+                }
+                match client::agent_post("/apps/deploy", &body, token).await {
+                    Ok(_) => {
+                        println!("\x1b[32m✓\x1b[0m");
+                        applied += 1;
+                    }
+                    Err(e) => {
+                        println!("\x1b[31m✗\x1b[0m ({e})");
+                        errors += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Cron Jobs ───────────────────────────────────────────────────
+    let desired_crons = desired["crons"].as_array();
+    if let Some(crons) = desired_crons {
+        if !crons.is_empty() {
+            if dry_run {
+                for cron in crons {
+                    let id = cron["id"].as_str().unwrap_or("-");
+                    let schedule = cron["schedule"].as_str().unwrap_or("");
+                    let command = cron["command"].as_str().unwrap_or("");
+                    plan_create.push(format!("cron: {id} ({schedule} {command})"));
+                }
+            } else {
+                print!("  Syncing {} cron job(s)... ", crons.len());
+                match client::agent_post("/crons/sync", &json!(crons), token).await {
+                    Ok(_) => {
+                        println!("\x1b[32m✓\x1b[0m");
+                        applied += 1;
+                    }
+                    Err(e) => {
+                        println!("\x1b[31m✗\x1b[0m ({e})");
+                        errors += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // ── PHP Versions ────────────────────────────────────────────────
+    let desired_php = desired["php"].as_array();
+    let current_php: Vec<&str> = current["php"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter(|p| p["installed"].as_bool() == Some(true))
+                .filter_map(|p| p["version"].as_str())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if let Some(phps) = desired_php {
+        for php in phps {
+            let version = php["version"].as_str().unwrap_or("");
+            if version.is_empty() {
+                continue;
+            }
+
+            if current_php.contains(&version) {
+                plan_skip.push(format!("php: {version} (already installed)"));
+                continue;
+            }
+
+            let desc = format!("php: {version}");
+
+            if dry_run {
+                plan_create.push(desc);
+            } else {
+                print!("  Installing PHP {version}... ");
+                let body = json!({ "version": version });
+                match client::agent_post("/php/install", &body, token).await {
+                    Ok(_) => {
+                        println!("\x1b[32m✓\x1b[0m");
+                        applied += 1;
+                    }
+                    Err(e) => {
+                        println!("\x1b[31m✗\x1b[0m ({e})");
+                        errors += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Output ──────────────────────────────────────────────────────
+    if dry_run {
+        println!("\x1b[1mPlan:\x1b[0m");
+        if plan_create.is_empty() && plan_skip.is_empty() {
+            println!("  No changes needed.");
+        } else {
+            for item in &plan_create {
+                println!("  \x1b[32m+\x1b[0m {item}");
+            }
+            for item in &plan_skip {
+                println!("  \x1b[90m=\x1b[0m {item}");
+            }
+            println!(
+                "\n{} to create, {} existing",
+                plan_create.len(),
+                plan_skip.len()
+            );
+        }
+    } else {
+        println!();
+        if errors > 0 {
+            println!(
+                "\x1b[33m{applied} applied, {errors} failed\x1b[0m"
+            );
+        } else if applied > 0 {
+            println!("\x1b[32m{applied} applied\x1b[0m");
+        } else {
+            println!("No changes needed.");
+        }
+    }
+
+    if errors > 0 {
+        Err(format!("{errors} operation(s) failed"))
+    } else {
+        Ok(())
+    }
+}
+
+/// Simple random byte from /dev/urandom for password generation.
+fn rand_byte() -> u8 {
+    use std::io::Read;
+    let mut buf = [0u8; 1];
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        f.read_exact(&mut buf).ok();
+    }
+    buf[0]
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
