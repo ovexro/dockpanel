@@ -3,36 +3,43 @@
 # DockPanel Setup
 # Installs DockPanel on a fresh server.
 # Supports: Ubuntu 20+, Debian 11+, CentOS 9+, Rocky 9+, Fedora 39+, Amazon Linux 2023
+# Architectures: x86_64, ARM64 (aarch64)
 #
 # Architecture:
 #   - PostgreSQL 16 (Docker container on port 5450)
 #   - Agent (Rust binary, systemd, Unix socket)
 #   - API (Rust binary, systemd, port 3080)
+#   - CLI (Rust binary, /usr/local/bin/dockpanel)
 #   - Frontend (Vite build, served by nginx)
 #   - Nginx (reverse proxy + static files)
 #
 # Usage:
-#   bash scripts/setup.sh
+#   bash scripts/setup.sh                # Build from source
+#   INSTALL_FROM_RELEASE=1 bash scripts/setup.sh  # Download pre-built binaries
 #   PANEL_PORT=9090 bash scripts/setup.sh
 #
 set -euo pipefail
 
-# ── Configuration (override with env vars) ──────────────────────────────────
+# ── Configuration (override with env vars) ──────────────────────────────
 PANEL_PORT="${PANEL_PORT:-8443}"
 CONFIG_DIR="/etc/dockpanel"
 AGENT_BIN="/usr/local/bin/dockpanel-agent"
 API_BIN="/usr/local/bin/dockpanel-api"
+CLI_BIN="/usr/local/bin/dockpanel"
 DB_PORT=5450
 DB_CONTAINER="dockpanel-postgres"
+INSTALL_FROM_RELEASE="${INSTALL_FROM_RELEASE:-0}"
+GITHUB_REPO="ovexro/dockpanel"
 
-# ── Resolve repo root ───────────────────────────────────────────────────────
+# ── Resolve repo root ───────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 FRONTEND_DIR="$REPO_DIR/panel/frontend"
 AGENT_SRC="$REPO_DIR/panel/agent"
 API_SRC="$REPO_DIR/panel/backend"
+CLI_SRC="$REPO_DIR/panel/cli"
 
-# ── Colors ───────────────────────────────────────────────────────────────────
+# ── Colors ───────────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -45,7 +52,7 @@ warn()   { echo -e "${YELLOW}[!]${NC} $1"; }
 error()  { echo -e "${RED}[x]${NC} $1" >&2; }
 header() { echo -e "\n${CYAN}${BOLD}── $1 ──${NC}\n"; }
 
-# ── Package manager ──────────────────────────────────────────────────────────
+# ── Package manager ──────────────────────────────────────────────────────
 detect_pkg_manager() {
     if command -v apt-get &> /dev/null; then
         PKG_MGR="apt"
@@ -75,7 +82,7 @@ pkg_update() {
     esac
 }
 
-# ── Banner ───────────────────────────────────────────────────────────────────
+# ── Banner ───────────────────────────────────────────────────────────────
 print_banner() {
     echo ""
     echo -e "${CYAN}${BOLD}"
@@ -92,7 +99,7 @@ BANNER
     echo ""
 }
 
-# ── Checks ───────────────────────────────────────────────────────────────────
+# ── Checks ───────────────────────────────────────────────────────────────
 check_root() {
     if [ "$EUID" -ne 0 ]; then
         error "This script must be run as root (or with sudo)"
@@ -101,9 +108,14 @@ check_root() {
 }
 
 check_source() {
+    # Source check only needed if building from source
+    if [ "$INSTALL_FROM_RELEASE" = "1" ]; then
+        return
+    fi
     if [ ! -d "$AGENT_SRC/src" ]; then
         error "Cannot find agent source at $AGENT_SRC"
-        error "Run this script from the DockPanel repository root."
+        error "Run this script from the DockPanel repository root,"
+        error "or set INSTALL_FROM_RELEASE=1 to download pre-built binaries."
         exit 1
     fi
 }
@@ -137,12 +149,34 @@ detect_os() {
     ARCH=$(uname -m)
     case "$ARCH" in
         x86_64)  DL_ARCH="amd64"; log "Architecture: x86_64" ;;
-        aarch64) DL_ARCH="arm64"; log "Architecture: ARM64" ;;
+        aarch64) DL_ARCH="arm64"; log "Architecture: ARM64 (homelab ready)" ;;
         *) error "Unsupported architecture: $ARCH"; exit 1 ;;
     esac
+
+    # ARM: check for swap (compilation needs ~1GB RAM)
+    if [ "$ARCH" = "aarch64" ] && [ "$INSTALL_FROM_RELEASE" != "1" ]; then
+        local total_mem
+        total_mem=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo "0")
+        local swap_total
+        swap_total=$(awk '/SwapTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo "0")
+
+        if [ "$total_mem" -lt 1500 ] && [ "$swap_total" -lt 512 ]; then
+            warn "Low memory detected (${total_mem}MB RAM, ${swap_total}MB swap)"
+            warn "Rust compilation may fail. Creating 2GB swap file..."
+            if [ ! -f /swapfile ]; then
+                dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+                chmod 600 /swapfile
+                mkswap /swapfile > /dev/null 2>&1
+                swapon /swapfile
+                log "Temporary 2GB swap file created"
+            else
+                log "Swap file already exists"
+            fi
+        fi
+    fi
 }
 
-# ── Install Dependencies ────────────────────────────────────────────────────
+# ── Install Dependencies ────────────────────────────────────────────────
 install_dependencies() {
     header "Installing Dependencies"
 
@@ -190,6 +224,12 @@ install_nginx() {
 install_node() {
     header "Node.js (for frontend build)"
 
+    # Skip if using pre-built release (frontend comes as tarball)
+    if [ "$INSTALL_FROM_RELEASE" = "1" ]; then
+        log "Skipping Node.js (using pre-built frontend)"
+        return
+    fi
+
     if command -v node &> /dev/null; then
         log "Node.js already installed: $(node --version)"
     else
@@ -205,7 +245,7 @@ install_node() {
     fi
 }
 
-# ── Directories ──────────────────────────────────────────────────────────────
+# ── Directories ──────────────────────────────────────────────────────────
 create_directories() {
     header "Creating Directories"
 
@@ -218,7 +258,7 @@ create_directories() {
     log "Directories created"
 }
 
-# ── Secrets ──────────────────────────────────────────────────────────────────
+# ── Secrets ──────────────────────────────────────────────────────────────
 generate_secrets() {
     header "Generating Secrets"
 
@@ -252,7 +292,7 @@ generate_secrets() {
     fi
 }
 
-# ── PostgreSQL ───────────────────────────────────────────────────────────────
+# ── PostgreSQL ───────────────────────────────────────────────────────────
 setup_database() {
     header "PostgreSQL Database"
 
@@ -290,7 +330,62 @@ setup_database() {
     exit 1
 }
 
-# ── Build Binaries ───────────────────────────────────────────────────────────
+# ── Download Pre-built Binaries ──────────────────────────────────────────
+download_binaries() {
+    header "Downloading Pre-built Binaries"
+
+    # Get latest release tag
+    local RELEASE_TAG
+    RELEASE_TAG=$(curl -sf "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+
+    if [ -z "$RELEASE_TAG" ]; then
+        error "Could not determine latest release. Check https://github.com/${GITHUB_REPO}/releases"
+        exit 1
+    fi
+
+    log "Latest release: $RELEASE_TAG"
+    local BASE_URL="https://github.com/${GITHUB_REPO}/releases/download/${RELEASE_TAG}"
+
+    # Download agent
+    log "Downloading agent (${DL_ARCH})..."
+    curl -sfL "${BASE_URL}/dockpanel-agent-linux-${DL_ARCH}" -o "$AGENT_BIN"
+    chmod +x "$AGENT_BIN"
+    log "Agent downloaded ($(du -h "$AGENT_BIN" | cut -f1))"
+
+    # Download API
+    log "Downloading API (${DL_ARCH})..."
+    curl -sfL "${BASE_URL}/dockpanel-api-linux-${DL_ARCH}" -o "$API_BIN"
+    chmod +x "$API_BIN"
+    log "API downloaded ($(du -h "$API_BIN" | cut -f1))"
+
+    # Download CLI
+    log "Downloading CLI (${DL_ARCH})..."
+    curl -sfL "${BASE_URL}/dockpanel-cli-linux-${DL_ARCH}" -o "$CLI_BIN"
+    chmod +x "$CLI_BIN"
+    log "CLI downloaded ($(du -h "$CLI_BIN" | cut -f1))"
+
+    # Download frontend
+    log "Downloading frontend..."
+    local FE_TARBALL="/tmp/dockpanel-frontend.tar.gz"
+    curl -sfL "${BASE_URL}/dockpanel-frontend.tar.gz" -o "$FE_TARBALL"
+
+    # Extract frontend — need a target directory
+    local FE_DIR="/opt/dockpanel/frontend"
+    mkdir -p "$FE_DIR"
+    tar xzf "$FE_TARBALL" -C "$FE_DIR"
+    rm -f "$FE_TARBALL"
+
+    # If dist/ is nested inside, flatten it
+    if [ -d "$FE_DIR/dist" ]; then
+        FRONTEND_DIST="$FE_DIR/dist"
+    else
+        FRONTEND_DIST="$FE_DIR"
+    fi
+
+    log "Frontend extracted to $FRONTEND_DIST"
+}
+
+# ── Build Binaries ───────────────────────────────────────────────────────
 build_binaries() {
     header "Building Binaries"
 
@@ -318,9 +413,16 @@ build_binaries() {
     cp "$API_SRC/target/release/dockpanel-api" "$API_BIN"
     chmod +x "$API_BIN"
     log "API built ($(du -h "$API_BIN" | cut -f1))"
+
+    # Build CLI
+    log "Building CLI..."
+    (cd "$CLI_SRC" && $CARGO_CMD build --release 2>&1 | tail -1)
+    cp "$CLI_SRC/target/release/dockpanel" "$CLI_BIN"
+    chmod +x "$CLI_BIN"
+    log "CLI built ($(du -h "$CLI_BIN" | cut -f1))"
 }
 
-# ── Build Frontend ───────────────────────────────────────────────────────────
+# ── Build Frontend ───────────────────────────────────────────────────────
 build_frontend() {
     header "Building Frontend"
 
@@ -337,7 +439,7 @@ build_frontend() {
     log "Frontend built at $FRONTEND_DIR/dist/"
 }
 
-# ── Systemd Services ─────────────────────────────────────────────────────────
+# ── Systemd Services ─────────────────────────────────────────────────────
 create_services() {
     header "Systemd Services"
 
@@ -355,7 +457,7 @@ ExecStartPost=/bin/sh -c 'sleep 1 && chgrp www-data /var/run/dockpanel/agent.soc
 Restart=always
 RestartSec=3
 Environment=RUST_LOG=info
-ProtectHome=true
+ReadWritePaths=/etc/nginx /etc/dockpanel /var/run/dockpanel /var/backups/dockpanel /var/www /var/log
 
 [Install]
 WantedBy=multi-user.target
@@ -419,7 +521,7 @@ EOF
     fi
 }
 
-# ── Nginx for Panel ──────────────────────────────────────────────────────────
+# ── Nginx for Panel ──────────────────────────────────────────────────────
 configure_nginx() {
     header "Configuring Nginx"
 
@@ -442,6 +544,14 @@ configure_nginx() {
         mkdir -p /etc/nginx/conf.d
     fi
 
+    # Determine frontend dist path
+    local FE_ROOT
+    if [ "$INSTALL_FROM_RELEASE" = "1" ] && [ -n "${FRONTEND_DIST:-}" ]; then
+        FE_ROOT="$FRONTEND_DIST"
+    else
+        FE_ROOT="${FRONTEND_DIR}/dist"
+    fi
+
     cat > "$NGINX_CONF" << NGINXEOF
 server {
     listen ${PANEL_PORT};
@@ -457,6 +567,14 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    # Agent proxy (for frontend /agent/* calls)
+    location /agent/ {
+        proxy_pass http://unix:/var/run/dockpanel/agent.sock:/;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
     }
 
     # Agent WebSocket terminal
@@ -484,7 +602,7 @@ server {
     }
 
     # Frontend static files
-    root ${FRONTEND_DIR}/dist;
+    root ${FE_ROOT};
     index index.html;
 
     location / {
@@ -515,7 +633,7 @@ NGINXEOF
     fi
 }
 
-# ── Health Check ─────────────────────────────────────────────────────────────
+# ── Health Check ─────────────────────────────────────────────────────────
 wait_for_health() {
     header "Health Check"
 
@@ -533,7 +651,7 @@ wait_for_health() {
     warn "API not responding on port 3080 yet — check: journalctl -u dockpanel-api -n 20"
 }
 
-# ── Summary ──────────────────────────────────────────────────────────────────
+# ── Summary ──────────────────────────────────────────────────────────────
 print_summary() {
     local SERVER_IP
     SERVER_IP=$(curl -sf --max-time 5 https://api.ipify.org 2>/dev/null || \
@@ -549,6 +667,10 @@ print_summary() {
     echo ""
     echo -e "  ${BOLD}First step:${NC}     Open the URL and create your admin account"
     echo ""
+    echo -e "  ${BOLD}CLI:${NC}            dockpanel status"
+    echo -e "                  dockpanel diagnose"
+    echo -e "                  dockpanel --help"
+    echo ""
     echo -e "  ${BOLD}Service commands:${NC}"
     echo -e "    Agent status:   systemctl status dockpanel-agent"
     echo -e "    API status:     systemctl status dockpanel-api"
@@ -560,7 +682,6 @@ print_summary() {
     echo -e "    Config:         ${CONFIG_DIR}/"
     echo -e "    Agent token:    ${CONFIG_DIR}/agent.token"
     echo -e "    API env:        ${CONFIG_DIR}/api.env"
-    echo -e "    Frontend:       ${FRONTEND_DIR}/dist/"
     echo -e "    Backups:        /var/backups/dockpanel/"
     echo ""
     echo -e "  ${BOLD}Database:${NC}"
@@ -569,17 +690,24 @@ print_summary() {
     echo ""
     echo -e "  ${YELLOW}Security:${NC} Restrict port ${PANEL_PORT} with a firewall (ufw/iptables)."
     echo -e "  ${YELLOW}SSL:${NC}      Set up HTTPS with: certbot --nginx"
-    echo -e "  ${YELLOW}Update:${NC}   Run: bash ${REPO_DIR}/scripts/update.sh"
+    echo -e "  ${YELLOW}Update:${NC}   Run: bash /opt/dockpanel/scripts/update.sh"
     echo ""
 }
 
-# ── Main ─────────────────────────────────────────────────────────────────────
+# ── Main ─────────────────────────────────────────────────────────────────
 main() {
     print_banner
     check_root
-    check_source
     detect_pkg_manager
     detect_os
+
+    # Auto-detect: if no source available, use release binaries
+    if [ "$INSTALL_FROM_RELEASE" != "1" ] && [ ! -d "$AGENT_SRC/src" ]; then
+        log "No source found — switching to pre-built binary download"
+        INSTALL_FROM_RELEASE=1
+    fi
+
+    check_source
     install_dependencies
     install_docker
     install_nginx
@@ -587,8 +715,14 @@ main() {
     create_directories
     generate_secrets
     setup_database
-    build_binaries
-    build_frontend
+
+    if [ "$INSTALL_FROM_RELEASE" = "1" ]; then
+        download_binaries
+    else
+        build_binaries
+        build_frontend
+    fi
+
     create_services
     configure_nginx
     wait_for_health

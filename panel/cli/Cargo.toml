@@ -8,6 +8,11 @@ description = "CLI for DockPanel — self-hosted server management"
 name = "dockpanel"
 path = "src/main.rs"
 
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full", "net"] }
