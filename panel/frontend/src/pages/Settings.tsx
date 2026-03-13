@@ -36,6 +36,22 @@ export default function Settings() {
   const [smtpEncryption, setSmtpEncryption] = useState("starttls");
   const [testingEmail, setTestingEmail] = useState(false);
 
+  // 2FA state
+  const [twoFaEnabled, setTwoFaEnabled] = useState(false);
+  const [twoFaSetup, setTwoFaSetup] = useState<{ secret: string; qr_svg: string } | null>(null);
+  const [twoFaCode, setTwoFaCode] = useState("");
+  const [twoFaDisableCode, setTwoFaDisableCode] = useState("");
+  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
+  const [twoFaLoading, setTwoFaLoading] = useState(false);
+
+  // Auto-healing
+  const [autoHealEnabled, setAutoHealEnabled] = useState(false);
+
+  // Notification channels
+  const [notifySlackUrl, setNotifySlackUrl] = useState("");
+  const [notifyDiscordUrl, setNotifyDiscordUrl] = useState("");
+  const [notifyEmail, setNotifyEmail] = useState(true);
+
   // Backup destinations
   const [destinations, setDestinations] = useState<BackupDestination[]>([]);
   const [showDestForm, setShowDestForm] = useState(false);
@@ -67,6 +83,7 @@ export default function Settings() {
       setSmtpFrom(data.smtp_from || "");
       setSmtpFromName(data.smtp_from_name || "");
       setSmtpEncryption(data.smtp_encryption || "starttls");
+      setAutoHealEnabled(data.auto_heal_enabled === "true");
     } catch (e) {
       setMessage({
         text: e instanceof Error ? e.message : "Failed to load settings",
@@ -97,10 +114,31 @@ export default function Settings() {
     }
   };
 
+  const load2faStatus = async () => {
+    try {
+      const data = await api.get<{ enabled: boolean }>("/auth/2fa/status");
+      setTwoFaEnabled(data.enabled);
+    } catch { /* ignore */ }
+  };
+
+  const loadNotifyChannels = async () => {
+    try {
+      const rules = await api.get<{ notify_email?: boolean; notify_slack_url?: string; notify_discord_url?: string }[]>("/alert-rules");
+      if (rules.length > 0) {
+        const r = rules[0];
+        setNotifyEmail(r.notify_email !== false);
+        setNotifySlackUrl(r.notify_slack_url || "");
+        setNotifyDiscordUrl(r.notify_discord_url || "");
+      }
+    } catch { /* ignore */ }
+  };
+
   useEffect(() => {
     loadSettings();
     loadHealth();
     loadDestinations();
+    load2faStatus();
+    loadNotifyChannels();
     healthTimer.current = setInterval(loadHealth, 30000);
     return () => clearInterval(healthTimer.current);
   }, []);
@@ -535,6 +573,242 @@ export default function Settings() {
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Two-Factor Authentication */}
+        <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-sm font-medium text-dark-50">Two-Factor Authentication</h3>
+            <p className="text-xs text-dark-200 mt-0.5">Add an extra layer of security to your account</p>
+          </div>
+          <div className="p-5">
+            {twoFaEnabled ? (
+              <div className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full bg-emerald-500" />
+                  <span className="text-sm text-emerald-400 font-medium">2FA is enabled</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={twoFaDisableCode}
+                    onChange={(e) => setTwoFaDisableCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    placeholder="Enter TOTP code to disable"
+                    className="px-3 py-2 border border-dark-500 rounded-lg text-sm w-48 focus:ring-2 focus:ring-rust-500 outline-none font-mono"
+                  />
+                  <button
+                    disabled={twoFaLoading || twoFaDisableCode.length < 6}
+                    onClick={async () => {
+                      setTwoFaLoading(true);
+                      setMessage({ text: "", type: "" });
+                      try {
+                        await api.post("/auth/2fa/disable", { code: twoFaDisableCode });
+                        setTwoFaEnabled(false);
+                        setTwoFaDisableCode("");
+                        setMessage({ text: "2FA disabled", type: "success" });
+                      } catch (e) {
+                        setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
+                      } finally {
+                        setTwoFaLoading(false);
+                      }
+                    }}
+                    className="px-4 py-2 bg-red-500/20 text-red-400 rounded-lg text-sm font-medium hover:bg-red-500/30 disabled:opacity-50"
+                  >
+                    Disable 2FA
+                  </button>
+                </div>
+              </div>
+            ) : twoFaSetup ? (
+              <div className="space-y-4">
+                <p className="text-sm text-dark-100">Scan this QR code with your authenticator app:</p>
+                <div className="flex justify-center bg-white rounded-lg p-4 w-fit mx-auto" dangerouslySetInnerHTML={{ __html: twoFaSetup.qr_svg }} />
+                <p className="text-xs text-dark-300 text-center font-mono break-all">
+                  Manual entry: {twoFaSetup.secret}
+                </p>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={twoFaCode}
+                    onChange={(e) => setTwoFaCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    placeholder="Enter 6-digit code"
+                    className="px-3 py-2 border border-dark-500 rounded-lg text-sm w-48 focus:ring-2 focus:ring-rust-500 outline-none font-mono"
+                    autoFocus
+                  />
+                  <button
+                    disabled={twoFaLoading || twoFaCode.length < 6}
+                    onClick={async () => {
+                      setTwoFaLoading(true);
+                      setMessage({ text: "", type: "" });
+                      try {
+                        const res = await api.post<{ recovery_codes: string[] }>("/auth/2fa/enable", { code: twoFaCode });
+                        setTwoFaEnabled(true);
+                        setTwoFaSetup(null);
+                        setTwoFaCode("");
+                        setRecoveryCodes(res.recovery_codes);
+                        setMessage({ text: "2FA enabled! Save your recovery codes.", type: "success" });
+                      } catch (e) {
+                        setMessage({ text: e instanceof Error ? e.message : "Invalid code", type: "error" });
+                      } finally {
+                        setTwoFaLoading(false);
+                      }
+                    }}
+                    className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+                  >
+                    Verify & Enable
+                  </button>
+                  <button
+                    onClick={() => { setTwoFaSetup(null); setTwoFaCode(""); }}
+                    className="px-4 py-2 text-dark-300 text-sm hover:text-dark-100"
+                  >
+                    Cancel
+                  </button>
+                </div>
+                {recoveryCodes.length > 0 && (
+                  <div className="mt-4 p-4 bg-amber-500/10 rounded-lg border border-amber-500/20">
+                    <p className="text-sm font-medium text-amber-400 mb-2">Recovery Codes (save these!)</p>
+                    <div className="grid grid-cols-2 gap-1">
+                      {recoveryCodes.map((code, i) => (
+                        <code key={i} className="text-xs text-dark-100 font-mono bg-dark-900 px-2 py-1 rounded">{code}</code>
+                      ))}
+                    </div>
+                    <p className="text-xs text-dark-300 mt-2">Each code can only be used once. Store them securely.</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-sm text-dark-200">
+                  Protect your account with time-based one-time passwords (TOTP).
+                  Works with Google Authenticator, Authy, 1Password, etc.
+                </p>
+                <button
+                  disabled={twoFaLoading}
+                  onClick={async () => {
+                    setTwoFaLoading(true);
+                    setMessage({ text: "", type: "" });
+                    try {
+                      const res = await api.post<{ secret: string; qr_svg: string }>("/auth/2fa/setup");
+                      setTwoFaSetup(res);
+                    } catch (e) {
+                      setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
+                    } finally {
+                      setTwoFaLoading(false);
+                    }
+                  }}
+                  className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+                >
+                  {twoFaLoading ? "Setting up..." : "Enable 2FA"}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Notification Channels */}
+        <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-sm font-medium text-dark-50">Notification Channels</h3>
+            <p className="text-xs text-dark-200 mt-0.5">Where to send alert notifications</p>
+          </div>
+          <div className="p-5 space-y-4">
+            <div className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                id="notify-email"
+                checked={notifyEmail}
+                onChange={(e) => setNotifyEmail(e.target.checked)}
+                className="rounded border-dark-500 text-rust-500 focus:ring-rust-500"
+              />
+              <label htmlFor="notify-email" className="text-sm text-dark-100">Email notifications</label>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-dark-100 mb-1">Slack Webhook URL</label>
+              <input
+                type="url"
+                value={notifySlackUrl}
+                onChange={(e) => setNotifySlackUrl(e.target.value)}
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 outline-none"
+                placeholder="https://hooks.slack.com/services/..."
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-dark-100 mb-1">Discord Webhook URL</label>
+              <input
+                type="url"
+                value={notifyDiscordUrl}
+                onChange={(e) => setNotifyDiscordUrl(e.target.value)}
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 outline-none"
+                placeholder="https://discord.com/api/webhooks/..."
+              />
+            </div>
+            <div className="flex justify-end">
+              <button
+                onClick={async () => {
+                  setSaving("notify");
+                  setMessage({ text: "", type: "" });
+                  try {
+                    await api.put("/alert-rules", {
+                      notify_email: notifyEmail,
+                      notify_slack_url: notifySlackUrl || null,
+                      notify_discord_url: notifyDiscordUrl || null,
+                    });
+                    setMessage({ text: "Notification channels saved", type: "success" });
+                  } catch (e) {
+                    setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
+                  } finally {
+                    setSaving(null);
+                  }
+                }}
+                disabled={saving === "notify"}
+                className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+              >
+                {saving === "notify" ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Auto-Healing */}
+        <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-sm font-medium text-dark-50">Auto-Healing</h3>
+            <p className="text-xs text-dark-200 mt-0.5">Automatically fix common issues when detected</p>
+          </div>
+          <div className="p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">Enable auto-healing</p>
+                <p className="text-xs text-dark-300 mt-0.5">
+                  Auto-restarts crashed services, cleans logs when disk is full, renews expiring SSL certs
+                </p>
+              </div>
+              <button
+                onClick={async () => {
+                  const newVal = !autoHealEnabled;
+                  try {
+                    await api.put("/settings", { auto_heal_enabled: newVal ? "true" : "false" });
+                    setAutoHealEnabled(newVal);
+                    setMessage({ text: `Auto-healing ${newVal ? "enabled" : "disabled"}`, type: "success" });
+                  } catch (e) {
+                    setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
+                  }
+                }}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${autoHealEnabled ? "bg-rust-500" : "bg-dark-600"}`}
+              >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${autoHealEnabled ? "translate-x-6" : "translate-x-1"}`} />
+              </button>
+            </div>
+            {autoHealEnabled && (
+              <div className="text-xs text-dark-300 space-y-1 pl-4 border-l-2 border-dark-600">
+                <p>Crashed services are restarted (max once per 10 minutes)</p>
+                <p>Logs are cleaned when disk exceeds 90% (max once per hour)</p>
+                <p>SSL certs are renewed when expiring within 3 days (max once per 6 hours)</p>
+                <p>All actions are logged in the Activity page</p>
               </div>
             )}
           </div>

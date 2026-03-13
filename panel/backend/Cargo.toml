@@ -33,3 +33,7 @@ rand = "0.8"
 sha2 = "0.10"
 hmac = "0.12"
 hex = "0.4"
+totp-rs = { version = "5", features = ["otpauth", "gen_secret"] }
+base32 = "0.5"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+data-encoding = "2"

@@ -23,6 +23,11 @@ pub struct User {
     pub plan: String,
     pub plan_status: String,
     pub plan_server_limit: i32,
+    #[serde(skip_serializing)]
+    pub totp_secret: Option<String>,
+    pub totp_enabled: bool,
+    #[serde(skip_serializing)]
+    pub recovery_codes: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

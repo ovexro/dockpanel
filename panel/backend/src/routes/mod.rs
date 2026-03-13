@@ -6,6 +6,7 @@ pub mod agent_updates;
 pub mod api_keys;
 pub mod auth;
 pub mod backup_destinations;
+pub mod dashboard;
 pub mod backup_schedules;
 pub mod backups;
 pub mod billing;
@@ -94,6 +95,12 @@ pub fn router() -> Router<AppState> {
         .route("/api/auth/verify-email", post(auth::verify_email))
         .route("/api/auth/forgot-password", post(auth::forgot_password))
         .route("/api/auth/reset-password", post(auth::reset_password))
+        // Two-Factor Authentication
+        .route("/api/auth/2fa/setup", post(auth::twofa_setup))
+        .route("/api/auth/2fa/enable", post(auth::twofa_enable))
+        .route("/api/auth/2fa/verify", post(auth::twofa_verify))
+        .route("/api/auth/2fa/disable", post(auth::twofa_disable))
+        .route("/api/auth/2fa/status", get(auth::twofa_status))
         // Users (admin)
         .route("/api/users", get(users::list).post(users::create))
         .route("/api/users/{id}", put(users::update).delete(users::remove))
@@ -234,6 +241,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/alerts/{id}/resolve", put(alerts::resolve))
         .route("/api/alert-rules", get(alerts::get_rules).put(alerts::update_rules))
         .route("/api/alert-rules/{server_id}", put(alerts::update_server_rules).delete(alerts::delete_server_rules))
+        // Dashboard Intelligence
+        .route("/api/dashboard/intelligence", get(dashboard::intelligence))
         // Activity (admin)
         .route("/api/activity", get(activity::list))
 }
