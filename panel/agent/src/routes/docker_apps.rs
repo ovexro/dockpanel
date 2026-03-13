@@ -278,6 +278,34 @@ async fn logs(
     Ok(Json(serde_json::json!({ "logs": output })))
 }
 
+/// GET /apps/{container_id}/env — Get container environment variables.
+async fn get_env(
+    Path(container_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_container_id(&container_id) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid container ID" })),
+        ));
+    }
+
+    let env = docker_apps::get_app_env(&container_id)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e })),
+            )
+        })?;
+
+    let env_map: Vec<serde_json::Value> = env
+        .into_iter()
+        .map(|(k, v)| serde_json::json!({ "key": k, "value": v }))
+        .collect();
+
+    Ok(Json(serde_json::json!({ "env": env_map })))
+}
+
 /// DELETE /apps/{container_id} — Remove a deployed app and clean up its proxy.
 async fn remove(
     Path(container_id): Path<String>,
@@ -362,4 +390,5 @@ pub fn router() -> Router<AppState> {
         .route("/apps/{container_id}/start", post(start))
         .route("/apps/{container_id}/restart", post(restart))
         .route("/apps/{container_id}/logs", get(logs))
+        .route("/apps/{container_id}/env", get(get_env))
 }

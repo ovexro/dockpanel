@@ -885,6 +885,30 @@ pub async fn get_app_logs(container_id: &str, tail: usize) -> Result<String, Str
     Ok(logs)
 }
 
+/// Get environment variables from a running container.
+pub async fn get_app_env(container_id: &str) -> Result<Vec<(String, String)>, String> {
+    let docker =
+        Docker::connect_with_local_defaults().map_err(|e| format!("Docker connect failed: {e}"))?;
+
+    let info = docker
+        .inspect_container(container_id, None)
+        .await
+        .map_err(|e| format!("Failed to inspect container: {e}"))?;
+
+    let env_list = info
+        .config
+        .and_then(|c| c.env)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|entry| {
+            let (k, v) = entry.split_once('=')?;
+            Some((k.to_string(), v.to_string()))
+        })
+        .collect();
+
+    Ok(env_list)
+}
+
 /// Get the domain label from a container, if set.
 pub async fn get_app_domain(container_id: &str) -> Option<String> {
     let docker = Docker::connect_with_local_defaults().ok()?;
