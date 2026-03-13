@@ -8,7 +8,7 @@
 #
 set -euo pipefail
 
-# ── Colors ────────────────────────────────────────────────────────────────────
+# ── Colors ────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
@@ -19,7 +19,7 @@ log()    { echo -e "${GREEN}[+]${NC} $1"; }
 warn()   { echo -e "${YELLOW}[!]${NC} $1"; }
 error()  { echo -e "${RED}[x]${NC} $1" >&2; }
 
-# ── Checks ────────────────────────────────────────────────────────────────────
+# ── Checks ────────────────────────────────────────────────────────────────
 if [ "$EUID" -ne 0 ]; then
     error "Run as root"
     exit 1
@@ -29,9 +29,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 AGENT_SRC="$REPO_DIR/panel/agent"
 API_SRC="$REPO_DIR/panel/backend"
+CLI_SRC="$REPO_DIR/panel/cli"
 FRONTEND_DIR="$REPO_DIR/panel/frontend"
 AGENT_BIN="/usr/local/bin/dockpanel-agent"
 API_BIN="/usr/local/bin/dockpanel-api"
+CLI_BIN="/usr/local/bin/dockpanel"
 
 if [ ! -d "$AGENT_SRC/src" ]; then
     error "Cannot find agent source at $AGENT_SRC"
@@ -42,7 +44,7 @@ echo ""
 echo -e "${GREEN}${BOLD}DockPanel Updater${NC}"
 echo ""
 
-# ── Pull latest code ──────────────────────────────────────────────────────────
+# ── Pull latest code ──────────────────────────────────────────────────────
 if [ -d "$REPO_DIR/.git" ]; then
     log "Pulling latest changes..."
     (cd "$REPO_DIR" && git pull --ff-only) || {
@@ -51,7 +53,7 @@ if [ -d "$REPO_DIR/.git" ]; then
     }
 fi
 
-# ── Detect Rust toolchain ────────────────────────────────────────────────────
+# ── Detect Rust toolchain ────────────────────────────────────────────────
 if command -v cargo &> /dev/null; then
     CARGO_CMD="cargo"
 elif [ -f "$HOME/.cargo/bin/cargo" ]; then
@@ -61,29 +63,34 @@ else
     exit 1
 fi
 
-# ── Build agent ───────────────────────────────────────────────────────────────
+# ── Build agent ───────────────────────────────────────────────────────────
 log "Building agent..."
 (cd "$AGENT_SRC" && $CARGO_CMD build --release 2>&1 | tail -1)
 
-# ── Build API ─────────────────────────────────────────────────────────────────
+# ── Build API ─────────────────────────────────────────────────────────────
 log "Building API..."
 (cd "$API_SRC" && $CARGO_CMD build --release 2>&1 | tail -1)
 
-# ── Deploy binaries ───────────────────────────────────────────────────────────
+# ── Build CLI ─────────────────────────────────────────────────────────────
+log "Building CLI..."
+(cd "$CLI_SRC" && $CARGO_CMD build --release 2>&1 | tail -1)
+
+# ── Deploy binaries ───────────────────────────────────────────────────────
 log "Stopping services..."
 systemctl stop dockpanel-agent dockpanel-api 2>/dev/null || true
 
 cp "$AGENT_SRC/target/release/dockpanel-agent" "$AGENT_BIN"
 cp "$API_SRC/target/release/dockpanel-api" "$API_BIN"
-chmod +x "$AGENT_BIN" "$API_BIN"
-log "Binaries updated"
+cp "$CLI_SRC/target/release/dockpanel" "$CLI_BIN"
+chmod +x "$AGENT_BIN" "$API_BIN" "$CLI_BIN"
+log "Binaries updated (agent: $(du -h "$AGENT_BIN" | cut -f1), api: $(du -h "$API_BIN" | cut -f1), cli: $(du -h "$CLI_BIN" | cut -f1))"
 
 systemctl start dockpanel-agent
 sleep 1
 systemctl start dockpanel-api
 log "Services restarted"
 
-# ── Build frontend ────────────────────────────────────────────────────────────
+# ── Build frontend ────────────────────────────────────────────────────────
 if [ -d "$FRONTEND_DIR" ]; then
     log "Building frontend..."
     (cd "$FRONTEND_DIR" && npm ci --silent 2>/dev/null || npm install --silent 2>/dev/null)
@@ -91,7 +98,7 @@ if [ -d "$FRONTEND_DIR" ]; then
     log "Frontend rebuilt"
 fi
 
-# ── Wait for health ──────────────────────────────────────────────────────────
+# ── Wait for health ──────────────────────────────────────────────────────
 log "Waiting for API..."
 WAITED=0
 while [ "$WAITED" -lt 30 ]; do
