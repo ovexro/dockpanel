@@ -383,11 +383,11 @@ export default function Dashboard() {
                     intel.health_score >= 75 ? "bg-blue-500/10" :
                     intel.health_score >= 60 ? "bg-amber-500/10" : "bg-red-500/10"
                   }`}>
-                    <span className={`text-lg font-bold ${
+                    <svg className={`w-5 h-5 ${
                       intel.health_score >= 90 ? "text-emerald-400" :
                       intel.health_score >= 75 ? "text-blue-400" :
                       intel.health_score >= 60 ? "text-amber-400" : "text-red-400"
-                    }`}>{intel.grade}</span>
+                    }`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733-.715-1.607-2.377-2.733-4.313-2.733C5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12Z" /></svg>
                   </div>
                   <p className="text-sm font-medium text-dark-200">Health Score</p>
                 </div>
@@ -398,6 +398,11 @@ export default function Dashboard() {
                 }`}>
                   {intel.health_score}
                   <span className="text-lg text-dark-400">/100</span>
+                  <span className={`text-base font-semibold ml-2 ${
+                    intel.health_score >= 90 ? "text-emerald-400/60" :
+                    intel.health_score >= 75 ? "text-blue-400/60" :
+                    intel.health_score >= 60 ? "text-amber-400/60" : "text-red-400/60"
+                  }`}>{intel.grade}</span>
                 </p>
                 <div className="flex items-center gap-4 mt-3 text-xs">
                   {intel.firing_alerts > 0 && (
@@ -415,7 +420,12 @@ export default function Dashboard() {
               {/* Top Issues */}
               <div className="bg-dark-800 rounded-xl border border-dark-500 p-5">
                 <div className="flex items-center justify-between mb-3">
-                  <p className="text-sm font-medium text-dark-200">Active Issues</p>
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-lg bg-amber-500/10 flex items-center justify-center">
+                      <svg className="w-5 h-5 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" /></svg>
+                    </div>
+                    <p className="text-sm font-medium text-dark-200">Active Issues</p>
+                  </div>
                   <Link to="/alerts" className="text-xs text-rust-400 hover:text-rust-300">View all</Link>
                 </div>
                 {intel.top_issues.length === 0 ? (
@@ -437,7 +447,12 @@ export default function Dashboard() {
 
               {/* SSL Certificates */}
               <div className="bg-dark-800 rounded-xl border border-dark-500 p-5">
-                <p className="text-sm font-medium text-dark-200 mb-3">SSL Certificates</p>
+                <div className="flex items-center gap-2.5 mb-3">
+                  <div className="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                    <svg className="w-5 h-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" /></svg>
+                  </div>
+                  <p className="text-sm font-medium text-dark-200">SSL Certificates</p>
+                </div>
                 {intel.ssl_countdowns.length === 0 ? (
                   <p className="text-sm text-dark-400 py-4 text-center">No SSL certificates</p>
                 ) : (
