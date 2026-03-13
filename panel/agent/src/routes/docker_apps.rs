@@ -1,5 +1,5 @@
 use axum::{
-    extract::Path,
+    extract::{Path, State},
     http::StatusCode,
     routing::{delete, get, post},
     Json, Router,
@@ -7,9 +7,11 @@ use axum::{
 use serde::Deserialize;
 use std::collections::HashMap;
 
-use super::{is_valid_container_id, is_valid_name, AppState};
+use super::{is_valid_container_id, is_valid_domain, is_valid_name, AppState};
+use crate::routes::nginx::SiteConfig;
 use crate::services::compose;
 use crate::services::docker_apps;
+use crate::services::{nginx, ssl};
 
 #[derive(Deserialize)]
 struct DeployRequest {
@@ -18,6 +20,10 @@ struct DeployRequest {
     port: u16,
     #[serde(default)]
     env: HashMap<String, String>,
+    /// Optional domain for auto reverse proxy
+    domain: Option<String>,
+    /// Email for Let's Encrypt SSL (requires domain)
+    ssl_email: Option<String>,
 }
 
 /// GET /apps/templates — List all available app templates.
@@ -25,8 +31,9 @@ async fn templates() -> Json<Vec<docker_apps::AppTemplate>> {
     Json(docker_apps::list_templates())
 }
 
-/// POST /apps/deploy — Deploy an app from a template.
+/// POST /apps/deploy — Deploy an app from a template, optionally with reverse proxy + SSL.
 async fn deploy(
+    State(state): State<AppState>,
     Json(body): Json<DeployRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     if !is_valid_name(&body.name) {
@@ -36,8 +43,17 @@ async fn deploy(
         ));
     }
 
+    if let Some(ref domain) = body.domain {
+        if !is_valid_domain(domain) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Invalid domain format" })),
+            ));
+        }
+    }
+
     let result =
-        docker_apps::deploy_app(&body.template_id, &body.name, body.port, body.env)
+        docker_apps::deploy_app(&body.template_id, &body.name, body.port, body.env, body.domain.as_deref())
             .await
             .map_err(|e| {
                 (
@@ -46,12 +62,109 @@ async fn deploy(
                 )
             })?;
 
-    Ok(Json(serde_json::json!({
+    let mut response = serde_json::json!({
         "success": true,
         "container_id": result.container_id,
         "name": result.name,
         "port": result.port,
-    })))
+    });
+
+    // Auto reverse proxy: create nginx config pointing to the app's port
+    if let Some(ref domain) = body.domain {
+        let site_config = SiteConfig {
+            runtime: "proxy".to_string(),
+            root: None,
+            proxy_port: Some(body.port),
+            php_socket: None,
+            ssl: None,
+            ssl_cert: None,
+            ssl_key: None,
+            rate_limit: None,
+            max_upload_mb: None,
+            php_memory_mb: None,
+            php_max_workers: None,
+        };
+
+        match nginx::render_site_config(&state.templates, domain, &site_config) {
+            Ok(rendered) => {
+                let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+                if let Err(e) = std::fs::write(&config_path, &rendered) {
+                    tracing::warn!("Auto-proxy: failed to write nginx config for {domain}: {e}");
+                    response["proxy_warning"] = serde_json::json!(format!("Failed to write nginx config: {e}"));
+                } else {
+                    match nginx::test_config().await {
+                        Ok(output) if output.success => {
+                            nginx::reload().await.ok();
+                            response["domain"] = serde_json::json!(domain);
+                            response["proxy"] = serde_json::json!(true);
+                            tracing::info!("Auto-proxy: {domain} → 127.0.0.1:{}", body.port);
+                        }
+                        Ok(output) => {
+                            std::fs::remove_file(&config_path).ok();
+                            tracing::warn!("Auto-proxy: nginx config test failed for {domain}: {}", output.stderr);
+                            response["proxy_warning"] = serde_json::json!(format!("Nginx config test failed: {}", output.stderr));
+                        }
+                        Err(e) => {
+                            std::fs::remove_file(&config_path).ok();
+                            tracing::warn!("Auto-proxy: nginx test error for {domain}: {e}");
+                            response["proxy_warning"] = serde_json::json!(format!("Nginx test error: {e}"));
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Auto-proxy: failed to render config for {domain}: {e}");
+                response["proxy_warning"] = serde_json::json!(format!("Failed to render nginx config: {e}"));
+            }
+        }
+
+        // SSL provisioning (only if proxy was set up successfully)
+        if response.get("proxy").is_some() {
+            if let Some(ref email) = body.ssl_email {
+                match ssl::load_or_create_account(email).await {
+                    Ok(account) => {
+                        match ssl::provision_cert(&account, domain).await {
+                            Ok(_cert_info) => {
+                                let ssl_site_config = SiteConfig {
+                                    runtime: "proxy".to_string(),
+                                    root: None,
+                                    proxy_port: Some(body.port),
+                                    php_socket: None,
+                                    ssl: None,
+                                    ssl_cert: None,
+                                    ssl_key: None,
+                                    rate_limit: None,
+                                    max_upload_mb: None,
+                                    php_memory_mb: None,
+                                    php_max_workers: None,
+                                };
+                                match ssl::enable_ssl_for_site(&state.templates, domain, &ssl_site_config).await {
+                                    Ok(()) => {
+                                        response["ssl"] = serde_json::json!(true);
+                                        tracing::info!("Auto-SSL: certificate provisioned for {domain}");
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("Auto-SSL: enable_ssl_for_site failed for {domain}: {e}");
+                                        response["ssl_warning"] = serde_json::json!(format!("SSL enable failed: {e}"));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("Auto-SSL: cert provisioning failed for {domain}: {e}");
+                                response["ssl_warning"] = serde_json::json!(format!("SSL provisioning failed: {e}"));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Auto-SSL: ACME account failed: {e}");
+                        response["ssl_warning"] = serde_json::json!(format!("ACME account failed: {e}"));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Json(response))
 }
 
 /// GET /apps — List all deployed apps.
@@ -159,7 +272,7 @@ async fn logs(
     Ok(Json(serde_json::json!({ "logs": output })))
 }
 
-/// DELETE /apps/{container_id} — Remove a deployed app.
+/// DELETE /apps/{container_id} — Remove a deployed app and clean up its proxy.
 async fn remove(
     Path(container_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
@@ -170,6 +283,9 @@ async fn remove(
         ));
     }
 
+    // Check for associated domain before removing the container
+    let domain = docker_apps::get_app_domain(&container_id).await;
+
     docker_apps::remove_app(&container_id)
         .await
         .map_err(|e| {
@@ -179,7 +295,19 @@ async fn remove(
             )
         })?;
 
-    Ok(Json(serde_json::json!({ "success": true })))
+    // Clean up nginx config if domain was set
+    let mut response = serde_json::json!({ "success": true });
+    if let Some(ref domain) = domain {
+        let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+        if std::path::Path::new(&config_path).exists() {
+            std::fs::remove_file(&config_path).ok();
+            nginx::reload().await.ok();
+            response["domain_removed"] = serde_json::json!(domain);
+            tracing::info!("Auto-proxy cleanup: removed nginx config for {domain}");
+        }
+    }
+
+    Ok(Json(response))
 }
 
 #[derive(Deserialize)]

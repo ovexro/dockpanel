@@ -26,6 +26,7 @@ interface DeployedApp {
   template: string;
   status: string;
   port: number | null;
+  domain: string | null;
 }
 
 interface ComposeService {
@@ -114,6 +115,8 @@ export default function Apps() {
   const [appName, setAppName] = useState("");
   const [appPort, setAppPort] = useState(0);
   const [envValues, setEnvValues] = useState<Record<string, string>>({});
+  const [appDomain, setAppDomain] = useState("");
+  const [sslEmail, setSslEmail] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [message, setMessage] = useState({ text: "", type: "" });
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -145,6 +148,8 @@ export default function Apps() {
     setSelected(tmpl);
     setAppName(tmpl.id);
     setAppPort(tmpl.default_port);
+    setAppDomain("");
+    setSslEmail("");
     const defaults: Record<string, string> = {};
     tmpl.env_vars.forEach((v) => {
       defaults[v.name] = v.default;
@@ -162,9 +167,14 @@ export default function Apps() {
         name: appName,
         port: appPort,
         env: envValues,
+        ...(appDomain ? { domain: appDomain } : {}),
+        ...(appDomain && sslEmail ? { ssl_email: sslEmail } : {}),
       });
       setSelected(null);
-      setMessage({ text: `${selected.name} deployed successfully`, type: "success" });
+      setMessage({
+        text: `${selected.name} deployed successfully${appDomain ? ` → ${appDomain}` : ""}${sslEmail ? " (with SSL)" : ""}`,
+        type: "success",
+      });
       loadApps();
     } catch (e) {
       setMessage({
@@ -310,6 +320,7 @@ export default function Apps() {
                 <tr className="bg-dark-900 border-b border-dark-500">
                   <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3">App</th>
                   <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 hidden sm:table-cell">Template</th>
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 hidden md:table-cell">Domain</th>
                   <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 hidden sm:table-cell w-20">Port</th>
                   <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 w-24">Status</th>
                   <th scope="col" className="text-right text-xs font-medium text-dark-200 uppercase px-5 py-3">Actions</th>
@@ -320,6 +331,13 @@ export default function Apps() {
                   <tr key={app.container_id} className="hover:bg-dark-800">
                     <td className="px-5 py-4 text-sm text-dark-50 font-medium">{app.name}</td>
                     <td className="px-5 py-4 text-sm text-dark-200 hidden sm:table-cell">{app.template}</td>
+                    <td className="px-5 py-4 text-sm hidden md:table-cell">
+                      {app.domain ? (
+                        <a href={`https://${app.domain}`} target="_blank" rel="noopener noreferrer" className="text-rust-400 hover:underline">{app.domain}</a>
+                      ) : (
+                        <span className="text-dark-300">{"\u2014"}</span>
+                      )}
+                    </td>
                     <td className="px-5 py-4 text-sm text-dark-200 font-mono hidden sm:table-cell">{app.port || "\u2014"}</td>
                     <td className="px-5 py-4">
                       <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${statusColors[app.status] || "bg-dark-700 text-dark-200"}`}>
@@ -483,6 +501,34 @@ export default function Apps() {
                   className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500"
                 />
               </div>
+
+              <div>
+                <label className="block text-sm font-medium text-dark-100 mb-1">
+                  Domain <span className="text-dark-300 font-normal">(optional — auto reverse proxy)</span>
+                </label>
+                <input
+                  type="text"
+                  value={appDomain}
+                  onChange={(e) => setAppDomain(e.target.value)}
+                  placeholder="app.example.com"
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500"
+                />
+              </div>
+
+              {appDomain && (
+                <div>
+                  <label className="block text-sm font-medium text-dark-100 mb-1">
+                    SSL Email <span className="text-dark-300 font-normal">(optional — Let's Encrypt)</span>
+                  </label>
+                  <input
+                    type="email"
+                    value={sslEmail}
+                    onChange={(e) => setSslEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500"
+                  />
+                </div>
+              )}
 
               {selected.env_vars.length > 0 && (
                 <div>

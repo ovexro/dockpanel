@@ -145,6 +145,12 @@ enum AppsCmd {
         /// Host port
         #[arg(long)]
         port: u16,
+        /// Domain for auto reverse proxy
+        #[arg(long)]
+        domain: Option<String>,
+        /// Email for Let's Encrypt SSL (requires --domain)
+        #[arg(long)]
+        ssl_email: Option<String>,
     },
     /// Stop a running app
     Stop {
@@ -315,7 +321,9 @@ async fn main() {
                 template,
                 name,
                 port,
-            }) => cmd_apps_deploy(&token, &template, &name, port).await,
+                domain,
+                ssl_email,
+            }) => cmd_apps_deploy(&token, &template, &name, port, domain.as_deref(), ssl_email.as_deref()).await,
             Some(AppsCmd::Stop { container_id }) => cmd_apps_action(&token, &container_id, "stop").await,
             Some(AppsCmd::Start { container_id }) => cmd_apps_action(&token, &container_id, "start").await,
             Some(AppsCmd::Restart { container_id }) => cmd_apps_action(&token, &container_id, "restart").await,
@@ -740,8 +748,8 @@ async fn cmd_apps_list(token: &str) -> Result<(), String> {
     }
 
     println!(
-        "\x1b[1m{:<14} {:<20} {:<15} {:<8} {:<12}\x1b[0m",
-        "CONTAINER", "NAME", "TEMPLATE", "PORT", "STATUS"
+        "\x1b[1m{:<14} {:<20} {:<15} {:<25} {:<8} {:<12}\x1b[0m",
+        "CONTAINER", "NAME", "TEMPLATE", "DOMAIN", "PORT", "STATUS"
     );
 
     for app in apps {
@@ -749,6 +757,7 @@ async fn cmd_apps_list(token: &str) -> Result<(), String> {
         let short_id = &cid[..cid.len().min(12)];
         let name = app["name"].as_str().unwrap_or("-");
         let template = app["template"].as_str().unwrap_or("-");
+        let domain = app["domain"].as_str().unwrap_or("-");
         let port = app["port"]
             .as_u64()
             .map(|p| p.to_string())
@@ -762,8 +771,8 @@ async fn cmd_apps_list(token: &str) -> Result<(), String> {
         };
 
         println!(
-            "{:<14} {:<20} {:<15} {:<8} {color}{:<12}\x1b[0m",
-            short_id, name, template, port, status
+            "{:<14} {:<20} {:<15} {:<25} {:<8} {color}{:<12}\x1b[0m",
+            short_id, name, template, domain, port, status
         );
     }
 
@@ -809,14 +818,27 @@ async fn cmd_apps_deploy(
     template: &str,
     name: &str,
     port: u16,
+    domain: Option<&str>,
+    ssl_email: Option<&str>,
 ) -> Result<(), String> {
+    if ssl_email.is_some() && domain.is_none() {
+        return Err("--ssl-email requires --domain".to_string());
+    }
+
     println!("Deploying app '{name}' from template '{template}' on port {port}...");
 
-    let body = json!({
+    let mut body = json!({
         "template_id": template,
         "name": name,
         "port": port,
     });
+
+    if let Some(domain) = domain {
+        body["domain"] = json!(domain);
+    }
+    if let Some(email) = ssl_email {
+        body["ssl_email"] = json!(email);
+    }
 
     let result = client::agent_post("/apps/deploy", &body, token).await?;
 
@@ -826,6 +848,22 @@ async fn cmd_apps_deploy(
         println!("  Name:         {name}");
         println!("  Port:         {port}");
         println!("  Container:    {}", &cid[..cid.len().min(12)]);
+
+        if let Some(domain) = result["domain"].as_str() {
+            println!("  Domain:       {domain}");
+        }
+        if result["proxy"].as_bool() == Some(true) {
+            println!("  Proxy:        \x1b[32mconfigured\x1b[0m");
+        }
+        if let Some(warning) = result["proxy_warning"].as_str() {
+            eprintln!("  \x1b[33mProxy warning:\x1b[0m {warning}");
+        }
+        if result["ssl"].as_bool() == Some(true) {
+            println!("  SSL:          \x1b[32mprovisioned\x1b[0m");
+        }
+        if let Some(warning) = result["ssl_warning"].as_str() {
+            eprintln!("  \x1b[33mSSL warning:\x1b[0m {warning}");
+        }
     } else {
         let msg = result["message"].as_str().unwrap_or("Unknown error");
         return Err(format!("Failed to deploy app: {msg}"));

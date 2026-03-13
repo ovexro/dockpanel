@@ -66,6 +66,7 @@ pub struct DeployedApp {
     pub template: String,
     pub status: String,
     pub port: Option<u16>,
+    pub domain: Option<String>,
 }
 
 static TEMPLATES: &[AppTemplateDef] = &[
@@ -245,6 +246,7 @@ pub async fn deploy_app(
     name: &str,
     port: u16,
     env: HashMap<String, String>,
+    domain: Option<&str>,
 ) -> Result<DeployResult, String> {
     let template = TEMPLATES
         .iter()
@@ -336,14 +338,20 @@ pub async fn deploy_app(
         },
         exposed_ports: Some(exposed_ports),
         host_config: Some(host_config),
-        labels: Some(HashMap::from([
-            ("dockpanel.managed".to_string(), "true".to_string()),
-            (
-                "dockpanel.app.template".to_string(),
-                template.id.to_string(),
-            ),
-            ("dockpanel.app.name".to_string(), name.to_string()),
-        ])),
+        labels: Some({
+            let mut labels = HashMap::from([
+                ("dockpanel.managed".to_string(), "true".to_string()),
+                (
+                    "dockpanel.app.template".to_string(),
+                    template.id.to_string(),
+                ),
+                ("dockpanel.app.name".to_string(), name.to_string()),
+            ]);
+            if let Some(domain) = domain {
+                labels.insert("dockpanel.app.domain".to_string(), domain.to_string());
+            }
+            labels
+        }),
         ..Default::default()
     };
 
@@ -419,12 +427,15 @@ pub async fn list_deployed_apps() -> Result<Vec<DeployedApp>, String> {
                 .map(|n| n.trim_start_matches('/').to_string())
                 .unwrap_or_default();
 
+            let domain = labels.get("dockpanel.app.domain").cloned();
+
             Some(DeployedApp {
                 container_id: id.clone(),
                 name,
                 template: template.clone(),
                 status,
                 port,
+                domain,
             })
         })
         .collect();
@@ -500,6 +511,13 @@ pub async fn get_app_logs(container_id: &str, tail: usize) -> Result<String, Str
     }
 
     Ok(logs)
+}
+
+/// Get the domain label from a container, if set.
+pub async fn get_app_domain(container_id: &str) -> Option<String> {
+    let docker = Docker::connect_with_local_defaults().ok()?;
+    let info = docker.inspect_container(container_id, None).await.ok()?;
+    info.config?.labels?.get("dockpanel.app.domain").cloned()
 }
 
 /// Stop and remove an app container, optionally removing its volumes.
