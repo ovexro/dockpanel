@@ -86,6 +86,9 @@ pub fn render_site_config(
     let max_upload_mb = config.max_upload_mb.unwrap_or(64);
     ctx.insert("max_upload_mb", &max_upload_mb);
 
+    // Custom nginx directives
+    ctx.insert("custom_nginx", &config.custom_nginx.as_deref().unwrap_or(""));
+
     let ssl = config.ssl.unwrap_or(false);
     ctx.insert("ssl", &ssl);
 

@@ -67,6 +67,7 @@ pub struct DeployedApp {
     pub status: String,
     pub port: Option<u16>,
     pub domain: Option<String>,
+    pub health: Option<String>,
 }
 
 static TEMPLATES: &[AppTemplateDef] = &[
@@ -207,6 +208,344 @@ static TEMPLATES: &[AppTemplateDef] = &[
         container_port: "3000/tcp",
         env_vars: &[],
         volumes: &["/data", "/etc/timezone"],
+    },
+    // ─── Databases ──────────────────────────────────────────────────
+    AppTemplateDef {
+        id: "postgres",
+        name: "PostgreSQL",
+        description: "Advanced open-source relational database",
+        category: "Database",
+        image: "postgres:16-alpine",
+        default_port: 5432,
+        container_port: "5432/tcp",
+        env_vars: &[
+            EnvVarDef { name: "POSTGRES_USER", label: "Username", default: "postgres", required: true, secret: false },
+            EnvVarDef { name: "POSTGRES_PASSWORD", label: "Password", default: "", required: true, secret: true },
+            EnvVarDef { name: "POSTGRES_DB", label: "Database Name", default: "app", required: false, secret: false },
+        ],
+        volumes: &["/var/lib/postgresql/data"],
+    },
+    AppTemplateDef {
+        id: "mysql",
+        name: "MySQL",
+        description: "The world's most popular open-source relational database",
+        category: "Database",
+        image: "mysql:8",
+        default_port: 3306,
+        container_port: "3306/tcp",
+        env_vars: &[
+            EnvVarDef { name: "MYSQL_ROOT_PASSWORD", label: "Root Password", default: "", required: true, secret: true },
+            EnvVarDef { name: "MYSQL_DATABASE", label: "Database Name", default: "app", required: false, secret: false },
+            EnvVarDef { name: "MYSQL_USER", label: "User", default: "", required: false, secret: false },
+            EnvVarDef { name: "MYSQL_PASSWORD", label: "User Password", default: "", required: false, secret: true },
+        ],
+        volumes: &["/var/lib/mysql"],
+    },
+    AppTemplateDef {
+        id: "mariadb",
+        name: "MariaDB",
+        description: "Community-developed fork of MySQL with enhanced performance",
+        category: "Database",
+        image: "mariadb:11",
+        default_port: 3307,
+        container_port: "3306/tcp",
+        env_vars: &[
+            EnvVarDef { name: "MARIADB_ROOT_PASSWORD", label: "Root Password", default: "", required: true, secret: true },
+            EnvVarDef { name: "MARIADB_DATABASE", label: "Database Name", default: "app", required: false, secret: false },
+        ],
+        volumes: &["/var/lib/mysql"],
+    },
+    AppTemplateDef {
+        id: "mongo",
+        name: "MongoDB",
+        description: "Document-oriented NoSQL database for modern apps",
+        category: "Database",
+        image: "mongo:7",
+        default_port: 27017,
+        container_port: "27017/tcp",
+        env_vars: &[
+            EnvVarDef { name: "MONGO_INITDB_ROOT_USERNAME", label: "Root Username", default: "admin", required: true, secret: false },
+            EnvVarDef { name: "MONGO_INITDB_ROOT_PASSWORD", label: "Root Password", default: "", required: true, secret: true },
+        ],
+        volumes: &["/data/db"],
+    },
+    // ─── CMS & Content ──────────────────────────────────────────────
+    AppTemplateDef {
+        id: "strapi",
+        name: "Strapi",
+        description: "Open-source headless CMS with a customizable API",
+        category: "CMS",
+        image: "strapi/strapi:latest",
+        default_port: 1337,
+        container_port: "1337/tcp",
+        env_vars: &[],
+        volumes: &["/srv/app"],
+    },
+    AppTemplateDef {
+        id: "directus",
+        name: "Directus",
+        description: "Open data platform — instant REST & GraphQL API for any SQL database",
+        category: "CMS",
+        image: "directus/directus:latest",
+        default_port: 8055,
+        container_port: "8055/tcp",
+        env_vars: &[
+            EnvVarDef { name: "ADMIN_EMAIL", label: "Admin Email", default: "admin@example.com", required: true, secret: false },
+            EnvVarDef { name: "ADMIN_PASSWORD", label: "Admin Password", default: "", required: true, secret: true },
+            EnvVarDef { name: "SECRET", label: "Secret Key", default: "", required: true, secret: true },
+        ],
+        volumes: &["/directus/uploads", "/directus/database"],
+    },
+    AppTemplateDef {
+        id: "nextcloud",
+        name: "Nextcloud",
+        description: "Self-hosted productivity platform — files, calendar, contacts, and more",
+        category: "Storage",
+        image: "nextcloud:latest",
+        default_port: 8082,
+        container_port: "80/tcp",
+        env_vars: &[
+            EnvVarDef { name: "NEXTCLOUD_ADMIN_USER", label: "Admin Username", default: "admin", required: true, secret: false },
+            EnvVarDef { name: "NEXTCLOUD_ADMIN_PASSWORD", label: "Admin Password", default: "", required: true, secret: true },
+        ],
+        volumes: &["/var/www/html"],
+    },
+    // ─── Monitoring & Analytics ─────────────────────────────────────
+    AppTemplateDef {
+        id: "grafana",
+        name: "Grafana",
+        description: "Open-source observability platform for metrics, logs, and traces",
+        category: "Monitoring",
+        image: "grafana/grafana:latest",
+        default_port: 3002,
+        container_port: "3000/tcp",
+        env_vars: &[
+            EnvVarDef { name: "GF_SECURITY_ADMIN_PASSWORD", label: "Admin Password", default: "admin", required: false, secret: true },
+        ],
+        volumes: &["/var/lib/grafana"],
+    },
+    AppTemplateDef {
+        id: "prometheus",
+        name: "Prometheus",
+        description: "Monitoring system and time-series database for metrics",
+        category: "Monitoring",
+        image: "prom/prometheus:latest",
+        default_port: 9090,
+        container_port: "9090/tcp",
+        env_vars: &[],
+        volumes: &["/prometheus"],
+    },
+    AppTemplateDef {
+        id: "plausible",
+        name: "Plausible Analytics",
+        description: "Privacy-friendly alternative to Google Analytics",
+        category: "Analytics",
+        image: "plausible/analytics:latest",
+        default_port: 8000,
+        container_port: "8000/tcp",
+        env_vars: &[
+            EnvVarDef { name: "SECRET_KEY_BASE", label: "Secret Key (64+ chars)", default: "", required: true, secret: true },
+            EnvVarDef { name: "BASE_URL", label: "Site URL", default: "http://localhost:8000", required: true, secret: false },
+        ],
+        volumes: &[],
+    },
+    AppTemplateDef {
+        id: "umami",
+        name: "Umami",
+        description: "Simple, privacy-focused website analytics",
+        category: "Analytics",
+        image: "ghcr.io/umami-software/umami:postgresql-latest",
+        default_port: 3003,
+        container_port: "3000/tcp",
+        env_vars: &[
+            EnvVarDef { name: "DATABASE_URL", label: "Postgres URL", default: "", required: true, secret: true },
+        ],
+        volumes: &[],
+    },
+    AppTemplateDef {
+        id: "matomo",
+        name: "Matomo",
+        description: "Google Analytics alternative that respects user privacy",
+        category: "Analytics",
+        image: "matomo:latest",
+        default_port: 8083,
+        container_port: "80/tcp",
+        env_vars: &[],
+        volumes: &["/var/www/html"],
+    },
+    // ─── Tools & Utilities ──────────────────────────────────────────
+    AppTemplateDef {
+        id: "pgadmin",
+        name: "pgAdmin",
+        description: "Web-based PostgreSQL management and administration tool",
+        category: "Tools",
+        image: "dpage/pgadmin4:latest",
+        default_port: 5050,
+        container_port: "80/tcp",
+        env_vars: &[
+            EnvVarDef { name: "PGADMIN_DEFAULT_EMAIL", label: "Admin Email", default: "admin@example.com", required: true, secret: false },
+            EnvVarDef { name: "PGADMIN_DEFAULT_PASSWORD", label: "Admin Password", default: "", required: true, secret: true },
+        ],
+        volumes: &["/var/lib/pgadmin"],
+    },
+    AppTemplateDef {
+        id: "minio",
+        name: "MinIO",
+        description: "High-performance S3-compatible object storage",
+        category: "Storage",
+        image: "minio/minio:latest",
+        default_port: 9000,
+        container_port: "9000/tcp",
+        env_vars: &[
+            EnvVarDef { name: "MINIO_ROOT_USER", label: "Root User", default: "minioadmin", required: true, secret: false },
+            EnvVarDef { name: "MINIO_ROOT_PASSWORD", label: "Root Password", default: "", required: true, secret: true },
+        ],
+        volumes: &["/data"],
+    },
+    AppTemplateDef {
+        id: "vaultwarden",
+        name: "Vaultwarden",
+        description: "Lightweight Bitwarden-compatible password manager server",
+        category: "Security",
+        image: "vaultwarden/server:latest",
+        default_port: 8084,
+        container_port: "80/tcp",
+        env_vars: &[
+            EnvVarDef { name: "ADMIN_TOKEN", label: "Admin Token", default: "", required: false, secret: true },
+        ],
+        volumes: &["/data"],
+    },
+    AppTemplateDef {
+        id: "meilisearch",
+        name: "Meilisearch",
+        description: "Lightning-fast, typo-tolerant search engine",
+        category: "Tools",
+        image: "getmeili/meilisearch:latest",
+        default_port: 7700,
+        container_port: "7700/tcp",
+        env_vars: &[
+            EnvVarDef { name: "MEILI_MASTER_KEY", label: "Master Key", default: "", required: true, secret: true },
+        ],
+        volumes: &["/meili_data"],
+    },
+    AppTemplateDef {
+        id: "metabase",
+        name: "Metabase",
+        description: "Business intelligence and analytics dashboard builder",
+        category: "Analytics",
+        image: "metabase/metabase:latest",
+        default_port: 3004,
+        container_port: "3000/tcp",
+        env_vars: &[],
+        volumes: &["/metabase-data"],
+    },
+    // ─── Communication ──────────────────────────────────────────────
+    AppTemplateDef {
+        id: "nocodb",
+        name: "NocoDB",
+        description: "Open-source Airtable alternative — turn any database into a spreadsheet",
+        category: "Tools",
+        image: "nocodb/nocodb:latest",
+        default_port: 8085,
+        container_port: "8080/tcp",
+        env_vars: &[],
+        volumes: &["/usr/app/data"],
+    },
+    AppTemplateDef {
+        id: "searxng",
+        name: "SearXNG",
+        description: "Privacy-respecting metasearch engine aggregating 70+ sources",
+        category: "Tools",
+        image: "searxng/searxng:latest",
+        default_port: 8086,
+        container_port: "8080/tcp",
+        env_vars: &[],
+        volumes: &[],
+    },
+    AppTemplateDef {
+        id: "jellyfin",
+        name: "Jellyfin",
+        description: "Free media server for movies, TV shows, music, and photos",
+        category: "Media",
+        image: "jellyfin/jellyfin:latest",
+        default_port: 8096,
+        container_port: "8096/tcp",
+        env_vars: &[],
+        volumes: &["/config", "/cache"],
+    },
+    AppTemplateDef {
+        id: "code-server",
+        name: "VS Code Server",
+        description: "Run VS Code in the browser — full IDE accessible anywhere",
+        category: "Development",
+        image: "codercom/code-server:latest",
+        default_port: 8443,
+        container_port: "8080/tcp",
+        env_vars: &[
+            EnvVarDef { name: "PASSWORD", label: "Access Password", default: "", required: true, secret: true },
+        ],
+        volumes: &["/home/coder"],
+    },
+    AppTemplateDef {
+        id: "drone",
+        name: "Drone CI",
+        description: "Container-native CI/CD platform with pipeline-as-code",
+        category: "Development",
+        image: "drone/drone:latest",
+        default_port: 8087,
+        container_port: "80/tcp",
+        env_vars: &[
+            EnvVarDef { name: "DRONE_SERVER_HOST", label: "Server Host", default: "localhost", required: true, secret: false },
+            EnvVarDef { name: "DRONE_SERVER_PROTO", label: "Protocol", default: "http", required: false, secret: false },
+            EnvVarDef { name: "DRONE_RPC_SECRET", label: "RPC Secret", default: "", required: true, secret: true },
+        ],
+        volumes: &["/data"],
+    },
+    AppTemplateDef {
+        id: "registry",
+        name: "Docker Registry",
+        description: "Private Docker image registry for storing and distributing container images",
+        category: "Development",
+        image: "registry:2",
+        default_port: 5000,
+        container_port: "5000/tcp",
+        env_vars: &[],
+        volumes: &["/var/lib/registry"],
+    },
+    AppTemplateDef {
+        id: "mailhog",
+        name: "MailHog",
+        description: "Email testing tool — catches outgoing emails for dev/testing",
+        category: "Development",
+        image: "mailhog/mailhog:latest",
+        default_port: 8025,
+        container_port: "8025/tcp",
+        env_vars: &[],
+        volumes: &[],
+    },
+    AppTemplateDef {
+        id: "pihole",
+        name: "Pi-hole",
+        description: "Network-wide ad blocker and DNS sinkhole",
+        category: "Networking",
+        image: "pihole/pihole:latest",
+        default_port: 8088,
+        container_port: "80/tcp",
+        env_vars: &[
+            EnvVarDef { name: "WEBPASSWORD", label: "Web Password", default: "", required: true, secret: true },
+        ],
+        volumes: &["/etc/pihole", "/etc/dnsmasq.d"],
+    },
+    AppTemplateDef {
+        id: "loki",
+        name: "Grafana Loki",
+        description: "Log aggregation system designed to work with Grafana",
+        category: "Monitoring",
+        image: "grafana/loki:latest",
+        default_port: 3100,
+        container_port: "3100/tcp",
+        env_vars: &[],
+        volumes: &["/loki"],
     },
 ];
 
@@ -448,6 +787,19 @@ pub async fn list_deployed_apps() -> Result<Vec<DeployedApp>, String> {
 
             let domain = labels.get("dockpanel.app.domain").cloned();
 
+            // Extract health from human-readable status string (e.g., "Up 2 hours (healthy)")
+            let health = c.status.as_deref().and_then(|s| {
+                if s.contains("(healthy)") {
+                    Some("healthy".to_string())
+                } else if s.contains("(unhealthy)") {
+                    Some("unhealthy".to_string())
+                } else if s.contains("(health: starting)") {
+                    Some("starting".to_string())
+                } else {
+                    None
+                }
+            });
+
             Some(DeployedApp {
                 container_id: id.clone(),
                 name,
@@ -455,6 +807,7 @@ pub async fn list_deployed_apps() -> Result<Vec<DeployedApp>, String> {
                 status,
                 port,
                 domain,
+                health,
             })
         })
         .collect();

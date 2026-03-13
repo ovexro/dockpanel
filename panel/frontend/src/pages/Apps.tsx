@@ -27,6 +27,7 @@ interface DeployedApp {
   status: string;
   port: number | null;
   domain: string | null;
+  health: string | null;
 }
 
 interface ComposeService {
@@ -326,6 +327,7 @@ export default function Apps() {
                   <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 hidden sm:table-cell">Template</th>
                   <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 hidden md:table-cell">Domain</th>
                   <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 hidden sm:table-cell w-20">Port</th>
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 hidden lg:table-cell w-24">Health</th>
                   <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 w-24">Status</th>
                   <th scope="col" className="text-right text-xs font-medium text-dark-200 uppercase px-5 py-3">Actions</th>
                 </tr>
@@ -343,6 +345,24 @@ export default function Apps() {
                       )}
                     </td>
                     <td className="px-5 py-4 text-sm text-dark-200 font-mono hidden sm:table-cell">{app.port || "\u2014"}</td>
+                    <td className="px-5 py-4 hidden lg:table-cell">
+                      {app.health ? (
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
+                          app.health === "healthy" ? "bg-emerald-500/15 text-emerald-400" :
+                          app.health === "unhealthy" ? "bg-red-500/15 text-red-400" :
+                          "bg-amber-500/15 text-amber-400"
+                        }`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${
+                            app.health === "healthy" ? "bg-emerald-400" :
+                            app.health === "unhealthy" ? "bg-red-400" :
+                            "bg-amber-400"
+                          }`} />
+                          {app.health}
+                        </span>
+                      ) : (
+                        <span className="text-dark-400 text-xs">{"\u2014"}</span>
+                      )}
+                    </td>
                     <td className="px-5 py-4">
                       <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${statusColors[app.status] || "bg-dark-700 text-dark-200"}`}>
                         {app.status}

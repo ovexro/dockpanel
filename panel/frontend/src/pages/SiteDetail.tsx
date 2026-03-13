@@ -17,6 +17,7 @@ interface Site {
   max_upload_mb: number;
   php_memory_mb: number;
   php_max_workers: number;
+  custom_nginx: string | null;
   parent_site_id: string | null;
   synced_at: string | null;
   created_at: string;
@@ -47,6 +48,7 @@ export default function SiteDetail() {
   const [maxUpload, setMaxUpload] = useState("64");
   const [phpMemory, setPhpMemory] = useState("256");
   const [phpWorkers, setPhpWorkers] = useState("5");
+  const [customNginx, setCustomNginx] = useState("");
   const [staging, setStaging] = useState<StagingInfo | null>(null);
   const [stagingLoading, setStagingLoading] = useState(false);
   const [stagingMessage, setStagingMessage] = useState("");
@@ -66,6 +68,7 @@ export default function SiteDetail() {
         setMaxUpload(String(s.max_upload_mb));
         setPhpMemory(String(s.php_memory_mb));
         setPhpWorkers(String(s.php_max_workers));
+        setCustomNginx(s.custom_nginx || "");
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
@@ -458,6 +461,24 @@ export default function SiteDetail() {
                 </>
               )}
             </div>
+            {/* Custom Nginx Directives */}
+            <div>
+              <label className="block text-xs font-medium text-dark-200 mb-1">
+                Custom Nginx Directives <span className="text-dark-300 font-normal">(injected into server block)</span>
+              </label>
+              <textarea
+                value={customNginx}
+                onChange={(e) => setCustomNginx(e.target.value)}
+                rows={4}
+                placeholder={"# Example:\n# add_header X-Custom-Header \"value\";\n# location /api { proxy_pass http://localhost:3000; }"}
+                spellCheck={false}
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none resize-y"
+              />
+              <p className="text-[10px] text-dark-400 mt-1">
+                Config is validated before applying. Invalid directives will be rejected.
+              </p>
+            </div>
+
             <div className="flex items-center justify-between">
               <p className="text-xs text-dark-300">
                 {rateLimit ? `${rateLimit} req/s per IP` : "No rate limit"} · {maxUpload} MB uploads
@@ -480,6 +501,7 @@ export default function SiteDetail() {
                         max_upload_mb: parseInt(maxUpload) || 64,
                         php_memory_mb: parseInt(phpMemory) || 256,
                         php_max_workers: parseInt(phpWorkers) || 5,
+                        custom_nginx: customNginx || null,
                       });
                       setSite(updated);
                       setLimitsMessage("Limits saved");
