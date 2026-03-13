@@ -24,6 +24,10 @@ struct DeployRequest {
     domain: Option<String>,
     /// Email for Let's Encrypt SSL (requires domain)
     ssl_email: Option<String>,
+    /// Memory limit in MB (e.g., 512)
+    memory_mb: Option<u64>,
+    /// CPU limit as percentage (e.g., 50 = 50% of one core)
+    cpu_percent: Option<u64>,
 }
 
 /// GET /apps/templates — List all available app templates.
@@ -53,7 +57,7 @@ async fn deploy(
     }
 
     let result =
-        docker_apps::deploy_app(&body.template_id, &body.name, body.port, body.env, body.domain.as_deref())
+        docker_apps::deploy_app(&body.template_id, &body.name, body.port, body.env, body.domain.as_deref(), body.memory_mb, body.cpu_percent)
             .await
             .map_err(|e| {
                 (

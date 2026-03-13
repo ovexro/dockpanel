@@ -247,6 +247,8 @@ pub async fn deploy_app(
     port: u16,
     env: HashMap<String, String>,
     domain: Option<&str>,
+    memory_mb: Option<u64>,
+    cpu_percent: Option<u64>,
 ) -> Result<DeployResult, String> {
     let template = TEMPLATES
         .iter()
@@ -321,6 +323,23 @@ pub async fn deploy_app(
         }),
         ..Default::default()
     };
+
+    // Docker resource limits
+    if let Some(mem) = memory_mb {
+        if mem > 0 {
+            host_config.memory = Some((mem * 1024 * 1024) as i64);
+            // Memory swap = 2x memory (allows some swap)
+            host_config.memory_swap = Some((mem * 2 * 1024 * 1024) as i64);
+        }
+    }
+    if let Some(cpu) = cpu_percent {
+        if cpu > 0 && cpu <= 100 {
+            // CPU quota: period * (percent/100)
+            // Default period is 100000 (100ms)
+            host_config.cpu_period = Some(100_000);
+            host_config.cpu_quota = Some((cpu * 1000) as i64);
+        }
+    }
 
     if !binds.is_empty() {
         host_config.binds = Some(binds);

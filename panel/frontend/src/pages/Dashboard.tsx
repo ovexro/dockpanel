@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api";
 import { formatSize, formatUptime } from "../utils/format";
 
@@ -43,6 +44,28 @@ interface SiteSummary {
   active: number;
 }
 
+interface SslCountdown {
+  domain: string;
+  days_left: number;
+  severity: string;
+}
+
+interface TopIssue {
+  title: string;
+  severity: string;
+  type: string;
+  since: string;
+}
+
+interface Intelligence {
+  health_score: number;
+  grade: string;
+  firing_alerts: number;
+  acknowledged_alerts: number;
+  ssl_countdowns: SslCountdown[];
+  top_issues: TopIssue[];
+}
+
 function ProgressBar({ pct, color }: { pct: number; color: string }) {
   return (
     <div
@@ -79,6 +102,7 @@ export default function Dashboard() {
   const [processes, setProcesses] = useState<Process[]>([]);
   const [network, setNetwork] = useState<NetworkIface[]>([]);
   const [error, setError] = useState("");
+  const [intel, setIntel] = useState<Intelligence | null>(null);
 
   const fetchData = () => {
     api
@@ -106,6 +130,10 @@ export default function Dashboard() {
       .get<NetworkIface[]>("/system/network")
       .then(setNetwork)
       .catch((e) => console.error("Failed to load network:", e));
+    api
+      .get<Intelligence>("/dashboard/intelligence")
+      .then(setIntel)
+      .catch((e) => console.error("Failed to load intelligence:", e));
   };
 
   useEffect(() => {
@@ -259,6 +287,94 @@ export default function Dashboard() {
               <p className="text-sm text-dark-300 mt-2">{system.hostname}</p>
             </div>
           </div>
+
+          {/* Server Health Intelligence */}
+          {intel && (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+              {/* Health Score */}
+              <div className="bg-dark-800 rounded-xl border border-dark-500 p-5">
+                <div className="flex items-center gap-2.5 mb-3">
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
+                    intel.health_score >= 90 ? "bg-emerald-500/10" :
+                    intel.health_score >= 75 ? "bg-blue-500/10" :
+                    intel.health_score >= 60 ? "bg-amber-500/10" : "bg-red-500/10"
+                  }`}>
+                    <span className={`text-lg font-bold ${
+                      intel.health_score >= 90 ? "text-emerald-400" :
+                      intel.health_score >= 75 ? "text-blue-400" :
+                      intel.health_score >= 60 ? "text-amber-400" : "text-red-400"
+                    }`}>{intel.grade}</span>
+                  </div>
+                  <p className="text-sm font-medium text-dark-200">Health Score</p>
+                </div>
+                <p className={`text-4xl font-bold ${
+                  intel.health_score >= 90 ? "text-emerald-400" :
+                  intel.health_score >= 75 ? "text-blue-400" :
+                  intel.health_score >= 60 ? "text-amber-400" : "text-red-400"
+                }`}>
+                  {intel.health_score}
+                  <span className="text-lg text-dark-400">/100</span>
+                </p>
+                <div className="flex items-center gap-4 mt-3 text-xs">
+                  {intel.firing_alerts > 0 && (
+                    <span className="text-red-400">{intel.firing_alerts} firing</span>
+                  )}
+                  {intel.acknowledged_alerts > 0 && (
+                    <span className="text-amber-400">{intel.acknowledged_alerts} ack'd</span>
+                  )}
+                  {intel.firing_alerts === 0 && intel.acknowledged_alerts === 0 && (
+                    <span className="text-emerald-400">All clear</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Top Issues */}
+              <div className="bg-dark-800 rounded-xl border border-dark-500 p-5">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-sm font-medium text-dark-200">Active Issues</p>
+                  <Link to="/alerts" className="text-xs text-rust-400 hover:text-rust-300">View all</Link>
+                </div>
+                {intel.top_issues.length === 0 ? (
+                  <p className="text-sm text-dark-400 py-4 text-center">No active issues</p>
+                ) : (
+                  <div className="space-y-2">
+                    {intel.top_issues.slice(0, 4).map((issue, i) => (
+                      <div key={i} className="flex items-start gap-2">
+                        <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${
+                          issue.severity === "critical" ? "bg-red-500" :
+                          issue.severity === "warning" ? "bg-amber-500" : "bg-blue-500"
+                        }`} />
+                        <p className="text-xs text-dark-100 leading-tight">{issue.title}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* SSL Certificates */}
+              <div className="bg-dark-800 rounded-xl border border-dark-500 p-5">
+                <p className="text-sm font-medium text-dark-200 mb-3">SSL Certificates</p>
+                {intel.ssl_countdowns.length === 0 ? (
+                  <p className="text-sm text-dark-400 py-4 text-center">No SSL certificates</p>
+                ) : (
+                  <div className="space-y-2">
+                    {intel.ssl_countdowns.map((ssl, i) => (
+                      <div key={i} className="flex items-center justify-between">
+                        <span className="text-xs text-dark-100 truncate max-w-[140px]">{ssl.domain}</span>
+                        <span className={`text-xs font-medium ${
+                          ssl.severity === "critical" ? "text-red-400" :
+                          ssl.severity === "warning" ? "text-amber-400" :
+                          ssl.severity === "info" ? "text-blue-400" : "text-emerald-400"
+                        }`}>
+                          {ssl.days_left}d left
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* System Information */}
           <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden mb-6">

@@ -117,6 +117,8 @@ export default function Apps() {
   const [envValues, setEnvValues] = useState<Record<string, string>>({});
   const [appDomain, setAppDomain] = useState("");
   const [sslEmail, setSslEmail] = useState("");
+  const [memoryMb, setMemoryMb] = useState("");
+  const [cpuPercent, setCpuPercent] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [message, setMessage] = useState({ text: "", type: "" });
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -169,6 +171,8 @@ export default function Apps() {
         env: envValues,
         ...(appDomain ? { domain: appDomain } : {}),
         ...(appDomain && sslEmail ? { ssl_email: sslEmail } : {}),
+        ...(memoryMb ? { memory_mb: parseInt(memoryMb) } : {}),
+        ...(cpuPercent ? { cpu_percent: parseInt(cpuPercent) } : {}),
       });
       setSelected(null);
       setMessage({
@@ -529,6 +533,36 @@ export default function Apps() {
                   />
                 </div>
               )}
+
+              {/* Resource Limits */}
+              <div>
+                <p className="text-sm font-medium text-dark-100 mb-2">Resource Limits <span className="text-dark-300 font-normal">(optional)</span></p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-dark-200 mb-0.5">Memory (MB)</label>
+                    <input
+                      type="number"
+                      value={memoryMb}
+                      onChange={(e) => setMemoryMb(e.target.value)}
+                      placeholder="e.g. 512"
+                      min="0"
+                      className="w-full px-3 py-1.5 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-dark-200 mb-0.5">CPU (%)</label>
+                    <input
+                      type="number"
+                      value={cpuPercent}
+                      onChange={(e) => setCpuPercent(e.target.value)}
+                      placeholder="e.g. 50"
+                      min="0"
+                      max="100"
+                      className="w-full px-3 py-1.5 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500"
+                    />
+                  </div>
+                </div>
+              </div>
 
               {selected.env_vars.length > 0 && (
                 <div>

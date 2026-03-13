@@ -4,14 +4,15 @@ use axum::{
     Json,
 };
 use std::time::Instant;
-use jsonwebtoken::{encode, EncodingKey, Header};
-use serde::Deserialize;
+use jsonwebtoken::{encode, decode, EncodingKey, DecodingKey, Header, Validation};
+use serde::{Deserialize, Serialize};
 use sha2::{Sha256, Digest};
 
 use argon2::{
     password_hash::{rand_core::OsRng, SaltString},
     Argon2, PasswordHash, PasswordHasher, PasswordVerifier,
 };
+use totp_rs::{Algorithm, TOTP, Secret};
 
 use crate::auth::{AuthUser, Claims};
 use crate::error::{err, ApiError};
@@ -176,6 +177,49 @@ pub async fn login(
         attempts.remove(&ip);
     }
 
+    // If 2FA is enabled, return a temporary token instead of a full session
+    if user.totp_enabled {
+        let now = chrono::Utc::now();
+        let temp_claims = TwoFaClaims {
+            sub: user.id,
+            purpose: "2fa".to_string(),
+            exp: (now + chrono::Duration::minutes(5)).timestamp() as usize,
+        };
+        let temp_token = encode(
+            &Header::default(),
+            &temp_claims,
+            &EncodingKey::from_secret(state.config.jwt_secret.as_bytes()),
+        )
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+        // Return empty cookie header (no session yet)
+        return Ok((
+            StatusCode::OK,
+            [(header::SET_COOKIE, String::new())],
+            Json(serde_json::json!({
+                "requires_2fa": true,
+                "temp_token": temp_token,
+            })),
+        ));
+    }
+
+    let (token, cookie) = issue_session(&state, &user)?;
+
+    Ok((
+        StatusCode::OK,
+        [(header::SET_COOKIE, cookie)],
+        Json(serde_json::json!({
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "role": user.role,
+            }
+        })),
+    ))
+}
+
+/// Issue a JWT session token + cookie for a user.
+fn issue_session(state: &AppState, user: &User) -> Result<(String, String), ApiError> {
     let now = chrono::Utc::now();
     let claims = Claims {
         sub: user.id,
@@ -195,18 +239,7 @@ pub async fn login(
     let cookie = format!(
         "token={token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=86400"
     );
-
-    Ok((
-        StatusCode::OK,
-        [(header::SET_COOKIE, cookie)],
-        Json(serde_json::json!({
-            "user": {
-                "id": user.id,
-                "email": user.email,
-                "role": user.role,
-            }
-        })),
-    ))
+    Ok((token, cookie))
 }
 
 fn record_login_attempt(
@@ -497,4 +530,316 @@ pub async fn reset_password(
     ).await;
 
     Ok(Json(serde_json::json!({ "ok": true, "message": "Password reset successfully" })))
+}
+
+// ─── Two-Factor Authentication (TOTP) ─────────────────────────────────────
+
+/// Claims for the temporary 2FA token (5-minute expiry).
+#[derive(Debug, Serialize, Deserialize)]
+struct TwoFaClaims {
+    sub: uuid::Uuid,
+    purpose: String,
+    exp: usize,
+}
+
+/// Generate 10 recovery codes (8 chars each, hex).
+fn generate_recovery_codes() -> Vec<String> {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    (0..10)
+        .map(|_| {
+            let bytes: [u8; 4] = rng.r#gen();
+            hex::encode(bytes)
+        })
+        .collect()
+}
+
+/// POST /api/auth/2fa/setup — Generate TOTP secret and return QR code.
+pub async fn twofa_setup(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Check if already enabled
+    let user: User = sqlx::query_as("SELECT * FROM users WHERE id = $1")
+        .bind(claims.sub)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    if user.totp_enabled {
+        return Err(err(StatusCode::BAD_REQUEST, "2FA is already enabled"));
+    }
+
+    // Generate secret
+    let secret = Secret::generate_secret();
+    let secret_base32 = secret.to_encoded().to_string();
+
+    let totp = TOTP::new(
+        Algorithm::SHA1,
+        6,
+        1,
+        30,
+        secret.to_bytes().map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?,
+        Some("DockPanel".to_string()),
+        user.email.clone(),
+    )
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let otpauth_url = totp.get_url();
+
+    // Generate QR code as SVG
+    let qr = qrcode::QrCode::new(otpauth_url.as_bytes())
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    let svg = qr.render::<qrcode::render::svg::Color>()
+        .min_dimensions(200, 200)
+        .build();
+
+    // Store secret in DB (not yet enabled)
+    sqlx::query(
+        "UPDATE users SET totp_secret = $1, updated_at = NOW() WHERE id = $2",
+    )
+    .bind(&secret_base32)
+    .bind(claims.sub)
+    .execute(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "secret": secret_base32,
+        "otpauth_url": otpauth_url,
+        "qr_svg": svg,
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct TwoFaVerifyRequest {
+    pub code: String,
+}
+
+/// POST /api/auth/2fa/enable — Verify a TOTP code and enable 2FA.
+pub async fn twofa_enable(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Json(body): Json<TwoFaVerifyRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user: User = sqlx::query_as("SELECT * FROM users WHERE id = $1")
+        .bind(claims.sub)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    if user.totp_enabled {
+        return Err(err(StatusCode::BAD_REQUEST, "2FA is already enabled"));
+    }
+
+    let secret_b32 = user.totp_secret.ok_or_else(|| {
+        err(StatusCode::BAD_REQUEST, "Call /api/auth/2fa/setup first")
+    })?;
+
+    let secret = Secret::Encoded(secret_b32)
+        .to_bytes()
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let totp = TOTP::new(Algorithm::SHA1, 6, 1, 30, secret, Some("DockPanel".to_string()), user.email.clone())
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    if !totp.check_current(&body.code).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))? {
+        return Err(err(StatusCode::UNAUTHORIZED, "Invalid 2FA code"));
+    }
+
+    // Generate recovery codes
+    let codes = generate_recovery_codes();
+    let codes_json = serde_json::to_string(&codes)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    // Hash each code for storage
+    let hashed_codes: Vec<String> = codes.iter().map(|c| hash_token(c)).collect();
+    let hashed_json = serde_json::to_string(&hashed_codes)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    sqlx::query(
+        "UPDATE users SET totp_enabled = TRUE, recovery_codes = $1, updated_at = NOW() WHERE id = $2",
+    )
+    .bind(&hashed_json)
+    .bind(claims.sub)
+    .execute(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "auth.2fa_enabled",
+        None, None, None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "recovery_codes": codes,
+        "message": "2FA enabled successfully. Save your recovery codes!"
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct TwoFaLoginRequest {
+    pub temp_token: String,
+    pub code: String,
+}
+
+/// POST /api/auth/2fa/verify — Complete login with TOTP code.
+pub async fn twofa_verify(
+    State(state): State<AppState>,
+    Json(body): Json<TwoFaLoginRequest>,
+) -> Result<(StatusCode, [(header::HeaderName, String); 1], Json<serde_json::Value>), ApiError> {
+    // Decode temp token
+    let token_data = decode::<TwoFaClaims>(
+        &body.temp_token,
+        &DecodingKey::from_secret(state.config.jwt_secret.as_bytes()),
+        &Validation::default(),
+    )
+    .map_err(|_| err(StatusCode::UNAUTHORIZED, "Invalid or expired 2FA token"))?;
+
+    if token_data.claims.purpose != "2fa" {
+        return Err(err(StatusCode::UNAUTHORIZED, "Invalid token purpose"));
+    }
+
+    let user: User = sqlx::query_as("SELECT * FROM users WHERE id = $1")
+        .bind(token_data.claims.sub)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let secret_b32 = user.totp_secret.as_ref().ok_or_else(|| {
+        err(StatusCode::INTERNAL_SERVER_ERROR, "2FA secret missing")
+    })?;
+
+    let secret = Secret::Encoded(secret_b32.clone())
+        .to_bytes()
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let totp = TOTP::new(Algorithm::SHA1, 6, 1, 30, secret, Some("DockPanel".to_string()), user.email.clone())
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let code_valid = totp.check_current(&body.code)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    if !code_valid {
+        // Try recovery codes
+        let used_recovery = try_recovery_code(&state.db, &user, &body.code).await?;
+        if !used_recovery {
+            return Err(err(StatusCode::UNAUTHORIZED, "Invalid 2FA code"));
+        }
+    }
+
+    let (_token, cookie) = issue_session(&state, &user)?;
+
+    Ok((
+        StatusCode::OK,
+        [(header::SET_COOKIE, cookie)],
+        Json(serde_json::json!({
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "role": user.role,
+            }
+        })),
+    ))
+}
+
+/// Try to use a recovery code. Returns true if a code matched and was consumed.
+async fn try_recovery_code(
+    db: &sqlx::PgPool,
+    user: &User,
+    code: &str,
+) -> Result<bool, ApiError> {
+    let codes_json = match &user.recovery_codes {
+        Some(c) => c,
+        None => return Ok(false),
+    };
+
+    let hashed_codes: Vec<String> = serde_json::from_str(codes_json)
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Recovery codes corrupted"))?;
+
+    let code_hash = hash_token(code);
+    if let Some(idx) = hashed_codes.iter().position(|h| h == &code_hash) {
+        let mut remaining = hashed_codes;
+        remaining.remove(idx);
+        let updated = serde_json::to_string(&remaining)
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+        sqlx::query("UPDATE users SET recovery_codes = $1, updated_at = NOW() WHERE id = $2")
+            .bind(&updated)
+            .bind(user.id)
+            .execute(db)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+#[derive(Deserialize)]
+pub struct TwoFaDisableRequest {
+    pub code: String,
+}
+
+/// POST /api/auth/2fa/disable — Disable 2FA (requires current TOTP code).
+pub async fn twofa_disable(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Json(body): Json<TwoFaDisableRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user: User = sqlx::query_as("SELECT * FROM users WHERE id = $1")
+        .bind(claims.sub)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    if !user.totp_enabled {
+        return Err(err(StatusCode::BAD_REQUEST, "2FA is not enabled"));
+    }
+
+    let secret_b32 = user.totp_secret.as_ref().ok_or_else(|| {
+        err(StatusCode::INTERNAL_SERVER_ERROR, "2FA secret missing")
+    })?;
+
+    let secret = Secret::Encoded(secret_b32.clone())
+        .to_bytes()
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let totp = TOTP::new(Algorithm::SHA1, 6, 1, 30, secret, Some("DockPanel".to_string()), user.email.clone())
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    if !totp.check_current(&body.code).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))? {
+        return Err(err(StatusCode::UNAUTHORIZED, "Invalid 2FA code"));
+    }
+
+    sqlx::query(
+        "UPDATE users SET totp_enabled = FALSE, totp_secret = NULL, recovery_codes = NULL, updated_at = NOW() WHERE id = $1",
+    )
+    .bind(claims.sub)
+    .execute(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "auth.2fa_disabled",
+        None, None, None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({ "ok": true, "message": "2FA has been disabled" })))
+}
+
+/// GET /api/auth/2fa/status — Check if 2FA is enabled for the current user.
+pub async fn twofa_status(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let row: (bool,) = sqlx::query_as("SELECT totp_enabled FROM users WHERE id = $1")
+        .bind(claims.sub)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    Ok(Json(serde_json::json!({ "enabled": row.0 })))
 }

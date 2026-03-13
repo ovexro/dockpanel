@@ -7,9 +7,14 @@ interface User {
   role: string;
 }
 
+interface TwoFaChallenge {
+  temp_token: string;
+}
+
 interface AuthContextType {
   user: User | null;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<TwoFaChallenge | null>;
+  verify2fa: (tempToken: string, code: string) => Promise<void>;
   logout: () => void;
   loading: boolean;
 }
@@ -30,10 +35,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const login = async (email: string, password: string) => {
-    const data = await api.post<{ user: User }>("/auth/login", {
+  const login = async (email: string, password: string): Promise<TwoFaChallenge | null> => {
+    const data = await api.post<{ user?: User; requires_2fa?: boolean; temp_token?: string }>("/auth/login", {
       email,
       password,
+    });
+    if (data.requires_2fa && data.temp_token) {
+      return { temp_token: data.temp_token };
+    }
+    if (data.user) {
+      setUser(data.user);
+    }
+    return null;
+  };
+
+  const verify2fa = async (tempToken: string, code: string) => {
+    const data = await api.post<{ user: User }>("/auth/2fa/verify", {
+      temp_token: tempToken,
+      code,
     });
     setUser(data.user);
   };
@@ -44,7 +63,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, loading }}>
+    <AuthContext.Provider value={{ user, login, verify2fa, logout, loading }}>
       {children}
     </AuthContext.Provider>
   );
