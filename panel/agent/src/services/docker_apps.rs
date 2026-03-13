@@ -68,6 +68,8 @@ pub struct DeployedApp {
     pub port: Option<u16>,
     pub domain: Option<String>,
     pub health: Option<String>,
+    pub image: Option<String>,
+    pub volumes: Vec<String>,
 }
 
 static TEMPLATES: &[AppTemplateDef] = &[
@@ -786,6 +788,23 @@ pub async fn list_deployed_apps() -> Result<Vec<DeployedApp>, String> {
                 .unwrap_or_default();
 
             let domain = labels.get("dockpanel.app.domain").cloned();
+            let image = c.image.clone();
+
+            // Extract volume mounts
+            let volumes = c
+                .mounts
+                .as_ref()
+                .map(|mounts| {
+                    mounts
+                        .iter()
+                        .filter_map(|m| {
+                            let src = m.source.as_deref().unwrap_or("?");
+                            let dst = m.destination.as_deref().unwrap_or("?");
+                            Some(format!("{src} → {dst}"))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
 
             // Extract health from human-readable status string (e.g., "Up 2 hours (healthy)")
             let health = c.status.as_deref().and_then(|s| {
@@ -808,6 +827,8 @@ pub async fn list_deployed_apps() -> Result<Vec<DeployedApp>, String> {
                 port,
                 domain,
                 health,
+                image,
+                volumes,
             })
         })
         .collect();
@@ -883,6 +904,88 @@ pub async fn get_app_logs(container_id: &str, tail: usize) -> Result<String, Str
     }
 
     Ok(logs)
+}
+
+/// Update an app by pulling the latest image and recreating the container.
+pub async fn update_app(container_id: &str) -> Result<String, String> {
+    let docker =
+        Docker::connect_with_local_defaults().map_err(|e| format!("Docker connect failed: {e}"))?;
+
+    // Inspect the container to get its full config
+    let info = docker
+        .inspect_container(container_id, None)
+        .await
+        .map_err(|e| format!("Failed to inspect container: {e}"))?;
+
+    let config = info.config.ok_or("No container config found")?;
+    let host_config = info.host_config.ok_or("No host config found")?;
+    let name = info.name.unwrap_or_default().trim_start_matches('/').to_string();
+    let image = config.image.clone().ok_or("No image found")?;
+
+    // Pull the latest image
+    tracing::info!("Updating app {name}: pulling {image}");
+    let mut pull = docker.create_image(
+        Some(CreateImageOptions {
+            from_image: image.as_str(),
+            ..Default::default()
+        }),
+        None,
+        None,
+    );
+    while let Some(result) = pull.next().await {
+        if let Err(e) = result {
+            tracing::warn!("Image pull warning: {e}");
+        }
+    }
+
+    // Stop and remove the old container
+    docker
+        .stop_container(container_id, Some(StopContainerOptions { t: 10 }))
+        .await
+        .ok();
+    docker
+        .remove_container(
+            container_id,
+            Some(RemoveContainerOptions {
+                v: false, // keep volumes
+                force: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .map_err(|e| format!("Failed to remove old container: {e}"))?;
+
+    // Recreate with same config
+    let new_config = Config {
+        image: config.image,
+        env: config.env,
+        exposed_ports: config.exposed_ports,
+        labels: config.labels,
+        host_config: Some(host_config),
+        cmd: config.cmd,
+        entrypoint: config.entrypoint,
+        working_dir: if config.working_dir.as_deref() == Some("") { None } else { config.working_dir },
+        ..Default::default()
+    };
+
+    let container = docker
+        .create_container(
+            Some(CreateContainerOptions {
+                name: name.as_str(),
+                platform: None,
+            }),
+            new_config,
+        )
+        .await
+        .map_err(|e| format!("Failed to create updated container: {e}"))?;
+
+    docker
+        .start_container(&container.id, None::<StartContainerOptions<String>>)
+        .await
+        .map_err(|e| format!("Failed to start updated container: {e}"))?;
+
+    tracing::info!("App updated: {name} ({image})");
+    Ok(container.id)
 }
 
 /// Get environment variables from a running container.

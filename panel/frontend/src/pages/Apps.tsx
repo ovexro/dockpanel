@@ -28,6 +28,8 @@ interface DeployedApp {
   port: number | null;
   domain: string | null;
   health: string | null;
+  image: string | null;
+  volumes: string[];
 }
 
 interface ComposeService {
@@ -354,6 +356,20 @@ export default function Apps() {
     }
   };
 
+  const handleUpdate = async (containerId: string) => {
+    setActionLoading(`${containerId}-update`);
+    setMessage({ text: "", type: "" });
+    try {
+      await api.post(`/apps/${containerId}/update`);
+      setMessage({ text: "App updated to latest image", type: "success" });
+      loadApps();
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : "Update failed", type: "error" });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const downloadLogs = () => {
     const appName = apps.find(a => a.container_id === logsTarget)?.name || "container";
     const blob = new Blob([logLines.join("\n")], { type: "text/plain" });
@@ -549,6 +565,13 @@ export default function Apps() {
                           className="px-2 py-1 rounded text-xs font-medium bg-purple-50 text-purple-600 hover:bg-purple-100"
                         >
                           Env
+                        </button>
+                        <button
+                          onClick={() => handleUpdate(app.container_id)}
+                          disabled={!!actionLoading}
+                          className="px-2 py-1 bg-cyan-50 text-cyan-600 rounded text-xs font-medium hover:bg-cyan-100 disabled:opacity-50"
+                        >
+                          {actionLoading === `${app.container_id}-update` ? "Updating..." : "Update"}
                         </button>
                         {deleteTarget === app.container_id ? (
                           <>
@@ -909,6 +932,23 @@ export default function Apps() {
                 ))}
               </div>
             )}
+            {/* Volumes */}
+            {(() => {
+              const app = apps.find(a => a.container_id === envTarget);
+              return app && app.volumes && app.volumes.length > 0 ? (
+                <div className="mt-4 pt-3 border-t border-dark-600">
+                  <p className="text-xs font-medium text-dark-200 mb-2">Persistent Volumes</p>
+                  <div className="space-y-1.5">
+                    {app.volumes.map((v, i) => (
+                      <div key={i} className="text-xs font-mono text-dark-100 bg-dark-900 rounded px-2 py-1.5 border border-dark-600 flex items-center gap-2">
+                        <svg className="w-3.5 h-3.5 text-dark-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg>
+                        {v}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null;
+            })()}
             <div className="mt-4 pt-3 border-t border-dark-600">
               <p className="text-[10px] text-dark-400">
                 Environment variables are set at deploy time. To change them, redeploy the app with updated values.

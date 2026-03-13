@@ -278,6 +278,29 @@ async fn logs(
     Ok(Json(serde_json::json!({ "logs": output })))
 }
 
+/// POST /apps/{container_id}/update — Pull latest image and recreate container.
+async fn update(
+    Path(container_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_container_id(&container_id) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid container ID" })),
+        ));
+    }
+
+    let new_id = docker_apps::update_app(&container_id)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e })),
+            )
+        })?;
+
+    Ok(Json(serde_json::json!({ "success": true, "container_id": new_id })))
+}
+
 /// GET /apps/{container_id}/env — Get container environment variables.
 async fn get_env(
     Path(container_id): Path<String>,
@@ -391,4 +414,5 @@ pub fn router() -> Router<AppState> {
         .route("/apps/{container_id}/restart", post(restart))
         .route("/apps/{container_id}/logs", get(logs))
         .route("/apps/{container_id}/env", get(get_env))
+        .route("/apps/{container_id}/update", post(update))
 }
