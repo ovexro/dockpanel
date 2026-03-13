@@ -5,8 +5,8 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
-use crate::error::{err, require_admin, ApiError};
+use crate::auth::AdminUser;
+use crate::error::{err, ApiError};
 use crate::AppState;
 
 #[derive(serde::Deserialize)]
@@ -32,10 +32,9 @@ pub struct ActivityLog {
 /// GET /api/activity — List activity logs (admin only).
 pub async fn list(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    AdminUser(_claims): AdminUser,
     Query(params): Query<ActivityQuery>,
 ) -> Result<Json<Vec<ActivityLog>>, ApiError> {
-    require_admin(&claims.role)?;
 
     let limit = params.limit.unwrap_or(50).min(200);
     let offset = params.offset.unwrap_or(0);

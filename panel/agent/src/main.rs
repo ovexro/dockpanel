@@ -11,9 +11,18 @@ const CONFIG_DIR: &str = "/etc/dockpanel";
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .init();
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+    let log_format = std::env::var("LOG_FORMAT").unwrap_or_default();
+    if log_format == "json" {
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .json()
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .init();
+    }
 
     // Ensure directories exist
     std::fs::create_dir_all("/var/run/dockpanel").ok();
@@ -76,6 +85,7 @@ async fn main() {
         .merge(routes::iac::router())
         .merge(routes::diagnostics::router())
         .layer(middleware::from_fn_with_state(state.clone(), routes::auth_middleware))
+        .layer(middleware::from_fn(routes::audit_middleware))
         .merge(routes::terminal::router())
         .merge(routes::logs::stream_router())
         .with_state(state);

@@ -7,9 +7,10 @@ mod services;
 
 use axum::{http::Method, Router};
 use sqlx::postgres::PgPoolOptions;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use tokio::sync::RwLock;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
@@ -23,13 +24,30 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub agent: AgentClient,
     pub login_attempts: Arc<Mutex<HashMap<String, Vec<Instant>>>>,
+    /// Blacklisted JWT JTIs (for logout). Entries expire naturally after 2h.
+    pub token_blacklist: Arc<RwLock<HashSet<String>>>,
+    /// Rate limiter for 2FA verification attempts: user_id -> (count, window_start)
+    pub twofa_attempts: Arc<Mutex<HashMap<uuid::Uuid, (u32, Instant)>>>,
+    /// Rate limiter for deploy webhooks: site_id -> (failed_count, window_start)
+    pub webhook_attempts: Arc<Mutex<HashMap<uuid::Uuid, (u32, Instant)>>>,
+    /// Rate limiter for agent endpoints: server_id -> (count, window_start)
+    pub agent_rate_limits: Arc<Mutex<HashMap<uuid::Uuid, (u32, Instant)>>>,
 }
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .init();
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+    let log_format = std::env::var("LOG_FORMAT").unwrap_or_default();
+    if log_format == "json" {
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .json()
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .init();
+    }
 
     let config = Config::from_env();
 
@@ -62,24 +80,32 @@ async fn main() {
         .await
         .expect("Failed to run database migrations");
 
+    // Set statement_timeout for all connections (30s max query time)
+    sqlx::query("SET statement_timeout = '30s'")
+        .execute(&db)
+        .await
+        .ok();
+
     tracing::info!("Database connected and migrations applied");
 
     // Create agent client
     let agent = AgentClient::new(config.agent_socket.clone(), config.agent_token.clone());
 
-    // Build CORS with explicit origin whitelist (before config moves into Arc)
+    // Build CORS with configurable origin whitelist (CORS_ORIGINS env var or defaults)
     let allowed_origins: Vec<axum::http::HeaderValue> = config
-        .base_url
-        .parse::<axum::http::HeaderValue>()
-        .into_iter()
-        .chain("https://demo.dockpanel.dev".parse::<axum::http::HeaderValue>())
-        .chain("https://dockpanel.dev".parse::<axum::http::HeaderValue>())
+        .cors_origins
+        .iter()
+        .filter_map(|o| o.parse::<axum::http::HeaderValue>().ok())
         .collect();
 
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list(allowed_origins))
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-        .allow_headers([axum::http::header::CONTENT_TYPE])
+        .allow_headers([
+            axum::http::header::CONTENT_TYPE,
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::ACCEPT,
+        ])
         .allow_credentials(true);
 
     let config = Arc::new(config);
@@ -90,6 +116,10 @@ async fn main() {
         config,
         agent,
         login_attempts: Arc::new(Mutex::new(HashMap::new())),
+        token_blacklist: Arc::new(RwLock::new(HashSet::new())),
+        twofa_attempts: Arc::new(Mutex::new(HashMap::new())),
+        webhook_attempts: Arc::new(Mutex::new(HashMap::new())),
+        agent_rate_limits: Arc::new(Mutex::new(HashMap::new())),
     };
 
     // Spawn backup scheduler

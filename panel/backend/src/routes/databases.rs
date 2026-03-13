@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{err, paginate, ApiError};
+use crate::error::{err, agent_error, paginate, ApiError};
 use crate::AppState;
 
 #[derive(serde::Deserialize)]
@@ -128,7 +128,7 @@ pub async fn create(
         .agent
         .post("/databases", Some(agent_body))
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Failed to create database: {e}")))?;
+        .map_err(|e| agent_error("Database creation", e))?;
 
     let container_id = result
         .get("container_id")
@@ -225,7 +225,7 @@ pub async fn remove(
     if let Some(cid) = &container_id {
         let agent_path = format!("/databases/{cid}");
         state.agent.delete(&agent_path).await
-            .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Failed to remove database container: {e}")))?;
+            .map_err(|e| agent_error("Database removal", e))?;
     }
 
     // Delete from DB

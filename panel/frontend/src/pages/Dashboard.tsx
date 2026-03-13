@@ -124,7 +124,7 @@ export default function Dashboard() {
     api
       .get<SystemInfo>("/system/info")
       .then(setSystem)
-      .catch((e) => setError(e.message));
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load system info"));
     api
       .get<{ id: string; status: string }[]>("/sites")
       .then((list) =>
@@ -133,27 +133,27 @@ export default function Dashboard() {
           active: list.filter((s) => s.status === "active").length,
         })
       )
-      .catch((e) => console.error("Failed to load sites:", e));
+      .catch(() => setError("Failed to load sites. Please try again."));
     api
       .get<{ id: string }[]>("/databases")
       .then((list) => setDbCount(list.length))
-      .catch((e) => console.error("Failed to load databases:", e));
+      .catch(() => setError("Failed to load databases. Please try again."));
     api
       .get<Process[]>("/system/processes")
       .then(setProcesses)
-      .catch((e) => console.error("Failed to load processes:", e));
+      .catch(() => {}); // Non-critical: processes panel simply stays empty
     api
       .get<NetworkIface[]>("/system/network")
       .then(setNetwork)
-      .catch((e) => console.error("Failed to load network:", e));
+      .catch(() => {}); // Non-critical: network panel simply stays empty
     api
       .get<Intelligence>("/dashboard/intelligence")
       .then(setIntel)
-      .catch((e) => console.error("Failed to load intelligence:", e));
+      .catch(() => {}); // Non-critical: intelligence panel simply stays empty
     api
       .get<{ container_id: string }[]>("/apps")
       .then((list) => setAppCount(list.length))
-      .catch(() => {});
+      .catch(() => {}); // Non-critical: only affects onboarding step count
   };
 
   useEffect(() => {

@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from "react";
+import { Navigate } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 import { timeAgo } from "../utils/format";
 
@@ -39,6 +41,7 @@ const FILTERS = [
 const LIMIT = 50;
 
 export default function Activity() {
+  const { user } = useAuth();
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -84,6 +87,8 @@ export default function Activity() {
     }, 10000);
     return () => clearInterval(refreshTimer.current);
   }, [filter]);
+
+  if (user?.role !== "admin") return <Navigate to="/" replace />;
 
   const handleLoadMore = () => {
     setLoadingMore(true);

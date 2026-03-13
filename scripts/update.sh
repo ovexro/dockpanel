@@ -76,6 +76,11 @@ log "Building CLI..."
 (cd "$CLI_SRC" && $CARGO_CMD build --release 2>&1 | tail -1)
 
 # ── Deploy binaries ───────────────────────────────────────────────────────
+log "Backing up current binaries..."
+cp "$AGENT_BIN" "${AGENT_BIN}.bak" 2>/dev/null || true
+cp "$API_BIN" "${API_BIN}.bak" 2>/dev/null || true
+cp "$CLI_BIN" "${CLI_BIN}.bak" 2>/dev/null || true
+
 log "Stopping services..."
 systemctl stop dockpanel-agent dockpanel-api 2>/dev/null || true
 
@@ -89,6 +94,22 @@ systemctl start dockpanel-agent
 sleep 1
 systemctl start dockpanel-api
 log "Services restarted"
+
+# ── Health check with rollback ───────────────────────────────────────────
+log "Running post-deploy health check..."
+sleep 5
+if ! curl -sf --max-time 15 http://127.0.0.1:3080/api/health > /dev/null 2>&1; then
+    error "Health check failed, rolling back..."
+    cp "${AGENT_BIN}.bak" "$AGENT_BIN" 2>/dev/null || true
+    cp "${API_BIN}.bak" "$API_BIN" 2>/dev/null || true
+    cp "${CLI_BIN}.bak" "$CLI_BIN" 2>/dev/null || true
+    systemctl restart dockpanel-agent dockpanel-api
+    warn "Rolled back to previous binaries"
+else
+    log "Health check passed"
+    # Clean up backups
+    rm -f "${AGENT_BIN}.bak" "${API_BIN}.bak" "${CLI_BIN}.bak"
+fi
 
 # ── Build frontend ────────────────────────────────────────────────────────
 if [ -d "$FRONTEND_DIR" ]; then

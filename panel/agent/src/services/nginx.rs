@@ -36,6 +36,97 @@ fn is_safe_path(path: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || "/-_.".contains(c))
 }
 
+/// Allowed nginx directives that can appear in custom_nginx config.
+const ALLOWED_NGINX_DIRECTIVES: &[&str] = &[
+    "client_max_body_size",
+    "gzip",
+    "gzip_types",
+    "gzip_min_length",
+    "proxy_read_timeout",
+    "proxy_connect_timeout",
+    "proxy_send_timeout",
+    "send_timeout",
+    "keepalive_timeout",
+    "server_tokens",
+    "add_header",
+    "expires",
+    "tcp_nodelay",
+    "tcp_nopush",
+    "sendfile",
+    "types_hash_max_size",
+];
+
+/// Dangerous nginx directive prefixes/keywords (case-insensitive).
+const DANGEROUS_DIRECTIVES: &[&str] = &[
+    "lua_",
+    "perl_",
+    "proxy_pass",
+    "return",
+    "rewrite",
+    "access_log",
+    "error_log",
+    "load_module",
+    "include",
+    "alias",
+];
+
+/// Validate custom nginx directives. Rejects dangerous content and only allows whitelisted directives.
+fn validate_custom_nginx(custom: &str) -> Result<(), String> {
+    if custom.trim().is_empty() {
+        return Ok(());
+    }
+
+    // Reject block-escape characters
+    if custom.contains('{') || custom.contains('}') {
+        return Err("Custom nginx config must not contain '{' or '}' (server block escape)".into());
+    }
+
+    for line in custom.lines() {
+        let trimmed = line.trim();
+
+        // Skip empty lines
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Reject comment-only lines (comment injection)
+        if trimmed.starts_with('#') {
+            return Err("Custom nginx config must not contain comment lines starting with '#'".into());
+        }
+
+        // Check for dangerous directives (case-insensitive)
+        let lower = trimmed.to_lowercase();
+        for dangerous in DANGEROUS_DIRECTIVES {
+            if lower.starts_with(dangerous) {
+                return Err(format!(
+                    "Custom nginx config contains forbidden directive: {dangerous}"
+                ));
+            }
+        }
+
+        // Extract the directive name (first word before whitespace or ';')
+        let directive = trimmed
+            .split(|c: char| c.is_whitespace() || c == ';')
+            .next()
+            .unwrap_or("")
+            .to_lowercase();
+
+        if directive.is_empty() {
+            continue;
+        }
+
+        if !ALLOWED_NGINX_DIRECTIVES.contains(&directive.as_str()) {
+            return Err(format!(
+                "Custom nginx directive '{}' is not in the allowed list. Allowed: {}",
+                directive,
+                ALLOWED_NGINX_DIRECTIVES.join(", ")
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 /// Validate a PHP-FPM socket path.
 fn is_safe_php_socket(socket: &str) -> bool {
     socket.starts_with("unix:/")
@@ -86,7 +177,10 @@ pub fn render_site_config(
     let max_upload_mb = config.max_upload_mb.unwrap_or(64);
     ctx.insert("max_upload_mb", &max_upload_mb);
 
-    // Custom nginx directives
+    // Custom nginx directives — validate before inserting
+    if let Some(ref custom) = config.custom_nginx {
+        validate_custom_nginx(custom).map_err(tera::Error::msg)?;
+    }
     ctx.insert("custom_nginx", &config.custom_nginx.as_deref().unwrap_or(""));
 
     let ssl = config.ssl.unwrap_or(false);

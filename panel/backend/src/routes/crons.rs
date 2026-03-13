@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{err, paginate, ApiError};
+use crate::error::{err, agent_error, paginate, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -86,7 +86,7 @@ async fn sync_crons_to_agent(state: &AppState, site_id: Uuid) -> Result<(), ApiE
         .agent
         .post("/crons/sync", Some(serde_json::Value::Array(agent_crons)))
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Agent sync failed: {e}")))?;
+        .map_err(|e| agent_error("Cron sync", e))?;
 
     Ok(())
 }
@@ -285,7 +285,7 @@ pub async fn run_now(
             })),
         )
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Execution failed: {e}")))?;
+        .map_err(|e| agent_error("Cron execution", e))?;
 
     let success = result.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
     let output = result.get("output").and_then(|v| v.as_str()).unwrap_or("");

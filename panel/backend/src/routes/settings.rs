@@ -5,8 +5,8 @@ use axum::{
 };
 use std::collections::HashMap;
 
-use crate::auth::AuthUser;
-use crate::error::{err, require_admin, ApiError};
+use crate::auth::AdminUser;
+use crate::error::{err, agent_error, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -19,9 +19,8 @@ struct SettingRow {
 /// GET /api/settings — Returns all settings as a key/value map (admin only).
 pub async fn list(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    AdminUser(_claims): AdminUser,
 ) -> Result<Json<HashMap<String, String>>, ApiError> {
-    require_admin(&claims.role)?;
 
     let rows: Vec<SettingRow> = sqlx::query_as("SELECT key, value FROM settings")
         .fetch_all(&state.db)
@@ -45,10 +44,9 @@ pub async fn list(
 /// PUT /api/settings — Upsert settings from key/value map (admin only).
 pub async fn update(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    AdminUser(claims): AdminUser,
     Json(body): Json<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&claims.role)?;
 
     // Whitelist allowed setting keys
     let allowed_keys = [
@@ -122,10 +120,9 @@ pub async fn update(
 /// POST /api/settings/smtp/test — Send a test email (admin only).
 pub async fn test_email(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    AdminUser(claims): AdminUser,
     Json(body): Json<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&claims.role)?;
 
     let to = body.get("to").cloned().unwrap_or_else(|| claims.email.clone());
     if to.is_empty() || !to.contains('@') {
@@ -155,7 +152,7 @@ pub async fn test_email(
     let result = state.agent
         .post("/smtp/test", Some(agent_body))
         .await
-        .map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &format!("Test email failed: {e}")))?;
+        .map_err(|e| agent_error("SMTP test email", e))?;
 
     let message = result.get("message").and_then(|v| v.as_str()).unwrap_or("Email sent");
 
@@ -170,9 +167,8 @@ pub async fn test_email(
 /// GET /api/settings/health — System health check (admin only).
 pub async fn health(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    AdminUser(_claims): AdminUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&claims.role)?;
 
     // Check DB
     let db_status = match sqlx::query("SELECT 1").execute(&state.db).await {

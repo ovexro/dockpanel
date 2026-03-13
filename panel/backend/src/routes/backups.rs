@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{err, paginate, ApiError};
+use crate::error::{err, agent_error, paginate, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -52,7 +52,7 @@ pub async fn create(
         .agent
         .post(&agent_path, None)
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Backup failed: {e}")))?;
+        .map_err(|e| agent_error("Backup creation", e))?;
 
     let filename = result
         .get("filename")
@@ -132,7 +132,7 @@ pub async fn restore(
         .agent
         .post(&agent_path, None)
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Restore failed: {e}")))?;
+        .map_err(|e| agent_error("Backup restore", e))?;
 
     tracing::info!("Backup restored: {} for {domain}", backup.filename);
     activity::log_activity(
@@ -164,7 +164,7 @@ pub async fn remove(
     // Delete from agent (must succeed before DB deletion)
     let agent_path = format!("/backups/{}/{}", domain, backup.filename);
     state.agent.delete(&agent_path).await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Failed to delete backup file: {e}")))?;
+        .map_err(|e| agent_error("Backup deletion", e))?;
 
     // Delete from DB
     sqlx::query("DELETE FROM backups WHERE id = $1")

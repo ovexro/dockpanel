@@ -9,6 +9,7 @@ pub struct Config {
     pub stripe_secret_key: Option<String>,
     pub stripe_webhook_secret: Option<String>,
     pub base_url: String,
+    pub cors_origins: Vec<String>,
 }
 
 impl Config {
@@ -18,6 +19,18 @@ impl Config {
         if jwt_secret.len() < 32 {
             panic!("JWT_SECRET must be at least 32 characters (got {}). Generate with: openssl rand -hex 32", jwt_secret.len());
         }
+
+        let base_url = std::env::var("BASE_URL").unwrap_or_else(|_| "https://demo.dockpanel.dev".into());
+
+        let cors_origins = std::env::var("CORS_ORIGINS")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.split(',').map(|o| o.trim().to_string()).filter(|o| !o.is_empty()).collect::<Vec<_>>())
+            .unwrap_or_else(|| vec![
+                base_url.clone(),
+                "https://demo.dockpanel.dev".into(),
+                "https://dockpanel.dev".into(),
+            ]);
 
         Self {
             database_url: std::env::var("DATABASE_URL")
@@ -35,7 +48,8 @@ impl Config {
                 .unwrap_or(20),
             stripe_secret_key: std::env::var("STRIPE_SECRET_KEY").ok().filter(|s| !s.is_empty()),
             stripe_webhook_secret: std::env::var("STRIPE_WEBHOOK_SECRET").ok().filter(|s| !s.is_empty()),
-            base_url: std::env::var("BASE_URL").unwrap_or_else(|_| "https://demo.dockpanel.dev".into()),
+            base_url,
+            cors_origins,
         }
     }
 }

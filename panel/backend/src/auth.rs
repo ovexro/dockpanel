@@ -6,6 +6,7 @@ use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::error::{err, ApiError};
 use crate::AppState;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -15,6 +16,9 @@ pub struct Claims {
     pub role: String,
     pub exp: usize,
     pub iat: usize,
+    /// JWT ID for token blacklisting on logout.
+    #[serde(default)]
+    pub jti: Option<String>,
 }
 
 /// JWT extractor — reads token from Authorization header or `token` cookie.
@@ -60,6 +64,36 @@ impl FromRequestParts<AppState> for AuthUser {
         .map_err(|_| StatusCode::UNAUTHORIZED)?
         .claims;
 
+        // Check token blacklist (revoked JTIs)
+        if let Some(ref jti) = claims.jti {
+            let blacklist = state.token_blacklist.read().await;
+            if blacklist.contains(jti) {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+        }
+
         Ok(AuthUser(claims))
+    }
+}
+
+/// Admin-only JWT extractor — extracts Claims then verifies role == "admin".
+pub struct AdminUser(pub Claims);
+
+impl FromRequestParts<AppState> for AdminUser {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let AuthUser(claims) = AuthUser::from_request_parts(parts, state)
+            .await
+            .map_err(|_| err(StatusCode::UNAUTHORIZED, "Authentication required"))?;
+
+        if claims.role != "admin" {
+            return Err(err(StatusCode::FORBIDDEN, "Admin access required"));
+        }
+
+        Ok(AdminUser(claims))
     }
 }

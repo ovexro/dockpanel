@@ -17,14 +17,12 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Placeholder routes
+// Pricing — DockPanel is free and open source
 app.get('/api/pricing', (_req, res) => {
   res.json({
-    plans: [
-      { id: 'personal', name: 'Personal', price: 2900, servers: 1 },
-      { id: 'agency', name: 'Agency', price: 9900, servers: 10 },
-      { id: 'unlimited', name: 'Unlimited', price: 19900, servers: -1 },
-    ],
+    plan: 'free',
+    price: 0,
+    features: ['Unlimited servers', 'All features', 'Community support'],
   });
 });
 

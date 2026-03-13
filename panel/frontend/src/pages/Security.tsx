@@ -1,4 +1,6 @@
 import { useState, useEffect } from "react";
+import { Navigate } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 
 interface SecurityOverview {
@@ -63,6 +65,7 @@ interface Posture {
 }
 
 export default function Security() {
+  const { user } = useAuth();
   const [overview, setOverview] = useState<SecurityOverview | null>(null);
   const [firewall, setFirewall] = useState<FirewallStatus | null>(null);
   const [fail2ban, setFail2ban] = useState<Fail2banStatus | null>(null);
@@ -103,6 +106,8 @@ export default function Security() {
   useEffect(() => {
     loadData();
   }, []);
+
+  if (user?.role !== "admin") return <Navigate to="/" replace />;
 
   const handleScan = async () => {
     setScanning(true);
