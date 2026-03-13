@@ -188,6 +188,27 @@ pub async fn app_logs(
     Ok(Json(result))
 }
 
+/// GET /api/apps/{container_id}/env — Get container environment variables.
+pub async fn app_env(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(container_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    if !is_valid_container_id(&container_id) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
+    }
+
+    let agent_path = format!("/apps/{}/env", container_id);
+    let result = state
+        .agent
+        .get(&agent_path)
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Env failed: {e}")))?;
+
+    Ok(Json(result))
+}
+
 /// POST /api/apps/compose/parse — Parse docker-compose.yml and preview services.
 pub async fn compose_parse(
     State(state): State<AppState>,
