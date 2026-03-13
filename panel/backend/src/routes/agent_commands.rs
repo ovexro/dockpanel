@@ -1,0 +1,109 @@
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    Json,
+};
+use uuid::Uuid;
+
+use crate::error::{err, ApiError};
+use crate::AppState;
+
+#[derive(serde::Serialize, sqlx::FromRow)]
+pub struct AgentCommand {
+    pub id: Uuid,
+    pub server_id: Uuid,
+    pub action: String,
+    pub payload: serde_json::Value,
+    pub status: String,
+    pub result: Option<serde_json::Value>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub picked_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Helper: extract + verify Bearer token → returns server_id.
+async fn auth_agent(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Uuid, ApiError> {
+    let token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "Missing authorization"))?;
+
+    let row: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM servers WHERE agent_token = $1")
+            .bind(token)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    row.map(|r| r.0)
+        .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "Invalid token"))
+}
+
+/// GET /api/agent/commands — Agent polls for pending commands.
+/// Returns up to 10 pending commands and marks them as 'running'.
+pub async fn poll(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<AgentCommand>>, ApiError> {
+    let server_id = auth_agent(&state, &headers).await?;
+
+    // Fetch and claim pending commands atomically
+    let commands: Vec<AgentCommand> = sqlx::query_as(
+        "UPDATE agent_commands SET status = 'running', picked_at = NOW() \
+         WHERE id IN (\
+           SELECT id FROM agent_commands \
+           WHERE server_id = $1 AND status = 'pending' \
+           ORDER BY created_at ASC LIMIT 10 \
+           FOR UPDATE SKIP LOCKED\
+         ) RETURNING *",
+    )
+    .bind(server_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    Ok(Json(commands))
+}
+
+#[derive(serde::Deserialize)]
+pub struct CommandResult {
+    pub command_id: Uuid,
+    pub status: String,
+    pub result: Option<serde_json::Value>,
+}
+
+/// POST /api/agent/commands/result — Agent reports command completion.
+pub async fn report_result(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<CommandResult>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let server_id = auth_agent(&state, &headers).await?;
+
+    let status = match body.status.as_str() {
+        "completed" | "failed" => body.status.as_str(),
+        _ => return Err(err(StatusCode::BAD_REQUEST, "Status must be 'completed' or 'failed'")),
+    };
+
+    let result = sqlx::query(
+        "UPDATE agent_commands SET status = $1, result = $2, completed_at = NOW() \
+         WHERE id = $3 AND server_id = $4 AND status = 'running'",
+    )
+    .bind(status)
+    .bind(&body.result)
+    .bind(body.command_id)
+    .bind(server_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    if result.rows_affected() == 0 {
+        return Err(err(StatusCode::NOT_FOUND, "Command not found or not running"));
+    }
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}

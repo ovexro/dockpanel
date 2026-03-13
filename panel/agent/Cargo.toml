@@ -1,0 +1,31 @@
+[package]
+name = "dockpanel-agent"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+tokio = { version = "1", features = ["full", "net"] }
+tower = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+tera = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sysinfo = "0.34"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+instant-acme = { version = "0.8", features = ["hyper-rustls", "rcgen"] }
+x509-parser = "0.16"
+bollard = "0.18"
+tokio-stream = "0.1"
+rand = "0.9"
+jsonwebtoken = "9"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+sha2 = "0.10"
+hex = "0.4"
+rustix = { version = "1", features = ["termios", "pty", "fs", "process"] }
+libc = "0.2"

@@ -1,0 +1,395 @@
+use serde::Serialize;
+use tokio::process::Command;
+
+#[derive(Serialize)]
+pub struct FirewallStatus {
+    pub active: bool,
+    pub default_policy: String,
+    pub rules: Vec<FirewallRule>,
+}
+
+#[derive(Serialize)]
+pub struct FirewallRule {
+    pub number: usize,
+    pub to: String,
+    pub action: String,
+    pub from: String,
+}
+
+#[derive(Serialize)]
+pub struct Fail2banStatus {
+    pub running: bool,
+    pub jails: Vec<JailInfo>,
+}
+
+#[derive(Serialize)]
+pub struct JailInfo {
+    pub name: String,
+    pub banned_count: u32,
+}
+
+#[derive(Serialize)]
+pub struct SecurityOverview {
+    pub firewall_active: bool,
+    pub firewall_rules_count: usize,
+    pub fail2ban_running: bool,
+    pub fail2ban_banned_total: u32,
+    pub ssh_port: u16,
+    pub ssh_password_auth: bool,
+    pub ssl_certs_count: usize,
+}
+
+/// Run `ufw status verbose` and parse the output into a `FirewallStatus`.
+pub async fn get_firewall_status() -> Result<FirewallStatus, String> {
+    let output = match tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        Command::new("ufw").args(["status", "verbose"]).output(),
+    )
+    .await
+    {
+        Ok(Ok(o)) => o,
+        _ => {
+            // ufw not installed, timed out, or errored — return inactive status
+            return Ok(FirewallStatus {
+                active: false,
+                default_policy: String::new(),
+                rules: Vec::new(),
+            });
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Check if active
+    let active = stdout.contains("Status: active");
+
+    // Parse default policy — line like "Default: deny (incoming), allow (outgoing), disabled (routed)"
+    let default_policy = stdout
+        .lines()
+        .find(|l| l.starts_with("Default:"))
+        .map(|l| l.trim_start_matches("Default:").trim().to_string())
+        .unwrap_or_default();
+
+    // Parse rules — they appear after the "---" separator line
+    let mut rules = Vec::new();
+    let mut in_rules = false;
+    let mut rule_num: usize = 0;
+
+    for line in stdout.lines() {
+        if line.starts_with("--") {
+            in_rules = true;
+            continue;
+        }
+        if !in_rules {
+            continue;
+        }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Skip "(v6)" duplicate lines — IPv6 rules
+        if trimmed.contains("(v6)") {
+            continue;
+        }
+
+        rule_num += 1;
+
+        // Typical line formats:
+        //   22/tcp                     ALLOW IN    Anywhere
+        //   80/tcp                     ALLOW IN    192.168.1.0/24
+        //   443                        DENY IN     Anywhere
+        // Split on whitespace and parse
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        if parts.len() >= 3 {
+            let to = parts[0].to_string();
+            // Action is typically "ALLOW" or "DENY", possibly followed by "IN"/"OUT"
+            let action = if parts.len() >= 3 && (parts[2] == "IN" || parts[2] == "OUT") {
+                format!("{} {}", parts[1], parts[2])
+            } else {
+                parts[1].to_string()
+            };
+            // From is the last part(s)
+            let from_idx = if parts.len() >= 3 && (parts[2] == "IN" || parts[2] == "OUT") {
+                3
+            } else {
+                2
+            };
+            let from = if from_idx < parts.len() {
+                parts[from_idx..].join(" ")
+            } else {
+                "Anywhere".to_string()
+            };
+
+            rules.push(FirewallRule {
+                number: rule_num,
+                to,
+                action,
+                from,
+            });
+        }
+    }
+
+    Ok(FirewallStatus {
+        active,
+        default_policy,
+        rules,
+    })
+}
+
+/// Add a firewall rule via `ufw`.
+///
+/// `action` should be "allow" or "deny".
+/// `proto` should be "tcp" or "udp".
+/// If `from` is provided, adds a source-restricted rule.
+pub async fn add_firewall_rule(
+    port: u16,
+    proto: &str,
+    action: &str,
+    from: Option<&str>,
+) -> Result<(), String> {
+    // Validate action
+    let action_lower = action.to_lowercase();
+    if action_lower != "allow" && action_lower != "deny" {
+        return Err(format!("Invalid action '{action}': must be 'allow' or 'deny'"));
+    }
+
+    // Validate proto
+    let proto_lower = proto.to_lowercase();
+    if proto_lower != "tcp" && proto_lower != "udp" {
+        return Err(format!("Invalid protocol '{proto}': must be 'tcp' or 'udp'"));
+    }
+
+    let port_proto = format!("{port}/{proto_lower}");
+
+    let mut args: Vec<String> = vec![action_lower];
+
+    if let Some(source) = from {
+        // Validate source IP — basic check for alphanumeric, dots, colons, slashes
+        if source.is_empty()
+            || !source
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == ':' || c == '/')
+        {
+            return Err(format!("Invalid source address: {source}"));
+        }
+        args.push("from".into());
+        args.push(source.to_string());
+        args.push("to".into());
+        args.push("any".into());
+        args.push("port".into());
+        args.push(port.to_string());
+        args.push("proto".into());
+        args.push(proto_lower);
+    } else {
+        args.push(port_proto);
+    }
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        Command::new("ufw").args(&args).output(),
+    )
+    .await
+    .map_err(|_| "ufw command timed out".to_string())?
+    .map_err(|_| "ufw is not installed".to_string())?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!("ufw failed: {stderr} {stdout}"));
+    }
+
+    Ok(())
+}
+
+/// Delete a firewall rule by its number.
+pub async fn remove_firewall_rule(rule_num: usize) -> Result<(), String> {
+    if rule_num == 0 {
+        return Err("Rule number must be >= 1".into());
+    }
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        Command::new("ufw")
+            .args(["--force", "delete", &rule_num.to_string()])
+            .output(),
+    )
+    .await
+    .map_err(|_| "ufw command timed out".to_string())?
+    .map_err(|_| "ufw is not installed".to_string())?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!("ufw delete failed: {stderr} {stdout}"));
+    }
+
+    Ok(())
+}
+
+/// Get fail2ban status: list of active jails and banned IPs count per jail.
+pub async fn get_fail2ban_status() -> Result<Fail2banStatus, String> {
+    let output = match tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        Command::new("fail2ban-client").arg("status").output(),
+    )
+    .await
+    {
+        Ok(Ok(o)) if o.status.success() => o,
+        _ => {
+            // fail2ban not installed, timed out, or not running
+            return Ok(Fail2banStatus {
+                running: false,
+                jails: Vec::new(),
+            });
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Parse jail list from output like:
+    //   `- Jail list:	sshd, nginx-http-auth`
+    let jail_names: Vec<String> = stdout
+        .lines()
+        .find(|l| l.contains("Jail list:"))
+        .map(|l| {
+            l.split("Jail list:")
+                .nth(1)
+                .unwrap_or("")
+                .trim()
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // For each jail, get banned count
+    let mut jails = Vec::new();
+    for name in &jail_names {
+        let jail_output = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            Command::new("fail2ban-client")
+                .args(["status", name])
+                .output(),
+        )
+        .await
+        .map_err(|_| format!("Jail query for {name} timed out"))?
+        .map_err(|e| format!("Failed to query jail {name}: {e}"))?;
+
+        let jail_stdout = String::from_utf8_lossy(&jail_output.stdout);
+
+        // Parse "Currently banned:" line
+        let banned_count = jail_stdout
+            .lines()
+            .find(|l| l.contains("Currently banned:"))
+            .and_then(|l| {
+                l.split("Currently banned:")
+                    .nth(1)
+                    .and_then(|v| v.trim().parse::<u32>().ok())
+            })
+            .unwrap_or(0);
+
+        jails.push(JailInfo {
+            name: name.clone(),
+            banned_count,
+        });
+    }
+
+    Ok(Fail2banStatus {
+        running: true,
+        jails,
+    })
+}
+
+/// Read SSH configuration values from /etc/ssh/sshd_config.
+/// Returns (port, password_auth_enabled).
+async fn parse_ssh_config() -> (u16, bool) {
+    let content = match tokio::fs::read_to_string("/etc/ssh/sshd_config").await {
+        Ok(c) => c,
+        Err(_) => return (22, true), // defaults
+    };
+
+    let mut port: u16 = 22;
+    let mut password_auth = true;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        // Skip comments and empty lines
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        if parts.len() < 2 {
+            continue;
+        }
+
+        match parts[0] {
+            "Port" => {
+                if let Ok(p) = parts[1].parse::<u16>() {
+                    port = p;
+                }
+            }
+            "PasswordAuthentication" => {
+                password_auth = parts[1].eq_ignore_ascii_case("yes");
+            }
+            _ => {}
+        }
+    }
+
+    (port, password_auth)
+}
+
+/// Count SSL certificate directories in /etc/dockpanel/ssl/.
+async fn count_ssl_certs() -> usize {
+    let mut count = 0;
+    let mut entries = match tokio::fs::read_dir("/etc/dockpanel/ssl").await {
+        Ok(e) => e,
+        Err(_) => return 0,
+    };
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if let Ok(ft) = entry.file_type().await {
+            if ft.is_dir() {
+                count += 1;
+            }
+        }
+    }
+
+    count
+}
+
+/// Aggregate security overview: firewall, fail2ban, SSH, SSL.
+pub async fn get_security_overview() -> Result<SecurityOverview, String> {
+    let (firewall, fail2ban, ssh, ssl) = tokio::join!(
+        get_firewall_status(),
+        get_fail2ban_status(),
+        parse_ssh_config(),
+        count_ssl_certs(),
+    );
+
+    let fw = firewall.unwrap_or(FirewallStatus {
+        active: false,
+        default_policy: String::new(),
+        rules: Vec::new(),
+    });
+
+    let f2b = fail2ban.unwrap_or(Fail2banStatus {
+        running: false,
+        jails: Vec::new(),
+    });
+
+    let banned_total: u32 = f2b.jails.iter().map(|j| j.banned_count).sum();
+
+    Ok(SecurityOverview {
+        firewall_active: fw.active,
+        firewall_rules_count: fw.rules.len(),
+        fail2ban_running: f2b.running,
+        fail2ban_banned_total: banned_total,
+        ssh_port: ssh.0,
+        ssh_password_auth: ssh.1,
+        ssl_certs_count: ssl,
+    })
+}
