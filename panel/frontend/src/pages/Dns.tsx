@@ -298,10 +298,10 @@ export default function Dns() {
         </div>
       )}
 
-      <div className="flex gap-6">
+      <div className="flex flex-col md:flex-row gap-6">
         {/* Zone List (sidebar) */}
         {zones.length > 0 && (
-          <div className="w-56 shrink-0">
+          <div className="md:w-56 shrink-0">
             <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
               <div className="px-4 py-3 border-b border-dark-600">
                 <h3 className="text-xs font-semibold text-dark-200 uppercase tracking-wider">Zones</h3>

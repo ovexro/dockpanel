@@ -12,6 +12,11 @@
 | `AGENT_SOCKET` | No | `/var/run/dockpanel/agent.sock` | Path to the agent's Unix socket |
 | `LISTEN_ADDR` | No | `0.0.0.0:3000` | Address and port the API listens on |
 | `DB_MAX_CONNECTIONS` | No | `20` | Maximum PostgreSQL connection pool size |
+| `BASE_URL` | No | `https://panel.example.com` | Panel base URL (used for links in emails, webhooks) |
+| `CORS_ORIGINS` | No | `https://panel.example.com` | Comma-separated list of allowed CORS origins |
+| `LOG_FORMAT` | No | `text` | Set to `json` for JSON structured logging |
+| `STRIPE_SECRET_KEY` | No | — | Stripe secret key (only if billing is enabled) |
+| `STRIPE_WEBHOOK_SECRET` | No | — | Stripe webhook signing secret (only if billing is enabled) |
 | `RUST_LOG` | No | `info` | Log level (`error`, `warn`, `info`, `debug`, `trace`) |
 
 ### Docker Compose (`.env` file in `panel/`)
@@ -34,6 +39,7 @@ The agent reads its configuration from files, not environment variables:
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
 | `RUST_LOG` | `info` | Log level |
+| `LOG_FORMAT` | `text` | Set to `json` for JSON structured logging |
 
 ## Directory Structure
 

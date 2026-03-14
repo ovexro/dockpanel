@@ -267,8 +267,9 @@ export default function Servers() {
           <h3 className="text-sm font-semibold text-dark-50 mb-3">Add New Server</h3>
           <div className="flex items-end gap-3">
             <div className="flex-1">
-              <label className="block text-xs font-medium text-dark-200 mb-1">Server Name</label>
+              <label htmlFor="server-name" className="block text-xs font-medium text-dark-200 mb-1">Server Name</label>
               <input
+                id="server-name"
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -403,6 +404,7 @@ export default function Servers() {
                       <select
                         value={metricsType}
                         onChange={(e) => { setMetricsType(e.target.value); fetchMetrics(s.id, e.target.value); }}
+                        aria-label="Metric type"
                         className="text-xs border border-dark-500 rounded px-2 py-0.5 outline-none"
                       >
                         <option value="cpu">CPU %</option>

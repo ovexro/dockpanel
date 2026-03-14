@@ -179,10 +179,10 @@ export default function Sites() {
             <thead>
               <tr className="border-b border-dark-500 bg-dark-900">
                 <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3">Domain</th>
-                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3">Runtime</th>
+                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3 hidden sm:table-cell">Runtime</th>
                 <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3">Status</th>
-                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3">SSL</th>
-                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3">Created</th>
+                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3 hidden md:table-cell">SSL</th>
+                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3 hidden lg:table-cell">Created</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-dark-600">
@@ -196,7 +196,7 @@ export default function Sites() {
                       {site.domain}
                     </Link>
                   </td>
-                  <td className="px-5 py-4 text-sm text-dark-200">
+                  <td className="px-5 py-4 text-sm text-dark-200 hidden sm:table-cell">
                     {runtimeLabels[site.runtime] || site.runtime}
                   </td>
                   <td className="px-5 py-4">
@@ -204,7 +204,7 @@ export default function Sites() {
                       {site.status}
                     </span>
                   </td>
-                  <td className="px-5 py-4">
+                  <td className="px-5 py-4 hidden md:table-cell">
                     {site.ssl_enabled ? (
                       <span className="inline-flex items-center gap-1 text-xs text-emerald-600">
                         <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
@@ -216,7 +216,7 @@ export default function Sites() {
                       <span className="text-xs text-dark-300">None</span>
                     )}
                   </td>
-                  <td className="px-5 py-4 text-sm text-dark-200">
+                  <td className="px-5 py-4 text-sm text-dark-200 hidden lg:table-cell">
                     {formatDate(site.created_at)}
                   </td>
                 </tr>
