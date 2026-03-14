@@ -196,10 +196,10 @@ export default function Layout() {
                       end={item.to === "/"}
                       onClick={() => setSidebarOpen(false)}
                       className={({ isActive }) =>
-                        `flex items-center gap-3 px-3 py-2 transition-colors text-sm font-medium ${
+                        `flex items-center gap-3 px-4 py-2 transition-colors text-sm uppercase tracking-wider ${
                           isActive
-                            ? "bg-rust-500/5 text-dark-50 border-l-2 border-rust-500"
-                            : "text-dark-300 hover:bg-dark-700/50 hover:text-dark-100 border-l-2 border-transparent"
+                            ? "bg-rust-500 text-dark-900 font-bold"
+                            : "text-dark-300 hover:text-dark-50 hover:bg-dark-500/50"
                         }`
                       }
                     >
