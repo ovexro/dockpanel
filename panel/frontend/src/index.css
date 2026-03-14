@@ -2,47 +2,59 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 @theme {
-  /* Orange accent — orange-600 base */
-  --color-rust-50:  #fff7ed;
-  --color-rust-100: #ffedd5;
-  --color-rust-200: #fed7aa;
-  --color-rust-300: #fdba74;
-  --color-rust-400: #fb923c;
-  --color-rust-500: #ea580c;
-  --color-rust-600: #c2410c;
-  --color-rust-700: #9a3412;
-  --color-rust-800: #7c2d12;
-  --color-rust-900: #431407;
+  /* Terminal green accent */
+  --color-rust-50:  #f0fdf4;
+  --color-rust-100: #dcfce7;
+  --color-rust-200: #bbf7d0;
+  --color-rust-300: #86efac;
+  --color-rust-400: #4ade80;
+  --color-rust-500: #4ade80;
+  --color-rust-600: #22c55e;
+  --color-rust-700: #166534;
+  --color-rust-800: #14532d;
+  --color-rust-900: #052e16;
 
-  /* Dark surfaces — zinc-950 base */
-  --color-dark-950: #050506;
-  --color-dark-900: #09090b;
-  --color-dark-800: #131316;
-  --color-dark-700: #1b1b1f;
-  --color-dark-600: #232328;
-  --color-dark-500: #2e2e35;
-  --color-dark-400: #52525b;
-  --color-dark-300: #71717a;
-  --color-dark-200: #a1a1aa;
-  --color-dark-100: #d4d4d8;
-  --color-dark-50:  #fafafa;
+  /* Terminal dark surfaces */
+  --color-dark-950: #020202;
+  --color-dark-900: #050505;
+  --color-dark-800: #0a0a0a;
+  --color-dark-700: #141414;
+  --color-dark-600: #1a1a1a;
+  --color-dark-500: #262626;
+  --color-dark-400: #525252;
+  --color-dark-300: #737373;
+  --color-dark-200: #a3a3a3;
+  --color-dark-100: #d4d4d4;
+  --color-dark-50:  #e5e5e5;
 
-  /* Typography */
-  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  /* Typography — all mono */
+  --font-sans: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
   --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
+
+  /* Square corners — terminal aesthetic */
+  --radius-xs: 0px;
+  --radius-sm: 0px;
+  --radius: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-2xl: 0px;
+  --radius-3xl: 0px;
 }
 
-/* Base dark theme */
+/* Base terminal theme */
 body {
   background-color: var(--color-dark-900);
   color: var(--color-dark-50);
-  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  letter-spacing: -0.011em;
+  /* CRT scanline effect */
+  background-image: linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+  background-size: 100% 3px;
 }
 
-/* Form elements on dark backgrounds */
+/* Form elements */
 input, select, textarea {
   background-color: var(--color-dark-900);
   color: var(--color-dark-50);
@@ -54,35 +66,45 @@ textarea::placeholder {
   color: var(--color-dark-300);
 }
 
-/* Scrollbar — thin and subtle */
+/* Terminal scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--color-dark-900);
+  border-left: 1px solid var(--color-dark-500);
 }
 
 ::-webkit-scrollbar-thumb {
   background: var(--color-dark-500);
-  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-dark-400);
+  background: var(--color-dark-300);
 }
 
-/* Selection color */
+/* Selection — green */
 ::selection {
   background: var(--color-rust-500);
-  color: white;
+  color: var(--color-dark-900);
 }
 
-/* Focus indicators for accessibility */
+/* Focus indicators */
 *:focus-visible {
   outline: 2px solid var(--color-rust-500);
   outline-offset: 2px;
+}
+
+/* Blinking cursor animation */
+.blinking-cursor {
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 
 /* Reduce motion for users who prefer it */
