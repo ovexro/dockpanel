@@ -37,7 +37,7 @@ export default function ResetPassword() {
   if (!token) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-dark-950 px-4">
-        <div className="bg-dark-800 rounded-xl shadow-lg p-6 max-w-sm w-full">
+        <div className="bg-dark-800 rounded-lg border border-dark-600 p-6 max-w-sm w-full">
           <div className="bg-red-500/10 text-red-400 text-sm px-4 py-3 rounded-lg border border-red-500/20">
             Invalid reset link. Please request a new one.
           </div>
@@ -79,7 +79,7 @@ export default function ResetPassword() {
         </div>
 
         {success ? (
-          <div className="bg-dark-800 rounded-xl shadow-lg p-6 space-y-4">
+          <div className="bg-dark-800 rounded-lg border border-dark-600 p-6 space-y-4">
             <div className="bg-emerald-50 text-emerald-400 text-sm px-4 py-3 rounded-lg border border-emerald-200">
               Password reset successfully!
             </div>
@@ -91,7 +91,7 @@ export default function ResetPassword() {
             </Link>
           </div>
         ) : (
-          <form onSubmit={handleSubmit} className="bg-dark-800 rounded-xl shadow-lg p-6 space-y-4">
+          <form onSubmit={handleSubmit} className="bg-dark-800 rounded-lg border border-dark-600 p-6 space-y-4">
             {error && (
               <div className="bg-red-500/10 text-red-400 text-sm px-4 py-3 rounded-lg border border-red-500/20">
                 {error}

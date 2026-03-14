@@ -87,9 +87,9 @@ export default function Billing() {
   if (loading) {
     return (
       <div className="p-6 lg:p-8">
-        <div className="bg-dark-800 rounded-xl border border-dark-500 p-6 animate-pulse">
-          <div className="h-6 bg-dark-600 rounded w-48 mb-4" />
-          <div className="h-4 bg-dark-600 rounded w-32" />
+        <div className="bg-dark-800 rounded-lg border border-dark-500 p-6 animate-pulse">
+          <div className="h-6 bg-dark-700 rounded w-48 mb-4" />
+          <div className="h-4 bg-dark-700 rounded w-32" />
         </div>
       </div>
     );
@@ -115,7 +115,7 @@ export default function Billing() {
 
       {/* Current Plan */}
       {info && (
-        <div className="bg-dark-800 rounded-xl border border-dark-500 p-5 mb-6">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-sm font-semibold text-dark-50 mb-2">Current Plan</h2>
@@ -172,7 +172,7 @@ export default function Billing() {
               return (
                 <div
                   key={p.id}
-                  className={`bg-dark-800 rounded-xl border-2 p-5 ${
+                  className={`bg-dark-800 rounded-lg border-2 p-5 ${
                     isCurrent ? "border-rust-500 ring-1 ring-rust-500" : "border-dark-500"
                   }`}
                 >
@@ -211,12 +211,12 @@ export default function Billing() {
       )}
 
       {!info?.billing_enabled && (
-        <div className="bg-dark-900 rounded-xl border border-dark-500 p-8 text-center">
+        <div className="bg-dark-900 rounded-lg border border-dark-500 p-8 text-center">
           <svg className="w-12 h-12 text-gray-300 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-3.75 3h15a2.25 2.25 0 0 0 2.25-2.25V6.75A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25v10.5A2.25 2.25 0 0 0 4.5 19.5Z" />
           </svg>
           <p className="text-dark-200 text-sm">
-            Billing is not configured. Set <code className="bg-dark-700 px-1.5 py-0.5 rounded text-xs">STRIPE_SECRET_KEY</code> to enable subscriptions.
+            Billing is not configured. Set <code className="bg-dark-700 px-1.5 py-0.5 rounded text-xs font-mono">STRIPE_SECRET_KEY</code> to enable subscriptions.
           </p>
         </div>
       )}

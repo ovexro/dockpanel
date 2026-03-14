@@ -167,7 +167,7 @@ export default function Diagnostics() {
       {/* Findings grouped by category */}
       {Object.entries(grouped).map(([category, items]) => (
         <div key={category} className="mb-6">
-          <h2 className="text-sm font-semibold text-dark-300 uppercase tracking-wider mb-3">
+          <h2 className="text-sm font-semibold text-dark-300 uppercase tracking-wider mb-3 font-mono">
             {categoryLabels[category] ?? category}
           </h2>
           <div className="space-y-2">
@@ -190,7 +190,7 @@ export default function Diagnostics() {
                             {finding.severity}
                           </span>
                         </div>
-                        <p className="text-sm text-dark-300 mt-1">{finding.description}</p>
+                        <p className="text-sm text-dark-300 mt-1 font-mono">{finding.description}</p>
                         {result && (
                           <p className={`text-sm mt-2 ${result.ok ? "text-green-400" : "text-red-400"}`}>
                             {result.ok ? "\u2713" : "\u2717"} {result.msg}

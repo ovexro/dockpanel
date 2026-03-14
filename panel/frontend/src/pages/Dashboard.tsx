@@ -78,7 +78,7 @@ interface Intelligence {
 function ProgressBar({ pct, color }: { pct: number; color: string }) {
   return (
     <div
-      className="w-full h-2 bg-dark-700 rounded-full overflow-hidden mt-3"
+      className="w-full h-1.5 bg-dark-700 rounded-full overflow-hidden mt-3"
       role="progressbar"
       aria-valuenow={Math.min(pct, 100)}
       aria-valuemin={0}
@@ -200,7 +200,7 @@ export default function Dashboard() {
         const completed = steps.filter(s => s.check()).length;
         if (completed >= 3) return null; // Auto-hide after 3+ steps done
         return (
-          <div className="mb-6 bg-dark-800 rounded-xl border border-dark-500 p-5">
+          <div className="mb-6 bg-dark-800 rounded-lg border border-dark-500 p-5">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <svg className="w-5 h-5 text-rust-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312m-2.24 2.39a4.493 4.493 0 00-1.757 4.306 4.493 4.493 0 004.306-1.758M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z" /></svg>
@@ -239,9 +239,9 @@ export default function Dashboard() {
       {!system ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" role="status" aria-live="polite">
           {[...Array(6)].map((_, i) => (
-            <div key={i} className="bg-dark-800 rounded-xl border border-dark-500 p-5 animate-pulse">
-              <div className="h-4 bg-dark-600 rounded w-20 mb-3" />
-              <div className="h-8 bg-dark-600 rounded w-32" />
+            <div key={i} className="bg-dark-800 rounded-lg border border-dark-500 p-5 animate-pulse">
+              <div className="h-4 bg-dark-700 rounded w-20 mb-3" />
+              <div className="h-8 bg-dark-700 rounded w-32" />
             </div>
           ))}
         </div>
@@ -250,7 +250,7 @@ export default function Dashboard() {
           {/* Resource cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
             {/* CPU */}
-            <div className="bg-dark-800 rounded-xl border border-dark-500 p-5">
+            <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <div className="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center">
@@ -260,13 +260,13 @@ export default function Dashboard() {
                   </div>
                   <p className="text-sm font-medium text-dark-200">CPU Usage</p>
                 </div>
-                <span className="text-xs text-dark-300">{system.cpu_count} cores</span>
+                <span className="text-xs text-dark-300 font-mono">{system.cpu_count} cores</span>
               </div>
               <p className="text-3xl font-bold text-dark-50 mt-2">
                 {system.cpu_usage.toFixed(1)}%
               </p>
               {system.load_avg_1 !== undefined && (
-                <p className="text-xs text-dark-300 mt-1">
+                <p className="text-xs text-dark-300 mt-1 font-mono">
                   Load: {system.load_avg_1?.toFixed(2)} / {system.load_avg_5?.toFixed(2)} / {system.load_avg_15?.toFixed(2)}
                 </p>
               )}
@@ -274,7 +274,7 @@ export default function Dashboard() {
             </div>
 
             {/* Memory */}
-            <div className="bg-dark-800 rounded-xl border border-dark-500 p-5">
+            <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <div className="w-9 h-9 rounded-lg bg-purple-500/10 flex items-center justify-center">
@@ -284,7 +284,7 @@ export default function Dashboard() {
                   </div>
                   <p className="text-sm font-medium text-dark-200">Memory</p>
                 </div>
-                <span className="text-xs text-dark-300">
+                <span className="text-xs text-dark-300 font-mono">
                   {(system.mem_used_mb / 1024).toFixed(1)} / {(system.mem_total_mb / 1024).toFixed(1)} GB
                 </span>
               </div>
@@ -292,7 +292,7 @@ export default function Dashboard() {
                 {system.mem_usage_pct.toFixed(1)}%
               </p>
               {system.swap_total_mb > 0 && (
-                <p className="text-xs text-dark-300 mt-1">
+                <p className="text-xs text-dark-300 mt-1 font-mono">
                   Swap: {(system.swap_used_mb / 1024).toFixed(2)} / {(system.swap_total_mb / 1024).toFixed(2)} GB
                 </p>
               )}
@@ -300,7 +300,7 @@ export default function Dashboard() {
             </div>
 
             {/* Disk */}
-            <div className="bg-dark-800 rounded-xl border border-dark-500 p-5">
+            <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <div className="w-9 h-9 rounded-lg bg-amber-500/10 flex items-center justify-center">
@@ -310,21 +310,21 @@ export default function Dashboard() {
                   </div>
                   <p className="text-sm font-medium text-dark-200">Disk</p>
                 </div>
-                <span className="text-xs text-dark-300">
+                <span className="text-xs text-dark-300 font-mono">
                   {system.disk_used_gb.toFixed(0)} / {system.disk_total_gb.toFixed(0)} GB
                 </span>
               </div>
               <p className="text-3xl font-bold text-dark-50 mt-2">
                 {system.disk_usage_pct.toFixed(1)}%
               </p>
-              <p className="text-xs text-dark-300 mt-1">
+              <p className="text-xs text-dark-300 mt-1 font-mono">
                 {(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB free
               </p>
               <ProgressBar pct={system.disk_usage_pct} color={barColor(system.disk_usage_pct)} />
             </div>
 
             {/* Sites */}
-            <div className="bg-dark-800 rounded-xl border border-dark-500 p-5">
+            <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-lg bg-emerald-500/10 flex items-center justify-center">
                   <svg className="w-5 h-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -340,7 +340,7 @@ export default function Dashboard() {
             </div>
 
             {/* Databases */}
-            <div className="bg-dark-800 rounded-xl border border-dark-500 p-5">
+            <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-lg bg-cyan-500/10 flex items-center justify-center">
                   <svg className="w-5 h-5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -356,7 +356,7 @@ export default function Dashboard() {
             </div>
 
             {/* Uptime */}
-            <div className="bg-dark-800 rounded-xl border border-dark-500 p-5">
+            <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-lg bg-rose-500/10 flex items-center justify-center">
                   <svg className="w-5 h-5 text-rose-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -376,7 +376,7 @@ export default function Dashboard() {
           {intel && (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
               {/* Health Score */}
-              <div className="bg-dark-800 rounded-xl border border-dark-500 p-5">
+              <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
                 <div className="flex items-center gap-2.5 mb-3">
                   <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
                     intel.health_score >= 90 ? "bg-emerald-500/10" :
@@ -418,7 +418,7 @@ export default function Dashboard() {
               </div>
 
               {/* Top Issues */}
-              <div className="bg-dark-800 rounded-xl border border-dark-500 p-5">
+              <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2.5">
                     <div className="w-9 h-9 rounded-lg bg-amber-500/10 flex items-center justify-center">
@@ -446,7 +446,7 @@ export default function Dashboard() {
               </div>
 
               {/* SSL Certificates */}
-              <div className="bg-dark-800 rounded-xl border border-dark-500 p-5">
+              <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
                 <div className="flex items-center gap-2.5 mb-3">
                   <div className="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center">
                     <svg className="w-5 h-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" /></svg>
@@ -459,13 +459,13 @@ export default function Dashboard() {
                   <div className="space-y-2">
                     {intel.ssl_countdowns.map((ssl, i) => (
                       <div key={i} className="flex items-center justify-between">
-                        <span className="text-xs text-dark-100 truncate max-w-[140px]">{ssl.domain}</span>
+                        <span className="text-xs text-dark-100 truncate max-w-[140px] font-mono">{ssl.domain}</span>
                         <span className={`text-xs font-medium ${
                           ssl.severity === "critical" ? "text-red-400" :
                           ssl.severity === "warning" ? "text-amber-400" :
                           ssl.severity === "info" ? "text-blue-400" : "text-emerald-400"
                         }`}>
-                          {ssl.days_left}d left
+                          <span className="font-mono">{ssl.days_left}d</span> left
                         </span>
                       </div>
                     ))}
@@ -476,7 +476,7 @@ export default function Dashboard() {
           )}
 
           {/* System Information */}
-          <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden mb-6">
+          <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mb-6">
             <div className="px-5 py-3 border-b border-dark-600">
               <h3 className="text-sm font-medium text-dark-50">System Information</h3>
             </div>
@@ -515,7 +515,7 @@ export default function Dashboard() {
               {/* Processes */}
               <div className="flex items-center justify-between md:border-t md:border-dark-600 px-5 py-3">
                 <span className="text-sm text-dark-300">Running Processes</span>
-                <span className="text-sm text-dark-50">{system.process_count.toLocaleString()}</span>
+                <span className="text-sm text-dark-50 font-mono">{system.process_count.toLocaleString()}</span>
               </div>
             </div>
           </div>
@@ -524,7 +524,7 @@ export default function Dashboard() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Network I/O */}
             {network.length > 0 && (
-              <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+              <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
                 <div className="px-5 py-3 border-b border-dark-600">
                   <h3 className="text-sm font-medium text-dark-50">Network I/O</h3>
                 </div>
@@ -540,10 +540,10 @@ export default function Dashboard() {
                     {network.filter(n => n.rx_bytes > 0 || n.tx_bytes > 0).map((iface) => (
                       <tr key={iface.name}>
                         <td className="px-5 py-2.5 text-sm text-dark-50 font-mono">{iface.name}</td>
-                        <td className="px-5 py-2.5 text-sm text-dark-200 text-right">
+                        <td className="px-5 py-2.5 text-sm text-dark-200 text-right font-mono">
                           <span className="text-emerald-600">{formatSize(iface.rx_bytes)}</span>
                         </td>
-                        <td className="px-5 py-2.5 text-sm text-dark-200 text-right">
+                        <td className="px-5 py-2.5 text-sm text-dark-200 text-right font-mono">
                           <span className="text-blue-600">{formatSize(iface.tx_bytes)}</span>
                         </td>
                       </tr>
@@ -555,7 +555,7 @@ export default function Dashboard() {
 
             {/* Top Processes */}
             {processes.length > 0 && (
-              <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+              <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
                 <div className="px-5 py-3 border-b border-dark-600">
                   <h3 className="text-sm font-medium text-dark-50">Top Processes</h3>
                 </div>
@@ -572,13 +572,13 @@ export default function Dashboard() {
                     {processes.slice(0, 10).map((p) => (
                       <tr key={p.pid}>
                         <td className="px-5 py-2 text-sm text-dark-50 font-mono truncate max-w-[200px]">{p.name}</td>
-                        <td className="px-5 py-2 text-sm text-dark-200 text-right">{p.pid}</td>
-                        <td className="px-5 py-2 text-sm text-right">
+                        <td className="px-5 py-2 text-sm text-dark-200 text-right font-mono">{p.pid}</td>
+                        <td className="px-5 py-2 text-sm text-right font-mono">
                           <span className={p.cpu_pct > 50 ? "text-red-400 font-medium" : "text-dark-200"}>
                             {p.cpu_pct.toFixed(1)}%
                           </span>
                         </td>
-                        <td className="px-5 py-2 text-sm text-dark-200 text-right">{p.mem_mb.toFixed(0)} MB</td>
+                        <td className="px-5 py-2 text-sm text-dark-200 text-right font-mono">{p.mem_mb.toFixed(0)} MB</td>
                       </tr>
                     ))}
                   </tbody>

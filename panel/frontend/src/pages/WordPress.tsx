@@ -165,9 +165,9 @@ export default function WordPress() {
     return (
       <div className="p-6 lg:p-8">
         <h1 className="text-2xl font-bold text-dark-50 mb-6">WordPress</h1>
-        <div className="bg-dark-800 rounded-xl border border-dark-500 p-6 animate-pulse">
-          <div className="h-6 bg-dark-600 rounded w-48 mb-4" />
-          <div className="h-4 bg-dark-600 rounded w-32" />
+        <div className="bg-dark-800 rounded-lg border border-dark-500 p-6 animate-pulse">
+          <div className="h-6 bg-dark-700 rounded w-48 mb-4" />
+          <div className="h-4 bg-dark-700 rounded w-32" />
         </div>
       </div>
     );
@@ -205,7 +205,7 @@ export default function WordPress() {
 
       {!info?.installed ? (
         /* WordPress Not Installed */
-        <div className="bg-dark-800 rounded-xl border border-dark-500 p-8">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 p-8">
           <div className="text-center max-w-md mx-auto">
             <div className="w-16 h-16 bg-blue-500/15 rounded-2xl flex items-center justify-center mx-auto mb-4">
               <svg className="w-8 h-8 text-blue-600" viewBox="0 0 24 24" fill="currentColor">
@@ -353,10 +353,10 @@ export default function WordPress() {
         /* WordPress Installed */
         <>
           {/* Info Card */}
-          <div className="bg-dark-800 rounded-xl border border-dark-500 p-5 mb-6">
+          <div className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6">
             <div className="flex items-center justify-between flex-wrap gap-4">
               <div className="flex items-center gap-4">
-                <div className="w-12 h-12 bg-blue-500/15 rounded-xl flex items-center justify-center">
+                <div className="w-12 h-12 bg-blue-500/15 rounded-lg flex items-center justify-center">
                   <svg className="w-7 h-7 text-blue-600" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M12 2C6.486 2 2 6.486 2 12s4.486 10 10 10 10-4.486 10-10S17.514 2 12 2zm0 2c1.67 0 3.214.52 4.488 1.401L5.401 16.488A7.957 7.957 0 0 1 4 12c0-4.411 3.589-8 8-8zm0 16c-1.67 0-3.214-.52-4.488-1.401L18.599 7.512A7.957 7.957 0 0 1 20 12c0 4.411-3.589 8-8 8z" />
                   </svg>
@@ -364,7 +364,7 @@ export default function WordPress() {
                 <div>
                   <div className="flex items-center gap-2">
                     <h2 className="text-lg font-semibold text-dark-50">
-                      WordPress {info.version}
+                      WordPress <span className="font-mono">{info.version}</span>
                     </h2>
                     {info.update_available && (
                       <span className="px-2 py-0.5 bg-amber-500/15 text-amber-400 rounded text-xs font-medium">
@@ -457,7 +457,7 @@ export default function WordPress() {
 
           {/* Plugin List */}
           {tab === "plugins" && (
-            <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-dark-900 text-left">
@@ -577,7 +577,7 @@ export default function WordPress() {
 
           {/* Theme List */}
           {tab === "themes" && (
-            <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-dark-900 text-left">
