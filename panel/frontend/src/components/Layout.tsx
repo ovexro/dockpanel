@@ -133,7 +133,7 @@ export default function Layout() {
 
       {/* Sidebar */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-64 bg-dark-950 text-white flex flex-col shrink-0 transform transition-transform duration-200 ease-in-out md:relative md:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 w-64 bg-dark-950 border-r border-dark-600 text-white flex flex-col shrink-0 transform transition-transform duration-200 ease-in-out md:relative md:translate-x-0 ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -175,9 +175,9 @@ export default function Layout() {
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 px-3 py-3 space-y-3 overflow-y-auto">
-          {visibleGroups.map((group) => (
-            <div key={group.label}>
+        <nav className="flex-1 px-3 py-2 space-y-1 overflow-y-auto">
+          {visibleGroups.map((group, gi) => (
+            <div key={group.label} className={gi > 0 ? "pt-2 mt-1 border-t border-dark-600/40" : ""}>
               <button
                 onClick={() => toggleGroup(group.label)}
                 className="flex items-center justify-between w-full px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-dark-400 hover:text-dark-200 transition-colors"
@@ -196,7 +196,7 @@ export default function Layout() {
                       end={item.to === "/"}
                       onClick={() => setSidebarOpen(false)}
                       className={({ isActive }) =>
-                        `flex items-center gap-3 px-3 py-2 transition-colors text-sm ${
+                        `flex items-center gap-3 px-3 py-1.5 transition-colors text-sm ${
                           isActive
                             ? "bg-rust-500/10 text-rust-400 border-l-2 border-rust-500"
                             : "text-dark-200 hover:bg-dark-700/50 hover:text-dark-100 border-l-2 border-transparent"

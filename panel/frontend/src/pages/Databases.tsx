@@ -152,7 +152,7 @@ export default function Databases() {
 
   return (
     <div className="p-6 lg:p-8">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
         <h1 className="text-2xl font-bold text-dark-50">Databases</h1>
         <button
           onClick={() => setShowForm(!showForm)}
@@ -294,7 +294,7 @@ export default function Databases() {
               </thead>
               <tbody className="divide-y divide-dark-600">
                 {databases.map((db) => (
-                  <tr key={db.id} className="hover:bg-dark-800 transition-colors">
+                  <tr key={db.id} className="hover:bg-dark-700/30 transition-colors">
                     <td className="px-5 py-4 text-sm font-medium text-dark-50 font-mono">
                       {db.name}
                     </td>
