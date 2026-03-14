@@ -97,7 +97,7 @@ export default function Activity() {
 
   return (
     <div className="p-6 lg:p-8">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
         <div>
           <h1 className="text-2xl font-bold text-dark-50">Activity Log</h1>
           <p className="text-sm text-dark-200 mt-1">Track all admin actions</p>
@@ -163,7 +163,7 @@ export default function Activity() {
                 {entries.map((entry) => {
                   const badge = actionBadge(entry.action);
                   return (
-                    <tr key={entry.id} className="hover:bg-dark-800">
+                    <tr key={entry.id} className="hover:bg-dark-700/30 transition-colors">
                       <td className="px-5 py-3 text-sm text-dark-200 whitespace-nowrap font-mono">
                         {timeAgo(entry.created_at)}
                       </td>

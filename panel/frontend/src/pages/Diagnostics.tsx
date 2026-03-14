@@ -78,7 +78,7 @@ export default function Diagnostics() {
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
         <div>
           <h1 className="text-2xl font-bold text-dark-50">Diagnostics</h1>
           <p className="text-dark-300 text-sm mt-1">

@@ -61,7 +61,7 @@ export default function Sites() {
 
   return (
     <div className="p-6 lg:p-8">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
         <h1 className="text-2xl font-bold text-dark-50">Sites</h1>
         <button
           onClick={() => setShowForm(!showForm)}
@@ -187,7 +187,7 @@ export default function Sites() {
             </thead>
             <tbody className="divide-y divide-dark-600">
               {sites.filter((s) => !s.parent_site_id).map((site) => (
-                <tr key={site.id} className="hover:bg-dark-800 transition-colors">
+                <tr key={site.id} className="hover:bg-dark-700/30 transition-colors">
                   <td className="px-5 py-4">
                     <Link
                       to={`/sites/${site.id}`}

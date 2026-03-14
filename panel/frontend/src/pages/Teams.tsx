@@ -145,7 +145,7 @@ export default function Teams() {
 
   return (
     <div className="p-6 lg:p-8">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
         <div>
           <h1 className="text-2xl font-bold text-dark-50">Teams</h1>
           <p className="text-sm text-dark-200 mt-1">Collaborate with your team</p>

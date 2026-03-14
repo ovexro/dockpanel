@@ -249,7 +249,7 @@ export default function Settings() {
 
   return (
     <div className="p-6 lg:p-8">
-      <div className="mb-6">
+      <div className="mb-6 pb-4 border-b border-dark-600">
         <h1 className="text-2xl font-bold text-dark-50">Settings</h1>
         <p className="text-sm text-dark-200 mt-1">Manage panel configuration</p>
       </div>

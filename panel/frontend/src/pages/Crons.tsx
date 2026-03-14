@@ -160,7 +160,7 @@ export default function Crons() {
       </div>
 
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
         <div>
           <h1 className="text-2xl font-bold text-dark-50">Cron Jobs</h1>
           <p className="text-sm text-dark-200 mt-1">{site?.domain}</p>
@@ -267,7 +267,7 @@ export default function Crons() {
         ) : (
           <div className="divide-y divide-dark-600">
             {crons.map((cron) => (
-              <div key={cron.id} className="px-5 py-4 hover:bg-dark-800 transition-colors">
+              <div key={cron.id} className="px-5 py-4 hover:bg-dark-700/30 transition-colors">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-3">
