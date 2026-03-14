@@ -258,7 +258,7 @@ export default function Settings() {
         <div
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
-              ? "bg-emerald-50 text-emerald-400 border-emerald-200"
+              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
               : "bg-red-500/10 text-red-400 border-red-500/20"
           }`}
         >
@@ -409,7 +409,7 @@ export default function Settings() {
               <button
                 onClick={handleTestEmail}
                 disabled={testingEmail || !smtpHost}
-                className="px-4 py-2 text-sm font-medium text-dark-100 bg-dark-700 rounded-lg hover:bg-gray-200 disabled:opacity-50"
+                className="px-4 py-2 text-sm font-medium text-dark-100 bg-dark-700 rounded-lg hover:bg-dark-600 disabled:opacity-50"
               >
                 {testingEmail ? "Sending..." : "Send Test Email"}
               </button>
@@ -566,7 +566,7 @@ export default function Settings() {
                           }
                         }}
                         disabled={testingDest === d.id}
-                        className="px-2 py-1 bg-blue-50 text-blue-400 rounded text-xs font-medium hover:bg-blue-100 disabled:opacity-50"
+                        className="px-2 py-1 bg-blue-500/10 text-blue-400 rounded text-xs font-medium hover:bg-blue-500/20 disabled:opacity-50"
                       >
                         {testingDest === d.id ? "Testing..." : "Test"}
                       </button>
@@ -580,7 +580,7 @@ export default function Settings() {
                             setMessage({ text: e instanceof Error ? e.message : "Delete failed", type: "error" });
                           }
                         }}
-                        className="px-2 py-1 bg-red-500/10 text-red-400 rounded text-xs font-medium hover:bg-red-100"
+                        className="px-2 py-1 bg-red-500/10 text-red-400 rounded text-xs font-medium hover:bg-red-500/20"
                       >
                         Delete
                       </button>

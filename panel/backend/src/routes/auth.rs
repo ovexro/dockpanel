@@ -69,7 +69,7 @@ pub async fn setup(
     }
 
     // Validate input
-    if body.email.is_empty() || !body.email.contains('@') {
+    if body.email.is_empty() || body.email.len() > 254 || !body.email.contains('@') {
         return Err(err(StatusCode::BAD_REQUEST, "Valid email address is required"));
     }
 
@@ -271,7 +271,7 @@ fn record_login_attempt(
 /// POST /api/auth/logout — Clear the auth cookie and blacklist the token JTI.
 pub async fn logout(
     State(state): State<AppState>,
-    auth: Result<AuthUser, StatusCode>,
+    auth: Result<AuthUser, crate::error::ApiError>,
 ) -> (StatusCode, [(header::HeaderName, String); 1], Json<serde_json::Value>) {
     // Blacklist the token's JTI so it cannot be reused
     if let Ok(AuthUser(claims)) = auth {
@@ -312,7 +312,7 @@ pub async fn register(
     headers: HeaderMap,
     Json(body): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    if body.email.is_empty() || !body.email.contains('@') {
+    if body.email.is_empty() || body.email.len() > 254 || !body.email.contains('@') {
         return Err(err(StatusCode::BAD_REQUEST, "Valid email address is required"));
     }
     if body.password.len() < 8 {

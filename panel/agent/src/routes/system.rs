@@ -1,4 +1,4 @@
-use axum::{routing::get, Json, Router};
+use axum::{extract::State, routing::get, Json, Router};
 use serde::Serialize;
 use sysinfo::{Components, Networks, System};
 
@@ -43,9 +43,11 @@ struct NetworkInfo {
     tx_bytes: u64,
 }
 
-async fn system_info() -> Json<SystemInfo> {
-    let mut sys = System::new_all();
-    sys.refresh_all();
+async fn system_info(State(state): State<AppState>) -> Json<SystemInfo> {
+    let mut sys = state.system.lock().await;
+    sys.refresh_cpu_usage();
+    sys.refresh_memory();
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
 
     let cpu_usage = sys.global_cpu_usage();
     let mem_total = sys.total_memory();

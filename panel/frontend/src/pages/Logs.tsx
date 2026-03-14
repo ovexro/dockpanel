@@ -279,8 +279,8 @@ export default function Logs() {
                   onClick={streaming ? stopStream : startStream}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                     streaming
-                      ? "bg-red-500/15 text-red-400 hover:bg-red-200"
-                      : "bg-emerald-500/15 text-emerald-400 hover:bg-emerald-200"
+                      ? "bg-red-500/15 text-red-400 hover:bg-red-500/20"
+                      : "bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/20"
                   }`}
                 >
                   {streaming ? "Stop Stream" : "Live Stream"}
@@ -291,7 +291,7 @@ export default function Logs() {
                     className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                       autoRefresh
                         ? "bg-emerald-500/15 text-emerald-400"
-                        : "bg-dark-700 text-dark-200 hover:bg-gray-200"
+                        : "bg-dark-700 text-dark-200 hover:bg-dark-600"
                     }`}
                   >
                     {autoRefresh ? "Auto ON" : "Auto"}
@@ -361,14 +361,14 @@ export default function Logs() {
                 />
                 <button
                   onClick={handleFilter}
-                  className="px-3 py-1.5 bg-dark-700 text-dark-200 rounded-lg text-sm hover:bg-gray-200"
+                  className="px-3 py-1.5 bg-dark-700 text-dark-200 rounded-lg text-sm hover:bg-dark-600"
                 >
                   Filter
                 </button>
                 {filter && (
                   <button
                     onClick={() => { setFilter(""); setFilterInput(""); }}
-                    className="px-2 py-1.5 text-dark-300 hover:text-gray-600"
+                    className="px-2 py-1.5 text-dark-300 hover:text-dark-200"
                   >
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />

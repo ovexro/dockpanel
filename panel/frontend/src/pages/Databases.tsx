@@ -248,7 +248,7 @@ export default function Databases() {
       ) : databases.length === 0 ? (
         <div className="bg-dark-800 rounded-xl border border-dark-500 p-12 text-center">
           <svg
-            className="w-12 h-12 mx-auto text-gray-300 mb-4"
+            className="w-12 h-12 mx-auto text-dark-400 mb-4"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -317,7 +317,7 @@ export default function Databases() {
                           className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
                             credentialsId === db.id
                               ? "bg-rust-500/15 text-rust-600"
-                              : "bg-dark-700 text-dark-200 hover:bg-gray-200"
+                              : "bg-dark-700 text-dark-200 hover:bg-dark-600"
                           }`}
                         >
                           {credentialsId === db.id ? "Hide" : "Connect"}
@@ -334,7 +334,7 @@ export default function Databases() {
                             </button>
                             <button
                               onClick={() => setConfirmDeleteId(null)}
-                              className="px-2 py-1 bg-dark-600 text-dark-100 rounded text-xs hover:bg-gray-300"
+                              className="px-2 py-1 bg-dark-600 text-dark-100 rounded text-xs hover:bg-dark-500"
                             >
                               No
                             </button>
@@ -379,7 +379,7 @@ export default function Databases() {
                         onClick={() =>
                           copyToClipboard(credentials.connection_string, "connection_string")
                         }
-                        className="shrink-0 px-3 py-2 bg-dark-700 text-dark-200 rounded-lg text-xs hover:bg-gray-200 transition-colors"
+                        className="shrink-0 px-3 py-2 bg-dark-700 text-dark-200 rounded-lg text-xs hover:bg-dark-600 transition-colors"
                       >
                         {copied === "connection_string" ? "Copied!" : "Copy"}
                       </button>
@@ -406,7 +406,7 @@ export default function Databases() {
                           </code>
                           <button
                             onClick={() => copyToClipboard(field.value, field.key)}
-                            className="shrink-0 p-1.5 text-dark-300 hover:text-gray-600"
+                            className="shrink-0 p-1.5 text-dark-300 hover:text-dark-200"
                             title={`Copy ${field.label}`}
                           >
                             {copied === field.key ? (

@@ -1,6 +1,18 @@
 use sqlx::PgPool;
+use std::sync::OnceLock;
 use std::time::Duration;
 use uuid::Uuid;
+
+/// Shared HTTP client for webhook notifications (reuses connections).
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .build()
+            .unwrap_or_default()
+    })
+}
 
 /// Notification channels for delivering alerts.
 pub struct NotifyChannels {
@@ -17,7 +29,7 @@ pub async fn send_notification(
     message: &str,
     body_html: &str,
 ) {
-    let client = reqwest::Client::new();
+    let client = http_client();
 
     // Email
     if let Some(ref email) = channels.email {
@@ -298,7 +310,10 @@ pub async fn resolve_alert(
         return;
     };
 
-    let id = server_id.or(site_id).unwrap();
+    let Some(id) = server_id.or(site_id) else {
+        tracing::warn!("resolve_alert called with no server_id or site_id");
+        return;
+    };
     let _ = sqlx::query(query)
         .bind(user_id)
         .bind(id)

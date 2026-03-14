@@ -63,7 +63,7 @@ pub async fn create(
     Json(body): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
 
-    if body.email.is_empty() || !body.email.contains('@') {
+    if body.email.is_empty() || body.email.len() > 254 || !body.email.contains('@') {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid email"));
     }
     if body.password.len() < 8 {

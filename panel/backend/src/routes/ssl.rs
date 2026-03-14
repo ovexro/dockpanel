@@ -101,7 +101,7 @@ pub async fn provision(
     tracing::info!("SSL provisioned for {}", site.domain);
 
     Ok(Json(serde_json::json!({
-        "success": true,
+        "ok": true,
         "domain": site.domain,
         "ssl_enabled": true,
         "cert_path": cert_path,

@@ -126,7 +126,7 @@ export default function Users() {
         <div
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
-              ? "bg-emerald-50 text-emerald-400 border-emerald-200"
+              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
               : "bg-red-500/10 text-red-400 border-red-500/20"
           }`}
         >
@@ -310,7 +310,7 @@ export default function Users() {
                   setEmail("");
                   setPassword("");
                 }}
-                className="px-4 py-2 text-sm text-dark-200 hover:text-gray-800"
+                className="px-4 py-2 text-sm text-dark-200 hover:text-dark-100"
               >
                 Cancel
               </button>

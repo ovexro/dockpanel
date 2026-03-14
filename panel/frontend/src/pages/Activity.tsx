@@ -178,10 +178,10 @@ export default function Activity() {
                         {entry.target_type && (
                           <span className="text-dark-300 text-xs mr-1">{entry.target_type}:</span>
                         )}
-                        {entry.target_name || <span className="text-gray-300">-</span>}
+                        {entry.target_name || <span className="text-dark-400">-</span>}
                       </td>
                       <td className="px-5 py-3 text-sm text-dark-200 truncate max-w-[250px]">
-                        {entry.details || <span className="text-gray-300">-</span>}
+                        {entry.details || <span className="text-dark-400">-</span>}
                       </td>
                     </tr>
                   );
@@ -194,7 +194,7 @@ export default function Activity() {
                 <button
                   onClick={handleLoadMore}
                   disabled={loadingMore}
-                  className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-gray-200 disabled:opacity-50"
+                  className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 disabled:opacity-50"
                 >
                   {loadingMore ? "Loading..." : "Load More"}
                 </button>

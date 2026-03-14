@@ -726,10 +726,22 @@ pub async fn deploy_app(
         .await
         .map_err(|e| format!("Failed to create container: {e}"))?;
 
-    docker
+    if let Err(e) = docker
         .start_container(&container.id, None::<StartContainerOptions<String>>)
         .await
-        .map_err(|e| format!("Failed to start container: {e}"))?;
+    {
+        // Clean up orphaned container on start failure
+        let _ = docker
+            .remove_container(
+                &container.id,
+                Some(bollard::container::RemoveContainerOptions {
+                    force: true,
+                    ..Default::default()
+                }),
+            )
+            .await;
+        return Err(format!("Failed to start container: {e}"));
+    }
 
     tracing::info!(
         "App deployed: {container_name} (template={}, port={port})",

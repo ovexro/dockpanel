@@ -140,7 +140,7 @@ pub async fn restore(
         Some("backup"), Some(&domain), Some(&backup.filename), None,
     ).await;
 
-    Ok(Json(serde_json::json!({ "success": true })))
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 /// DELETE /api/sites/{id}/backups/{backup_id} — Delete a backup.

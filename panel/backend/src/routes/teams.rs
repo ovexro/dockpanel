@@ -140,12 +140,15 @@ pub async fn create(
         return Err(err(StatusCode::BAD_REQUEST, "Team limit reached (10)"));
     }
 
+    let mut tx = state.db.begin().await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
     let team: Team = sqlx::query_as(
         "INSERT INTO teams (name, owner_id) VALUES ($1, $2) RETURNING *",
     )
     .bind(name)
     .bind(claims.sub)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
@@ -155,9 +158,12 @@ pub async fn create(
     )
     .bind(team.id)
     .bind(claims.sub)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    tx.commit().await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "team.create",
@@ -303,7 +309,10 @@ pub async fn accept_invite(
     let (invite_id, team_id, _email, role) = invite
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Invalid or expired invitation"))?;
 
-    // Add user as team member
+    // Add user as team member + delete invite atomically
+    let mut tx = state.db.begin().await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
     sqlx::query(
         "INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, $3) \
          ON CONFLICT (team_id, user_id) DO UPDATE SET role = $3",
@@ -311,16 +320,18 @@ pub async fn accept_invite(
     .bind(team_id)
     .bind(claims.sub)
     .bind(&role)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    // Delete used invite
     sqlx::query("DELETE FROM team_invites WHERE id = $1")
         .bind(invite_id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await
-        .ok();
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    tx.commit().await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     let team_name: (String,) = sqlx::query_as("SELECT name FROM teams WHERE id = $1")
         .bind(team_id)

@@ -151,7 +151,7 @@ export default function Servers() {
   const handleAction = async (serverId: string, action: string) => {
     setActionLoading(`${serverId}-${action}`);
     try {
-      await api.post(`/servers/${serverId}/command`, { action });
+      await api.post(`/servers/${serverId}/commands`, { action });
       fetchServers();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Action failed");
@@ -200,7 +200,7 @@ export default function Servers() {
 
       {/* Status overview */}
       {servers.length > 0 && (
-        <div className="grid grid-cols-3 gap-4 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
           <div className="bg-dark-800 rounded-xl border border-dark-500 p-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-emerald-500/15 rounded-lg flex items-center justify-center">
@@ -239,22 +239,22 @@ export default function Servers() {
 
       {/* Install script display */}
       {installInfo && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-5 mb-6">
+        <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-5 mb-6">
           <h3 className="text-sm font-semibold text-emerald-400 mb-2">
             Server "{installInfo.name}" created!
           </h3>
           <p className="text-sm text-emerald-400 mb-3">
             Run this command on your server to install the DockPanel agent:
           </p>
-          <div className="bg-gray-900 text-emerald-400 p-4 rounded-lg font-mono text-xs break-all">
+          <div className="bg-dark-950 text-emerald-400 p-4 rounded-lg font-mono text-xs break-all">
             {installInfo.install_script}
           </div>
-          <p className="text-xs text-emerald-600 mt-3">
+          <p className="text-xs text-emerald-400 mt-3">
             Save your agent token — it won't be shown again.
           </p>
           <button
             onClick={() => setInstallInfo(null)}
-            className="mt-3 px-3 py-1.5 bg-emerald-200 text-emerald-400 rounded-lg text-xs font-medium hover:bg-emerald-300"
+            className="mt-3 px-3 py-1.5 bg-emerald-500/20 text-emerald-400 rounded-lg text-xs font-medium hover:bg-emerald-500/30"
           >
             Dismiss
           </button>
@@ -287,7 +287,7 @@ export default function Servers() {
             <button
               type="button"
               onClick={() => setShowForm(false)}
-              className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-gray-200"
+              className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600"
             >
               Cancel
             </button>
@@ -298,7 +298,7 @@ export default function Servers() {
       {/* Server cards */}
       {servers.length === 0 ? (
         <div className="bg-dark-800 rounded-xl border border-dark-500 p-12 text-center">
-          <svg className="w-12 h-12 text-gray-300 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+          <svg className="w-12 h-12 text-dark-400 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M5 12a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2M5 12a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2m-2-4h.01M17 16h.01" />
           </svg>
           <p className="text-dark-200 text-sm">No servers yet. Add your first server to get started.</p>

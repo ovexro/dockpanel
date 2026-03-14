@@ -25,7 +25,7 @@ pub struct Claims {
 pub struct AuthUser(pub Claims);
 
 impl FromRequestParts<AppState> for AuthUser {
-    type Rejection = StatusCode;
+    type Rejection = ApiError;
 
     async fn from_request_parts(
         parts: &mut Parts,
@@ -50,7 +50,7 @@ impl FromRequestParts<AppState> for AuthUser {
                             .find_map(|s| s.trim().strip_prefix("token=").map(|v| v.to_string()))
                     })
             })
-            .ok_or(StatusCode::UNAUTHORIZED)?;
+            .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "Authentication required"))?;
 
         let mut validation = Validation::new(jsonwebtoken::Algorithm::HS256);
         validation.validate_exp = true;
@@ -61,14 +61,14 @@ impl FromRequestParts<AppState> for AuthUser {
             &DecodingKey::from_secret(state.config.jwt_secret.as_bytes()),
             &validation,
         )
-        .map_err(|_| StatusCode::UNAUTHORIZED)?
+        .map_err(|_| err(StatusCode::UNAUTHORIZED, "Invalid or expired token"))?
         .claims;
 
         // Check token blacklist (revoked JTIs)
         if let Some(ref jti) = claims.jti {
             let blacklist = state.token_blacklist.read().await;
             if blacklist.contains(jti) {
-                return Err(StatusCode::UNAUTHORIZED);
+                return Err(err(StatusCode::UNAUTHORIZED, "Token has been revoked"));
             }
         }
 

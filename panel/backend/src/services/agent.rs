@@ -4,6 +4,7 @@ use hyper::client::conn::http1;
 use hyper::Request;
 use hyper_util::rt::TokioIo;
 use std::fmt;
+use std::time::Duration;
 use tokio::net::UnixStream;
 
 #[derive(Debug)]
@@ -39,6 +40,17 @@ impl AgentClient {
     }
 
     async fn request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, AgentError> {
+        tokio::time::timeout(Duration::from_secs(60), self.request_inner(method, path, body))
+            .await
+            .map_err(|_| AgentError::Request("agent request timed out after 60s".into()))?
+    }
+
+    async fn request_inner(
         &self,
         method: &str,
         path: &str,

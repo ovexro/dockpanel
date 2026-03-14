@@ -201,7 +201,7 @@ export default function Dns() {
     MX: "bg-amber-500/15 text-amber-400",
     TXT: "bg-dark-700 text-dark-100",
     NS: "bg-purple-500/15 text-purple-400",
-    SRV: "bg-pink-100 text-pink-700",
+    SRV: "bg-pink-500/10 text-pink-400",
     CAA: "bg-red-500/15 text-red-400",
   };
 
@@ -235,7 +235,7 @@ export default function Dns() {
       {message.text && (
         <div className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
           message.type === "success"
-            ? "bg-emerald-50 text-emerald-400 border-emerald-200"
+            ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
             : "bg-red-500/10 text-red-400 border-red-500/20"
         }`}>
           {message.text}
@@ -352,7 +352,7 @@ export default function Dns() {
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => selectZone(selectedZone)}
-                    className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-gray-200"
+                    className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600"
                   >
                     Refresh
                   </button>
@@ -375,7 +375,7 @@ export default function Dns() {
                         value={recType}
                         onChange={(e) => setRecType(e.target.value)}
                         disabled={!!editingRecord}
-                        className="w-full px-2 py-1.5 border border-dark-500 rounded-md text-sm bg-dark-800 focus:ring-2 focus:ring-rust-500 outline-none disabled:bg-gray-100"
+                        className="w-full px-2 py-1.5 border border-dark-500 rounded-md text-sm bg-dark-800 focus:ring-2 focus:ring-rust-500 outline-none disabled:bg-dark-700"
                       >
                         {RECORD_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                       </select>
@@ -421,7 +421,7 @@ export default function Dns() {
                     </button>
                     <button
                       onClick={() => setShowRecordForm(false)}
-                      className="px-4 py-1.5 bg-dark-600 text-dark-100 rounded-lg text-sm font-medium hover:bg-gray-300"
+                      className="px-4 py-1.5 bg-dark-600 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-500"
                     >
                       Cancel
                     </button>
@@ -455,7 +455,7 @@ export default function Dns() {
                         <td className="px-4 py-2.5 text-xs text-dark-200">{ttlLabel(r.ttl)}</td>
                         <td className="px-4 py-2.5">
                           {r.proxied !== undefined && (
-                            <span className={`inline-block w-3 h-3 rounded-full ${r.proxied ? "bg-orange-400" : "bg-gray-300"}`} title={r.proxied ? "Proxied" : "DNS only"} />
+                            <span className={`inline-block w-3 h-3 rounded-full ${r.proxied ? "bg-orange-400" : "bg-dark-500"}`} title={r.proxied ? "Proxied" : "DNS only"} />
                           )}
                         </td>
                         <td className="px-4 py-2.5">

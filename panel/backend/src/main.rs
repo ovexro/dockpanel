@@ -6,8 +6,9 @@ mod routes;
 mod services;
 
 use axum::{http::Method, Router};
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use std::collections::{HashMap, HashSet};
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::RwLock;
@@ -52,11 +53,23 @@ async fn main() {
     let config = Config::from_env();
 
     // Connect to PostgreSQL with retry (DB container may not be ready yet)
+    let connect_opts = PgConnectOptions::from_str(&config.database_url)
+        .expect("Invalid DATABASE_URL");
+
     let mut retries = 0u32;
     let db = loop {
         match PgPoolOptions::new()
             .max_connections(config.db_max_connections)
-            .connect(&config.database_url)
+            .min_connections(2)
+            .after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    sqlx::query("SET statement_timeout = '30000'")
+                        .execute(&mut *conn)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect_with(connect_opts.clone())
             .await
         {
             Ok(pool) => break pool,
@@ -79,12 +92,6 @@ async fn main() {
         .run(&db)
         .await
         .expect("Failed to run database migrations");
-
-    // Set statement_timeout for all connections (30s max query time)
-    sqlx::query("SET statement_timeout = '30s'")
-        .execute(&db)
-        .await
-        .ok();
 
     tracing::info!("Database connected and migrations applied");
 
@@ -122,44 +129,91 @@ async fn main() {
         agent_rate_limits: Arc::new(Mutex::new(HashMap::new())),
     };
 
-    // Spawn backup scheduler
-    let scheduler_db = state.db.clone();
-    let scheduler_agent = state.agent.clone();
-    tokio::spawn(async move {
-        services::backup_scheduler::run(scheduler_db, scheduler_agent).await;
-    });
+    // Supervised background task spawner: monitors JoinHandle, auto-restarts on panic
+    fn spawn_supervised<F, Fut>(name: &'static str, f: F)
+    where
+        F: Fn() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        tokio::spawn(async move {
+            loop {
+                let handle = tokio::spawn(f());
+                match handle.await {
+                    Ok(()) => {
+                        tracing::warn!("Background task '{name}' exited, restarting in 10s");
+                    }
+                    Err(e) => {
+                        tracing::error!("Background task '{name}' panicked: {e}, restarting in 10s");
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            }
+        });
+    }
 
-    // Spawn server health monitor
-    let monitor_db = state.db.clone();
-    tokio::spawn(async move {
-        services::server_monitor::run(monitor_db).await;
-    });
+    // Spawn supervised background tasks
+    let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
+    spawn_supervised("backup_scheduler", move || services::backup_scheduler::run(s_db.clone(), s_agent.clone()));
 
-    // Spawn uptime monitor
-    let uptime_db = state.db.clone();
-    tokio::spawn(async move {
-        services::uptime::run(uptime_db).await;
-    });
+    let s_db = state.db.clone();
+    spawn_supervised("server_monitor", move || services::server_monitor::run(s_db.clone()));
 
-    // Spawn security scanner (weekly)
-    let scanner_db = state.db.clone();
-    let scanner_agent = state.agent.clone();
-    tokio::spawn(async move {
-        services::security_scanner::run(scanner_db, scanner_agent).await;
-    });
+    let s_db = state.db.clone();
+    spawn_supervised("uptime_monitor", move || services::uptime::run(s_db.clone()));
 
-    // Spawn alert engine
-    let alert_db = state.db.clone();
-    let alert_agent = state.agent.clone();
-    tokio::spawn(async move {
-        services::alert_engine::run(alert_db, alert_agent).await;
-    });
+    let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
+    spawn_supervised("security_scanner", move || services::security_scanner::run(s_db.clone(), s_agent.clone()));
 
-    // Spawn auto-healer
-    let healer_db = state.db.clone();
-    let healer_agent = state.agent.clone();
+    let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
+    spawn_supervised("alert_engine", move || services::alert_engine::run(s_db.clone(), s_agent.clone()));
+
+    let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
+    spawn_supervised("auto_healer", move || services::auto_healer::run(s_db.clone(), s_agent.clone()));
+
+    // Periodic cleanup of token blacklist and rate limiters (every 15 minutes)
+    let cleanup_blacklist = state.token_blacklist.clone();
+    let cleanup_login = state.login_attempts.clone();
+    let cleanup_twofa = state.twofa_attempts.clone();
+    let cleanup_webhook = state.webhook_attempts.clone();
+    let cleanup_agent_rl = state.agent_rate_limits.clone();
     tokio::spawn(async move {
-        services::auto_healer::run(healer_db, healer_agent).await;
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(900));
+        loop {
+            interval.tick().await;
+            // Clear all blacklisted tokens (JWT expiry is 2h, cleanup runs every 15m)
+            let removed = {
+                let mut bl = cleanup_blacklist.write().await;
+                let count = bl.len();
+                if count > 1000 {
+                    bl.clear();
+                    count
+                } else {
+                    0
+                }
+            };
+            if removed > 0 {
+                tracing::info!("Cleaned {removed} entries from token blacklist");
+            }
+            // Clean expired rate limit entries
+            let now = Instant::now();
+            let window_15m = std::time::Duration::from_secs(900);
+            let window_5m = std::time::Duration::from_secs(300);
+            if let Ok(mut map) = cleanup_login.lock() {
+                map.retain(|_, attempts| {
+                    attempts.retain(|t| now.duration_since(*t) < window_15m);
+                    !attempts.is_empty()
+                });
+            }
+            if let Ok(mut map) = cleanup_twofa.lock() {
+                map.retain(|_, (_, start)| now.duration_since(*start) < window_5m);
+            }
+            if let Ok(mut map) = cleanup_webhook.lock() {
+                map.retain(|_, (_, start)| now.duration_since(*start) < window_5m);
+            }
+            if let Ok(mut map) = cleanup_agent_rl.lock() {
+                map.retain(|_, (_, start)| now.duration_since(*start) < std::time::Duration::from_secs(60));
+            }
+        }
     });
 
     let app = Router::new()
