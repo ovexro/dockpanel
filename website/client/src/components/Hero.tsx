@@ -46,12 +46,13 @@ export default function Hero() {
         <div className="mx-auto mt-10 max-w-xl">
           <div className="group relative overflow-hidden rounded-xl border border-white/10 bg-surface-900/80 backdrop-blur">
             <div className="flex items-center justify-between gap-4 px-5 py-4">
-              <div className="flex items-center gap-3 overflow-x-auto">
+              <div className="flex items-center gap-3 min-w-0">
                 <span className="shrink-0 text-sm text-brand-400">$</span>
-                <code className="whitespace-nowrap text-sm text-surface-200/80">{installCmd}</code>
+                <code className="text-sm text-surface-200/80 break-all sm:whitespace-nowrap">{installCmd}</code>
               </div>
               <button
                 onClick={copyCommand}
+                aria-label="Copy install command to clipboard"
                 className="shrink-0 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-surface-200/70 transition hover:bg-white/10 hover:text-white"
               >
                 {copied ? 'Copied!' : 'Copy'}
@@ -151,25 +152,21 @@ export default function Hero() {
                 <div className="mb-4 text-sm font-semibold text-white/90">Dashboard</div>
                 <div className="grid grid-cols-3 gap-2.5">
                   {[
-                    { label: 'Active Sites', value: '12', sub: 'All healthy', color: 'emerald' as const },
-                    { label: 'SSL Certs', value: '12', sub: 'Auto-renew', color: 'emerald' as const },
-                    { label: 'Databases', value: '8', sub: '2.1 GB used', color: 'blue' as const },
-                    { label: 'Docker Apps', value: '5', sub: 'All running', color: 'emerald' as const },
-                    { label: 'Backups', value: '47', sub: 'Last: 2h ago', color: 'blue' as const },
-                    { label: 'CPU / RAM', value: '3%', sub: '12 MB used', color: 'emerald' as const },
-                  ].map(({ label, value, sub, color }) => (
+                    { label: 'Active Sites', value: '12', sub: 'All healthy' },
+                    { label: 'SSL Certs', value: '12', sub: 'Auto-renew' },
+                    { label: 'Databases', value: '8', sub: '2.1 GB used' },
+                    { label: 'Docker Apps', value: '5', sub: 'All running' },
+                    { label: 'Backups', value: '47', sub: 'Last: 2h ago' },
+                    { label: 'CPU / RAM', value: '3%', sub: '12 MB used' },
+                  ].map(({ label, value, sub }) => (
                     <div
                       key={label}
                       className="rounded-lg border border-white/[0.04] bg-white/[0.025] p-2.5 md:p-3"
                     >
                       <div className="text-[10px] uppercase tracking-wider text-surface-200/25">{label}</div>
                       <div className="mt-1 text-xl font-bold text-white">{value}</div>
-                      <div className={`mt-1 flex items-center gap-1 text-[10px] ${
-                        color === 'emerald' ? 'text-emerald-400/70' : 'text-brand-300/70'
-                      }`}>
-                        <span className={`inline-block h-1.5 w-1.5 rounded-full ${
-                          color === 'emerald' ? 'bg-emerald-400' : 'bg-brand-400'
-                        }`} />
+                      <div className="mt-1 flex items-center gap-1 text-[10px] text-brand-300/70">
+                        <span className="inline-block h-1.5 w-1.5 rounded-full bg-brand-400" />
                         {sub}
                       </div>
                     </div>

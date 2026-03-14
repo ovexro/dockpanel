@@ -3,7 +3,7 @@ const steps = [
     step: '01',
     title: 'Install with one command',
     description: 'Run the install script on any fresh VPS. DockPanel detects your OS, installs Docker if needed, and sets everything up automatically.',
-    code: 'curl -sL https://dockpanel.dev/install.sh | sh',
+    code: 'curl -sL https://dockpanel.dev/install.sh | sudo bash',
     isTerminal: true,
   },
   {
