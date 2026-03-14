@@ -111,7 +111,7 @@ export default function Diagnostics() {
 
       {/* Summary Cards */}
       {report && (
-        <div className="grid grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
           <button
             onClick={() => setFilter("all")}
             className={`p-4 rounded-lg border transition-colors ${filter === "all" ? "border-rust-500 bg-dark-800" : "border-dark-500 bg-dark-900 hover:bg-dark-800"}`}

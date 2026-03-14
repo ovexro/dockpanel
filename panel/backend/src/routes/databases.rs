@@ -116,6 +116,29 @@ pub async fn create(
     let password = uuid::Uuid::new_v4().to_string().replace('-', "");
     let port = find_available_port(&state, engine).await?;
 
+    // Insert DB record first to atomically claim the port (unique index prevents races).
+    // container_id is empty until the agent creates it.
+    let db_record: Database = sqlx::query_as(
+        "INSERT INTO databases (site_id, name, engine, db_user, db_password_enc, container_id, port) \
+         VALUES ($1, $2, $3, $4, $5, '', $6) \
+         RETURNING id, site_id, name, engine, db_user, container_id, port, created_at",
+    )
+    .bind(body.site_id)
+    .bind(&body.name)
+    .bind(engine)
+    .bind(&body.name)
+    .bind(&password)
+    .bind(port)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| {
+        if e.to_string().contains("unique") || e.to_string().contains("duplicate") {
+            err(StatusCode::CONFLICT, "Port or database name conflict, please retry")
+        } else {
+            err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+        }
+    })?;
+
     // Call agent to create container
     let agent_body = serde_json::json!({
         "name": body.name,
@@ -124,11 +147,17 @@ pub async fn create(
         "port": port,
     });
 
-    let result = state
-        .agent
-        .post("/databases", Some(agent_body))
-        .await
-        .map_err(|e| agent_error("Database creation", e))?;
+    let result = match state.agent.post("/databases", Some(agent_body)).await {
+        Ok(r) => r,
+        Err(e) => {
+            // Clean up the DB record if agent fails
+            let _ = sqlx::query("DELETE FROM databases WHERE id = $1")
+                .bind(db_record.id)
+                .execute(&state.db)
+                .await;
+            return Err(agent_error("Database creation", e));
+        }
+    };
 
     let container_id = result
         .get("container_id")
@@ -136,22 +165,13 @@ pub async fn create(
         .unwrap_or("")
         .to_string();
 
-    // Encrypt password (store as-is for now, proper encryption later)
-    let db_record: Database = sqlx::query_as(
-        "INSERT INTO databases (site_id, name, engine, db_user, db_password_enc, container_id, port) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7) \
-         RETURNING id, site_id, name, engine, db_user, container_id, port, created_at",
-    )
-    .bind(body.site_id)
-    .bind(&body.name)
-    .bind(engine)
-    .bind(&body.name)
-    .bind(&password)
-    .bind(&container_id)
-    .bind(port)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    // Update with the actual container_id
+    sqlx::query("UPDATE databases SET container_id = $1 WHERE id = $2")
+        .bind(&container_id)
+        .bind(db_record.id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     tracing::info!("Database created: {} ({}, port {})", body.name, engine, port);
 

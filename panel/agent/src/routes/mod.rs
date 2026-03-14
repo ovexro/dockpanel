@@ -26,13 +26,18 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use bollard::Docker;
 use std::sync::Arc;
+use sysinfo::System;
 use tera::Tera;
+use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub struct AppState {
     pub token: String,
     pub templates: Arc<Tera>,
+    pub system: Arc<Mutex<System>>,
+    pub docker: Docker,
 }
 
 /// Validate a domain name format (shared across route modules).

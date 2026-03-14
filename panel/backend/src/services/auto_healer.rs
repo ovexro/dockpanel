@@ -209,7 +209,7 @@ async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
 
         let result = agent
             .post(
-                &format!("/ssl/renew"),
+                "/ssl/renew",
                 Some(serde_json::json!({ "domain": domain })),
             )
             .await;

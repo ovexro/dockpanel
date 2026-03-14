@@ -309,7 +309,7 @@ pub async fn run_now(
     ).await;
 
     Ok(Json(serde_json::json!({
-        "success": success,
+        "ok": success,
         "output": output,
         "status": status_str,
     })))

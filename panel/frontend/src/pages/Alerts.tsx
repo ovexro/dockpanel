@@ -106,7 +106,7 @@ export default function Alerts() {
   return (
     <div className="p-6 max-w-6xl mx-auto">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-xl font-semibold text-dark-50">Alerts</h1>
+        <h1 className="text-2xl font-bold text-dark-50">Alerts</h1>
         <button
           onClick={fetchAlerts}
           className="px-3 py-1.5 bg-dark-700 text-dark-200 rounded-lg text-sm hover:bg-dark-600"
@@ -116,7 +116,7 @@ export default function Alerts() {
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <div
           className={`p-4 rounded-xl border cursor-pointer transition-colors ${
             statusFilter === "firing"

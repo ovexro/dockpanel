@@ -137,7 +137,7 @@ export default function SiteDetail() {
     <div className="p-6 lg:p-8">
       {/* Breadcrumb */}
       <div className="mb-6">
-        <Link to="/sites" className="text-sm text-dark-200 hover:text-gray-700">
+        <Link to="/sites" className="text-sm text-dark-200 hover:text-dark-100">
           Sites
         </Link>
         <span className="text-sm text-dark-300 mx-2">/</span>
@@ -170,7 +170,7 @@ export default function SiteDetail() {
               </button>
               <button
                 onClick={() => setConfirmDelete(false)}
-                className="px-3 py-1.5 bg-dark-600 text-dark-100 rounded-lg text-sm hover:bg-gray-300"
+                className="px-3 py-1.5 bg-dark-600 text-dark-100 rounded-lg text-sm hover:bg-dark-500"
               >
                 Cancel
               </button>
@@ -178,7 +178,7 @@ export default function SiteDetail() {
           ) : (
             <button
               onClick={handleDelete}
-              className="px-4 py-2 bg-red-500/10 text-red-400 rounded-lg text-sm font-medium hover:bg-red-100 transition-colors"
+              className="px-4 py-2 bg-red-500/10 text-red-400 rounded-lg text-sm font-medium hover:bg-red-500/20 transition-colors"
             >
               Delete Site
             </button>
@@ -310,7 +310,7 @@ export default function SiteDetail() {
           className="bg-dark-800 rounded-xl border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-amber-50 rounded-lg text-amber-600 group-hover:bg-amber-100 transition-colors">
+            <div className="p-2 bg-amber-500/10 rounded-lg text-amber-400 group-hover:bg-amber-500/20 transition-colors">
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-8.69-6.44-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v12a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9a2.25 2.25 0 0 0-2.25-2.25h-5.379a1.5 1.5 0 0 1-1.06-.44Z" />
               </svg>
@@ -326,7 +326,7 @@ export default function SiteDetail() {
           className="bg-dark-800 rounded-xl border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-slate-100 rounded-lg text-slate-600 group-hover:bg-slate-200 transition-colors">
+            <div className="p-2 bg-slate-500/10 rounded-lg text-slate-400 group-hover:bg-slate-500/20 transition-colors">
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="m6.75 7.5 3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0 0 21 18V6a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 6v12a2.25 2.25 0 0 0 2.25 2.25Z" />
               </svg>
@@ -358,7 +358,7 @@ export default function SiteDetail() {
           className="bg-dark-800 rounded-xl border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-violet-50 rounded-lg text-violet-600 group-hover:bg-violet-100 transition-colors">
+            <div className="p-2 bg-violet-500/10 rounded-lg text-violet-400 group-hover:bg-violet-500/20 transition-colors">
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
               </svg>
@@ -374,7 +374,7 @@ export default function SiteDetail() {
           className="bg-dark-800 rounded-xl border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-emerald-50 rounded-lg text-emerald-600 group-hover:bg-emerald-100 transition-colors">
+            <div className="p-2 bg-emerald-500/10 rounded-lg text-emerald-400 group-hover:bg-emerald-500/20 transition-colors">
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75 22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3-4.5 16.5" />
               </svg>
@@ -390,7 +390,7 @@ export default function SiteDetail() {
           className="bg-dark-800 rounded-xl border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-50 rounded-lg text-blue-600 group-hover:bg-blue-100 transition-colors">
+            <div className="p-2 bg-blue-500/10 rounded-lg text-blue-400 group-hover:bg-blue-500/20 transition-colors">
               <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12 2C6.486 2 2 6.486 2 12s4.486 10 10 10 10-4.486 10-10S17.514 2 12 2zm0 2c1.67 0 3.214.52 4.488 1.401L5.401 16.488A7.957 7.957 0 0 1 4 12c0-4.411 3.589-8 8-8zm0 16c-1.67 0-3.214-.52-4.488-1.401L18.599 7.512A7.957 7.957 0 0 1 20 12c0 4.411-3.589 8-8 8z" />
               </svg>
@@ -612,13 +612,13 @@ export default function SiteDetail() {
                   </button>
                   <Link
                     to={`/sites/${staging.site.id}/files`}
-                    className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-gray-200 transition-colors"
+                    className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600 transition-colors"
                   >
                     Files
                   </Link>
                   <Link
                     to={`/terminal?site=${staging.site.id}`}
-                    className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-gray-200 transition-colors"
+                    className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600 transition-colors"
                   >
                     Terminal
                   </Link>
@@ -639,7 +639,7 @@ export default function SiteDetail() {
                         setStagingLoading(false);
                       }
                     }}
-                    className="px-3 py-1.5 bg-red-500/10 text-red-400 rounded-lg text-xs font-medium hover:bg-red-100 transition-colors"
+                    className="px-3 py-1.5 bg-red-500/10 text-red-400 rounded-lg text-xs font-medium hover:bg-red-500/20 transition-colors"
                   >
                     Delete Staging
                   </button>
@@ -694,7 +694,7 @@ export default function SiteDetail() {
                     </button>
                     <button
                       onClick={() => setShowStagingForm(false)}
-                      className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors"
+                      className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 transition-colors"
                     >
                       Cancel
                     </button>
@@ -722,7 +722,7 @@ export default function SiteDetail() {
       {sslMessage && (
         <div className={`mt-4 px-4 py-3 rounded-lg text-sm ${
           sslMessage.includes("success")
-            ? "bg-emerald-50 text-emerald-400 border border-emerald-200"
+            ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
             : "bg-red-500/10 text-red-400 border border-red-500/20"
         }`}>
           {sslMessage}

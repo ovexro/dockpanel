@@ -22,7 +22,7 @@ interface Team {
 
 const roleColors: Record<string, string> = {
   owner: "bg-rust-500/15 text-rust-600",
-  admin: "bg-violet-100 text-violet-700",
+  admin: "bg-violet-500/15 text-violet-400",
   developer: "bg-emerald-500/15 text-emerald-400",
   viewer: "bg-dark-700 text-dark-200",
 };
@@ -165,7 +165,7 @@ export default function Teams() {
         </div>
       )}
       {success && (
-        <div className="bg-emerald-50 text-emerald-400 text-sm px-4 py-3 rounded-lg border border-emerald-200 mb-4">
+        <div className="bg-emerald-500/10 text-emerald-400 text-sm px-4 py-3 rounded-lg border border-emerald-500/20 mb-4">
           {success}
           <button onClick={() => setSuccess("")} className="ml-2 font-medium hover:underline">Dismiss</button>
         </div>
@@ -182,14 +182,14 @@ export default function Teams() {
             <button type="submit" disabled={submitting} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50">
               {submitting ? "Creating..." : "Create"}
             </button>
-            <button type="button" onClick={() => setShowCreate(false)} className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-gray-200">Cancel</button>
+            <button type="button" onClick={() => setShowCreate(false)} className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600">Cancel</button>
           </div>
         </form>
       )}
 
       {teams.length === 0 ? (
         <div className="bg-dark-800 rounded-xl border border-dark-500 p-12 text-center">
-          <svg className="w-12 h-12 text-gray-300 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+          <svg className="w-12 h-12 text-dark-400 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 0 0 3.741-.479 3 3 0 0 0-4.682-2.72m.94 3.198.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0 1 12 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 0 1 6 18.719m12 0a5.971 5.971 0 0 0-.941-3.197m0 0A5.995 5.995 0 0 0 12 12.75a5.995 5.995 0 0 0-5.058 2.772m0 0a3 3 0 0 0-4.681 2.72 8.986 8.986 0 0 0 3.74.477m.94-3.197a5.971 5.971 0 0 0-.94 3.197M15 6.75a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm6 3a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Zm-13.5 0a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Z" />
           </svg>
           <p className="text-dark-200 text-sm">No teams yet. Create one to start collaborating.</p>
@@ -207,7 +207,7 @@ export default function Teams() {
                   {t.is_owner && (
                     <button
                       onClick={() => setInviteTeamId(inviteTeamId === t.id ? null : t.id)}
-                      className="px-3 py-1.5 bg-rust-500/10 text-rust-600 rounded-lg text-xs font-medium hover:bg-indigo-100"
+                      className="px-3 py-1.5 bg-rust-500/10 text-rust-600 rounded-lg text-xs font-medium hover:bg-rust-500/20"
                     >
                       Invite
                     </button>

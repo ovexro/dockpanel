@@ -2,8 +2,12 @@ mod routes;
 mod services;
 
 use axum::{middleware, Router};
+use bollard::Docker;
 use std::path::Path;
+use std::sync::Arc;
+use sysinfo::System;
 use tokio::net::UnixListener;
+use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
 
 const SOCKET_PATH: &str = "/var/run/dockpanel/agent.sock";
@@ -55,10 +59,20 @@ async fn main() {
     // Initialize Tera templates
     let templates = services::nginx::init_templates();
 
+    // Initialize cached System instance (refreshed per request instead of rebuilt)
+    let mut sys = System::new_all();
+    sys.refresh_all();
+
+    // Initialize shared Docker client
+    let docker = Docker::connect_with_local_defaults()
+        .expect("Failed to connect to Docker daemon");
+
     // Build shared state
     let state = routes::AppState {
         token,
         templates,
+        system: Arc::new(Mutex::new(sys)),
+        docker,
     };
 
     // Build router with auth middleware
