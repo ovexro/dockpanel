@@ -62,7 +62,7 @@ export default function Sites() {
   return (
     <div className="p-6 lg:p-8">
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
-        <h1 className="text-2xl font-bold text-dark-50">Sites</h1>
+        <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Sites</h1>
         <button
           onClick={() => setShowForm(!showForm)}
           className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
@@ -178,11 +178,11 @@ export default function Sites() {
           <table className="w-full">
             <thead>
               <tr className="border-b border-dark-500 bg-dark-900">
-                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3">Domain</th>
-                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3 hidden sm:table-cell">Runtime</th>
-                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3">Status</th>
-                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3 hidden md:table-cell">SSL</th>
-                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3 hidden lg:table-cell">Created</th>
+                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-widest font-mono px-5 py-3">Domain</th>
+                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-widest font-mono px-5 py-3 hidden sm:table-cell">Runtime</th>
+                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-widest font-mono px-5 py-3">Status</th>
+                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-widest font-mono px-5 py-3 hidden md:table-cell">SSL</th>
+                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-widest font-mono px-5 py-3 hidden lg:table-cell">Created</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-dark-600">

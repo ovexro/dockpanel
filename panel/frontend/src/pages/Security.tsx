@@ -221,7 +221,7 @@ export default function Security() {
   if (loading) {
     return (
       <div className="p-6 lg:p-8">
-        <h1 className="text-2xl font-bold text-dark-50 mb-6">Security</h1>
+        <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest mb-6">Security</h1>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {[...Array(4)].map((_, i) => (
             <div key={i} className="bg-dark-800 rounded-lg border border-dark-500 p-5 animate-pulse">
@@ -237,7 +237,7 @@ export default function Security() {
   return (
     <div className="p-6 lg:p-8">
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
-        <h1 className="text-2xl font-bold text-dark-50">Security</h1>
+        <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Security</h1>
         <button
           onClick={handleScan}
           disabled={scanning}
@@ -298,7 +298,7 @@ export default function Security() {
                       <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />
                     </svg>
                   </div>
-                  <p className="text-sm font-medium text-dark-200">Security Score</p>
+                  <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Security Score</p>
                 </div>
                 <div className="flex items-end gap-1 mt-2">
                   <span className={`text-3xl font-bold ${scoreColor(posture.score)}`}>{posture.score}</span>
@@ -321,7 +321,7 @@ export default function Security() {
                         <path strokeLinecap="round" strokeLinejoin="round" d="M12 18a3.75 3.75 0 0 0 .495-7.468 5.99 5.99 0 0 0-1.925 3.547 5.975 5.975 0 0 1-2.133-1.001A3.75 3.75 0 0 0 12 18Z" />
                       </svg>
                     </div>
-                    <p className="text-sm font-medium text-dark-200">Firewall</p>
+                    <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Firewall</p>
                   </div>
                   <div className="flex items-center gap-2 mt-2">
                     <div className={`w-3 h-3 rounded-full ${overview.firewall_active ? "bg-emerald-500" : "bg-red-500"}`} />
@@ -339,7 +339,7 @@ export default function Security() {
                         <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 18.364A9 9 0 0 0 5.636 5.636m12.728 12.728A9 9 0 0 1 5.636 5.636m12.728 12.728L5.636 5.636" />
                       </svg>
                     </div>
-                    <p className="text-sm font-medium text-dark-200">Fail2Ban</p>
+                    <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Fail2Ban</p>
                   </div>
                   <div className="flex items-center gap-2 mt-2">
                     <div className={`w-3 h-3 rounded-full ${overview.fail2ban_running ? "bg-emerald-500" : "bg-gray-300"}`} />
@@ -357,7 +357,7 @@ export default function Security() {
                         <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 0 1 3 3m3 0a6 6 0 0 1-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25Z" />
                       </svg>
                     </div>
-                    <p className="text-sm font-medium text-dark-200">SSH</p>
+                    <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">SSH</p>
                   </div>
                   <p className="text-lg font-bold text-dark-50 mt-2">Port <span className="font-mono">{overview.ssh_port}</span></p>
                   <p className="text-xs mt-1">
@@ -374,7 +374,7 @@ export default function Security() {
                         <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
                       </svg>
                     </div>
-                    <p className="text-sm font-medium text-dark-200">SSL Certs</p>
+                    <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">SSL Certs</p>
                   </div>
                   <p className="text-3xl font-bold text-dark-50 mt-2">{overview.ssl_certs_count}</p>
                   <p className="text-xs text-dark-300 mt-1">Active certificates</p>
@@ -387,7 +387,7 @@ export default function Security() {
           {posture?.latest_scan && posture.latest_scan.findings_count > 0 && (
             <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mb-6">
               <div className="px-5 py-3 border-b border-dark-600 flex items-center justify-between">
-                <h3 className="text-sm font-medium text-dark-50">Latest Scan Findings</h3>
+                <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Latest Scan Findings</h3>
                 <span className="text-xs text-dark-300 font-mono">
                   {new Date(posture.latest_scan.completed_at || posture.latest_scan.started_at).toLocaleString()}
                 </span>
@@ -418,7 +418,7 @@ export default function Security() {
             {/* Firewall Rules */}
             <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
               <div className="px-5 py-3 border-b border-dark-600 flex items-center justify-between">
-                <h3 className="text-sm font-medium text-dark-50">Firewall Rules</h3>
+                <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Firewall Rules</h3>
                 <button
                   onClick={() => setShowAddRule(true)}
                   className="px-3 py-1 bg-rust-500 text-white rounded-md text-xs font-medium hover:bg-rust-600"
@@ -430,11 +430,11 @@ export default function Security() {
                 <table className="w-full">
                   <thead>
                     <tr className="bg-dark-900">
-                      <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-2">#</th>
-                      <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-2">To</th>
-                      <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-2">Action</th>
-                      <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-2">From</th>
-                      <th scope="col" className="text-right text-xs font-medium text-dark-200 uppercase px-5 py-2 w-16"></th>
+                      <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">#</th>
+                      <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">To</th>
+                      <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Action</th>
+                      <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">From</th>
+                      <th scope="col" className="text-right text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2 w-16"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-dark-600">
@@ -476,14 +476,14 @@ export default function Security() {
             {/* Fail2Ban Jails */}
             <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
               <div className="px-5 py-3 border-b border-dark-600">
-                <h3 className="text-sm font-medium text-dark-50">Fail2Ban Jails</h3>
+                <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Fail2Ban Jails</h3>
               </div>
               {fail2ban && fail2ban.jails.length > 0 ? (
                 <table className="w-full">
                   <thead>
                     <tr className="bg-dark-900">
-                      <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-2">Jail</th>
-                      <th scope="col" className="text-right text-xs font-medium text-dark-200 uppercase px-5 py-2">Banned</th>
+                      <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Jail</th>
+                      <th scope="col" className="text-right text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Banned</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-dark-600">
@@ -607,7 +607,7 @@ export default function Security() {
       {showAddRule && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onKeyDown={(e) => { if (e.key === "Escape") setShowAddRule(false); }}>
           <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-96" role="dialog" aria-labelledby="add-rule-title">
-            <h3 id="add-rule-title" className="text-lg font-semibold text-dark-50 mb-4">Add Firewall Rule</h3>
+            <h3 id="add-rule-title" className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-4">Add Firewall Rule</h3>
             <div className="space-y-3">
               <div>
                 <label htmlFor="rule-port" className="block text-sm font-medium text-dark-100 mb-1">Port</label>

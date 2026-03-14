@@ -147,8 +147,8 @@ export default function Teams() {
     <div className="p-6 lg:p-8">
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
         <div>
-          <h1 className="text-2xl font-bold text-dark-50">Teams</h1>
-          <p className="text-sm text-dark-200 mt-1">Collaborate with your team</p>
+          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Teams</h1>
+          <p className="text-sm text-dark-200 font-mono mt-1">Collaborate with your team</p>
         </div>
         <button
           onClick={() => setShowCreate(!showCreate)}
@@ -173,7 +173,7 @@ export default function Teams() {
 
       {showCreate && (
         <form onSubmit={handleCreate} className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6">
-          <h3 className="text-sm font-semibold text-dark-50 mb-3">New Team</h3>
+          <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-3">New Team</h3>
           <div className="flex items-end gap-3">
             <div className="flex-1">
               <label htmlFor="team-name" className="block text-xs font-medium text-dark-200 mb-1">Team Name</label>
@@ -200,7 +200,7 @@ export default function Teams() {
             <div key={t.id} className="bg-dark-800 rounded-lg border border-dark-500 p-5">
               <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h3 className="text-sm font-semibold text-dark-50">{t.name}</h3>
+                  <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">{t.name}</h3>
                   <p className="text-xs text-dark-300 mt-0.5">{t.members.length} member{t.members.length !== 1 ? "s" : ""} · Created {formatDate(t.created_at)}</p>
                 </div>
                 <div className="flex items-center gap-2">

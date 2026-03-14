@@ -441,8 +441,8 @@ export default function Apps() {
     <div className="p-6 lg:p-8">
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
         <div>
-          <h1 className="text-2xl font-bold text-dark-50">Docker Apps</h1>
-          <p className="text-sm text-dark-200 mt-1">
+          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Docker Apps</h1>
+          <p className="text-sm text-dark-200 font-mono mt-1">
             One-click deploy popular applications
           </p>
         </div>
@@ -472,20 +472,20 @@ export default function Apps() {
       {/* Deployed Apps */}
       {apps.length > 0 && (
         <div className="mb-8">
-          <h2 className="text-sm font-medium text-dark-200 uppercase mb-3">
+          <h2 className="text-sm font-medium text-dark-200 uppercase font-mono tracking-widest mb-3">
             Running Apps
           </h2>
           <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
             <table className="w-full">
               <thead>
                 <tr className="bg-dark-900 border-b border-dark-500">
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3">App</th>
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 hidden sm:table-cell">Template</th>
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 hidden md:table-cell">Domain</th>
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 hidden sm:table-cell w-20">Port</th>
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 hidden lg:table-cell w-24">Health</th>
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 w-24">Status</th>
-                  <th scope="col" className="text-right text-xs font-medium text-dark-200 uppercase px-5 py-3">Actions</th>
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3">App</th>
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 hidden sm:table-cell">Template</th>
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 hidden md:table-cell">Domain</th>
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 hidden sm:table-cell w-20">Port</th>
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 hidden lg:table-cell w-24">Health</th>
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 w-24">Status</th>
+                  <th scope="col" className="text-right text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-dark-600">
@@ -606,7 +606,7 @@ export default function Apps() {
                   <div className="flex items-center justify-between px-5 py-3 border-b border-dark-600">
                     <div className="flex items-center gap-3">
                       <svg className="w-4 h-4 text-dark-200" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                      <h3 id="logs-dialog-title" className="text-sm font-semibold text-dark-50">
+                      <h3 id="logs-dialog-title" className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">
                         {apps.find(a => a.container_id === logsTarget)?.name}
                       </h3>
                       {logAutoRefresh && (
@@ -712,7 +712,7 @@ export default function Apps() {
       )}
 
       {/* Template Gallery */}
-      <h2 className="text-sm font-medium text-dark-200 uppercase mb-3">
+      <h2 className="text-sm font-medium text-dark-200 uppercase font-mono tracking-widest mb-3">
         App Templates
       </h2>
       {loading ? (
@@ -762,7 +762,7 @@ export default function Apps() {
           onKeyDown={(e) => { if (e.key === "Escape") setSelected(null); }}
         >
           <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-[480px] max-h-[80vh] overflow-y-auto">
-            <h3 id="deploy-dialog-title" className="text-lg font-semibold text-dark-50 mb-1">
+            <h3 id="deploy-dialog-title" className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-1">
               Deploy {selected.name}
             </h3>
             <p className="text-sm text-dark-200 mb-4">{selected.description}</p>
@@ -899,7 +899,7 @@ export default function Apps() {
         >
           <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto border border-dark-500">
             <div className="flex items-center justify-between mb-4">
-              <h3 id="env-dialog-title" className="text-lg font-semibold text-dark-50">
+              <h3 id="env-dialog-title" className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">
                 Environment Variables
               </h3>
               <button onClick={() => setEnvTarget(null)} className="text-dark-300 hover:text-dark-50">
@@ -967,7 +967,7 @@ export default function Apps() {
           onKeyDown={(e) => { if (e.key === "Escape") { setShowCompose(false); setComposeParsed(null); setComposeError(""); }}}
         >
           <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-2xl max-h-[85vh] overflow-y-auto">
-            <h3 id="compose-dialog-title" className="text-lg font-semibold text-dark-50 mb-1">
+            <h3 id="compose-dialog-title" className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-1">
               Import Docker Compose
             </h3>
             <p className="text-sm text-dark-200 mb-4">

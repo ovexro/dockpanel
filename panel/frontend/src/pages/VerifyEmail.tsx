@@ -39,7 +39,7 @@ export default function VerifyEmail() {
               <rect x="18" y="18" width="10" height="10" rx="2" opacity="0.5" />
             </svg>
           </div>
-          <h1 className="text-2xl font-bold text-white">Email Verification</h1>
+          <h1 className="text-base font-bold text-rust-500 uppercase font-mono tracking-widest">DockPanel</h1>
         </div>
 
         <div className="bg-dark-800 rounded-lg border border-dark-600 p-6 space-y-4">

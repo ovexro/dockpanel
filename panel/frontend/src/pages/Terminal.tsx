@@ -171,7 +171,7 @@ export default function Terminal() {
       <div className="px-6 py-4 border-b border-dark-500 bg-dark-800 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-4">
           <div>
-            <h1 className="text-lg font-semibold text-dark-50">Terminal</h1>
+            <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Terminal</h1>
             <div className="flex items-center gap-2 mt-0.5">
               <div
                 className={`w-2 h-2 rounded-full ${

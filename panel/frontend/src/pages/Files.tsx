@@ -192,7 +192,7 @@ export default function Files() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
         <div>
-          <h1 className="text-2xl font-bold text-dark-50">File Manager</h1>
+          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">File Manager</h1>
           <p className="text-sm text-dark-200 mt-1 font-mono">{site?.domain}</p>
         </div>
         <button
@@ -248,16 +248,16 @@ export default function Files() {
             <table className="w-full">
               <thead>
                 <tr className="bg-dark-900 border-b border-dark-500">
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-4 py-3">
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-4 py-3">
                     Name
                   </th>
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-4 py-3 w-24">
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-4 py-3 w-24">
                     Size
                   </th>
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-4 py-3 w-36">
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-4 py-3 w-36">
                     Modified
                   </th>
-                  <th scope="col" className="text-right text-xs font-medium text-dark-200 uppercase px-4 py-3 w-28">
+                  <th scope="col" className="text-right text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-4 py-3 w-28">
                     Actions
                   </th>
                 </tr>
@@ -393,7 +393,7 @@ export default function Files() {
       {showCreate && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
           <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-96">
-            <h3 className="text-lg font-semibold text-dark-50 mb-4">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-4">
               Create New
             </h3>
             <div className="flex gap-2 mb-4">
@@ -452,7 +452,7 @@ export default function Files() {
       {renaming && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
           <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-96">
-            <h3 className="text-lg font-semibold text-dark-50 mb-4">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-4">
               Rename "{renaming}"
             </h3>
             <input
@@ -485,7 +485,7 @@ export default function Files() {
       {deleteTarget && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
           <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-96">
-            <h3 className="text-lg font-semibold text-dark-50 mb-2">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-2">
               Delete "{deleteTarget}"?
             </h3>
             <p className="text-sm text-dark-200 mb-4">

@@ -162,8 +162,8 @@ export default function Crons() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
         <div>
-          <h1 className="text-2xl font-bold text-dark-50">Cron Jobs</h1>
-          <p className="text-sm text-dark-200 mt-1">{site?.domain}</p>
+          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Cron Jobs</h1>
+          <p className="text-sm text-dark-200 font-mono mt-1">{site?.domain}</p>
         </div>
         <button
           onClick={() => { setShowForm(!showForm); setEditId(null); setLabel(""); setCommand(""); setSchedule("0 * * * *"); }}

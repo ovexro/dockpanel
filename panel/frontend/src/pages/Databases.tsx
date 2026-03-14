@@ -153,7 +153,7 @@ export default function Databases() {
   return (
     <div className="p-6 lg:p-8">
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
-        <h1 className="text-2xl font-bold text-dark-50">Databases</h1>
+        <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Databases</h1>
         <button
           onClick={() => setShowForm(!showForm)}
           disabled={sites.length === 0}
@@ -272,22 +272,22 @@ export default function Databases() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-dark-500 bg-dark-900">
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3">
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-widest font-mono px-5 py-3">
                     Name
                   </th>
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3">
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-widest font-mono px-5 py-3">
                     Engine
                   </th>
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3 hidden md:table-cell">
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-widest font-mono px-5 py-3 hidden md:table-cell">
                     Site
                   </th>
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3 hidden sm:table-cell">
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-widest font-mono px-5 py-3 hidden sm:table-cell">
                     Port
                   </th>
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3 hidden lg:table-cell">
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase tracking-widest font-mono px-5 py-3 hidden lg:table-cell">
                     Created
                   </th>
-                  <th scope="col" className="text-right text-xs font-medium text-dark-200 uppercase tracking-wider px-5 py-3">
+                  <th scope="col" className="text-right text-xs font-medium text-dark-200 uppercase tracking-widest font-mono px-5 py-3">
                     Actions
                   </th>
                 </tr>
@@ -362,7 +362,7 @@ export default function Databases() {
                 <div className="text-center text-dark-300 py-4">Loading credentials...</div>
               ) : credentials ? (
                 <div>
-                  <h3 className="text-sm font-semibold text-dark-50 mb-4">
+                  <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-4">
                     Connection Details
                   </h3>
 
