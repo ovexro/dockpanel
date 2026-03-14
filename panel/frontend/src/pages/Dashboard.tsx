@@ -244,179 +244,83 @@ export default function Dashboard() {
         </div>
       ) : (
         <>
-          {/* Resource cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-            {/* CPU */}
-            <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-md bg-blue-500/10 flex items-center justify-center">
-                    <svg className="w-3.5 h-3.5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h10.5a2.25 2.25 0 0 0 2.25-2.25V6.75a2.25 2.25 0 0 0-2.25-2.25H6.75A2.25 2.25 0 0 0 4.5 6.75v10.5a2.25 2.25 0 0 0 2.25 2.25Zm.75-12h9v9h-9v-9Z" /></svg>
-                  </div>
-                  <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">CPU Usage</p>
-                </div>
-                <span className="text-xs text-dark-300 font-mono">{system.cpu_count} cores</span>
+          {/* Resource Gauges — 3 column */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            <div className="border border-dark-500 bg-dark-800 p-5 flex flex-col items-center">
+              <div className="flex justify-center py-2">
+                <RingGauge pct={system.cpu_usage} size={96} strokeWidth={6} />
               </div>
-              <div className="flex justify-center py-1">
-                <RingGauge pct={system.cpu_usage} />
-              </div>
-              {system.load_avg_1 !== undefined && (
-                <p className="text-xs text-dark-300 mt-3 font-mono text-center">
-                  Load: {system.load_avg_1?.toFixed(2)} / {system.load_avg_5?.toFixed(2)} / {system.load_avg_15?.toFixed(2)}
-                </p>
-              )}
+              <p className="text-xs text-dark-300 uppercase tracking-widest mt-3">CPU Usage</p>
+              <p className="text-[11px] text-dark-400 mt-1">{system.cpu_count} cores{system.load_avg_1 !== undefined ? ` · Load ${system.load_avg_1?.toFixed(2)}` : ""}</p>
             </div>
-
-            {/* Memory */}
-            <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-md bg-purple-500/10 flex items-center justify-center">
-                    <svg className="w-3.5 h-3.5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25a2.25 2.25 0 0 1-2.25-2.25v-2.25Z" /></svg>
-                  </div>
-                  <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Memory</p>
-                </div>
-                <span className="text-xs text-dark-300 font-mono">
-                  {(system.mem_used_mb / 1024).toFixed(1)} / {(system.mem_total_mb / 1024).toFixed(1)} GB
-                </span>
+            <div className="border border-dark-500 bg-dark-800 p-5 flex flex-col items-center">
+              <div className="flex justify-center py-2">
+                <RingGauge pct={system.mem_usage_pct} size={96} strokeWidth={6} />
               </div>
-              <div className="flex justify-center py-1">
-                <RingGauge pct={system.mem_usage_pct} />
-              </div>
-              {system.swap_total_mb > 0 && (
-                <p className="text-xs text-dark-300 mt-3 font-mono text-center">
-                  Swap: {(system.swap_used_mb / 1024).toFixed(2)} / {(system.swap_total_mb / 1024).toFixed(2)} GB
-                </p>
-              )}
+              <p className="text-xs text-dark-300 uppercase tracking-widest mt-3">Memory</p>
+              <p className="text-[11px] text-dark-400 mt-1">{(system.mem_used_mb / 1024).toFixed(1)} / {(system.mem_total_mb / 1024).toFixed(1)} GB{system.swap_total_mb > 0 ? ` · Swap ${(system.swap_used_mb / 1024).toFixed(1)}G` : ""}</p>
             </div>
-
-            {/* Disk */}
-            <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-md bg-amber-500/10 flex items-center justify-center">
-                    <svg className="w-3.5 h-3.5 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 17.25v-.228a4.5 4.5 0 0 0-.12-1.03l-2.268-9.64a3.375 3.375 0 0 0-3.285-2.602H7.923a3.375 3.375 0 0 0-3.285 2.602l-2.268 9.64a4.5 4.5 0 0 0-.12 1.03v.228m19.5 0a3 3 0 0 1-3 3H5.25a3 3 0 0 1-3-3m19.5 0a3 3 0 0 0-3-3H5.25a3 3 0 0 0-3 3m16.5 0h.008v.008h-.008v-.008Zm-3 0h.008v.008h-.008v-.008Z" /></svg>
-                  </div>
-                  <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Disk</p>
-                </div>
-                <span className="text-xs text-dark-300 font-mono">
-                  {system.disk_used_gb.toFixed(0)} / {system.disk_total_gb.toFixed(0)} GB
-                </span>
+            <div className="border border-dark-500 bg-dark-800 p-5 flex flex-col items-center">
+              <div className="flex justify-center py-2">
+                <RingGauge pct={system.disk_usage_pct} size={96} strokeWidth={6} />
               </div>
-              <div className="flex justify-center py-1">
-                <RingGauge pct={system.disk_usage_pct} />
-              </div>
-              <p className="text-xs text-dark-300 mt-3 font-mono text-center">
-                {(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB free
-              </p>
+              <p className="text-xs text-dark-300 uppercase tracking-widest mt-3">Disk</p>
+              <p className="text-[11px] text-dark-400 mt-1">{system.disk_used_gb.toFixed(0)} / {system.disk_total_gb.toFixed(0)} GB · {(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB free</p>
             </div>
+          </div>
 
-            {/* Uptime */}
-            <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-md bg-rose-500/10 flex items-center justify-center">
-                  <svg className="w-4 h-4 text-rose-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                  </svg>
-                </div>
-                <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Uptime</p>
-              </div>
-              <p className="text-3xl font-bold text-dark-50 mt-2">
-                {formatUptime(system.uptime_secs)}
-              </p>
-              <p className="text-sm text-dark-300 mt-2">{system.hostname}</p>
+          {/* Status Bar */}
+          <div className="border border-dark-500 bg-dark-800 px-5 py-3 mb-6 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="text-dark-400">UPTIME</span>
+              <span className="text-dark-50">{formatUptime(system.uptime_secs)}</span>
             </div>
-
-            {/* Sites */}
-            <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-md bg-emerald-500/10 flex items-center justify-center">
-                  <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0 1 12 16.5a17.92 17.92 0 0 1-8.716-2.247m0 0A9 9 0 0 1 3 12c0-1.47.353-2.856.978-4.082" />
-                  </svg>
-                </div>
-                <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Sites</p>
-              </div>
-              <p className="text-3xl font-bold text-dark-50 mt-2">{sites.total}</p>
-              <p className="text-sm text-dark-300 mt-2">
-                {sites.active} active
-              </p>
+            <span className="text-dark-500">|</span>
+            <div className="flex items-center gap-2">
+              <span className="text-dark-400">SITES</span>
+              <span className="text-dark-50">{sites.total}</span>
+              {sites.active > 0 && <span className="text-rust-400">({sites.active} active)</span>}
             </div>
-
-            {/* Databases */}
-            <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-md bg-cyan-500/10 flex items-center justify-center">
-                  <svg className="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
-                  </svg>
-                </div>
-                <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Databases</p>
-              </div>
-              <p className="text-3xl font-bold text-dark-50 mt-2">{dbCount}</p>
-              <p className="text-sm text-dark-300 mt-2">
-                PostgreSQL / MariaDB
-              </p>
+            <span className="text-dark-500">|</span>
+            <div className="flex items-center gap-2">
+              <span className="text-dark-400">DATABASES</span>
+              <span className="text-dark-50">{dbCount}</span>
             </div>
-
-            {/* Health Score */}
             {intel && <>
-            {/* Health Score */}
-              <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
-                <div className="flex items-center gap-2.5 mb-3">
-                  <div className={`w-8 h-8 rounded-md flex items-center justify-center ${
-                    intel.health_score >= 90 ? "bg-emerald-500/10" :
-                    intel.health_score >= 75 ? "bg-blue-500/10" :
-                    intel.health_score >= 60 ? "bg-amber-500/10" : "bg-red-500/10"
-                  }`}>
-                    <svg className={`w-5 h-5 ${
-                      intel.health_score >= 90 ? "text-emerald-400" :
-                      intel.health_score >= 75 ? "text-blue-400" :
-                      intel.health_score >= 60 ? "text-amber-400" : "text-red-400"
-                    }`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733-.715-1.607-2.377-2.733-4.313-2.733C5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12Z" /></svg>
-                  </div>
-                  <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Health Score</p>
-                </div>
-                <p className={`text-4xl font-bold ${
+              <span className="text-dark-500">|</span>
+              <div className="flex items-center gap-2">
+                <span className="text-dark-400">HEALTH</span>
+                <span className={
                   intel.health_score >= 90 ? "text-emerald-400" :
                   intel.health_score >= 75 ? "text-blue-400" :
                   intel.health_score >= 60 ? "text-amber-400" : "text-red-400"
-                }`}>
-                  {intel.health_score}
-                  <span className="text-lg text-dark-400">/100</span>
-                  <span className={`text-base font-semibold ml-2 ${
-                    intel.health_score >= 90 ? "text-emerald-400/60" :
-                    intel.health_score >= 75 ? "text-blue-400/60" :
-                    intel.health_score >= 60 ? "text-amber-400/60" : "text-red-400/60"
-                  }`}>{intel.grade}</span>
-                </p>
-                <div className="flex items-center gap-4 mt-3 text-xs">
-                  {intel.firing_alerts > 0 && (
-                    <span className="text-red-400">{intel.firing_alerts} firing</span>
-                  )}
-                  {intel.acknowledged_alerts > 0 && (
-                    <span className="text-amber-400">{intel.acknowledged_alerts} ack'd</span>
-                  )}
-                  {intel.firing_alerts === 0 && intel.acknowledged_alerts === 0 && (
-                    <span className="text-emerald-400">All clear</span>
-                  )}
-                </div>
+                }>{intel.health_score}/100 {intel.grade}</span>
               </div>
+              <span className="text-dark-500">|</span>
+              <div className="flex items-center gap-2">
+                <span className="text-dark-400">ALERTS</span>
+                {intel.firing_alerts > 0
+                  ? <span className="text-red-400">{intel.firing_alerts} firing</span>
+                  : <span className="text-emerald-400">0</span>
+                }
+              </div>
+              <span className="text-dark-500">|</span>
+              <div className="flex items-center gap-2">
+                <span className="text-dark-400">SSL</span>
+                <span className="text-dark-50">{intel.ssl_countdowns.length} certs</span>
+              </div>
+            </>}
+          </div>
 
-              {/* Top Issues */}
-              <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-md bg-amber-500/10 flex items-center justify-center">
-                      <svg className="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" /></svg>
-                    </div>
-                    <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Active Issues</p>
+          {/* Active Issues + SSL — side by side */}
+          {intel && (intel.top_issues.length > 0 || intel.ssl_countdowns.length > 0) && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+              {intel.top_issues.length > 0 && (
+                <div className="border border-dark-500 bg-dark-800 p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-xs text-dark-300 uppercase tracking-widest">Active Issues</h3>
+                    <Link to="/alerts" className="text-xs text-rust-400 hover:text-rust-300">View all</Link>
                   </div>
-                  <Link to="/alerts" className="text-xs text-rust-400 hover:text-rust-300">View all</Link>
-                </div>
-                {intel.top_issues.length === 0 ? (
-                  <p className="text-sm text-dark-400 py-4 text-center">No active issues</p>
-                ) : (
                   <div className="space-y-2">
                     {intel.top_issues.slice(0, 4).map((issue, i) => (
                       <div key={i} className="flex items-start gap-2">
@@ -428,81 +332,47 @@ export default function Dashboard() {
                       </div>
                     ))}
                   </div>
-                )}
-              </div>
-
-              {/* SSL Certificates */}
-              <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
-                <div className="flex items-center gap-2.5 mb-3">
-                  <div className="w-8 h-8 rounded-md bg-blue-500/10 flex items-center justify-center">
-                    <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" /></svg>
-                  </div>
-                  <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">SSL Certificates</p>
                 </div>
-                {intel.ssl_countdowns.length === 0 ? (
-                  <p className="text-sm text-dark-400 py-4 text-center">No SSL certificates</p>
-                ) : (
+              )}
+              {intel.ssl_countdowns.length > 0 && (
+                <div className="border border-dark-500 bg-dark-800 p-4">
+                  <h3 className="text-xs text-dark-300 uppercase tracking-widest mb-3">SSL Certificates</h3>
                   <div className="space-y-2">
                     {intel.ssl_countdowns.map((ssl, i) => (
                       <div key={i} className="flex items-center justify-between">
-                        <span className="text-xs text-dark-100 truncate max-w-[140px] font-mono">{ssl.domain}</span>
-                        <span className={`text-xs font-medium ${
+                        <span className="text-xs text-dark-100 truncate max-w-[200px]">{ssl.domain}</span>
+                        <span className={`text-xs ${
                           ssl.severity === "critical" ? "text-red-400" :
                           ssl.severity === "warning" ? "text-amber-400" :
                           ssl.severity === "info" ? "text-blue-400" : "text-emerald-400"
-                        }`}>
-                          <span className="font-mono">{ssl.days_left}d</span> left
-                        </span>
+                        }`}>{ssl.days_left}d left</span>
                       </div>
                     ))}
                   </div>
-                )}
-              </div>
-            </>}
-          </div>
-
-          {/* System Information */}
-          <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mb-6">
-            <div className="px-5 py-3 border-b border-dark-600">
-              <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">System Information</h3>
+                </div>
+              )}
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 divide-y md:divide-y-0 divide-dark-600">
-              {/* Hostname */}
-              <div className="flex items-center justify-between md:border-r md:border-dark-600 px-5 py-3">
-                <span className="text-sm text-dark-300">Hostname</span>
-                <span className="text-sm text-dark-50 font-mono">{system.hostname}</span>
-              </div>
-              {/* OS */}
-              <div className="flex items-center justify-between md:border-r xl:border-r md:border-dark-600 px-5 py-3">
-                <span className="text-sm text-dark-300">Operating System</span>
-                <span className="text-sm text-dark-50">{system.os}</span>
-              </div>
-              {/* Kernel */}
-              <div className="flex items-center justify-between px-5 py-3">
-                <span className="text-sm text-dark-300">Kernel</span>
-                <span className="text-sm text-dark-50 font-mono">{system.kernel}</span>
-              </div>
-              {/* CPU */}
-              <div className="flex items-center justify-between md:border-r md:border-t md:border-dark-600 px-5 py-3">
-                <span className="text-sm text-dark-300">Processor</span>
-                <span className="text-sm text-dark-50">{system.cpu_model}, {system.cpu_count} cores</span>
-              </div>
-              {/* CPU Temp */}
-              <div className="flex items-center justify-between md:border-r xl:border-r md:border-t md:border-dark-600 px-5 py-3">
-                <span className="text-sm text-dark-300">CPU Temperature</span>
-                {system.cpu_temp != null ? (
-                  <span className={`text-sm font-medium ${tempColor(system.cpu_temp)}`}>
-                    {system.cpu_temp.toFixed(0)}°C
-                  </span>
-                ) : (
-                  <span className="text-sm text-dark-400">N/A</span>
-                )}
-              </div>
-              {/* Processes */}
-              <div className="flex items-center justify-between md:border-t md:border-dark-600 px-5 py-3">
-                <span className="text-sm text-dark-300">Running Processes</span>
-                <span className="text-sm text-dark-50 font-mono">{system.process_count.toLocaleString()}</span>
-              </div>
+          )}
+
+          {/* System Information — neofetch style */}
+          <div className="border border-dark-500 bg-dark-800 p-5 mb-6">
+            <h3 className="text-xs text-dark-300 uppercase tracking-widest mb-4">System Information</h3>
+            <div className="space-y-1.5 text-sm">
+              {[
+                ["Hostname", system.hostname],
+                ["OS", system.os],
+                ["Kernel", system.kernel],
+                ["Processor", `${system.cpu_model}, ${system.cpu_count} cores`],
+                ["Temperature", system.cpu_temp != null ? `${system.cpu_temp.toFixed(0)}°C` : "N/A"],
+                ["Processes", system.process_count.toLocaleString()],
+              ].map(([label, value]) => (
+                <div key={label} className="flex items-baseline gap-2">
+                  <span className="text-rust-400">{">"}</span>
+                  <span className="text-dark-300 w-28 shrink-0">{label}</span>
+                  <span className="text-dark-500 flex-1 border-b border-dotted border-dark-500 mx-1 mb-1" />
+                  <span className={`text-dark-50 shrink-0 ${label === "Temperature" && system.cpu_temp != null ? tempColor(system.cpu_temp) : ""}`}>{value}</span>
+                </div>
+              ))}
             </div>
           </div>
 
