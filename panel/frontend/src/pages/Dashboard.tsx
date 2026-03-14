@@ -249,7 +249,12 @@ export default function Dashboard() {
             {/* CPU */}
             <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
               <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">CPU Usage</p>
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-md bg-blue-500/10 flex items-center justify-center">
+                    <svg className="w-3.5 h-3.5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h10.5a2.25 2.25 0 0 0 2.25-2.25V6.75a2.25 2.25 0 0 0-2.25-2.25H6.75A2.25 2.25 0 0 0 4.5 6.75v10.5a2.25 2.25 0 0 0 2.25 2.25Zm.75-12h9v9h-9v-9Z" /></svg>
+                  </div>
+                  <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">CPU Usage</p>
+                </div>
                 <span className="text-xs text-dark-300 font-mono">{system.cpu_count} cores</span>
               </div>
               <div className="flex justify-center py-1">
@@ -265,7 +270,12 @@ export default function Dashboard() {
             {/* Memory */}
             <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
               <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Memory</p>
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-md bg-purple-500/10 flex items-center justify-center">
+                    <svg className="w-3.5 h-3.5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25a2.25 2.25 0 0 1-2.25-2.25v-2.25Z" /></svg>
+                  </div>
+                  <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Memory</p>
+                </div>
                 <span className="text-xs text-dark-300 font-mono">
                   {(system.mem_used_mb / 1024).toFixed(1)} / {(system.mem_total_mb / 1024).toFixed(1)} GB
                 </span>
@@ -283,7 +293,12 @@ export default function Dashboard() {
             {/* Disk */}
             <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
               <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Disk</p>
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-md bg-amber-500/10 flex items-center justify-center">
+                    <svg className="w-3.5 h-3.5 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 17.25v-.228a4.5 4.5 0 0 0-.12-1.03l-2.268-9.64a3.375 3.375 0 0 0-3.285-2.602H7.923a3.375 3.375 0 0 0-3.285 2.602l-2.268 9.64a4.5 4.5 0 0 0-.12 1.03v.228m19.5 0a3 3 0 0 1-3 3H5.25a3 3 0 0 1-3-3m19.5 0a3 3 0 0 0-3-3H5.25a3 3 0 0 0-3 3m16.5 0h.008v.008h-.008v-.008Zm-3 0h.008v.008h-.008v-.008Z" /></svg>
+                  </div>
+                  <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Disk</p>
+                </div>
                 <span className="text-xs text-dark-300 font-mono">
                   {system.disk_used_gb.toFixed(0)} / {system.disk_total_gb.toFixed(0)} GB
                 </span>
