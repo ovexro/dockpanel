@@ -122,6 +122,9 @@ export default function CommandPalette() {
     >
       <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" />
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
         className="relative w-full max-w-lg mx-4 bg-dark-800 rounded-xl shadow-2xl border border-dark-500 overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
@@ -138,6 +141,7 @@ export default function CommandPalette() {
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Search pages, actions..."
+            aria-label="Search commands"
             className="w-full py-3.5 bg-transparent text-sm text-dark-50 placeholder-dark-300 focus:outline-none"
           />
           <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] text-dark-300 border border-dark-500 rounded bg-dark-700/50 shrink-0">

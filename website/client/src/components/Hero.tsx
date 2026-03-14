@@ -2,7 +2,7 @@ import { useState } from 'react';
 
 export default function Hero() {
   const [copied, setCopied] = useState(false);
-  const installCmd = 'curl -sL https://dockpanel.dev/install.sh | sh';
+  const installCmd = 'curl -sL https://dockpanel.dev/install.sh | sudo bash';
 
   const copyCommand = () => {
     navigator.clipboard.writeText(installCmd);
