@@ -180,8 +180,8 @@ export default function Servers() {
     <div className="p-6 lg:p-8">
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
         <div>
-          <h1 className="text-2xl font-bold text-dark-50">Servers</h1>
-          <p className="text-sm text-dark-200 mt-1">Monitor and manage your connected servers</p>
+          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Servers</h1>
+          <p className="text-sm text-dark-200 font-mono mt-1">Monitor and manage your connected servers</p>
         </div>
         <button
           onClick={() => { setShowForm(!showForm); setInstallInfo(null); }}
@@ -240,7 +240,7 @@ export default function Servers() {
       {/* Install script display */}
       {installInfo && (
         <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-5 mb-6">
-          <h3 className="text-sm font-semibold text-emerald-400 mb-2">
+          <h3 className="text-xs font-medium text-emerald-400 uppercase font-mono tracking-widest mb-2">
             Server "{installInfo.name}" created!
           </h3>
           <p className="text-sm text-emerald-400 mb-3">
@@ -264,7 +264,7 @@ export default function Servers() {
       {/* Create form */}
       {showForm && (
         <form onSubmit={handleCreate} className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6">
-          <h3 className="text-sm font-semibold text-dark-50 mb-3">Add New Server</h3>
+          <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-3">Add New Server</h3>
           <div className="flex items-end gap-3">
             <div className="flex-1">
               <label htmlFor="server-name" className="block text-xs font-medium text-dark-200 mb-1">Server Name</label>

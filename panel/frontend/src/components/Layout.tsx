@@ -148,7 +148,7 @@ export default function Layout() {
                 <rect x="18" y="18" width="10" height="10" rx="2" opacity="0.5" />
               </svg>
             </div>
-            <span className="text-lg font-semibold tracking-tight">DockPanel</span>
+            <span className="text-base font-bold tracking-widest uppercase font-mono text-rust-500">DockPanel</span>
           </div>
           {/* Close button (mobile) */}
           <button
@@ -166,7 +166,7 @@ export default function Layout() {
         <div className="px-3 pt-3 pb-1">
           <button
             onClick={() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }))}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-dark-800/30 border border-dark-600/50 text-sm text-dark-300 hover:text-dark-100 hover:border-dark-400 transition-colors"
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-dark-800/30 border border-dark-600/50 text-sm font-mono text-dark-300 hover:text-dark-100 hover:border-dark-400 transition-colors"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" /></svg>
             <span className="flex-1 text-left">Search...</span>
@@ -180,7 +180,7 @@ export default function Layout() {
             <div key={group.label} className={gi > 0 ? "pt-2 mt-1 border-t border-dark-600/40" : ""}>
               <button
                 onClick={() => toggleGroup(group.label)}
-                className="flex items-center justify-between w-full px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-dark-400 hover:text-dark-200 transition-colors"
+                className="flex items-center justify-between w-full px-3 py-1 text-[11px] font-semibold uppercase tracking-widest text-rust-500/70 hover:text-rust-400 font-mono transition-colors"
               >
                 {group.label}
                 <svg className={`w-3 h-3 transition-transform ${collapsed[group.label] ? "-rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -196,10 +196,10 @@ export default function Layout() {
                       end={item.to === "/"}
                       onClick={() => setSidebarOpen(false)}
                       className={({ isActive }) =>
-                        `flex items-center gap-3 px-3 py-1.5 transition-colors text-sm ${
+                        `flex items-center gap-3 px-3 py-1.5 transition-colors text-sm font-mono ${
                           isActive
                             ? "bg-rust-500/10 text-rust-400 border-l-2 border-rust-500"
-                            : "text-dark-200 hover:bg-dark-700/50 hover:text-dark-100 border-l-2 border-transparent"
+                            : "text-rust-400/60 hover:bg-dark-700/50 hover:text-rust-300 border-l-2 border-transparent"
                         }`
                       }
                     >
@@ -252,7 +252,7 @@ export default function Layout() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
             </svg>
           </button>
-          <span className="text-lg font-semibold text-dark-50">DockPanel</span>
+          <span className="text-base font-bold tracking-widest uppercase font-mono text-rust-500">DockPanel</span>
         </div>
         <Outlet />
       </main>

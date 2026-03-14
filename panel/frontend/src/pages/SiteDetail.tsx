@@ -147,7 +147,7 @@ export default function SiteDetail() {
       {/* Header */}
       <div className="flex items-start justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-dark-50 font-mono">{site.domain}</h1>
+          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">{site.domain}</h1>
           <div className="flex items-center gap-3 mt-2">
             <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${statusColors[site.status] || "bg-dark-700 text-dark-200"}`}>
               {site.status}
@@ -407,7 +407,7 @@ export default function SiteDetail() {
       {site.status === "active" && (
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-6">
           <div className="px-5 py-4 border-b border-dark-600">
-            <h2 className="text-sm font-semibold text-dark-50">Resource Limits</h2>
+            <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Resource Limits</h2>
           </div>
           <div className="p-5 space-y-4">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -525,7 +525,7 @@ export default function SiteDetail() {
       {site.status === "active" && !site.parent_site_id && (
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-6">
           <div className="px-5 py-4 border-b border-dark-600 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-dark-50">Staging Environment</h2>
+            <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Staging Environment</h2>
             {staging?.exists && staging.site && (
               <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${statusColors[staging.site.status] || "bg-dark-700 text-dark-200"}`}>
                 {staging.site.status}

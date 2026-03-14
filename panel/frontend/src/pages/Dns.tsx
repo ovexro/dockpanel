@@ -208,7 +208,7 @@ export default function Dns() {
   if (loading) {
     return (
       <div className="p-6 lg:p-8">
-        <h1 className="text-2xl font-bold text-dark-50 mb-6">DNS Management</h1>
+        <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest mb-6">DNS Management</h1>
         <div className="bg-dark-800 rounded-lg border border-dark-500 p-6 animate-pulse">
           <div className="h-6 bg-dark-700 rounded w-48 mb-4" />
           <div className="h-4 bg-dark-700 rounded w-32" />
@@ -221,8 +221,8 @@ export default function Dns() {
     <div className="p-6 lg:p-8">
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
         <div>
-          <h1 className="text-2xl font-bold text-dark-50">DNS Management</h1>
-          <p className="text-sm text-dark-200 mt-1">Manage DNS records via Cloudflare</p>
+          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">DNS Management</h1>
+          <p className="text-sm text-dark-200 font-mono mt-1">Manage DNS records via Cloudflare</p>
         </div>
         <button
           onClick={() => setShowAddZone(!showAddZone)}
@@ -245,7 +245,7 @@ export default function Dns() {
       {/* Add Zone Form */}
       {showAddZone && (
         <div className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6 space-y-4">
-          <h3 className="text-sm font-semibold text-dark-50">Connect Cloudflare Zone</h3>
+          <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Connect Cloudflare Zone</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-dark-100 mb-1">Domain</label>
@@ -304,7 +304,7 @@ export default function Dns() {
           <div className="md:w-56 shrink-0">
             <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
               <div className="px-4 py-3 border-b border-dark-600">
-                <h3 className="text-xs font-semibold text-dark-200 uppercase tracking-wider">Zones</h3>
+                <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Zones</h3>
               </div>
               <div className="divide-y divide-dark-600">
                 {zones.map((z) => (
@@ -434,12 +434,12 @@ export default function Dns() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-dark-900 text-left">
-                      <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase w-20">Type</th>
-                      <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase">Name</th>
-                      <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase">Content</th>
-                      <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase w-16">TTL</th>
-                      <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase w-16">Proxy</th>
-                      <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase w-20">Actions</th>
+                      <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase font-mono tracking-widest w-20">Type</th>
+                      <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase font-mono tracking-widest">Name</th>
+                      <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase font-mono tracking-widest">Content</th>
+                      <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase font-mono tracking-widest w-16">TTL</th>
+                      <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase font-mono tracking-widest w-16">Proxy</th>
+                      <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase font-mono tracking-widest w-20">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-dark-600">

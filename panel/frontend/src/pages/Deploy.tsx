@@ -162,7 +162,7 @@ export default function Deploy() {
       </div>
 
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-dark-50">Git Deploy</h1>
+        <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Git Deploy</h1>
         {config && (
           <div className="flex items-center gap-3">
             <button
@@ -196,7 +196,7 @@ export default function Deploy() {
       {/* Configuration */}
       <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
         <div className="px-5 py-4 border-b border-dark-600">
-          <h2 className="text-lg font-semibold text-dark-50">Repository</h2>
+          <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Repository</h2>
         </div>
         <div className="p-5 space-y-4">
           <div>
@@ -258,7 +258,7 @@ export default function Deploy() {
       {config && (
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-4 border-b border-dark-600">
-            <h2 className="text-lg font-semibold text-dark-50">Deploy Key</h2>
+            <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Deploy Key</h2>
             <p className="text-xs text-dark-200 mt-1">For private repos using SSH. Add this key as a deploy key in your Git provider.</p>
           </div>
           <div className="p-5">
@@ -300,7 +300,7 @@ export default function Deploy() {
       {config && config.auto_deploy && (
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-4 border-b border-dark-600">
-            <h2 className="text-lg font-semibold text-dark-50">Webhook URL</h2>
+            <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Webhook URL</h2>
             <p className="text-xs text-dark-200 mt-1">Add this URL to your Git provider's webhook settings (push events).</p>
           </div>
           <div className="p-5">
@@ -362,7 +362,7 @@ export default function Deploy() {
       {logs.length > 0 && (
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-4 border-b border-dark-600">
-            <h2 className="text-lg font-semibold text-dark-50">Deploy History</h2>
+            <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Deploy History</h2>
           </div>
           <div className="divide-y divide-dark-600">
             {logs.map((log) => (
