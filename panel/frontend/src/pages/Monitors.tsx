@@ -158,8 +158,8 @@ export default function Monitors() {
     <div className="p-6 lg:p-8">
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
         <div>
-          <h1 className="text-2xl font-bold text-dark-50">Uptime Monitors</h1>
-          <p className="text-sm text-dark-200 mt-1">
+          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Uptime Monitors</h1>
+          <p className="text-sm text-dark-200 font-mono mt-1">
             {monitors.length > 0 ? (
               <>{upCount} up, {downCount} down, {monitors.length - upCount - downCount} pending</>
             ) : (
@@ -185,7 +185,7 @@ export default function Monitors() {
       {/* Create form */}
       {showForm && (
         <form onSubmit={handleCreate} className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6">
-          <h3 className="text-sm font-semibold text-dark-50 mb-3">New Monitor</h3>
+          <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-3">New Monitor</h3>
           <div className="grid grid-cols-2 gap-4 mb-4">
             <div>
               <label className="block text-xs font-medium text-dark-200 mb-1">Name</label>

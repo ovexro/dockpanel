@@ -106,7 +106,7 @@ export default function Alerts() {
   return (
     <div className="p-6 max-w-6xl mx-auto">
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
-        <h1 className="text-2xl font-bold text-dark-50">Alerts</h1>
+        <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Alerts</h1>
         <button
           onClick={fetchAlerts}
           className="px-3 py-1.5 bg-dark-700 text-dark-200 rounded-lg text-sm hover:bg-dark-600"

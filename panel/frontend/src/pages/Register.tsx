@@ -48,7 +48,7 @@ export default function Register() {
               <rect x="18" y="18" width="10" height="10" rx="2" opacity="0.5" />
             </svg>
           </div>
-          <h1 className="text-2xl font-bold text-white">Create Account</h1>
+          <h1 className="text-base font-bold text-rust-500 uppercase font-mono tracking-widest">DockPanel</h1>
           <p className="text-dark-200 text-sm mt-1">Start managing your servers</p>
         </div>
 

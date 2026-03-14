@@ -160,7 +160,7 @@ export default function Backups() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
         <div>
-          <h1 className="text-2xl font-bold text-dark-50">Backups</h1>
+          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Backups</h1>
           <p className="text-sm text-dark-200 mt-1 font-mono">{site?.domain}</p>
         </div>
         <button
@@ -200,7 +200,7 @@ export default function Backups() {
       {/* Scheduled Backups */}
       <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mb-6">
         <div className="px-5 py-3 border-b border-dark-600 flex items-center justify-between">
-          <h3 className="text-sm font-medium text-dark-50">Scheduled Backup</h3>
+          <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Scheduled Backup</h3>
           {!showScheduleForm && (
             <button
               onClick={() => setShowScheduleForm(true)}
@@ -336,16 +336,16 @@ export default function Backups() {
           <table className="w-full">
             <thead>
               <tr className="bg-dark-900 border-b border-dark-500">
-                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3">
+                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3">
                   Filename
                 </th>
-                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 w-24">
+                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 w-24">
                   Size
                 </th>
-                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 w-40">
+                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 w-40">
                   Created
                 </th>
-                <th scope="col" className="text-right text-xs font-medium text-dark-200 uppercase px-5 py-3 w-40">
+                <th scope="col" className="text-right text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 w-40">
                   Actions
                 </th>
               </tr>

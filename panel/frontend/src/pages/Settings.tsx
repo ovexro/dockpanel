@@ -234,7 +234,7 @@ export default function Settings() {
   if (loading) {
     return (
       <div className="p-6 lg:p-8">
-        <h1 className="text-2xl font-bold text-dark-50 mb-6">Settings</h1>
+        <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest mb-6">Settings</h1>
         <div className="space-y-4">
           {[...Array(3)].map((_, i) => (
             <div key={i} className="bg-dark-800 rounded-lg border border-dark-500 p-6 animate-pulse">
@@ -250,8 +250,8 @@ export default function Settings() {
   return (
     <div className="p-6 lg:p-8">
       <div className="mb-6 pb-4 border-b border-dark-600">
-        <h1 className="text-2xl font-bold text-dark-50">Settings</h1>
-        <p className="text-sm text-dark-200 mt-1">Manage panel configuration</p>
+        <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Settings</h1>
+        <p className="text-sm text-dark-200 font-mono mt-1">Manage panel configuration</p>
       </div>
 
       {message.text && (
@@ -270,7 +270,7 @@ export default function Settings() {
         {/* General Settings */}
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600">
-            <h3 className="text-sm font-medium text-dark-50">General Settings</h3>
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">General Settings</h3>
           </div>
           <div className="p-5 space-y-4">
             <div>
@@ -299,7 +299,7 @@ export default function Settings() {
         {/* SMTP Configuration */}
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600">
-            <h3 className="text-sm font-medium text-dark-50">SMTP Configuration</h3>
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">SMTP Configuration</h3>
             <p className="text-xs text-dark-200 mt-0.5">Configure outgoing email for all sites on this server</p>
           </div>
           <div className="p-5 space-y-4">
@@ -429,7 +429,7 @@ export default function Settings() {
         {/* Backup Destinations */}
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600 flex items-center justify-between">
-            <h3 className="text-sm font-medium text-dark-50">Backup Destinations</h3>
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Backup Destinations</h3>
             <button
               onClick={() => setShowDestForm(!showDestForm)}
               className="px-3 py-1 bg-rust-500 text-white rounded-md text-xs font-medium hover:bg-rust-600"
@@ -597,7 +597,7 @@ export default function Settings() {
         {/* Two-Factor Authentication */}
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600">
-            <h3 className="text-sm font-medium text-dark-50">Two-Factor Authentication</h3>
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Two-Factor Authentication</h3>
             <p className="text-xs text-dark-200 mt-0.5">Add an extra layer of security to your account</p>
           </div>
           <div className="p-5">
@@ -730,7 +730,7 @@ export default function Settings() {
         {/* Notification Channels */}
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600">
-            <h3 className="text-sm font-medium text-dark-50">Notification Channels</h3>
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Notification Channels</h3>
             <p className="text-xs text-dark-200 mt-0.5">Where to send alert notifications</p>
           </div>
           <div className="p-5 space-y-4">
@@ -796,7 +796,7 @@ export default function Settings() {
         {/* Auto-Healing */}
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600">
-            <h3 className="text-sm font-medium text-dark-50">Auto-Healing</h3>
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Auto-Healing</h3>
             <p className="text-xs text-dark-200 mt-0.5">Automatically fix common issues when detected</p>
           </div>
           <div className="p-5 space-y-4">
@@ -840,7 +840,7 @@ export default function Settings() {
         {/* System Health */}
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600 flex items-center justify-between">
-            <h3 className="text-sm font-medium text-dark-50">System Health</h3>
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">System Health</h3>
             <button
               onClick={() => {
                 setHealthLoading(true);

@@ -164,7 +164,7 @@ export default function WordPress() {
   if (loading) {
     return (
       <div className="p-6 lg:p-8">
-        <h1 className="text-2xl font-bold text-dark-50 mb-6">WordPress</h1>
+        <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest mb-6">WordPress</h1>
         <div className="bg-dark-800 rounded-lg border border-dark-500 p-6 animate-pulse">
           <div className="h-6 bg-dark-700 rounded w-48 mb-4" />
           <div className="h-4 bg-dark-700 rounded w-32" />
@@ -186,8 +186,8 @@ export default function WordPress() {
           </svg>
         </Link>
         <div className="flex-1">
-          <h1 className="text-2xl font-bold text-dark-50">WordPress</h1>
-          <p className="text-sm text-dark-200 mt-0.5">Manage WordPress installation</p>
+          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">WordPress</h1>
+          <p className="text-sm text-dark-200 font-mono mt-0.5">Manage WordPress installation</p>
         </div>
       </div>
 
@@ -228,7 +228,7 @@ export default function WordPress() {
 
           {showInstall && (
             <div className="mt-8 pt-6 border-t border-dark-500 space-y-4">
-              <h3 className="text-sm font-semibold text-dark-50">Installation Details</h3>
+              <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Installation Details</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-medium text-dark-100 mb-1">Site URL</label>
@@ -461,19 +461,19 @@ export default function WordPress() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-dark-900 text-left">
-                    <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase">
+                    <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase font-mono tracking-widest">
                       Plugin
                     </th>
-                    <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase w-24">
+                    <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase font-mono tracking-widest w-24">
                       Version
                     </th>
-                    <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase w-24">
+                    <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase font-mono tracking-widest w-24">
                       Status
                     </th>
-                    <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase w-24">
+                    <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase font-mono tracking-widest w-24">
                       Update
                     </th>
-                    <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase w-32">
+                    <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase font-mono tracking-widest w-32">
                       Actions
                     </th>
                   </tr>
@@ -581,19 +581,19 @@ export default function WordPress() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-dark-900 text-left">
-                    <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase">
+                    <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase font-mono tracking-widest">
                       Theme
                     </th>
-                    <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase w-24">
+                    <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase font-mono tracking-widest w-24">
                       Version
                     </th>
-                    <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase w-24">
+                    <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase font-mono tracking-widest w-24">
                       Status
                     </th>
-                    <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase w-24">
+                    <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase font-mono tracking-widest w-24">
                       Update
                     </th>
-                    <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase w-32">
+                    <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase font-mono tracking-widest w-32">
                       Actions
                     </th>
                   </tr>

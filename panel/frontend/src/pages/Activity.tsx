@@ -99,8 +99,8 @@ export default function Activity() {
     <div className="p-6 lg:p-8">
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
         <div>
-          <h1 className="text-2xl font-bold text-dark-50">Activity Log</h1>
-          <p className="text-sm text-dark-200 mt-1">Track all admin actions</p>
+          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Activity Log</h1>
+          <p className="text-sm text-dark-200 font-mono mt-1">Track all admin actions</p>
         </div>
         <select
           value={filter}
@@ -142,19 +142,19 @@ export default function Activity() {
             <table className="w-full">
               <thead>
                 <tr className="bg-dark-900 border-b border-dark-500">
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 w-28">
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 w-28">
                     Time
                   </th>
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3">
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3">
                     User
                   </th>
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 w-36">
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 w-36">
                     Action
                   </th>
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 hidden md:table-cell">
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 hidden md:table-cell">
                     Target
                   </th>
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 hidden lg:table-cell">
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 hidden lg:table-cell">
                     Details
                   </th>
                 </tr>

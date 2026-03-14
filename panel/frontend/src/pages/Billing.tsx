@@ -98,8 +98,8 @@ export default function Billing() {
   return (
     <div className="p-6 lg:p-8">
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-dark-50">Billing</h1>
-        <p className="text-sm text-dark-200 mt-1">Manage your subscription and plan</p>
+        <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Billing</h1>
+        <p className="text-sm text-dark-200 font-mono mt-1">Manage your subscription and plan</p>
       </div>
 
       {error && (
@@ -118,7 +118,7 @@ export default function Billing() {
         <div className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-sm font-semibold text-dark-50 mb-2">Current Plan</h2>
+              <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-2">Current Plan</h2>
               <div className="flex items-center gap-3">
                 <span className="text-lg font-bold text-dark-50 capitalize">{info.plan}</span>
                 <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${statusColors[info.plan_status] || "bg-dark-700 text-dark-200"}`}>
@@ -163,7 +163,7 @@ export default function Billing() {
       {/* Plan Cards */}
       {info?.billing_enabled && (
         <div>
-          <h2 className="text-sm font-semibold text-dark-50 mb-4">
+          <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-4">
             {info.plan === "free" ? "Choose a Plan" : "Change Plan"}
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

@@ -165,7 +165,7 @@ export default function Dashboard() {
   return (
     <div className="p-6 lg:p-8">
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
-        <h1 className="text-2xl font-bold text-dark-50">Dashboard</h1>
+        <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Dashboard</h1>
         <div className="flex items-center gap-2 flex-wrap">
           <Link to="/apps" className="px-3 py-1.5 bg-dark-800 border border-dark-500 rounded-lg text-xs font-medium text-dark-100 hover:bg-dark-700 hover:text-dark-50 flex items-center gap-1.5">
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
@@ -204,7 +204,7 @@ export default function Dashboard() {
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <svg className="w-5 h-5 text-rust-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312m-2.24 2.39a4.493 4.493 0 00-1.757 4.306 4.493 4.493 0 004.306-1.758M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z" /></svg>
-                <h3 className="text-sm font-semibold text-dark-50">Getting Started</h3>
+                <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Getting Started</h3>
                 <span className="text-[10px] text-dark-300">{completed}/{steps.length}</span>
               </div>
               <button onClick={dismissOnboarding} className="text-dark-400 hover:text-dark-200 text-xs">Dismiss</button>
@@ -258,7 +258,7 @@ export default function Dashboard() {
                       <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h10.5a2.25 2.25 0 0 0 2.25-2.25V6.75a2.25 2.25 0 0 0-2.25-2.25H6.75A2.25 2.25 0 0 0 4.5 6.75v10.5a2.25 2.25 0 0 0 2.25 2.25Zm.75-12h9v9h-9v-9Z" />
                     </svg>
                   </div>
-                  <p className="text-sm font-medium text-dark-200">CPU Usage</p>
+                  <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">CPU Usage</p>
                 </div>
                 <span className="text-xs text-dark-300 font-mono">{system.cpu_count} cores</span>
               </div>
@@ -282,7 +282,7 @@ export default function Dashboard() {
                       <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25a2.25 2.25 0 0 1-2.25-2.25v-2.25Z" />
                     </svg>
                   </div>
-                  <p className="text-sm font-medium text-dark-200">Memory</p>
+                  <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Memory</p>
                 </div>
                 <span className="text-xs text-dark-300 font-mono">
                   {(system.mem_used_mb / 1024).toFixed(1)} / {(system.mem_total_mb / 1024).toFixed(1)} GB
@@ -308,7 +308,7 @@ export default function Dashboard() {
                       <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 17.25v-.228a4.5 4.5 0 0 0-.12-1.03l-2.268-9.64a3.375 3.375 0 0 0-3.285-2.602H7.923a3.375 3.375 0 0 0-3.285 2.602l-2.268 9.64a4.5 4.5 0 0 0-.12 1.03v.228m19.5 0a3 3 0 0 1-3 3H5.25a3 3 0 0 1-3-3m19.5 0a3 3 0 0 0-3-3H5.25a3 3 0 0 0-3 3m16.5 0h.008v.008h-.008v-.008Zm-3 0h.008v.008h-.008v-.008Z" />
                     </svg>
                   </div>
-                  <p className="text-sm font-medium text-dark-200">Disk</p>
+                  <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Disk</p>
                 </div>
                 <span className="text-xs text-dark-300 font-mono">
                   {system.disk_used_gb.toFixed(0)} / {system.disk_total_gb.toFixed(0)} GB
@@ -331,7 +331,7 @@ export default function Dashboard() {
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0 1 12 16.5a17.92 17.92 0 0 1-8.716-2.247m0 0A9 9 0 0 1 3 12c0-1.47.353-2.856.978-4.082" />
                   </svg>
                 </div>
-                <p className="text-sm font-medium text-dark-200">Sites</p>
+                <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Sites</p>
               </div>
               <p className="text-3xl font-bold text-dark-50 mt-2">{sites.total}</p>
               <p className="text-sm text-dark-300 mt-2">
@@ -347,7 +347,7 @@ export default function Dashboard() {
                     <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
                   </svg>
                 </div>
-                <p className="text-sm font-medium text-dark-200">Databases</p>
+                <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Databases</p>
               </div>
               <p className="text-3xl font-bold text-dark-50 mt-2">{dbCount}</p>
               <p className="text-sm text-dark-300 mt-2">
@@ -363,7 +363,7 @@ export default function Dashboard() {
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
                   </svg>
                 </div>
-                <p className="text-sm font-medium text-dark-200">Uptime</p>
+                <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Uptime</p>
               </div>
               <p className="text-3xl font-bold text-dark-50 mt-2">
                 {formatUptime(system.uptime_secs)}
@@ -389,7 +389,7 @@ export default function Dashboard() {
                       intel.health_score >= 60 ? "text-amber-400" : "text-red-400"
                     }`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733-.715-1.607-2.377-2.733-4.313-2.733C5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12Z" /></svg>
                   </div>
-                  <p className="text-sm font-medium text-dark-200">Health Score</p>
+                  <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Health Score</p>
                 </div>
                 <p className={`text-4xl font-bold ${
                   intel.health_score >= 90 ? "text-emerald-400" :
@@ -424,7 +424,7 @@ export default function Dashboard() {
                     <div className="w-8 h-8 rounded-md bg-amber-500/10 flex items-center justify-center">
                       <svg className="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" /></svg>
                     </div>
-                    <p className="text-sm font-medium text-dark-200">Active Issues</p>
+                    <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Active Issues</p>
                   </div>
                   <Link to="/alerts" className="text-xs text-rust-400 hover:text-rust-300">View all</Link>
                 </div>
@@ -451,7 +451,7 @@ export default function Dashboard() {
                   <div className="w-8 h-8 rounded-md bg-blue-500/10 flex items-center justify-center">
                     <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" /></svg>
                   </div>
-                  <p className="text-sm font-medium text-dark-200">SSL Certificates</p>
+                  <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">SSL Certificates</p>
                 </div>
                 {intel.ssl_countdowns.length === 0 ? (
                   <p className="text-sm text-dark-400 py-4 text-center">No SSL certificates</p>
@@ -478,7 +478,7 @@ export default function Dashboard() {
           {/* System Information */}
           <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mb-6">
             <div className="px-5 py-3 border-b border-dark-600">
-              <h3 className="text-sm font-medium text-dark-50">System Information</h3>
+              <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">System Information</h3>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 divide-y md:divide-y-0 divide-dark-600">
               {/* Hostname */}
@@ -526,14 +526,14 @@ export default function Dashboard() {
             {network.length > 0 && (
               <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
                 <div className="px-5 py-3 border-b border-dark-600">
-                  <h3 className="text-sm font-medium text-dark-50">Network I/O</h3>
+                  <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Network I/O</h3>
                 </div>
                 <table className="w-full">
                   <thead>
                     <tr className="bg-dark-900">
-                      <th className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-2">Interface</th>
-                      <th className="text-right text-xs font-medium text-dark-200 uppercase px-5 py-2">RX</th>
-                      <th className="text-right text-xs font-medium text-dark-200 uppercase px-5 py-2">TX</th>
+                      <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Interface</th>
+                      <th className="text-right text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">RX</th>
+                      <th className="text-right text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">TX</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-dark-600">
@@ -557,15 +557,15 @@ export default function Dashboard() {
             {processes.length > 0 && (
               <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
                 <div className="px-5 py-3 border-b border-dark-600">
-                  <h3 className="text-sm font-medium text-dark-50">Top Processes</h3>
+                  <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Top Processes</h3>
                 </div>
                 <table className="w-full">
                   <thead>
                     <tr className="bg-dark-900">
-                      <th className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-2">Process</th>
-                      <th className="text-right text-xs font-medium text-dark-200 uppercase px-5 py-2">PID</th>
-                      <th className="text-right text-xs font-medium text-dark-200 uppercase px-5 py-2">CPU</th>
-                      <th className="text-right text-xs font-medium text-dark-200 uppercase px-5 py-2">MEM</th>
+                      <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Process</th>
+                      <th className="text-right text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">PID</th>
+                      <th className="text-right text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">CPU</th>
+                      <th className="text-right text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">MEM</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-dark-600">

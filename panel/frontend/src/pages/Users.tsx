@@ -106,8 +106,8 @@ export default function Users() {
     <div className="p-6 lg:p-8">
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
         <div>
-          <h1 className="text-2xl font-bold text-dark-50">Users</h1>
-          <p className="text-sm text-dark-200 mt-1">
+          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Users</h1>
+          <p className="text-sm text-dark-200 font-mono mt-1">
             Manage user accounts and permissions
           </p>
         </div>
@@ -149,19 +149,19 @@ export default function Users() {
           <table className="w-full">
             <thead>
               <tr className="bg-dark-900 border-b border-dark-500">
-                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3">
+                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3">
                   Email
                 </th>
-                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 w-28">
+                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 w-28">
                   Role
                 </th>
-                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 w-20">
+                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 w-20">
                   Sites
                 </th>
-                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 w-36">
+                <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 w-36">
                   Created
                 </th>
-                <th scope="col" className="text-right text-xs font-medium text-dark-200 uppercase px-5 py-3 w-28">
+                <th scope="col" className="text-right text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 w-28">
                   Actions
                 </th>
               </tr>
@@ -265,7 +265,7 @@ export default function Users() {
           }}
         >
           <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-[420px]">
-            <h3 id="create-user-title" className="text-lg font-semibold text-dark-50 mb-4">
+            <h3 id="create-user-title" className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-4">
               Create User
             </h3>
             <div className="space-y-4">

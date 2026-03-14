@@ -252,7 +252,7 @@ export default function Logs() {
       {/* Header */}
       <div className="px-6 py-4 border-b border-dark-500 bg-dark-800 shrink-0">
         <div className="flex items-center justify-between mb-3">
-          <h1 className="text-lg font-semibold text-dark-50">Log Viewer</h1>
+          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Log Viewer</h1>
           <div className="flex items-center gap-2">
             {/* Mode toggle */}
             <div className="flex bg-dark-700 rounded-lg p-0.5">

@@ -74,7 +74,7 @@ export default function ResetPassword() {
     <div className="min-h-screen flex items-center justify-center bg-dark-950 px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-white">Set New Password</h1>
+          <h1 className="text-base font-bold text-rust-500 uppercase font-mono tracking-widest">DockPanel</h1>
           <p className="text-dark-200 text-sm mt-1">Enter your new password below</p>
         </div>
 
