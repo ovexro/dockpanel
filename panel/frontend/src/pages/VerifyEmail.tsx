@@ -31,7 +31,7 @@ export default function VerifyEmail() {
     <div className="min-h-screen flex items-center justify-center bg-dark-950 px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 bg-rust-500 rounded-2xl mb-4">
+          <div className="inline-flex items-center justify-center w-14 h-14 bg-rust-500 rounded-xl mb-4">
             <svg className="w-8 h-8 text-white" viewBox="0 0 32 32" fill="currentColor">
               <rect x="4" y="4" width="10" height="10" rx="2" opacity="0.9" />
               <rect x="18" y="4" width="10" height="10" rx="2" opacity="0.7" />
@@ -42,7 +42,7 @@ export default function VerifyEmail() {
           <h1 className="text-2xl font-bold text-white">Email Verification</h1>
         </div>
 
-        <div className="bg-dark-800 rounded-xl shadow-lg p-6 space-y-4">
+        <div className="bg-dark-800 rounded-lg border border-dark-600 p-6 space-y-4">
           {status === "loading" && (
             <div className="text-center text-dark-200 py-4">Verifying your email...</div>
           )}

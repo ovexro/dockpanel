@@ -118,7 +118,7 @@ export default function Alerts() {
       {/* Summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <div
-          className={`p-4 rounded-xl border cursor-pointer transition-colors ${
+          className={`p-4 rounded-lg border cursor-pointer transition-colors ${
             statusFilter === "firing"
               ? "bg-red-500/10 border-red-500/30"
               : "bg-dark-800 border-dark-500 hover:border-dark-400"
@@ -129,7 +129,7 @@ export default function Alerts() {
           <div className="text-sm text-dark-200">Firing</div>
         </div>
         <div
-          className={`p-4 rounded-xl border cursor-pointer transition-colors ${
+          className={`p-4 rounded-lg border cursor-pointer transition-colors ${
             statusFilter === "acknowledged"
               ? "bg-amber-500/10 border-amber-500/30"
               : "bg-dark-800 border-dark-500 hover:border-dark-400"
@@ -140,7 +140,7 @@ export default function Alerts() {
           <div className="text-sm text-dark-200">Acknowledged</div>
         </div>
         <div
-          className={`p-4 rounded-xl border cursor-pointer transition-colors ${
+          className={`p-4 rounded-lg border cursor-pointer transition-colors ${
             statusFilter === "resolved"
               ? "bg-emerald-500/10 border-emerald-500/30"
               : "bg-dark-800 border-dark-500 hover:border-dark-400"
@@ -179,7 +179,7 @@ export default function Alerts() {
       {loading ? (
         <div className="space-y-3">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="h-20 bg-dark-800 rounded-xl animate-pulse" />
+            <div key={i} className="h-20 bg-dark-800 rounded-lg animate-pulse" />
           ))}
         </div>
       ) : alerts.length === 0 ? (
@@ -200,7 +200,7 @@ export default function Alerts() {
             return (
               <div
                 key={alert.id}
-                className={`p-4 rounded-xl border border-dark-500 ${
+                className={`p-4 rounded-lg border border-dark-500 ${
                   alert.status === "resolved" ? "bg-dark-800/50 opacity-70" : "bg-dark-800"
                 }`}
               >
@@ -215,12 +215,12 @@ export default function Alerts() {
                         <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${sev.bg} ${sev.text}`}>
                           {alert.severity}
                         </span>
-                        <span className="px-1.5 py-0.5 rounded text-xs bg-dark-700 text-dark-300">
+                        <span className="px-1.5 py-0.5 rounded text-xs bg-dark-700 text-dark-300 font-mono">
                           {TYPE_LABELS[alert.alert_type] || alert.alert_type}
                         </span>
                       </div>
                       <p className="text-sm text-dark-200 mb-1">{alert.message}</p>
-                      <p className="text-xs text-dark-300">
+                      <p className="text-xs text-dark-300 font-mono">
                         {ago(alert.created_at)}
                         {alert.resolved_at && ` -- resolved ${ago(alert.resolved_at)}`}
                         {alert.acknowledged_at && !alert.resolved_at && ` -- acknowledged ${ago(alert.acknowledged_at)}`}

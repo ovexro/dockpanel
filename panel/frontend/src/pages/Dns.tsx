@@ -209,9 +209,9 @@ export default function Dns() {
     return (
       <div className="p-6 lg:p-8">
         <h1 className="text-2xl font-bold text-dark-50 mb-6">DNS Management</h1>
-        <div className="bg-dark-800 rounded-xl border border-dark-500 p-6 animate-pulse">
-          <div className="h-6 bg-dark-600 rounded w-48 mb-4" />
-          <div className="h-4 bg-dark-600 rounded w-32" />
+        <div className="bg-dark-800 rounded-lg border border-dark-500 p-6 animate-pulse">
+          <div className="h-6 bg-dark-700 rounded w-48 mb-4" />
+          <div className="h-4 bg-dark-700 rounded w-32" />
         </div>
       </div>
     );
@@ -244,7 +244,7 @@ export default function Dns() {
 
       {/* Add Zone Form */}
       {showAddZone && (
-        <div className="bg-dark-800 rounded-xl border border-dark-500 p-5 mb-6 space-y-4">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6 space-y-4">
           <h3 className="text-sm font-semibold text-dark-50">Connect Cloudflare Zone</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
@@ -302,7 +302,7 @@ export default function Dns() {
         {/* Zone List (sidebar) */}
         {zones.length > 0 && (
           <div className="md:w-56 shrink-0">
-            <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
               <div className="px-4 py-3 border-b border-dark-600">
                 <h3 className="text-xs font-semibold text-dark-200 uppercase tracking-wider">Zones</h3>
               </div>
@@ -315,7 +315,7 @@ export default function Dns() {
                     }`}
                     onClick={() => selectZone(z)}
                   >
-                    <span className="text-sm font-medium text-dark-50 truncate">{z.domain}</span>
+                    <span className="text-sm font-medium text-dark-50 truncate font-mono">{z.domain}</span>
                     <button
                       onClick={(e) => { e.stopPropagation(); handleDeleteZone(z); }}
                       className="text-dark-300 hover:text-red-500 shrink-0"
@@ -334,19 +334,19 @@ export default function Dns() {
         {/* Records Table */}
         <div className="flex-1 min-w-0">
           {!selectedZone ? (
-            <div className="bg-dark-800 rounded-xl border border-dark-500 p-12 text-center">
+            <div className="bg-dark-800 rounded-lg border border-dark-500 p-12 text-center">
               <p className="text-dark-300">{zones.length === 0 ? "Add a Cloudflare zone to get started" : "Select a zone"}</p>
             </div>
           ) : loadingRecords ? (
-            <div className="bg-dark-800 rounded-xl border border-dark-500 p-6 animate-pulse">
-              <div className="h-6 bg-dark-600 rounded w-48 mb-4" />
-              {[...Array(5)].map((_, i) => <div key={i} className="h-10 bg-dark-600 rounded w-full mb-2" />)}
+            <div className="bg-dark-800 rounded-lg border border-dark-500 p-6 animate-pulse">
+              <div className="h-6 bg-dark-700 rounded w-48 mb-4" />
+              {[...Array(5)].map((_, i) => <div key={i} className="h-10 bg-dark-700 rounded w-full mb-2" />)}
             </div>
           ) : (
-            <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
               <div className="px-5 py-4 border-b border-dark-600 flex items-center justify-between">
                 <div>
-                  <h2 className="text-lg font-semibold text-dark-50">{selectedZone.domain}</h2>
+                  <h2 className="text-lg font-semibold text-dark-50 font-mono">{selectedZone.domain}</h2>
                   <p className="text-xs text-dark-200">{records.length} record{records.length !== 1 ? "s" : ""}</p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -452,7 +452,7 @@ export default function Dns() {
                         </td>
                         <td className="px-4 py-2.5 font-mono text-xs text-dark-50 truncate max-w-48">{r.name}</td>
                         <td className="px-4 py-2.5 font-mono text-xs text-dark-200 truncate max-w-64">{r.content}</td>
-                        <td className="px-4 py-2.5 text-xs text-dark-200">{ttlLabel(r.ttl)}</td>
+                        <td className="px-4 py-2.5 text-xs text-dark-200 font-mono">{ttlLabel(r.ttl)}</td>
                         <td className="px-4 py-2.5">
                           {r.proxied !== undefined && (
                             <span className={`inline-block w-3 h-3 rounded-full ${r.proxied ? "bg-orange-400" : "bg-dark-500"}`} title={r.proxied ? "Proxied" : "DNS only"} />

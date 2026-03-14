@@ -112,9 +112,9 @@ export default function SiteDetail() {
   if (loading) {
     return (
       <div className="p-6 lg:p-8">
-        <div className="bg-dark-800 rounded-xl border border-dark-500 p-6 animate-pulse">
-          <div className="h-6 bg-dark-600 rounded w-64 mb-4" />
-          <div className="h-4 bg-dark-600 rounded w-32" />
+        <div className="bg-dark-800 rounded-lg border border-dark-500 p-6 animate-pulse">
+          <div className="h-6 bg-dark-700 rounded w-64 mb-4" />
+          <div className="h-4 bg-dark-700 rounded w-32" />
         </div>
       </div>
     );
@@ -126,7 +126,7 @@ export default function SiteDetail() {
         <div className="bg-red-500/10 text-red-400 px-4 py-3 rounded-lg border border-red-500/20">
           {error || "Site not found"}
         </div>
-        <Link to="/sites" className="text-sm text-rust-500 hover:text-rust-700 mt-4 inline-block">
+        <Link to="/sites" className="text-sm text-rust-400 hover:text-rust-300 mt-4 inline-block">
           &larr; Back to sites
         </Link>
       </div>
@@ -141,13 +141,13 @@ export default function SiteDetail() {
           Sites
         </Link>
         <span className="text-sm text-dark-300 mx-2">/</span>
-        <span className="text-sm text-dark-50 font-medium">{site.domain}</span>
+        <span className="text-sm text-dark-50 font-medium font-mono">{site.domain}</span>
       </div>
 
       {/* Header */}
       <div className="flex items-start justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-dark-50">{site.domain}</h1>
+          <h1 className="text-2xl font-bold text-dark-50 font-mono">{site.domain}</h1>
           <div className="flex items-center gap-3 mt-2">
             <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${statusColors[site.status] || "bg-dark-700 text-dark-200"}`}>
               {site.status}
@@ -187,11 +187,11 @@ export default function SiteDetail() {
       </div>
 
       {/* Details */}
-      <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+      <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
         <dl className="divide-y divide-dark-600">
           <div className="px-5 py-4 grid grid-cols-3">
             <dt className="text-sm font-medium text-dark-200">Domain</dt>
-            <dd className="text-sm text-dark-50 col-span-2">{site.domain}</dd>
+            <dd className="text-sm text-dark-50 col-span-2 font-mono">{site.domain}</dd>
           </div>
           <div className="px-5 py-4 grid grid-cols-3">
             <dt className="text-sm font-medium text-dark-200">Runtime</dt>
@@ -202,7 +202,7 @@ export default function SiteDetail() {
           {site.proxy_port && (
             <div className="px-5 py-4 grid grid-cols-3">
               <dt className="text-sm font-medium text-dark-200">Proxy Port</dt>
-              <dd className="text-sm text-dark-50 col-span-2">{site.proxy_port}</dd>
+              <dd className="text-sm text-dark-50 col-span-2 font-mono">{site.proxy_port}</dd>
             </div>
           )}
           {site.runtime === "php" && (
@@ -307,7 +307,7 @@ export default function SiteDetail() {
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mt-6">
         <Link
           to={`/sites/${id}/files`}
-          className="bg-dark-800 rounded-xl border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
+          className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
         >
           <div className="flex items-center gap-3">
             <div className="p-2 bg-amber-500/10 rounded-lg text-amber-400 group-hover:bg-amber-500/20 transition-colors">
@@ -323,7 +323,7 @@ export default function SiteDetail() {
         </Link>
         <Link
           to={`/terminal?site=${id}`}
-          className="bg-dark-800 rounded-xl border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
+          className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
         >
           <div className="flex items-center gap-3">
             <div className="p-2 bg-slate-500/10 rounded-lg text-slate-400 group-hover:bg-slate-500/20 transition-colors">
@@ -339,7 +339,7 @@ export default function SiteDetail() {
         </Link>
         <Link
           to={`/sites/${id}/backups`}
-          className="bg-dark-800 rounded-xl border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
+          className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
         >
           <div className="flex items-center gap-3">
             <div className="p-2 bg-rust-500/10 rounded-lg text-rust-500 group-hover:bg-indigo-100 transition-colors">
@@ -355,7 +355,7 @@ export default function SiteDetail() {
         </Link>
         <Link
           to={`/sites/${id}/crons`}
-          className="bg-dark-800 rounded-xl border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
+          className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
         >
           <div className="flex items-center gap-3">
             <div className="p-2 bg-violet-500/10 rounded-lg text-violet-400 group-hover:bg-violet-500/20 transition-colors">
@@ -371,7 +371,7 @@ export default function SiteDetail() {
         </Link>
         <Link
           to={`/sites/${id}/deploy`}
-          className="bg-dark-800 rounded-xl border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
+          className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
         >
           <div className="flex items-center gap-3">
             <div className="p-2 bg-emerald-500/10 rounded-lg text-emerald-400 group-hover:bg-emerald-500/20 transition-colors">
@@ -387,7 +387,7 @@ export default function SiteDetail() {
         </Link>
         <Link
           to={`/sites/${id}/wordpress`}
-          className="bg-dark-800 rounded-xl border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
+          className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
         >
           <div className="flex items-center gap-3">
             <div className="p-2 bg-blue-500/10 rounded-lg text-blue-400 group-hover:bg-blue-500/20 transition-colors">
@@ -405,7 +405,7 @@ export default function SiteDetail() {
 
       {/* Resource Limits */}
       {site.status === "active" && (
-        <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden mt-6">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-6">
           <div className="px-5 py-4 border-b border-dark-600">
             <h2 className="text-sm font-semibold text-dark-50">Resource Limits</h2>
           </div>
@@ -523,7 +523,7 @@ export default function SiteDetail() {
 
       {/* Staging Environment */}
       {site.status === "active" && !site.parent_site_id && (
-        <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden mt-6">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-6">
           <div className="px-5 py-4 border-b border-dark-600 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-dark-50">Staging Environment</h2>
             {staging?.exists && staging.site && (
@@ -543,7 +543,7 @@ export default function SiteDetail() {
                       href={`http://${staging.site.domain}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-sm text-rust-500 hover:text-rust-700"
+                      className="text-sm text-rust-400 hover:text-rust-300 font-mono"
                     >
                       {staging.site.domain}
                     </a>

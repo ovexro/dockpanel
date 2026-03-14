@@ -475,7 +475,7 @@ export default function Apps() {
           <h2 className="text-sm font-medium text-dark-200 uppercase mb-3">
             Running Apps
           </h2>
-          <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+          <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
             <table className="w-full">
               <thead>
                 <tr className="bg-dark-900 border-b border-dark-500">
@@ -491,11 +491,11 @@ export default function Apps() {
               <tbody className="divide-y divide-dark-600">
                 {apps.map((app) => (
                   <tr key={app.container_id} className="hover:bg-dark-800">
-                    <td className="px-5 py-4 text-sm text-dark-50 font-medium">{app.name}</td>
+                    <td className="px-5 py-4 text-sm text-dark-50 font-medium font-mono">{app.name}</td>
                     <td className="px-5 py-4 text-sm text-dark-200 hidden sm:table-cell">{app.template}</td>
                     <td className="px-5 py-4 text-sm hidden md:table-cell">
                       {app.domain ? (
-                        <a href={`https://${app.domain}`} target="_blank" rel="noopener noreferrer" className="text-rust-400 hover:underline">{app.domain}</a>
+                        <a href={`https://${app.domain}`} target="_blank" rel="noopener noreferrer" className="text-rust-400 hover:underline font-mono">{app.domain}</a>
                       ) : (
                         <span className="text-dark-300">{"\u2014"}</span>
                       )}
@@ -601,7 +601,7 @@ export default function Apps() {
                 aria-labelledby="logs-dialog-title"
                 onKeyDown={(e) => { if (e.key === "Escape") closeLogs(); }}
               >
-                <div className="bg-dark-800 rounded-xl shadow-xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden border border-dark-500">
+                <div className="bg-dark-800 rounded-lg shadow-xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden border border-dark-500">
                   {/* Header */}
                   <div className="flex items-center justify-between px-5 py-3 border-b border-dark-600">
                     <div className="flex items-center gap-3">
@@ -718,9 +718,9 @@ export default function Apps() {
       {loading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {[...Array(8)].map((_, i) => (
-            <div key={i} className="bg-dark-800 rounded-xl border border-dark-500 p-5 animate-pulse">
-              <div className="h-5 bg-dark-600 rounded w-24 mb-2" />
-              <div className="h-4 bg-dark-600 rounded w-full" />
+            <div key={i} className="bg-dark-800 rounded-lg border border-dark-500 p-5 animate-pulse">
+              <div className="h-5 bg-dark-700 rounded w-24 mb-2" />
+              <div className="h-4 bg-dark-700 rounded w-full" />
             </div>
           ))}
         </div>
@@ -730,7 +730,7 @@ export default function Apps() {
             <button
               key={tmpl.id}
               onClick={() => openDeploy(tmpl)}
-              className="bg-dark-800 rounded-xl border border-dark-500 p-5 text-left hover:border-indigo-300 hover:shadow-sm transition-all group"
+              className="bg-dark-800 rounded-lg border border-dark-500 p-5 text-left hover:border-indigo-300 hover:shadow-sm transition-all group"
             >
               <div className="flex items-center gap-3 mb-3">
                 <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${categoryColors[tmpl.category] || "bg-dark-700"}`}>
@@ -761,7 +761,7 @@ export default function Apps() {
           aria-labelledby="deploy-dialog-title"
           onKeyDown={(e) => { if (e.key === "Escape") setSelected(null); }}
         >
-          <div className="bg-dark-800 rounded-xl shadow-xl p-6 w-full max-w-[480px] max-h-[80vh] overflow-y-auto">
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-[480px] max-h-[80vh] overflow-y-auto">
             <h3 id="deploy-dialog-title" className="text-lg font-semibold text-dark-50 mb-1">
               Deploy {selected.name}
             </h3>
@@ -897,7 +897,7 @@ export default function Apps() {
           aria-labelledby="env-dialog-title"
           onKeyDown={(e) => { if (e.key === "Escape") setEnvTarget(null); }}
         >
-          <div className="bg-dark-800 rounded-xl shadow-xl p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto border border-dark-500">
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto border border-dark-500">
             <div className="flex items-center justify-between mb-4">
               <h3 id="env-dialog-title" className="text-lg font-semibold text-dark-50">
                 Environment Variables
@@ -966,7 +966,7 @@ export default function Apps() {
           aria-labelledby="compose-dialog-title"
           onKeyDown={(e) => { if (e.key === "Escape") { setShowCompose(false); setComposeParsed(null); setComposeError(""); }}}
         >
-          <div className="bg-dark-800 rounded-xl shadow-xl p-6 w-full max-w-2xl max-h-[85vh] overflow-y-auto">
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-2xl max-h-[85vh] overflow-y-auto">
             <h3 id="compose-dialog-title" className="text-lg font-semibold text-dark-50 mb-1">
               Import Docker Compose
             </h3>

@@ -168,9 +168,9 @@ export default function Servers() {
   if (loading) {
     return (
       <div className="p-6 lg:p-8">
-        <div className="bg-dark-800 rounded-xl border border-dark-500 p-6 animate-pulse">
-          <div className="h-6 bg-dark-600 rounded w-48 mb-4" />
-          <div className="h-4 bg-dark-600 rounded w-32" />
+        <div className="bg-dark-800 rounded-lg border border-dark-500 p-6 animate-pulse">
+          <div className="h-6 bg-dark-700 rounded w-48 mb-4" />
+          <div className="h-4 bg-dark-700 rounded w-32" />
         </div>
       </div>
     );
@@ -201,7 +201,7 @@ export default function Servers() {
       {/* Status overview */}
       {servers.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-          <div className="bg-dark-800 rounded-xl border border-dark-500 p-4">
+          <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-emerald-500/15 rounded-lg flex items-center justify-center">
                 <div className="w-3 h-3 bg-emerald-500 rounded-full" />
@@ -212,7 +212,7 @@ export default function Servers() {
               </div>
             </div>
           </div>
-          <div className="bg-dark-800 rounded-xl border border-dark-500 p-4">
+          <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-red-500/15 rounded-lg flex items-center justify-center">
                 <div className="w-3 h-3 bg-red-500 rounded-full" />
@@ -223,7 +223,7 @@ export default function Servers() {
               </div>
             </div>
           </div>
-          <div className="bg-dark-800 rounded-xl border border-dark-500 p-4">
+          <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-amber-500/15 rounded-lg flex items-center justify-center">
                 <div className="w-3 h-3 bg-amber-500 rounded-full" />
@@ -239,7 +239,7 @@ export default function Servers() {
 
       {/* Install script display */}
       {installInfo && (
-        <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-5 mb-6">
+        <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-5 mb-6">
           <h3 className="text-sm font-semibold text-emerald-400 mb-2">
             Server "{installInfo.name}" created!
           </h3>
@@ -263,7 +263,7 @@ export default function Servers() {
 
       {/* Create form */}
       {showForm && (
-        <form onSubmit={handleCreate} className="bg-dark-800 rounded-xl border border-dark-500 p-5 mb-6">
+        <form onSubmit={handleCreate} className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6">
           <h3 className="text-sm font-semibold text-dark-50 mb-3">Add New Server</h3>
           <div className="flex items-end gap-3">
             <div className="flex-1">
@@ -298,7 +298,7 @@ export default function Servers() {
 
       {/* Server cards */}
       {servers.length === 0 ? (
-        <div className="bg-dark-800 rounded-xl border border-dark-500 p-12 text-center">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 p-12 text-center">
           <svg className="w-12 h-12 text-dark-400 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M5 12a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2M5 12a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2m-2-4h.01M17 16h.01" />
           </svg>
@@ -307,7 +307,7 @@ export default function Servers() {
       ) : (
         <div className="space-y-4">
           {servers.map((s) => (
-            <div key={s.id} className="bg-dark-800 rounded-xl border border-dark-500 p-5">
+            <div key={s.id} className="bg-dark-800 rounded-lg border border-dark-500 p-5">
               {/* Header row */}
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-3">
@@ -322,7 +322,7 @@ export default function Servers() {
                         <span className="text-xs text-dark-300">{s.os_info}</span>
                       )}
                       {s.agent_version && (
-                        <span className="text-xs text-dark-300">v{s.agent_version}</span>
+                        <span className="text-xs text-dark-300 font-mono">v{s.agent_version}</span>
                       )}
                     </div>
                   </div>
@@ -387,7 +387,7 @@ export default function Servers() {
                   {s.status === "online" && (
                     <button
                       onClick={() => toggleServerExpand(s.id)}
-                      className="text-rust-400 hover:text-indigo-700 font-medium"
+                      className="text-rust-400 hover:text-rust-300 font-medium"
                     >
                       {expandedServer === s.id ? "Hide Metrics" : "Metrics"}
                     </button>

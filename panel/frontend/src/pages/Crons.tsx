@@ -189,7 +189,7 @@ export default function Crons() {
 
       {/* Create form */}
       {showForm && (
-        <form onSubmit={handleCreate} className="bg-dark-800 rounded-xl border border-dark-500 p-5 mb-6 space-y-4">
+        <form onSubmit={handleCreate} className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6 space-y-4">
           <div>
             <label htmlFor="cron-label" className="block text-sm font-medium text-dark-100 mb-1">Label (optional)</label>
             <input
@@ -253,7 +253,7 @@ export default function Crons() {
       )}
 
       {/* Crons list */}
-      <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+      <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
         {loading ? (
           <div className="p-8 text-center text-dark-300">Loading...</div>
         ) : crons.length === 0 ? (
@@ -295,7 +295,7 @@ export default function Crons() {
                         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
                         </svg>
-                        <code>{cron.schedule}</code>
+                        <code className="font-mono">{cron.schedule}</code>
                       </span>
                       {cron.last_run && (
                         <span className="text-xs text-dark-300">

@@ -138,7 +138,7 @@ export default function Layout() {
         }`}
       >
         {/* Logo */}
-        <div className="px-6 py-5 border-b border-dark-500 flex items-center justify-between">
+        <div className="px-6 py-5 border-b border-dark-600 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 bg-rust-500 rounded-lg flex items-center justify-center">
               <svg className="w-5 h-5 text-white" viewBox="0 0 32 32" fill="currentColor" aria-hidden="true">
@@ -166,7 +166,7 @@ export default function Layout() {
         <div className="px-3 pt-3 pb-1">
           <button
             onClick={() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }))}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-dark-800/60 border border-dark-600 text-sm text-dark-300 hover:text-dark-100 hover:border-dark-400 transition-colors"
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-dark-800/30 border border-dark-600/50 text-sm text-dark-300 hover:text-dark-100 hover:border-dark-400 transition-colors"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" /></svg>
             <span className="flex-1 text-left">Search...</span>
@@ -196,10 +196,10 @@ export default function Layout() {
                       end={item.to === "/"}
                       onClick={() => setSidebarOpen(false)}
                       className={({ isActive }) =>
-                        `flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm ${
+                        `flex items-center gap-3 px-3 py-2 transition-colors text-sm ${
                           isActive
-                            ? "bg-rust-500 text-white"
-                            : "text-dark-100 hover:bg-dark-800 hover:text-white"
+                            ? "bg-rust-500/10 text-rust-400 border-l-2 border-rust-500"
+                            : "text-dark-200 hover:bg-dark-700/50 hover:text-dark-100 border-l-2 border-transparent"
                         }`
                       }
                     >
@@ -219,7 +219,7 @@ export default function Layout() {
         </nav>
 
         {/* User */}
-        <div className="px-4 py-4 border-t border-dark-500">
+        <div className="px-4 py-4 border-t border-dark-600">
           <div className="flex items-center justify-between">
             <div className="min-w-0">
               <p className="text-sm font-medium truncate">{user.email}</p>
@@ -242,7 +242,7 @@ export default function Layout() {
       {/* Main content */}
       <main id="main-content" className="flex-1 overflow-auto">
         {/* Mobile header with hamburger */}
-        <div className="sticky top-0 z-30 flex items-center gap-3 px-4 py-3 bg-dark-800 border-b border-dark-500 md:hidden">
+        <div className="sticky top-0 z-30 flex items-center gap-3 px-4 py-3 bg-dark-900 border-b border-dark-600 md:hidden">
           <button
             onClick={() => setSidebarOpen(true)}
             className="p-2 text-dark-200 hover:text-dark-50 hover:bg-dark-700 rounded-lg"

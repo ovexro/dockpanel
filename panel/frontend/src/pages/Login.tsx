@@ -55,7 +55,7 @@ export default function Login() {
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 bg-rust-500 rounded-2xl mb-4">
+          <div className="inline-flex items-center justify-center w-14 h-14 bg-rust-500 rounded-xl mb-4">
             <svg className="w-8 h-8 text-white" viewBox="0 0 32 32" fill="currentColor">
               <rect x="4" y="4" width="10" height="10" rx="2" opacity="0.9" />
               <rect x="18" y="4" width="10" height="10" rx="2" opacity="0.7" />
@@ -71,7 +71,7 @@ export default function Login() {
 
         {/* 2FA Form */}
         {twoFaToken ? (
-          <form onSubmit={handle2fa} className="bg-dark-800 rounded-xl shadow-lg p-6 space-y-4">
+          <form onSubmit={handle2fa} className="bg-dark-800 rounded-lg border border-dark-600 p-6 space-y-4">
             {error && (
               <div role="alert" className="bg-red-500/10 text-red-400 text-sm px-4 py-3 rounded-lg border border-red-500/20">
                 {error}
@@ -117,7 +117,7 @@ export default function Login() {
           </form>
         ) : (
           /* Login Form */
-          <form onSubmit={handleSubmit} className="bg-dark-800 rounded-xl shadow-lg p-6 space-y-4">
+          <form onSubmit={handleSubmit} className="bg-dark-800 rounded-lg border border-dark-600 p-6 space-y-4">
             {error && (
               <div role="alert" className="bg-red-500/10 text-red-400 text-sm px-4 py-3 rounded-lg border border-red-500/20">
                 {error}
@@ -141,7 +141,7 @@ export default function Login() {
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label htmlFor="login-password" className="block text-sm font-medium text-dark-100">Password</label>
-                <Link to="/forgot-password" className="text-xs text-rust-500 hover:text-rust-700">
+                <Link to="/forgot-password" className="text-xs text-rust-400 hover:text-rust-300">
                   Forgot password?
                 </Link>
               </div>

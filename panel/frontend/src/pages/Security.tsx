@@ -224,9 +224,9 @@ export default function Security() {
         <h1 className="text-2xl font-bold text-dark-50 mb-6">Security</h1>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {[...Array(4)].map((_, i) => (
-            <div key={i} className="bg-dark-800 rounded-xl border border-dark-500 p-5 animate-pulse">
-              <div className="h-4 bg-dark-600 rounded w-20 mb-3" />
-              <div className="h-8 bg-dark-600 rounded w-16" />
+            <div key={i} className="bg-dark-800 rounded-lg border border-dark-500 p-5 animate-pulse">
+              <div className="h-4 bg-dark-700 rounded w-20 mb-3" />
+              <div className="h-8 bg-dark-700 rounded w-16" />
             </div>
           ))}
         </div>
@@ -291,7 +291,7 @@ export default function Security() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
             {/* Security Score */}
             {posture && posture.score >= 0 && (
-              <div className="bg-dark-800 rounded-xl border border-dark-500 p-5">
+              <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
                 <div className="flex items-center gap-2.5">
                   <div className="w-9 h-9 rounded-lg bg-indigo-500/10 flex items-center justify-center">
                     <svg className="w-5 h-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -313,7 +313,7 @@ export default function Security() {
 
             {overview && (
               <>
-                <div className="bg-dark-800 rounded-xl border border-dark-500 p-5">
+                <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
                   <div className="flex items-center gap-2.5">
                     <div className="w-9 h-9 rounded-lg bg-orange-500/10 flex items-center justify-center">
                       <svg className="w-5 h-5 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -332,7 +332,7 @@ export default function Security() {
                   <p className="text-xs text-dark-300 mt-1">{overview.firewall_rules_count} rules</p>
                 </div>
 
-                <div className="bg-dark-800 rounded-xl border border-dark-500 p-5">
+                <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
                   <div className="flex items-center gap-2.5">
                     <div className="w-9 h-9 rounded-lg bg-red-500/10 flex items-center justify-center">
                       <svg className="w-5 h-5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -347,10 +347,10 @@ export default function Security() {
                       {overview.fail2ban_running ? "Running" : "Stopped"}
                     </span>
                   </div>
-                  <p className="text-xs text-dark-300 mt-1">{overview.fail2ban_banned_total} banned IPs</p>
+                  <p className="text-xs text-dark-300 mt-1"><span className="font-mono">{overview.fail2ban_banned_total}</span> banned IPs</p>
                 </div>
 
-                <div className="bg-dark-800 rounded-xl border border-dark-500 p-5">
+                <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
                   <div className="flex items-center gap-2.5">
                     <div className="w-9 h-9 rounded-lg bg-emerald-500/10 flex items-center justify-center">
                       <svg className="w-5 h-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -359,7 +359,7 @@ export default function Security() {
                     </div>
                     <p className="text-sm font-medium text-dark-200">SSH</p>
                   </div>
-                  <p className="text-lg font-bold text-dark-50 mt-2">Port {overview.ssh_port}</p>
+                  <p className="text-lg font-bold text-dark-50 mt-2">Port <span className="font-mono">{overview.ssh_port}</span></p>
                   <p className="text-xs mt-1">
                     <span className={overview.ssh_password_auth ? "text-amber-600" : "text-emerald-600"}>
                       Password auth: {overview.ssh_password_auth ? "On" : "Off"}
@@ -367,7 +367,7 @@ export default function Security() {
                   </p>
                 </div>
 
-                <div className="bg-dark-800 rounded-xl border border-dark-500 p-5">
+                <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
                   <div className="flex items-center gap-2.5">
                     <div className="w-9 h-9 rounded-lg bg-yellow-500/10 flex items-center justify-center">
                       <svg className="w-5 h-5 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -385,10 +385,10 @@ export default function Security() {
 
           {/* Latest scan findings */}
           {posture?.latest_scan && posture.latest_scan.findings_count > 0 && (
-            <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden mb-6">
+            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mb-6">
               <div className="px-5 py-3 border-b border-dark-600 flex items-center justify-between">
                 <h3 className="text-sm font-medium text-dark-50">Latest Scan Findings</h3>
-                <span className="text-xs text-dark-300">
+                <span className="text-xs text-dark-300 font-mono">
                   {new Date(posture.latest_scan.completed_at || posture.latest_scan.started_at).toLocaleString()}
                 </span>
               </div>
@@ -406,7 +406,7 @@ export default function Security() {
               <div className="p-3">
                 <button
                   onClick={() => { setTab("scans"); handleViewScan(posture.latest_scan!.id); }}
-                  className="text-sm text-rust-500 hover:text-rust-700 font-medium"
+                  className="text-sm text-rust-400 hover:text-rust-300 font-medium"
                 >
                   View details
                 </button>
@@ -416,7 +416,7 @@ export default function Security() {
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Firewall Rules */}
-            <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
               <div className="px-5 py-3 border-b border-dark-600 flex items-center justify-between">
                 <h3 className="text-sm font-medium text-dark-50">Firewall Rules</h3>
                 <button
@@ -440,14 +440,14 @@ export default function Security() {
                   <tbody className="divide-y divide-dark-600">
                     {firewall.rules.map((rule) => (
                       <tr key={rule.number} className="hover:bg-dark-800">
-                        <td className="px-5 py-2.5 text-sm text-dark-300">{rule.number}</td>
+                        <td className="px-5 py-2.5 text-sm text-dark-300 font-mono">{rule.number}</td>
                         <td className="px-5 py-2.5 text-sm text-dark-50 font-mono">{rule.to}</td>
                         <td className="px-5 py-2.5">
                           <span className={`text-xs font-medium ${rule.action.toLowerCase().includes("allow") ? "text-emerald-600" : "text-red-400"}`}>
                             {rule.action}
                           </span>
                         </td>
-                        <td className="px-5 py-2.5 text-sm text-dark-200">{rule.from}</td>
+                        <td className="px-5 py-2.5 text-sm text-dark-200 font-mono">{rule.from}</td>
                         <td className="px-5 py-2.5 text-right">
                           {deleteTarget === rule.number ? (
                             <div className="flex gap-1 justify-end">
@@ -474,7 +474,7 @@ export default function Security() {
             </div>
 
             {/* Fail2Ban Jails */}
-            <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
               <div className="px-5 py-3 border-b border-dark-600">
                 <h3 className="text-sm font-medium text-dark-50">Fail2Ban Jails</h3>
               </div>
@@ -489,7 +489,7 @@ export default function Security() {
                   <tbody className="divide-y divide-dark-600">
                     {fail2ban.jails.map((jail) => (
                       <tr key={jail.name}>
-                        <td className="px-5 py-2.5 text-sm text-dark-50">{jail.name}</td>
+                        <td className="px-5 py-2.5 text-sm text-dark-50 font-mono">{jail.name}</td>
                         <td className="px-5 py-2.5 text-sm text-right">
                           <span className={`font-medium ${jail.banned_count > 0 ? "text-red-400" : "text-dark-300"}`}>
                             {jail.banned_count}
@@ -512,12 +512,12 @@ export default function Security() {
       {tab === "scans" && (
         <div className="space-y-4">
           {scans.length === 0 ? (
-            <div className="bg-dark-800 rounded-xl border border-dark-500 p-8 text-center">
+            <div className="bg-dark-800 rounded-lg border border-dark-500 p-8 text-center">
               <p className="text-dark-300 text-sm">No security scans yet. Click "Run Security Scan" to start.</p>
             </div>
           ) : (
             scans.map((scan) => (
-              <div key={scan.id} className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+              <div key={scan.id} className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
                 <button
                   onClick={() => handleViewScan(scan.id)}
                   className="w-full px-5 py-4 flex items-center justify-between hover:bg-dark-800 transition-colors text-left"
@@ -536,7 +536,7 @@ export default function Security() {
                       <p className="text-sm font-medium text-dark-50">
                         {scan.scan_type === "full" ? "Full Security Scan" : scan.scan_type}
                       </p>
-                      <p className="text-xs text-dark-300">
+                      <p className="text-xs text-dark-300 font-mono">
                         {new Date(scan.started_at).toLocaleString()}
                         {scan.status === "running" && " (running...)"}
                       </p>
@@ -579,7 +579,7 @@ export default function Security() {
                                   <p className="text-xs text-dark-200 mt-0.5">{f.description}</p>
                                 )}
                                 <div className="flex items-center gap-3 mt-1.5">
-                                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${checkTypeBadge(f.check_type)}`}>
+                                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium font-mono ${checkTypeBadge(f.check_type)}`}>
                                     {f.check_type.replace("_", " ")}
                                   </span>
                                   {f.file_path && (
@@ -606,7 +606,7 @@ export default function Security() {
       {/* Add Rule Dialog */}
       {showAddRule && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onKeyDown={(e) => { if (e.key === "Escape") setShowAddRule(false); }}>
-          <div className="bg-dark-800 rounded-xl shadow-xl p-6 w-96" role="dialog" aria-labelledby="add-rule-title">
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-96" role="dialog" aria-labelledby="add-rule-title">
             <h3 id="add-rule-title" className="text-lg font-semibold text-dark-50 mb-4">Add Firewall Rule</h3>
             <div className="space-y-3">
               <div>

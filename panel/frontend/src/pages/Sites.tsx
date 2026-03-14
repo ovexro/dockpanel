@@ -82,7 +82,7 @@ export default function Sites() {
       {showForm && (
         <form
           onSubmit={handleCreate}
-          className="bg-dark-800 rounded-xl border border-dark-500 p-5 mb-6 space-y-4"
+          className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6 space-y-4"
         >
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
@@ -158,15 +158,15 @@ export default function Sites() {
 
       {/* Sites list */}
       {loading ? (
-        <div className="bg-dark-800 rounded-xl border border-dark-500 animate-pulse">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 animate-pulse">
           {[...Array(3)].map((_, i) => (
             <div key={i} className="px-5 py-4 border-b border-dark-600 last:border-0">
-              <div className="h-5 bg-dark-600 rounded w-48" />
+              <div className="h-5 bg-dark-700 rounded w-48" />
             </div>
           ))}
         </div>
       ) : sites.length === 0 ? (
-        <div className="bg-dark-800 rounded-xl border border-dark-500 p-12 text-center">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 p-12 text-center">
           <svg className="w-12 h-12 mx-auto text-gray-300 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0 1 12 16.5a17.92 17.92 0 0 1-8.716-2.247m0 0A9 9 0 0 1 3 12c0-1.47.353-2.856.978-4.082" />
           </svg>
@@ -174,7 +174,7 @@ export default function Sites() {
           <p className="text-dark-300 text-sm mt-1">Create your first site to get started</p>
         </div>
       ) : (
-        <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <table className="w-full">
             <thead>
               <tr className="border-b border-dark-500 bg-dark-900">
@@ -191,7 +191,7 @@ export default function Sites() {
                   <td className="px-5 py-4">
                     <Link
                       to={`/sites/${site.id}`}
-                      className="text-sm font-medium text-rust-500 hover:text-rust-700"
+                      className="text-sm font-medium text-rust-400 hover:text-rust-300 font-mono"
                     >
                       {site.domain}
                     </Link>
