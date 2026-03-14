@@ -42,6 +42,11 @@ export default function CommandPalette() {
     { id: "users", label: "Users", icon: "M15 19.128a9.38 9.38 0 002.625.372", action: () => go("/users"), category: "Navigate", keywords: "accounts roles admin" },
     { id: "teams", label: "Teams", icon: "M18 18.72a9.094 9.094 0 003.741-.479", action: () => go("/teams"), category: "Navigate", keywords: "members invite access" },
     { id: "activity", label: "Activity", icon: "M12 6v6h4.5m4.5 0a9 9 0 11-18 0", action: () => go("/activity"), category: "Navigate", keywords: "audit log history" },
+    { id: "updates", label: "Updates", icon: "M16.023 9.348h4.992M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99", action: () => go("/updates"), category: "Navigate", keywords: "packages apt upgrade system" },
+    { id: "crons", label: "Cron Jobs", icon: "M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z", action: () => go("/crons"), category: "Navigate", keywords: "schedule tasks recurring jobs" },
+    { id: "backups", label: "Backups", icon: "M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5", action: () => go("/backups"), category: "Navigate", keywords: "backup restore snapshot s3" },
+    { id: "files", label: "File Manager", icon: "M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776", action: () => go("/files"), category: "Navigate", keywords: "browse edit upload download" },
+    { id: "wordpress", label: "WordPress", icon: "M12 21a9 9 0 100-18 9 9 0 000 18z", action: () => go("/wordpress"), category: "Navigate", keywords: "wp plugins themes cms" },
   ];
 
   const filtered = query
