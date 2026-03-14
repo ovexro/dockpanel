@@ -174,6 +174,77 @@ const appIcons: Record<string, ReactNode> = {
   pihole: (
     <svg className="w-6 h-6" viewBox="0 0 128 128"><circle fill="#96060c" cx="64" cy="64" r="60"/><circle fill="#f44" cx="64" cy="64" r="48" opacity=".3"/><path fill="#fff" d="M64 16c-26.5 0-48 20.5-48 46 0 4 .5 8 1.5 12h93c1-4 1.5-8 1.5-12 0-25.5-21.5-46-48-46z" opacity=".1"/><path fill="#fff" d="M46 34h28c4.4 0 8 3.6 8 8v4H46v-4c0-4.4 0-8 0-8zm0 20h36v4c0 2-2 4-4 4H50l-4-8z" opacity=".9"/><path fill="#fff" d="M46 34v28M58 34v28" stroke="#fff" strokeWidth="3" opacity=".6"/><text x="44" y="96" fill="#fff" fontSize="32" fontWeight="bold" fontFamily="serif" opacity=".9">&#x3c0;</text></svg>
   ),
+  // ─── CMS (additional) ─────────────────────────────────────────
+  drupal: (
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><path fill="#0678be" d="M64 4C46 4 42 18 34 26c-4 4-10 6-10 6 0 16 4 32 14 44 10 12 24 18 26 44h0c2-26 16-32 26-44 10-12 14-28 14-44 0 0-6-2-10-6C86 18 82 4 64 4z"/><circle fill="#fff" cx="50" cy="60" r="8" opacity=".7"/><circle fill="#fff" cx="78" cy="60" r="8" opacity=".7"/><circle fill="#fff" cx="64" cy="84" r="6" opacity=".5"/></svg>
+  ),
+  joomla: (
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><path fill="#f44321" d="M42 24c-10 0-18 8-18 18v4l20 20 14-14-20-20h4c2 0 4-2 4-4s-2-4-4-4z" opacity=".9"/><path fill="#f9a541" d="M86 24h-4l-20 20 14 14 20-20v-4c0-10-8-10-10-10z" opacity=".9"/><path fill="#5091cd" d="M24 86v-4l20-20 14 14-20 20h-4c-10 0-10-8-10-10z" opacity=".9"/><path fill="#2fB84f" d="M104 68v4c0 10-8 18-18 18h-4l-20-20 14-14 20 20v-4c0-2 2-4 4-4s4 2 4 0z" opacity=".9"/><circle fill="#fff" cx="64" cy="64" r="8" opacity=".6"/></svg>
+  ),
+  prestashop: (
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#df0067" width="128" height="128"/><path fill="#fff" d="M40 40h48c4.4 0 8 3.6 8 8v4H40v-4c0-4.4 3.6-8 0-8zm0 20h56v4H40v-4zm0 12h48v4H40v-4zm0 12h40v4H40v-4z" opacity=".8"/><circle fill="#fff" cx="48" cy="100" r="6"/><circle fill="#fff" cx="80" cy="100" r="6"/><path fill="#fff" d="M32 32l4 48h56l4-48" opacity=".15"/></svg>
+  ),
+  // ─── Wiki / Docs ──────────────────────────────────────────────
+  wikijs: (
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#1976d2" width="128" height="128"/><path fill="#fff" d="M28 32h72c2.2 0 4 1.8 4 4v56c0 2.2-1.8 4-4 4H28c-2.2 0-4-1.8-4-4V36c0-2.2 1.8-4 4-4z" opacity=".15"/><path fill="#fff" d="M36 48h56v4H36zm0 12h48v4H36zm0 12h52v4H36zm0 12h36v4H36z" opacity=".7"/><path fill="#fff" d="M36 32v64" stroke="#fff" strokeWidth="3" opacity=".4"/><text x="78" y="46" fill="#fff" fontSize="24" fontWeight="bold" fontFamily="sans-serif" opacity=".9">W</text></svg>
+  ),
+  bookstack: (
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#0288d1" width="128" height="128"/><rect fill="#fff" x="28" y="24" width="72" height="16" rx="4" opacity=".5"/><rect fill="#fff" x="28" y="44" width="72" height="16" rx="4" opacity=".65"/><rect fill="#fff" x="28" y="64" width="72" height="16" rx="4" opacity=".8"/><rect fill="#fff" x="28" y="84" width="72" height="16" rx="4" opacity=".95"/><path fill="none" stroke="#0288d1" strokeWidth="2" d="M40 30h48M40 50h40M40 70h44M40 90h36" opacity=".5"/></svg>
+  ),
+  outline: (
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#0366d6" width="128" height="128"/><path fill="#fff" d="M64 20L28 64l36 44 36-44L64 20z" opacity=".2"/><path fill="#fff" d="M64 32L36 64l28 32 28-32L64 32z" opacity=".5"/><path fill="#fff" d="M64 44L44 64l20 20 20-20L64 44z" opacity=".9"/></svg>
+  ),
+  // ─── Communication ────────────────────────────────────────────
+  mattermost: (
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#0058cc" width="128" height="128"/><path fill="#fff" d="M64 20c-24.3 0-44 17.9-44 40 0 10 4 19.2 10.6 26.2L26 104l20-10c5.4 2.6 11.6 4 18 4 24.3 0 44-17.9 44-40S88.3 20 64 20z" opacity=".9"/><path fill="#0058cc" d="M48 50h32v6H48zm0 12h24v6H48z"/></svg>
+  ),
+  rocketchat: (
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#f5455c" width="128" height="128"/><path fill="#fff" d="M64 20c-26.5 0-48 16.6-48 37 0 11 5.8 20.9 15 27.8L28 104l18-10c5.8 2.2 12.2 3.4 18 3.4 26.5 0 48-16.6 48-37S90.5 20 64 20z" opacity=".9"/><circle fill="#f5455c" cx="48" cy="58" r="5"/><circle fill="#f5455c" cx="64" cy="58" r="5"/><circle fill="#f5455c" cx="80" cy="58" r="5"/></svg>
+  ),
+  discourse: (
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><circle fill="#231f20" cx="64" cy="64" r="60"/><path fill="#fff" d="M64 24c-22 0-40 16.6-40 37s18 37 40 37l32 10-12-18c8-7 12-17 12-29 0-20.4-14.3-37-32-37z" opacity=".15"/><path fill="#87ceeb" d="M42 52h44v6H42z" opacity=".9"/><path fill="#f0c040" d="M42 64h36v6H42z" opacity=".9"/><path fill="#e45735" d="M42 76h28v6H42z" opacity=".9"/></svg>
+  ),
+  // ─── Media (additional) ───────────────────────────────────────
+  immich: (
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#4250af" width="128" height="128"/><rect fill="#fff" x="20" y="28" width="88" height="72" rx="8" opacity=".15"/><circle fill="#fff" cx="52" cy="56" r="16" opacity=".7"/><circle fill="#4250af" cx="52" cy="56" r="8"/><path fill="#fff" d="M68 44h28v28H68z" opacity=".5" rx="4"/><path fill="#fff" d="M20 84l28-20 16 12 20-16 24 18v14c0 4.4-3.6 8-8 8H28c-4.4 0-8-3.6-8-8V84z" opacity=".6"/></svg>
+  ),
+  photoprism: (
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#01b189" width="128" height="128"/><circle fill="#fff" cx="64" cy="56" r="28" opacity=".2"/><path fill="#fff" d="M64 32c-13.2 0-24 10.8-24 24s10.8 24 24 24 24-10.8 24-24-10.8-24-24-24zm0 40c-8.8 0-16-7.2-16-16s7.2-16 16-16 16 7.2 16 16-7.2 16-16 16z" opacity=".9"/><circle fill="#fff" cx="64" cy="56" r="8" opacity=".6"/><path fill="#fff" d="M40 92h48v4c0 2.2-1.8 4-4 4H44c-2.2 0-4-1.8-4-4v-4z" opacity=".5"/></svg>
+  ),
+  // ─── Security (additional) ────────────────────────────────────
+  authentik: (
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#fd4b2d" width="128" height="128"/><path fill="#fff" d="M64 16L24 48v32c0 20 16 32 40 36 24-4 40-16 40-36V48L64 16z" opacity=".15"/><path fill="#fff" d="M64 28L32 52v28c0 16 12 26 32 30 20-4 32-14 32-30V52L64 28z" opacity=".3"/><path fill="#fff" d="M64 40L40 56v20c0 12 8 20 24 24 16-4 24-12 24-24V56L64 40z" opacity=".9"/><circle fill="#fd4b2d" cx="64" cy="64" r="8"/></svg>
+  ),
+  keycloak: (
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#4d4d4d" width="128" height="128"/><path fill="#fff" d="M40 28h48l-12 24H52L40 28z" opacity=".6"/><path fill="#fff" d="M52 52h24v24H52z" opacity=".9"/><path fill="#fff" d="M40 100h48l-12-24H52L40 100z" opacity=".6"/><path fill="#00b4f0" d="M60 58h8v12h-8z"/><circle fill="#00b4f0" cx="64" cy="56" r="4"/></svg>
+  ),
+  // ─── Dev Tools (additional) ───────────────────────────────────
+  woodpecker: (
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#4caf50" width="128" height="128"/><path fill="#fff" d="M24 96V44l20-20v52L24 96zm28 0V32l20-20v64L52 96zm28 0V20l24-8v68L80 96z" opacity=".85"/></svg>
+  ),
+  sonarqube: (
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#4e9bcd" width="128" height="128"/><path fill="#fff" d="M28 96c0-40 24-64 72-68v12c-40 4-60 24-60 56H28z" opacity=".9"/><path fill="#fff" d="M44 96c0-28 16-48 56-52v12c-32 4-44 18-44 40H44z" opacity=".6"/><path fill="#fff" d="M60 96c0-18 10-32 40-36v12c-22 3-28 12-28 24H60z" opacity=".35"/></svg>
+  ),
+  forgejo: (
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#fb923c" width="128" height="128"/><circle fill="#fff" cx="64" cy="48" r="20" opacity=".9"/><circle fill="#fb923c" cx="58" cy="44" r="4"/><circle fill="#fb923c" cx="70" cy="44" r="4"/><path fill="#fff" d="M44 72c0 16 8 28 20 32 12-4 20-16 20-32H44z" opacity=".7"/><path fill="#fb923c" d="M56 52c2 3 4.8 4 8 4s6-1 8-4" stroke="#fb923c" strokeWidth="2" fill="none" strokeLinecap="round"/></svg>
+  ),
+  // ─── Business / Productivity ──────────────────────────────────
+  "invoice-ninja": (
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#2f2e2e" width="128" height="128"/><rect fill="#fff" x="28" y="24" width="72" height="80" rx="4" opacity=".15"/><path fill="#fff" d="M40 36h48v4H40zm0 12h48v2H40zm0 8h48v2H40zm0 8h32v2H40z" opacity=".7"/><path fill="#fff" d="M40 80h20v12H40z" opacity=".4"/><path fill="#51e898" d="M72 76l8 8 16-20" stroke="#51e898" strokeWidth="4" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+  ),
+  erpnext: (
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#0089ff" width="128" height="128"/><rect fill="#fff" x="20" y="24" width="88" height="80" rx="8" opacity=".15"/><rect fill="#fff" x="28" y="56" width="16" height="36" rx="3" opacity=".9"/><rect fill="#fff" x="52" y="40" width="16" height="52" rx="3" opacity=".9"/><rect fill="#fff" x="76" y="48" width="16" height="44" rx="3" opacity=".9"/><path fill="#fff" d="M28 36h64v8H28z" opacity=".4"/></svg>
+  ),
+  calcom: (
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#292929" width="128" height="128"/><rect fill="#fff" x="24" y="32" width="80" height="72" rx="8" opacity=".15"/><rect fill="#fff" x="24" y="32" width="80" height="16" rx="8" opacity=".5"/><rect fill="#fff" x="40" y="24" width="4" height="16" rx="2"/><rect fill="#fff" x="84" y="24" width="4" height="16" rx="2"/><rect fill="#fff" x="36" y="56" width="12" height="12" rx="2" opacity=".3"/><rect fill="#fff" x="56" y="56" width="12" height="12" rx="2" opacity=".3"/><rect fill="#fff" x="76" y="56" width="12" height="12" rx="2" opacity=".3"/><rect fill="#fff" x="36" y="76" width="12" height="12" rx="2" opacity=".3"/><rect fill="#fff" x="56" y="76" width="12" height="12" rx="2" opacity=".9"/><rect fill="#fff" x="76" y="76" width="12" height="12" rx="2" opacity=".3"/></svg>
+  ),
+  // ─── Support ──────────────────────────────────────────────────
+  chatwoot: (
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#1f93ff" width="128" height="128"/><path fill="#fff" d="M64 20c-24.3 0-44 17.9-44 40 0 8.4 2.8 16.2 7.6 22.6L22 104l23.8-8.6c5.6 2.8 12 4.4 18.2 4.4 24.3 0 44-17.9 44-40S88.3 20 64 20z" opacity=".9"/><circle fill="#1f93ff" cx="48" cy="60" r="5"/><circle fill="#1f93ff" cx="64" cy="60" r="5"/><circle fill="#1f93ff" cx="80" cy="60" r="5"/></svg>
+  ),
+  typebot: (
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#ff8e20" width="128" height="128"/><rect fill="#fff" x="20" y="24" width="40" height="28" rx="8" opacity=".9"/><rect fill="#fff" x="68" y="48" width="40" height="28" rx="8" opacity=".9"/><rect fill="#fff" x="20" y="76" width="48" height="28" rx="8" opacity=".7"/><path fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" d="M48 52v8l20-4M72 76l-12 8" opacity=".6"/></svg>
+  ),
 };
 
 const statusColors: Record<string, string> = {
