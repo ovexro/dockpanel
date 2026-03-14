@@ -161,7 +161,7 @@ export default function Dashboard() {
 
   return (
     <div className="p-6 lg:p-8">
-      <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
         <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Dashboard</h1>
         <div className="flex items-center gap-2 flex-wrap">
           <Link to="/apps" className="px-3 py-1.5 bg-dark-800 border border-dark-500 rounded-lg text-xs font-medium text-dark-100 hover:bg-dark-700 hover:text-dark-50 flex items-center gap-1.5">
@@ -510,7 +510,7 @@ export default function Dashboard() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Network I/O */}
             {network.length > 0 && (
-              <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+              <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-x-auto">
                 <div className="px-5 py-3 border-b border-dark-600">
                   <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Network I/O</h3>
                 </div>
@@ -541,7 +541,7 @@ export default function Dashboard() {
 
             {/* Top Processes */}
             {processes.length > 0 && (
-              <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+              <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-x-auto">
                 <div className="px-5 py-3 border-b border-dark-600">
                   <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Top Processes</h3>
                 </div>
