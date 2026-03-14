@@ -208,11 +208,11 @@ export default function Security() {
       case "malware":
         return "bg-red-500/10 text-red-400";
       case "file_integrity":
-        return "bg-purple-50 text-purple-600";
+        return "bg-purple-500/10 text-purple-400";
       case "open_port":
-        return "bg-amber-50 text-amber-600";
+        return "bg-amber-500/10 text-amber-400";
       case "ssl_expiry":
-        return "bg-orange-50 text-orange-600";
+        return "bg-orange-500/10 text-orange-400";
       default:
         return "bg-dark-900 text-dark-200";
     }
@@ -257,7 +257,7 @@ export default function Security() {
         <div
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
-              ? "bg-emerald-50 text-emerald-400 border-emerald-200"
+              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
               : "bg-red-500/10 text-red-400 border-red-500/20"
           }`}
         >
@@ -270,7 +270,7 @@ export default function Security() {
         <button
           onClick={() => setTab("overview")}
           className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
-            tab === "overview" ? "bg-dark-800 text-dark-50 shadow-sm" : "text-dark-200 hover:text-gray-700"
+            tab === "overview" ? "bg-dark-800 text-dark-50 shadow-sm" : "text-dark-200 hover:text-dark-100"
           }`}
         >
           Overview
@@ -278,7 +278,7 @@ export default function Security() {
         <button
           onClick={() => setTab("scans")}
           className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
-            tab === "scans" ? "bg-dark-800 text-dark-50 shadow-sm" : "text-dark-200 hover:text-gray-700"
+            tab === "scans" ? "bg-dark-800 text-dark-50 shadow-sm" : "text-dark-200 hover:text-dark-100"
           }`}
         >
           Scan History
@@ -392,7 +392,7 @@ export default function Security() {
                   {new Date(posture.latest_scan.completed_at || posture.latest_scan.started_at).toLocaleString()}
                 </span>
               </div>
-              <div className="px-5 py-3 flex gap-4 text-sm border-b border-gray-50">
+              <div className="px-5 py-3 flex gap-4 text-sm border-b border-dark-600">
                 {posture.latest_scan.critical_count > 0 && (
                   <span className="text-red-400 font-medium">{posture.latest_scan.critical_count} critical</span>
                 )}

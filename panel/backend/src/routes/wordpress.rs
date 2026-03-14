@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{err, ApiError};
+use crate::error::{agent_error, err, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -68,7 +68,7 @@ pub async fn install(
         .agent
         .post(&format!("/wordpress/{domain}/install"), Some(body))
         .await
-        .map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &e.to_string()))?;
+        .map_err(|e| agent_error("WordPress", e))?;
 
     activity::log_activity(
         &state.db,
@@ -138,7 +138,7 @@ pub async fn update(
             None::<serde_json::Value>,
         )
         .await
-        .map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &e.to_string()))?;
+        .map_err(|e| agent_error("WordPress", e))?;
 
     activity::log_activity(
         &state.db,
@@ -171,7 +171,7 @@ pub async fn plugin_action(
             Some(body),
         )
         .await
-        .map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &e.to_string()))?;
+        .map_err(|e| agent_error("WordPress", e))?;
 
     Ok(Json(resp))
 }
@@ -192,7 +192,7 @@ pub async fn theme_action(
             Some(body),
         )
         .await
-        .map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &e.to_string()))?;
+        .map_err(|e| agent_error("WordPress", e))?;
 
     Ok(Json(resp))
 }
@@ -210,7 +210,7 @@ pub async fn set_auto_update(
         .agent
         .post(&format!("/wordpress/{domain}/auto-update"), Some(body))
         .await
-        .map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &e.to_string()))?;
+        .map_err(|e| agent_error("WordPress", e))?;
 
     Ok(Json(resp))
 }

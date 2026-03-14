@@ -227,9 +227,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/servers", get(servers::list).post(servers::create))
         .route("/api/servers/{id}", get(servers::get_one).delete(servers::remove))
         .route("/api/servers/{id}/metrics", get(metrics::server_metrics))
-        .route("/api/servers/{id}/command", post(server_actions::dispatch))
-        .route("/api/servers/{id}/commands", get(server_actions::list_commands))
-        .route("/api/servers/{id}/command/{cmd_id}", get(server_actions::command_status))
+        .route("/api/servers/{id}/commands", post(server_actions::dispatch).get(server_actions::list_commands))
+        .route("/api/servers/{id}/commands/{cmd_id}", get(server_actions::command_status))
         // Teams
         .route("/api/teams", get(teams::list).post(teams::create))
         .route("/api/teams/{id}", delete(teams::remove))
@@ -245,6 +244,9 @@ pub fn router() -> Router<AppState> {
         .route("/api/alert-rules/{server_id}", put(alerts::update_server_rules).delete(alerts::delete_server_rules))
         // Dashboard Intelligence
         .route("/api/dashboard/intelligence", get(dashboard::intelligence))
+        // Agent Diagnostics proxy
+        .route("/api/agent/diagnostics", get(system::diagnostics))
+        .route("/api/agent/diagnostics/fix", post(system::diagnostics_fix))
         // Activity (admin)
         .route("/api/activity", get(activity::list))
 }

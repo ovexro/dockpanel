@@ -270,9 +270,13 @@ pub async fn enable_ssl_for_site(
         .map_err(|e| format!("Template render error: {e}"))?;
 
     let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
-    tokio::fs::write(&config_path, &rendered)
+    let tmp_path = format!("{config_path}.tmp");
+    tokio::fs::write(&tmp_path, &rendered)
         .await
         .map_err(|e| format!("Failed to write nginx config: {e}"))?;
+    tokio::fs::rename(&tmp_path, &config_path)
+        .await
+        .map_err(|e| format!("Failed to rename nginx config: {e}"))?;
 
     let test_result = nginx::test_config()
         .await
