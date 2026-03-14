@@ -248,7 +248,7 @@ export default function Dashboard() {
       ) : (
         <>
           {/* Resource cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
             {/* CPU */}
             <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
               <div className="flex items-center justify-between">
@@ -323,6 +323,22 @@ export default function Dashboard() {
               <ProgressBar pct={system.disk_usage_pct} color={barColor(system.disk_usage_pct)} />
             </div>
 
+            {/* Uptime */}
+            <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-md bg-rose-500/10 flex items-center justify-center">
+                  <svg className="w-4 h-4 text-rose-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                  </svg>
+                </div>
+                <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Uptime</p>
+              </div>
+              <p className="text-3xl font-bold text-dark-50 mt-2">
+                {formatUptime(system.uptime_secs)}
+              </p>
+              <p className="text-sm text-dark-300 mt-2">{system.hostname}</p>
+            </div>
+
             {/* Sites */}
             <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
               <div className="flex items-center gap-2.5">
@@ -355,27 +371,9 @@ export default function Dashboard() {
               </p>
             </div>
 
-            {/* Uptime */}
-            <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-md bg-rose-500/10 flex items-center justify-center">
-                  <svg className="w-4 h-4 text-rose-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                  </svg>
-                </div>
-                <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Uptime</p>
-              </div>
-              <p className="text-3xl font-bold text-dark-50 mt-2">
-                {formatUptime(system.uptime_secs)}
-              </p>
-              <p className="text-sm text-dark-300 mt-2">{system.hostname}</p>
-            </div>
-          </div>
-
-          {/* Server Health Intelligence */}
-          {intel && (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
-              {/* Health Score */}
+            {/* Health Score */}
+            {intel && <>
+            {/* Health Score */}
               <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
                 <div className="flex items-center gap-2.5 mb-3">
                   <div className={`w-8 h-8 rounded-md flex items-center justify-center ${
@@ -472,8 +470,8 @@ export default function Dashboard() {
                   </div>
                 )}
               </div>
-            </div>
-          )}
+            </>}
+          </div>
 
           {/* System Information */}
           <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mb-6">
