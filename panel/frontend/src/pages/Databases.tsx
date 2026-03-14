@@ -152,7 +152,7 @@ export default function Databases() {
 
   return (
     <div className="p-6 lg:p-8">
-      <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
         <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Databases</h1>
         <button
           onClick={() => setShowForm(!showForm)}
@@ -268,7 +268,7 @@ export default function Databases() {
         </div>
       ) : (
         <div className="space-y-0">
-          <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+          <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr className="border-b border-dark-500 bg-dark-900">
