@@ -34,6 +34,7 @@ const Apps = lazy(() => import("./pages/Apps"));
 const Security = lazy(() => import("./pages/Security"));
 const Diagnostics = lazy(() => import("./pages/Diagnostics"));
 const Settings = lazy(() => import("./pages/Settings"));
+const Updates = lazy(() => import("./pages/Updates"));
 const Alerts = lazy(() => import("./pages/Alerts"));
 const Activity = lazy(() => import("./pages/Activity"));
 
@@ -66,6 +67,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/security" element={<Security />} />
               <Route path="/diagnostics" element={<Diagnostics />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/updates" element={<Updates />} />
               <Route path="/activity" element={<Activity />} />
               <Route path="/users" element={<Users />} />
               <Route path="/servers" element={<Servers />} />

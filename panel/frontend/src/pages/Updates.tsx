@@ -1,0 +1,269 @@
+import { useState } from "react";
+import { Navigate } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
+import { api } from "../api";
+
+interface PackageUpdate {
+  name: string;
+  current_version: string;
+  new_version: string;
+  repo: string;
+  security: boolean;
+}
+
+export default function Updates() {
+  const { user } = useAuth();
+  const [packages, setPackages] = useState<PackageUpdate[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [checked, setChecked] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [message, setMessage] = useState({ text: "", type: "" });
+
+  if (user?.role !== "admin") return <Navigate to="/" replace />;
+
+  const checkUpdates = async () => {
+    setLoading(true);
+    setMessage({ text: "", type: "" });
+    try {
+      const data = await api.get<{ updates: PackageUpdate[] }>("/system/updates");
+      setPackages(data.updates || []);
+      setSelected(new Set());
+      setChecked(true);
+    } catch (e) {
+      setMessage({
+        text: e instanceof Error ? e.message : "Failed to check for updates",
+        type: "error",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const applyUpdates = async () => {
+    setApplying(true);
+    setMessage({ text: "", type: "" });
+    try {
+      const body = selected.size > 0 ? { packages: Array.from(selected) } : {};
+      await api.post("/system/updates/apply", body);
+      setMessage({
+        text: selected.size > 0
+          ? `Successfully updated ${selected.size} package(s)`
+          : "All packages updated successfully",
+        type: "success",
+      });
+      // Refresh the list
+      const data = await api.get<{ updates: PackageUpdate[] }>("/system/updates");
+      setPackages(data.updates || []);
+      setSelected(new Set());
+    } catch (e) {
+      setMessage({
+        text: e instanceof Error ? e.message : "Failed to apply updates",
+        type: "error",
+      });
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const toggleSelect = (name: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (selected.size === packages.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(packages.map((p) => p.name)));
+    }
+  };
+
+  const securityCount = packages.filter((p) => p.security).length;
+
+  return (
+    <div className="p-6 lg:p-8">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
+        <div>
+          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">
+            System Updates
+          </h1>
+          <p className="text-xs text-dark-400 font-mono mt-1">
+            Manage system package updates
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {packages.length > 0 && (
+            <button
+              onClick={applyUpdates}
+              disabled={applying}
+              className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2"
+            >
+              {applying && (
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+              )}
+              {applying
+                ? "Applying..."
+                : selected.size > 0
+                  ? `Update Selected (${selected.size})`
+                  : "Update All"}
+            </button>
+          )}
+          <button
+            onClick={checkUpdates}
+            disabled={loading}
+            className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 flex items-center gap-2"
+          >
+            {loading && (
+              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+            )}
+            {loading ? "Checking..." : "Check for Updates"}
+          </button>
+        </div>
+      </div>
+
+      {message.text && (
+        <div
+          className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
+            message.type === "success"
+              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+              : "bg-red-500/10 text-red-400 border-red-500/20"
+          }`}
+        >
+          {message.text}
+        </div>
+      )}
+
+      {/* Summary cards */}
+      {checked && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+          <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                <svg className="w-5 h-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                </svg>
+              </div>
+              <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Available</p>
+            </div>
+            <p className="text-3xl font-bold text-dark-50 mt-2">{packages.length}</p>
+            <p className="text-xs text-dark-300 mt-1">packages to update</p>
+          </div>
+
+          <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-lg bg-red-500/10 flex items-center justify-center">
+                <svg className="w-5 h-5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+                </svg>
+              </div>
+              <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Security</p>
+            </div>
+            <p className={`text-3xl font-bold mt-2 ${securityCount > 0 ? "text-red-400" : "text-emerald-400"}`}>
+              {securityCount}
+            </p>
+            <p className="text-xs text-dark-300 mt-1">security patches</p>
+          </div>
+
+          <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-lg bg-emerald-500/10 flex items-center justify-center">
+                <svg className="w-5 h-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                </svg>
+              </div>
+              <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Selected</p>
+            </div>
+            <p className="text-3xl font-bold text-dark-50 mt-2">
+              {selected.size || "All"}
+            </p>
+            <p className="text-xs text-dark-300 mt-1">
+              {selected.size > 0 ? "packages selected" : "packages will update"}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Package table */}
+      {checked && packages.length === 0 ? (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 p-12 text-center">
+          <svg className="w-12 h-12 text-emerald-400 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+          </svg>
+          <p className="text-dark-50 text-sm font-medium">System is up to date</p>
+          <p className="text-dark-300 text-xs mt-1 font-mono">All packages are at their latest versions</p>
+        </div>
+      ) : checked && packages.length > 0 ? (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="bg-dark-900">
+                <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2 w-10">
+                  <input
+                    type="checkbox"
+                    checked={selected.size === packages.length && packages.length > 0}
+                    onChange={toggleAll}
+                    className="w-3.5 h-3.5 accent-rust-500"
+                  />
+                </th>
+                <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Package</th>
+                <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Current</th>
+                <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Available</th>
+                <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Repo</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-dark-600">
+              {packages.map((pkg) => (
+                <tr
+                  key={pkg.name}
+                  className={`hover:bg-dark-700/30 transition-colors ${
+                    selected.has(pkg.name) ? "bg-dark-700/20" : ""
+                  }`}
+                >
+                  <td className="px-5 py-2.5">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(pkg.name)}
+                      onChange={() => toggleSelect(pkg.name)}
+                      className="w-3.5 h-3.5 accent-rust-500"
+                    />
+                  </td>
+                  <td className="px-5 py-2.5 text-sm text-dark-50 font-mono">
+                    <div className="flex items-center gap-2">
+                      {pkg.name}
+                      {pkg.security && (
+                        <span className="px-1.5 py-0.5 bg-red-500/15 text-red-400 rounded text-[10px] font-semibold uppercase tracking-wider border border-red-500/20">
+                          Security
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-5 py-2.5 text-sm text-dark-300 font-mono">{pkg.current_version}</td>
+                  <td className="px-5 py-2.5 text-sm text-emerald-400 font-mono">{pkg.new_version}</td>
+                  <td className="px-5 py-2.5 text-sm text-dark-200 font-mono">{pkg.repo}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : !checked ? (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 p-12 text-center">
+          <svg className="w-12 h-12 text-dark-400 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+          </svg>
+          <p className="text-dark-300 text-sm">Click "Check for Updates" to scan for available package updates</p>
+        </div>
+      ) : null}
+    </div>
+  );
+}

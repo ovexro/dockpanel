@@ -110,6 +110,7 @@ export default function Dashboard() {
   const [error, setError] = useState("");
   const [intel, setIntel] = useState<Intelligence | null>(null);
   const [appCount, setAppCount] = useState(0);
+  const [updateCount, setUpdateCount] = useState(0);
   const [dismissed, setDismissed] = useState(() => localStorage.getItem("dp-onboarding-dismissed") === "1");
 
   const dismissOnboarding = useCallback(() => {
@@ -151,6 +152,10 @@ export default function Dashboard() {
       .get<{ container_id: string }[]>("/apps")
       .then((list) => setAppCount(list.length))
       .catch(() => {}); // Non-critical: only affects onboarding step count
+    api
+      .get<{ count: number; security: number }>("/system/updates/count")
+      .then((d) => setUpdateCount(d.count))
+      .catch(() => {});
   };
 
   useEffect(() => {
@@ -310,6 +315,14 @@ export default function Dashboard() {
                 <span className="text-dark-50">{intel.ssl_countdowns.length} certs</span>
               </div>
             </>}
+            <span className="text-dark-500">|</span>
+            <div className="flex items-center gap-2">
+              <span className="text-dark-400">UPDATES</span>
+              {updateCount > 0
+                ? <span className="text-amber-400">{updateCount} available</span>
+                : <span className="text-emerald-400">up to date</span>
+              }
+            </div>
           </div>
 
           {/* Active Issues + SSL — side by side */}

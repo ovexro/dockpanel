@@ -18,6 +18,7 @@ pub mod staging;
 pub mod ssl;
 pub mod system;
 pub mod terminal;
+pub mod updates;
 pub mod wordpress;
 
 use axum::{
