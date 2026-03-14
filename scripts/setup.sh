@@ -480,6 +480,7 @@ RestartSec=5
 StartLimitBurst=5
 StartLimitIntervalSec=60
 Environment=RUST_LOG=info
+RuntimeDirectory=dockpanel
 ReadWritePaths=/etc/nginx /etc/dockpanel /var/run/dockpanel /var/backups/dockpanel /var/www /var/log /etc/letsencrypt
 NoNewPrivileges=yes
 ProtectSystem=strict
@@ -516,6 +517,7 @@ ProtectHome=yes
 ProtectKernelLogs=yes
 ProtectKernelModules=yes
 ProtectSystem=strict
+RuntimeDirectory=dockpanel
 ReadWritePaths=/var/run/dockpanel /tmp
 MemoryMax=1G
 LimitNOFILE=65535
