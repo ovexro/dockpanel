@@ -1,17 +1,17 @@
 @import "tailwindcss";
 
 @theme {
-  /* Brand Colors — Rust Orange */
-  --color-brand-50: #fff7ed;
-  --color-brand-100: #ffedd5;
-  --color-brand-200: #fed7aa;
-  --color-brand-300: #fdba74;
-  --color-brand-400: #ff7a18;
-  --color-brand-500: #ff6b2b;
-  --color-brand-600: #f74c00;
-  --color-brand-700: #c73d00;
-  --color-brand-800: #952f00;
-  --color-brand-900: #7a2700;
+  /* Brand Colors — Green (matches panel) */
+  --color-brand-50: #f0fdf4;
+  --color-brand-100: #dcfce7;
+  --color-brand-200: #bbf7d0;
+  --color-brand-300: #86efac;
+  --color-brand-400: #4ade80;
+  --color-brand-500: #22c55e;
+  --color-brand-600: #16a34a;
+  --color-brand-700: #15803d;
+  --color-brand-800: #166534;
+  --color-brand-900: #14532d;
 
   /* Surface Colors — GitHub-style neutral darks */
   --color-surface-50: #f0f6fc;
@@ -48,14 +48,14 @@ code, pre {
 /* Alternating section background */
 .section-alt {
   background:
-    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(247, 76, 0, 0.03), transparent 70%),
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(74, 222, 128, 0.03), transparent 70%),
     rgba(255, 255, 255, 0.008);
 }
 
 /* Subtle pricing glow for popular card */
 .pricing-glow {
   box-shadow:
-    0 0 60px -15px rgba(247, 76, 0, 0.25),
-    0 0 30px -10px rgba(255, 122, 24, 0.15),
+    0 0 60px -15px rgba(22, 163, 74, 0.25),
+    0 0 30px -10px rgba(74, 222, 128, 0.15),
     0 25px 50px -12px rgba(0, 0, 0, 0.4);
 }
