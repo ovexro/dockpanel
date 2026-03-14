@@ -111,6 +111,7 @@ export default function Dashboard() {
   const [intel, setIntel] = useState<Intelligence | null>(null);
   const [appCount, setAppCount] = useState(0);
   const [updateCount, setUpdateCount] = useState(0);
+  const [rebootRequired, setRebootRequired] = useState(false);
   const [dismissed, setDismissed] = useState(() => localStorage.getItem("dp-onboarding-dismissed") === "1");
 
   const dismissOnboarding = useCallback(() => {
@@ -153,8 +154,8 @@ export default function Dashboard() {
       .then((list) => setAppCount(list.length))
       .catch(() => {}); // Non-critical: only affects onboarding step count
     api
-      .get<{ count: number; security: number }>("/system/updates/count")
-      .then((d) => setUpdateCount(d.count))
+      .get<{ count: number; security: number; reboot_required: boolean }>("/system/updates/count")
+      .then((d) => { setUpdateCount(d.count); setRebootRequired(d.reboot_required); })
       .catch(() => {});
   };
 
@@ -324,6 +325,20 @@ export default function Dashboard() {
               }
             </div>
           </div>
+
+          {/* Reboot Required Warning */}
+          {rebootRequired && (
+            <div className="border border-amber-500/50 bg-amber-500/5 p-4 mb-6 flex items-start gap-3">
+              <svg className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" /></svg>
+              <div className="flex-1">
+                <p className="text-sm text-amber-400 font-bold">Reboot Required</p>
+                <p className="text-xs text-dark-300 mt-1">Recent package updates (such as a new kernel version) require a reboot to be fully applied.</p>
+              </div>
+              <Link to="/updates" className="px-4 py-2 bg-amber-500 text-dark-900 text-xs font-bold uppercase tracking-wider hover:bg-amber-400 transition-colors shrink-0">
+                View Updates
+              </Link>
+            </div>
+          )}
 
           {/* Active Issues + SSL — side by side */}
           {intel && (intel.top_issues.length > 0 || intel.ssl_countdowns.length > 0) && (
