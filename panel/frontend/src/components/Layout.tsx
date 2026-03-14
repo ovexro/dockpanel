@@ -180,7 +180,7 @@ export default function Layout() {
             <div key={group.label} className={gi > 0 ? "pt-2 mt-1 border-t border-dark-600/40" : ""}>
               <button
                 onClick={() => toggleGroup(group.label)}
-                className="flex items-center justify-between w-full px-3 py-1 text-[11px] font-semibold uppercase tracking-widest text-rust-500/70 hover:text-rust-400 font-mono transition-colors"
+                className="flex items-center justify-between w-full px-3 py-1 text-[11px] font-semibold uppercase tracking-widest text-dark-400 hover:text-dark-200 font-mono transition-colors"
               >
                 {group.label}
                 <svg className={`w-3 h-3 transition-transform ${collapsed[group.label] ? "-rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -198,8 +198,8 @@ export default function Layout() {
                       className={({ isActive }) =>
                         `flex items-center gap-3 px-3 py-1.5 transition-colors text-sm font-mono ${
                           isActive
-                            ? "bg-rust-500/10 text-rust-400 border-l-2 border-rust-500"
-                            : "text-rust-400/60 hover:bg-dark-700/50 hover:text-rust-300 border-l-2 border-transparent"
+                            ? "bg-rust-500/5 text-dark-50 border-l-2 border-rust-500"
+                            : "text-dark-300 hover:bg-dark-700/50 hover:text-dark-100 border-l-2 border-transparent"
                         }`
                       }
                     >
