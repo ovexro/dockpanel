@@ -89,7 +89,7 @@ function RingGauge({ pct, size = 80, strokeWidth = 5 }: { pct: number; size?: nu
         <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke={color} strokeWidth={strokeWidth} strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round" className="transition-all duration-700" />
       </svg>
       <div className="absolute inset-0 flex items-center justify-center">
-        <span className="text-base font-bold text-dark-50 font-mono">{clamped.toFixed(0)}<span className="text-xs text-dark-400">%</span></span>
+        <span className="text-base font-bold text-dark-50 font-mono">{clamped.toFixed(0)}<span className="text-sm text-dark-200">%</span></span>
       </div>
     </div>
   );
