@@ -18,6 +18,7 @@ interface Site {
   php_memory_mb: number;
   php_max_workers: number;
   custom_nginx: string | null;
+  php_preset: string | null;
   parent_site_id: string | null;
   synced_at: string | null;
   created_at: string;
@@ -245,6 +246,12 @@ export default function SiteDetail() {
                   )}
                 </div>
               </dd>
+            </div>
+          )}
+          {site.runtime === "php" && site.php_preset && site.php_preset !== "generic" && (
+            <div className="px-5 py-4 grid grid-cols-3">
+              <dt className="text-sm font-medium text-dark-200">Framework</dt>
+              <dd className="text-sm text-dark-50 col-span-2 capitalize">{site.php_preset}</dd>
             </div>
           )}
           <div className="px-5 py-4 grid grid-cols-3">

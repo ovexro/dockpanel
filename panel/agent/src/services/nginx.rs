@@ -220,6 +220,7 @@ pub fn render_site_config(
                     .as_deref()
                     .unwrap_or("unix:/run/php/php-fpm.sock"),
             );
+            ctx.insert("php_preset", &config.php_preset.as_deref().unwrap_or("generic"));
             if ssl {
                 templates.render("https.conf", &ctx)
             } else {

@@ -51,6 +51,7 @@ pub struct Site {
     pub php_memory_mb: i32,
     pub php_max_workers: i32,
     pub custom_nginx: Option<String>,
+    pub php_preset: Option<String>,
     pub parent_site_id: Option<Uuid>,
     pub synced_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
