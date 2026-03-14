@@ -136,7 +136,15 @@ export default function Users() {
 
       <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
         {loading ? (
-          <div className="p-8 text-center text-dark-300">Loading...</div>
+          <div className="p-6 space-y-3 animate-pulse">
+            {[...Array(4)].map((_, i) => (
+              <div key={i} className="h-12 bg-dark-600 rounded w-full" />
+            ))}
+          </div>
+        ) : users.length === 0 ? (
+          <div className="p-12 text-center">
+            <p className="text-dark-200 font-medium">No users</p>
+          </div>
         ) : (
           <table className="w-full">
             <thead>

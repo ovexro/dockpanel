@@ -29,7 +29,7 @@ After installation, open `http://YOUR_SERVER_IP:8443` and create your admin acco
 - **Site Management** — Static, PHP (multiple versions), Node.js, and reverse proxy sites with automatic Nginx configuration
 - **Free SSL** — Automatic Let's Encrypt provisioning and renewal
 - **Database Management** — MySQL and PostgreSQL in Docker containers with credential management
-- **Docker Apps** — 8 one-click templates (WordPress, Ghost, Redis, Portainer, n8n, Gitea, Adminer, Uptime Kuma) + Docker Compose import
+- **Docker Apps** — 34 one-click templates across 10 categories (databases, CMS, monitoring, analytics, tools, dev, storage, media, networking, security) + Docker Compose import
 - **Web Terminal** — Full SSH terminal in your browser via WebSocket
 - **File Manager** — Browse, edit, upload, and download files from the browser
 - **Backups** — Scheduled backups with S3-compatible remote destinations and one-click restore
@@ -42,6 +42,11 @@ After installation, open `http://YOUR_SERVER_IP:8443` and create your admin acco
 - **Cron Jobs** — Create, edit, and manage cron jobs with execution tracking
 - **Teams** — Multi-user access with admin/user roles and team-based permissions
 - **Activity Log** — Full audit trail of all panel actions
+- **CLI** — Full command-line interface (`dockpanel status`, `dockpanel sites`, `dockpanel diagnose`, etc.)
+- **Infrastructure as Code** — Export/import server config as YAML (`dockpanel export`, `dockpanel apply`)
+- **Smart Diagnostics** — Pattern-based issue detection with one-click fixes
+- **Auto-Healing** — Automatic restart of crashed services, log cleanup, SSL renewal
+- **2FA** — TOTP two-factor authentication with recovery codes
 - **Multi-Server** — Manage unlimited servers from a single dashboard
 - **ARM64** — Runs on Raspberry Pi, Oracle Cloud free-tier ARM, and any ARM64 server
 
@@ -84,6 +89,7 @@ dockpanel/
 ├── panel/
 │   ├── agent/          # Rust agent (host-level operations)
 │   ├── backend/        # Rust API server
+│   ├── cli/            # Rust CLI binary
 │   └── frontend/       # React frontend
 ├── scripts/
 │   ├── install.sh      # Quick installer (curl | bash)
@@ -110,8 +116,30 @@ cd panel/agent && cargo build --release
 # API
 cd panel/backend && cargo build --release
 
+# CLI
+cd panel/cli && cargo build --release
+
 # Frontend
 cd panel/frontend && npm install && npx vite build
+```
+
+### Running Locally
+
+1. Start PostgreSQL (Docker): `docker run -d --name dockpanel-postgres -e POSTGRES_USER=dockpanel -e POSTGRES_PASSWORD=dockpanel -e POSTGRES_DB=dockpanel -p 5450:5432 postgres:16`
+2. Create `/etc/dockpanel/api.env` with: `DATABASE_URL=postgres://dockpanel:dockpanel@localhost:5450/dockpanel` and `JWT_SECRET=<random-64-char-hex>`
+3. Start the agent: `sudo ./panel/agent/target/release/dockpanel-agent`
+4. Start the API: `./panel/backend/target/release/dockpanel-api`
+5. Start the frontend dev server: `cd panel/frontend && npm run dev`
+
+### CLI Usage
+
+```bash
+dockpanel status              # Server status
+dockpanel sites               # List sites
+dockpanel apps                # List Docker apps
+dockpanel diagnose            # Run diagnostics
+dockpanel export -o config.yml  # Export server config
+dockpanel apply config.yml    # Apply config from YAML
 ```
 
 ## Update

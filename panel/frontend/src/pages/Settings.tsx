@@ -305,8 +305,9 @@ export default function Settings() {
           <div className="p-5 space-y-4">
             {/* Provider Preset */}
             <div>
-              <label className="block text-sm font-medium text-dark-100 mb-1">Provider</label>
+              <label htmlFor="smtp-provider" className="block text-sm font-medium text-dark-100 mb-1">Provider</label>
               <select
+                id="smtp-provider"
                 value={smtpProvider}
                 onChange={(e) => applyPreset(e.target.value)}
                 className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm bg-dark-800 focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
@@ -345,8 +346,9 @@ export default function Settings() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-dark-100 mb-1">Encryption</label>
+                <label htmlFor="smtp-encryption" className="block text-sm font-medium text-dark-100 mb-1">Encryption</label>
                 <select
+                  id="smtp-encryption"
                   value={smtpEncryption}
                   onChange={(e) => setSmtpEncryption(e.target.value)}
                   className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm bg-dark-800 focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
@@ -612,6 +614,7 @@ export default function Settings() {
                     value={twoFaDisableCode}
                     onChange={(e) => setTwoFaDisableCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
                     placeholder="Enter TOTP code to disable"
+                    aria-label="TOTP code to disable 2FA"
                     className="px-3 py-2 border border-dark-500 rounded-lg text-sm w-48 focus:ring-2 focus:ring-rust-500 outline-none font-mono"
                   />
                   <button
@@ -650,6 +653,7 @@ export default function Settings() {
                     value={twoFaCode}
                     onChange={(e) => setTwoFaCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
                     placeholder="Enter 6-digit code"
+                    aria-label="TOTP verification code"
                     className="px-3 py-2 border border-dark-500 rounded-lg text-sm w-48 focus:ring-2 focus:ring-rust-500 outline-none font-mono"
                     autoFocus
                   />
@@ -741,8 +745,9 @@ export default function Settings() {
               <label htmlFor="notify-email" className="text-sm text-dark-100">Email notifications</label>
             </div>
             <div>
-              <label className="block text-sm font-medium text-dark-100 mb-1">Slack Webhook URL</label>
+              <label htmlFor="notify-slack" className="block text-sm font-medium text-dark-100 mb-1">Slack Webhook URL</label>
               <input
+                id="notify-slack"
                 type="url"
                 value={notifySlackUrl}
                 onChange={(e) => setNotifySlackUrl(e.target.value)}
@@ -751,8 +756,9 @@ export default function Settings() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-dark-100 mb-1">Discord Webhook URL</label>
+              <label htmlFor="notify-discord" className="block text-sm font-medium text-dark-100 mb-1">Discord Webhook URL</label>
               <input
+                id="notify-discord"
                 type="url"
                 value={notifyDiscordUrl}
                 onChange={(e) => setNotifyDiscordUrl(e.target.value)}
@@ -812,6 +818,9 @@ export default function Settings() {
                     setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
                   }
                 }}
+                role="switch"
+                aria-checked={autoHealEnabled}
+                aria-label="Enable auto-healing"
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${autoHealEnabled ? "bg-rust-500" : "bg-dark-600"}`}
               >
                 <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${autoHealEnabled ? "translate-x-6" : "translate-x-1"}`} />

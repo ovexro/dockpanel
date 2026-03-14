@@ -124,27 +124,37 @@ export default function Activity() {
 
       <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
         {loading ? (
-          <div className="p-8 text-center text-dark-300">Loading...</div>
+          <div className="p-6 space-y-3 animate-pulse">
+            {[...Array(5)].map((_, i) => (
+              <div key={i} className="h-10 bg-dark-600 rounded w-full" />
+            ))}
+          </div>
         ) : entries.length === 0 ? (
-          <div className="p-8 text-center text-dark-300">No activity found</div>
+          <div className="p-12 text-center">
+            <svg className="w-12 h-12 text-dark-400 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1} aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+            </svg>
+            <p className="text-dark-200 font-medium">No activity found</p>
+            <p className="text-dark-300 text-sm mt-1">Admin actions will appear here</p>
+          </div>
         ) : (
           <>
             <table className="w-full">
               <thead>
                 <tr className="bg-dark-900 border-b border-dark-500">
-                  <th className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 w-28">
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 w-28">
                     Time
                   </th>
-                  <th className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3">
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3">
                     User
                   </th>
-                  <th className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 w-36">
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 w-36">
                     Action
                   </th>
-                  <th className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3">
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 hidden md:table-cell">
                     Target
                   </th>
-                  <th className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3">
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase px-5 py-3 hidden lg:table-cell">
                     Details
                   </th>
                 </tr>
@@ -174,13 +184,13 @@ export default function Activity() {
                           {entry.action}
                         </span>
                       </td>
-                      <td className="px-5 py-3 text-sm text-dark-50">
+                      <td className="px-5 py-3 text-sm text-dark-50 hidden md:table-cell">
                         {entry.target_type && (
                           <span className="text-dark-300 text-xs mr-1">{entry.target_type}:</span>
                         )}
                         {entry.target_name || <span className="text-dark-400">-</span>}
                       </td>
-                      <td className="px-5 py-3 text-sm text-dark-200 truncate max-w-[250px]">
+                      <td className="px-5 py-3 text-sm text-dark-200 truncate max-w-[250px] hidden lg:table-cell">
                         {entry.details || <span className="text-dark-400">-</span>}
                       </td>
                     </tr>
