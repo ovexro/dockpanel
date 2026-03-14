@@ -1,0 +1,1 @@
+ALTER TABLE sites ADD COLUMN IF NOT EXISTS php_preset VARCHAR(32) DEFAULT 'generic';

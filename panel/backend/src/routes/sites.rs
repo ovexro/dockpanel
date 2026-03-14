@@ -24,6 +24,7 @@ pub struct CreateSiteRequest {
     pub runtime: Option<String>,
     pub proxy_port: Option<i32>,
     pub php_version: Option<String>,
+    pub php_preset: Option<String>,
 }
 
 /// GET /api/sites — List all sites for the current user.
@@ -77,6 +78,15 @@ pub async fn create(
         ));
     }
 
+    if let Some(ref preset) = body.php_preset {
+        if !["generic", "laravel", "wordpress", "drupal", "joomla", "symfony", "codeigniter", "magento"].contains(&preset.as_str()) {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "php_preset must be one of: generic, laravel, wordpress, drupal, joomla, symfony, codeigniter, magento",
+            ));
+        }
+    }
+
     // Check domain uniqueness
     let existing: Option<(Uuid,)> =
         sqlx::query_as("SELECT id FROM sites WHERE domain = $1")
@@ -91,14 +101,15 @@ pub async fn create(
 
     // Insert site with status "creating"
     let site: Site = sqlx::query_as(
-        "INSERT INTO sites (user_id, domain, runtime, status, proxy_port, php_version) \
-         VALUES ($1, $2, $3, 'creating', $4, $5) RETURNING *",
+        "INSERT INTO sites (user_id, domain, runtime, status, proxy_port, php_version, php_preset) \
+         VALUES ($1, $2, $3, 'creating', $4, $5, $6) RETURNING *",
     )
     .bind(claims.sub)
     .bind(&body.domain)
     .bind(runtime)
     .bind(body.proxy_port)
     .bind(&body.php_version)
+    .bind(body.php_preset.as_deref().unwrap_or("generic"))
     .fetch_one(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -113,6 +124,9 @@ pub async fn create(
     }
     if let Some(ref php) = body.php_version {
         agent_body["php_socket"] = serde_json::json!(format!("unix:/run/php/php{php}-fpm.sock"));
+    }
+    if let Some(ref preset) = body.php_preset {
+        agent_body["php_preset"] = serde_json::json!(preset);
     }
 
     // Call agent to create nginx config
@@ -220,6 +234,11 @@ pub async fn switch_php(
         "runtime": "php",
         "php_socket": format!("unix:/run/php/php{version}-fpm.sock"),
     });
+
+    // Preserve PHP preset
+    if let Some(ref preset) = site.php_preset {
+        agent_body["php_preset"] = serde_json::json!(preset);
+    }
 
     // Preserve custom nginx directives
     if let Some(ref custom) = site.custom_nginx {
@@ -388,6 +407,9 @@ pub async fn update_limits(
         agent_body["custom_nginx"] = serde_json::json!(custom);
     } else if let Some(ref existing) = site.custom_nginx {
         agent_body["custom_nginx"] = serde_json::json!(existing);
+    }
+    if let Some(ref preset) = site.php_preset {
+        agent_body["php_preset"] = serde_json::json!(preset);
     }
 
     if let Some(port) = site.proxy_port {

@@ -62,6 +62,7 @@ async fn provision(
         php_memory_mb: None,
         php_max_workers: None,
         custom_nginx: None,
+        php_preset: None,
     };
 
     ssl::enable_ssl_for_site(&state.templates, &domain, &site_config)

@@ -88,6 +88,7 @@ async fn deploy(
             php_memory_mb: None,
             php_max_workers: None,
             custom_nginx: None,
+            php_preset: None,
         };
 
         match nginx::render_site_config(&state.templates, domain, &site_config) {
@@ -143,6 +144,7 @@ async fn deploy(
                                     php_memory_mb: None,
                                     php_max_workers: None,
                                     custom_nginx: None,
+                                    php_preset: None,
                                 };
                                 match ssl::enable_ssl_for_site(&state.templates, domain, &ssl_site_config).await {
                                     Ok(()) => {

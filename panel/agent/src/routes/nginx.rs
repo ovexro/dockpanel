@@ -36,6 +36,8 @@ pub struct SiteConfig {
     pub php_max_workers: Option<u32>,
     /// Custom nginx directives injected into server block
     pub custom_nginx: Option<String>,
+    /// PHP framework preset: "laravel", "wordpress", "drupal", "joomla", "symfony", "codeigniter", "magento", "generic"
+    pub php_preset: Option<String>,
 }
 
 #[derive(Serialize)]
