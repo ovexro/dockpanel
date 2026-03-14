@@ -25,6 +25,7 @@ export default function Sites() {
   const [runtime, setRuntime] = useState("static");
   const [proxyPort, setProxyPort] = useState("");
   const [phpVersion, setPhpVersion] = useState("8.4");
+  const [phpPreset, setPhpPreset] = useState("generic");
   const [submitting, setSubmitting] = useState(false);
 
   const fetchSites = () => {
@@ -44,7 +45,10 @@ export default function Sites() {
     try {
       const body: Record<string, unknown> = { domain, runtime };
       if (runtime === "proxy") body.proxy_port = parseInt(proxyPort);
-      if (runtime === "php") body.php_version = phpVersion;
+      if (runtime === "php") {
+        body.php_version = phpVersion;
+        body.php_preset = phpPreset;
+      }
 
       await api.post("/sites", body);
       setShowForm(false);
@@ -130,19 +134,39 @@ export default function Sites() {
           )}
 
           {runtime === "php" && (
-            <div>
-              <label htmlFor="site-php-version" className="block text-sm font-medium text-dark-100 mb-1">PHP Version</label>
-              <select
-                id="site-php-version"
-                value={phpVersion}
-                onChange={(e) => setPhpVersion(e.target.value)}
-                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none text-sm bg-dark-800 max-w-xs"
-              >
-                <option value="8.4">PHP 8.4</option>
-                <option value="8.3">PHP 8.3</option>
-                <option value="8.2">PHP 8.2</option>
-                <option value="8.1">PHP 8.1</option>
-              </select>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label htmlFor="site-php-version" className="block text-sm font-medium text-dark-100 mb-1">PHP Version</label>
+                <select
+                  id="site-php-version"
+                  value={phpVersion}
+                  onChange={(e) => setPhpVersion(e.target.value)}
+                  className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none text-sm bg-dark-800"
+                >
+                  <option value="8.4">PHP 8.4</option>
+                  <option value="8.3">PHP 8.3</option>
+                  <option value="8.2">PHP 8.2</option>
+                  <option value="8.1">PHP 8.1</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="site-php-preset" className="block text-sm font-medium text-dark-100 mb-1">Framework</label>
+                <select
+                  id="site-php-preset"
+                  value={phpPreset}
+                  onChange={(e) => setPhpPreset(e.target.value)}
+                  className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none text-sm bg-dark-800"
+                >
+                  <option value="generic">Generic PHP</option>
+                  <option value="laravel">Laravel</option>
+                  <option value="wordpress">WordPress</option>
+                  <option value="drupal">Drupal</option>
+                  <option value="joomla">Joomla</option>
+                  <option value="symfony">Symfony</option>
+                  <option value="codeigniter">CodeIgniter</option>
+                  <option value="magento">Magento</option>
+                </select>
+              </div>
             </div>
           )}
 
