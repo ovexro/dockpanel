@@ -99,3 +99,22 @@ pub async fn updates_count(
         .map_err(|e| agent_error("Update count", e))?;
     Ok(Json(data))
 }
+
+/// POST /api/system/reboot — Reboot the system (admin only).
+pub async fn system_reboot(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let data = state
+        .agent
+        .post("/system/reboot", None::<serde_json::Value>)
+        .await
+        .map_err(|e| agent_error("System reboot", e))?;
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "system.reboot",
+        Some("system"), Some("server"), None, None,
+    ).await;
+
+    Ok(Json(data))
+}

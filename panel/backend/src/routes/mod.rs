@@ -176,6 +176,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/system/updates", get(system::updates_list))
         .route("/api/system/updates/apply", post(system::updates_apply))
         .route("/api/system/updates/count", get(system::updates_count))
+        .route("/api/system/reboot", post(system::system_reboot))
         // Logs (admin)
         .route("/api/logs", get(logs::system_logs))
         .route("/api/logs/search", get(logs::search_system_logs))

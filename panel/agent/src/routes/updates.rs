@@ -24,12 +24,20 @@ struct ApplyResult {
     success: bool,
     updated: usize,
     output: String,
+    reboot_required: bool,
 }
 
 #[derive(Serialize)]
 struct UpdateCount {
     count: usize,
     security: usize,
+    reboot_required: bool,
+}
+
+#[derive(Serialize)]
+struct RebootResult {
+    success: bool,
+    message: String,
 }
 
 /// Parse a single apt upgradable line into a PackageUpdate.
@@ -129,6 +137,7 @@ async fn apply_updates(Json(body): Json<ApplyRequest>) -> Json<ApplyResult> {
                     success: false,
                     updated: 0,
                     output: format!("Invalid package name: {pkg}"),
+                    reboot_required: false,
                 });
             }
         }
@@ -172,21 +181,27 @@ async fn apply_updates(Json(body): Json<ApplyRequest>) -> Json<ApplyResult> {
                 .filter(|l| l.starts_with("Setting up "))
                 .count();
 
+            let reboot_required =
+                tokio::fs::metadata("/var/run/reboot-required").await.is_ok();
+
             Json(ApplyResult {
                 success: output.status.success(),
                 updated,
                 output: combined,
+                reboot_required,
             })
         }
         Ok(Err(e)) => Json(ApplyResult {
             success: false,
             updated: 0,
             output: format!("Failed to execute apt: {e}"),
+            reboot_required: false,
         }),
         Err(_) => Json(ApplyResult {
             success: false,
             updated: 0,
             output: "Command timed out after 300 seconds".to_string(),
+            reboot_required: false,
         }),
     }
 }
@@ -217,7 +232,36 @@ async fn update_count() -> Json<UpdateCount> {
         Err(_) => (0, 0),
     };
 
-    Json(UpdateCount { count, security })
+    let reboot_required =
+        tokio::fs::metadata("/var/run/reboot-required").await.is_ok();
+
+    Json(UpdateCount { count, security, reboot_required })
+}
+
+/// POST /system/reboot — schedule a system reboot in 1 minute.
+async fn system_reboot() -> Json<RebootResult> {
+    let result = Command::new("shutdown")
+        .args(["-r", "+1", "DockPanel initiated reboot"])
+        .output()
+        .await;
+
+    match result {
+        Ok(output) if output.status.success() => Json(RebootResult {
+            success: true,
+            message: "System will reboot in 1 minute".to_string(),
+        }),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            Json(RebootResult {
+                success: false,
+                message: format!("Reboot command failed: {stderr}"),
+            })
+        }
+        Err(e) => Json(RebootResult {
+            success: false,
+            message: format!("Failed to execute shutdown: {e}"),
+        }),
+    }
 }
 
 pub fn router() -> Router<AppState> {
@@ -225,4 +269,5 @@ pub fn router() -> Router<AppState> {
         .route("/system/updates", get(list_updates))
         .route("/system/updates/apply", post(apply_updates))
         .route("/system/updates/count", get(update_count))
+        .route("/system/reboot", post(system_reboot))
 }
