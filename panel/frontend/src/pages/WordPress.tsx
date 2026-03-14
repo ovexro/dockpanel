@@ -457,7 +457,7 @@ export default function WordPress() {
 
           {/* Plugin List */}
           {tab === "plugins" && (
-            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-dark-900 text-left">
@@ -577,7 +577,7 @@ export default function WordPress() {
 
           {/* Theme List */}
           {tab === "themes" && (
-            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-dark-900 text-left">

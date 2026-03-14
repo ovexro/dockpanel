@@ -158,7 +158,7 @@ export default function Backups() {
       </div>
 
       {/* Header */}
-      <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
         <div>
           <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Backups</h1>
           <p className="text-sm text-dark-200 mt-1 font-mono">{site?.domain}</p>
@@ -319,7 +319,7 @@ export default function Backups() {
       </div>
 
       {/* Backups list */}
-      <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+      <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-x-auto">
         {loading ? (
           <div className="p-8 text-center text-dark-300">Loading...</div>
         ) : backups.length === 0 ? (

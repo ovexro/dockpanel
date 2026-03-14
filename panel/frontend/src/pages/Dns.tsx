@@ -219,7 +219,7 @@ export default function Dns() {
 
   return (
     <div className="p-6 lg:p-8">
-      <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
         <div>
           <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">DNS Management</h1>
           <p className="text-sm text-dark-200 font-mono mt-1">Manage DNS records via Cloudflare</p>
@@ -343,7 +343,7 @@ export default function Dns() {
               {[...Array(5)].map((_, i) => <div key={i} className="h-10 bg-dark-700 rounded w-full mb-2" />)}
             </div>
           ) : (
-            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-x-auto">
               <div className="px-5 py-4 border-b border-dark-600 flex items-center justify-between">
                 <div>
                   <h2 className="text-lg font-semibold text-dark-50 font-mono">{selectedZone.domain}</h2>

@@ -97,7 +97,7 @@ export default function Activity() {
 
   return (
     <div className="p-6 lg:p-8">
-      <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
         <div>
           <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Activity Log</h1>
           <p className="text-sm text-dark-200 font-mono mt-1">Track all admin actions</p>
@@ -122,7 +122,7 @@ export default function Activity() {
         </div>
       )}
 
-      <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+      <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-x-auto">
         {loading ? (
           <div className="p-6 space-y-3 animate-pulse">
             {[...Array(5)].map((_, i) => (
