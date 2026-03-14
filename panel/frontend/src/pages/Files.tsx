@@ -190,7 +190,7 @@ export default function Files() {
       </div>
 
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
         <div>
           <h1 className="text-2xl font-bold text-dark-50">File Manager</h1>
           <p className="text-sm text-dark-200 mt-1 font-mono">{site?.domain}</p>
@@ -265,7 +265,7 @@ export default function Files() {
               <tbody className="divide-y divide-dark-600">
                 {currentPath !== "." && (
                   <tr
-                    className="hover:bg-dark-800 cursor-pointer"
+                    className="hover:bg-dark-700/30 transition-colors cursor-pointer"
                     onClick={goUp}
                   >
                     <td className="px-4 py-3 text-sm text-dark-100 flex items-center gap-2" colSpan={4}>
@@ -291,7 +291,7 @@ export default function Files() {
                   .map((entry) => (
                     <tr
                       key={entry.name}
-                      className="hover:bg-dark-800 group"
+                      className="hover:bg-dark-700/30 transition-colors group"
                     >
                       <td className="px-4 py-3">
                         <button

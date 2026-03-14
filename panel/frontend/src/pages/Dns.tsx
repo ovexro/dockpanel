@@ -219,7 +219,7 @@ export default function Dns() {
 
   return (
     <div className="p-6 lg:p-8">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
         <div>
           <h1 className="text-2xl font-bold text-dark-50">DNS Management</h1>
           <p className="text-sm text-dark-200 mt-1">Manage DNS records via Cloudflare</p>
@@ -444,7 +444,7 @@ export default function Dns() {
                   </thead>
                   <tbody className="divide-y divide-dark-600">
                     {records.map((r) => (
-                      <tr key={r.id} className="hover:bg-dark-800">
+                      <tr key={r.id} className="hover:bg-dark-700/30 transition-colors">
                         <td className="px-4 py-2.5">
                           <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${typeColor[r.type] || "bg-dark-700 text-dark-200"}`}>
                             {r.type}

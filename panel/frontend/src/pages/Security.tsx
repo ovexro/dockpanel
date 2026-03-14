@@ -236,7 +236,7 @@ export default function Security() {
 
   return (
     <div className="p-6 lg:p-8">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
         <h1 className="text-2xl font-bold text-dark-50">Security</h1>
         <button
           onClick={handleScan}
@@ -439,7 +439,7 @@ export default function Security() {
                   </thead>
                   <tbody className="divide-y divide-dark-600">
                     {firewall.rules.map((rule) => (
-                      <tr key={rule.number} className="hover:bg-dark-800">
+                      <tr key={rule.number} className="hover:bg-dark-700/30 transition-colors">
                         <td className="px-5 py-2.5 text-sm text-dark-300 font-mono">{rule.number}</td>
                         <td className="px-5 py-2.5 text-sm text-dark-50 font-mono">{rule.to}</td>
                         <td className="px-5 py-2.5">
@@ -488,7 +488,7 @@ export default function Security() {
                   </thead>
                   <tbody className="divide-y divide-dark-600">
                     {fail2ban.jails.map((jail) => (
-                      <tr key={jail.name}>
+                      <tr key={jail.name} className="hover:bg-dark-700/30 transition-colors">
                         <td className="px-5 py-2.5 text-sm text-dark-50 font-mono">{jail.name}</td>
                         <td className="px-5 py-2.5 text-sm text-right">
                           <span className={`font-medium ${jail.banned_count > 0 ? "text-red-400" : "text-dark-300"}`}>

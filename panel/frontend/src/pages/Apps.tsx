@@ -439,7 +439,7 @@ export default function Apps() {
 
   return (
     <div className="p-6 lg:p-8">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 pb-4 border-b border-dark-600">
         <div>
           <h1 className="text-2xl font-bold text-dark-50">Docker Apps</h1>
           <p className="text-sm text-dark-200 mt-1">
@@ -490,7 +490,7 @@ export default function Apps() {
               </thead>
               <tbody className="divide-y divide-dark-600">
                 {apps.map((app) => (
-                  <tr key={app.container_id} className="hover:bg-dark-800">
+                  <tr key={app.container_id} className="hover:bg-dark-700/30 transition-colors">
                     <td className="px-5 py-4 text-sm text-dark-50 font-medium font-mono">{app.name}</td>
                     <td className="px-5 py-4 text-sm text-dark-200 hidden sm:table-cell">{app.template}</td>
                     <td className="px-5 py-4 text-sm hidden md:table-cell">

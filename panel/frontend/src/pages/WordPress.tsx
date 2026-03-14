@@ -176,7 +176,7 @@ export default function WordPress() {
   return (
     <div className="p-6 lg:p-8">
       {/* Header */}
-      <div className="flex items-center gap-3 mb-6">
+      <div className="flex items-center gap-3 mb-6 pb-4 border-b border-dark-600">
         <Link
           to={`/sites/${id}`}
           className="p-1.5 text-dark-300 hover:text-gray-700 rounded-lg hover:bg-dark-700"
@@ -480,7 +480,7 @@ export default function WordPress() {
                 </thead>
                 <tbody className="divide-y divide-dark-600">
                   {plugins.map((p) => (
-                    <tr key={p.name} className="hover:bg-dark-800">
+                    <tr key={p.name} className="hover:bg-dark-700/30 transition-colors">
                       <td className="px-4 py-2.5 text-dark-50 font-medium">{p.name}</td>
                       <td className="px-4 py-2.5 text-dark-200 font-mono text-xs">{p.version}</td>
                       <td className="px-4 py-2.5">
@@ -600,7 +600,7 @@ export default function WordPress() {
                 </thead>
                 <tbody className="divide-y divide-dark-600">
                   {themes.map((t) => (
-                    <tr key={t.name} className="hover:bg-dark-800">
+                    <tr key={t.name} className="hover:bg-dark-700/30 transition-colors">
                       <td className="px-4 py-2.5 text-dark-50 font-medium">{t.name}</td>
                       <td className="px-4 py-2.5 text-dark-200 font-mono text-xs">{t.version}</td>
                       <td className="px-4 py-2.5">
