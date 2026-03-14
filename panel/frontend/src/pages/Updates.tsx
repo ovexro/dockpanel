@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
@@ -11,6 +11,20 @@ interface PackageUpdate {
   security: boolean;
 }
 
+interface ApplyResult {
+  success: boolean;
+  updated: number;
+  output: string;
+  reboot_required: boolean;
+}
+
+function colorLine(line: string): string {
+  if (/Unpacking |Setting up |Processing /.test(line)) return "text-rust-400";
+  if (/WARNING|W:/.test(line)) return "text-amber-400";
+  if (/ERROR|E:/.test(line)) return "text-red-400";
+  return "text-dark-300";
+}
+
 export default function Updates() {
   const { user } = useAuth();
   const [packages, setPackages] = useState<PackageUpdate[]>([]);
@@ -19,8 +33,26 @@ export default function Updates() {
   const [checked, setChecked] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [message, setMessage] = useState({ text: "", type: "" });
+  const [rebootRequired, setRebootRequired] = useState(false);
+  const [aptOutput, setAptOutput] = useState<string[] | null>(null);
+  const termRef = useRef<HTMLDivElement>(null);
 
   if (user?.role !== "admin") return <Navigate to="/" replace />;
+
+  // Check reboot_required on mount
+  useEffect(() => {
+    api
+      .get<{ count: number; security: number; reboot_required: boolean }>("/system/updates/count")
+      .then((d) => setRebootRequired(d.reboot_required))
+      .catch(() => {});
+  }, []);
+
+  // Auto-scroll terminal to bottom
+  useEffect(() => {
+    if (termRef.current) {
+      termRef.current.scrollTop = termRef.current.scrollHeight;
+    }
+  }, [aptOutput]);
 
   const checkUpdates = async () => {
     setLoading(true);
@@ -43,14 +75,26 @@ export default function Updates() {
   const applyUpdates = async () => {
     setApplying(true);
     setMessage({ text: "", type: "" });
+    setAptOutput(null);
     try {
       const body = selected.size > 0 ? { packages: Array.from(selected) } : {};
-      await api.post("/system/updates/apply", body);
+      const result = await api.post<ApplyResult>("/system/updates/apply", body);
+
+      // Show terminal output
+      if (result.output) {
+        setAptOutput(result.output.split("\n"));
+      }
+
+      // Check reboot status from response
+      setRebootRequired(result.reboot_required);
+
       setMessage({
-        text: selected.size > 0
-          ? `Successfully updated ${selected.size} package(s)`
-          : "All packages updated successfully",
-        type: "success",
+        text: result.success
+          ? selected.size > 0
+            ? `Successfully updated ${selected.size} package(s)`
+            : "All packages updated successfully"
+          : "Update completed with errors — check the output below",
+        type: result.success ? "success" : "error",
       });
       // Refresh the list
       const data = await api.get<{ updates: PackageUpdate[] }>("/system/updates");
@@ -63,6 +107,28 @@ export default function Updates() {
       });
     } finally {
       setApplying(false);
+    }
+  };
+
+  const handleReboot = async () => {
+    if (
+      !window.confirm(
+        "Are you sure you want to reboot the server? All services will be temporarily unavailable."
+      )
+    )
+      return;
+
+    try {
+      const result = await api.post<{ success: boolean; message: string }>("/system/reboot");
+      setMessage({
+        text: result.message,
+        type: result.success ? "success" : "error",
+      });
+    } catch (e) {
+      setMessage({
+        text: e instanceof Error ? e.message : "Failed to initiate reboot",
+        type: "error",
+      });
     }
   };
 
@@ -132,6 +198,27 @@ export default function Updates() {
         </div>
       </div>
 
+      {/* Reboot Required Banner */}
+      {rebootRequired && (
+        <div className="border border-amber-500/50 bg-amber-500/5 p-4 flex items-start gap-3 mb-6">
+          <svg className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+          </svg>
+          <div className="flex-1">
+            <p className="text-sm text-amber-400 font-bold">Reboot Required</p>
+            <p className="text-xs text-dark-300 mt-1">
+              Recent package updates (such as a new kernel version) require a reboot to be fully applied.
+            </p>
+          </div>
+          <button
+            onClick={handleReboot}
+            className="px-4 py-2 bg-amber-500 text-dark-900 text-xs font-bold uppercase tracking-wider hover:bg-amber-400 transition-colors shrink-0"
+          >
+            Reboot Now
+          </button>
+        </div>
+      )}
+
       {message.text && (
         <div
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
@@ -141,6 +228,39 @@ export default function Updates() {
           }`}
         >
           {message.text}
+        </div>
+      )}
+
+      {/* Terminal output */}
+      {(applying || aptOutput) && (
+        <div className="mb-6">
+          {/* Terminal header */}
+          <div className="flex items-center justify-between border border-dark-500 border-b-0 bg-dark-800 px-4 py-2">
+            <span className="text-xs text-dark-300 uppercase tracking-widest font-mono">apt output</span>
+            <div className="flex gap-1.5">
+              <div className="w-2.5 h-2.5 rounded-full bg-dark-500" />
+              <div className="w-2.5 h-2.5 rounded-full bg-dark-500" />
+              <div className="w-2.5 h-2.5 rounded-full bg-dark-500" />
+            </div>
+          </div>
+          {/* Terminal body */}
+          <div
+            ref={termRef}
+            className="border border-dark-500 bg-[#020202] p-4 h-64 overflow-y-auto font-mono text-[11px] leading-relaxed"
+          >
+            {applying && !aptOutput && (
+              <div className="text-rust-400">
+                <span>&gt; Running apt upgrade...</span>
+                <span className="inline-block w-2 h-3.5 bg-rust-400 ml-1 animate-pulse" />
+              </div>
+            )}
+            {aptOutput &&
+              aptOutput.map((line, i) => (
+                <div key={i} className={colorLine(line)}>
+                  {line || "\u00A0"}
+                </div>
+              ))}
+          </div>
         </div>
       )}
 
