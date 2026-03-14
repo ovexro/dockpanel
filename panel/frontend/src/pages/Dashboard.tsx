@@ -75,27 +75,24 @@ interface Intelligence {
   top_issues: TopIssue[];
 }
 
-function ProgressBar({ pct, color }: { pct: number; color: string }) {
+function RingGauge({ pct, size = 80, strokeWidth = 5 }: { pct: number; size?: number; strokeWidth?: number }) {
+  const clamped = Math.min(pct, 100);
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference * (1 - clamped / 100);
+  const color = pct < 60 ? "#10b981" : pct < 85 ? "#f59e0b" : "#ef4444";
+
   return (
-    <div
-      className="w-full h-1.5 bg-dark-700 rounded-full overflow-hidden mt-3"
-      role="progressbar"
-      aria-valuenow={Math.min(pct, 100)}
-      aria-valuemin={0}
-      aria-valuemax={100}
-    >
-      <div
-        className={`h-full rounded-full transition-all duration-500 ${color}`}
-        style={{ width: `${Math.min(pct, 100)}%` }}
-      />
+    <div className="relative" style={{ width: size, height: size }} role="progressbar" aria-valuenow={clamped} aria-valuemin={0} aria-valuemax={100}>
+      <svg width={size} height={size} className="-rotate-90">
+        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="currentColor" className="text-dark-700" strokeWidth={strokeWidth} />
+        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke={color} strokeWidth={strokeWidth} strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round" className="transition-all duration-700" />
+      </svg>
+      <div className="absolute inset-0 flex items-center justify-center">
+        <span className="text-base font-bold text-dark-50 font-mono">{clamped.toFixed(0)}<span className="text-xs text-dark-400">%</span></span>
+      </div>
     </div>
   );
-}
-
-function barColor(pct: number): string {
-  if (pct < 60) return "bg-emerald-500";
-  if (pct < 85) return "bg-amber-500";
-  return "bg-red-500";
 }
 
 function tempColor(temp: number): string {
@@ -251,76 +248,52 @@ export default function Dashboard() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
             {/* CPU */}
             <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-md bg-blue-500/10 flex items-center justify-center">
-                    <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h10.5a2.25 2.25 0 0 0 2.25-2.25V6.75a2.25 2.25 0 0 0-2.25-2.25H6.75A2.25 2.25 0 0 0 4.5 6.75v10.5a2.25 2.25 0 0 0 2.25 2.25Zm.75-12h9v9h-9v-9Z" />
-                    </svg>
-                  </div>
-                  <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">CPU Usage</p>
-                </div>
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">CPU Usage</p>
                 <span className="text-xs text-dark-300 font-mono">{system.cpu_count} cores</span>
               </div>
-              <p className="text-3xl font-bold text-dark-50 mt-2">
-                {system.cpu_usage.toFixed(1)}%
-              </p>
+              <div className="flex justify-center py-1">
+                <RingGauge pct={system.cpu_usage} />
+              </div>
               {system.load_avg_1 !== undefined && (
-                <p className="text-xs text-dark-300 mt-1 font-mono">
+                <p className="text-xs text-dark-300 mt-3 font-mono text-center">
                   Load: {system.load_avg_1?.toFixed(2)} / {system.load_avg_5?.toFixed(2)} / {system.load_avg_15?.toFixed(2)}
                 </p>
               )}
-              <ProgressBar pct={system.cpu_usage} color={barColor(system.cpu_usage)} />
             </div>
 
             {/* Memory */}
             <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-md bg-purple-500/10 flex items-center justify-center">
-                    <svg className="w-4 h-4 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25a2.25 2.25 0 0 1-2.25-2.25v-2.25Z" />
-                    </svg>
-                  </div>
-                  <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Memory</p>
-                </div>
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Memory</p>
                 <span className="text-xs text-dark-300 font-mono">
                   {(system.mem_used_mb / 1024).toFixed(1)} / {(system.mem_total_mb / 1024).toFixed(1)} GB
                 </span>
               </div>
-              <p className="text-3xl font-bold text-dark-50 mt-2">
-                {system.mem_usage_pct.toFixed(1)}%
-              </p>
+              <div className="flex justify-center py-1">
+                <RingGauge pct={system.mem_usage_pct} />
+              </div>
               {system.swap_total_mb > 0 && (
-                <p className="text-xs text-dark-300 mt-1 font-mono">
+                <p className="text-xs text-dark-300 mt-3 font-mono text-center">
                   Swap: {(system.swap_used_mb / 1024).toFixed(2)} / {(system.swap_total_mb / 1024).toFixed(2)} GB
                 </p>
               )}
-              <ProgressBar pct={system.mem_usage_pct} color={barColor(system.mem_usage_pct)} />
             </div>
 
             {/* Disk */}
             <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-md bg-amber-500/10 flex items-center justify-center">
-                    <svg className="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 17.25v-.228a4.5 4.5 0 0 0-.12-1.03l-2.268-9.64a3.375 3.375 0 0 0-3.285-2.602H7.923a3.375 3.375 0 0 0-3.285 2.602l-2.268 9.64a4.5 4.5 0 0 0-.12 1.03v.228m19.5 0a3 3 0 0 1-3 3H5.25a3 3 0 0 1-3-3m19.5 0a3 3 0 0 0-3-3H5.25a3 3 0 0 0-3 3m16.5 0h.008v.008h-.008v-.008Zm-3 0h.008v.008h-.008v-.008Z" />
-                    </svg>
-                  </div>
-                  <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Disk</p>
-                </div>
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Disk</p>
                 <span className="text-xs text-dark-300 font-mono">
                   {system.disk_used_gb.toFixed(0)} / {system.disk_total_gb.toFixed(0)} GB
                 </span>
               </div>
-              <p className="text-3xl font-bold text-dark-50 mt-2">
-                {system.disk_usage_pct.toFixed(1)}%
-              </p>
-              <p className="text-xs text-dark-300 mt-1 font-mono">
+              <div className="flex justify-center py-1">
+                <RingGauge pct={system.disk_usage_pct} />
+              </div>
+              <p className="text-xs text-dark-300 mt-3 font-mono text-center">
                 {(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB free
               </p>
-              <ProgressBar pct={system.disk_usage_pct} color={barColor(system.disk_usage_pct)} />
             </div>
 
             {/* Uptime */}
