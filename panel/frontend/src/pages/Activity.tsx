@@ -122,11 +122,11 @@ export default function Activity() {
         </div>
       )}
 
-      <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+      <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
         {loading ? (
           <div className="p-6 space-y-3 animate-pulse">
             {[...Array(5)].map((_, i) => (
-              <div key={i} className="h-10 bg-dark-600 rounded w-full" />
+              <div key={i} className="h-10 bg-dark-700 rounded w-full" />
             ))}
           </div>
         ) : entries.length === 0 ? (
@@ -164,7 +164,7 @@ export default function Activity() {
                   const badge = actionBadge(entry.action);
                   return (
                     <tr key={entry.id} className="hover:bg-dark-800">
-                      <td className="px-5 py-3 text-sm text-dark-200 whitespace-nowrap">
+                      <td className="px-5 py-3 text-sm text-dark-200 whitespace-nowrap font-mono">
                         {timeAgo(entry.created_at)}
                       </td>
                       <td className="px-5 py-3">
@@ -172,25 +172,25 @@ export default function Activity() {
                           <div className="w-6 h-6 rounded-full bg-rust-500/15 text-rust-500 flex items-center justify-center text-xs font-medium shrink-0">
                             {entry.user_email?.[0]?.toUpperCase() || "?"}
                           </div>
-                          <span className="text-sm text-dark-50 truncate max-w-[180px]">
+                          <span className="text-sm text-dark-50 truncate max-w-[180px] font-mono">
                             {entry.user_email}
                           </span>
                         </div>
                       </td>
                       <td className="px-5 py-3">
                         <span
-                          className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${badge.bg} ${badge.text}`}
+                          className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium font-mono ${badge.bg} ${badge.text}`}
                         >
                           {entry.action}
                         </span>
                       </td>
-                      <td className="px-5 py-3 text-sm text-dark-50 hidden md:table-cell">
+                      <td className="px-5 py-3 text-sm text-dark-50 hidden md:table-cell font-mono">
                         {entry.target_type && (
                           <span className="text-dark-300 text-xs mr-1">{entry.target_type}:</span>
                         )}
                         {entry.target_name || <span className="text-dark-400">-</span>}
                       </td>
-                      <td className="px-5 py-3 text-sm text-dark-200 truncate max-w-[250px] hidden lg:table-cell">
+                      <td className="px-5 py-3 text-sm text-dark-200 truncate max-w-[250px] hidden lg:table-cell font-mono">
                         {entry.details || <span className="text-dark-400">-</span>}
                       </td>
                     </tr>

@@ -237,9 +237,9 @@ export default function Settings() {
         <h1 className="text-2xl font-bold text-dark-50 mb-6">Settings</h1>
         <div className="space-y-4">
           {[...Array(3)].map((_, i) => (
-            <div key={i} className="bg-dark-800 rounded-xl border border-dark-500 p-6 animate-pulse">
-              <div className="h-5 bg-dark-600 rounded w-40 mb-4" />
-              <div className="h-10 bg-dark-600 rounded w-full" />
+            <div key={i} className="bg-dark-800 rounded-lg border border-dark-500 p-6 animate-pulse">
+              <div className="h-5 bg-dark-700 rounded w-40 mb-4" />
+              <div className="h-10 bg-dark-700 rounded w-full" />
             </div>
           ))}
         </div>
@@ -268,7 +268,7 @@ export default function Settings() {
 
       <div className="space-y-6">
         {/* General Settings */}
-        <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600">
             <h3 className="text-sm font-medium text-dark-50">General Settings</h3>
           </div>
@@ -297,7 +297,7 @@ export default function Settings() {
         </div>
 
         {/* SMTP Configuration */}
-        <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600">
             <h3 className="text-sm font-medium text-dark-50">SMTP Configuration</h3>
             <p className="text-xs text-dark-200 mt-0.5">Configure outgoing email for all sites on this server</p>
@@ -330,7 +330,7 @@ export default function Settings() {
                   type="text"
                   value={smtpHost}
                   onChange={(e) => setSmtpHost(e.target.value)}
-                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none font-mono"
                   placeholder="smtp.example.com"
                 />
               </div>
@@ -341,7 +341,7 @@ export default function Settings() {
                   type="text"
                   value={smtpPort}
                   onChange={(e) => setSmtpPort(e.target.value)}
-                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none font-mono"
                   placeholder="587"
                 />
               </div>
@@ -427,7 +427,7 @@ export default function Settings() {
         </div>
 
         {/* Backup Destinations */}
-        <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600 flex items-center justify-between">
             <h3 className="text-sm font-medium text-dark-50">Backup Destinations</h3>
             <button
@@ -467,7 +467,7 @@ export default function Settings() {
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-dark-100 mb-1">Endpoint URL</label>
-                      <input type="text" value={destEndpoint} onChange={(e) => setDestEndpoint(e.target.value)} placeholder="https://s3.amazonaws.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+                      <input type="text" value={destEndpoint} onChange={(e) => setDestEndpoint(e.target.value)} placeholder="https://s3.amazonaws.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none font-mono" />
                       <p className="text-xs text-dark-300 mt-1">For R2: https://ACCOUNT_ID.r2.cloudflarestorage.com</p>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
@@ -490,11 +490,11 @@ export default function Settings() {
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-xs font-medium text-dark-100 mb-1">Host</label>
-                        <input type="text" value={destSftpHost} onChange={(e) => setDestSftpHost(e.target.value)} placeholder="backup.example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+                        <input type="text" value={destSftpHost} onChange={(e) => setDestSftpHost(e.target.value)} placeholder="backup.example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none font-mono" />
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-dark-100 mb-1">Port</label>
-                        <input type="text" value={destSftpPort} onChange={(e) => setDestSftpPort(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+                        <input type="text" value={destSftpPort} onChange={(e) => setDestSftpPort(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none font-mono" />
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
@@ -509,7 +509,7 @@ export default function Settings() {
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-dark-100 mb-1">Remote Path</label>
-                      <input type="text" value={destSftpPath} onChange={(e) => setDestSftpPath(e.target.value)} placeholder="/backups" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+                      <input type="text" value={destSftpPath} onChange={(e) => setDestSftpPath(e.target.value)} placeholder="/backups" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none font-mono" />
                     </div>
                   </>
                 )}
@@ -550,7 +550,7 @@ export default function Settings() {
                   <div key={d.id} className="flex items-center justify-between p-3 bg-dark-900 rounded-lg">
                     <div>
                       <p className="text-sm font-medium text-dark-50">{d.name}</p>
-                      <p className="text-xs text-dark-200">
+                      <p className="text-xs text-dark-200 font-mono">
                         {d.dtype === "s3" ? `S3: ${d.config.bucket || ""}` : `SFTP: ${d.config.host || ""}`}
                       </p>
                     </div>
@@ -595,7 +595,7 @@ export default function Settings() {
         </div>
 
         {/* Two-Factor Authentication */}
-        <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600">
             <h3 className="text-sm font-medium text-dark-50">Two-Factor Authentication</h3>
             <p className="text-xs text-dark-200 mt-0.5">Add an extra layer of security to your account</p>
@@ -728,7 +728,7 @@ export default function Settings() {
         </div>
 
         {/* Notification Channels */}
-        <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600">
             <h3 className="text-sm font-medium text-dark-50">Notification Channels</h3>
             <p className="text-xs text-dark-200 mt-0.5">Where to send alert notifications</p>
@@ -751,7 +751,7 @@ export default function Settings() {
                 type="url"
                 value={notifySlackUrl}
                 onChange={(e) => setNotifySlackUrl(e.target.value)}
-                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 outline-none"
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 outline-none font-mono"
                 placeholder="https://hooks.slack.com/services/..."
               />
             </div>
@@ -762,7 +762,7 @@ export default function Settings() {
                 type="url"
                 value={notifyDiscordUrl}
                 onChange={(e) => setNotifyDiscordUrl(e.target.value)}
-                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 outline-none"
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 outline-none font-mono"
                 placeholder="https://discord.com/api/webhooks/..."
               />
             </div>
@@ -794,7 +794,7 @@ export default function Settings() {
         </div>
 
         {/* Auto-Healing */}
-        <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600">
             <h3 className="text-sm font-medium text-dark-50">Auto-Healing</h3>
             <p className="text-xs text-dark-200 mt-0.5">Automatically fix common issues when detected</p>
@@ -838,7 +838,7 @@ export default function Settings() {
         </div>
 
         {/* System Health */}
-        <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600 flex items-center justify-between">
             <h3 className="text-sm font-medium text-dark-50">System Health</h3>
             <button
@@ -881,7 +881,7 @@ export default function Settings() {
                     <div className="w-3 h-3 rounded-full bg-blue-500" />
                     <span className="text-sm text-dark-50">Uptime</span>
                   </div>
-                  <span className="text-sm font-medium text-dark-200">{health.uptime}</span>
+                  <span className="text-sm font-medium text-dark-200 font-mono">{health.uptime}</span>
                 </div>
               </div>
             )}

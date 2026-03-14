@@ -161,7 +161,7 @@ export default function Backups() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-dark-50">Backups</h1>
-          <p className="text-sm text-dark-200 mt-1">{site?.domain}</p>
+          <p className="text-sm text-dark-200 mt-1 font-mono">{site?.domain}</p>
         </div>
         <button
           onClick={handleCreate}
@@ -198,7 +198,7 @@ export default function Backups() {
       )}
 
       {/* Scheduled Backups */}
-      <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden mb-6">
+      <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mb-6">
         <div className="px-5 py-3 border-b border-dark-600 flex items-center justify-between">
           <h3 className="text-sm font-medium text-dark-50">Scheduled Backup</h3>
           {!showScheduleForm && (
@@ -301,7 +301,7 @@ export default function Backups() {
                   </span>
                 </p>
                 {schedule.last_run && (
-                  <p className="text-xs text-dark-200 mt-1">
+                  <p className="text-xs text-dark-200 mt-1 font-mono">
                     Last run: {new Date(schedule.last_run).toLocaleString()}
                     {schedule.last_status && (
                       <span className={`ml-1 ${schedule.last_status === "success" ? "text-emerald-600" : "text-red-400"}`}>
@@ -319,7 +319,7 @@ export default function Backups() {
       </div>
 
       {/* Backups list */}
-      <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+      <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
         {loading ? (
           <div className="p-8 text-center text-dark-300">Loading...</div>
         ) : backups.length === 0 ? (
@@ -363,10 +363,10 @@ export default function Backups() {
                       </span>
                     </div>
                   </td>
-                  <td className="px-5 py-4 text-sm text-dark-200">
+                  <td className="px-5 py-4 text-sm text-dark-200 font-mono">
                     {formatSize(backup.size_bytes)}
                   </td>
-                  <td className="px-5 py-4 text-sm text-dark-200">
+                  <td className="px-5 py-4 text-sm text-dark-200 font-mono">
                     {formatDate(backup.created_at)}
                   </td>
                   <td className="px-5 py-4 text-right">

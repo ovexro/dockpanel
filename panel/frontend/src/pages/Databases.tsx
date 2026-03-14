@@ -176,7 +176,7 @@ export default function Databases() {
       {showForm && (
         <form
           onSubmit={handleCreate}
-          className="bg-dark-800 rounded-xl border border-dark-500 p-5 mb-6 space-y-4"
+          className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6 space-y-4"
         >
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
@@ -238,15 +238,15 @@ export default function Databases() {
 
       {/* Database list */}
       {loading ? (
-        <div className="bg-dark-800 rounded-xl border border-dark-500 animate-pulse">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 animate-pulse">
           {[...Array(3)].map((_, i) => (
             <div key={i} className="px-5 py-4 border-b border-dark-600 last:border-0">
-              <div className="h-5 bg-dark-600 rounded w-48" />
+              <div className="h-5 bg-dark-700 rounded w-48" />
             </div>
           ))}
         </div>
       ) : databases.length === 0 ? (
-        <div className="bg-dark-800 rounded-xl border border-dark-500 p-12 text-center">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 p-12 text-center">
           <svg
             className="w-12 h-12 mx-auto text-dark-400 mb-4"
             fill="none"
@@ -268,7 +268,7 @@ export default function Databases() {
         </div>
       ) : (
         <div className="space-y-0">
-          <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+          <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
             <table className="w-full">
               <thead>
                 <tr className="border-b border-dark-500 bg-dark-900">
@@ -295,13 +295,13 @@ export default function Databases() {
               <tbody className="divide-y divide-dark-600">
                 {databases.map((db) => (
                   <tr key={db.id} className="hover:bg-dark-800 transition-colors">
-                    <td className="px-5 py-4 text-sm font-medium text-dark-50">
+                    <td className="px-5 py-4 text-sm font-medium text-dark-50 font-mono">
                       {db.name}
                     </td>
                     <td className="px-5 py-4 text-sm text-dark-200">
                       {engineLabels[db.engine] || db.engine}
                     </td>
-                    <td className="px-5 py-4 text-sm text-dark-200 hidden md:table-cell">
+                    <td className="px-5 py-4 text-sm text-dark-200 hidden md:table-cell font-mono">
                       {getSiteDomain(db.site_id)}
                     </td>
                     <td className="px-5 py-4 text-sm text-dark-200 font-mono hidden sm:table-cell">
@@ -357,7 +357,7 @@ export default function Databases() {
 
           {/* Credentials panel */}
           {credentialsId && (
-            <div className="mt-4 bg-dark-800 rounded-xl border border-dark-500 p-5">
+            <div className="mt-4 bg-dark-800 rounded-lg border border-dark-500 p-5">
               {credentialsLoading ? (
                 <div className="text-center text-dark-300 py-4">Loading credentials...</div>
               ) : credentials ? (

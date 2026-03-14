@@ -134,11 +134,11 @@ export default function Users() {
         </div>
       )}
 
-      <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+      <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
         {loading ? (
           <div className="p-6 space-y-3 animate-pulse">
             {[...Array(4)].map((_, i) => (
-              <div key={i} className="h-12 bg-dark-600 rounded w-full" />
+              <div key={i} className="h-12 bg-dark-700 rounded w-full" />
             ))}
           </div>
         ) : users.length === 0 ? (
@@ -174,7 +174,7 @@ export default function Users() {
                       <div className="w-8 h-8 rounded-full bg-rust-500/15 text-rust-500 flex items-center justify-center text-sm font-medium">
                         {user.email[0].toUpperCase()}
                       </div>
-                      <span className="text-sm text-dark-50">{user.email}</span>
+                      <span className="text-sm text-dark-50 font-mono">{user.email}</span>
                     </div>
                   </td>
                   <td className="px-5 py-4">
@@ -212,7 +212,7 @@ export default function Users() {
                   <td className="px-5 py-4 text-sm text-dark-200">
                     {user.site_count}
                   </td>
-                  <td className="px-5 py-4 text-sm text-dark-200">
+                  <td className="px-5 py-4 text-sm text-dark-200 font-mono">
                     {new Date(user.created_at).toLocaleDateString()}
                   </td>
                   <td className="px-5 py-4 text-right">
@@ -264,7 +264,7 @@ export default function Users() {
             }
           }}
         >
-          <div className="bg-dark-800 rounded-xl shadow-xl p-6 w-[420px]">
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-[420px]">
             <h3 id="create-user-title" className="text-lg font-semibold text-dark-50 mb-4">
               Create User
             </h3>

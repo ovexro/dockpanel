@@ -146,9 +146,9 @@ export default function Monitors() {
   if (loading) {
     return (
       <div className="p-6 lg:p-8">
-        <div className="bg-dark-800 rounded-xl border border-dark-500 p-6 animate-pulse">
-          <div className="h-6 bg-dark-600 rounded w-48 mb-4" />
-          <div className="h-4 bg-dark-600 rounded w-32" />
+        <div className="bg-dark-800 rounded-lg border border-dark-500 p-6 animate-pulse">
+          <div className="h-6 bg-dark-700 rounded w-48 mb-4" />
+          <div className="h-4 bg-dark-700 rounded w-32" />
         </div>
       </div>
     );
@@ -184,7 +184,7 @@ export default function Monitors() {
 
       {/* Create form */}
       {showForm && (
-        <form onSubmit={handleCreate} className="bg-dark-800 rounded-xl border border-dark-500 p-5 mb-6">
+        <form onSubmit={handleCreate} className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6">
           <h3 className="text-sm font-semibold text-dark-50 mb-3">New Monitor</h3>
           <div className="grid grid-cols-2 gap-4 mb-4">
             <div>
@@ -226,7 +226,7 @@ export default function Monitors() {
 
       {/* Monitor list */}
       {monitors.length === 0 ? (
-        <div className="bg-dark-800 rounded-xl border border-dark-500 p-12 text-center">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 p-12 text-center">
           <svg className="w-12 h-12 text-dark-400 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
           </svg>
@@ -235,7 +235,7 @@ export default function Monitors() {
       ) : (
         <div className="space-y-3">
           {monitors.map((m) => (
-            <div key={m.id} className="bg-dark-800 rounded-xl border border-dark-500">
+            <div key={m.id} className="bg-dark-800 rounded-lg border border-dark-500">
               <div className="p-4 cursor-pointer" onClick={() => toggleExpand(m.id)}>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
@@ -247,7 +247,7 @@ export default function Monitors() {
                   </div>
                   <div className="flex items-center gap-4">
                     {m.last_response_time != null && (
-                      <span className={`text-xs font-medium ${m.last_response_time > 2000 ? "text-red-500" : m.last_response_time > 500 ? "text-amber-500" : "text-emerald-600"}`}>
+                      <span className={`text-xs font-medium font-mono ${m.last_response_time > 2000 ? "text-red-500" : m.last_response_time > 500 ? "text-amber-500" : "text-emerald-600"}`}>
                         {m.last_response_time}ms
                       </span>
                     )}
@@ -300,8 +300,8 @@ export default function Monitors() {
                                 <span className="text-dark-200">{formatDate(c.checked_at)}</span>
                               </div>
                               <div className="flex items-center gap-2">
-                                {c.status_code && <span className="text-dark-200">{c.status_code}</span>}
-                                {c.response_time != null && <span className="text-dark-300">{c.response_time}ms</span>}
+                                {c.status_code && <span className="text-dark-200 font-mono">{c.status_code}</span>}
+                                {c.response_time != null && <span className="text-dark-300 font-mono">{c.response_time}ms</span>}
                                 {c.error && <span className="text-red-500 truncate max-w-32">{c.error}</span>}
                               </div>
                             </div>

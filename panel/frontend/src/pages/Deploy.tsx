@@ -142,9 +142,9 @@ export default function Deploy() {
   if (loading) {
     return (
       <div className="p-6 lg:p-8">
-        <div className="bg-dark-800 rounded-xl border border-dark-500 p-6 animate-pulse">
-          <div className="h-6 bg-dark-600 rounded w-48 mb-4" />
-          <div className="h-4 bg-dark-600 rounded w-32" />
+        <div className="bg-dark-800 rounded-lg border border-dark-500 p-6 animate-pulse">
+          <div className="h-6 bg-dark-700 rounded w-48 mb-4" />
+          <div className="h-4 bg-dark-700 rounded w-32" />
         </div>
       </div>
     );
@@ -194,7 +194,7 @@ export default function Deploy() {
       )}
 
       {/* Configuration */}
-      <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+      <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
         <div className="px-5 py-4 border-b border-dark-600">
           <h2 className="text-lg font-semibold text-dark-50">Repository</h2>
         </div>
@@ -256,7 +256,7 @@ export default function Deploy() {
 
       {/* Deploy Key */}
       {config && (
-        <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-4 border-b border-dark-600">
             <h2 className="text-lg font-semibold text-dark-50">Deploy Key</h2>
             <p className="text-xs text-dark-200 mt-1">For private repos using SSH. Add this key as a deploy key in your Git provider.</p>
@@ -298,7 +298,7 @@ export default function Deploy() {
 
       {/* Webhook URL */}
       {config && config.auto_deploy && (
-        <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-4 border-b border-dark-600">
             <h2 className="text-lg font-semibold text-dark-50">Webhook URL</h2>
             <p className="text-xs text-dark-200 mt-1">Add this URL to your Git provider's webhook settings (push events).</p>
@@ -341,7 +341,7 @@ export default function Deploy() {
 
       {/* Status */}
       {config && config.last_deploy && (
-        <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-4 flex items-center justify-between">
             <div>
               <span className="text-sm font-medium text-dark-100">Last deploy: </span>
@@ -360,7 +360,7 @@ export default function Deploy() {
 
       {/* Deploy Logs */}
       {logs.length > 0 && (
-        <div className="bg-dark-800 rounded-xl border border-dark-500 overflow-hidden">
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-4 border-b border-dark-600">
             <h2 className="text-lg font-semibold text-dark-50">Deploy History</h2>
           </div>
@@ -388,7 +388,7 @@ export default function Deploy() {
                   </div>
                   <div className="flex items-center gap-3">
                     {log.duration_ms != null && (
-                      <span className="text-xs text-dark-200">{(log.duration_ms / 1000).toFixed(1)}s</span>
+                      <span className="text-xs text-dark-200 font-mono">{(log.duration_ms / 1000).toFixed(1)}s</span>
                     )}
                     <span className="text-xs text-dark-300 bg-dark-700 px-1.5 py-0.5 rounded">{log.triggered_by}</span>
                     <svg className={`w-4 h-4 text-dark-300 transition-transform ${expandedLog === log.id ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

@@ -1,39 +1,45 @@
 @import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 @theme {
-  /* Rust Orange accent */
-  --color-rust-50: #fff7ed;
+  /* Orange accent — orange-600 base */
+  --color-rust-50:  #fff7ed;
   --color-rust-100: #ffedd5;
   --color-rust-200: #fed7aa;
   --color-rust-300: #fdba74;
-  --color-rust-400: #ff7a18;
-  --color-rust-500: #f74c00;
-  --color-rust-600: #dc4500;
-  --color-rust-700: #b83a00;
-  --color-rust-800: #952f00;
-  --color-rust-900: #7a2700;
+  --color-rust-400: #fb923c;
+  --color-rust-500: #ea580c;
+  --color-rust-600: #c2410c;
+  --color-rust-700: #9a3412;
+  --color-rust-800: #7c2d12;
+  --color-rust-900: #431407;
 
-  /* Dark panel surfaces — GitHub-style */
-  --color-dark-950: #0b0f14;
-  --color-dark-900: #0d1117;
-  --color-dark-800: #161b22;
-  --color-dark-700: #1c2128;
-  --color-dark-600: #21262d;
-  --color-dark-500: #30363d;
-  --color-dark-400: #484f58;
-  --color-dark-300: #6e7681;
-  --color-dark-200: #8b949e;
-  --color-dark-100: #c9d1d9;
-  --color-dark-50: #e6edf3;
+  /* Dark surfaces — zinc-950 base */
+  --color-dark-950: #050506;
+  --color-dark-900: #09090b;
+  --color-dark-800: #131316;
+  --color-dark-700: #1b1b1f;
+  --color-dark-600: #232328;
+  --color-dark-500: #2e2e35;
+  --color-dark-400: #52525b;
+  --color-dark-300: #71717a;
+  --color-dark-200: #a1a1aa;
+  --color-dark-100: #d4d4d8;
+  --color-dark-50:  #fafafa;
+
+  /* Typography */
+  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
 }
 
 /* Base dark theme */
 body {
   background-color: var(--color-dark-900);
   color: var(--color-dark-50);
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.011em;
 }
 
 /* Form elements on dark backgrounds */
@@ -48,19 +54,19 @@ textarea::placeholder {
   color: var(--color-dark-300);
 }
 
-/* Scrollbar styling for dark theme */
+/* Scrollbar — thin and subtle */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--color-dark-900);
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
   background: var(--color-dark-500);
-  border-radius: 4px;
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {

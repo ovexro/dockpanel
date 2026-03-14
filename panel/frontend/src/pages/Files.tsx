@@ -193,7 +193,7 @@ export default function Files() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-dark-50">File Manager</h1>
-          <p className="text-sm text-dark-200 mt-1">{site?.domain}</p>
+          <p className="text-sm text-dark-200 mt-1 font-mono">{site?.domain}</p>
         </div>
         <button
           onClick={() => setShowCreate(true)}
@@ -207,7 +207,7 @@ export default function Files() {
       <div className="bg-dark-800 rounded-lg border border-dark-500 px-4 py-2.5 mb-4 flex items-center gap-1 text-sm overflow-x-auto">
         <button
           onClick={() => loadDir(".")}
-          className="text-rust-500 hover:text-rust-700 font-medium shrink-0"
+          className="text-rust-400 hover:text-rust-300 font-medium shrink-0 font-mono"
         >
           /
         </button>
@@ -219,12 +219,12 @@ export default function Files() {
                 onClick={() =>
                   loadDir(breadcrumbs.slice(0, i + 1).join("/"))
                 }
-                className="text-rust-500 hover:text-rust-700"
+                className="text-rust-400 hover:text-rust-300 font-mono"
               >
                 {part}
               </button>
             ) : (
-              <span className="text-dark-50 font-medium">{part}</span>
+              <span className="text-dark-50 font-medium font-mono">{part}</span>
             )}
           </span>
         ))}
@@ -241,7 +241,7 @@ export default function Files() {
 
       <div className="flex gap-6">
         {/* File listing */}
-        <div className={`bg-dark-800 rounded-xl border border-dark-500 overflow-hidden ${editing ? "w-1/2" : "w-full"}`}>
+        <div className={`bg-dark-800 rounded-lg border border-dark-500 overflow-hidden ${editing ? "w-1/2" : "w-full"}`}>
           {loading ? (
             <div className="p-8 text-center text-dark-300">Loading...</div>
           ) : (
@@ -300,7 +300,7 @@ export default function Files() {
                               ? navigateTo(entry.name)
                               : openFile(entry.name)
                           }
-                          className="flex items-center gap-2 text-sm text-dark-50 hover:text-indigo-600"
+                          className="flex items-center gap-2 text-sm text-dark-50 hover:text-indigo-600 font-mono"
                         >
                           {entry.is_dir ? (
                             <svg className="w-4 h-4 text-amber-500" fill="currentColor" viewBox="0 0 20 20">
@@ -314,10 +314,10 @@ export default function Files() {
                           {entry.name}
                         </button>
                       </td>
-                      <td className="px-4 py-3 text-sm text-dark-200">
+                      <td className="px-4 py-3 text-sm text-dark-200 font-mono">
                         {entry.is_dir ? "—" : formatSize(entry.size)}
                       </td>
-                      <td className="px-4 py-3 text-sm text-dark-200">
+                      <td className="px-4 py-3 text-sm text-dark-200 font-mono">
                         {formatDate(entry.modified)}
                       </td>
                       <td className="px-4 py-3 text-right">
@@ -356,9 +356,9 @@ export default function Files() {
 
         {/* Editor panel */}
         {editing && (
-          <div className="w-1/2 bg-dark-800 rounded-xl border border-dark-500 flex flex-col overflow-hidden">
+          <div className="w-1/2 bg-dark-800 rounded-lg border border-dark-500 flex flex-col overflow-hidden">
             <div className="px-4 py-3 bg-dark-900 border-b border-dark-500 flex items-center justify-between">
-              <span className="text-sm font-medium text-dark-100 truncate">
+              <span className="text-sm font-medium text-dark-100 truncate font-mono">
                 {editing}
               </span>
               <div className="flex items-center gap-2">
@@ -392,7 +392,7 @@ export default function Files() {
       {/* Create dialog */}
       {showCreate && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-dark-800 rounded-xl shadow-xl p-6 w-96">
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-96">
             <h3 className="text-lg font-semibold text-dark-50 mb-4">
               Create New
             </h3>
@@ -451,7 +451,7 @@ export default function Files() {
       {/* Rename dialog */}
       {renaming && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-dark-800 rounded-xl shadow-xl p-6 w-96">
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-96">
             <h3 className="text-lg font-semibold text-dark-50 mb-4">
               Rename "{renaming}"
             </h3>
@@ -484,7 +484,7 @@ export default function Files() {
       {/* Delete confirm */}
       {deleteTarget && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-dark-800 rounded-xl shadow-xl p-6 w-96">
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-96">
             <h3 className="text-lg font-semibold text-dark-50 mb-2">
               Delete "{deleteTarget}"?
             </h3>
