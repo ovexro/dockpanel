@@ -6,12 +6,22 @@ Wants=nginx.service
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/dockpanel-agent
+ExecStartPost=/bin/sh -c 'sleep 1 && chgrp www-data /var/run/dockpanel/agent.sock 2>/dev/null; chmod 660 /var/run/dockpanel/agent.sock 2>/dev/null; true'
 Restart=always
-RestartSec=3
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
 Environment=RUST_LOG=info
-
-# Security hardening (agent needs host access for nginx/ssl/docker)
-ProtectHome=true
+RuntimeDirectory=dockpanel
+ReadWritePaths=/etc/nginx /etc/dockpanel /var/run/dockpanel /var/backups/dockpanel /var/www /var/log /etc/letsencrypt
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+MemoryMax=512M
+LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
