@@ -133,13 +133,13 @@ function CountUp({ value }: { value: number }) {
 }
 
 function barColor(pct: number): string {
-  if (pct < 60) return "bg-emerald-500";
+  if (pct < 60) return "bg-rust-500";
   if (pct < 85) return "bg-amber-500";
   return "bg-red-500";
 }
 
 function pctColor(pct: number): string {
-  if (pct < 60) return "text-emerald-500";
+  if (pct < 60) return "text-rust-500";
   if (pct < 85) return "text-amber-500";
   return "text-red-500";
 }
@@ -331,7 +331,7 @@ export default function Dashboard() {
                 icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 17.25v-.228a4.5 4.5 0 0 0-.12-1.03l-2.268-9.64a3.375 3.375 0 0 0-3.285-2.602H7.923a3.375 3.375 0 0 0-3.285 2.602l-2.268 9.64a4.5 4.5 0 0 0-.12 1.03v.228m19.5 0a3 3 0 0 1-3 3H5.25a3 3 0 0 1-3-3m19.5 0a3 3 0 0 0-3-3H5.25a3 3 0 0 0-3 3m16.5 0h.008v.008h-.008v-.008Zm-3 0h.008v.008h-.008v-.008Z" /></svg> },
             ].map(({ label, pct, detail, icon }) => (
               <div key={label} className="border border-dark-500 bg-dark-800 p-5 relative overflow-hidden">
-                <div className={`absolute inset-0 opacity-[0.03] ${pct < 60 ? "bg-emerald-500" : pct < 85 ? "bg-amber-500" : "bg-red-500"}`} />
+                <div className={`absolute inset-0 opacity-[0.03] ${pct < 60 ? "bg-rust-500" : pct < 85 ? "bg-amber-500" : "bg-red-500"}`} />
                 <div className="relative text-center">
                   <div className="flex items-center justify-center gap-1.5 text-dark-200 mb-1">
                     <span className="opacity-60">{icon}</span>
