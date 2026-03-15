@@ -88,6 +88,7 @@ pub fn is_safe_relative_path(path: &str) -> bool {
 pub fn router() -> Router<AppState> {
     Router::new()
         // Auth
+        .route("/api/auth/setup-status", get(auth::setup_status))
         .route("/api/auth/setup", post(auth::setup))
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/logout", post(auth::logout))

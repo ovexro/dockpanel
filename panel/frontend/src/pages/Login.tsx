@@ -1,4 +1,4 @@
-import { useState, FormEvent } from "react";
+import { useState, useEffect, FormEvent } from "react";
 import { useNavigate, Link, Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
@@ -9,13 +9,23 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [needsSetup, setNeedsSetup] = useState(false);
 
   // 2FA state
   const [twoFaToken, setTwoFaToken] = useState("");
   const [twoFaCode, setTwoFaCode] = useState("");
 
+  // Check if setup is needed (no users exist)
+  useEffect(() => {
+    fetch("/api/auth/setup-status")
+      .then(r => r.json())
+      .then(d => { if (d.needs_setup) setNeedsSetup(true); })
+      .catch(() => {});
+  }, []);
+
   if (loading) return null;
   if (user) return <Navigate to="/" replace />;
+  if (needsSetup) return <Navigate to="/setup" replace />;
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
