@@ -220,7 +220,7 @@ export default function Security() {
 
   if (loading) {
     return (
-      <div className="p-6 lg:p-8">
+      <div className="p-6 lg:p-8 animate-fade-up">
         <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest mb-6">Security</h1>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {[...Array(4)].map((_, i) => (

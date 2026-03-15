@@ -167,7 +167,7 @@ export default function Servers() {
 
   if (loading) {
     return (
-      <div className="p-6 lg:p-8">
+      <div className="p-6 lg:p-8 animate-fade-up">
         <div className="bg-dark-800 rounded-lg border border-dark-500 p-6 animate-pulse">
           <div className="h-6 bg-dark-700 rounded w-48 mb-4" />
           <div className="h-4 bg-dark-700 rounded w-32" />
