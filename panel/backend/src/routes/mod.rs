@@ -17,6 +17,7 @@ pub mod dns;
 pub mod docker_apps;
 pub mod files;
 pub mod logs;
+pub mod mail;
 pub mod metrics;
 pub mod monitors;
 pub mod security;
@@ -250,6 +251,17 @@ pub fn router() -> Router<AppState> {
         // Dashboard Intelligence
         .route("/api/dashboard/intelligence", get(dashboard::intelligence))
         .route("/api/dashboard/metrics-history", get(dashboard::metrics_history))
+        // Mail
+        .route("/api/mail/domains", get(mail::list_domains).post(mail::create_domain))
+        .route("/api/mail/domains/{id}", put(mail::update_domain).delete(mail::delete_domain))
+        .route("/api/mail/domains/{id}/dns", get(mail::domain_dns))
+        .route("/api/mail/domains/{id}/accounts", get(mail::list_accounts).post(mail::create_account))
+        .route("/api/mail/domains/{id}/accounts/{account_id}", put(mail::update_account).delete(mail::delete_account))
+        .route("/api/mail/domains/{id}/aliases", get(mail::list_aliases).post(mail::create_alias))
+        .route("/api/mail/domains/{id}/aliases/{alias_id}", delete(mail::delete_alias))
+        .route("/api/mail/queue", get(mail::get_queue))
+        .route("/api/mail/queue/flush", post(mail::flush_queue))
+        .route("/api/mail/queue/{queue_id}", delete(mail::delete_queued))
         // Agent Diagnostics proxy
         .route("/api/agent/diagnostics", get(system::diagnostics))
         .route("/api/agent/diagnostics/fix", post(system::diagnostics_fix))
