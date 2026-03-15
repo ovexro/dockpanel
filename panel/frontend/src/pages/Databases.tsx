@@ -157,7 +157,7 @@ export default function Databases() {
         <button
           onClick={() => setShowForm(!showForm)}
           disabled={sites.length === 0}
-          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors disabled:opacity-50"
+          className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 transition-colors disabled:opacity-50"
         >
           {showForm ? "Cancel" : "Create Database"}
         </button>
@@ -187,7 +187,7 @@ export default function Databases() {
                 id="db-site"
                 value={siteId}
                 onChange={(e) => setSiteId(e.target.value)}
-                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none text-sm bg-dark-800"
+                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm bg-dark-800"
               >
                 {sites.map((s) => (
                   <option key={s.id} value={s.id}>
@@ -208,7 +208,7 @@ export default function Databases() {
                 required
                 placeholder="my_database"
                 pattern="[a-zA-Z0-9_]+"
-                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none text-sm"
+                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm"
               />
             </div>
             <div>
@@ -219,7 +219,7 @@ export default function Databases() {
                 id="db-engine"
                 value={engine}
                 onChange={(e) => setEngine(e.target.value)}
-                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none text-sm bg-dark-800"
+                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm bg-dark-800"
               >
                 <option value="postgres">PostgreSQL 16</option>
                 <option value="mariadb">MariaDB 11</option>
@@ -229,7 +229,7 @@ export default function Databases() {
           <button
             type="submit"
             disabled={submitting}
-            className="px-6 py-2.5 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
+            className="px-6 py-2.5 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50 transition-colors"
           >
             {submitting ? "Creating..." : "Create Database"}
           </button>

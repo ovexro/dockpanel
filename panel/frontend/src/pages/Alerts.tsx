@@ -157,7 +157,7 @@ export default function Alerts() {
         <button
           onClick={() => setTypeFilter("")}
           className={`px-3 py-1 rounded-lg text-xs font-medium ${
-            !typeFilter ? "bg-rust-500 text-white" : "bg-dark-700 text-dark-200"
+            !typeFilter ? "bg-accent-500 text-white" : "bg-dark-700 text-dark-200"
           }`}
         >
           All
@@ -167,7 +167,7 @@ export default function Alerts() {
             key={key}
             onClick={() => setTypeFilter(typeFilter === key ? "" : key)}
             className={`px-3 py-1 rounded-lg text-xs font-medium ${
-              typeFilter === key ? "bg-rust-500 text-white" : "bg-dark-700 text-dark-200"
+              typeFilter === key ? "bg-accent-500 text-white" : "bg-dark-700 text-dark-200"
             }`}
           >
             {label}

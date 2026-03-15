@@ -169,7 +169,7 @@ export default function Monitors() {
         </div>
         <button
           onClick={() => setShowForm(!showForm)}
-          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
+          className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 transition-colors"
         >
           Add Monitor
         </button>
@@ -189,15 +189,15 @@ export default function Monitors() {
           <div className="grid grid-cols-2 gap-4 mb-4">
             <div>
               <label className="block text-xs font-medium text-dark-200 mb-1">Name</label>
-              <input type="text" value={formName} onChange={(e) => setFormName(e.target.value)} required placeholder="My Website" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+              <input type="text" value={formName} onChange={(e) => setFormName(e.target.value)} required placeholder="My Website" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
             </div>
             <div>
               <label className="block text-xs font-medium text-dark-200 mb-1">URL</label>
-              <input type="url" value={formUrl} onChange={(e) => setFormUrl(e.target.value)} required placeholder="https://example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+              <input type="url" value={formUrl} onChange={(e) => setFormUrl(e.target.value)} required placeholder="https://example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
             </div>
             <div>
               <label className="block text-xs font-medium text-dark-200 mb-1">Check Interval</label>
-              <select value={formInterval} onChange={(e) => setFormInterval(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none">
+              <select value={formInterval} onChange={(e) => setFormInterval(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none">
                 <option value="30">30 seconds</option>
                 <option value="60">1 minute</option>
                 <option value="300">5 minutes</option>
@@ -206,15 +206,15 @@ export default function Monitors() {
             </div>
             <div>
               <label className="block text-xs font-medium text-dark-200 mb-1">Slack Webhook (optional)</label>
-              <input type="url" value={formSlack} onChange={(e) => setFormSlack(e.target.value)} placeholder="https://hooks.slack.com/..." className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+              <input type="url" value={formSlack} onChange={(e) => setFormSlack(e.target.value)} placeholder="https://hooks.slack.com/..." className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
             </div>
           </div>
           <div className="mb-4">
             <label className="block text-xs font-medium text-dark-200 mb-1">Discord Webhook (optional)</label>
-            <input type="url" value={formDiscord} onChange={(e) => setFormDiscord(e.target.value)} placeholder="https://discord.com/api/webhooks/..." className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+            <input type="url" value={formDiscord} onChange={(e) => setFormDiscord(e.target.value)} placeholder="https://discord.com/api/webhooks/..." className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
           </div>
           <div className="flex gap-3">
-            <button type="submit" disabled={submitting} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50">
+            <button type="submit" disabled={submitting} className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50">
               {submitting ? "Creating..." : "Create Monitor"}
             </button>
             <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600">

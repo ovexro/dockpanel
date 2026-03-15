@@ -69,7 +69,7 @@ export default function Sites() {
         <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Sites</h1>
         <button
           onClick={() => setShowForm(!showForm)}
-          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
+          className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 transition-colors"
         >
           {showForm ? "Cancel" : "Create Site"}
         </button>
@@ -98,7 +98,7 @@ export default function Sites() {
                 onChange={(e) => setDomain(e.target.value)}
                 required
                 placeholder="example.com"
-                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none text-sm"
+                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm"
               />
             </div>
             <div>
@@ -107,7 +107,7 @@ export default function Sites() {
                 id="site-runtime"
                 value={runtime}
                 onChange={(e) => setRuntime(e.target.value)}
-                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none text-sm bg-dark-800"
+                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm bg-dark-800"
               >
                 <option value="static">Static (HTML/CSS/JS)</option>
                 <option value="php">PHP</option>
@@ -128,7 +128,7 @@ export default function Sites() {
                 placeholder="3000"
                 min="1"
                 max="65535"
-                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none text-sm max-w-xs"
+                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm max-w-xs"
               />
             </div>
           )}
@@ -141,7 +141,7 @@ export default function Sites() {
                   id="site-php-version"
                   value={phpVersion}
                   onChange={(e) => setPhpVersion(e.target.value)}
-                  className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none text-sm bg-dark-800"
+                  className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm bg-dark-800"
                 >
                   <option value="8.4">PHP 8.4</option>
                   <option value="8.3">PHP 8.3</option>
@@ -155,7 +155,7 @@ export default function Sites() {
                   id="site-php-preset"
                   value={phpPreset}
                   onChange={(e) => setPhpPreset(e.target.value)}
-                  className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none text-sm bg-dark-800"
+                  className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm bg-dark-800"
                 >
                   <option value="generic">Generic PHP</option>
                   <option value="laravel">Laravel</option>
@@ -173,7 +173,7 @@ export default function Sites() {
           <button
             type="submit"
             disabled={submitting}
-            className="px-6 py-2.5 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
+            className="px-6 py-2.5 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50 transition-colors"
           >
             {submitting ? "Creating..." : "Create Site"}
           </button>

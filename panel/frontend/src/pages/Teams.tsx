@@ -152,7 +152,7 @@ export default function Teams() {
         </div>
         <button
           onClick={() => setShowCreate(!showCreate)}
-          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
+          className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 transition-colors"
         >
           Create Team
         </button>
@@ -177,9 +177,9 @@ export default function Teams() {
           <div className="flex items-end gap-3">
             <div className="flex-1">
               <label htmlFor="team-name" className="block text-xs font-medium text-dark-200 mb-1">Team Name</label>
-              <input id="team-name" type="text" value={teamName} onChange={(e) => setTeamName(e.target.value)} required placeholder="e.g. Engineering" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+              <input id="team-name" type="text" value={teamName} onChange={(e) => setTeamName(e.target.value)} required placeholder="e.g. Engineering" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
             </div>
-            <button type="submit" disabled={submitting} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50">
+            <button type="submit" disabled={submitting} className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50">
               {submitting ? "Creating..." : "Create"}
             </button>
             <button type="button" onClick={() => setShowCreate(false)} className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600">Cancel</button>
@@ -233,17 +233,17 @@ export default function Teams() {
                   <div className="flex items-end gap-3">
                     <div className="flex-1">
                       <label className="block text-xs font-medium text-dark-200 mb-1">Email</label>
-                      <input type="email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} required placeholder="user@example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+                      <input type="email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} required placeholder="user@example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-dark-200 mb-1">Role</label>
-                      <select value={inviteRole} onChange={(e) => setInviteRole(e.target.value)} className="px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none">
+                      <select value={inviteRole} onChange={(e) => setInviteRole(e.target.value)} className="px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none">
                         <option value="admin">Admin</option>
                         <option value="developer">Developer</option>
                         <option value="viewer">Viewer</option>
                       </select>
                     </div>
-                    <button type="submit" className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600">Send</button>
+                    <button type="submit" className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600">Send</button>
                   </div>
                 </form>
               )}

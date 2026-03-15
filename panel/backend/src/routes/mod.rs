@@ -249,6 +249,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/alert-rules/{server_id}", put(alerts::update_server_rules).delete(alerts::delete_server_rules))
         // Dashboard Intelligence
         .route("/api/dashboard/intelligence", get(dashboard::intelligence))
+        .route("/api/dashboard/metrics-history", get(dashboard::metrics_history))
         // Agent Diagnostics proxy
         .route("/api/agent/diagnostics", get(system::diagnostics))
         .route("/api/agent/diagnostics/fix", post(system::diagnostics_fix))

@@ -70,7 +70,7 @@ export default function Setup() {
               onChange={(e) => setEmail(e.target.value)}
               required
               autoFocus
-              className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none transition-shadow text-sm"
+              className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-shadow text-sm"
             />
           </div>
 
@@ -83,7 +83,7 @@ export default function Setup() {
               onChange={(e) => setPassword(e.target.value)}
               required
               minLength={8}
-              className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none transition-shadow text-sm"
+              className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-shadow text-sm"
             />
           </div>
 
@@ -95,14 +95,14 @@ export default function Setup() {
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
               required
-              className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none transition-shadow text-sm"
+              className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-shadow text-sm"
             />
           </div>
 
           <button
             type="submit"
             disabled={submitting}
-            className="w-full py-2.5 bg-rust-500 text-white rounded-lg font-medium hover:bg-rust-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
+            className="w-full py-2.5 bg-accent-500 text-white rounded-lg font-medium hover:bg-accent-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
           >
             {submitting ? "Creating..." : "Create Admin Account"}
           </button>

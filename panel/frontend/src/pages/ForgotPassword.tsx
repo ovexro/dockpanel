@@ -50,7 +50,7 @@ export default function ForgotPassword() {
             </div>
             <Link
               to="/login"
-              className="block w-full py-2.5 bg-rust-500 text-white rounded-lg font-medium hover:bg-rust-600 text-center text-sm"
+              className="block w-full py-2.5 bg-accent-500 text-white rounded-lg font-medium hover:bg-accent-600 text-center text-sm"
             >
               Back to Login
             </Link>
@@ -71,14 +71,14 @@ export default function ForgotPassword() {
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 autoFocus
-                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none transition-shadow text-sm"
+                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-shadow text-sm"
                 placeholder="you@example.com"
               />
             </div>
             <button
               type="submit"
               disabled={submitting}
-              className="w-full py-2.5 bg-rust-500 text-white rounded-lg font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors text-sm"
+              className="w-full py-2.5 bg-accent-500 text-white rounded-lg font-medium hover:bg-accent-600 disabled:opacity-50 transition-colors text-sm"
             >
               {submitting ? "Sending..." : "Send Reset Link"}
             </button>

@@ -287,7 +287,7 @@ export default function Settings() {
                 type="text"
                 value={panelName}
                 onChange={(e) => setPanelName(e.target.value)}
-                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500"
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
                 placeholder="DockPanel"
               />
             </div>
@@ -295,7 +295,7 @@ export default function Settings() {
               <button
                 onClick={saveGeneral}
                 disabled={saving === "general"}
-                className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+                className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
               >
                 {saving === "general" ? "Saving..." : "Save"}
               </button>
@@ -317,7 +317,7 @@ export default function Settings() {
                 id="smtp-provider"
                 value={smtpProvider}
                 onChange={(e) => applyPreset(e.target.value)}
-                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm bg-dark-800 focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm bg-dark-800 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
               >
                 <option value="custom">Custom SMTP</option>
                 <option value="mailgun">Mailgun</option>
@@ -337,7 +337,7 @@ export default function Settings() {
                   type="text"
                   value={smtpHost}
                   onChange={(e) => setSmtpHost(e.target.value)}
-                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none font-mono"
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none font-mono"
                   placeholder="smtp.example.com"
                 />
               </div>
@@ -348,7 +348,7 @@ export default function Settings() {
                   type="text"
                   value={smtpPort}
                   onChange={(e) => setSmtpPort(e.target.value)}
-                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none font-mono"
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none font-mono"
                   placeholder="587"
                 />
               </div>
@@ -358,7 +358,7 @@ export default function Settings() {
                   id="smtp-encryption"
                   value={smtpEncryption}
                   onChange={(e) => setSmtpEncryption(e.target.value)}
-                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm bg-dark-800 focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm bg-dark-800 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
                 >
                   <option value="starttls">STARTTLS (port 587)</option>
                   <option value="tls">TLS/SSL (port 465)</option>
@@ -374,7 +374,7 @@ export default function Settings() {
                   type="text"
                   value={smtpUser}
                   onChange={(e) => setSmtpUser(e.target.value)}
-                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
                   placeholder="user@example.com"
                 />
               </div>
@@ -385,7 +385,7 @@ export default function Settings() {
                   type="password"
                   value={smtpPass}
                   onChange={(e) => setSmtpPass(e.target.value)}
-                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
                   placeholder="Enter password or API key"
                 />
               </div>
@@ -398,7 +398,7 @@ export default function Settings() {
                   type="text"
                   value={smtpFrom}
                   onChange={(e) => setSmtpFrom(e.target.value)}
-                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
                   placeholder="noreply@example.com"
                 />
               </div>
@@ -409,7 +409,7 @@ export default function Settings() {
                   type="text"
                   value={smtpFromName}
                   onChange={(e) => setSmtpFromName(e.target.value)}
-                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
                   placeholder="DockPanel"
                 />
               </div>
@@ -425,7 +425,7 @@ export default function Settings() {
               <button
                 onClick={saveSMTP}
                 disabled={saving === "smtp"}
-                className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+                className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
               >
                 {saving === "smtp" ? "Saving..." : "Save"}
               </button>
@@ -439,7 +439,7 @@ export default function Settings() {
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Backup Destinations</h3>
             <button
               onClick={() => setShowDestForm(!showDestForm)}
-              className="px-3 py-1 bg-rust-500 text-white rounded-md text-xs font-medium hover:bg-rust-600"
+              className="px-3 py-1 bg-accent-500 text-white rounded-md text-xs font-medium hover:bg-accent-600"
             >
               {showDestForm ? "Cancel" : "Add Destination"}
             </button>
@@ -450,11 +450,11 @@ export default function Settings() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-medium text-dark-100 mb-1">Name</label>
-                    <input type="text" value={destName} onChange={(e) => setDestName(e.target.value)} placeholder="My S3 Backup" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+                    <input type="text" value={destName} onChange={(e) => setDestName(e.target.value)} placeholder="My S3 Backup" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-dark-100 mb-1">Type</label>
-                    <select value={destType} onChange={(e) => setDestType(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm bg-dark-800 focus:ring-2 focus:ring-rust-500 outline-none">
+                    <select value={destType} onChange={(e) => setDestType(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm bg-dark-800 focus:ring-2 focus:ring-accent-500 outline-none">
                       <option value="s3">S3 / R2 / MinIO</option>
                       <option value="sftp">SFTP</option>
                     </select>
@@ -465,31 +465,31 @@ export default function Settings() {
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-xs font-medium text-dark-100 mb-1">Bucket</label>
-                        <input type="text" value={destBucket} onChange={(e) => setDestBucket(e.target.value)} placeholder="my-backups" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+                        <input type="text" value={destBucket} onChange={(e) => setDestBucket(e.target.value)} placeholder="my-backups" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-dark-100 mb-1">Region</label>
-                        <input type="text" value={destRegion} onChange={(e) => setDestRegion(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+                        <input type="text" value={destRegion} onChange={(e) => setDestRegion(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
                       </div>
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-dark-100 mb-1">Endpoint URL</label>
-                      <input type="text" value={destEndpoint} onChange={(e) => setDestEndpoint(e.target.value)} placeholder="https://s3.amazonaws.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none font-mono" />
+                      <input type="text" value={destEndpoint} onChange={(e) => setDestEndpoint(e.target.value)} placeholder="https://s3.amazonaws.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none font-mono" />
                       <p className="text-xs text-dark-300 mt-1">For R2: https://ACCOUNT_ID.r2.cloudflarestorage.com</p>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-xs font-medium text-dark-100 mb-1">Access Key</label>
-                        <input type="text" value={destAccessKey} onChange={(e) => setDestAccessKey(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+                        <input type="text" value={destAccessKey} onChange={(e) => setDestAccessKey(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-dark-100 mb-1">Secret Key</label>
-                        <input type="password" value={destSecretKey} onChange={(e) => setDestSecretKey(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+                        <input type="password" value={destSecretKey} onChange={(e) => setDestSecretKey(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
                       </div>
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-dark-100 mb-1">Path Prefix</label>
-                      <input type="text" value={destPathPrefix} onChange={(e) => setDestPathPrefix(e.target.value)} placeholder="backups" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+                      <input type="text" value={destPathPrefix} onChange={(e) => setDestPathPrefix(e.target.value)} placeholder="backups" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
                     </div>
                   </>
                 ) : (
@@ -497,26 +497,26 @@ export default function Settings() {
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-xs font-medium text-dark-100 mb-1">Host</label>
-                        <input type="text" value={destSftpHost} onChange={(e) => setDestSftpHost(e.target.value)} placeholder="backup.example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none font-mono" />
+                        <input type="text" value={destSftpHost} onChange={(e) => setDestSftpHost(e.target.value)} placeholder="backup.example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none font-mono" />
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-dark-100 mb-1">Port</label>
-                        <input type="text" value={destSftpPort} onChange={(e) => setDestSftpPort(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none font-mono" />
+                        <input type="text" value={destSftpPort} onChange={(e) => setDestSftpPort(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none font-mono" />
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-xs font-medium text-dark-100 mb-1">Username</label>
-                        <input type="text" value={destSftpUser} onChange={(e) => setDestSftpUser(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+                        <input type="text" value={destSftpUser} onChange={(e) => setDestSftpUser(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-dark-100 mb-1">Password</label>
-                        <input type="password" value={destSftpPass} onChange={(e) => setDestSftpPass(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+                        <input type="password" value={destSftpPass} onChange={(e) => setDestSftpPass(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
                       </div>
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-dark-100 mb-1">Remote Path</label>
-                      <input type="text" value={destSftpPath} onChange={(e) => setDestSftpPath(e.target.value)} placeholder="/backups" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none font-mono" />
+                      <input type="text" value={destSftpPath} onChange={(e) => setDestSftpPath(e.target.value)} placeholder="/backups" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none font-mono" />
                     </div>
                   </>
                 )}
@@ -542,7 +542,7 @@ export default function Settings() {
                         setSavingDest(false);
                       }
                     }}
-                    className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+                    className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
                   >
                     {savingDest ? "Saving..." : "Save Destination"}
                   </button>
@@ -622,7 +622,7 @@ export default function Settings() {
                     onChange={(e) => setTwoFaDisableCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
                     placeholder="Enter TOTP code to disable"
                     aria-label="TOTP code to disable 2FA"
-                    className="px-3 py-2 border border-dark-500 rounded-lg text-sm w-48 focus:ring-2 focus:ring-rust-500 outline-none font-mono"
+                    className="px-3 py-2 border border-dark-500 rounded-lg text-sm w-48 focus:ring-2 focus:ring-accent-500 outline-none font-mono"
                   />
                   <button
                     disabled={twoFaLoading || twoFaDisableCode.length < 6}
@@ -661,7 +661,7 @@ export default function Settings() {
                     onChange={(e) => setTwoFaCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
                     placeholder="Enter 6-digit code"
                     aria-label="TOTP verification code"
-                    className="px-3 py-2 border border-dark-500 rounded-lg text-sm w-48 focus:ring-2 focus:ring-rust-500 outline-none font-mono"
+                    className="px-3 py-2 border border-dark-500 rounded-lg text-sm w-48 focus:ring-2 focus:ring-accent-500 outline-none font-mono"
                     autoFocus
                   />
                   <button
@@ -682,7 +682,7 @@ export default function Settings() {
                         setTwoFaLoading(false);
                       }
                     }}
-                    className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+                    className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
                   >
                     Verify & Enable
                   </button>
@@ -725,7 +725,7 @@ export default function Settings() {
                       setTwoFaLoading(false);
                     }
                   }}
-                  className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+                  className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
                 >
                   {twoFaLoading ? "Setting up..." : "Enable 2FA"}
                 </button>
@@ -792,7 +792,7 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
                 type="url"
                 value={pdnsApiUrl}
                 onChange={(e) => setPdnsApiUrl(e.target.value)}
-                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 outline-none font-mono"
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none font-mono"
                 placeholder="http://127.0.0.1:8081"
               />
             </div>
@@ -803,7 +803,7 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
                 type="password"
                 value={pdnsApiKey}
                 onChange={(e) => setPdnsApiKey(e.target.value)}
-                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 outline-none font-mono"
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none font-mono"
                 placeholder="PowerDNS API key"
               />
               <p className="text-xs text-dark-300 mt-1">The api-key value from /etc/powerdns/pdns.conf</p>
@@ -827,7 +827,7 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
                   }
                 }}
                 disabled={saving === "pdns"}
-                className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+                className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
               >
                 {saving === "pdns" ? "Saving..." : "Save"}
               </button>
@@ -848,7 +848,7 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
                 id="notify-email"
                 checked={notifyEmail}
                 onChange={(e) => setNotifyEmail(e.target.checked)}
-                className="rounded border-dark-500 text-rust-500 focus:ring-rust-500"
+                className="rounded border-dark-500 text-rust-500 focus:ring-accent-500"
               />
               <label htmlFor="notify-email" className="text-sm text-dark-100">Email notifications</label>
             </div>
@@ -859,7 +859,7 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
                 type="url"
                 value={notifySlackUrl}
                 onChange={(e) => setNotifySlackUrl(e.target.value)}
-                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 outline-none font-mono"
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none font-mono"
                 placeholder="https://hooks.slack.com/services/..."
               />
             </div>
@@ -870,7 +870,7 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
                 type="url"
                 value={notifyDiscordUrl}
                 onChange={(e) => setNotifyDiscordUrl(e.target.value)}
-                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 outline-none font-mono"
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none font-mono"
                 placeholder="https://discord.com/api/webhooks/..."
               />
             </div>
@@ -893,7 +893,7 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
                   }
                 }}
                 disabled={saving === "notify"}
-                className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+                className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
               >
                 {saving === "notify" ? "Saving..." : "Save"}
               </button>
@@ -954,7 +954,7 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
                 setHealthLoading(true);
                 loadHealth();
               }}
-              className="px-3 py-1 bg-rust-500 text-white rounded-md text-xs font-medium hover:bg-rust-600"
+              className="px-3 py-1 bg-accent-500 text-white rounded-md text-xs font-medium hover:bg-accent-600"
             >
               Check Now
             </button>
