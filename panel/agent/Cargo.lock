@@ -509,6 +509,7 @@ dependencies = [
  "instant-acme",
  "jsonwebtoken",
  "libc",
+ "rand 0.8.5",
  "reqwest",
  "rustix",
  "serde",
