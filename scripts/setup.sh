@@ -939,12 +939,28 @@ main() {
         build_frontend
     fi
 
-    create_services
+    # Remove default nginx config to avoid certbot conflicts
+    rm -f /etc/nginx/sites-enabled/default
+
+    # These steps should continue even if one fails
+    set +e
     configure_nginx
+    create_services
+
+    # Wait for services to start
+    sleep 3
+
+    # Start services (may already be started by create_services)
+    systemctl start dockpanel-agent 2>/dev/null
+    systemctl start dockpanel-api 2>/dev/null
+    sleep 2
+
     install_recommended_services
     provision_panel_ssl
     wait_for_health
     setup_db_backup
+    set -e
+
     print_summary
 }
 
