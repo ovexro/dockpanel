@@ -39,11 +39,21 @@ export default function Updates() {
 
   if (user?.role !== "admin") return <Navigate to="/" replace />;
 
-  // Check reboot_required on mount
+  // Check reboot + auto-load updates on mount
   useEffect(() => {
     api
       .get<{ count: number; security: number; reboot_required: boolean }>("/system/updates/count")
-      .then((d) => setRebootRequired(d.reboot_required))
+      .then((d) => {
+        setRebootRequired(d.reboot_required);
+        // Auto-load package list if updates available
+        if (d.count > 0) {
+          setLoading(true);
+          api.get<{ updates: PackageUpdate[] }>("/system/updates")
+            .then(data => { setPackages(data.updates || []); setChecked(true); })
+            .catch(() => {})
+            .finally(() => setLoading(false));
+        }
+      })
       .catch(() => {});
   }, []);
 
