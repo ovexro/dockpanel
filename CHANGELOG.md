@@ -4,6 +4,58 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.1.0] - 2026-03-15
+
+### Added
+- **Email Management**: Full mail server with one-click install (Postfix + Dovecot + OpenDKIM). Domains, mailboxes, aliases, catch-all, quotas, autoresponders, DKIM signing, DNS helper (MX/SPF/DKIM/DMARC), mail queue viewer
+- **PowerDNS**: Self-hosted DNS alongside Cloudflare. Provider selector, zone creation, record CRUD, setup guide
+- **One-Click CMS Install**: WordPress, Drupal, Joomla — create site + database + install + SSL in one click from Sites page
+- **Historical Charts**: SVG sparkline charts (CPU/Memory/Disk 24h) with background metrics collector (60s interval, 7-day retention)
+- **Light Theme**: CSS variable overrides, sun/moon toggle in sidebar footer, localStorage persistence
+- **One-Click Service Installers**: PHP-FPM, Certbot, UFW, Fail2Ban — install from Settings page
+- **Smart Port Opener**: Port recognition (28+ ports), safety categories (safe/caution/blocked), quick presets (Web/Mail/Database)
+- **SSH Key Management**: List/add/remove authorized keys with SHA256 fingerprints
+- **Auto-Updates**: Toggle for unattended-upgrades security patches
+- **Panel IP Whitelist**: Restrict panel access to specific IPs
+- **Auto-SSL**: Automatic Let's Encrypt provisioning on site creation
+- **Webhook Testing**: Test Slack/Discord webhooks from Settings
+- **File Upload**: Base64 binary upload with path traversal protection
+- **Webmail Template**: Roundcube one-click deploy from Docker Apps
+- **Spam Filter Template**: Rspamd one-click deploy from Docker Apps
+- **BUILD STABLE Badge**: Build status indicator in sidebar footer
+
+### Changed
+- **Harmonized Color Palette**: Green/amber/red at identical saturation/lightness (anchored at #22c55e). Custom `warn-*` and `danger-*` CSS scales. Zero stale emerald/amber/yellow references
+- **Dashboard Redesign**: Bar metrics with centered text-5xl numbers (replaced ring gauges), neutral white numbers + gray progress bars (color only for warnings/critical), system info grid (replaced neofetch style)
+- **Sidebar Overhaul**: Flat nav (no progressive disclosure), white active state with blinking _ cursor, 19px icons, spacing-only groups
+- **Terminal Frame**: Unified bordered container (header + canvas in single frame)
+- **Mobile Responsive**: Card layouts for Activity, Users, DNS records. Logs toolbar wrapping. Monitors polish
+- **Contrast**: All text-dark-400 bumped to text-dark-300 globally (36 instances, 14 files) for WCAG compliance
+- **Animations**: Page fade-up, stagger children, counting numbers, typewriter welcome, hover-lift. Respects prefers-reduced-motion
+- **Login Page**: Logo updated to match sidebar brand
+- **Apps/Sites Separation**: WordPress/Drupal/Joomla moved from Docker Apps to native PHP in Sites. 32 Docker templates remain for services and tools
+- **502 Error UX**: "Agent offline" message with `systemctl restart` command instead of cryptic "Request failed (502)"
+- **Security Score**: Prominence increase, singular/plural grammar fix
+- **Apps Empty State**: Error message with icon when templates fail to load
+
+### Fixed
+- **Diagnostics**: Agent nginx -t check distinguishes [warn] from [emerg]/[error] — no false critical on cosmetic warnings
+- **Document Root False Positives**: Changed ProtectHome=yes → read-only so agent can see /home/* directories
+- **Agent Socket Persistence**: Added tmpfiles.d config + /run/nginx.pid to ReadWritePaths
+- **Agent Permissions**: NoNewPrivileges=no, ReadWritePaths for mail/apt/etc paths — enables package installation
+- **CUPS Disabled**: Removed unnecessary print service
+
+### Security
+- Setup script auto-installs UFW + Fail2Ban with default rules
+- Smart firewall blocks dangerous ports (Telnet, NetBIOS, SMB, MSSQL)
+- All cookie flags verified: HttpOnly, Secure, SameSite=Strict, Max-Age=7200
+
+### Infrastructure
+- Metrics collector background service (60s interval, 7-day retention)
+- Mail config sync to Postfix/Dovecot via atomic file writes
+- DKIM key generation via openssl RSA 2048-bit
+- Setup script installs PHP, Certbot, UFW, Fail2Ban out of the box
+
 ## [1.0.0] - 2026-03-14
 
 ### Added
