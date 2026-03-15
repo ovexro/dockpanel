@@ -18,8 +18,8 @@ const features = [
     ),
     title: 'Free SSL Certificates',
     description: "Automatic Let's Encrypt provisioning and renewal. One-click SSL for every site with zero-downtime certificate rotation.",
-    iconBg: 'bg-emerald-500/10',
-    iconColor: 'text-emerald-400',
+    iconBg: 'bg-brand-500/10',
+    iconColor: 'text-brand-400',
   },
   {
     icon: (
@@ -51,8 +51,8 @@ const features = [
     ),
     title: 'Docker Apps & Compose',
     description: '34 one-click app templates across 10 categories — databases, CMS, monitoring, analytics, and more. Auto reverse proxy with SSL, container health checks, and CPU/memory resource limits.',
-    iconBg: 'bg-emerald-500/10',
-    iconColor: 'text-emerald-400',
+    iconBg: 'bg-brand-500/10',
+    iconColor: 'text-brand-400',
   },
   {
     icon: (
@@ -62,8 +62,8 @@ const features = [
     ),
     title: 'Infrastructure as Code',
     description: 'Export your entire server config as YAML. Version control it, review diffs, apply to new servers. Reproducible infrastructure with dry-run support.',
-    iconBg: 'bg-amber-500/10',
-    iconColor: 'text-amber-400',
+    iconBg: 'bg-orange-500/10',
+    iconColor: 'text-orange-400',
   },
   {
     icon: (
@@ -95,8 +95,8 @@ const features = [
     ),
     title: 'Backups & S3 Storage',
     description: 'Scheduled backups with S3-compatible remote destinations. Per-site backup policies, one-click restore, and connection testing.',
-    iconBg: 'bg-amber-500/10',
-    iconColor: 'text-amber-400',
+    iconBg: 'bg-orange-500/10',
+    iconColor: 'text-orange-400',
   },
   {
     icon: (
@@ -128,8 +128,8 @@ const features = [
     ),
     title: 'ARM & Homelab Ready',
     description: 'Runs on Raspberry Pi, Oracle Cloud free-tier ARM instances, and any ARM64 server. Same ~10MB binary, same features, same performance.',
-    iconBg: 'bg-emerald-500/10',
-    iconColor: 'text-emerald-400',
+    iconBg: 'bg-brand-500/10',
+    iconColor: 'text-brand-400',
   },
   {
     icon: (
@@ -150,8 +150,8 @@ const features = [
     ),
     title: 'Auto-Healing Engine',
     description: 'Automatic remediation of crashed services, disk space recovery, and SSL renewal. Runs silently in the background with full audit trail and opt-in control.',
-    iconBg: 'bg-amber-500/10',
-    iconColor: 'text-amber-400',
+    iconBg: 'bg-orange-500/10',
+    iconColor: 'text-orange-400',
   },
   {
     icon: (

@@ -16,7 +16,7 @@ const specs = [
 
 function BoolBadge({ value }: { value: boolean }) {
   return value ? (
-    <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-green-500/20 text-green-400">
+    <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-brand-500/20 text-brand-400">
       <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
       </svg>
