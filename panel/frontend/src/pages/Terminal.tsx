@@ -208,7 +208,7 @@ export default function Terminal() {
       </div>
 
       {error && (
-        <div className="px-6 py-2 bg-red-500/10 text-red-400 text-sm border-b border-red-500/20">
+        <div className="px-6 py-2 bg-red-500/10 text-danger-400 text-sm border-b border-red-500/20">
           {error}
         </div>
       )}

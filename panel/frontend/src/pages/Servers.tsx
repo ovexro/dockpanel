@@ -23,7 +23,7 @@ interface Server {
 
 const statusColors: Record<string, string> = {
   online: "bg-rust-500/15 text-rust-400",
-  offline: "bg-red-500/15 text-red-400",
+  offline: "bg-red-500/15 text-danger-400",
   pending: "bg-warn-500/15 text-warn-400",
 };
 
@@ -192,7 +192,7 @@ export default function Servers() {
       </div>
 
       {error && (
-        <div className="bg-red-500/10 text-red-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-4">
+        <div className="bg-red-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-4">
           {error}
           <button onClick={() => setError("")} className="ml-2 font-medium hover:underline">Dismiss</button>
         </div>
@@ -347,7 +347,7 @@ export default function Servers() {
                   )}
                   <button
                     onClick={() => handleDelete(s.id, s.name)}
-                    className="p-1.5 text-dark-300 hover:text-red-500 transition-colors"
+                    className="p-1.5 text-dark-300 hover:text-danger-500 transition-colors"
                     title="Delete server"
                   >
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

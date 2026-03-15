@@ -21,7 +21,7 @@ interface ApplyResult {
 function colorLine(line: string): string {
   if (/Unpacking |Setting up |Processing /.test(line)) return "text-rust-400";
   if (/WARNING|W:/.test(line)) return "text-warn-400";
-  if (/ERROR|E:/.test(line)) return "text-red-400";
+  if (/ERROR|E:/.test(line)) return "text-danger-400";
   return "text-dark-300";
 }
 
@@ -224,7 +224,7 @@ export default function Updates() {
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
               ? "bg-rust-500/10 text-rust-400 border-rust-500/20"
-              : "bg-red-500/10 text-red-400 border-red-500/20"
+              : "bg-red-500/10 text-danger-400 border-red-500/20"
           }`}
         >
           {message.text}
@@ -283,13 +283,13 @@ export default function Updates() {
           <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
             <div className="flex items-center gap-2.5">
               <div className="w-9 h-9 rounded-lg bg-red-500/10 flex items-center justify-center">
-                <svg className="w-5 h-5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <svg className="w-5 h-5 text-danger-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
                 </svg>
               </div>
               <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Security</p>
             </div>
-            <p className={`text-3xl font-bold mt-2 ${securityCount > 0 ? "text-red-400" : "text-rust-400"}`}>
+            <p className={`text-3xl font-bold mt-2 ${securityCount > 0 ? "text-danger-400" : "text-rust-400"}`}>
               {securityCount}
             </p>
             <p className="text-xs text-dark-300 mt-1">security patches</p>
@@ -362,7 +362,7 @@ export default function Updates() {
                     <div className="flex items-center gap-2">
                       {pkg.name}
                       {pkg.security && (
-                        <span className="px-1.5 py-0.5 bg-red-500/15 text-red-400 rounded text-[10px] font-semibold uppercase tracking-wider border border-red-500/20">
+                        <span className="px-1.5 py-0.5 bg-red-500/15 text-danger-400 rounded text-[10px] font-semibold uppercase tracking-wider border border-red-500/20">
                           Security
                         </span>
                       )}

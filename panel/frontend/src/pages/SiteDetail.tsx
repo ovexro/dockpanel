@@ -124,7 +124,7 @@ export default function SiteDetail() {
   if (error || !site) {
     return (
       <div className="p-6 lg:p-8">
-        <div className="bg-red-500/10 text-red-400 px-4 py-3 rounded-lg border border-red-500/20">
+        <div className="bg-red-500/10 text-danger-400 px-4 py-3 rounded-lg border border-red-500/20">
           {error || "Site not found"}
         </div>
         <Link to="/sites" className="text-sm text-rust-400 hover:text-rust-300 mt-4 inline-block">
@@ -161,7 +161,7 @@ export default function SiteDetail() {
         <div>
           {confirmDelete ? (
             <div className="flex items-center gap-2">
-              <span className="text-sm text-red-400">Are you sure?</span>
+              <span className="text-sm text-danger-400">Are you sure?</span>
               <button
                 onClick={handleDelete}
                 disabled={deleting}
@@ -179,7 +179,7 @@ export default function SiteDetail() {
           ) : (
             <button
               onClick={handleDelete}
-              className="px-4 py-2 bg-red-500/10 text-red-400 rounded-lg text-sm font-medium hover:bg-red-500/20 transition-colors"
+              className="px-4 py-2 bg-red-500/10 text-danger-400 rounded-lg text-sm font-medium hover:bg-red-500/20 transition-colors"
             >
               Delete Site
             </button>
@@ -240,7 +240,7 @@ export default function SiteDetail() {
                     <span className="text-xs text-dark-200">Switching...</span>
                   )}
                   {phpMessage && (
-                    <span className={`text-xs ${phpMessage.includes("Switched") ? "text-rust-400" : "text-red-400"}`}>
+                    <span className={`text-xs ${phpMessage.includes("Switched") ? "text-rust-400" : "text-danger-400"}`}>
                       {phpMessage}
                     </span>
                   )}
@@ -493,7 +493,7 @@ export default function SiteDetail() {
               </p>
               <div className="flex items-center gap-3">
                 {limitsMessage && (
-                  <span className={`text-xs ${limitsMessage.includes("saved") ? "text-rust-400" : "text-red-400"}`}>
+                  <span className={`text-xs ${limitsMessage.includes("saved") ? "text-rust-400" : "text-danger-400"}`}>
                     {limitsMessage}
                   </span>
                 )}
@@ -646,14 +646,14 @@ export default function SiteDetail() {
                         setStagingLoading(false);
                       }
                     }}
-                    className="px-3 py-1.5 bg-red-500/10 text-red-400 rounded-lg text-xs font-medium hover:bg-red-500/20 transition-colors"
+                    className="px-3 py-1.5 bg-red-500/10 text-danger-400 rounded-lg text-xs font-medium hover:bg-red-500/20 transition-colors"
                   >
                     Delete Staging
                   </button>
                 </div>
 
                 {stagingMessage && (
-                  <p className={`text-xs ${stagingMessage.includes("failed") || stagingMessage.includes("Failed") ? "text-red-400" : "text-rust-400"}`}>
+                  <p className={`text-xs ${stagingMessage.includes("failed") || stagingMessage.includes("Failed") ? "text-danger-400" : "text-rust-400"}`}>
                     {stagingMessage}
                   </p>
                 )}
@@ -715,7 +715,7 @@ export default function SiteDetail() {
                   </button>
                 )}
                 {stagingMessage && (
-                  <p className={`text-xs ${stagingMessage.includes("failed") || stagingMessage.includes("Failed") ? "text-red-400" : "text-rust-400"}`}>
+                  <p className={`text-xs ${stagingMessage.includes("failed") || stagingMessage.includes("Failed") ? "text-danger-400" : "text-rust-400"}`}>
                     {stagingMessage}
                   </p>
                 )}
@@ -730,7 +730,7 @@ export default function SiteDetail() {
         <div className={`mt-4 px-4 py-3 rounded-lg text-sm ${
           sslMessage.includes("success")
             ? "bg-rust-500/10 text-rust-400 border border-rust-500/20"
-            : "bg-red-500/10 text-red-400 border border-red-500/20"
+            : "bg-red-500/10 text-danger-400 border border-red-500/20"
         }`}>
           {sslMessage}
         </div>

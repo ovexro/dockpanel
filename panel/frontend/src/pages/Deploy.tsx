@@ -174,7 +174,7 @@ export default function Deploy() {
             </button>
             <button
               onClick={handleRemove}
-              className="px-4 py-2 bg-red-500/10 text-red-400 rounded-lg text-sm font-medium hover:bg-red-100 transition-colors"
+              className="px-4 py-2 bg-red-500/10 text-danger-400 rounded-lg text-sm font-medium hover:bg-red-100 transition-colors"
             >
               Remove
             </button>
@@ -187,7 +187,7 @@ export default function Deploy() {
         <div className={`px-4 py-3 rounded-lg text-sm border ${
           message.includes("success") || message.includes("saved") || message.includes("Copied") || message.includes("generated") || message.includes("removed")
             ? "bg-rust-50 text-rust-400 border-rust-200"
-            : "bg-red-500/10 text-red-400 border-red-500/20"
+            : "bg-red-500/10 text-danger-400 border-red-500/20"
         }`}>
           {message}
         </div>
@@ -350,7 +350,7 @@ export default function Deploy() {
             <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${
               config.last_status === "success"
                 ? "bg-rust-500/15 text-rust-400"
-                : "bg-red-500/15 text-red-400"
+                : "bg-red-500/15 text-danger-400"
             }`}>
               {config.last_status}
             </span>
@@ -375,7 +375,7 @@ export default function Deploy() {
                     <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
                       log.status === "success"
                         ? "bg-rust-500/15 text-rust-400"
-                        : "bg-red-500/15 text-red-400"
+                        : "bg-red-500/15 text-danger-400"
                     }`}>
                       {log.status}
                     </span>

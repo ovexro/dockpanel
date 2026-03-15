@@ -141,13 +141,13 @@ function barColor(pct: number): string {
 function pctColor(pct: number): string {
   if (pct < 60) return "text-rust-400";
   if (pct < 85) return "text-warn-500";
-  return "text-red-500";
+  return "text-danger-500";
 }
 
 function tempColor(temp: number): string {
   if (temp < 60) return "text-rust-400";
   if (temp < 80) return "text-warn-400";
-  return "text-red-400";
+  return "text-danger-400";
 }
 
 export default function Dashboard() {
@@ -240,7 +240,7 @@ export default function Dashboard() {
       </div>
 
       {error && (
-        <div className="bg-red-500/10 text-red-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-6">
+        <div className="bg-red-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-6">
           <div className="flex items-start gap-3">
             <svg className="w-5 h-5 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
@@ -353,9 +353,9 @@ export default function Dashboard() {
           {metricsHistory.length >= 2 && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
               {[
-                { label: "CPU", data: metricsHistory.map(p => p.cpu), color: "#43ef82" },
+                { label: "CPU", data: metricsHistory.map(p => p.cpu), color: "#22c55e" },
                 { label: "Memory", data: metricsHistory.map(p => p.mem), color: "#6366f1" },
-                { label: "Disk", data: metricsHistory.map(p => p.disk), color: "#efb043" },
+                { label: "Disk", data: metricsHistory.map(p => p.disk), color: "#c48821" },
               ].map(({ label, data, color }) => (
                 <div key={label} className="border border-dark-500 bg-dark-800 p-4">
                   <div className="flex items-center justify-between mb-2">
@@ -390,7 +390,7 @@ export default function Dashboard() {
                 <span className={`text-sm font-bold ${
                   intel.health_score >= 90 ? "text-rust-400" :
                   intel.health_score >= 75 ? "text-blue-400" :
-                  intel.health_score >= 60 ? "text-warn-400" : "text-red-400"
+                  intel.health_score >= 60 ? "text-warn-400" : "text-danger-400"
                 }`}>{intel.health_score}/100 {intel.grade}</span>
               </div>
               <div className={`px-4 py-3 flex flex-col ${
@@ -398,7 +398,7 @@ export default function Dashboard() {
               }`}>
                 <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Alerts</span>
                 {intel.firing_alerts > 0
-                  ? <span className="text-sm text-red-400 font-bold">{intel.firing_alerts} firing</span>
+                  ? <span className="text-sm text-danger-400 font-bold">{intel.firing_alerts} firing</span>
                   : <span className="text-sm text-rust-400 font-medium">0</span>
                 }
               </div>
@@ -460,7 +460,7 @@ export default function Dashboard() {
                       <div key={i} className="flex items-center justify-between">
                         <span className="text-xs text-dark-100 truncate max-w-[200px]">{ssl.domain}</span>
                         <span className={`text-xs ${
-                          ssl.severity === "critical" ? "text-red-400" :
+                          ssl.severity === "critical" ? "text-danger-400" :
                           ssl.severity === "warning" ? "text-warn-400" :
                           ssl.severity === "info" ? "text-blue-400" : "text-rust-400"
                         }`}>{ssl.days_left}d left</span>
@@ -543,7 +543,7 @@ export default function Dashboard() {
                         <td className="px-5 py-2 text-sm text-dark-50 font-mono truncate max-w-[200px]">{p.name}</td>
                         <td className="px-5 py-2 text-sm text-dark-200 text-right font-mono">{p.pid}</td>
                         <td className="px-5 py-2 text-sm text-right font-mono">
-                          <span className={p.cpu_pct > 50 ? "text-red-400 font-medium" : "text-dark-200"}>
+                          <span className={p.cpu_pct > 50 ? "text-danger-400 font-medium" : "text-dark-200"}>
                             {p.cpu_pct.toFixed(1)}%
                           </span>
                         </td>

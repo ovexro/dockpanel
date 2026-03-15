@@ -189,7 +189,7 @@ export default function Backups() {
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
               ? "bg-rust-50 text-rust-400 border-rust-200"
-              : "bg-red-500/10 text-red-400 border-red-500/20"
+              : "bg-red-500/10 text-danger-400 border-red-500/20"
           }`}
           role="alert"
         >
@@ -257,7 +257,7 @@ export default function Backups() {
                         setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
                       }
                     }}
-                    className="px-3 py-1.5 text-sm text-red-400 bg-red-500/10 rounded-lg hover:bg-red-100"
+                    className="px-3 py-1.5 text-sm text-danger-400 bg-red-500/10 rounded-lg hover:bg-red-100"
                   >
                     Remove
                   </button>
@@ -304,7 +304,7 @@ export default function Backups() {
                   <p className="text-xs text-dark-200 mt-1 font-mono">
                     Last run: {new Date(schedule.last_run).toLocaleString()}
                     {schedule.last_status && (
-                      <span className={`ml-1 ${schedule.last_status === "success" ? "text-rust-400" : "text-red-400"}`}>
+                      <span className={`ml-1 ${schedule.last_status === "success" ? "text-rust-400" : "text-danger-400"}`}>
                         ({schedule.last_status})
                       </span>
                     )}
@@ -396,7 +396,7 @@ export default function Backups() {
                       ) : (
                         <button
                           onClick={() => setDeleteTarget(backup.id)}
-                          className="px-3 py-1 bg-red-500/10 text-red-400 rounded-md text-xs font-medium hover:bg-red-100 transition-colors"
+                          className="px-3 py-1 bg-red-500/10 text-danger-400 rounded-md text-xs font-medium hover:bg-red-100 transition-colors"
                         >
                           Delete
                         </button>

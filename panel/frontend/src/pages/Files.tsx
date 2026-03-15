@@ -231,7 +231,7 @@ export default function Files() {
       </div>
 
       {error && (
-        <div className="mb-4 px-4 py-3 bg-red-500/10 text-red-400 rounded-lg border border-red-500/20 text-sm">
+        <div className="mb-4 px-4 py-3 bg-red-500/10 text-danger-400 rounded-lg border border-red-500/20 text-sm">
           {error}
           <button onClick={() => setError("")} className="ml-2 underline">
             dismiss
@@ -337,7 +337,7 @@ export default function Files() {
                           </button>
                           <button
                             onClick={() => setDeleteTarget(entry.name)}
-                            className="p-1 text-dark-300 hover:text-red-600"
+                            className="p-1 text-dark-300 hover:text-danger-500"
                             title="Delete"
                             aria-label="Delete"
                           >

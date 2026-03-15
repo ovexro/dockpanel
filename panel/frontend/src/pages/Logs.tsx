@@ -241,7 +241,7 @@ export default function Logs() {
   };
 
   const lineClass = (line: string) => {
-    if (/\berror\b|ERROR|\b5\d{2}\b/i.test(line)) return "text-red-400";
+    if (/\berror\b|ERROR|\b5\d{2}\b/i.test(line)) return "text-danger-400";
     if (/\bwarn\b|WARN|\b4\d{2}\b/i.test(line)) return "text-warn-400";
     if (/\binfo\b|INFO/i.test(line)) return "text-blue-400";
     return "text-gray-300";
@@ -279,7 +279,7 @@ export default function Logs() {
                   onClick={streaming ? stopStream : startStream}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                     streaming
-                      ? "bg-red-500/15 text-red-400 hover:bg-red-500/20"
+                      ? "bg-red-500/15 text-danger-400 hover:bg-red-500/20"
                       : "bg-rust-500/15 text-rust-400 hover:bg-rust-500/20"
                   }`}
                 >
@@ -422,7 +422,7 @@ export default function Logs() {
       </div>
 
       {error && (
-        <div className="px-6 py-3 bg-red-500/10 border-b border-red-500/20 text-red-400 text-sm">
+        <div className="px-6 py-3 bg-red-500/10 border-b border-red-500/20 text-danger-400 text-sm">
           {error}
         </div>
       )}
