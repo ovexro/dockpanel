@@ -50,7 +50,7 @@ const features = [
       </svg>
     ),
     title: 'Docker Apps & Compose',
-    description: '34 one-click app templates across 10 categories — databases, CMS, monitoring, analytics, and more. Auto reverse proxy with SSL, container health checks, and CPU/memory resource limits.',
+    description: '36 one-click app templates across 11 categories — databases, CMS, monitoring, analytics, mail, and more. Auto reverse proxy with SSL, container health checks, and CPU/memory resource limits.',
     iconBg: 'bg-brand-500/10',
     iconColor: 'text-brand-400',
   },
@@ -163,6 +163,28 @@ const features = [
     description: 'Full audit trail of every action — site creation, SSL changes, database operations, user logins. Filterable, searchable, with timestamps and actor tracking.',
     iconBg: 'bg-violet-500/10',
     iconColor: 'text-violet-400',
+  },
+  {
+    icon: (
+      <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
+      </svg>
+    ),
+    title: 'Email Management',
+    description: 'Full mail server with one-click install. Domains, mailboxes, aliases, DKIM signing, DNS helper (MX/SPF/DMARC), mail queue, autoresponders, quotas. Roundcube webmail and Rspamd spam filter as Docker apps.',
+    iconBg: 'bg-brand-500/10',
+    iconColor: 'text-brand-400',
+  },
+  {
+    icon: (
+      <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+      </svg>
+    ),
+    title: 'Zero-Friction Setup',
+    description: 'One install script sets up everything — Docker, Nginx, PHP, Certbot, UFW, Fail2Ban. Every additional service (mail, DNS) is one click away from the panel. SSH keys, auto-updates, and IP whitelisting built in.',
+    iconBg: 'bg-orange-500/10',
+    iconColor: 'text-orange-400',
   },
 ];
 
