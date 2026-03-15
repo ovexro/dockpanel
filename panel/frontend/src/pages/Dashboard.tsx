@@ -353,7 +353,7 @@ export default function Dashboard() {
           {metricsHistory.length >= 2 && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
               {[
-                { label: "CPU", data: metricsHistory.map(p => p.cpu), color: "#10b981" },
+                { label: "CPU", data: metricsHistory.map(p => p.cpu), color: "#22c55e" },
                 { label: "Memory", data: metricsHistory.map(p => p.mem), color: "#6366f1" },
                 { label: "Disk", data: metricsHistory.map(p => p.disk), color: "#f59e0b" },
               ].map(({ label, data, color }) => (
