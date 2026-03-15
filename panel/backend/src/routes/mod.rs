@@ -252,6 +252,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/dashboard/intelligence", get(dashboard::intelligence))
         .route("/api/dashboard/metrics-history", get(dashboard::metrics_history))
         // Mail
+        .route("/api/mail/status", get(mail::mail_status))
+        .route("/api/mail/install", post(mail::mail_install))
         .route("/api/mail/domains", get(mail::list_domains).post(mail::create_domain))
         .route("/api/mail/domains/{id}", put(mail::update_domain).delete(mail::delete_domain))
         .route("/api/mail/domains/{id}/dns", get(mail::domain_dns))
