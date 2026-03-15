@@ -145,7 +145,7 @@ function pctColor(pct: number): string {
 }
 
 function tempColor(temp: number): string {
-  if (temp < 60) return "text-emerald-400";
+  if (temp < 60) return "text-rust-400";
   if (temp < 80) return "text-amber-400";
   return "text-red-400";
 }
@@ -282,21 +282,21 @@ export default function Dashboard() {
                   to={step.link}
                   className={`border p-4 transition-all hover-lift ${
                     step.check()
-                      ? "border-emerald-500/30 bg-emerald-500/5"
+                      ? "border-rust-500/30 bg-rust-500/5"
                       : "border-dark-500 bg-dark-900/50 hover:border-rust-500/40"
                   }`}
                 >
                   <div className="flex items-center gap-2 mb-2">
                     {step.check() ? (
-                      <div className="w-5 h-5 bg-emerald-500/15 flex items-center justify-center">
-                        <svg className="w-3 h-3 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                      <div className="w-5 h-5 bg-rust-500/15 flex items-center justify-center">
+                        <svg className="w-3 h-3 text-rust-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
                       </div>
                     ) : (
                       <div className="w-5 h-5 border border-dark-400 flex items-center justify-center">
                         <span className="text-[8px] text-dark-300 font-bold">{steps.indexOf(step) + 1}</span>
                       </div>
                     )}
-                    <span className={`text-xs font-medium ${step.check() ? "text-emerald-400" : "text-dark-50"}`}>{step.label}</span>
+                    <span className={`text-xs font-medium ${step.check() ? "text-rust-400" : "text-dark-50"}`}>{step.label}</span>
                   </div>
                   <p className="text-[10px] text-dark-300 leading-relaxed mb-2">{step.description}</p>
                   {!step.check() && (
@@ -388,7 +388,7 @@ export default function Dashboard() {
               }`}>
                 <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Health</span>
                 <span className={`text-sm font-bold ${
-                  intel.health_score >= 90 ? "text-emerald-400" :
+                  intel.health_score >= 90 ? "text-rust-400" :
                   intel.health_score >= 75 ? "text-blue-400" :
                   intel.health_score >= 60 ? "text-amber-400" : "text-red-400"
                 }`}>{intel.health_score}/100 {intel.grade}</span>
@@ -399,7 +399,7 @@ export default function Dashboard() {
                 <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Alerts</span>
                 {intel.firing_alerts > 0
                   ? <span className="text-sm text-red-400 font-bold">{intel.firing_alerts} firing</span>
-                  : <span className="text-sm text-emerald-400 font-medium">0</span>
+                  : <span className="text-sm text-rust-400 font-medium">0</span>
                 }
               </div>
               <div className="bg-dark-800 px-4 py-3 flex flex-col">
@@ -411,7 +411,7 @@ export default function Dashboard() {
               <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Updates</span>
               {updateCount > 0
                 ? <span className="text-sm text-amber-400 font-bold">{updateCount} available</span>
-                : <span className="text-sm text-emerald-400 font-medium">up to date</span>
+                : <span className="text-sm text-rust-400 font-medium">up to date</span>
               }
             </div>
           </div>
@@ -462,7 +462,7 @@ export default function Dashboard() {
                         <span className={`text-xs ${
                           ssl.severity === "critical" ? "text-red-400" :
                           ssl.severity === "warning" ? "text-amber-400" :
-                          ssl.severity === "info" ? "text-blue-400" : "text-emerald-400"
+                          ssl.severity === "info" ? "text-blue-400" : "text-rust-400"
                         }`}>{ssl.days_left}d left</span>
                       </div>
                     ))}
@@ -510,7 +510,7 @@ export default function Dashboard() {
                       <tr key={iface.name} className="hover:bg-dark-700/30 transition-colors">
                         <td className="px-5 py-2.5 text-sm text-dark-50 font-mono">{iface.name}</td>
                         <td className="px-5 py-2.5 text-sm text-dark-200 text-right font-mono">
-                          <span className="text-emerald-600">{formatSize(iface.rx_bytes)}</span>
+                          <span className="text-rust-600">{formatSize(iface.rx_bytes)}</span>
                         </td>
                         <td className="px-5 py-2.5 text-sm text-dark-200 text-right font-mono">
                           <span className="text-blue-600">{formatSize(iface.tx_bytes)}</span>
