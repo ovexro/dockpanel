@@ -88,14 +88,46 @@ async fn check_nginx() -> Vec<DiagnosticFinding> {
     };
 
     if let Some(out) = test_output {
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let has_fatal = stderr.contains("[emerg]") || stderr.contains("[error]")
+            || stderr.contains("[crit]") || stderr.contains("[alert]");
+        let warn_lines: Vec<&str> = stderr.lines().filter(|l| l.contains("[warn]")).collect();
+
+        if has_fatal {
+            // Real failure — nginx config is broken
+            let error_lines: Vec<&str> = stderr.lines()
+                .filter(|l| l.contains("[emerg]") || l.contains("[error]") || l.contains("[crit]"))
+                .collect();
             findings.push(DiagnosticFinding {
                 id: "nginx-config-invalid".into(),
                 category: "nginx".into(),
                 severity: "critical".into(),
                 title: "Nginx configuration is invalid".into(),
-                description: format!("nginx -t failed: {}", stderr.lines().take(3).collect::<Vec<_>>().join(" ")),
+                description: format!("nginx -t: {}", error_lines.iter().take(3).cloned().collect::<Vec<_>>().join(" ")),
+                fix_available: false,
+                fix_id: None,
+            });
+        } else if !warn_lines.is_empty() {
+            // Warnings only — nginx works fine, cosmetic issues
+            findings.push(DiagnosticFinding {
+                id: "nginx-config-warnings".into(),
+                category: "nginx".into(),
+                severity: "info".into(),
+                title: format!("Nginx has {} configuration warning{}", warn_lines.len(), if warn_lines.len() == 1 { "" } else { "s" }),
+                description: warn_lines.iter().take(3).map(|w| {
+                    w.split("[warn]").last().unwrap_or(w).trim().to_string()
+                }).collect::<Vec<_>>().join("; "),
+                fix_available: false,
+                fix_id: None,
+            });
+        } else if !out.status.success() {
+            // Unknown failure
+            findings.push(DiagnosticFinding {
+                id: "nginx-config-invalid".into(),
+                category: "nginx".into(),
+                severity: "critical".into(),
+                title: "Nginx configuration is invalid".into(),
+                description: format!("nginx -t exited with code {}: {}", out.status.code().unwrap_or(-1), stderr.lines().take(3).collect::<Vec<_>>().join(" ")),
                 fix_available: false,
                 fix_id: None,
             });

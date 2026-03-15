@@ -75,21 +75,22 @@ interface Intelligence {
   top_issues: TopIssue[];
 }
 
-function RingGauge({ pct, size = 80, strokeWidth = 5 }: { pct: number; size?: number; strokeWidth?: number }) {
+function RingGauge({ pct, size = 120, strokeWidth = 7 }: { pct: number; size?: number; strokeWidth?: number }) {
   const clamped = Math.min(pct, 100);
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference * (1 - clamped / 100);
   const color = pct < 60 ? "#10b981" : pct < 85 ? "#f59e0b" : "#ef4444";
+  const glowColor = pct < 60 ? "rgba(16,185,129,0.15)" : pct < 85 ? "rgba(245,158,11,0.15)" : "rgba(239,68,68,0.15)";
 
   return (
-    <div className="relative" style={{ width: size, height: size }} role="progressbar" aria-valuenow={clamped} aria-valuemin={0} aria-valuemax={100}>
+    <div className="relative" style={{ width: size, height: size, filter: `drop-shadow(0 0 8px ${glowColor})` }} role="progressbar" aria-valuenow={clamped} aria-valuemin={0} aria-valuemax={100}>
       <svg width={size} height={size} className="-rotate-90">
         <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="currentColor" className="text-dark-700" strokeWidth={strokeWidth} />
         <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke={color} strokeWidth={strokeWidth} strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round" className="transition-all duration-700" />
       </svg>
       <div className="absolute inset-0 flex items-center justify-center">
-        <span className="text-base font-bold text-dark-50 font-mono">{clamped.toFixed(0)}<span className="text-sm text-dark-200">%</span></span>
+        <span className="text-2xl font-bold text-dark-50 font-mono">{clamped.toFixed(0)}<span className="text-base text-dark-300">%</span></span>
       </div>
     </div>
   );
@@ -187,7 +188,19 @@ export default function Dashboard() {
 
       {error && (
         <div className="bg-red-500/10 text-red-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-6">
-          {error}
+          <div className="flex items-start gap-3">
+            <svg className="w-5 h-5 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+            </svg>
+            <div>
+              <p className="font-medium">{error}</p>
+              {error.includes("Agent offline") && (
+                <p className="text-xs text-dark-300 mt-1 font-mono">
+                  Run: <span className="text-dark-100">systemctl restart dockpanel-agent</span>
+                </p>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
@@ -252,76 +265,82 @@ export default function Dashboard() {
         <>
           {/* Resource Gauges — 3 column */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-            <div className="border border-dark-500 bg-dark-800 p-5 flex flex-col items-center">
-              <div className="flex justify-center py-2">
-                <RingGauge pct={system.cpu_usage} size={96} strokeWidth={6} />
+            <div className="border border-dark-500 bg-dark-800 p-6 flex flex-col items-center">
+              <div className="flex justify-center py-3">
+                <RingGauge pct={system.cpu_usage} />
               </div>
-              <p className="text-xs text-dark-300 uppercase tracking-widest mt-3">CPU Usage</p>
-              <p className="text-[11px] text-dark-400 mt-1">{system.cpu_count} cores{system.load_avg_1 !== undefined ? ` · Load ${system.load_avg_1?.toFixed(2)}` : ""}</p>
+              <p className="text-sm text-dark-200 uppercase tracking-widest mt-3 font-medium flex items-center gap-1.5">
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><rect x="6" y="6" width="12" height="12" rx="1" /><path d="M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4M19 9h4m-4 6h4" strokeLinecap="round" /></svg>
+                CPU Usage
+              </p>
+              <p className="text-xs text-dark-400 mt-1">{system.cpu_count} cores{system.load_avg_1 !== undefined ? ` · Load ${system.load_avg_1?.toFixed(2)}` : ""}</p>
             </div>
-            <div className="border border-dark-500 bg-dark-800 p-5 flex flex-col items-center">
-              <div className="flex justify-center py-2">
-                <RingGauge pct={system.mem_usage_pct} size={96} strokeWidth={6} />
+            <div className="border border-dark-500 bg-dark-800 p-6 flex flex-col items-center">
+              <div className="flex justify-center py-3">
+                <RingGauge pct={system.mem_usage_pct} />
               </div>
-              <p className="text-xs text-dark-300 uppercase tracking-widest mt-3">Memory</p>
-              <p className="text-[11px] text-dark-400 mt-1">{(system.mem_used_mb / 1024).toFixed(1)} / {(system.mem_total_mb / 1024).toFixed(1)} GB{system.swap_total_mb > 0 ? ` · Swap ${(system.swap_used_mb / 1024).toFixed(1)}G` : ""}</p>
+              <p className="text-sm text-dark-200 uppercase tracking-widest mt-3 font-medium flex items-center gap-1.5">
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><rect x="3" y="4" width="18" height="16" rx="1" /><path d="M7 4v3m4-3v3m4-3v3M3 10h18" strokeLinecap="round" /></svg>
+                Memory
+              </p>
+              <p className="text-xs text-dark-400 mt-1">{(system.mem_used_mb / 1024).toFixed(1)} / {(system.mem_total_mb / 1024).toFixed(1)} GB{system.swap_total_mb > 0 ? ` · Swap ${(system.swap_used_mb / 1024).toFixed(1)}G` : ""}</p>
             </div>
-            <div className="border border-dark-500 bg-dark-800 p-5 flex flex-col items-center">
-              <div className="flex justify-center py-2">
-                <RingGauge pct={system.disk_usage_pct} size={96} strokeWidth={6} />
+            <div className="border border-dark-500 bg-dark-800 p-6 flex flex-col items-center">
+              <div className="flex justify-center py-3">
+                <RingGauge pct={system.disk_usage_pct} />
               </div>
-              <p className="text-xs text-dark-300 uppercase tracking-widest mt-3">Disk</p>
-              <p className="text-[11px] text-dark-400 mt-1">{system.disk_used_gb.toFixed(0)} / {system.disk_total_gb.toFixed(0)} GB · {(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB free</p>
+              <p className="text-sm text-dark-200 uppercase tracking-widest mt-3 font-medium flex items-center gap-1.5">
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 17.25v-.228a4.5 4.5 0 0 0-.12-1.03l-2.268-9.64a3.375 3.375 0 0 0-3.285-2.602H7.923a3.375 3.375 0 0 0-3.285 2.602l-2.268 9.64a4.5 4.5 0 0 0-.12 1.03v.228m19.5 0a3 3 0 0 1-3 3H5.25a3 3 0 0 1-3-3m19.5 0a3 3 0 0 0-3-3H5.25a3 3 0 0 0-3 3m16.5 0h.008v.008h-.008v-.008Zm-3 0h.008v.008h-.008v-.008Z" /></svg>
+                Disk
+              </p>
+              <p className="text-xs text-dark-400 mt-1">{system.disk_used_gb.toFixed(0)} / {system.disk_total_gb.toFixed(0)} GB · {(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB free</p>
             </div>
           </div>
 
-          {/* Status Bar */}
-          <div className="border border-dark-500 bg-dark-800 px-5 py-3 mb-6 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
-            <div className="flex items-center gap-2">
-              <span className="text-dark-400">UPTIME</span>
-              <span className="text-dark-50">{formatUptime(system.uptime_secs)}</span>
+          {/* Status Bar — grid of stat cells */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-px bg-dark-600 border border-dark-500 mb-6">
+            <div className="bg-dark-800 px-4 py-3 flex flex-col">
+              <span className="text-[10px] text-dark-400 uppercase tracking-widest mb-1">Uptime</span>
+              <span className="text-sm text-dark-50 font-medium">{formatUptime(system.uptime_secs)}</span>
             </div>
-            <span className="text-dark-500">|</span>
-            <div className="flex items-center gap-2">
-              <span className="text-dark-400">SITES</span>
-              <span className="text-dark-50">{sites.total}</span>
-              {sites.active > 0 && <span className="text-rust-400">({sites.active} active)</span>}
+            <div className="bg-dark-800 px-4 py-3 flex flex-col">
+              <span className="text-[10px] text-dark-400 uppercase tracking-widest mb-1">Sites</span>
+              <span className="text-sm text-dark-50 font-medium">{sites.total}{sites.active > 0 && <span className="text-rust-400 ml-1 text-xs">({sites.active} active)</span>}</span>
             </div>
-            <span className="text-dark-500">|</span>
-            <div className="flex items-center gap-2">
-              <span className="text-dark-400">DATABASES</span>
-              <span className="text-dark-50">{dbCount}</span>
+            <div className="bg-dark-800 px-4 py-3 flex flex-col">
+              <span className="text-[10px] text-dark-400 uppercase tracking-widest mb-1">Databases</span>
+              <span className="text-sm text-dark-50 font-medium">{dbCount}</span>
             </div>
             {intel && <>
-              <span className="text-dark-500">|</span>
-              <div className="flex items-center gap-2">
-                <span className="text-dark-400">HEALTH</span>
-                <span className={
+              <div className={`px-4 py-3 flex flex-col ${
+                intel.health_score < 60 ? "bg-red-500/5" : "bg-dark-800"
+              }`}>
+                <span className="text-[10px] text-dark-400 uppercase tracking-widest mb-1">Health</span>
+                <span className={`text-sm font-bold ${
                   intel.health_score >= 90 ? "text-emerald-400" :
                   intel.health_score >= 75 ? "text-blue-400" :
                   intel.health_score >= 60 ? "text-amber-400" : "text-red-400"
-                }>{intel.health_score}/100 {intel.grade}</span>
+                }`}>{intel.health_score}/100 {intel.grade}</span>
               </div>
-              <span className="text-dark-500">|</span>
-              <div className="flex items-center gap-2">
-                <span className="text-dark-400">ALERTS</span>
+              <div className={`px-4 py-3 flex flex-col ${
+                intel.firing_alerts > 0 ? "bg-red-500/5" : "bg-dark-800"
+              }`}>
+                <span className="text-[10px] text-dark-400 uppercase tracking-widest mb-1">Alerts</span>
                 {intel.firing_alerts > 0
-                  ? <span className="text-red-400">{intel.firing_alerts} firing</span>
-                  : <span className="text-emerald-400">0</span>
+                  ? <span className="text-sm text-red-400 font-bold">{intel.firing_alerts} firing</span>
+                  : <span className="text-sm text-emerald-400 font-medium">0</span>
                 }
               </div>
-              <span className="text-dark-500">|</span>
-              <div className="flex items-center gap-2">
-                <span className="text-dark-400">SSL</span>
-                <span className="text-dark-50">{intel.ssl_countdowns.length} certs</span>
+              <div className="bg-dark-800 px-4 py-3 flex flex-col">
+                <span className="text-[10px] text-dark-400 uppercase tracking-widest mb-1">SSL</span>
+                <span className="text-sm text-dark-50 font-medium">{intel.ssl_countdowns.length} certs</span>
               </div>
             </>}
-            <span className="text-dark-500">|</span>
-            <div className="flex items-center gap-2">
-              <span className="text-dark-400">UPDATES</span>
+            <div className="bg-dark-800 px-4 py-3 flex flex-col">
+              <span className="text-[10px] text-dark-400 uppercase tracking-widest mb-1">Updates</span>
               {updateCount > 0
-                ? <span className="text-amber-400">{updateCount} available</span>
-                : <span className="text-emerald-400">up to date</span>
+                ? <span className="text-sm text-amber-400 font-bold">{updateCount} available</span>
+                : <span className="text-sm text-emerald-400 font-medium">up to date</span>
               }
             </div>
           </div>
@@ -385,7 +404,7 @@ export default function Dashboard() {
           {/* System Information — neofetch style */}
           <div className="border border-dark-500 bg-dark-800 p-5 mb-6">
             <h3 className="text-xs text-dark-300 uppercase tracking-widest mb-4">System Information</h3>
-            <div className="space-y-1.5 text-sm">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-1.5 text-sm">
               {[
                 ["Hostname", system.hostname],
                 ["OS", system.os],
@@ -394,11 +413,11 @@ export default function Dashboard() {
                 ["Temperature", system.cpu_temp != null ? `${system.cpu_temp.toFixed(0)}°C` : "N/A"],
                 ["Processes", system.process_count.toLocaleString()],
               ].map(([label, value]) => (
-                <div key={label} className="flex items-baseline gap-2">
-                  <span className="text-rust-400">{">"}</span>
-                  <span className="text-dark-300 w-28 shrink-0">{label}</span>
-                  <span className="text-dark-500 flex-1 border-b border-dotted border-dark-500 mx-1 mb-1" />
-                  <span className={`text-dark-50 shrink-0 ${label === "Temperature" && system.cpu_temp != null ? tempColor(system.cpu_temp) : ""}`}>{value}</span>
+                <div key={label} className="flex items-baseline gap-2 min-w-0">
+                  <span className="text-rust-400 shrink-0">{">"}</span>
+                  <span className="text-dark-300 w-24 shrink-0">{label}</span>
+                  <span className="text-dark-500 flex-1 border-b border-dotted border-dark-500 mx-1 mb-1 min-w-4" />
+                  <span title={String(value)} className={`text-dark-50 shrink-0 max-w-[55%] truncate ${label === "Temperature" && system.cpu_temp != null ? tempColor(system.cpu_temp) : ""}`}>{value}</span>
                 </div>
               ))}
             </div>

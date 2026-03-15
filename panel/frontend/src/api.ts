@@ -34,10 +34,12 @@ async function request<T = unknown>(
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    throw new ApiError(
-      res.status,
-      (data as { error?: string }).error || `Request failed (${res.status})`
-    );
+    let message = (data as { error?: string }).error || `Request failed (${res.status})`;
+    // Translate common backend errors into user-friendly messages
+    if (res.status === 502 || message.includes("agent connection failed")) {
+      message = "Agent offline — the DockPanel agent is not responding.";
+    }
+    throw new ApiError(res.status, message);
   }
 
   return data as T;

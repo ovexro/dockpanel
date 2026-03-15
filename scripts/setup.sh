@@ -276,6 +276,9 @@ create_directories() {
     mkdir -p /var/backups/dockpanel
     mkdir -p /var/www/acme
 
+    # Ensure socket directory persists across tmpfiles cleanup/reboot
+    echo "d /var/run/dockpanel 0755 root root -" > /etc/tmpfiles.d/dockpanel.conf
+
     log "Directories created"
 }
 
@@ -481,10 +484,10 @@ StartLimitBurst=5
 StartLimitIntervalSec=60
 Environment=RUST_LOG=info
 RuntimeDirectory=dockpanel
-ReadWritePaths=/etc/nginx /etc/dockpanel /var/run/dockpanel /var/backups/dockpanel /var/www /var/log /etc/letsencrypt
+ReadWritePaths=/etc/nginx /etc/dockpanel /var/run/dockpanel /var/backups/dockpanel /var/www /var/log /etc/letsencrypt /var/lib/nginx /run/nginx.pid
 NoNewPrivileges=yes
 ProtectSystem=strict
-ProtectHome=yes
+ProtectHome=read-only
 PrivateTmp=yes
 ProtectKernelLogs=yes
 ProtectKernelModules=yes
