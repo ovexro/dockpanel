@@ -106,7 +106,7 @@ export default function Activity() {
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           aria-label="Filter by activity type"
-          className="px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500"
+          className="px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
         >
           {FILTERS.map((f) => (
             <option key={f.value} value={f.value}>

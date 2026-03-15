@@ -88,7 +88,7 @@ export default function Diagnostics() {
         <button
           onClick={runDiagnostics}
           disabled={loading}
-          className="px-4 py-2 bg-rust-500 hover:bg-rust-600 text-white rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+          className="px-4 py-2 bg-rust-500 hover:bg-accent-600 text-white rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
         >
           {loading ? (
             <>
@@ -202,7 +202,7 @@ export default function Diagnostics() {
                       <button
                         onClick={() => applyFix(finding.fix_id!, finding.id)}
                         disabled={fixing === finding.id}
-                        className="shrink-0 px-3 py-1.5 text-sm bg-rust-500 hover:bg-rust-600 text-white rounded transition-colors disabled:opacity-50"
+                        className="shrink-0 px-3 py-1.5 text-sm bg-rust-500 hover:bg-accent-600 text-white rounded transition-colors disabled:opacity-50"
                       >
                         {fixing === finding.id ? "Fixing..." : "Fix"}
                       </button>

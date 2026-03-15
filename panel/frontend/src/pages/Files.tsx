@@ -197,7 +197,7 @@ export default function Files() {
         </div>
         <button
           onClick={() => setShowCreate(true)}
-          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
+          className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 transition-colors"
         >
           New File/Folder
         </button>
@@ -365,7 +365,7 @@ export default function Files() {
                 <button
                   onClick={saveFile}
                   disabled={saving}
-                  className="px-3 py-1 bg-rust-500 text-white rounded-md text-xs font-medium hover:bg-rust-600 disabled:opacity-50"
+                  className="px-3 py-1 bg-accent-500 text-white rounded-md text-xs font-medium hover:bg-accent-600 disabled:opacity-50"
                 >
                   {saving ? "Saving..." : "Save"}
                 </button>
@@ -401,7 +401,7 @@ export default function Files() {
                 onClick={() => setCreateType("file")}
                 className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
                   createType === "file"
-                    ? "bg-rust-500 text-white"
+                    ? "bg-accent-500 text-white"
                     : "bg-dark-700 text-dark-200 hover:bg-gray-200"
                 }`}
               >
@@ -411,7 +411,7 @@ export default function Files() {
                 onClick={() => setCreateType("dir")}
                 className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
                   createType === "dir"
-                    ? "bg-rust-500 text-white"
+                    ? "bg-accent-500 text-white"
                     : "bg-dark-700 text-dark-200 hover:bg-gray-200"
                 }`}
               >
@@ -423,7 +423,7 @@ export default function Files() {
               value={createName}
               onChange={(e) => setCreateName(e.target.value)}
               placeholder="Name..."
-              className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500"
+              className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
               autoFocus
               onKeyDown={(e) => e.key === "Enter" && handleCreate()}
             />
@@ -439,7 +439,7 @@ export default function Files() {
               </button>
               <button
                 onClick={handleCreate}
-                className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600"
+                className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600"
               >
                 Create
               </button>
@@ -459,7 +459,7 @@ export default function Files() {
               type="text"
               value={renameTo}
               onChange={(e) => setRenameTo(e.target.value)}
-              className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500"
+              className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
               autoFocus
               onKeyDown={(e) => e.key === "Enter" && handleRename()}
             />
@@ -472,7 +472,7 @@ export default function Files() {
               </button>
               <button
                 onClick={handleRename}
-                className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600"
+                className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600"
               >
                 Rename
               </button>

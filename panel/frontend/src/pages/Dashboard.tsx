@@ -75,25 +75,43 @@ interface Intelligence {
   top_issues: TopIssue[];
 }
 
-function RingGauge({ pct, size = 120, strokeWidth = 7 }: { pct: number; size?: number; strokeWidth?: number }) {
-  const clamped = Math.min(pct, 100);
-  const radius = (size - strokeWidth) / 2;
-  const circumference = 2 * Math.PI * radius;
-  const offset = circumference * (1 - clamped / 100);
-  const color = pct < 60 ? "#10b981" : pct < 85 ? "#f59e0b" : "#ef4444";
-  const glowColor = pct < 60 ? "rgba(16,185,129,0.15)" : pct < 85 ? "rgba(245,158,11,0.15)" : "rgba(239,68,68,0.15)";
+interface MetricPoint {
+  cpu: number;
+  mem: number;
+  disk: number;
+  time: string;
+}
+
+function Sparkline({ data, color, height = 60 }: { data: number[]; color: string; height?: number }) {
+  if (data.length < 2) return null;
+  const max = Math.max(...data, 1);
+  const width = 300;
+  const points = data.map((v, i) => {
+    const x = (i / (data.length - 1)) * width;
+    const y = height - (v / max) * (height - 4) - 2;
+    return `${x},${y}`;
+  }).join(" ");
+
+  const fillPoints = `0,${height} ${points} ${width},${height}`;
 
   return (
-    <div className="relative" style={{ width: size, height: size, filter: `drop-shadow(0 0 8px ${glowColor})` }} role="progressbar" aria-valuenow={clamped} aria-valuemin={0} aria-valuemax={100}>
-      <svg width={size} height={size} className="-rotate-90">
-        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="currentColor" className="text-dark-700" strokeWidth={strokeWidth} />
-        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke={color} strokeWidth={strokeWidth} strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round" className="transition-all duration-700" />
-      </svg>
-      <div className="absolute inset-0 flex items-center justify-center">
-        <span className="text-2xl font-bold text-dark-50 font-mono">{clamped.toFixed(0)}<span className="text-base text-dark-300">%</span></span>
-      </div>
-    </div>
+    <svg viewBox={`0 0 ${width} ${height}`} className="w-full" preserveAspectRatio="none" aria-hidden="true">
+      <polygon points={fillPoints} fill={color} opacity="0.08" />
+      <polyline points={points} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+    </svg>
   );
+}
+
+function barColor(pct: number): string {
+  if (pct < 60) return "bg-emerald-500";
+  if (pct < 85) return "bg-amber-500";
+  return "bg-red-500";
+}
+
+function pctColor(pct: number): string {
+  if (pct < 60) return "text-emerald-400";
+  if (pct < 85) return "text-amber-400";
+  return "text-red-400";
 }
 
 function tempColor(temp: number): string {
@@ -114,6 +132,7 @@ export default function Dashboard() {
   const [updateCount, setUpdateCount] = useState(0);
   const [rebootRequired, setRebootRequired] = useState(false);
   const [dismissed, setDismissed] = useState(() => localStorage.getItem("dp-onboarding-dismissed") === "1");
+  const [metricsHistory, setMetricsHistory] = useState<MetricPoint[]>([]);
 
   const dismissOnboarding = useCallback(() => {
     setDismissed(true);
@@ -157,6 +176,10 @@ export default function Dashboard() {
     api
       .get<{ count: number; security: number; reboot_required: boolean }>("/system/updates/count")
       .then((d) => { setUpdateCount(d.count); setRebootRequired(d.reboot_required); })
+      .catch(() => {});
+    api
+      .get<{ points: MetricPoint[] }>("/dashboard/metrics-history")
+      .then((d) => setMetricsHistory(d.points || []))
       .catch(() => {});
   };
 
@@ -263,39 +286,53 @@ export default function Dashboard() {
         </div>
       ) : (
         <>
-          {/* Resource Gauges — 3 column */}
+          {/* Resource Metrics — 3 column */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-            <div className="border border-dark-500 bg-dark-800 p-6 flex flex-col items-center">
-              <div className="flex justify-center py-3">
-                <RingGauge pct={system.cpu_usage} />
+            {[
+              { label: "CPU Usage", pct: system.cpu_usage, detail: `${system.cpu_count} cores${system.load_avg_1 !== undefined ? ` · Load ${system.load_avg_1?.toFixed(2)}` : ""}`,
+                icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><rect x="6" y="6" width="12" height="12" rx="1" /><path d="M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4M19 9h4m-4 6h4" strokeLinecap="round" /></svg> },
+              { label: "Memory", pct: system.mem_usage_pct, detail: `${(system.mem_used_mb / 1024).toFixed(1)} / ${(system.mem_total_mb / 1024).toFixed(1)} GB${system.swap_total_mb > 0 ? ` · Swap ${(system.swap_used_mb / 1024).toFixed(1)}G` : ""}`,
+                icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><rect x="3" y="4" width="18" height="16" rx="1" /><path d="M7 4v3m4-3v3m4-3v3M3 10h18" strokeLinecap="round" /></svg> },
+              { label: "Disk", pct: system.disk_usage_pct, detail: `${system.disk_used_gb.toFixed(0)} / ${system.disk_total_gb.toFixed(0)} GB · ${(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB free`,
+                icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 17.25v-.228a4.5 4.5 0 0 0-.12-1.03l-2.268-9.64a3.375 3.375 0 0 0-3.285-2.602H7.923a3.375 3.375 0 0 0-3.285 2.602l-2.268 9.64a4.5 4.5 0 0 0-.12 1.03v.228m19.5 0a3 3 0 0 1-3 3H5.25a3 3 0 0 1-3-3m19.5 0a3 3 0 0 0-3-3H5.25a3 3 0 0 0-3 3m16.5 0h.008v.008h-.008v-.008Zm-3 0h.008v.008h-.008v-.008Z" /></svg> },
+            ].map(({ label, pct, detail, icon }) => (
+              <div key={label} className="border border-dark-500 bg-dark-800 p-5 relative overflow-hidden">
+                <div className={`absolute inset-0 opacity-[0.03] ${pct < 60 ? "bg-emerald-500" : pct < 85 ? "bg-amber-500" : "bg-red-500"}`} />
+                <div className="relative text-center">
+                  <div className="flex items-center justify-center gap-1.5 text-dark-200 mb-1">
+                    <span className="opacity-60">{icon}</span>
+                    <span className="text-xs uppercase tracking-widest font-medium">{label}</span>
+                  </div>
+                  <div className={`text-5xl font-bold font-mono my-2 ${pctColor(pct)}`}>
+                    {pct.toFixed(0)}<span className="text-xl text-dark-300 ml-0.5">%</span>
+                  </div>
+                  <div className="h-2 bg-dark-700 rounded-full overflow-hidden mt-3 mx-auto max-w-[80%]">
+                    <div className={`h-full rounded-full transition-all duration-700 ${barColor(pct)}`} style={{ width: `${Math.min(pct, 100)}%` }} />
+                  </div>
+                  <p className="text-xs text-dark-300 mt-3">{detail}</p>
+                </div>
               </div>
-              <p className="text-sm text-dark-200 uppercase tracking-widest mt-3 font-medium flex items-center gap-1.5">
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><rect x="6" y="6" width="12" height="12" rx="1" /><path d="M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4M19 9h4m-4 6h4" strokeLinecap="round" /></svg>
-                CPU Usage
-              </p>
-              <p className="text-xs text-dark-300 mt-1">{system.cpu_count} cores{system.load_avg_1 !== undefined ? ` · Load ${system.load_avg_1?.toFixed(2)}` : ""}</p>
-            </div>
-            <div className="border border-dark-500 bg-dark-800 p-6 flex flex-col items-center">
-              <div className="flex justify-center py-3">
-                <RingGauge pct={system.mem_usage_pct} />
-              </div>
-              <p className="text-sm text-dark-200 uppercase tracking-widest mt-3 font-medium flex items-center gap-1.5">
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><rect x="3" y="4" width="18" height="16" rx="1" /><path d="M7 4v3m4-3v3m4-3v3M3 10h18" strokeLinecap="round" /></svg>
-                Memory
-              </p>
-              <p className="text-xs text-dark-300 mt-1">{(system.mem_used_mb / 1024).toFixed(1)} / {(system.mem_total_mb / 1024).toFixed(1)} GB{system.swap_total_mb > 0 ? ` · Swap ${(system.swap_used_mb / 1024).toFixed(1)}G` : ""}</p>
-            </div>
-            <div className="border border-dark-500 bg-dark-800 p-6 flex flex-col items-center">
-              <div className="flex justify-center py-3">
-                <RingGauge pct={system.disk_usage_pct} />
-              </div>
-              <p className="text-sm text-dark-200 uppercase tracking-widest mt-3 font-medium flex items-center gap-1.5">
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 17.25v-.228a4.5 4.5 0 0 0-.12-1.03l-2.268-9.64a3.375 3.375 0 0 0-3.285-2.602H7.923a3.375 3.375 0 0 0-3.285 2.602l-2.268 9.64a4.5 4.5 0 0 0-.12 1.03v.228m19.5 0a3 3 0 0 1-3 3H5.25a3 3 0 0 1-3-3m19.5 0a3 3 0 0 0-3-3H5.25a3 3 0 0 0-3 3m16.5 0h.008v.008h-.008v-.008Zm-3 0h.008v.008h-.008v-.008Z" /></svg>
-                Disk
-              </p>
-              <p className="text-xs text-dark-300 mt-1">{system.disk_used_gb.toFixed(0)} / {system.disk_total_gb.toFixed(0)} GB · {(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB free</p>
-            </div>
+            ))}
           </div>
+
+          {/* Historical Charts */}
+          {metricsHistory.length >= 2 && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              {[
+                { label: "CPU", data: metricsHistory.map(p => p.cpu), color: "#10b981" },
+                { label: "Memory", data: metricsHistory.map(p => p.mem), color: "#6366f1" },
+                { label: "Disk", data: metricsHistory.map(p => p.disk), color: "#f59e0b" },
+              ].map(({ label, data, color }) => (
+                <div key={label} className="border border-dark-500 bg-dark-800 p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] uppercase tracking-widest text-dark-300 font-medium">{label} (24h)</span>
+                    <span className="text-xs text-dark-200 font-mono">{data[data.length - 1]?.toFixed(1)}%</span>
+                  </div>
+                  <Sparkline data={data} color={color} height={48} />
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Status Bar — grid of stat cells */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-px bg-dark-600 border border-dark-500 mb-6">

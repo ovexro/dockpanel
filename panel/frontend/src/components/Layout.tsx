@@ -74,21 +74,14 @@ export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [firingCount, setFiringCount] = useState(0);
   const [updateCount, setUpdateCount] = useState(0);
+  const [theme, setTheme] = useState(() => localStorage.getItem("dp-theme") || "dark");
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("dp-theme", theme);
+  }, [theme]);
   const alertTimer = useRef<ReturnType<typeof setInterval>>(undefined);
   const updateTimer = useRef<ReturnType<typeof setInterval>>(undefined);
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
-    try {
-      return JSON.parse(localStorage.getItem("dp-nav-collapsed") || "{}");
-    } catch { return {}; }
-  });
-
-  const toggleGroup = (label: string) => {
-    setCollapsed(prev => {
-      const next = { ...prev, [label]: !prev[label] };
-      localStorage.setItem("dp-nav-collapsed", JSON.stringify(next));
-      return next;
-    });
-  };
 
   useEffect(() => {
     const fetchFiring = () => {
@@ -147,7 +140,7 @@ export default function Layout() {
 
       {/* Sidebar */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-64 bg-dark-950 border-r border-dark-600 text-white flex flex-col shrink-0 transform transition-transform duration-200 ease-in-out md:relative md:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 w-64 bg-dark-950 border-r border-dark-600 text-dark-50 flex flex-col shrink-0 transform transition-transform duration-200 ease-in-out md:relative md:translate-x-0 ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -168,7 +161,7 @@ export default function Layout() {
           {/* Close button (mobile) */}
           <button
             onClick={() => setSidebarOpen(false)}
-            className="p-1.5 text-dark-200 hover:text-white md:hidden rounded-lg"
+            className="p-1.5 text-dark-200 hover:text-dark-50 md:hidden rounded-lg"
             aria-label="Close sidebar"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
@@ -190,56 +183,45 @@ export default function Layout() {
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 px-3 py-2 space-y-1 overflow-y-auto">
+        <nav className="flex-1 px-3 pt-4 overflow-y-auto">
           {visibleGroups.map((group, gi) => (
-            <div key={group.label} className={gi > 0 ? "pt-2 mt-1 border-t border-dark-600/40" : ""}>
-              <button
-                onClick={() => toggleGroup(group.label)}
-                className="flex items-center justify-between w-full px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-dark-300 hover:text-dark-200 font-mono transition-colors"
-              >
-                {group.label}
-                <svg className={`w-3 h-3 transition-transform ${collapsed[group.label] ? "-rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-              {!collapsed[group.label] && (
-                <div className="mt-1 space-y-0.5">
-                  {group.items.map((item) => (
-                    <NavLink
-                      key={item.label}
-                      to={item.to}
-                      end={item.to === "/"}
-                      onClick={() => setSidebarOpen(false)}
-                      className={({ isActive }) =>
-                        `flex items-center gap-3 px-4 py-2 transition-colors text-sm uppercase tracking-wider ${
-                          isActive
-                            ? "bg-rust-500 text-dark-900 font-bold"
-                            : "text-dark-300 hover:text-dark-50 hover:bg-dark-500/50"
-                        }`
-                      }
-                    >
-                      {item.icon}
-                      <span>{item.label}</span>
-                      {item.to === "/alerts" && firingCount > 0 && (
-                        <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-red-500 text-white rounded-full min-w-[20px] text-center">
-                          {firingCount}
-                        </span>
-                      )}
-                      {item.to === "/updates" && updateCount > 0 && (
-                        <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-red-500 text-white rounded-full min-w-[20px] text-center">
-                          {updateCount}
-                        </span>
-                      )}
-                    </NavLink>
-                  ))}
-                </div>
-              )}
+            <div key={group.label} className={gi > 0 ? "mt-5" : ""}>
+              <div className="space-y-1">
+                {group.items.map((item) => (
+                  <NavLink
+                    key={item.label}
+                    to={item.to}
+                    end={item.to === "/"}
+                    onClick={() => setSidebarOpen(false)}
+                    className={({ isActive }) =>
+                      `flex items-center gap-3 px-4 py-2 transition-colors text-sm uppercase tracking-wider ${
+                        isActive
+                          ? "bg-rust-500/10 text-rust-500 font-bold border-l-2 border-rust-500"
+                          : "text-dark-300 hover:text-dark-50 hover:bg-dark-700/50"
+                      }`
+                    }
+                  >
+                    {item.icon}
+                    <span>{item.label}</span>
+                    {item.to === "/alerts" && firingCount > 0 && (
+                      <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-red-500 text-white rounded-full min-w-[20px] text-center">
+                        {firingCount}
+                      </span>
+                    )}
+                    {item.to === "/updates" && updateCount > 0 && (
+                      <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-red-500 text-white rounded-full min-w-[20px] text-center">
+                        {updateCount}
+                      </span>
+                    )}
+                  </NavLink>
+                ))}
+              </div>
             </div>
           ))}
         </nav>
 
-        {/* User */}
-        <div className="px-4 py-4 border-t border-dark-600">
+        {/* User + Build Status */}
+        <div className="mx-3 px-4 py-4 border-t border-dark-600/50 space-y-3">
           <div className="flex items-center justify-between">
             <div className="min-w-0">
               <p className="text-sm font-medium truncate">{user.email}</p>
@@ -247,13 +229,31 @@ export default function Layout() {
             </div>
             <button
               onClick={logout}
-              className="p-2 text-dark-200 hover:text-white hover:bg-dark-800 rounded-lg transition-colors"
+              className="p-2 text-dark-200 hover:text-dark-50 hover:bg-dark-800 rounded-lg transition-colors"
               title="Logout"
               aria-label="Logout"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} aria-hidden="true">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" />
               </svg>
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 px-2.5 py-1.5 bg-dark-800 border border-dark-600/40 flex-1">
+              <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+              <span className="text-[10px] font-semibold uppercase tracking-widest text-dark-300 font-mono">Build Stable</span>
+            </div>
+            <button
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              className="p-1.5 text-dark-300 hover:text-dark-50 bg-dark-800 border border-dark-600/40 transition-colors"
+              title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+              aria-label="Toggle theme"
+            >
+              {theme === "dark" ? (
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z" /></svg>
+              ) : (
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z" /></svg>
+              )}
             </button>
           </div>
         </div>

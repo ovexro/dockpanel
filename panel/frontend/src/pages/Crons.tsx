@@ -167,7 +167,7 @@ export default function Crons() {
         </div>
         <button
           onClick={() => { setShowForm(!showForm); setEditId(null); setLabel(""); setCommand(""); setSchedule("0 * * * *"); }}
-          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
+          className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 transition-colors"
         >
           {showForm ? "Cancel" : "Add Cron Job"}
         </button>
@@ -198,7 +198,7 @@ export default function Crons() {
               value={label}
               onChange={(e) => setLabel(e.target.value)}
               placeholder="Cleanup temp files"
-              className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none text-sm"
+              className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm"
             />
           </div>
           <div>
@@ -210,7 +210,7 @@ export default function Crons() {
               onChange={(e) => setCommand(e.target.value)}
               required
               placeholder="/usr/bin/php /var/www/example.com/artisan schedule:run"
-              className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none text-sm font-mono"
+              className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm font-mono"
             />
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -220,7 +220,7 @@ export default function Crons() {
                 id="cron-preset"
                 value={PRESETS.find((p) => p.value === schedule) ? schedule : "custom"}
                 onChange={(e) => { if (e.target.value !== "custom") setSchedule(e.target.value); }}
-                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none text-sm bg-dark-800"
+                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm bg-dark-800"
               >
                 {PRESETS.map((p) => (
                   <option key={p.value} value={p.value}>{p.label} ({p.value})</option>
@@ -237,7 +237,7 @@ export default function Crons() {
                 onChange={(e) => setSchedule(e.target.value)}
                 required
                 placeholder="* * * * *"
-                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none text-sm font-mono"
+                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm font-mono"
               />
               <p className="text-xs text-dark-300 mt-1">minute hour day month weekday</p>
             </div>
@@ -245,7 +245,7 @@ export default function Crons() {
           <button
             type="submit"
             disabled={submitting}
-            className="px-6 py-2.5 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
+            className="px-6 py-2.5 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50 transition-colors"
           >
             {submitting ? "Creating..." : "Create Cron Job"}
           </button>
@@ -390,7 +390,7 @@ export default function Crons() {
                     <div className="flex gap-2">
                       <button
                         onClick={() => handleEdit(cron)}
-                        className="px-4 py-2 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600"
+                        className="px-4 py-2 bg-accent-500 text-white rounded-lg text-xs font-medium hover:bg-accent-600"
                       >
                         Save
                       </button>

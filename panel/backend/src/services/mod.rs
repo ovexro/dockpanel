@@ -4,6 +4,7 @@ pub mod alert_engine;
 pub mod auto_healer;
 pub mod backup_scheduler;
 pub mod email;
+pub mod metrics_collector;
 pub mod notifications;
 pub mod security_scanner;
 pub mod server_monitor;
