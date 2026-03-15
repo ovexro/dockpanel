@@ -18,7 +18,7 @@ interface ActivityEntry {
 function actionBadge(action: string): { bg: string; text: string } {
   const lower = action.toLowerCase();
   if (lower.includes("create") || lower.includes("deploy")) {
-    return { bg: "bg-emerald-500/15", text: "text-emerald-400" };
+    return { bg: "bg-rust-500/15", text: "text-rust-400" };
   }
   if (lower.includes("delete") || lower.includes("remove")) {
     return { bg: "bg-red-500/15", text: "text-red-400" };

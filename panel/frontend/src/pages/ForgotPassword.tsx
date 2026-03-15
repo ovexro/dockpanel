@@ -45,7 +45,7 @@ export default function ForgotPassword() {
 
         {success ? (
           <div className="bg-dark-800 rounded-lg border border-dark-600 p-6 space-y-4">
-            <div className="bg-emerald-50 text-emerald-400 text-sm px-4 py-3 rounded-lg border border-emerald-200">
+            <div className="bg-rust-50 text-rust-400 text-sm px-4 py-3 rounded-lg border border-rust-200">
               If an account exists with that email, a reset link has been sent. Check your inbox.
             </div>
             <Link

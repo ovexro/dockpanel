@@ -240,7 +240,7 @@ export default function SiteDetail() {
                     <span className="text-xs text-dark-200">Switching...</span>
                   )}
                   {phpMessage && (
-                    <span className={`text-xs ${phpMessage.includes("Switched") ? "text-emerald-600" : "text-red-400"}`}>
+                    <span className={`text-xs ${phpMessage.includes("Switched") ? "text-rust-600" : "text-red-400"}`}>
                       {phpMessage}
                     </span>
                   )}
@@ -259,7 +259,7 @@ export default function SiteDetail() {
             <dd className="text-sm col-span-2">
               {site.ssl_enabled ? (
                 <div className="space-y-1">
-                  <span className="inline-flex items-center gap-1 text-emerald-600">
+                  <span className="inline-flex items-center gap-1 text-rust-600">
                     <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                       <path fillRule="evenodd" d="M10 1a4.5 4.5 0 0 0-4.5 4.5V9H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-.5V5.5A4.5 4.5 0 0 0 10 1Zm3 8V5.5a3 3 0 1 0-6 0V9h6Z" clipRule="evenodd" />
                     </svg>
@@ -317,7 +317,7 @@ export default function SiteDetail() {
           className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-amber-500/10 rounded-lg text-amber-400 group-hover:bg-amber-500/20 transition-colors">
+            <div className="p-2 bg-warn-500/10 rounded-lg text-warn-400 group-hover:bg-warn-500/20 transition-colors">
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-8.69-6.44-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v12a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9a2.25 2.25 0 0 0-2.25-2.25h-5.379a1.5 1.5 0 0 1-1.06-.44Z" />
               </svg>
@@ -381,7 +381,7 @@ export default function SiteDetail() {
           className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-emerald-500/10 rounded-lg text-emerald-400 group-hover:bg-emerald-500/20 transition-colors">
+            <div className="p-2 bg-rust-500/10 rounded-lg text-rust-400 group-hover:bg-rust-500/20 transition-colors">
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75 22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3-4.5 16.5" />
               </svg>
@@ -493,7 +493,7 @@ export default function SiteDetail() {
               </p>
               <div className="flex items-center gap-3">
                 {limitsMessage && (
-                  <span className={`text-xs ${limitsMessage.includes("saved") ? "text-emerald-600" : "text-red-400"}`}>
+                  <span className={`text-xs ${limitsMessage.includes("saved") ? "text-rust-600" : "text-red-400"}`}>
                     {limitsMessage}
                   </span>
                 )}
@@ -613,7 +613,7 @@ export default function SiteDetail() {
                         setStagingLoading(false);
                       }
                     }}
-                    className="px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-medium hover:bg-amber-700 disabled:opacity-50 transition-colors"
+                    className="px-3 py-1.5 bg-warn-600 text-white rounded-lg text-xs font-medium hover:bg-warn-600 disabled:opacity-50 transition-colors"
                   >
                     Push to Prod
                   </button>
@@ -653,7 +653,7 @@ export default function SiteDetail() {
                 </div>
 
                 {stagingMessage && (
-                  <p className={`text-xs ${stagingMessage.includes("failed") || stagingMessage.includes("Failed") ? "text-red-400" : "text-emerald-600"}`}>
+                  <p className={`text-xs ${stagingMessage.includes("failed") || stagingMessage.includes("Failed") ? "text-red-400" : "text-rust-600"}`}>
                     {stagingMessage}
                   </p>
                 )}
@@ -715,7 +715,7 @@ export default function SiteDetail() {
                   </button>
                 )}
                 {stagingMessage && (
-                  <p className={`text-xs ${stagingMessage.includes("failed") || stagingMessage.includes("Failed") ? "text-red-400" : "text-emerald-600"}`}>
+                  <p className={`text-xs ${stagingMessage.includes("failed") || stagingMessage.includes("Failed") ? "text-red-400" : "text-rust-600"}`}>
                     {stagingMessage}
                   </p>
                 )}
@@ -729,7 +729,7 @@ export default function SiteDetail() {
       {sslMessage && (
         <div className={`mt-4 px-4 py-3 rounded-lg text-sm ${
           sslMessage.includes("success")
-            ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+            ? "bg-rust-500/10 text-rust-400 border border-rust-500/20"
             : "bg-red-500/10 text-red-400 border border-red-500/20"
         }`}>
           {sslMessage}

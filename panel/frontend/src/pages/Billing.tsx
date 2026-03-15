@@ -34,8 +34,8 @@ const plans = [
 ];
 
 const statusColors: Record<string, string> = {
-  active: "bg-emerald-500/15 text-emerald-400",
-  grace: "bg-amber-500/15 text-amber-400",
+  active: "bg-rust-500/15 text-rust-400",
+  grace: "bg-warn-500/15 text-warn-400",
   suspended: "bg-red-500/15 text-red-400",
 };
 
@@ -108,7 +108,7 @@ export default function Billing() {
         </div>
       )}
       {success && (
-        <div className="bg-emerald-50 text-emerald-400 text-sm px-4 py-3 rounded-lg border border-emerald-200 mb-4">
+        <div className="bg-rust-50 text-rust-400 text-sm px-4 py-3 rounded-lg border border-rust-200 mb-4">
           {success}
         </div>
       )}
@@ -148,7 +148,7 @@ export default function Billing() {
             )}
           </div>
           {info.plan_status === "grace" && (
-            <div className="mt-3 bg-amber-50 text-amber-400 text-sm px-4 py-2 rounded-lg border border-amber-200">
+            <div className="mt-3 bg-warn-500/10 text-warn-400 text-sm px-4 py-2 rounded-lg border border-warn-400/20">
               Your last payment failed. Please update your payment method to avoid service interruption.
             </div>
           )}
@@ -183,7 +183,7 @@ export default function Billing() {
                   <ul className="space-y-2 mb-6">
                     {p.features.map((f) => (
                       <li key={f} className="flex items-center gap-2 text-sm text-dark-200">
-                        <svg className="w-4 h-4 text-emerald-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <svg className="w-4 h-4 text-rust-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
                         </svg>
                         {f}

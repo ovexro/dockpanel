@@ -177,7 +177,7 @@ export default function Crons() {
         <div
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
-              ? "bg-emerald-50 text-emerald-400 border-emerald-200"
+              ? "bg-rust-50 text-rust-400 border-rust-200"
               : "bg-red-500/10 text-red-400 border-red-500/20"
           }`}
           role="alert"
@@ -301,7 +301,7 @@ export default function Crons() {
                         <span className="text-xs text-dark-300">
                           Last run: {formatDate(cron.last_run)}
                           {cron.last_status && (
-                            <span className={`ml-1 ${cron.last_status === "success" ? "text-emerald-600" : "text-red-500"}`}>
+                            <span className={`ml-1 ${cron.last_status === "success" ? "text-rust-600" : "text-red-500"}`}>
                               ({cron.last_status})
                             </span>
                           )}
@@ -313,7 +313,7 @@ export default function Crons() {
                     <button
                       onClick={() => handleRun(cron)}
                       disabled={running === cron.id}
-                      className="px-3 py-1 bg-amber-50 text-amber-400 rounded-md text-xs font-medium hover:bg-amber-100 disabled:opacity-50 transition-colors"
+                      className="px-3 py-1 bg-warn-500/10 text-warn-400 rounded-md text-xs font-medium hover:bg-warn-400/15 disabled:opacity-50 transition-colors"
                       aria-label="Run now"
                     >
                       {running === cron.id ? "Running..." : "Run Now"}

@@ -242,7 +242,7 @@ export default function Logs() {
 
   const lineClass = (line: string) => {
     if (/\berror\b|ERROR|\b5\d{2}\b/i.test(line)) return "text-red-400";
-    if (/\bwarn\b|WARN|\b4\d{2}\b/i.test(line)) return "text-amber-400";
+    if (/\bwarn\b|WARN|\b4\d{2}\b/i.test(line)) return "text-warn-400";
     if (/\binfo\b|INFO/i.test(line)) return "text-blue-400";
     return "text-gray-300";
   };
@@ -280,7 +280,7 @@ export default function Logs() {
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                     streaming
                       ? "bg-red-500/15 text-red-400 hover:bg-red-500/20"
-                      : "bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/20"
+                      : "bg-rust-500/15 text-rust-400 hover:bg-rust-500/20"
                   }`}
                 >
                   {streaming ? "Stop Stream" : "Live Stream"}
@@ -290,7 +290,7 @@ export default function Logs() {
                     onClick={() => setAutoRefresh(!autoRefresh)}
                     className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                       autoRefresh
-                        ? "bg-emerald-500/15 text-emerald-400"
+                        ? "bg-rust-500/15 text-rust-400"
                         : "bg-dark-700 text-dark-200 hover:bg-dark-600"
                     }`}
                   >
@@ -411,10 +411,10 @@ export default function Logs() {
         {streaming && (
           <div className="mt-2 flex items-center gap-2">
             <span className="relative flex h-2.5 w-2.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rust-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rust-500" />
             </span>
-            <span className="text-xs text-emerald-600 font-medium">
+            <span className="text-xs text-rust-600 font-medium">
               Live streaming — {lines.length} lines received
             </span>
           </div>

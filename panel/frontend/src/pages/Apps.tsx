@@ -47,9 +47,9 @@ interface ComposeDeployResult {
 
 const categoryColors: Record<string, string> = {
   CMS: "bg-blue-500/15",
-  Database: "bg-emerald-500/15",
+  Database: "bg-rust-500/15",
   Monitoring: "bg-purple-500/15",
-  DevOps: "bg-amber-500/15",
+  DevOps: "bg-warn-500/15",
   Automation: "bg-pink-500/15",
   Tools: "bg-slate-500/15",
   Development: "bg-cyan-500/15",
@@ -119,7 +119,7 @@ const appIcons: Record<string, ReactNode> = {
   ),
   // ─── Tools ───────────────────────────────────────────────────
   adminer: (
-    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#22c55e" width="128" height="128"/><path fill="#fff" d="M64 20c-22 0-40 7.2-40 16v56c0 8.8 18 16 40 16s40-7.2 40-16V36c0-8.8-18-16-40-16z" opacity=".15"/><ellipse fill="#fff" cx="64" cy="36" rx="36" ry="12" opacity=".9"/><path fill="#fff" d="M28 48c0 6.6 16.1 12 36 12s36-5.4 36-12" opacity=".6" stroke="#fff" strokeWidth="2" fill="none"/><path fill="#fff" d="M28 68c0 6.6 16.1 12 36 12s36-5.4 36-12" opacity=".4" stroke="#fff" strokeWidth="2" fill="none"/><path fill="none" stroke="#fff" strokeWidth="2" opacity=".3" d="M28 36v56M100 36v56"/></svg>
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#43ef82" width="128" height="128"/><path fill="#fff" d="M64 20c-22 0-40 7.2-40 16v56c0 8.8 18 16 40 16s40-7.2 40-16V36c0-8.8-18-16-40-16z" opacity=".15"/><ellipse fill="#fff" cx="64" cy="36" rx="36" ry="12" opacity=".9"/><path fill="#fff" d="M28 48c0 6.6 16.1 12 36 12s36-5.4 36-12" opacity=".6" stroke="#fff" strokeWidth="2" fill="none"/><path fill="#fff" d="M28 68c0 6.6 16.1 12 36 12s36-5.4 36-12" opacity=".4" stroke="#fff" strokeWidth="2" fill="none"/><path fill="none" stroke="#fff" strokeWidth="2" opacity=".3" d="M28 36v56M100 36v56"/></svg>
   ),
   portainer: (
     <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#13bef9" width="128" height="128"/><path fill="#fff" d="M40 36h20v20H40zm24 0h20v20H64zm-24 24h20v20H40zm24 0h20v20H64zm-24 24h20v20H40z" opacity=".9"/><path fill="#fff" d="M64 84h20v20H64z" opacity=".5"/><rect fill="#fff" x="88" y="60" width="20" height="20" opacity=".3"/></svg>
@@ -160,7 +160,7 @@ const appIcons: Record<string, ReactNode> = {
     <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#2496ed" width="128" height="128"/><path fill="#fff" d="M32 56h18v18H32zm22-22h18v40H54zm22-12h18v52H76z" opacity=".9"/><path fill="#fff" d="M20 82c4-4 10-6 18-6 12 0 18 4 26 4s14-2 26-2c10 0 16 2 20 4v8c-4-2-10-4-20-4-12 0-18 2-26 2s-14-4-26-4c-8 0-14 2-18 6v-8z" opacity=".7"/><circle fill="#fff" cx="22" cy="78" r="4"/></svg>
   ),
   mailhog: (
-    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#f59e0b" width="128" height="128"/><rect fill="#fff" x="20" y="36" width="88" height="56" rx="8" opacity=".2"/><path fill="#fff" d="M24 40l40 28 40-28v8L68 76c-2 1.5-6 1.5-8 0L24 48v-8z" opacity=".9"/><path fill="none" stroke="#fff" strokeWidth="4" opacity=".6" d="M24 40l40 28 40-28"/></svg>
+    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#efb043" width="128" height="128"/><rect fill="#fff" x="20" y="36" width="88" height="56" rx="8" opacity=".2"/><path fill="#fff" d="M24 40l40 28 40-28v8L68 76c-2 1.5-6 1.5-8 0L24 48v-8z" opacity=".9"/><path fill="none" stroke="#fff" strokeWidth="4" opacity=".6" d="M24 40l40 28 40-28"/></svg>
   ),
   // ─── Automation ──────────────────────────────────────────────
   n8n: (
@@ -248,9 +248,9 @@ const appIcons: Record<string, ReactNode> = {
 };
 
 const statusColors: Record<string, string> = {
-  running: "bg-emerald-500/15 text-emerald-400",
+  running: "bg-rust-500/15 text-rust-400",
   exited: "bg-red-500/15 text-red-400",
-  created: "bg-amber-500/15 text-amber-400",
+  created: "bg-warn-500/15 text-warn-400",
   paused: "bg-dark-700 text-dark-200",
 };
 
@@ -532,7 +532,7 @@ export default function Apps() {
         <div
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
-              ? "bg-emerald-50 text-emerald-400 border-emerald-200"
+              ? "bg-rust-50 text-rust-400 border-rust-200"
               : "bg-red-500/10 text-red-400 border-red-500/20"
           }`}
         >
@@ -575,14 +575,14 @@ export default function Apps() {
                     <td className="px-5 py-4 hidden lg:table-cell">
                       {app.health ? (
                         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
-                          app.health === "healthy" ? "bg-emerald-500/15 text-emerald-400" :
+                          app.health === "healthy" ? "bg-rust-500/15 text-rust-400" :
                           app.health === "unhealthy" ? "bg-red-500/15 text-red-400" :
-                          "bg-amber-500/15 text-amber-400"
+                          "bg-warn-500/15 text-warn-400"
                         }`}>
                           <span className={`w-1.5 h-1.5 rounded-full ${
-                            app.health === "healthy" ? "bg-emerald-400" :
+                            app.health === "healthy" ? "bg-rust-400" :
                             app.health === "unhealthy" ? "bg-red-400" :
-                            "bg-amber-400"
+                            "bg-warn-400"
                           }`} />
                           {app.health}
                         </span>
@@ -601,7 +601,7 @@ export default function Apps() {
                           <button
                             onClick={() => handleAction(app.container_id, "stop")}
                             disabled={actionLoading === `${app.container_id}-stop`}
-                            className="px-2 py-1 bg-amber-50 text-amber-400 rounded text-xs font-medium hover:bg-amber-100 disabled:opacity-50"
+                            className="px-2 py-1 bg-warn-500/10 text-warn-400 rounded text-xs font-medium hover:bg-warn-400/15 disabled:opacity-50"
                           >
                             {actionLoading === `${app.container_id}-stop` ? "..." : "Stop"}
                           </button>
@@ -609,7 +609,7 @@ export default function Apps() {
                           <button
                             onClick={() => handleAction(app.container_id, "start")}
                             disabled={actionLoading === `${app.container_id}-start`}
-                            className="px-2 py-1 bg-emerald-50 text-emerald-400 rounded text-xs font-medium hover:bg-emerald-100 disabled:opacity-50"
+                            className="px-2 py-1 bg-rust-50 text-rust-400 rounded text-xs font-medium hover:bg-rust-100 disabled:opacity-50"
                           >
                             {actionLoading === `${app.container_id}-start` ? "..." : "Start"}
                           </button>
@@ -681,8 +681,8 @@ export default function Apps() {
                         {apps.find(a => a.container_id === logsTarget)?.name}
                       </h3>
                       {logAutoRefresh && (
-                        <span className="flex items-center gap-1 text-[10px] text-emerald-400">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        <span className="flex items-center gap-1 text-[10px] text-rust-400">
+                          <span className="w-1.5 h-1.5 rounded-full bg-rust-400 animate-pulse" />
                           Live
                         </span>
                       )}
@@ -710,7 +710,7 @@ export default function Apps() {
                     <button
                       onClick={() => setLogAutoRefresh(!logAutoRefresh)}
                       className={`px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 ${
-                        logAutoRefresh ? "bg-emerald-500/15 text-emerald-400" : "bg-dark-700 text-dark-200 hover:bg-dark-600"
+                        logAutoRefresh ? "bg-rust-500/15 text-rust-400" : "bg-dark-700 text-dark-200 hover:bg-dark-600"
                       }`}
                     >
                       <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
@@ -757,7 +757,7 @@ export default function Apps() {
                         const lvl = ll.includes("error") || ll.includes("fatal") || ll.includes("panic")
                           ? "text-red-400"
                           : ll.includes("warn")
-                          ? "text-amber-400"
+                          ? "text-warn-400"
                           : ll.includes("info")
                           ? "text-blue-300"
                           : "text-gray-300";
@@ -767,7 +767,7 @@ export default function Apps() {
                             {logSearch ? (() => {
                               const idx = line.toLowerCase().indexOf(logSearch.toLowerCase());
                               if (idx === -1) return line;
-                              return <>{line.slice(0, idx)}<mark className="bg-amber-500/30 text-amber-200 rounded px-0.5">{line.slice(idx, idx + logSearch.length)}</mark>{line.slice(idx + logSearch.length)}</>;
+                              return <>{line.slice(0, idx)}<mark className="bg-warn-500/30 text-warn-400 rounded px-0.5">{line.slice(idx, idx + logSearch.length)}</mark>{line.slice(idx + logSearch.length)}</>;
                             })() : line}
                           </div>
                         );
@@ -1134,7 +1134,7 @@ export default function Apps() {
                         {svc.volumes.length > 0 && (
                           <div className="mt-1.5 flex gap-2 flex-wrap">
                             {svc.volumes.map((v, i) => (
-                              <span key={i} className="px-1.5 py-0.5 bg-amber-50 text-amber-600 rounded text-[10px] font-mono">
+                              <span key={i} className="px-1.5 py-0.5 bg-warn-500/10 text-warn-500 rounded text-[10px] font-mono">
                                 {v}
                               </span>
                             ))}
@@ -1155,7 +1155,7 @@ export default function Apps() {
                   <button
                     onClick={handleComposeDeploy}
                     disabled={composeDeploying}
-                    className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2"
+                    className="px-4 py-2 bg-rust-600 text-white rounded-lg text-sm font-medium hover:bg-rust-700 disabled:opacity-50 flex items-center gap-2"
                   >
                     {composeDeploying && (
                       <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">

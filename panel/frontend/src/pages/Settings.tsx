@@ -265,7 +265,7 @@ export default function Settings() {
         <div
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
-              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+              ? "bg-rust-500/10 text-rust-400 border-rust-500/20"
               : "bg-red-500/10 text-red-400 border-red-500/20"
           }`}
         >
@@ -611,8 +611,8 @@ export default function Settings() {
             {twoFaEnabled ? (
               <div className="space-y-4">
                 <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full bg-emerald-500" />
-                  <span className="text-sm text-emerald-400 font-medium">2FA is enabled</span>
+                  <div className="w-3 h-3 rounded-full bg-rust-500" />
+                  <span className="text-sm text-rust-400 font-medium">2FA is enabled</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <input
@@ -694,8 +694,8 @@ export default function Settings() {
                   </button>
                 </div>
                 {recoveryCodes.length > 0 && (
-                  <div className="mt-4 p-4 bg-amber-500/10 rounded-lg border border-amber-500/20">
-                    <p className="text-sm font-medium text-amber-400 mb-2">Recovery Codes (save these!)</p>
+                  <div className="mt-4 p-4 bg-warn-500/10 rounded-lg border border-warn-500/20">
+                    <p className="text-sm font-medium text-warn-400 mb-2">Recovery Codes (save these!)</p>
                     <div className="grid grid-cols-2 gap-1">
                       {recoveryCodes.map((code, i) => (
                         <code key={i} className="text-xs text-dark-100 font-mono bg-dark-900 px-2 py-1 rounded">{code}</code>
@@ -968,19 +968,19 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className={`w-3 h-3 rounded-full ${health.database ? "bg-emerald-500" : "bg-red-500"}`} />
+                    <div className={`w-3 h-3 rounded-full ${health.database ? "bg-rust-500" : "bg-red-500"}`} />
                     <span className="text-sm text-dark-50">Database</span>
                   </div>
-                  <span className={`text-sm font-medium ${health.database ? "text-emerald-600" : "text-red-400"}`}>
+                  <span className={`text-sm font-medium ${health.database ? "text-rust-600" : "text-red-400"}`}>
                     {health.database ? "Connected" : "Error"}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className={`w-3 h-3 rounded-full ${health.agent ? "bg-emerald-500" : "bg-red-500"}`} />
+                    <div className={`w-3 h-3 rounded-full ${health.agent ? "bg-rust-500" : "bg-red-500"}`} />
                     <span className="text-sm text-dark-50">Agent</span>
                   </div>
-                  <span className={`text-sm font-medium ${health.agent ? "text-emerald-600" : "text-red-400"}`}>
+                  <span className={`text-sm font-medium ${health.agent ? "text-rust-600" : "text-red-400"}`}>
                     {health.agent ? "Connected" : "Error"}
                   </span>
                 </div>
