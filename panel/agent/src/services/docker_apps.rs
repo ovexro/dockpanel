@@ -73,46 +73,7 @@ pub struct DeployedApp {
 }
 
 static TEMPLATES: &[AppTemplateDef] = &[
-    AppTemplateDef {
-        id: "wordpress",
-        name: "WordPress",
-        description: "The world's most popular CMS for blogs and websites",
-        category: "CMS",
-        image: "wordpress:latest",
-        default_port: 8080,
-        container_port: "80/tcp",
-        env_vars: &[
-            EnvVarDef {
-                name: "WORDPRESS_DB_HOST",
-                label: "Database Host",
-                default: "",
-                required: true,
-                secret: false,
-            },
-            EnvVarDef {
-                name: "WORDPRESS_DB_USER",
-                label: "Database User",
-                default: "",
-                required: true,
-                secret: false,
-            },
-            EnvVarDef {
-                name: "WORDPRESS_DB_PASSWORD",
-                label: "Database Password",
-                default: "",
-                required: true,
-                secret: true,
-            },
-            EnvVarDef {
-                name: "WORDPRESS_DB_NAME",
-                label: "Database Name",
-                default: "",
-                required: true,
-                secret: false,
-            },
-        ],
-        volumes: &[],
-    },
+    // WordPress, Drupal, Joomla, PrestaShop moved to Sites (native PHP install)
     AppTemplateDef {
         id: "ghost",
         name: "Ghost",
@@ -548,50 +509,6 @@ static TEMPLATES: &[AppTemplateDef] = &[
         container_port: "3100/tcp",
         env_vars: &[],
         volumes: &["/loki"],
-    },
-    // ─── CMS (additional) ────────────────────────────────────────
-    AppTemplateDef {
-        id: "drupal",
-        name: "Drupal",
-        description: "Flexible open-source CMS for ambitious digital experiences",
-        category: "CMS",
-        image: "drupal:latest",
-        default_port: 8089,
-        container_port: "80/tcp",
-        env_vars: &[],
-        volumes: &["/var/www/html/sites", "/var/www/html/modules", "/var/www/html/themes"],
-    },
-    AppTemplateDef {
-        id: "joomla",
-        name: "Joomla",
-        description: "Award-winning CMS for building websites and web applications",
-        category: "CMS",
-        image: "joomla:latest",
-        default_port: 8090,
-        container_port: "80/tcp",
-        env_vars: &[
-            EnvVarDef { name: "JOOMLA_DB_HOST", label: "Database Host", default: "", required: true, secret: false },
-            EnvVarDef { name: "JOOMLA_DB_USER", label: "Database User", default: "joomla", required: false, secret: false },
-            EnvVarDef { name: "JOOMLA_DB_PASSWORD", label: "Database Password", default: "", required: true, secret: true },
-            EnvVarDef { name: "JOOMLA_DB_NAME", label: "Database Name", default: "joomla_db", required: false, secret: false },
-        ],
-        volumes: &["/var/www/html"],
-    },
-    AppTemplateDef {
-        id: "prestashop",
-        name: "PrestaShop",
-        description: "Open-source e-commerce platform for building online stores",
-        category: "CMS",
-        image: "prestashop/prestashop:latest",
-        default_port: 8091,
-        container_port: "80/tcp",
-        env_vars: &[
-            EnvVarDef { name: "DB_SERVER", label: "Database Server", default: "", required: true, secret: false },
-            EnvVarDef { name: "DB_USER", label: "Database User", default: "prestashop", required: false, secret: false },
-            EnvVarDef { name: "DB_PASSWD", label: "Database Password", default: "", required: true, secret: true },
-            EnvVarDef { name: "DB_NAME", label: "Database Name", default: "prestashop", required: false, secret: false },
-        ],
-        volumes: &["/var/www/html"],
     },
     // ─── Wiki / Docs ─────────────────────────────────────────────
     AppTemplateDef {

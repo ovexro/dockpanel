@@ -24,9 +24,14 @@ export default function Sites() {
   const [domain, setDomain] = useState("");
   const [runtime, setRuntime] = useState("static");
   const [proxyPort, setProxyPort] = useState("");
-  const [phpVersion, setPhpVersion] = useState("8.4");
+  const [phpVersion, setPhpVersion] = useState("8.3");
   const [phpPreset, setPhpPreset] = useState("generic");
   const [submitting, setSubmitting] = useState(false);
+  const [cms, setCms] = useState("");
+  const [siteTitle, setSiteTitle] = useState("");
+  const [adminEmail, setAdminEmail] = useState("");
+  const [adminUser, setAdminUser] = useState("admin");
+  const [adminPassword, setAdminPassword] = useState("");
 
   const fetchSites = () => {
     api
@@ -43,11 +48,20 @@ export default function Sites() {
     setError("");
     setSubmitting(true);
     try {
-      const body: Record<string, unknown> = { domain, runtime };
-      if (runtime === "proxy") body.proxy_port = parseInt(proxyPort);
-      if (runtime === "php") {
+      const effectiveRuntime = cms ? "php" : runtime;
+      const effectivePreset = cms || phpPreset;
+      const body: Record<string, unknown> = { domain, runtime: effectiveRuntime };
+      if (effectiveRuntime === "proxy") body.proxy_port = parseInt(proxyPort);
+      if (effectiveRuntime === "php") {
         body.php_version = phpVersion;
-        body.php_preset = phpPreset;
+        body.php_preset = effectivePreset;
+      }
+      if (cms) {
+        body.cms = cms;
+        if (siteTitle) body.site_title = siteTitle;
+        if (adminEmail) body.admin_email = adminEmail;
+        if (adminUser) body.admin_user = adminUser;
+        if (adminPassword) body.admin_password = adminPassword;
       }
 
       await api.post("/sites", body);
@@ -88,6 +102,25 @@ export default function Sites() {
           onSubmit={handleCreate}
           className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6 space-y-4"
         >
+          {/* Quick CMS Install */}
+          <div>
+            <label className="block text-xs font-medium text-dark-200 mb-2">Quick Install</label>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { id: "", label: "Custom Site", desc: "" },
+                { id: "wordpress", label: "WordPress", desc: "Blog & CMS" },
+                { id: "drupal", label: "Drupal", desc: "Enterprise CMS" },
+                { id: "joomla", label: "Joomla", desc: "CMS" },
+              ].map((c) => (
+                <button key={c.id} type="button" onClick={() => { setCms(c.id); if (c.id) { setRuntime("php"); setPhpPreset(c.id || "generic"); } else { setRuntime("static"); } }}
+                  className={`px-3 py-2 border text-sm transition-colors ${cms === c.id ? "border-dark-50/30 bg-dark-50/5 text-dark-50" : "border-dark-500 bg-dark-900/50 text-dark-300 hover:border-dark-400"}`}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label htmlFor="site-domain" className="block text-sm font-medium text-dark-100 mb-1">Domain</label>
@@ -101,20 +134,45 @@ export default function Sites() {
                 className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm"
               />
             </div>
-            <div>
-              <label htmlFor="site-runtime" className="block text-sm font-medium text-dark-100 mb-1">Runtime</label>
-              <select
-                id="site-runtime"
-                value={runtime}
-                onChange={(e) => setRuntime(e.target.value)}
-                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm bg-dark-800"
-              >
-                <option value="static">Static (HTML/CSS/JS)</option>
-                <option value="php">PHP</option>
-                <option value="proxy">Reverse Proxy (Docker/Node)</option>
-              </select>
-            </div>
+            {!cms ? (
+              <div>
+                <label htmlFor="site-runtime" className="block text-sm font-medium text-dark-100 mb-1">Runtime</label>
+                <select
+                  id="site-runtime"
+                  value={runtime}
+                  onChange={(e) => setRuntime(e.target.value)}
+                  className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm bg-dark-800"
+                >
+                  <option value="static">Static (HTML/CSS/JS)</option>
+                  <option value="php">PHP</option>
+                  <option value="proxy">Reverse Proxy (Docker/Node)</option>
+                </select>
+              </div>
+            ) : (
+              <div>
+                <label className="block text-sm font-medium text-dark-100 mb-1">Site Title</label>
+                <input type="text" value={siteTitle} onChange={(e) => setSiteTitle(e.target.value)} placeholder={`My ${cms.charAt(0).toUpperCase() + cms.slice(1)} Site`} className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none text-sm" />
+              </div>
+            )}
           </div>
+
+          {/* CMS Admin Fields */}
+          {cms && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-dark-100 mb-1">Admin Email</label>
+                <input type="email" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} placeholder="you@example.com" className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none text-sm" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-dark-100 mb-1">Admin Username</label>
+                <input type="text" value={adminUser} onChange={(e) => setAdminUser(e.target.value)} placeholder="admin" className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none text-sm" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-dark-100 mb-1">Admin Password</label>
+                <input type="password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} placeholder="Auto-generated if blank" className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none text-sm" />
+              </div>
+            </div>
+          )}
 
           {runtime === "proxy" && (
             <div>
