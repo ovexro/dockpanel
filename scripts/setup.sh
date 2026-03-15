@@ -484,8 +484,8 @@ StartLimitBurst=5
 StartLimitIntervalSec=60
 Environment=RUST_LOG=info
 RuntimeDirectory=dockpanel
-ReadWritePaths=/etc/nginx /etc/dockpanel /var/run/dockpanel /var/backups/dockpanel /var/www /var/log /etc/letsencrypt /var/lib/nginx /run/nginx.pid
-NoNewPrivileges=yes
+ReadWritePaths=/etc/nginx /etc/dockpanel /var/run/dockpanel /var/backups/dockpanel /var/www /var/log /etc/letsencrypt /var/lib/nginx /run/nginx.pid /etc/postfix /etc/dovecot /etc/opendkim.conf /var/vmail /var/spool/postfix /var/lib/dpkg /var/cache/apt /var/lib/apt /usr /run/opendkim
+NoNewPrivileges=no
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=yes
