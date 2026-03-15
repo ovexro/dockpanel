@@ -702,6 +702,78 @@ wait_for_health() {
 }
 
 # ── Summary ──────────────────────────────────────────────────────────────
+install_recommended_services() {
+    header "Recommended Services"
+
+    # PHP-FPM (needed for WordPress, PHP sites)
+    if ! command -v php &> /dev/null; then
+        log "Installing PHP-FPM..."
+        local PHP_VER="8.3"
+        if [ "$PKG_MGR" = "apt" ]; then
+            apt-get install -y php${PHP_VER}-fpm php${PHP_VER}-cli php${PHP_VER}-mysql \
+                php${PHP_VER}-pgsql php${PHP_VER}-curl php${PHP_VER}-gd php${PHP_VER}-mbstring \
+                php${PHP_VER}-xml php${PHP_VER}-zip php${PHP_VER}-bcmath php${PHP_VER}-intl \
+                php${PHP_VER}-readline php${PHP_VER}-opcache > /dev/null 2>&1
+            systemctl enable --now php${PHP_VER}-fpm > /dev/null 2>&1
+        fi
+        log "PHP ${PHP_VER} installed with FPM"
+    else
+        log "PHP already installed: $(php -v | head -1 | awk '{print $2}')"
+    fi
+
+    # Certbot (needed for SSL certificates)
+    if ! command -v certbot &> /dev/null; then
+        log "Installing Certbot..."
+        pkg_install certbot python3-certbot-nginx
+        systemctl enable --now certbot.timer > /dev/null 2>&1
+        log "Certbot installed with auto-renewal"
+    else
+        log "Certbot already installed"
+    fi
+
+    # UFW (firewall)
+    if ! command -v ufw &> /dev/null; then
+        log "Installing UFW firewall..."
+        pkg_install ufw
+        ufw default deny incoming > /dev/null 2>&1
+        ufw default allow outgoing > /dev/null 2>&1
+        ufw allow 22/tcp > /dev/null 2>&1
+        ufw allow 80/tcp > /dev/null 2>&1
+        ufw allow 443/tcp > /dev/null 2>&1
+        ufw --force enable > /dev/null 2>&1
+        log "UFW installed and enabled (SSH, HTTP, HTTPS allowed)"
+    else
+        log "UFW already installed"
+    fi
+
+    # Fail2Ban (intrusion prevention)
+    if ! command -v fail2ban-client &> /dev/null; then
+        log "Installing Fail2Ban..."
+        pkg_install fail2ban
+        cat > /etc/fail2ban/jail.local << 'F2BEOF'
+[DEFAULT]
+bantime = 3600
+findtime = 600
+maxretry = 5
+
+[sshd]
+enabled = true
+
+[nginx-http-auth]
+enabled = true
+
+[nginx-limit-req]
+enabled = true
+F2BEOF
+        systemctl enable --now fail2ban > /dev/null 2>&1
+        log "Fail2Ban installed with SSH + Nginx jails"
+    else
+        log "Fail2Ban already installed"
+    fi
+
+    log "All recommended services ready"
+}
+
 print_summary() {
     local SERVER_IP
     SERVER_IP=$(curl -sf --max-time 5 https://api.ipify.org 2>/dev/null || \
@@ -738,8 +810,20 @@ print_summary() {
     echo -e "    Container:      ${DB_CONTAINER} (port ${DB_PORT})"
     echo -e "    Connect:        docker exec -it ${DB_CONTAINER} psql -U dockpanel -d dockpanel"
     echo ""
-    echo -e "  ${YELLOW}Security:${NC} Restrict port ${PANEL_PORT} with a firewall (ufw/iptables)."
-    echo -e "  ${YELLOW}SSL:${NC}      Set up HTTPS with: certbot --nginx"
+    echo -e "  ${BOLD}Installed services:${NC}"
+    echo -e "    Docker, Nginx, PHP-FPM, Certbot, UFW, Fail2Ban"
+    echo ""
+    echo -e "  ${BOLD}Optional (install from panel):${NC}"
+    echo -e "    Mail server:    Settings → Services or Mail page → Install"
+    echo -e "    Webmail:        Apps → Deploy → Roundcube"
+    echo -e "    Spam filter:    Apps → Deploy → Rspamd"
+    echo ""
+    echo -e "  ${YELLOW}Next steps:${NC}"
+    echo -e "    1. Open the panel URL and create your admin account"
+    echo -e "    2. Add your first site (Sites → Create Site)"
+    echo -e "    3. Provision SSL (click the lock icon on any site)"
+    echo -e "    4. Run diagnostics (Diagnostics → Run Scan)"
+    echo ""
     echo -e "  ${YELLOW}Update:${NC}   Run: bash /opt/dockpanel/scripts/update.sh"
     echo ""
 }
@@ -801,6 +885,7 @@ main() {
 
     create_services
     configure_nginx
+    install_recommended_services
     wait_for_health
     setup_db_backup
     print_summary
