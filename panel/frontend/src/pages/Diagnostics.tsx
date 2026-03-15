@@ -23,7 +23,7 @@ interface DiagnosticReport {
 
 const severityColors: Record<string, { bg: string; text: string; dot: string }> = {
   critical: { bg: "bg-red-500/10", text: "text-red-400", dot: "bg-red-500" },
-  warning: { bg: "bg-yellow-500/10", text: "text-yellow-400", dot: "bg-yellow-500" },
+  warning: { bg: "bg-warn-500/10", text: "text-warn-400", dot: "bg-warn-500" },
   info: { bg: "bg-blue-500/10", text: "text-blue-400", dot: "bg-blue-500" },
 };
 
@@ -128,9 +128,9 @@ export default function Diagnostics() {
           </button>
           <button
             onClick={() => setFilter("warning")}
-            className={`p-4 rounded-lg border transition-colors ${filter === "warning" ? "border-yellow-500 bg-dark-800" : "border-dark-500 bg-dark-900 hover:bg-dark-800"}`}
+            className={`p-4 rounded-lg border transition-colors ${filter === "warning" ? "border-warn-500 bg-dark-800" : "border-dark-500 bg-dark-900 hover:bg-dark-800"}`}
           >
-            <div className="text-2xl font-bold text-yellow-400">{report.summary.warning}</div>
+            <div className="text-2xl font-bold text-warn-400">{report.summary.warning}</div>
             <div className="text-sm text-dark-300">Warnings</div>
           </button>
           <button
