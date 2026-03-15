@@ -151,7 +151,7 @@ export default function Databases() {
     sites.find((s) => s.id === siteId)?.domain || "Unknown";
 
   return (
-    <div className="p-6 lg:p-8">
+    <div className="p-6 lg:p-8 animate-fade-up">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
         <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Databases</h1>
         <button

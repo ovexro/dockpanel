@@ -94,7 +94,7 @@ export default function Users() {
 
   if (error) {
     return (
-      <div className="p-6 lg:p-8">
+      <div className="p-6 lg:p-8 animate-fade-up">
         <div className="bg-red-500/10 text-red-400 px-4 py-3 rounded-lg border border-red-500/20">
           {error}
         </div>
