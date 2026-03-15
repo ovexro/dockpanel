@@ -281,6 +281,12 @@ create_directories() {
     # Ensure socket directory persists across tmpfiles cleanup/reboot
     echo "d /var/run/dockpanel 0755 root root -" > /etc/tmpfiles.d/dockpanel.conf
 
+    # Create all directories/files required by systemd ReadWritePaths
+    # (these may not exist yet on a fresh install — services are installed later)
+    mkdir -p /etc/postfix /etc/dovecot /var/vmail /var/spool/postfix /run/opendkim
+    mkdir -p /var/lib/nginx /etc/letsencrypt /var/lib/dpkg /var/cache/apt /var/lib/apt
+    touch /etc/opendkim.conf /run/nginx.pid 2>/dev/null || true
+
     log "Directories created"
 }
 
