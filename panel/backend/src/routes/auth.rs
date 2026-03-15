@@ -53,6 +53,18 @@ pub struct LoginRequest {
     pub password: String,
 }
 
+/// GET /api/auth/setup-status — Check if setup is needed (no users exist).
+pub async fn setup_status(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    Ok(Json(serde_json::json!({ "needs_setup": count.0 == 0 })))
+}
+
 /// POST /api/auth/setup — Create the initial admin user. Only works when no users exist.
 pub async fn setup(
     State(state): State<AppState>,
