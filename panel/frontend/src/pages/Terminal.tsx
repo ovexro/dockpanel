@@ -176,7 +176,7 @@ export default function Terminal() {
             <div className="flex items-center gap-2 mt-0.5">
               <div
                 className={`w-2 h-2 rounded-full ${
-                  connected ? "bg-emerald-500" : "bg-gray-300"
+                  connected ? "bg-rust-500" : "bg-gray-300"
                 }`}
               />
               <span className="text-xs text-dark-200">

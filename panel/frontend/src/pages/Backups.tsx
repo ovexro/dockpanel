@@ -188,7 +188,7 @@ export default function Backups() {
         <div
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
-              ? "bg-emerald-50 text-emerald-400 border-emerald-200"
+              ? "bg-rust-50 text-rust-400 border-rust-200"
               : "bg-red-500/10 text-red-400 border-red-500/20"
           }`}
           role="alert"
@@ -235,7 +235,7 @@ export default function Backups() {
                     ))}
                   </select>
                   {destinations.length === 0 && (
-                    <p className="text-xs text-amber-600 mt-1">Add a destination in Settings first</p>
+                    <p className="text-xs text-warn-500 mt-1">Add a destination in Settings first</p>
                   )}
                 </div>
               </div>
@@ -296,7 +296,7 @@ export default function Backups() {
                   <span className="font-mono bg-dark-700 px-1.5 py-0.5 rounded text-xs">{schedule.schedule}</span>
                   <span className="mx-2 text-dark-300">|</span>
                   Keep {schedule.retention_count} backups
-                  <span className={`ml-2 inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${schedule.enabled ? "bg-emerald-500/15 text-emerald-400" : "bg-dark-700 text-dark-200"}`}>
+                  <span className={`ml-2 inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${schedule.enabled ? "bg-rust-500/15 text-rust-400" : "bg-dark-700 text-dark-200"}`}>
                     {schedule.enabled ? "Active" : "Paused"}
                   </span>
                 </p>
@@ -304,7 +304,7 @@ export default function Backups() {
                   <p className="text-xs text-dark-200 mt-1 font-mono">
                     Last run: {new Date(schedule.last_run).toLocaleString()}
                     {schedule.last_status && (
-                      <span className={`ml-1 ${schedule.last_status === "success" ? "text-emerald-600" : "text-red-400"}`}>
+                      <span className={`ml-1 ${schedule.last_status === "success" ? "text-rust-600" : "text-red-400"}`}>
                         ({schedule.last_status})
                       </span>
                     )}
@@ -374,7 +374,7 @@ export default function Backups() {
                       <button
                         onClick={() => handleRestore(backup.id)}
                         disabled={restoring === backup.id}
-                        className="px-3 py-1 bg-amber-50 text-amber-400 rounded-md text-xs font-medium hover:bg-amber-100 disabled:opacity-50 transition-colors"
+                        className="px-3 py-1 bg-warn-500/10 text-warn-400 rounded-md text-xs font-medium hover:bg-warn-400/15 disabled:opacity-50 transition-colors"
                       >
                         {restoring === backup.id ? "Restoring..." : "Restore"}
                       </button>

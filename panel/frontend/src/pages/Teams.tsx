@@ -23,7 +23,7 @@ interface Team {
 const roleColors: Record<string, string> = {
   owner: "bg-rust-500/15 text-rust-600",
   admin: "bg-violet-500/15 text-violet-400",
-  developer: "bg-emerald-500/15 text-emerald-400",
+  developer: "bg-rust-500/15 text-rust-400",
   viewer: "bg-dark-700 text-dark-200",
 };
 
@@ -165,7 +165,7 @@ export default function Teams() {
         </div>
       )}
       {success && (
-        <div className="bg-emerald-500/10 text-emerald-400 text-sm px-4 py-3 rounded-lg border border-emerald-500/20 mb-4">
+        <div className="bg-rust-500/10 text-rust-400 text-sm px-4 py-3 rounded-lg border border-rust-500/20 mb-4">
           {success}
           <button onClick={() => setSuccess("")} className="ml-2 font-medium hover:underline">Dismiss</button>
         </div>

@@ -36,7 +36,7 @@ const TYPE_LABELS: Record<string, string> = {
 
 const SEVERITY_STYLES: Record<string, { bg: string; text: string; dot: string }> = {
   critical: { bg: "bg-red-500/10", text: "text-red-400", dot: "bg-red-500" },
-  warning: { bg: "bg-amber-500/10", text: "text-amber-400", dot: "bg-amber-500" },
+  warning: { bg: "bg-warn-500/10", text: "text-warn-400", dot: "bg-warn-500" },
   info: { bg: "bg-blue-500/10", text: "text-blue-400", dot: "bg-blue-500" },
 };
 
@@ -131,23 +131,23 @@ export default function Alerts() {
         <div
           className={`p-4 rounded-lg border cursor-pointer transition-colors ${
             statusFilter === "acknowledged"
-              ? "bg-amber-500/10 border-amber-500/30"
+              ? "bg-warn-500/10 border-warn-500/30"
               : "bg-dark-800 border-dark-500 hover:border-dark-400"
           }`}
           onClick={() => setStatusFilter(statusFilter === "acknowledged" ? "" : "acknowledged")}
         >
-          <div className="text-2xl font-bold text-amber-400">{summary.acknowledged}</div>
+          <div className="text-2xl font-bold text-warn-400">{summary.acknowledged}</div>
           <div className="text-sm text-dark-200">Acknowledged</div>
         </div>
         <div
           className={`p-4 rounded-lg border cursor-pointer transition-colors ${
             statusFilter === "resolved"
-              ? "bg-emerald-500/10 border-emerald-500/30"
+              ? "bg-rust-500/10 border-rust-500/30"
               : "bg-dark-800 border-dark-500 hover:border-dark-400"
           }`}
           onClick={() => setStatusFilter(statusFilter === "resolved" ? "" : "resolved")}
         >
-          <div className="text-2xl font-bold text-emerald-400">{summary.resolved}</div>
+          <div className="text-2xl font-bold text-rust-400">{summary.resolved}</div>
           <div className="text-sm text-dark-200">Resolved (30d)</div>
         </div>
       </div>
@@ -231,13 +231,13 @@ export default function Alerts() {
                     <div className="flex gap-1.5 shrink-0">
                       <button
                         onClick={() => handleAcknowledge(alert.id)}
-                        className="px-2.5 py-1 bg-amber-500/15 text-amber-400 rounded-lg text-xs hover:bg-amber-500/25"
+                        className="px-2.5 py-1 bg-warn-500/15 text-warn-400 rounded-lg text-xs hover:bg-warn-500/25"
                       >
                         Ack
                       </button>
                       <button
                         onClick={() => handleResolve(alert.id)}
-                        className="px-2.5 py-1 bg-emerald-500/15 text-emerald-400 rounded-lg text-xs hover:bg-emerald-500/25"
+                        className="px-2.5 py-1 bg-rust-500/15 text-rust-400 rounded-lg text-xs hover:bg-rust-500/25"
                       >
                         Resolve
                       </button>
@@ -246,7 +246,7 @@ export default function Alerts() {
                   {alert.status === "acknowledged" && (
                     <button
                       onClick={() => handleResolve(alert.id)}
-                      className="px-2.5 py-1 bg-emerald-500/15 text-emerald-400 rounded-lg text-xs hover:bg-emerald-500/25 shrink-0"
+                      className="px-2.5 py-1 bg-rust-500/15 text-rust-400 rounded-lg text-xs hover:bg-rust-500/25 shrink-0"
                     >
                       Resolve
                     </button>

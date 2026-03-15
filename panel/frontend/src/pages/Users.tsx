@@ -126,7 +126,7 @@ export default function Users() {
         <div
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
-              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+              ? "bg-rust-500/10 text-rust-400 border-rust-500/20"
               : "bg-red-500/10 text-red-400 border-red-500/20"
           }`}
         >

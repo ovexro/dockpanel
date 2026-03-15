@@ -208,8 +208,8 @@ export default function Dns() {
   const typeColor: Record<string, string> = {
     A: "bg-blue-500/15 text-blue-400",
     AAAA: "bg-rust-500/15 text-rust-600",
-    CNAME: "bg-emerald-500/15 text-emerald-400",
-    MX: "bg-amber-500/15 text-amber-400",
+    CNAME: "bg-rust-500/15 text-rust-400",
+    MX: "bg-warn-500/15 text-warn-400",
     TXT: "bg-dark-700 text-dark-100",
     NS: "bg-purple-500/15 text-purple-400",
     SRV: "bg-pink-500/10 text-pink-400",
@@ -255,7 +255,7 @@ export default function Dns() {
       {message.text && (
         <div className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
           message.type === "success"
-            ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+            ? "bg-rust-500/10 text-rust-400 border-rust-500/20"
             : "bg-red-500/10 text-red-400 border-red-500/20"
         }`}>
           {message.text}

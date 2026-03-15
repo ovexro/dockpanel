@@ -240,7 +240,7 @@ export default function Layout() {
           </div>
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-2 px-2.5 py-1.5 bg-dark-800 border border-dark-600/40 flex-1">
-              <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+              <div className="w-2 h-2 rounded-full bg-rust-500 shrink-0" />
               <span className="text-[10px] font-semibold uppercase tracking-widest text-dark-300 font-mono">Build Stable</span>
             </div>
             <button
