@@ -103,7 +103,7 @@ export default function Login() {
             <button
               type="submit"
               disabled={submitting || twoFaCode.length < 6}
-              className="w-full py-2.5 bg-accent-500 text-white rounded-lg font-medium hover:bg-accent-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
+              className="w-full py-2.5 bg-rust-500 text-white rounded-lg font-medium hover:bg-rust-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
             >
               {submitting ? "Verifying..." : "Verify"}
             </button>
@@ -159,7 +159,7 @@ export default function Login() {
             <button
               type="submit"
               disabled={submitting}
-              className="w-full py-2.5 bg-accent-500 text-white rounded-lg font-medium hover:bg-accent-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
+              className="w-full py-2.5 bg-rust-500 text-white rounded-lg font-medium hover:bg-rust-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
             >
               {submitting ? "Signing in..." : "Sign in"}
             </button>

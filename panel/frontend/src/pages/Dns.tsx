@@ -246,7 +246,7 @@ export default function Dns() {
         </div>
         <button
           onClick={() => setShowAddZone(!showAddZone)}
-          className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 transition-colors"
+          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
         >
           {showAddZone ? "Cancel" : "Add Zone"}
         </button>
@@ -341,7 +341,7 @@ export default function Dns() {
                 <button
                   onClick={handleAddZone}
                   disabled={savingZone || !zoneDomain || !zoneId || !zoneToken || (authMethod === "key" && !zoneEmail)}
-                  className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
+                  className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
                 >
                   {savingZone ? "Verifying..." : "Connect Zone"}
                 </button>
@@ -368,7 +368,7 @@ export default function Dns() {
                 <button
                   onClick={handleAddZone}
                   disabled={savingZone || !zoneDomain}
-                  className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
+                  className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
                 >
                   {savingZone ? "Creating..." : "Create Zone"}
                 </button>
@@ -450,7 +450,7 @@ export default function Dns() {
                     </button>
                     <button
                       onClick={() => openRecordForm()}
-                      className="px-3 py-1.5 bg-accent-500 text-white rounded-lg text-xs font-medium hover:bg-accent-600 flex items-center gap-1"
+                      className="px-3 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600 flex items-center gap-1"
                     >
                       <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
                       <span className="hidden sm:inline">Add Record</span>
@@ -510,7 +510,7 @@ export default function Dns() {
                     <button
                       onClick={handleSaveRecord}
                       disabled={savingRecord || !recName || !recContent}
-                      className="px-4 py-1.5 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
+                      className="px-4 py-1.5 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
                     >
                       {savingRecord ? "Saving..." : editingRecord ? "Update" : "Create"}
                     </button>

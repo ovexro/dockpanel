@@ -166,7 +166,7 @@ export default function Backups() {
         <button
           onClick={handleCreate}
           disabled={creating}
-          className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50 transition-colors flex items-center gap-2"
+          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors flex items-center gap-2"
         >
           {creating ? (
             <>
@@ -204,7 +204,7 @@ export default function Backups() {
           {!showScheduleForm && (
             <button
               onClick={() => setShowScheduleForm(true)}
-              className="px-3 py-1 bg-accent-500 text-white rounded-md text-xs font-medium hover:bg-accent-600"
+              className="px-3 py-1 bg-rust-500 text-white rounded-md text-xs font-medium hover:bg-rust-600"
             >
               {schedule ? "Edit" : "Set Up"}
             </button>
@@ -283,7 +283,7 @@ export default function Backups() {
                       setSavingSchedule(false);
                     }
                   }}
-                  className="px-4 py-1.5 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
+                  className="px-4 py-1.5 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
                 >
                   {savingSchedule ? "Saving..." : "Save"}
                 </button>

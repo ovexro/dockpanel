@@ -58,7 +58,7 @@ export default function VerifyEmail() {
           )}
           <Link
             to="/login"
-            className="block w-full py-2.5 bg-accent-500 text-white rounded-lg font-medium hover:bg-accent-600 text-center text-sm"
+            className="block w-full py-2.5 bg-rust-500 text-white rounded-lg font-medium hover:bg-rust-600 text-center text-sm"
           >
             Go to Login
           </Link>

@@ -302,7 +302,7 @@ export default function Logs() {
             <button
               onClick={mode === "search" ? handleSearch : fetchLogs}
               disabled={loading || streaming}
-              className="px-3 py-1.5 bg-accent-500 text-white rounded-lg text-xs font-medium hover:bg-accent-600 disabled:opacity-50"
+              className="px-3 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600 disabled:opacity-50"
             >
               {loading ? "Loading..." : mode === "search" ? "Search" : "Refresh"}
             </button>
