@@ -134,19 +134,19 @@ function CountUp({ value }: { value: number }) {
 
 function barColor(pct: number): string {
   if (pct < 60) return "bg-rust-500";
-  if (pct < 85) return "bg-amber-500";
+  if (pct < 85) return "bg-warn-500";
   return "bg-red-500";
 }
 
 function pctColor(pct: number): string {
   if (pct < 60) return "text-rust-500";
-  if (pct < 85) return "text-amber-500";
+  if (pct < 85) return "text-warn-500";
   return "text-red-500";
 }
 
 function tempColor(temp: number): string {
   if (temp < 60) return "text-rust-400";
-  if (temp < 80) return "text-amber-400";
+  if (temp < 80) return "text-warn-400";
   return "text-red-400";
 }
 
@@ -331,7 +331,7 @@ export default function Dashboard() {
                 icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 17.25v-.228a4.5 4.5 0 0 0-.12-1.03l-2.268-9.64a3.375 3.375 0 0 0-3.285-2.602H7.923a3.375 3.375 0 0 0-3.285 2.602l-2.268 9.64a4.5 4.5 0 0 0-.12 1.03v.228m19.5 0a3 3 0 0 1-3 3H5.25a3 3 0 0 1-3-3m19.5 0a3 3 0 0 0-3-3H5.25a3 3 0 0 0-3 3m16.5 0h.008v.008h-.008v-.008Zm-3 0h.008v.008h-.008v-.008Z" /></svg> },
             ].map(({ label, pct, detail, icon }) => (
               <div key={label} className="border border-dark-500 bg-dark-800 p-5 relative overflow-hidden">
-                <div className={`absolute inset-0 opacity-[0.03] ${pct < 60 ? "bg-rust-500" : pct < 85 ? "bg-amber-500" : "bg-red-500"}`} />
+                <div className={`absolute inset-0 opacity-[0.03] ${pct < 60 ? "bg-rust-500" : pct < 85 ? "bg-warn-500" : "bg-red-500"}`} />
                 <div className="relative text-center">
                   <div className="flex items-center justify-center gap-1.5 text-dark-200 mb-1">
                     <span className="opacity-60">{icon}</span>
@@ -353,9 +353,9 @@ export default function Dashboard() {
           {metricsHistory.length >= 2 && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
               {[
-                { label: "CPU", data: metricsHistory.map(p => p.cpu), color: "#22c55e" },
+                { label: "CPU", data: metricsHistory.map(p => p.cpu), color: "#43ef82" },
                 { label: "Memory", data: metricsHistory.map(p => p.mem), color: "#6366f1" },
-                { label: "Disk", data: metricsHistory.map(p => p.disk), color: "#f59e0b" },
+                { label: "Disk", data: metricsHistory.map(p => p.disk), color: "#efb043" },
               ].map(({ label, data, color }) => (
                 <div key={label} className="border border-dark-500 bg-dark-800 p-4">
                   <div className="flex items-center justify-between mb-2">
@@ -390,7 +390,7 @@ export default function Dashboard() {
                 <span className={`text-sm font-bold ${
                   intel.health_score >= 90 ? "text-rust-400" :
                   intel.health_score >= 75 ? "text-blue-400" :
-                  intel.health_score >= 60 ? "text-amber-400" : "text-red-400"
+                  intel.health_score >= 60 ? "text-warn-400" : "text-red-400"
                 }`}>{intel.health_score}/100 {intel.grade}</span>
               </div>
               <div className={`px-4 py-3 flex flex-col ${
@@ -410,7 +410,7 @@ export default function Dashboard() {
             <div className="bg-dark-800 px-4 py-3 flex flex-col">
               <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Updates</span>
               {updateCount > 0
-                ? <span className="text-sm text-amber-400 font-bold">{updateCount} available</span>
+                ? <span className="text-sm text-warn-400 font-bold">{updateCount} available</span>
                 : <span className="text-sm text-rust-400 font-medium">up to date</span>
               }
             </div>
@@ -418,13 +418,13 @@ export default function Dashboard() {
 
           {/* Reboot Required Warning */}
           {rebootRequired && (
-            <div className="border border-amber-500/50 bg-amber-500/5 p-4 mb-6 flex items-start gap-3">
-              <svg className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" /></svg>
+            <div className="border border-warn-500/50 bg-warn-500/5 p-4 mb-6 flex items-start gap-3">
+              <svg className="w-5 h-5 text-warn-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" /></svg>
               <div className="flex-1">
-                <p className="text-sm text-amber-400 font-bold">Reboot Required</p>
+                <p className="text-sm text-warn-400 font-bold">Reboot Required</p>
                 <p className="text-xs text-dark-300 mt-1">Recent package updates (such as a new kernel version) require a reboot to be fully applied.</p>
               </div>
-              <Link to="/updates" className="px-4 py-2 bg-amber-500 text-dark-900 text-xs font-bold uppercase tracking-wider hover:bg-amber-400 transition-colors shrink-0">
+              <Link to="/updates" className="px-4 py-2 bg-warn-500 text-dark-900 text-xs font-bold uppercase tracking-wider hover:bg-warn-400 transition-colors shrink-0">
                 View Updates
               </Link>
             </div>
@@ -444,7 +444,7 @@ export default function Dashboard() {
                       <div key={i} className="flex items-start gap-2">
                         <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${
                           issue.severity === "critical" ? "bg-red-500" :
-                          issue.severity === "warning" ? "bg-amber-500" : "bg-blue-500"
+                          issue.severity === "warning" ? "bg-warn-500" : "bg-blue-500"
                         }`} />
                         <p className="text-xs text-dark-100 leading-tight">{issue.title}</p>
                       </div>
@@ -461,7 +461,7 @@ export default function Dashboard() {
                         <span className="text-xs text-dark-100 truncate max-w-[200px]">{ssl.domain}</span>
                         <span className={`text-xs ${
                           ssl.severity === "critical" ? "text-red-400" :
-                          ssl.severity === "warning" ? "text-amber-400" :
+                          ssl.severity === "warning" ? "text-warn-400" :
                           ssl.severity === "info" ? "text-blue-400" : "text-rust-400"
                         }`}>{ssl.days_left}d left</span>
                       </div>
