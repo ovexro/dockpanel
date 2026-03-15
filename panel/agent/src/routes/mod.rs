@@ -13,6 +13,7 @@ pub mod mail;
 pub mod nginx;
 pub mod remote_backup;
 pub mod security;
+pub mod service_installer;
 pub mod services;
 pub mod smtp;
 pub mod staging;
