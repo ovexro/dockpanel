@@ -195,7 +195,7 @@ export default function WordPress() {
         <div
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
-              ? "bg-emerald-50 text-emerald-400 border-emerald-200"
+              ? "bg-rust-50 text-rust-400 border-rust-200"
               : "bg-red-500/10 text-red-400 border-red-500/20"
           }`}
         >
@@ -367,7 +367,7 @@ export default function WordPress() {
                       WordPress <span className="font-mono">{info.version}</span>
                     </h2>
                     {info.update_available && (
-                      <span className="px-2 py-0.5 bg-amber-500/15 text-amber-400 rounded text-xs font-medium">
+                      <span className="px-2 py-0.5 bg-warn-500/15 text-warn-400 rounded text-xs font-medium">
                         {info.update_available} available
                       </span>
                     )}
@@ -376,7 +376,7 @@ export default function WordPress() {
                     {plugins.length} plugin{plugins.length !== 1 ? "s" : ""},{" "}
                     {themes.length} theme{themes.length !== 1 ? "s" : ""}
                     {updatesAvailable > 0 && (
-                      <span className="text-amber-600 ml-1">
+                      <span className="text-warn-500 ml-1">
                         ({updatesAvailable} update{updatesAvailable !== 1 ? "s" : ""} available)
                       </span>
                     )}
@@ -388,7 +388,7 @@ export default function WordPress() {
                   <button
                     onClick={() => handleUpdate("core")}
                     disabled={busy === "update-core"}
-                    className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-medium hover:bg-amber-600 disabled:opacity-50"
+                    className="px-3 py-1.5 bg-warn-500 text-white rounded-lg text-xs font-medium hover:bg-warn-600 disabled:opacity-50"
                   >
                     {busy === "update-core" ? "Updating..." : "Update Core"}
                   </button>
@@ -417,7 +417,7 @@ export default function WordPress() {
                     onClick={() => handleAutoUpdate(!info.auto_update)}
                     disabled={busy === "auto-update"}
                     className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-                      info.auto_update ? "bg-emerald-500" : "bg-gray-300"
+                      info.auto_update ? "bg-rust-500" : "bg-gray-300"
                     }`}
                   >
                     <span
@@ -487,7 +487,7 @@ export default function WordPress() {
                         <span
                           className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${
                             p.status === "active"
-                              ? "bg-emerald-500/15 text-emerald-400"
+                              ? "bg-rust-500/15 text-rust-400"
                               : p.status === "must-use"
                               ? "bg-purple-500/15 text-purple-400"
                               : "bg-dark-700 text-dark-200"
@@ -498,7 +498,7 @@ export default function WordPress() {
                       </td>
                       <td className="px-4 py-2.5">
                         {p.update === "available" ? (
-                          <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-400">
+                          <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-warn-500/15 text-warn-400">
                             available
                           </span>
                         ) : (
@@ -520,7 +520,7 @@ export default function WordPress() {
                               <button
                                 onClick={() => handlePluginAction(p.name, "activate")}
                                 disabled={busy.startsWith("plugin-")}
-                                className="px-2 py-1 text-xs bg-emerald-500/15 text-emerald-400 rounded hover:bg-emerald-200 disabled:opacity-50"
+                                className="px-2 py-1 text-xs bg-rust-500/15 text-rust-400 rounded hover:bg-rust-200 disabled:opacity-50"
                               >
                                 Activate
                               </button>
@@ -530,7 +530,7 @@ export default function WordPress() {
                             <button
                               onClick={() => handlePluginAction(p.name, "update")}
                               disabled={busy.startsWith("plugin-")}
-                              className="px-2 py-1 text-xs bg-amber-500/15 text-amber-400 rounded hover:bg-amber-200 disabled:opacity-50"
+                              className="px-2 py-1 text-xs bg-warn-500/15 text-warn-400 rounded hover:bg-warn-400/20 disabled:opacity-50"
                             >
                               Update
                             </button>
@@ -607,7 +607,7 @@ export default function WordPress() {
                         <span
                           className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${
                             t.status === "active"
-                              ? "bg-emerald-500/15 text-emerald-400"
+                              ? "bg-rust-500/15 text-rust-400"
                               : t.status === "parent"
                               ? "bg-blue-500/15 text-blue-400"
                               : "bg-dark-700 text-dark-200"
@@ -618,7 +618,7 @@ export default function WordPress() {
                       </td>
                       <td className="px-4 py-2.5">
                         {t.update === "available" ? (
-                          <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-400">
+                          <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-warn-500/15 text-warn-400">
                             available
                           </span>
                         ) : (
@@ -631,7 +631,7 @@ export default function WordPress() {
                             <button
                               onClick={() => handleThemeAction(t.name, "activate")}
                               disabled={busy.startsWith("theme-")}
-                              className="px-2 py-1 text-xs bg-emerald-500/15 text-emerald-400 rounded hover:bg-emerald-200 disabled:opacity-50"
+                              className="px-2 py-1 text-xs bg-rust-500/15 text-rust-400 rounded hover:bg-rust-200 disabled:opacity-50"
                             >
                               Activate
                             </button>
@@ -640,7 +640,7 @@ export default function WordPress() {
                             <button
                               onClick={() => handleThemeAction(t.name, "update")}
                               disabled={busy.startsWith("theme-")}
-                              className="px-2 py-1 text-xs bg-amber-500/15 text-amber-400 rounded hover:bg-amber-200 disabled:opacity-50"
+                              className="px-2 py-1 text-xs bg-warn-500/15 text-warn-400 rounded hover:bg-warn-400/20 disabled:opacity-50"
                             >
                               Update
                             </button>

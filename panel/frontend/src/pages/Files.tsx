@@ -303,7 +303,7 @@ export default function Files() {
                           className="flex items-center gap-2 text-sm text-dark-50 hover:text-indigo-600 font-mono"
                         >
                           {entry.is_dir ? (
-                            <svg className="w-4 h-4 text-amber-500" fill="currentColor" viewBox="0 0 20 20">
+                            <svg className="w-4 h-4 text-warn-500" fill="currentColor" viewBox="0 0 20 20">
                               <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
                             </svg>
                           ) : (

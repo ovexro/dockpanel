@@ -22,15 +22,15 @@ interface Server {
 }
 
 const statusColors: Record<string, string> = {
-  online: "bg-emerald-500/15 text-emerald-400",
+  online: "bg-rust-500/15 text-rust-400",
   offline: "bg-red-500/15 text-red-400",
-  pending: "bg-amber-500/15 text-amber-400",
+  pending: "bg-warn-500/15 text-warn-400",
 };
 
 const statusDot: Record<string, string> = {
-  online: "bg-emerald-500",
+  online: "bg-rust-500",
   offline: "bg-red-500",
-  pending: "bg-amber-500",
+  pending: "bg-warn-500",
 };
 
 function UsageGauge({ label, value, max, unit, color }: { label: string; value: number; max: number; unit: string; color: string }) {
@@ -42,7 +42,7 @@ function UsageGauge({ label, value, max, unit, color }: { label: string; value: 
         <span className="text-xs font-medium text-dark-100">{value.toFixed(label === "CPU" ? 1 : 0)}{unit}</span>
       </div>
       <div className="h-2 bg-dark-700 rounded-full overflow-hidden">
-        <div className={`h-full rounded-full transition-all duration-500 ${pct > 90 ? "bg-red-500" : pct > 70 ? "bg-amber-500" : color}`} style={{ width: `${pct}%` }} />
+        <div className={`h-full rounded-full transition-all duration-500 ${pct > 90 ? "bg-red-500" : pct > 70 ? "bg-warn-500" : color}`} style={{ width: `${pct}%` }} />
       </div>
     </div>
   );
@@ -203,8 +203,8 @@ export default function Servers() {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
           <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-emerald-500/15 rounded-lg flex items-center justify-center">
-                <div className="w-3 h-3 bg-emerald-500 rounded-full" />
+              <div className="w-10 h-10 bg-rust-500/15 rounded-lg flex items-center justify-center">
+                <div className="w-3 h-3 bg-rust-500 rounded-full" />
               </div>
               <div>
                 <p className="text-2xl font-bold text-dark-50">{online}</p>
@@ -225,8 +225,8 @@ export default function Servers() {
           </div>
           <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-amber-500/15 rounded-lg flex items-center justify-center">
-                <div className="w-3 h-3 bg-amber-500 rounded-full" />
+              <div className="w-10 h-10 bg-warn-500/15 rounded-lg flex items-center justify-center">
+                <div className="w-3 h-3 bg-warn-500 rounded-full" />
               </div>
               <div>
                 <p className="text-2xl font-bold text-dark-50">{pending}</p>
@@ -239,22 +239,22 @@ export default function Servers() {
 
       {/* Install script display */}
       {installInfo && (
-        <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-5 mb-6">
-          <h3 className="text-xs font-medium text-emerald-400 uppercase font-mono tracking-widest mb-2">
+        <div className="bg-rust-500/10 border border-rust-500/20 rounded-lg p-5 mb-6">
+          <h3 className="text-xs font-medium text-rust-400 uppercase font-mono tracking-widest mb-2">
             Server "{installInfo.name}" created!
           </h3>
-          <p className="text-sm text-emerald-400 mb-3">
+          <p className="text-sm text-rust-400 mb-3">
             Run this command on your server to install the DockPanel agent:
           </p>
-          <div className="bg-dark-950 text-emerald-400 p-4 rounded-lg font-mono text-xs break-all">
+          <div className="bg-dark-950 text-rust-400 p-4 rounded-lg font-mono text-xs break-all">
             {installInfo.install_script}
           </div>
-          <p className="text-xs text-emerald-400 mt-3">
+          <p className="text-xs text-rust-400 mt-3">
             Save your agent token — it won't be shown again.
           </p>
           <button
             onClick={() => setInstallInfo(null)}
-            className="mt-3 px-3 py-1.5 bg-emerald-500/20 text-emerald-400 rounded-lg text-xs font-medium hover:bg-emerald-500/30"
+            className="mt-3 px-3 py-1.5 bg-rust-500/20 text-rust-400 rounded-lg text-xs font-medium hover:bg-rust-500/30"
           >
             Dismiss
           </button>
@@ -427,7 +427,7 @@ export default function Servers() {
                         return (
                           <div
                             key={i}
-                            className={`flex-1 min-w-0 rounded-t ${h > 90 ? "bg-red-400" : h > 70 ? "bg-amber-400" : "bg-indigo-400"}`}
+                            className={`flex-1 min-w-0 rounded-t ${h > 90 ? "bg-red-400" : h > 70 ? "bg-warn-400" : "bg-indigo-400"}`}
                             style={{ height: `${Math.max(h, 2)}%` }}
                             title={`${p.value.toFixed(1)} at ${new Date(p.recorded_at).toLocaleTimeString()}`}
                           />

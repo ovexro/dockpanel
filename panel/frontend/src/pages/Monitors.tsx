@@ -34,13 +34,13 @@ interface Incident {
 }
 
 const statusColors: Record<string, string> = {
-  up: "bg-emerald-500/15 text-emerald-400",
+  up: "bg-rust-500/15 text-rust-400",
   down: "bg-red-500/15 text-red-400",
   pending: "bg-dark-700 text-dark-200",
 };
 
 const statusDot: Record<string, string> = {
-  up: "bg-emerald-500",
+  up: "bg-rust-500",
   down: "bg-red-500",
   pending: "bg-gray-400",
 };
@@ -247,7 +247,7 @@ export default function Monitors() {
                   </div>
                   <div className="flex items-center gap-2 sm:gap-4 shrink-0">
                     {m.last_response_time != null && (
-                      <span className={`text-xs font-medium font-mono ${m.last_response_time > 2000 ? "text-red-500" : m.last_response_time > 500 ? "text-amber-500" : "text-emerald-600"}`}>
+                      <span className={`text-xs font-medium font-mono ${m.last_response_time > 2000 ? "text-red-500" : m.last_response_time > 500 ? "text-warn-500" : "text-rust-600"}`}>
                         {m.last_response_time}ms
                       </span>
                     )}
@@ -296,7 +296,7 @@ export default function Monitors() {
                           {checks.slice(0, 20).map((c) => (
                             <div key={c.id} className="flex items-center justify-between text-xs">
                               <div className="flex items-center gap-2">
-                                <div className={`w-1.5 h-1.5 rounded-full ${c.status_code && c.status_code < 400 ? "bg-emerald-500" : "bg-red-500"}`} />
+                                <div className={`w-1.5 h-1.5 rounded-full ${c.status_code && c.status_code < 400 ? "bg-rust-500" : "bg-red-500"}`} />
                                 <span className="text-dark-200">{formatDate(c.checked_at)}</span>
                               </div>
                               <div className="flex items-center gap-2">
@@ -320,7 +320,7 @@ export default function Monitors() {
                           {incidents.map((i) => (
                             <div key={i.id} className="text-xs border border-dark-600 rounded-lg p-2">
                               <div className="flex items-center justify-between">
-                                <span className={`font-medium ${i.resolved_at ? "text-emerald-600" : "text-red-400"}`}>
+                                <span className={`font-medium ${i.resolved_at ? "text-rust-600" : "text-red-400"}`}>
                                   {i.resolved_at ? "Resolved" : "Ongoing"}
                                 </span>
                                 <span className="text-dark-300">{formatDate(i.started_at)}</span>

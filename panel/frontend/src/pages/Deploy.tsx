@@ -186,7 +186,7 @@ export default function Deploy() {
       {message && (
         <div className={`px-4 py-3 rounded-lg text-sm border ${
           message.includes("success") || message.includes("saved") || message.includes("Copied") || message.includes("generated") || message.includes("removed")
-            ? "bg-emerald-50 text-emerald-400 border-emerald-200"
+            ? "bg-rust-50 text-rust-400 border-rust-200"
             : "bg-red-500/10 text-red-400 border-red-500/20"
         }`}>
           {message}
@@ -349,7 +349,7 @@ export default function Deploy() {
             </div>
             <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${
               config.last_status === "success"
-                ? "bg-emerald-500/15 text-emerald-400"
+                ? "bg-rust-500/15 text-rust-400"
                 : "bg-red-500/15 text-red-400"
             }`}>
               {config.last_status}
@@ -374,7 +374,7 @@ export default function Deploy() {
                   <div className="flex items-center gap-3">
                     <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
                       log.status === "success"
-                        ? "bg-emerald-500/15 text-emerald-400"
+                        ? "bg-rust-500/15 text-rust-400"
                         : "bg-red-500/15 text-red-400"
                     }`}>
                       {log.status}
