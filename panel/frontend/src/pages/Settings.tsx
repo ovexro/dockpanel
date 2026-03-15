@@ -971,7 +971,7 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
                     <div className={`w-3 h-3 rounded-full ${health.database ? "bg-rust-500" : "bg-red-500"}`} />
                     <span className="text-sm text-dark-50">Database</span>
                   </div>
-                  <span className={`text-sm font-medium ${health.database ? "text-rust-600" : "text-red-400"}`}>
+                  <span className={`text-sm font-medium ${health.database ? "text-rust-400" : "text-red-400"}`}>
                     {health.database ? "Connected" : "Error"}
                   </span>
                 </div>
@@ -980,7 +980,7 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
                     <div className={`w-3 h-3 rounded-full ${health.agent ? "bg-rust-500" : "bg-red-500"}`} />
                     <span className="text-sm text-dark-50">Agent</span>
                   </div>
-                  <span className={`text-sm font-medium ${health.agent ? "text-rust-600" : "text-red-400"}`}>
+                  <span className={`text-sm font-medium ${health.agent ? "text-rust-400" : "text-red-400"}`}>
                     {health.agent ? "Connected" : "Error"}
                   </span>
                 </div>

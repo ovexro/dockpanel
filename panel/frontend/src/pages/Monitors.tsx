@@ -247,7 +247,7 @@ export default function Monitors() {
                   </div>
                   <div className="flex items-center gap-2 sm:gap-4 shrink-0">
                     {m.last_response_time != null && (
-                      <span className={`text-xs font-medium font-mono ${m.last_response_time > 2000 ? "text-red-500" : m.last_response_time > 500 ? "text-warn-500" : "text-rust-600"}`}>
+                      <span className={`text-xs font-medium font-mono ${m.last_response_time > 2000 ? "text-red-500" : m.last_response_time > 500 ? "text-warn-500" : "text-rust-400"}`}>
                         {m.last_response_time}ms
                       </span>
                     )}
@@ -320,7 +320,7 @@ export default function Monitors() {
                           {incidents.map((i) => (
                             <div key={i.id} className="text-xs border border-dark-600 rounded-lg p-2">
                               <div className="flex items-center justify-between">
-                                <span className={`font-medium ${i.resolved_at ? "text-rust-600" : "text-red-400"}`}>
+                                <span className={`font-medium ${i.resolved_at ? "text-rust-400" : "text-red-400"}`}>
                                   {i.resolved_at ? "Resolved" : "Ongoing"}
                                 </span>
                                 <span className="text-dark-300">{formatDate(i.started_at)}</span>

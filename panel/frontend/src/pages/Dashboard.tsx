@@ -139,7 +139,7 @@ function barColor(pct: number): string {
 }
 
 function pctColor(pct: number): string {
-  if (pct < 60) return "text-rust-500";
+  if (pct < 60) return "text-rust-400";
   if (pct < 85) return "text-warn-500";
   return "text-red-500";
 }
@@ -510,7 +510,7 @@ export default function Dashboard() {
                       <tr key={iface.name} className="hover:bg-dark-700/30 transition-colors">
                         <td className="px-5 py-2.5 text-sm text-dark-50 font-mono">{iface.name}</td>
                         <td className="px-5 py-2.5 text-sm text-dark-200 text-right font-mono">
-                          <span className="text-rust-600">{formatSize(iface.rx_bytes)}</span>
+                          <span className="text-rust-400">{formatSize(iface.rx_bytes)}</span>
                         </td>
                         <td className="px-5 py-2.5 text-sm text-dark-200 text-right font-mono">
                           <span className="text-blue-600">{formatSize(iface.tx_bytes)}</span>
