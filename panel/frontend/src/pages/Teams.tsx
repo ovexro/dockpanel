@@ -21,7 +21,7 @@ interface Team {
 }
 
 const roleColors: Record<string, string> = {
-  owner: "bg-rust-500/15 text-rust-600",
+  owner: "bg-rust-500/15 text-rust-400",
   admin: "bg-violet-500/15 text-violet-400",
   developer: "bg-rust-500/15 text-rust-400",
   viewer: "bg-dark-700 text-dark-200",
@@ -207,7 +207,7 @@ export default function Teams() {
                   {t.is_owner && (
                     <button
                       onClick={() => setInviteTeamId(inviteTeamId === t.id ? null : t.id)}
-                      className="px-3 py-1.5 bg-rust-500/10 text-rust-600 rounded-lg text-xs font-medium hover:bg-rust-500/20"
+                      className="px-3 py-1.5 bg-rust-500/10 text-rust-400 rounded-lg text-xs font-medium hover:bg-rust-500/20"
                     >
                       Invite
                     </button>

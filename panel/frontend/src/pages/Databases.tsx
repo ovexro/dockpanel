@@ -316,7 +316,7 @@ export default function Databases() {
                           onClick={() => toggleCredentials(db.id)}
                           className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
                             credentialsId === db.id
-                              ? "bg-rust-500/15 text-rust-600"
+                              ? "bg-rust-500/15 text-rust-400"
                               : "bg-dark-700 text-dark-200 hover:bg-dark-600"
                           }`}
                         >

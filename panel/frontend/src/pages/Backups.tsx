@@ -304,7 +304,7 @@ export default function Backups() {
                   <p className="text-xs text-dark-200 mt-1 font-mono">
                     Last run: {new Date(schedule.last_run).toLocaleString()}
                     {schedule.last_status && (
-                      <span className={`ml-1 ${schedule.last_status === "success" ? "text-rust-600" : "text-red-400"}`}>
+                      <span className={`ml-1 ${schedule.last_status === "success" ? "text-rust-400" : "text-red-400"}`}>
                         ({schedule.last_status})
                       </span>
                     )}

@@ -191,7 +191,7 @@ export default function Billing() {
                     ))}
                   </ul>
                   {isCurrent ? (
-                    <div className="w-full px-4 py-2 bg-rust-500/10 text-rust-600 rounded-lg text-sm font-medium text-center">
+                    <div className="w-full px-4 py-2 bg-rust-500/10 text-rust-400 rounded-lg text-sm font-medium text-center">
                       Current Plan
                     </div>
                   ) : (

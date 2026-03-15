@@ -301,7 +301,7 @@ export default function Crons() {
                         <span className="text-xs text-dark-300">
                           Last run: {formatDate(cron.last_run)}
                           {cron.last_status && (
-                            <span className={`ml-1 ${cron.last_status === "success" ? "text-rust-600" : "text-red-500"}`}>
+                            <span className={`ml-1 ${cron.last_status === "success" ? "text-rust-400" : "text-red-500"}`}>
                               ({cron.last_status})
                             </span>
                           )}

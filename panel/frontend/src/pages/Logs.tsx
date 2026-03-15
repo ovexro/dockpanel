@@ -414,7 +414,7 @@ export default function Logs() {
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rust-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rust-500" />
             </span>
-            <span className="text-xs text-rust-600 font-medium">
+            <span className="text-xs text-rust-400 font-medium">
               Live streaming — {lines.length} lines received
             </span>
           </div>
