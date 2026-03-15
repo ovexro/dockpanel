@@ -158,7 +158,7 @@ export default function Updates() {
           <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">
             System Updates
           </h1>
-          <p className="text-xs text-dark-400 font-mono mt-1">
+          <p className="text-xs text-dark-300 font-mono mt-1">
             Manage system package updates
           </p>
         </div>
@@ -378,7 +378,7 @@ export default function Updates() {
         </div>
       ) : !checked ? (
         <div className="bg-dark-800 rounded-lg border border-dark-500 p-12 text-center">
-          <svg className="w-12 h-12 text-dark-400 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <svg className="w-12 h-12 text-dark-300 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
           </svg>
           <p className="text-dark-300 text-sm">Click "Check for Updates" to scan for available package updates</p>

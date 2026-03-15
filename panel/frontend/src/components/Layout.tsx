@@ -195,7 +195,7 @@ export default function Layout() {
             <div key={group.label} className={gi > 0 ? "pt-2 mt-1 border-t border-dark-600/40" : ""}>
               <button
                 onClick={() => toggleGroup(group.label)}
-                className="flex items-center justify-between w-full px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-dark-400 hover:text-dark-200 font-mono transition-colors"
+                className="flex items-center justify-between w-full px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-dark-300 hover:text-dark-200 font-mono transition-colors"
               >
                 {group.label}
                 <svg className={`w-3 h-3 transition-transform ${collapsed[group.label] ? "-rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

@@ -227,7 +227,7 @@ export default function Monitors() {
       {/* Monitor list */}
       {monitors.length === 0 ? (
         <div className="bg-dark-800 rounded-lg border border-dark-500 p-12 text-center">
-          <svg className="w-12 h-12 text-dark-400 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+          <svg className="w-12 h-12 text-dark-300 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
           </svg>
           <p className="text-dark-200 text-sm">No monitors yet. Add one to start tracking uptime.</p>
@@ -242,7 +242,7 @@ export default function Monitors() {
                     <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${statusDot[m.status] || "bg-gray-400"} ${m.status === "up" ? "animate-pulse" : ""}`} />
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-dark-50 truncate">{m.name}</p>
-                      <p className="text-xs text-dark-300 font-mono truncate">{m.url}</p>
+                      <p className="text-xs text-dark-200 font-mono truncate">{m.url}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 sm:gap-4 shrink-0">
