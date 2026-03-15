@@ -11,7 +11,7 @@ const faqs = [
   },
   {
     q: 'How does Docker-native work? Are sites in containers?',
-    a: 'Sites run on the host with Nginx, which keeps things fast and simple. Docker is used for databases (MySQL/PostgreSQL containers), 34 one-click app templates (WordPress, Ghost, Grafana, Nextcloud, n8n, and more), and Docker Compose imports. Containers get health monitoring, CPU/memory limits, and auto reverse proxy with SSL.',
+    a: 'Sites run on the host with Nginx, which keeps things fast and simple. Docker is used for databases (MySQL/PostgreSQL containers), 32 one-click app templates (Ghost, Grafana, Nextcloud, n8n, Roundcube, Rspamd, and more), and Docker Compose imports. Containers get health monitoring, CPU/memory limits, and auto reverse proxy with SSL.',
   },
   {
     q: 'What happens if DockPanel goes down?',
@@ -36,6 +36,18 @@ const faqs = [
   {
     q: 'Why Rust instead of PHP/Node.js?',
     a: "Rust compiles to a single ~10MB binary with no runtime dependencies. It uses ~12MB of RAM vs ~300-800MB for PHP-based panels. On a $5 VPS with 1GB RAM, that's the difference between running 2 sites and running 20. Rust also eliminates entire classes of security vulnerabilities (buffer overflows, use-after-free) at compile time.",
+  },
+  {
+    q: 'Can DockPanel manage email?',
+    a: 'Yes. DockPanel has full email management — one-click install of Postfix + Dovecot + OpenDKIM, mail domains, mailboxes with quotas, aliases, forwarding, autoresponders, DKIM signing, DNS helper (generates MX/SPF/DKIM/DMARC records), and a mail queue viewer. Roundcube webmail and Rspamd spam filter are available as one-click Docker apps.',
+  },
+  {
+    q: 'What gets installed automatically?',
+    a: 'The install script sets up everything: Docker, Nginx, PHP-FPM, Certbot (SSL), UFW (firewall), Fail2Ban (intrusion prevention), and the DockPanel agent + API + frontend. Mail server, webmail, and DNS server are optional one-click installs from the panel. Zero manual configuration needed.',
+  },
+  {
+    q: 'Can I install WordPress with one click?',
+    a: 'Yes. On the Sites page, select WordPress and enter your domain. DockPanel automatically creates the site, provisions a database, downloads WordPress, configures wp-config.php, runs the install, and provisions an SSL certificate — all in one click.',
   },
 ];
 
