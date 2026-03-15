@@ -267,6 +267,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/services/install/certbot", post(system::install_certbot))
         .route("/api/services/install/ufw", post(system::install_ufw))
         .route("/api/services/install/fail2ban", post(system::install_fail2ban))
+        .route("/api/services/install/powerdns", post(system::install_powerdns))
         // Mail
         .route("/api/mail/status", get(mail::mail_status))
         .route("/api/mail/install", post(mail::mail_install))

@@ -1076,6 +1076,7 @@ function ServiceInstallers() {
     { id: "certbot", label: "Certbot", desc: "Let's Encrypt SSL certificates with auto-renewal", field: "certbot", checkInstalled: (s: any) => s?.certbot?.installed, checkRunning: () => true, extra: () => null },
     { id: "ufw", label: "UFW Firewall", desc: "Firewall with default rules (SSH, HTTP, HTTPS, mail ports)", field: "ufw", checkInstalled: (s: any) => s?.ufw?.installed, checkRunning: (s: any) => s?.ufw?.active, extra: () => null },
     { id: "fail2ban", label: "Fail2Ban", desc: "Intrusion prevention with SSH, Nginx, Postfix jails", field: "fail2ban", checkInstalled: (s: any) => s?.fail2ban?.installed, checkRunning: (s: any) => s?.fail2ban?.running, extra: () => null },
+    { id: "powerdns", label: "PowerDNS", desc: "Self-hosted authoritative DNS server with HTTP API", field: "powerdns", checkInstalled: (s: any) => s?.powerdns?.installed, checkRunning: (s: any) => s?.powerdns?.running, extra: () => null },
   ];
 
   return (
@@ -1110,6 +1111,7 @@ function ServiceInstallers() {
             <p><span className="text-dark-100 font-medium">Certbot</span> — Installs Let's Encrypt certbot with nginx plugin. Enables auto-renewal timer. Required for free SSL certificates.</p>
             <p><span className="text-dark-100 font-medium">UFW</span> — Installs firewall, opens SSH/HTTP/HTTPS/SMTP/IMAPS ports, enables with deny-by-default policy.</p>
             <p><span className="text-dark-100 font-medium">Fail2Ban</span> — Installs intrusion prevention. Creates jails for SSH brute-force, nginx auth failures, Postfix, and Dovecot.</p>
+            <p><span className="text-dark-100 font-medium">PowerDNS</span> — Installs authoritative DNS server with PostgreSQL backend. Auto-configures HTTP API and saves credentials to Settings.</p>
           </div>
         )}
 
