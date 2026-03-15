@@ -166,7 +166,7 @@ export default function Backups() {
         <button
           onClick={handleCreate}
           disabled={creating}
-          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors flex items-center gap-2"
+          className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50 transition-colors flex items-center gap-2"
         >
           {creating ? (
             <>
@@ -204,7 +204,7 @@ export default function Backups() {
           {!showScheduleForm && (
             <button
               onClick={() => setShowScheduleForm(true)}
-              className="px-3 py-1 bg-rust-500 text-white rounded-md text-xs font-medium hover:bg-rust-600"
+              className="px-3 py-1 bg-accent-500 text-white rounded-md text-xs font-medium hover:bg-accent-600"
             >
               {schedule ? "Edit" : "Set Up"}
             </button>
@@ -216,19 +216,19 @@ export default function Backups() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-dark-100 mb-1">Schedule</label>
-                  <select value={SCHEDULE_PRESETS.some(p => p.value === schedCron) ? schedCron : "custom"} onChange={(e) => { if (e.target.value !== "custom") setSchedCron(e.target.value); }} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm bg-dark-800 focus:ring-2 focus:ring-rust-500 outline-none">
+                  <select value={SCHEDULE_PRESETS.some(p => p.value === schedCron) ? schedCron : "custom"} onChange={(e) => { if (e.target.value !== "custom") setSchedCron(e.target.value); }} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm bg-dark-800 focus:ring-2 focus:ring-accent-500 outline-none">
                     {SCHEDULE_PRESETS.map((p) => (
                       <option key={p.value} value={p.value}>{p.label}</option>
                     ))}
                     <option value="custom">Custom</option>
                   </select>
                   {!SCHEDULE_PRESETS.some(p => p.value === schedCron) && (
-                    <input type="text" value={schedCron} onChange={(e) => setSchedCron(e.target.value)} placeholder="0 2 * * *" className="w-full mt-2 px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 outline-none" />
+                    <input type="text" value={schedCron} onChange={(e) => setSchedCron(e.target.value)} placeholder="0 2 * * *" className="w-full mt-2 px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
                   )}
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-dark-100 mb-1">Destination</label>
-                  <select value={schedDestId} onChange={(e) => setSchedDestId(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm bg-dark-800 focus:ring-2 focus:ring-rust-500 outline-none">
+                  <select value={schedDestId} onChange={(e) => setSchedDestId(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm bg-dark-800 focus:ring-2 focus:ring-accent-500 outline-none">
                     <option value="">Select destination...</option>
                     {destinations.map((d) => (
                       <option key={d.id} value={d.id}>{d.name} ({d.dtype})</option>
@@ -241,7 +241,7 @@ export default function Backups() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-dark-100 mb-1">Keep last N backups</label>
-                <input type="number" value={schedRetention} onChange={(e) => setSchedRetention(e.target.value)} min="1" max="365" className="w-32 px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 outline-none" />
+                <input type="number" value={schedRetention} onChange={(e) => setSchedRetention(e.target.value)} min="1" max="365" className="w-32 px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
               </div>
               <div className="flex justify-end gap-2">
                 <button onClick={() => setShowScheduleForm(false)} className="px-3 py-1.5 text-sm text-dark-100 bg-dark-700 rounded-lg hover:bg-gray-200">Cancel</button>
@@ -283,7 +283,7 @@ export default function Backups() {
                       setSavingSchedule(false);
                     }
                   }}
-                  className="px-4 py-1.5 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+                  className="px-4 py-1.5 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
                 >
                   {savingSchedule ? "Saving..." : "Save"}
                 </button>

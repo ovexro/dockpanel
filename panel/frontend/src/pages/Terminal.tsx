@@ -166,9 +166,10 @@ export default function Terminal() {
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full p-4">
+      <div className="flex flex-col flex-1 border border-dark-500 min-h-0">
       {/* Header */}
-      <div className="px-6 py-4 border-b border-dark-500 bg-dark-800 flex items-center justify-between shrink-0">
+      <div className="px-5 py-3 border-b border-dark-500 bg-dark-800 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-4">
           <div>
             <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Terminal</h1>
@@ -188,7 +189,7 @@ export default function Terminal() {
           <select
             value={selectedSite}
             onChange={(e) => handleSiteChange(e.target.value)}
-            className="text-sm border border-dark-500 rounded-lg px-3 py-1.5 bg-dark-800 focus:ring-2 focus:ring-rust-500 focus:border-rust-500"
+            className="text-sm border border-dark-500 rounded-lg px-3 py-1.5 bg-dark-800 focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
           >
             <option value="">Server root</option>
             {sites.map((s) => (
@@ -213,8 +214,9 @@ export default function Terminal() {
       )}
 
       {/* Terminal */}
-      <div className="flex-1 bg-[#1e1e2e] p-2">
+      <div className="flex-1 bg-[#1e1e2e] p-2 min-h-0">
         <div ref={termRef} className="h-full" />
+      </div>
       </div>
     </div>
   );

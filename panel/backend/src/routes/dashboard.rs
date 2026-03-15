@@ -129,3 +129,32 @@ pub async fn intelligence(
         "diagnostics": diagnostics_summary,
     })))
 }
+
+/// GET /api/dashboard/metrics-history — Historical CPU/memory/disk data for charts.
+pub async fn metrics_history(
+    AuthUser(_claims): AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let rows: Vec<(f32, f32, f32, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT cpu_pct, mem_pct, disk_pct, created_at FROM metrics_history \
+         WHERE created_at > NOW() - INTERVAL '24 hours' \
+         ORDER BY created_at ASC",
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let points: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|(cpu, mem, disk, ts)| {
+            serde_json::json!({
+                "cpu": cpu,
+                "mem": mem,
+                "disk": disk,
+                "time": ts.format("%H:%M").to_string(),
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "points": points })))
+}

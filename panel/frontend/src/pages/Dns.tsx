@@ -246,7 +246,7 @@ export default function Dns() {
         </div>
         <button
           onClick={() => setShowAddZone(!showAddZone)}
-          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
+          className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 transition-colors"
         >
           {showAddZone ? "Cancel" : "Add Zone"}
         </button>
@@ -300,22 +300,22 @@ export default function Dns() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-medium text-dark-100 mb-1">Domain</label>
-                  <input type="text" value={zoneDomain} onChange={(e) => setZoneDomain(e.target.value)} placeholder="example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+                  <input type="text" value={zoneDomain} onChange={(e) => setZoneDomain(e.target.value)} placeholder="example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-dark-100 mb-1">Cloudflare Zone ID</label>
-                  <input type="text" value={zoneId} onChange={(e) => setZoneId(e.target.value)} placeholder="abc123..." className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none font-mono" />
+                  <input type="text" value={zoneId} onChange={(e) => setZoneId(e.target.value)} placeholder="abc123..." className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none font-mono" />
                 </div>
               </div>
               <div>
                 <label className="block text-xs font-medium text-dark-100 mb-2">Authentication Method</label>
                 <div className="flex gap-4">
                   <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="radio" name="authMethod" checked={authMethod === "token"} onChange={() => setAuthMethod("token")} className="w-4 h-4 text-rust-500 border-dark-500 focus:ring-rust-500" />
+                    <input type="radio" name="authMethod" checked={authMethod === "token"} onChange={() => setAuthMethod("token")} className="w-4 h-4 text-rust-500 border-dark-500 focus:ring-accent-500" />
                     <span className="text-sm text-dark-100">API Token</span>
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="radio" name="authMethod" checked={authMethod === "key"} onChange={() => setAuthMethod("key")} className="w-4 h-4 text-rust-500 border-dark-500 focus:ring-rust-500" />
+                    <input type="radio" name="authMethod" checked={authMethod === "key"} onChange={() => setAuthMethod("key")} className="w-4 h-4 text-rust-500 border-dark-500 focus:ring-accent-500" />
                     <span className="text-sm text-dark-100">Global API Key</span>
                   </label>
                 </div>
@@ -324,12 +324,12 @@ export default function Dns() {
                 {authMethod === "key" && (
                   <div>
                     <label className="block text-xs font-medium text-dark-100 mb-1">Cloudflare Email</label>
-                    <input type="email" value={zoneEmail} onChange={(e) => setZoneEmail(e.target.value)} placeholder="you@example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+                    <input type="email" value={zoneEmail} onChange={(e) => setZoneEmail(e.target.value)} placeholder="you@example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
                   </div>
                 )}
                 <div>
                   <label className="block text-xs font-medium text-dark-100 mb-1">{authMethod === "token" ? "API Token" : "Global API Key"}</label>
-                  <input type="password" value={zoneToken} onChange={(e) => setZoneToken(e.target.value)} placeholder={authMethod === "token" ? "Scoped token with DNS edit permission" : "Global API Key from CF dashboard"} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+                  <input type="password" value={zoneToken} onChange={(e) => setZoneToken(e.target.value)} placeholder={authMethod === "token" ? "Scoped token with DNS edit permission" : "Global API Key from CF dashboard"} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
                 </div>
               </div>
               <p className="text-xs text-dark-300">
@@ -341,7 +341,7 @@ export default function Dns() {
                 <button
                   onClick={handleAddZone}
                   disabled={savingZone || !zoneDomain || !zoneId || !zoneToken || (authMethod === "key" && !zoneEmail)}
-                  className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+                  className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
                 >
                   {savingZone ? "Verifying..." : "Connect Zone"}
                 </button>
@@ -352,7 +352,7 @@ export default function Dns() {
               <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Create PowerDNS Zone</h3>
               <div>
                 <label className="block text-xs font-medium text-dark-100 mb-1">Domain</label>
-                <input type="text" value={zoneDomain} onChange={(e) => setZoneDomain(e.target.value)} placeholder="example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+                <input type="text" value={zoneDomain} onChange={(e) => setZoneDomain(e.target.value)} placeholder="example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
               </div>
               <div className="flex items-start gap-2 bg-blue-500/5 border border-blue-500/20 px-3 py-2.5">
                 <svg className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -368,7 +368,7 @@ export default function Dns() {
                 <button
                   onClick={handleAddZone}
                   disabled={savingZone || !zoneDomain}
-                  className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+                  className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
                 >
                   {savingZone ? "Creating..." : "Create Zone"}
                 </button>
@@ -450,7 +450,7 @@ export default function Dns() {
                     </button>
                     <button
                       onClick={() => openRecordForm()}
-                      className="px-3 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600 flex items-center gap-1"
+                      className="px-3 py-1.5 bg-accent-500 text-white rounded-lg text-xs font-medium hover:bg-accent-600 flex items-center gap-1"
                     >
                       <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
                       <span className="hidden sm:inline">Add Record</span>
@@ -470,22 +470,22 @@ export default function Dns() {
                         value={recType}
                         onChange={(e) => setRecType(e.target.value)}
                         disabled={!!editingRecord}
-                        className="w-full px-2 py-1.5 border border-dark-500 rounded-md text-sm bg-dark-800 focus:ring-2 focus:ring-rust-500 outline-none disabled:bg-dark-700"
+                        className="w-full px-2 py-1.5 border border-dark-500 rounded-md text-sm bg-dark-800 focus:ring-2 focus:ring-accent-500 outline-none disabled:bg-dark-700"
                       >
                         {RECORD_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                       </select>
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-dark-200 mb-1">Name</label>
-                      <input type="text" value={recName} onChange={(e) => setRecName(e.target.value)} placeholder="@" className="w-full px-2 py-1.5 border border-dark-500 rounded-md text-sm focus:ring-2 focus:ring-rust-500 outline-none" />
+                      <input type="text" value={recName} onChange={(e) => setRecName(e.target.value)} placeholder="@" className="w-full px-2 py-1.5 border border-dark-500 rounded-md text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
                     </div>
                     <div className="col-span-2 sm:col-span-1">
                       <label className="block text-xs font-medium text-dark-200 mb-1">Content</label>
-                      <input type="text" value={recContent} onChange={(e) => setRecContent(e.target.value)} placeholder={recType === "A" ? "1.2.3.4" : recType === "CNAME" ? "target.com" : ""} className="w-full px-2 py-1.5 border border-dark-500 rounded-md text-sm focus:ring-2 focus:ring-rust-500 outline-none" />
+                      <input type="text" value={recContent} onChange={(e) => setRecContent(e.target.value)} placeholder={recType === "A" ? "1.2.3.4" : recType === "CNAME" ? "target.com" : ""} className="w-full px-2 py-1.5 border border-dark-500 rounded-md text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-dark-200 mb-1">TTL</label>
-                      <select value={recTtl} onChange={(e) => setRecTtl(e.target.value)} className="w-full px-2 py-1.5 border border-dark-500 rounded-md text-sm bg-dark-800 focus:ring-2 focus:ring-rust-500 outline-none">
+                      <select value={recTtl} onChange={(e) => setRecTtl(e.target.value)} className="w-full px-2 py-1.5 border border-dark-500 rounded-md text-sm bg-dark-800 focus:ring-2 focus:ring-accent-500 outline-none">
                         {isCloudflare && <option value="1">Auto</option>}
                         <option value="60">1 min</option>
                         <option value="300">5 min</option>
@@ -496,7 +496,7 @@ export default function Dns() {
                     {recType === "MX" && (
                       <div>
                         <label className="block text-xs font-medium text-dark-200 mb-1">Priority</label>
-                        <input type="number" value={recPriority} onChange={(e) => setRecPriority(e.target.value)} min="0" max="65535" className="w-full px-2 py-1.5 border border-dark-500 rounded-md text-sm focus:ring-2 focus:ring-rust-500 outline-none" />
+                        <input type="number" value={recPriority} onChange={(e) => setRecPriority(e.target.value)} min="0" max="65535" className="w-full px-2 py-1.5 border border-dark-500 rounded-md text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
                       </div>
                     )}
                   </div>
@@ -510,7 +510,7 @@ export default function Dns() {
                     <button
                       onClick={handleSaveRecord}
                       disabled={savingRecord || !recName || !recContent}
-                      className="px-4 py-1.5 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+                      className="px-4 py-1.5 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
                     >
                       {savingRecord ? "Saving..." : editingRecord ? "Update" : "Create"}
                     </button>

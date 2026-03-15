@@ -168,7 +168,7 @@ export default function Deploy() {
             <button
               onClick={handleDeploy}
               disabled={deploying}
-              className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
+              className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50 transition-colors"
             >
               {deploying ? "Deploying..." : "Deploy Now"}
             </button>
@@ -206,7 +206,7 @@ export default function Deploy() {
               value={repoUrl}
               onChange={(e) => setRepoUrl(e.target.value)}
               placeholder="https://github.com/user/repo.git or git@github.com:user/repo.git"
-              className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
+              className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
             />
           </div>
           <div className="grid grid-cols-2 gap-4">
@@ -217,7 +217,7 @@ export default function Deploy() {
                 value={branch}
                 onChange={(e) => setBranch(e.target.value)}
                 placeholder="main"
-                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
               />
             </div>
             <div className="flex items-end">
@@ -226,7 +226,7 @@ export default function Deploy() {
                   type="checkbox"
                   checked={autoDeploy}
                   onChange={(e) => setAutoDeploy(e.target.checked)}
-                  className="w-4 h-4 text-rust-500 border-dark-500 rounded focus:ring-rust-500"
+                  className="w-4 h-4 text-rust-500 border-dark-500 rounded focus:ring-accent-500"
                 />
                 <span className="text-sm text-dark-100">Auto-deploy on webhook push</span>
               </label>
@@ -239,14 +239,14 @@ export default function Deploy() {
               onChange={(e) => setDeployScript(e.target.value)}
               placeholder={"# Runs after git pull. Example:\nnpm install\nnpm run build"}
               rows={4}
-              className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
+              className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
             />
           </div>
           <div className="flex items-center gap-3">
             <button
               onClick={handleSave}
               disabled={saving || !repoUrl.trim()}
-              className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
+              className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50 transition-colors"
             >
               {saving ? "Saving..." : config ? "Update Config" : "Save Config"}
             </button>

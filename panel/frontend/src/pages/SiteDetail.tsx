@@ -229,7 +229,7 @@ export default function SiteDetail() {
                       }
                     }}
                     disabled={switchingPhp}
-                    className="px-2 py-1 border border-dark-500 rounded-md text-sm bg-dark-800 focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none disabled:opacity-50"
+                    className="px-2 py-1 border border-dark-500 rounded-md text-sm bg-dark-800 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none disabled:opacity-50"
                   >
                     <option value="8.4">PHP 8.4</option>
                     <option value="8.3">PHP 8.3</option>
@@ -278,7 +278,7 @@ export default function SiteDetail() {
                     <button
                       onClick={handleProvisionSSL}
                       disabled={provisioning}
-                      className="px-3 py-1 bg-rust-500 text-white rounded-md text-xs font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
+                      className="px-3 py-1 bg-accent-500 text-white rounded-md text-xs font-medium hover:bg-accent-600 disabled:opacity-50 transition-colors"
                     >
                       {provisioning ? "Provisioning..." : "Enable SSL"}
                     </button>
@@ -427,7 +427,7 @@ export default function SiteDetail() {
                   placeholder="Unlimited"
                   min="1"
                   max="10000"
-                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
                 />
               </div>
               <div>
@@ -438,7 +438,7 @@ export default function SiteDetail() {
                   onChange={(e) => setMaxUpload(e.target.value)}
                   min="1"
                   max="10240"
-                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
                 />
               </div>
               {site.runtime === "php" && (
@@ -451,7 +451,7 @@ export default function SiteDetail() {
                       onChange={(e) => setPhpMemory(e.target.value)}
                       min="32"
                       max="4096"
-                      className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
+                      className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
                     />
                   </div>
                   <div>
@@ -462,7 +462,7 @@ export default function SiteDetail() {
                       onChange={(e) => setPhpWorkers(e.target.value)}
                       min="1"
                       max="100"
-                      className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
+                      className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
                     />
                   </div>
                 </>
@@ -479,7 +479,7 @@ export default function SiteDetail() {
                 rows={4}
                 placeholder={"# Example:\n# add_header X-Custom-Header \"value\";\n# location /api { proxy_pass http://localhost:3000; }"}
                 spellCheck={false}
-                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none resize-y"
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none resize-y"
               />
               <p className="text-[10px] text-dark-300 mt-1">
                 Config is validated before applying. Invalid directives will be rejected.
@@ -518,7 +518,7 @@ export default function SiteDetail() {
                       setSavingLimits(false);
                     }
                   }}
-                  className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
+                  className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50 transition-colors"
                 >
                   {savingLimits ? "Saving..." : "Apply Limits"}
                 </button>
@@ -594,7 +594,7 @@ export default function SiteDetail() {
                         setStagingLoading(false);
                       }
                     }}
-                    className="px-3 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
+                    className="px-3 py-1.5 bg-accent-500 text-white rounded-lg text-xs font-medium hover:bg-accent-600 disabled:opacity-50 transition-colors"
                   >
                     {stagingLoading ? "Working..." : "Sync from Prod"}
                   </button>
@@ -674,7 +674,7 @@ export default function SiteDetail() {
                         value={stagingDomain}
                         onChange={(e) => setStagingDomain(e.target.value)}
                         placeholder={`staging.${site.domain}`}
-                        className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
+                        className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
                       />
                     </div>
                     <button
@@ -695,7 +695,7 @@ export default function SiteDetail() {
                           setStagingLoading(false);
                         }
                       }}
-                      className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
+                      className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50 transition-colors"
                     >
                       {stagingLoading ? "Creating..." : "Create"}
                     </button>
@@ -709,7 +709,7 @@ export default function SiteDetail() {
                 ) : (
                   <button
                     onClick={() => setShowStagingForm(true)}
-                    className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
+                    className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 transition-colors"
                   >
                     Create Staging
                   </button>
