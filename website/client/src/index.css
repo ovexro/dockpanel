@@ -1,16 +1,16 @@
 @import "tailwindcss";
 
 @theme {
-  /* Brand Colors — Green (matches panel) */
-  --color-brand-50: #f0fdf4;
-  --color-brand-100: #dcfce7;
-  --color-brand-200: #bbf7d0;
-  --color-brand-300: #86efac;
-  --color-brand-400: #4ade80;
-  --color-brand-500: #22c55e;
-  --color-brand-600: #16a34a;
-  --color-brand-700: #15803d;
-  --color-brand-800: #166534;
+  /* Brand Colors — Harmonized green (matches panel rust-* scale) */
+  --color-brand-50: #f0fdf6;
+  --color-brand-100: #d6fce4;
+  --color-brand-200: #a8f8c4;
+  --color-brand-300: #72f8a3;
+  --color-brand-400: #72f8a3;
+  --color-brand-500: #43ef82;
+  --color-brand-600: #22c55e;
+  --color-brand-700: #16a34a;
+  --color-brand-800: #15803d;
   --color-brand-900: #14532d;
 
   /* Surface Colors — GitHub-style neutral darks */
