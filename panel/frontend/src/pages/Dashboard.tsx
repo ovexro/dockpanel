@@ -139,9 +139,9 @@ function barColor(pct: number): string {
 }
 
 function pctColor(pct: number): string {
-  if (pct < 60) return "text-emerald-400";
-  if (pct < 85) return "text-amber-400";
-  return "text-red-400";
+  if (pct < 60) return "text-emerald-500";
+  if (pct < 85) return "text-amber-500";
+  return "text-red-500";
 }
 
 function tempColor(temp: number): string {
