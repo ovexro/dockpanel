@@ -36,7 +36,7 @@ const plans = [
 const statusColors: Record<string, string> = {
   active: "bg-rust-500/15 text-rust-400",
   grace: "bg-warn-500/15 text-warn-400",
-  suspended: "bg-red-500/15 text-red-400",
+  suspended: "bg-red-500/15 text-danger-400",
 };
 
 export default function Billing() {
@@ -103,7 +103,7 @@ export default function Billing() {
       </div>
 
       {error && (
-        <div className="bg-red-500/10 text-red-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-4">
+        <div className="bg-red-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-4">
           {error}
         </div>
       )}
@@ -153,7 +153,7 @@ export default function Billing() {
             </div>
           )}
           {info.plan_status === "suspended" && (
-            <div className="mt-3 bg-red-500/10 text-red-400 text-sm px-4 py-2 rounded-lg border border-red-500/20">
+            <div className="mt-3 bg-red-500/10 text-danger-400 text-sm px-4 py-2 rounded-lg border border-red-500/20">
               Your subscription is suspended. Please update your payment to restore access.
             </div>
           )}

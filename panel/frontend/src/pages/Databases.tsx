@@ -164,7 +164,7 @@ export default function Databases() {
       </div>
 
       {error && (
-        <div role="alert" className="bg-red-500/10 text-red-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-4">
+        <div role="alert" className="bg-red-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-4">
           {error}
           <button onClick={() => setError("")} className="float-right font-bold" aria-label="Close error">
             &times;
@@ -324,7 +324,7 @@ export default function Databases() {
                         </button>
                         {confirmDeleteId === db.id ? (
                           <>
-                            <span className="text-xs text-red-400">Sure?</span>
+                            <span className="text-xs text-danger-400">Sure?</span>
                             <button
                               onClick={() => handleDelete(db.id)}
                               disabled={deletingId === db.id}
@@ -342,7 +342,7 @@ export default function Databases() {
                         ) : (
                           <button
                             onClick={() => handleDelete(db.id)}
-                            className="text-xs text-red-500 hover:text-red-700"
+                            className="text-xs text-danger-500 hover:text-danger-500"
                           >
                             Delete
                           </button>

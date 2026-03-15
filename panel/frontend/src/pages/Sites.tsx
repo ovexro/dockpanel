@@ -76,7 +76,7 @@ export default function Sites() {
       </div>
 
       {error && (
-        <div role="alert" className="bg-red-500/10 text-red-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-4">
+        <div role="alert" className="bg-red-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-4">
           {error}
           <button onClick={() => setError("")} className="float-right font-bold" aria-label="Close error">&times;</button>
         </div>
