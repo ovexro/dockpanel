@@ -240,7 +240,7 @@ export default function SiteDetail() {
                     <span className="text-xs text-dark-200">Switching...</span>
                   )}
                   {phpMessage && (
-                    <span className={`text-xs ${phpMessage.includes("Switched") ? "text-rust-600" : "text-red-400"}`}>
+                    <span className={`text-xs ${phpMessage.includes("Switched") ? "text-rust-400" : "text-red-400"}`}>
                       {phpMessage}
                     </span>
                   )}
@@ -259,7 +259,7 @@ export default function SiteDetail() {
             <dd className="text-sm col-span-2">
               {site.ssl_enabled ? (
                 <div className="space-y-1">
-                  <span className="inline-flex items-center gap-1 text-rust-600">
+                  <span className="inline-flex items-center gap-1 text-rust-400">
                     <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                       <path fillRule="evenodd" d="M10 1a4.5 4.5 0 0 0-4.5 4.5V9H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-.5V5.5A4.5 4.5 0 0 0 10 1Zm3 8V5.5a3 3 0 1 0-6 0V9h6Z" clipRule="evenodd" />
                     </svg>
@@ -493,7 +493,7 @@ export default function SiteDetail() {
               </p>
               <div className="flex items-center gap-3">
                 {limitsMessage && (
-                  <span className={`text-xs ${limitsMessage.includes("saved") ? "text-rust-600" : "text-red-400"}`}>
+                  <span className={`text-xs ${limitsMessage.includes("saved") ? "text-rust-400" : "text-red-400"}`}>
                     {limitsMessage}
                   </span>
                 )}
@@ -653,7 +653,7 @@ export default function SiteDetail() {
                 </div>
 
                 {stagingMessage && (
-                  <p className={`text-xs ${stagingMessage.includes("failed") || stagingMessage.includes("Failed") ? "text-red-400" : "text-rust-600"}`}>
+                  <p className={`text-xs ${stagingMessage.includes("failed") || stagingMessage.includes("Failed") ? "text-red-400" : "text-rust-400"}`}>
                     {stagingMessage}
                   </p>
                 )}
@@ -715,7 +715,7 @@ export default function SiteDetail() {
                   </button>
                 )}
                 {stagingMessage && (
-                  <p className={`text-xs ${stagingMessage.includes("failed") || stagingMessage.includes("Failed") ? "text-red-400" : "text-rust-600"}`}>
+                  <p className={`text-xs ${stagingMessage.includes("failed") || stagingMessage.includes("Failed") ? "text-red-400" : "text-rust-400"}`}>
                     {stagingMessage}
                   </p>
                 )}
