@@ -205,7 +205,7 @@ export default function Users() {
                     <div className="w-8 h-8 rounded-full bg-rust-500/15 text-rust-500 flex items-center justify-center text-sm font-medium shrink-0">{user.email[0].toUpperCase()}</div>
                     <div className="min-w-0">
                       <span className="text-sm text-dark-50 font-mono block truncate">{user.email}</span>
-                      <span className="text-xs text-dark-400 font-mono">{new Date(user.created_at).toLocaleDateString()}</span>
+                      <span className="text-xs text-dark-300 font-mono">{new Date(user.created_at).toLocaleDateString()}</span>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0 ml-2">

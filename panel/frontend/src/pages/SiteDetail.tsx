@@ -481,7 +481,7 @@ export default function SiteDetail() {
                 spellCheck={false}
                 className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none resize-y"
               />
-              <p className="text-[10px] text-dark-400 mt-1">
+              <p className="text-[10px] text-dark-300 mt-1">
                 Config is validated before applying. Invalid directives will be rejected.
               </p>
             </div>

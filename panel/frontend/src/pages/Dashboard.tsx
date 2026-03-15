@@ -223,7 +223,7 @@ export default function Dashboard() {
                 <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Getting Started</h3>
                 <span className="text-[10px] text-dark-300">{completed}/{steps.length}</span>
               </div>
-              <button onClick={dismissOnboarding} className="text-dark-400 hover:text-dark-200 text-xs">Dismiss</button>
+              <button onClick={dismissOnboarding} className="text-dark-300 hover:text-dark-200 text-xs">Dismiss</button>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
               {steps.map(step => (
@@ -273,7 +273,7 @@ export default function Dashboard() {
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><rect x="6" y="6" width="12" height="12" rx="1" /><path d="M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4M19 9h4m-4 6h4" strokeLinecap="round" /></svg>
                 CPU Usage
               </p>
-              <p className="text-xs text-dark-400 mt-1">{system.cpu_count} cores{system.load_avg_1 !== undefined ? ` · Load ${system.load_avg_1?.toFixed(2)}` : ""}</p>
+              <p className="text-xs text-dark-300 mt-1">{system.cpu_count} cores{system.load_avg_1 !== undefined ? ` · Load ${system.load_avg_1?.toFixed(2)}` : ""}</p>
             </div>
             <div className="border border-dark-500 bg-dark-800 p-6 flex flex-col items-center">
               <div className="flex justify-center py-3">
@@ -283,7 +283,7 @@ export default function Dashboard() {
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><rect x="3" y="4" width="18" height="16" rx="1" /><path d="M7 4v3m4-3v3m4-3v3M3 10h18" strokeLinecap="round" /></svg>
                 Memory
               </p>
-              <p className="text-xs text-dark-400 mt-1">{(system.mem_used_mb / 1024).toFixed(1)} / {(system.mem_total_mb / 1024).toFixed(1)} GB{system.swap_total_mb > 0 ? ` · Swap ${(system.swap_used_mb / 1024).toFixed(1)}G` : ""}</p>
+              <p className="text-xs text-dark-300 mt-1">{(system.mem_used_mb / 1024).toFixed(1)} / {(system.mem_total_mb / 1024).toFixed(1)} GB{system.swap_total_mb > 0 ? ` · Swap ${(system.swap_used_mb / 1024).toFixed(1)}G` : ""}</p>
             </div>
             <div className="border border-dark-500 bg-dark-800 p-6 flex flex-col items-center">
               <div className="flex justify-center py-3">
@@ -293,29 +293,29 @@ export default function Dashboard() {
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 17.25v-.228a4.5 4.5 0 0 0-.12-1.03l-2.268-9.64a3.375 3.375 0 0 0-3.285-2.602H7.923a3.375 3.375 0 0 0-3.285 2.602l-2.268 9.64a4.5 4.5 0 0 0-.12 1.03v.228m19.5 0a3 3 0 0 1-3 3H5.25a3 3 0 0 1-3-3m19.5 0a3 3 0 0 0-3-3H5.25a3 3 0 0 0-3 3m16.5 0h.008v.008h-.008v-.008Zm-3 0h.008v.008h-.008v-.008Z" /></svg>
                 Disk
               </p>
-              <p className="text-xs text-dark-400 mt-1">{system.disk_used_gb.toFixed(0)} / {system.disk_total_gb.toFixed(0)} GB · {(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB free</p>
+              <p className="text-xs text-dark-300 mt-1">{system.disk_used_gb.toFixed(0)} / {system.disk_total_gb.toFixed(0)} GB · {(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB free</p>
             </div>
           </div>
 
           {/* Status Bar — grid of stat cells */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-px bg-dark-600 border border-dark-500 mb-6">
             <div className="bg-dark-800 px-4 py-3 flex flex-col">
-              <span className="text-[10px] text-dark-400 uppercase tracking-widest mb-1">Uptime</span>
+              <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Uptime</span>
               <span className="text-sm text-dark-50 font-medium">{formatUptime(system.uptime_secs)}</span>
             </div>
             <div className="bg-dark-800 px-4 py-3 flex flex-col">
-              <span className="text-[10px] text-dark-400 uppercase tracking-widest mb-1">Sites</span>
+              <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Sites</span>
               <span className="text-sm text-dark-50 font-medium">{sites.total}{sites.active > 0 && <span className="text-rust-400 ml-1 text-xs">({sites.active} active)</span>}</span>
             </div>
             <div className="bg-dark-800 px-4 py-3 flex flex-col">
-              <span className="text-[10px] text-dark-400 uppercase tracking-widest mb-1">Databases</span>
+              <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Databases</span>
               <span className="text-sm text-dark-50 font-medium">{dbCount}</span>
             </div>
             {intel && <>
               <div className={`px-4 py-3 flex flex-col ${
                 intel.health_score < 60 ? "bg-red-500/5" : "bg-dark-800"
               }`}>
-                <span className="text-[10px] text-dark-400 uppercase tracking-widest mb-1">Health</span>
+                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Health</span>
                 <span className={`text-sm font-bold ${
                   intel.health_score >= 90 ? "text-emerald-400" :
                   intel.health_score >= 75 ? "text-blue-400" :
@@ -325,19 +325,19 @@ export default function Dashboard() {
               <div className={`px-4 py-3 flex flex-col ${
                 intel.firing_alerts > 0 ? "bg-red-500/5" : "bg-dark-800"
               }`}>
-                <span className="text-[10px] text-dark-400 uppercase tracking-widest mb-1">Alerts</span>
+                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Alerts</span>
                 {intel.firing_alerts > 0
                   ? <span className="text-sm text-red-400 font-bold">{intel.firing_alerts} firing</span>
                   : <span className="text-sm text-emerald-400 font-medium">0</span>
                 }
               </div>
               <div className="bg-dark-800 px-4 py-3 flex flex-col">
-                <span className="text-[10px] text-dark-400 uppercase tracking-widest mb-1">SSL</span>
+                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">SSL</span>
                 <span className="text-sm text-dark-50 font-medium">{intel.ssl_countdowns.length} certs</span>
               </div>
             </>}
             <div className="bg-dark-800 px-4 py-3 flex flex-col">
-              <span className="text-[10px] text-dark-400 uppercase tracking-widest mb-1">Updates</span>
+              <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Updates</span>
               {updateCount > 0
                 ? <span className="text-sm text-amber-400 font-bold">{updateCount} available</span>
                 : <span className="text-sm text-emerald-400 font-medium">up to date</span>
