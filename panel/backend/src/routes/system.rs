@@ -160,6 +160,84 @@ pub async fn install_ufw(
     Ok(Json(result))
 }
 
+// ── SSH Keys ────────────────────────────────────────────────────────────
+
+pub async fn list_ssh_keys(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.get("/ssh-keys").await.map_err(|e| agent_error("SSH keys", e))?;
+    Ok(Json(result))
+}
+
+pub async fn add_ssh_key(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.post("/ssh-keys", Some(body)).await.map_err(|e| agent_error("Add SSH key", e))?;
+    activity::log_activity(&state.db, claims.sub, &claims.email, "ssh.key.add", Some("system"), None, None, None).await;
+    Ok(Json(result))
+}
+
+pub async fn remove_ssh_key(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    axum::extract::Path(fingerprint): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.delete(&format!("/ssh-keys/{fingerprint}")).await.map_err(|e| agent_error("Remove SSH key", e))?;
+    activity::log_activity(&state.db, claims.sub, &claims.email, "ssh.key.remove", Some("system"), None, None, None).await;
+    Ok(Json(result))
+}
+
+// ── Auto-Updates ────────────────────────────────────────────────────────
+
+pub async fn auto_updates_status(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.get("/auto-updates/status").await.map_err(|e| agent_error("Auto-updates", e))?;
+    Ok(Json(result))
+}
+
+pub async fn enable_auto_updates(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.post("/auto-updates/enable", None).await.map_err(|e| agent_error("Enable auto-updates", e))?;
+    activity::log_activity(&state.db, claims.sub, &claims.email, "auto-updates.enable", Some("system"), None, None, None).await;
+    Ok(Json(result))
+}
+
+pub async fn disable_auto_updates(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.post("/auto-updates/disable", None).await.map_err(|e| agent_error("Disable auto-updates", e))?;
+    activity::log_activity(&state.db, claims.sub, &claims.email, "auto-updates.disable", Some("system"), None, None, None).await;
+    Ok(Json(result))
+}
+
+// ── Panel IP Whitelist ──────────────────────────────────────────────────
+
+pub async fn get_panel_whitelist(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.get("/panel-whitelist").await.map_err(|e| agent_error("Whitelist", e))?;
+    Ok(Json(result))
+}
+
+pub async fn set_panel_whitelist(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.post("/panel-whitelist", Some(body)).await.map_err(|e| agent_error("Set whitelist", e))?;
+    activity::log_activity(&state.db, claims.sub, &claims.email, "panel.whitelist.update", Some("system"), None, None, None).await;
+    Ok(Json(result))
+}
+
 pub async fn install_fail2ban(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
