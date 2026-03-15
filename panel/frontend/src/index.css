@@ -2,17 +2,17 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 @theme {
-  /* Terminal green accent — status indicators, health, success */
-  --color-rust-50:  #f0fdf4;
-  --color-rust-100: #dcfce7;
-  --color-rust-200: #bbf7d0;
-  --color-rust-300: #86efac;
-  --color-rust-400: #4ade80;
-  --color-rust-500: #4ade80;
-  --color-rust-600: #22c55e;
-  --color-rust-700: #166534;
-  --color-rust-800: #14532d;
-  --color-rust-900: #052e16;
+  /* Emerald accent — status indicators, health, success, brand */
+  --color-rust-50:  #ecfdf5;
+  --color-rust-100: #d1fae5;
+  --color-rust-200: #a7f3d0;
+  --color-rust-300: #6ee7b7;
+  --color-rust-400: #34d399;
+  --color-rust-500: #10b981;
+  --color-rust-600: #059669;
+  --color-rust-700: #047857;
+  --color-rust-800: #065f46;
+  --color-rust-900: #064e3b;
 
   /* Interactive accent — buttons, links, focus rings */
   --color-accent-50:  #eef2ff;
@@ -80,9 +80,9 @@ body {
   --color-dark-100: #1e293b;
   --color-dark-50:  #0f172a;
 
-  --color-rust-500: #16a34a;
-  --color-rust-400: #22c55e;
-  --color-rust-600: #15803d;
+  --color-rust-500: #059669;
+  --color-rust-400: #10b981;
+  --color-rust-600: #047857;
 
   --color-accent-500: #4f46e5;
   --color-accent-600: #4338ca;
@@ -150,11 +150,11 @@ textarea::placeholder {
 
 /* Logo terminal glow */
 .logo-glow {
-  text-shadow: 0 0 12px rgba(74, 222, 128, 0.35);
+  text-shadow: 0 0 12px rgba(16, 185, 129, 0.4);
 }
 
 .logo-icon-glow {
-  box-shadow: 0 0 16px rgba(74, 222, 128, 0.3), 0 0 4px rgba(74, 222, 128, 0.15);
+  box-shadow: 0 0 16px rgba(16, 185, 129, 0.3), 0 0 4px rgba(16, 185, 129, 0.15);
 }
 
 /* Blinking cursor animation */

@@ -295,7 +295,7 @@ export default function Settings() {
               <button
                 onClick={saveGeneral}
                 disabled={saving === "general"}
-                className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
+                className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
               >
                 {saving === "general" ? "Saving..." : "Save"}
               </button>
@@ -425,7 +425,7 @@ export default function Settings() {
               <button
                 onClick={saveSMTP}
                 disabled={saving === "smtp"}
-                className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
+                className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
               >
                 {saving === "smtp" ? "Saving..." : "Save"}
               </button>
@@ -439,7 +439,7 @@ export default function Settings() {
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Backup Destinations</h3>
             <button
               onClick={() => setShowDestForm(!showDestForm)}
-              className="px-3 py-1 bg-accent-500 text-white rounded-md text-xs font-medium hover:bg-accent-600"
+              className="px-3 py-1 bg-rust-500 text-white rounded-md text-xs font-medium hover:bg-rust-600"
             >
               {showDestForm ? "Cancel" : "Add Destination"}
             </button>
@@ -542,7 +542,7 @@ export default function Settings() {
                         setSavingDest(false);
                       }
                     }}
-                    className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
+                    className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
                   >
                     {savingDest ? "Saving..." : "Save Destination"}
                   </button>
@@ -682,7 +682,7 @@ export default function Settings() {
                         setTwoFaLoading(false);
                       }
                     }}
-                    className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
+                    className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
                   >
                     Verify & Enable
                   </button>
@@ -725,7 +725,7 @@ export default function Settings() {
                       setTwoFaLoading(false);
                     }
                   }}
-                  className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
+                  className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
                 >
                   {twoFaLoading ? "Setting up..." : "Enable 2FA"}
                 </button>
@@ -827,7 +827,7 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
                   }
                 }}
                 disabled={saving === "pdns"}
-                className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
+                className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
               >
                 {saving === "pdns" ? "Saving..." : "Save"}
               </button>
@@ -893,7 +893,7 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
                   }
                 }}
                 disabled={saving === "notify"}
-                className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50"
+                className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
               >
                 {saving === "notify" ? "Saving..." : "Save"}
               </button>
@@ -954,7 +954,7 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
                 setHealthLoading(true);
                 loadHealth();
               }}
-              className="px-3 py-1 bg-accent-500 text-white rounded-md text-xs font-medium hover:bg-accent-600"
+              className="px-3 py-1 bg-rust-500 text-white rounded-md text-xs font-medium hover:bg-rust-600"
             >
               Check Now
             </button>

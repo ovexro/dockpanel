@@ -278,7 +278,7 @@ export default function SiteDetail() {
                     <button
                       onClick={handleProvisionSSL}
                       disabled={provisioning}
-                      className="px-3 py-1 bg-accent-500 text-white rounded-md text-xs font-medium hover:bg-accent-600 disabled:opacity-50 transition-colors"
+                      className="px-3 py-1 bg-rust-500 text-white rounded-md text-xs font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
                     >
                       {provisioning ? "Provisioning..." : "Enable SSL"}
                     </button>
@@ -518,7 +518,7 @@ export default function SiteDetail() {
                       setSavingLimits(false);
                     }
                   }}
-                  className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50 transition-colors"
+                  className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
                 >
                   {savingLimits ? "Saving..." : "Apply Limits"}
                 </button>
@@ -594,7 +594,7 @@ export default function SiteDetail() {
                         setStagingLoading(false);
                       }
                     }}
-                    className="px-3 py-1.5 bg-accent-500 text-white rounded-lg text-xs font-medium hover:bg-accent-600 disabled:opacity-50 transition-colors"
+                    className="px-3 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
                   >
                     {stagingLoading ? "Working..." : "Sync from Prod"}
                   </button>
@@ -695,7 +695,7 @@ export default function SiteDetail() {
                           setStagingLoading(false);
                         }
                       }}
-                      className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50 transition-colors"
+                      className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
                     >
                       {stagingLoading ? "Creating..." : "Create"}
                     </button>
@@ -709,7 +709,7 @@ export default function SiteDetail() {
                 ) : (
                   <button
                     onClick={() => setShowStagingForm(true)}
-                    className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 transition-colors"
+                    className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
                   >
                     Create Staging
                   </button>

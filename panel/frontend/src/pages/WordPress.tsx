@@ -397,7 +397,7 @@ export default function WordPress() {
                   <button
                     onClick={() => handleUpdate("plugins")}
                     disabled={busy === "update-plugins"}
-                    className="px-3 py-1.5 bg-accent-500 text-white rounded-lg text-xs font-medium hover:bg-accent-600 disabled:opacity-50"
+                    className="px-3 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600 disabled:opacity-50"
                   >
                     {busy === "update-plugins" ? "Updating..." : "Update All Plugins"}
                   </button>
@@ -406,7 +406,7 @@ export default function WordPress() {
                   <button
                     onClick={() => handleUpdate("themes")}
                     disabled={busy === "update-themes"}
-                    className="px-3 py-1.5 bg-accent-500 text-white rounded-lg text-xs font-medium hover:bg-accent-600 disabled:opacity-50"
+                    className="px-3 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600 disabled:opacity-50"
                   >
                     {busy === "update-themes" ? "Updating..." : "Update All Themes"}
                   </button>
@@ -437,7 +437,7 @@ export default function WordPress() {
               onClick={() => setTab("plugins")}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                 tab === "plugins"
-                  ? "bg-accent-500 text-white"
+                  ? "bg-rust-500 text-white"
                   : "bg-dark-700 text-dark-200 hover:bg-gray-200"
               }`}
             >
@@ -447,7 +447,7 @@ export default function WordPress() {
               onClick={() => setTab("themes")}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                 tab === "themes"
-                  ? "bg-accent-500 text-white"
+                  ? "bg-rust-500 text-white"
                   : "bg-dark-700 text-dark-200 hover:bg-gray-200"
               }`}
             >
