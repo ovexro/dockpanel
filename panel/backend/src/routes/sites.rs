@@ -25,6 +25,12 @@ pub struct CreateSiteRequest {
     pub proxy_port: Option<i32>,
     pub php_version: Option<String>,
     pub php_preset: Option<String>,
+    // One-click CMS install
+    pub cms: Option<String>,  // "wordpress", "drupal", "joomla", "prestashop"
+    pub site_title: Option<String>,
+    pub admin_email: Option<String>,
+    pub admin_user: Option<String>,
+    pub admin_password: Option<String>,
 }
 
 /// GET /api/sites — List all sites for the current user.
@@ -159,13 +165,86 @@ pub async fn create(
             let ssl_agent = state.agent.clone();
             let ssl_domain = body.domain.clone();
             tokio::spawn(async move {
-                // Small delay to let DNS propagate
                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                 match ssl_agent.post(&format!("/ssl/provision/{ssl_domain}"), None).await {
                     Ok(_) => tracing::info!("Auto-SSL provisioned for {ssl_domain}"),
                     Err(e) => tracing::info!("Auto-SSL skipped for {ssl_domain}: {e} (can be provisioned manually)"),
                 }
             });
+
+            // One-click CMS install (WordPress, Drupal, Joomla)
+            if let Some(ref cms) = body.cms {
+                if cms == "wordpress" {
+                    let wp_agent = state.agent.clone();
+                    let wp_domain = body.domain.clone();
+                    let wp_db = state.db.clone();
+                    let wp_title = body.site_title.clone().unwrap_or_else(|| body.domain.clone());
+                    let wp_email = body.admin_email.clone().unwrap_or_else(|| "admin@example.com".to_string());
+                    let wp_user = body.admin_user.clone().unwrap_or_else(|| "admin".to_string());
+                    let wp_pass = body.admin_password.clone().unwrap_or_else(|| {
+                        use rand::Rng;
+                        let mut rng = rand::thread_rng();
+                        (0..16).map(|_| rng.sample(rand::distributions::Alphanumeric) as char).collect()
+                    });
+
+                    tokio::spawn(async move {
+                        // 1. Create database via agent
+                        let db_name = wp_domain.replace('.', "_").replace('-', "_");
+                        let db_user = db_name.clone();
+                        let db_pass: String = {
+                            use rand::Rng;
+                            let mut rng = rand::thread_rng();
+                            (0..20).map(|_| rng.sample(rand::distributions::Alphanumeric) as char).collect()
+                        };
+
+                        let db_result = wp_agent.post("/databases", Some(serde_json::json!({
+                            "engine": "mysql",
+                            "name": db_name,
+                            "user": db_user,
+                            "password": db_pass,
+                        }))).await;
+
+                        let db_host = match db_result {
+                            Ok(resp) => resp.get("host").and_then(|v| v.as_str()).unwrap_or("127.0.0.1").to_string(),
+                            Err(e) => {
+                                tracing::error!("WordPress DB creation failed for {wp_domain}: {e}");
+                                return;
+                            }
+                        };
+
+                        // Store DB in panel database
+                        let _ = sqlx::query(
+                            "INSERT INTO databases (site_id, engine, name, username, host) \
+                             VALUES ((SELECT id FROM sites WHERE domain = $1), 'mysql', $2, $3, $4) \
+                             ON CONFLICT DO NOTHING",
+                        )
+                        .bind(&wp_domain)
+                        .bind(&db_name)
+                        .bind(&db_user)
+                        .bind(&db_host)
+                        .execute(&wp_db)
+                        .await;
+
+                        // 2. Install WordPress via agent
+                        let install_result = wp_agent.post(&format!("/wordpress/{wp_domain}/install"), Some(serde_json::json!({
+                            "url": format!("https://{wp_domain}"),
+                            "title": wp_title,
+                            "admin_user": wp_user,
+                            "admin_pass": wp_pass,
+                            "admin_email": wp_email,
+                            "db_name": db_name,
+                            "db_user": db_user,
+                            "db_pass": db_pass,
+                            "db_host": db_host,
+                        }))).await;
+
+                        match install_result {
+                            Ok(_) => tracing::info!("WordPress installed on {wp_domain}"),
+                            Err(e) => tracing::error!("WordPress install failed for {wp_domain}: {e}"),
+                        }
+                    });
+                }
+            }
 
             Ok((StatusCode::CREATED, Json(updated)))
         }
