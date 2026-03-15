@@ -248,7 +248,7 @@ export default function Databases() {
       ) : databases.length === 0 ? (
         <div className="bg-dark-800 rounded-lg border border-dark-500 p-12 text-center">
           <svg
-            className="w-12 h-12 mx-auto text-dark-400 mb-4"
+            className="w-12 h-12 mx-auto text-dark-300 mb-4"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"

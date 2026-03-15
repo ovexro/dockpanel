@@ -131,7 +131,7 @@ export default function Activity() {
           </div>
         ) : entries.length === 0 ? (
           <div className="p-12 text-center">
-            <svg className="w-12 h-12 text-dark-400 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1} aria-hidden="true">
+            <svg className="w-12 h-12 text-dark-300 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1} aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
             </svg>
             <p className="text-dark-200 font-medium">No activity found</p>
@@ -167,10 +167,10 @@ export default function Activity() {
                       </td>
                       <td className="px-5 py-3 text-sm text-dark-50 hidden md:table-cell font-mono">
                         {entry.target_type && <span className="text-dark-300 text-xs mr-1">{entry.target_type}:</span>}
-                        {entry.target_name || <span className="text-dark-400">-</span>}
+                        {entry.target_name || <span className="text-dark-300">-</span>}
                       </td>
                       <td className="px-5 py-3 text-sm text-dark-200 truncate max-w-[250px] hidden lg:table-cell font-mono">
-                        {entry.details || <span className="text-dark-400">-</span>}
+                        {entry.details || <span className="text-dark-300">-</span>}
                       </td>
                     </tr>
                   );
@@ -186,7 +186,7 @@ export default function Activity() {
                   <div key={entry.id} className="px-4 py-3 space-y-1.5">
                     <div className="flex items-center justify-between">
                       <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium font-mono ${badge.bg} ${badge.text}`}>{entry.action}</span>
-                      <span className="text-xs text-dark-400 font-mono">{timeAgo(entry.created_at)}</span>
+                      <span className="text-xs text-dark-300 font-mono">{timeAgo(entry.created_at)}</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <div className="w-5 h-5 rounded-full bg-rust-500/15 text-rust-500 flex items-center justify-center text-[10px] font-medium shrink-0">{entry.user_email?.[0]?.toUpperCase() || "?"}</div>
@@ -194,8 +194,8 @@ export default function Activity() {
                     </div>
                     {(entry.target_name || entry.details) && (
                       <div className="text-xs text-dark-300 font-mono truncate">
-                        {entry.target_type && <span className="text-dark-400">{entry.target_type}: </span>}
-                        {entry.target_name}{entry.details && <span className="text-dark-400 ml-2">{entry.details}</span>}
+                        {entry.target_type && <span className="text-dark-300">{entry.target_type}: </span>}
+                        {entry.target_name}{entry.details && <span className="text-dark-300 ml-2">{entry.details}</span>}
                       </div>
                     )}
                   </div>

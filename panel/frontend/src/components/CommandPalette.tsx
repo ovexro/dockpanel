@@ -163,7 +163,7 @@ export default function CommandPalette() {
           ) : (
             Object.entries(grouped).map(([category, cmds]) => (
               <div key={category}>
-                <div className="px-4 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-dark-400">
+                <div className="px-4 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-dark-300">
                   {category}
                 </div>
                 {cmds.map((cmd) => {
@@ -185,7 +185,7 @@ export default function CommandPalette() {
                       </svg>
                       <span className="flex-1">{cmd.label}</span>
                       {selectedIndex === idx && (
-                        <kbd className="text-[10px] text-dark-400">
+                        <kbd className="text-[10px] text-dark-300">
                           Enter
                         </kbd>
                       )}
@@ -198,7 +198,7 @@ export default function CommandPalette() {
         </div>
 
         {/* Footer */}
-        <div className="flex items-center gap-4 px-4 py-2 border-t border-dark-600 text-[10px] text-dark-400">
+        <div className="flex items-center gap-4 px-4 py-2 border-t border-dark-600 text-[10px] text-dark-300">
           <span className="flex items-center gap-1">
             <kbd className="px-1 py-0.5 border border-dark-500 rounded bg-dark-700/50">&uarr;&darr;</kbd>
             Navigate

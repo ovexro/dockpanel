@@ -401,7 +401,7 @@ export default function Dns() {
                         {providerBadge(z.provider)}
                       </div>
                       {zoneCounts[z.id] !== undefined && (
-                        <span className="text-[10px] text-dark-400 mt-0.5 block">{zoneCounts[z.id]} record{zoneCounts[z.id] !== 1 ? "s" : ""}</span>
+                        <span className="text-[10px] text-dark-300 mt-0.5 block">{zoneCounts[z.id]} record{zoneCounts[z.id] !== 1 ? "s" : ""}</span>
                       )}
                     </div>
                     <button
