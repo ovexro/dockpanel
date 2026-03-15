@@ -84,6 +84,34 @@ pub struct CreateAliasRequest {
     pub destination_email: String,
 }
 
+// ── Mail server status + installation ────────────────────────────────────
+
+/// GET /api/mail/status
+pub async fn mail_status(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.get("/mail/status").await
+        .map_err(|e| agent_error("Mail status", e))?;
+    Ok(Json(result))
+}
+
+/// POST /api/mail/install
+pub async fn mail_install(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.post("/mail/install", None).await
+        .map_err(|e| agent_error("Mail install", e))?;
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "mail.server.install",
+        Some("mail"), None, None, None,
+    ).await;
+
+    Ok(Json(result))
+}
+
 // ── Domain routes ───────────────────────────────────────────────────────
 
 /// GET /api/mail/domains

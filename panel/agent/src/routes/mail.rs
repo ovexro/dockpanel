@@ -75,6 +75,8 @@ const DKIM_KEYS_DIR: &str = "/etc/dockpanel/dkim";
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/mail/status", get(mail_status))
+        .route("/mail/install", post(mail_install))
         .route("/mail/dkim/generate", post(dkim_generate))
         .route("/mail/domains/configure", post(domain_configure))
         .route("/mail/domains/remove", post(domain_remove))
@@ -82,6 +84,197 @@ pub fn router() -> Router<AppState> {
         .route("/mail/queue", get(queue_list))
         .route("/mail/queue/flush", post(queue_flush))
         .route("/mail/queue/delete", post(queue_delete))
+}
+
+// ── Mail server status + installation ────────────────────────────────────
+
+async fn mail_status() -> Result<Json<serde_json::Value>, ApiErr> {
+    let postfix = is_service_active("postfix").await;
+    let dovecot = is_service_active("dovecot").await;
+    let opendkim = is_service_active("opendkim").await;
+    let postfix_installed = is_installed("postfix").await;
+    let dovecot_installed = is_installed("dovecot-imapd").await;
+    let opendkim_installed = is_installed("opendkim").await;
+    let vmail_exists = Path::new(VMAIL_DIR).exists();
+
+    let installed = postfix_installed && dovecot_installed;
+    let running = postfix && dovecot;
+
+    Ok(Json(serde_json::json!({
+        "installed": installed,
+        "running": running,
+        "postfix": { "installed": postfix_installed, "running": postfix },
+        "dovecot": { "installed": dovecot_installed, "running": dovecot },
+        "opendkim": { "installed": opendkim_installed, "running": opendkim },
+        "vmail_user": vmail_exists,
+    })))
+}
+
+async fn mail_install() -> Result<Json<serde_json::Value>, ApiErr> {
+    tracing::info!("Starting mail server installation...");
+
+    // 1. Install packages
+    let output = Command::new("apt-get")
+        .args(["install", "-y", "postfix", "dovecot-imapd", "dovecot-pop3d", "dovecot-lmtpd", "opendkim", "opendkim-tools"])
+        .env("DEBIAN_FRONTEND", "noninteractive")
+        .output()
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("apt install failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Package install failed: {}", stderr.chars().take(200).collect::<String>())));
+    }
+
+    // 2. Create vmail user (uid/gid 5000)
+    let _ = Command::new("groupadd").args(["-g", "5000", "vmail"]).output().await;
+    let _ = Command::new("useradd").args(["-g", "5000", "-u", "5000", "-d", VMAIL_DIR, "-s", "/usr/sbin/nologin", "-m", "vmail"]).output().await;
+    tokio::fs::create_dir_all(VMAIL_DIR).await.ok();
+    let _ = Command::new("chown").args(["-R", "vmail:vmail", VMAIL_DIR]).output().await;
+
+    // 3. Create config directories
+    tokio::fs::create_dir_all(DKIM_KEYS_DIR).await.ok();
+    tokio::fs::create_dir_all("/etc/dockpanel/mail").await.ok();
+
+    // 4. Write Postfix main.cf additions for virtual mailbox hosting
+    let postfix_config = r#"
+# DockPanel mail configuration
+virtual_mailbox_domains = /etc/postfix/virtual_domains
+virtual_mailbox_maps = hash:/etc/postfix/virtual_mailbox_maps
+virtual_alias_maps = hash:/etc/postfix/virtual_alias_maps
+virtual_mailbox_base = /var/vmail
+virtual_uid_maps = static:5000
+virtual_gid_maps = static:5000
+virtual_transport = lmtp:unix:private/dovecot-lmtp
+
+# SMTP authentication via Dovecot
+smtpd_sasl_type = dovecot
+smtpd_sasl_path = private/auth
+smtpd_sasl_auth_enable = yes
+smtpd_recipient_restrictions = permit_sasl_authenticated, permit_mynetworks, reject_unauth_destination
+
+# TLS
+smtpd_tls_security_level = may
+smtpd_tls_auth_only = yes
+
+# OpenDKIM milter
+milter_protocol = 6
+milter_default_action = accept
+smtpd_milters = unix:opendkim/opendkim.sock
+non_smtpd_milters = unix:opendkim/opendkim.sock
+"#;
+
+    // Append to main.cf if not already configured
+    let main_cf = tokio::fs::read_to_string("/etc/postfix/main.cf").await.unwrap_or_default();
+    if !main_cf.contains("DockPanel mail configuration") {
+        let new_content = format!("{main_cf}\n{postfix_config}");
+        write_file_atomic("/etc/postfix/main.cf", &new_content).await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write main.cf: {e}")))?;
+    }
+
+    // 5. Enable submission port (587) in master.cf
+    let master_cf = tokio::fs::read_to_string("/etc/postfix/master.cf").await.unwrap_or_default();
+    if !master_cf.contains("submission inet") || master_cf.contains("#submission inet") {
+        let submission_config = "\nsubmission inet n - y - - smtpd\n  -o syslog_name=postfix/submission\n  -o smtpd_tls_security_level=encrypt\n  -o smtpd_sasl_auth_enable=yes\n  -o smtpd_recipient_restrictions=permit_sasl_authenticated,reject\n";
+        let new_master = format!("{master_cf}\n{submission_config}");
+        write_file_atomic("/etc/postfix/master.cf", &new_master).await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write master.cf: {e}")))?;
+    }
+
+    // 6. Write Dovecot configuration for virtual users
+    let dovecot_config = r#"# DockPanel Dovecot configuration
+protocols = imap pop3 lmtp
+
+mail_location = maildir:/var/vmail/%d/%n
+mail_uid = 5000
+mail_gid = 5000
+first_valid_uid = 5000
+
+# Authentication
+passdb {
+  driver = passwd-file
+  args = /etc/dovecot/users
+}
+
+userdb {
+  driver = passwd-file
+  args = /etc/dovecot/users
+  default_fields = uid=5000 gid=5000 home=/var/vmail/%d/%n
+}
+
+# LMTP for Postfix delivery
+service lmtp {
+  unix_listener /var/spool/postfix/private/dovecot-lmtp {
+    mode = 0600
+    user = postfix
+    group = postfix
+  }
+}
+
+# SASL auth for Postfix
+service auth {
+  unix_listener /var/spool/postfix/private/auth {
+    mode = 0660
+    user = postfix
+    group = postfix
+  }
+}
+
+# SSL
+ssl = required
+"#;
+
+    write_file_atomic("/etc/dovecot/conf.d/99-dockpanel.conf", dovecot_config).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write dovecot config: {e}")))?;
+
+    // 7. Create empty map files
+    write_file_atomic(POSTFIX_VIRTUAL_DOMAINS, "").await.ok();
+    write_file_atomic(POSTFIX_VIRTUAL_MAILBOX, "").await.ok();
+    write_file_atomic(POSTFIX_VIRTUAL_ALIAS, "").await.ok();
+    write_file_atomic(DOVECOT_USERS, "").await.ok();
+    let _ = Command::new("postmap").arg(POSTFIX_VIRTUAL_MAILBOX).output().await;
+    let _ = Command::new("postmap").arg(POSTFIX_VIRTUAL_ALIAS).output().await;
+
+    // 8. Configure OpenDKIM
+    let opendkim_conf = "Syslog yes\nUMask 007\nSocket local:/var/spool/postfix/opendkim/opendkim.sock\nPidFile /run/opendkim/opendkim.pid\nOversignHeaders From\nTrustAnchorFile /usr/share/dns/root.key\nKeyTable /etc/dockpanel/dkim/key.table\nSigningTable refile:/etc/dockpanel/dkim/signing.table\nExternalIgnoreList /etc/dockpanel/dkim/trusted.hosts\nInternalHosts /etc/dockpanel/dkim/trusted.hosts\n";
+    write_file_atomic("/etc/opendkim.conf", opendkim_conf).await.ok();
+
+    let trusted_hosts = "127.0.0.1\nlocalhost\n";
+    write_file_atomic("/etc/dockpanel/dkim/trusted.hosts", trusted_hosts).await.ok();
+    write_file_atomic("/etc/dockpanel/dkim/key.table", "").await.ok();
+    write_file_atomic("/etc/dockpanel/dkim/signing.table", "").await.ok();
+
+    // Create opendkim socket directory in Postfix chroot
+    tokio::fs::create_dir_all("/var/spool/postfix/opendkim").await.ok();
+    let _ = Command::new("chown").args(["opendkim:postfix", "/var/spool/postfix/opendkim"]).output().await;
+
+    // 9. Enable and start services
+    let _ = Command::new("systemctl").args(["enable", "postfix", "dovecot", "opendkim"]).output().await;
+    let _ = Command::new("systemctl").args(["restart", "postfix"]).output().await;
+    let _ = Command::new("systemctl").args(["restart", "dovecot"]).output().await;
+    let _ = Command::new("systemctl").args(["restart", "opendkim"]).output().await;
+
+    tracing::info!("Mail server installation complete");
+
+    Ok(ok("Mail server installed and configured"))
+}
+
+async fn is_service_active(name: &str) -> bool {
+    Command::new("systemctl")
+        .args(["is-active", "--quiet", name])
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+async fn is_installed(package: &str) -> bool {
+    Command::new("dpkg")
+        .args(["-l", package])
+        .output()
+        .await
+        .map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).contains("ii"))
+        .unwrap_or(false)
 }
 
 // ── DKIM key generation ─────────────────────────────────────────────────
