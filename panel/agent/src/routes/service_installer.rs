@@ -24,11 +24,15 @@ pub fn router() -> Router<AppState> {
         .route("/services/install/certbot", post(install_certbot))
         .route("/services/install/ufw", post(install_ufw))
         .route("/services/install/fail2ban", post(install_fail2ban))
+        .route("/services/install/powerdns", post(install_powerdns))
 }
 
 // ── Status check ────────────────────────────────────────────────────────
 
 async fn install_status() -> Result<Json<serde_json::Value>, ApiErr> {
+    let pdns_installed = is_installed("pdns-server").await;
+    let pdns_running = is_active("pdns").await;
+
     let php_installed = is_installed("php-fpm").await || is_installed("php8.3-fpm").await || is_installed("php8.2-fpm").await || is_installed("php8.1-fpm").await;
     let php_running = is_active("php8.3-fpm").await || is_active("php8.2-fpm").await || is_active("php8.1-fpm").await;
     let certbot_installed = which("certbot").await;
@@ -45,6 +49,7 @@ async fn install_status() -> Result<Json<serde_json::Value>, ApiErr> {
         "certbot": { "installed": certbot_installed },
         "ufw": { "installed": ufw_installed, "active": ufw_active },
         "fail2ban": { "installed": fail2ban_installed, "running": fail2ban_running },
+        "powerdns": { "installed": pdns_installed, "running": pdns_running },
     })))
 }
 
@@ -185,6 +190,93 @@ enabled = true
 
     tracing::info!("Fail2Ban installed with default jails");
     Ok(ok("Fail2Ban installed with SSH, Nginx, Postfix, Dovecot jails"))
+}
+
+// ── PowerDNS installer ──────────────────────────────────────────────────
+
+async fn install_powerdns() -> Result<Json<serde_json::Value>, ApiErr> {
+    tracing::info!("Installing PowerDNS...");
+
+    // 1. Install packages
+    let output = Command::new("sh")
+        .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get install -y pdns-server pdns-backend-pgsql"])
+        .output()
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("apt install failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("PowerDNS install failed: {}", stderr.chars().take(300).collect::<String>())));
+    }
+
+    // 2. Create a PostgreSQL database for PowerDNS using the existing panel DB container
+    let db_exists = Command::new("docker")
+        .args(["exec", "dockpanel-postgres", "psql", "-U", "dockpanel", "-lqt"])
+        .output()
+        .await
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("pdns"))
+        .unwrap_or(false);
+
+    if !db_exists {
+        let _ = Command::new("docker")
+            .args(["exec", "dockpanel-postgres", "psql", "-U", "dockpanel", "-c", "CREATE DATABASE pdns;"])
+            .output()
+            .await;
+
+        // Load PowerDNS schema
+        let schema_path = "/usr/share/doc/pdns-backend-pgsql/schema.pgsql.sql";
+        if tokio::fs::metadata(schema_path).await.is_ok() {
+            // Use shell pipe to feed schema to psql
+            let _ = Command::new("sh")
+                .args(["-c", &format!("cat {} | docker exec -i dockpanel-postgres psql -U dockpanel -d pdns", schema_path)])
+                .output()
+                .await;
+        }
+    }
+
+    // 3. Generate API key
+    let api_key: String = {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        (0..32).map(|_| rng.sample(rand::distributions::Alphanumeric) as char).collect()
+    };
+
+    // 4. Write PowerDNS config
+    let pdns_conf = format!(r#"# DockPanel PowerDNS configuration
+launch=gpgsql
+gpgsql-host=127.0.0.1
+gpgsql-port=5450
+gpgsql-dbname=pdns
+gpgsql-user=dockpanel
+gpgsql-password=REDACTED_DB_PASSWORD
+
+# HTTP API
+api=yes
+api-key={api_key}
+webserver=yes
+webserver-address=127.0.0.1
+webserver-port=8081
+webserver-allow-from=127.0.0.1
+
+# SOA defaults
+default-soa-content=ns1.@ hostmaster.@ 0 10800 3600 604800 3600
+"#);
+
+    tokio::fs::write("/etc/powerdns/pdns.conf", &pdns_conf).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write pdns.conf: {e}")))?;
+
+    // 5. Enable and start
+    let _ = Command::new("systemctl").args(["enable", "pdns"]).output().await;
+    let _ = Command::new("systemctl").args(["restart", "pdns"]).output().await;
+
+    tracing::info!("PowerDNS installed with API key");
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "message": "PowerDNS installed and configured",
+        "api_url": "http://127.0.0.1:8081",
+        "api_key": api_key,
+    })))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────

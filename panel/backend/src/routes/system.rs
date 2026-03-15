@@ -238,6 +238,32 @@ pub async fn set_panel_whitelist(
     Ok(Json(result))
 }
 
+pub async fn install_powerdns(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.post("/services/install/powerdns", None).await
+        .map_err(|e| agent_error("PowerDNS install", e))?;
+
+    // Auto-save API URL and key to settings
+    if let (Some(url), Some(key)) = (
+        result.get("api_url").and_then(|v| v.as_str()),
+        result.get("api_key").and_then(|v| v.as_str()),
+    ) {
+        let _ = sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES ('pdns_api_url', $1, NOW()) ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()")
+            .bind(url)
+            .execute(&state.db)
+            .await;
+        let _ = sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES ('pdns_api_key', $1, NOW()) ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()")
+            .bind(key)
+            .execute(&state.db)
+            .await;
+    }
+
+    activity::log_activity(&state.db, claims.sub, &claims.email, "service.install", Some("system"), Some("powerdns"), None, None).await;
+    Ok(Json(result))
+}
+
 pub async fn install_fail2ban(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
