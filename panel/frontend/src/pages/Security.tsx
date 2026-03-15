@@ -604,75 +604,110 @@ export default function Security() {
       )}
 
       {/* Add Rule Dialog */}
-      {showAddRule && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onKeyDown={(e) => { if (e.key === "Escape") setShowAddRule(false); }}>
-          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-96" role="dialog" aria-labelledby="add-rule-title">
-            <h3 id="add-rule-title" className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-4">Add Firewall Rule</h3>
+      {showAddRule && (() => {
+        const portInfo: Record<string, { service: string; safety: "safe" | "caution" | "blocked" }> = {
+          "22": { service: "SSH", safety: "safe" }, "80": { service: "HTTP", safety: "safe" }, "443": { service: "HTTPS", safety: "safe" },
+          "8080": { service: "HTTP Alt", safety: "safe" }, "8443": { service: "HTTPS Alt", safety: "safe" },
+          "3000": { service: "Web App", safety: "safe" }, "3001": { service: "Web App", safety: "safe" },
+          "5000": { service: "Web App", safety: "safe" }, "8000": { service: "Web App", safety: "safe" },
+          "25": { service: "SMTP", safety: "caution" }, "587": { service: "SMTP Submission", safety: "caution" },
+          "465": { service: "SMTPS", safety: "caution" }, "993": { service: "IMAPS", safety: "caution" },
+          "995": { service: "POP3S", safety: "caution" }, "110": { service: "POP3", safety: "caution" },
+          "143": { service: "IMAP", safety: "caution" }, "21": { service: "FTP", safety: "caution" },
+          "3306": { service: "MySQL", safety: "caution" }, "5432": { service: "PostgreSQL", safety: "caution" },
+          "6379": { service: "Redis", safety: "caution" }, "27017": { service: "MongoDB", safety: "caution" },
+          "23": { service: "Telnet", safety: "blocked" }, "135": { service: "RPC", safety: "blocked" },
+          "136": { service: "NetBIOS", safety: "blocked" }, "137": { service: "NetBIOS", safety: "blocked" },
+          "138": { service: "NetBIOS", safety: "blocked" }, "139": { service: "NetBIOS", safety: "blocked" },
+          "445": { service: "SMB", safety: "blocked" }, "1433": { service: "MSSQL", safety: "blocked" },
+        };
+
+        const info = rulePort ? portInfo[rulePort] : null;
+        const isBlocked = info?.safety === "blocked";
+
+        const presets = [
+          { label: "Web", ports: "80, 443, 8080", action: () => { setRulePort("80"); } },
+          { label: "Mail", ports: "25, 587, 993", action: () => { setRulePort("587"); } },
+          { label: "Database", ports: "3306 or 5432", action: () => { setRulePort("3306"); } },
+        ];
+
+        return (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowAddRule(false)}>
+          <div className="bg-dark-800 border border-dark-500 shadow-xl p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()} role="dialog" aria-labelledby="add-rule-title">
+            <h3 id="add-rule-title" className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-4">Open Port</h3>
+
+            {/* Quick presets */}
+            <div className="flex gap-2 mb-4">
+              {presets.map((p) => (
+                <button key={p.label} onClick={p.action} className="px-3 py-1.5 bg-dark-700 border border-dark-500 text-xs text-dark-100 hover:bg-dark-600 transition-colors">
+                  {p.label} <span className="text-dark-300 ml-1">{p.ports}</span>
+                </button>
+              ))}
+            </div>
+
             <div className="space-y-3">
               <div>
-                <label htmlFor="rule-port" className="block text-sm font-medium text-dark-100 mb-1">Port</label>
+                <label htmlFor="rule-port" className="block text-xs font-medium text-dark-100 mb-1">Port Number</label>
                 <input
                   id="rule-port"
                   type="number"
                   value={rulePort}
                   onChange={(e) => setRulePort(e.target.value)}
-                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm"
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none"
                   placeholder="e.g. 8080"
                   autoFocus
                 />
+                {/* Port info badge */}
+                {rulePort && (
+                  <div className={`mt-2 flex items-center gap-2 text-xs ${isBlocked ? "text-danger-400" : info?.safety === "caution" ? "text-warn-400" : "text-rust-400"}`}>
+                    <span className={`w-2 h-2 rounded-full ${isBlocked ? "bg-danger-400" : info?.safety === "caution" ? "bg-warn-400" : "bg-rust-400"}`} />
+                    {info ? (
+                      <span>{info.service} — {isBlocked ? "Blocked (security risk)" : info.safety === "caution" ? "Use with caution (restrict source IP if possible)" : "Safe to open"}</span>
+                    ) : (
+                      <span>Custom port — safe to open</span>
+                    )}
+                  </div>
+                )}
               </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label htmlFor="rule-protocol" className="block text-sm font-medium text-dark-100 mb-1">Protocol</label>
-                  <select
-                    id="rule-protocol"
-                    value={ruleProto}
-                    onChange={(e) => setRuleProto(e.target.value)}
-                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm"
-                  >
+                  <label htmlFor="rule-protocol" className="block text-xs font-medium text-dark-100 mb-1">Protocol</label>
+                  <select id="rule-protocol" value={ruleProto} onChange={(e) => setRuleProto(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm">
                     <option value="tcp">TCP</option>
                     <option value="udp">UDP</option>
                     <option value="tcp/udp">TCP/UDP</option>
                   </select>
                 </div>
                 <div>
-                  <label htmlFor="rule-action" className="block text-sm font-medium text-dark-100 mb-1">Action</label>
-                  <select
-                    id="rule-action"
-                    value={ruleAction}
-                    onChange={(e) => setRuleAction(e.target.value)}
-                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm"
-                  >
+                  <label htmlFor="rule-action" className="block text-xs font-medium text-dark-100 mb-1">Action</label>
+                  <select id="rule-action" value={ruleAction} onChange={(e) => setRuleAction(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm">
                     <option value="allow">Allow</option>
                     <option value="deny">Deny</option>
                   </select>
                 </div>
               </div>
+
               <div>
-                <label htmlFor="rule-from" className="block text-sm font-medium text-dark-100 mb-1">From IP (optional)</label>
-                <input
-                  id="rule-from"
-                  type="text"
-                  value={ruleFrom}
-                  onChange={(e) => setRuleFrom(e.target.value)}
-                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm"
-                  placeholder="Any (leave empty)"
-                />
+                <label htmlFor="rule-from" className="block text-xs font-medium text-dark-100 mb-1">From IP <span className="text-dark-300">(optional — leave empty for any)</span></label>
+                <input id="rule-from" type="text" value={ruleFrom} onChange={(e) => setRuleFrom(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" placeholder="Any" />
               </div>
             </div>
+
             <div className="flex justify-end gap-2 mt-5">
               <button onClick={() => setShowAddRule(false)} className="px-4 py-2 text-sm text-dark-200">Cancel</button>
               <button
                 onClick={handleAddRule}
-                disabled={!rulePort}
+                disabled={!rulePort || isBlocked}
                 className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
               >
-                Add Rule
+                {isBlocked ? "Port Blocked" : "Open Port"}
               </button>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
