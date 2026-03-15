@@ -58,6 +58,7 @@ const categoryColors: Record<string, string> = {
   Security: "bg-rose-500/15",
   Media: "bg-violet-500/15",
   Networking: "bg-teal-500/15",
+  Mail: "bg-rust-500/15",
 };
 
 // SVG icons for each app template

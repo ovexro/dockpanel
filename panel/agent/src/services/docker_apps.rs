@@ -868,6 +868,33 @@ static TEMPLATES: &[AppTemplateDef] = &[
         ],
         volumes: &[],
     },
+    // ─── Mail ──────────────────────────────────────────────────────
+    AppTemplateDef {
+        id: "roundcube",
+        name: "Roundcube",
+        description: "Modern webmail client with IMAP support — access your mailboxes from the browser",
+        category: "Mail",
+        image: "roundcube/roundcubemail:latest",
+        default_port: 8080,
+        container_port: "80/tcp",
+        env_vars: &[
+            EnvVarDef { name: "ROUNDCUBEMAIL_DEFAULT_HOST", label: "IMAP Host", default: "localhost", required: true, secret: false },
+            EnvVarDef { name: "ROUNDCUBEMAIL_SMTP_SERVER", label: "SMTP Host", default: "localhost", required: true, secret: false },
+            EnvVarDef { name: "ROUNDCUBEMAIL_SMTP_PORT", label: "SMTP Port", default: "587", required: false, secret: false },
+        ],
+        volumes: &["/var/roundcube/db", "/var/roundcube/config"],
+    },
+    AppTemplateDef {
+        id: "rspamd",
+        name: "Rspamd",
+        description: "Fast, free spam filtering system — protects your mailboxes from spam and phishing",
+        category: "Mail",
+        image: "rspamd/rspamd:latest",
+        default_port: 11334,
+        container_port: "11334/tcp",
+        env_vars: &[],
+        volumes: &["/var/lib/rspamd", "/etc/rspamd/local.d"],
+    },
 ];
 
 /// Convert a static template definition to the owned serializable type.
