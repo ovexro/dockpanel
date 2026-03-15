@@ -945,6 +945,9 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
           </div>
         </div>
 
+        {/* Service Installers */}
+        <ServiceInstallers />
+
         {/* System Health */}
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600 flex items-center justify-between">
@@ -994,6 +997,115 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
               </div>
             )}
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Service Installers Component ────────────────────────────────────────
+
+function ServiceInstallers() {
+  const [status, setStatus] = useState<Record<string, { installed?: boolean; running?: boolean; active?: boolean; version?: string | null }> | null>(null);
+  const [installing, setInstalling] = useState<string | null>(null);
+  const [msg, setMsg] = useState({ text: "", type: "" });
+  const [showGuide, setShowGuide] = useState(false);
+
+  useEffect(() => {
+    api.get<Record<string, unknown>>("/services/install-status")
+      .then((d) => setStatus(d as any))
+      .catch(() => {});
+  }, []);
+
+  const install = async (service: string, label: string) => {
+    setInstalling(service);
+    setMsg({ text: "", type: "" });
+    try {
+      await api.post(`/services/install/${service}`, {});
+      setMsg({ text: `${label} installed successfully`, type: "success" });
+      const d = await api.get<Record<string, unknown>>("/services/install-status");
+      setStatus(d as any);
+    } catch (e) {
+      setMsg({ text: e instanceof Error ? e.message : "Installation failed", type: "error" });
+    } finally {
+      setInstalling(null);
+    }
+  };
+
+  const services = [
+    { id: "php", label: "PHP", desc: "PHP-FPM for dynamic websites (WordPress, Laravel, etc.)", field: "php", checkInstalled: (s: any) => s?.php?.installed, checkRunning: (s: any) => s?.php?.running, extra: (s: any) => s?.php?.version ? `v${s.php.version}` : null },
+    { id: "certbot", label: "Certbot", desc: "Let's Encrypt SSL certificates with auto-renewal", field: "certbot", checkInstalled: (s: any) => s?.certbot?.installed, checkRunning: () => true, extra: () => null },
+    { id: "ufw", label: "UFW Firewall", desc: "Firewall with default rules (SSH, HTTP, HTTPS, mail ports)", field: "ufw", checkInstalled: (s: any) => s?.ufw?.installed, checkRunning: (s: any) => s?.ufw?.active, extra: () => null },
+    { id: "fail2ban", label: "Fail2Ban", desc: "Intrusion prevention with SSH, Nginx, Postfix jails", field: "fail2ban", checkInstalled: (s: any) => s?.fail2ban?.installed, checkRunning: (s: any) => s?.fail2ban?.running, extra: () => null },
+  ];
+
+  return (
+    <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+      <div className="px-5 py-3 border-b border-dark-600">
+        <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Services</h3>
+        <p className="text-xs text-dark-200 mt-0.5">One-click install for common server software</p>
+      </div>
+      <div className="p-5 space-y-4">
+        {msg.text && (
+          <div className={`px-4 py-2 rounded-lg text-sm border ${msg.type === "success" ? "bg-rust-500/10 text-rust-400 border-rust-500/20" : "bg-red-500/10 text-danger-400 border-red-500/20"}`}>
+            {msg.text}
+          </div>
+        )}
+
+        <button
+          onClick={() => setShowGuide(!showGuide)}
+          className="flex items-center gap-2 text-sm text-blue-400 hover:text-blue-300 transition-colors"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+          </svg>
+          {showGuide ? "Hide details" : "What do these install?"}
+          <svg className={`w-3 h-3 transition-transform ${showGuide ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+          </svg>
+        </button>
+
+        {showGuide && (
+          <div className="bg-dark-900 border border-dark-500 p-4 text-xs text-dark-200 space-y-2">
+            <p><span className="text-dark-100 font-medium">PHP</span> — Installs PHP-FPM + common extensions (mysql, curl, gd, mbstring, xml, zip, opcache). Required for WordPress and PHP sites.</p>
+            <p><span className="text-dark-100 font-medium">Certbot</span> — Installs Let's Encrypt certbot with nginx plugin. Enables auto-renewal timer. Required for free SSL certificates.</p>
+            <p><span className="text-dark-100 font-medium">UFW</span> — Installs firewall, opens SSH/HTTP/HTTPS/SMTP/IMAPS ports, enables with deny-by-default policy.</p>
+            <p><span className="text-dark-100 font-medium">Fail2Ban</span> — Installs intrusion prevention. Creates jails for SSH brute-force, nginx auth failures, Postfix, and Dovecot.</p>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {services.map((svc) => {
+            const installed = status ? svc.checkInstalled(status) : null;
+            const running = status ? svc.checkRunning(status) : null;
+            const extra = status ? svc.extra(status) : null;
+
+            return (
+              <div key={svc.id} className="border border-dark-500 bg-dark-900/50 p-4 flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-dark-50">{svc.label}</span>
+                    {extra && <span className="text-[10px] text-dark-300">{extra}</span>}
+                    {installed === true && (
+                      <span className={`w-2 h-2 rounded-full ${running ? "bg-rust-400" : "bg-warn-400"}`} title={running ? "Running" : "Installed but not running"} />
+                    )}
+                  </div>
+                  <p className="text-[10px] text-dark-300 mt-0.5">{svc.desc}</p>
+                </div>
+                {installed ? (
+                  <span className="text-[10px] text-dark-300 uppercase tracking-wider shrink-0 ml-3">Installed</span>
+                ) : (
+                  <button
+                    onClick={() => install(svc.id, svc.label)}
+                    disabled={installing !== null}
+                    className="px-3 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600 disabled:opacity-50 shrink-0 ml-3"
+                  >
+                    {installing === svc.id ? "Installing..." : "Install"}
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>

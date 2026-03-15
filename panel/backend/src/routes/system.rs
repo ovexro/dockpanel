@@ -118,3 +118,54 @@ pub async fn system_reboot(
 
     Ok(Json(data))
 }
+
+// ── Service installers (proxy to agent) ─────────────────────────────────
+
+pub async fn install_status(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.get("/services/install-status").await
+        .map_err(|e| agent_error("Install status", e))?;
+    Ok(Json(result))
+}
+
+pub async fn install_php(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.post("/services/install/php", None).await
+        .map_err(|e| agent_error("PHP install", e))?;
+    activity::log_activity(&state.db, claims.sub, &claims.email, "service.install", Some("system"), Some("php"), None, None).await;
+    Ok(Json(result))
+}
+
+pub async fn install_certbot(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.post("/services/install/certbot", None).await
+        .map_err(|e| agent_error("Certbot install", e))?;
+    activity::log_activity(&state.db, claims.sub, &claims.email, "service.install", Some("system"), Some("certbot"), None, None).await;
+    Ok(Json(result))
+}
+
+pub async fn install_ufw(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.post("/services/install/ufw", None).await
+        .map_err(|e| agent_error("UFW install", e))?;
+    activity::log_activity(&state.db, claims.sub, &claims.email, "service.install", Some("system"), Some("ufw"), None, None).await;
+    Ok(Json(result))
+}
+
+pub async fn install_fail2ban(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.post("/services/install/fail2ban", None).await
+        .map_err(|e| agent_error("Fail2Ban install", e))?;
+    activity::log_activity(&state.db, claims.sub, &claims.email, "service.install", Some("system"), Some("fail2ban"), None, None).await;
+    Ok(Json(result))
+}

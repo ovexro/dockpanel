@@ -251,6 +251,12 @@ pub fn router() -> Router<AppState> {
         // Dashboard Intelligence
         .route("/api/dashboard/intelligence", get(dashboard::intelligence))
         .route("/api/dashboard/metrics-history", get(dashboard::metrics_history))
+        // Service installers
+        .route("/api/services/install-status", get(system::install_status))
+        .route("/api/services/install/php", post(system::install_php))
+        .route("/api/services/install/certbot", post(system::install_certbot))
+        .route("/api/services/install/ufw", post(system::install_ufw))
+        .route("/api/services/install/fail2ban", post(system::install_fail2ban))
         // Mail
         .route("/api/mail/status", get(mail::mail_status))
         .route("/api/mail/install", post(mail::mail_install))
