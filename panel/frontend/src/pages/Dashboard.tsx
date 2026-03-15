@@ -1,7 +1,32 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { formatSize, formatUptime } from "../utils/format";
+
+function useCountUp(target: number, duration = 800): number {
+  const [value, setValue] = useState(0);
+  const prev = useRef(0);
+  useEffect(() => {
+    const start = prev.current;
+    const diff = target - start;
+    if (Math.abs(diff) < 0.5) { setValue(target); prev.current = target; return; }
+    const steps = Math.max(Math.floor(duration / 16), 1);
+    let step = 0;
+    const timer = setInterval(() => {
+      step++;
+      const progress = step / steps;
+      const eased = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+      setValue(start + diff * eased);
+      if (step >= steps) {
+        setValue(target);
+        prev.current = target;
+        clearInterval(timer);
+      }
+    }, 16);
+    return () => clearInterval(timer);
+  }, [target, duration]);
+  return value;
+}
 
 interface OnboardingStep {
   id: string;
@@ -102,6 +127,11 @@ function Sparkline({ data, color, height = 60 }: { data: number[]; color: string
   );
 }
 
+function CountUp({ value }: { value: number }) {
+  const displayed = useCountUp(value);
+  return <>{displayed.toFixed(0)}</>;
+}
+
 function barColor(pct: number): string {
   if (pct < 60) return "bg-emerald-500";
   if (pct < 85) return "bg-amber-500";
@@ -190,7 +220,7 @@ export default function Dashboard() {
   }, []);
 
   return (
-    <div className="p-6 lg:p-8">
+    <div className="p-6 lg:p-8 animate-fade-up">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
         <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Dashboard</h1>
         <div className="flex items-center gap-2 flex-wrap">
@@ -237,37 +267,41 @@ export default function Dashboard() {
           { id: "diagnostics", label: "Run diagnostics", description: "Check your server health and fix issues", link: "/diagnostics", check: () => false },
         ];
         const completed = steps.filter(s => s.check()).length;
-        if (completed >= 3) return null; // Auto-hide after 3+ steps done
+        if (completed >= 3) return null;
         return (
-          <div className="mb-6 bg-dark-800 rounded-lg border border-dark-500 p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <svg className="w-5 h-5 text-rust-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312m-2.24 2.39a4.493 4.493 0 00-1.757 4.306 4.493 4.493 0 004.306-1.758M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z" /></svg>
-                <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Getting Started</h3>
-                <span className="text-[10px] text-dark-300">{completed}/{steps.length}</span>
-              </div>
-              <button onClick={dismissOnboarding} className="text-dark-300 hover:text-dark-200 text-xs">Dismiss</button>
+          <div className="mb-6 bg-dark-800 border border-dark-500 p-5 animate-fade-up">
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-sm font-bold text-dark-50 typewriter inline-block">Welcome to DockPanel</h3>
+              <button onClick={dismissOnboarding} className="text-dark-300 hover:text-dark-200 text-xs shrink-0 ml-4">Dismiss</button>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
+            <p className="text-xs text-dark-300 mb-4">Complete these steps to set up your server. <span className="text-dark-200">{completed}/{steps.length} done</span></p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 stagger-children">
               {steps.map(step => (
                 <Link
                   key={step.id}
                   to={step.link}
-                  className={`rounded-lg border p-3 transition-colors ${
+                  className={`border p-4 transition-all hover-lift ${
                     step.check()
                       ? "border-emerald-500/30 bg-emerald-500/5"
-                      : "border-dark-500 bg-dark-900/50 hover:border-dark-400"
+                      : "border-dark-500 bg-dark-900/50 hover:border-rust-500/40"
                   }`}
                 >
-                  <div className="flex items-center gap-1.5 mb-1">
+                  <div className="flex items-center gap-2 mb-2">
                     {step.check() ? (
-                      <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                      <div className="w-5 h-5 bg-emerald-500/15 flex items-center justify-center">
+                        <svg className="w-3 h-3 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                      </div>
                     ) : (
-                      <div className="w-3.5 h-3.5 rounded-full border-2 border-dark-400" />
+                      <div className="w-5 h-5 border border-dark-400 flex items-center justify-center">
+                        <span className="text-[8px] text-dark-300 font-bold">{steps.indexOf(step) + 1}</span>
+                      </div>
                     )}
-                    <span className={`text-xs font-medium ${step.check() ? "text-emerald-400" : "text-dark-100"}`}>{step.label}</span>
+                    <span className={`text-xs font-medium ${step.check() ? "text-emerald-400" : "text-dark-50"}`}>{step.label}</span>
                   </div>
-                  <p className="text-[10px] text-dark-300 leading-relaxed">{step.description}</p>
+                  <p className="text-[10px] text-dark-300 leading-relaxed mb-2">{step.description}</p>
+                  {!step.check() && (
+                    <span className="text-[10px] text-rust-500 font-medium">Start &rarr;</span>
+                  )}
                 </Link>
               ))}
             </div>
@@ -287,7 +321,7 @@ export default function Dashboard() {
       ) : (
         <>
           {/* Resource Metrics — 3 column */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 stagger-children">
             {[
               { label: "CPU Usage", pct: system.cpu_usage, detail: `${system.cpu_count} cores${system.load_avg_1 !== undefined ? ` · Load ${system.load_avg_1?.toFixed(2)}` : ""}`,
                 icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><rect x="6" y="6" width="12" height="12" rx="1" /><path d="M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4M19 9h4m-4 6h4" strokeLinecap="round" /></svg> },
@@ -304,7 +338,7 @@ export default function Dashboard() {
                     <span className="text-xs uppercase tracking-widest font-medium">{label}</span>
                   </div>
                   <div className={`text-5xl font-bold font-mono my-2 ${pctColor(pct)}`}>
-                    {pct.toFixed(0)}<span className="text-xl text-dark-300 ml-0.5">%</span>
+                    <CountUp value={pct} /><span className="text-xl text-dark-300 ml-0.5">%</span>
                   </div>
                   <div className="h-2 bg-dark-700 rounded-full overflow-hidden mt-3 mx-auto max-w-[80%]">
                     <div className={`h-full rounded-full transition-all duration-700 ${barColor(pct)}`} style={{ width: `${Math.min(pct, 100)}%` }} />
