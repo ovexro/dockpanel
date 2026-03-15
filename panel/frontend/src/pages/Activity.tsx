@@ -139,24 +139,15 @@ export default function Activity() {
           </div>
         ) : (
           <>
-            <table className="w-full">
+            {/* Desktop Table */}
+            <table className="w-full hidden sm:table">
               <thead>
                 <tr className="bg-dark-900 border-b border-dark-500">
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 w-28">
-                    Time
-                  </th>
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3">
-                    User
-                  </th>
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 w-36">
-                    Action
-                  </th>
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 hidden md:table-cell">
-                    Target
-                  </th>
-                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 hidden lg:table-cell">
-                    Details
-                  </th>
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 w-28">Time</th>
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3">User</th>
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 w-36">Action</th>
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 hidden md:table-cell">Target</th>
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 hidden lg:table-cell">Details</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-dark-600">
@@ -164,30 +155,18 @@ export default function Activity() {
                   const badge = actionBadge(entry.action);
                   return (
                     <tr key={entry.id} className="hover:bg-dark-700/30 transition-colors">
-                      <td className="px-5 py-3 text-sm text-dark-200 whitespace-nowrap font-mono">
-                        {timeAgo(entry.created_at)}
-                      </td>
+                      <td className="px-5 py-3 text-sm text-dark-200 whitespace-nowrap font-mono">{timeAgo(entry.created_at)}</td>
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-2">
-                          <div className="w-6 h-6 rounded-full bg-rust-500/15 text-rust-500 flex items-center justify-center text-xs font-medium shrink-0">
-                            {entry.user_email?.[0]?.toUpperCase() || "?"}
-                          </div>
-                          <span className="text-sm text-dark-50 truncate max-w-[180px] font-mono">
-                            {entry.user_email}
-                          </span>
+                          <div className="w-6 h-6 rounded-full bg-rust-500/15 text-rust-500 flex items-center justify-center text-xs font-medium shrink-0">{entry.user_email?.[0]?.toUpperCase() || "?"}</div>
+                          <span className="text-sm text-dark-50 truncate max-w-[180px] font-mono">{entry.user_email}</span>
                         </div>
                       </td>
                       <td className="px-5 py-3">
-                        <span
-                          className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium font-mono ${badge.bg} ${badge.text}`}
-                        >
-                          {entry.action}
-                        </span>
+                        <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium font-mono ${badge.bg} ${badge.text}`}>{entry.action}</span>
                       </td>
                       <td className="px-5 py-3 text-sm text-dark-50 hidden md:table-cell font-mono">
-                        {entry.target_type && (
-                          <span className="text-dark-300 text-xs mr-1">{entry.target_type}:</span>
-                        )}
+                        {entry.target_type && <span className="text-dark-300 text-xs mr-1">{entry.target_type}:</span>}
                         {entry.target_name || <span className="text-dark-400">-</span>}
                       </td>
                       <td className="px-5 py-3 text-sm text-dark-200 truncate max-w-[250px] hidden lg:table-cell font-mono">
@@ -198,6 +177,31 @@ export default function Activity() {
                 })}
               </tbody>
             </table>
+
+            {/* Mobile Cards */}
+            <div className="sm:hidden divide-y divide-dark-600">
+              {entries.map((entry) => {
+                const badge = actionBadge(entry.action);
+                return (
+                  <div key={entry.id} className="px-4 py-3 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium font-mono ${badge.bg} ${badge.text}`}>{entry.action}</span>
+                      <span className="text-xs text-dark-400 font-mono">{timeAgo(entry.created_at)}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-5 h-5 rounded-full bg-rust-500/15 text-rust-500 flex items-center justify-center text-[10px] font-medium shrink-0">{entry.user_email?.[0]?.toUpperCase() || "?"}</div>
+                      <span className="text-xs text-dark-200 font-mono truncate">{entry.user_email}</span>
+                    </div>
+                    {(entry.target_name || entry.details) && (
+                      <div className="text-xs text-dark-300 font-mono truncate">
+                        {entry.target_type && <span className="text-dark-400">{entry.target_type}: </span>}
+                        {entry.target_name}{entry.details && <span className="text-dark-400 ml-2">{entry.details}</span>}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
 
             {hasMore && (
               <div className="px-5 py-4 border-t border-dark-600 text-center">

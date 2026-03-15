@@ -55,15 +55,16 @@ export default function Login() {
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 bg-rust-500 rounded-xl mb-4">
-            <svg className="w-8 h-8 text-white" viewBox="0 0 32 32" fill="currentColor">
-              <rect x="4" y="4" width="10" height="10" rx="2" opacity="0.9" />
-              <rect x="18" y="4" width="10" height="10" rx="2" opacity="0.7" />
-              <rect x="4" y="18" width="10" height="10" rx="2" opacity="0.7" />
-              <rect x="18" y="18" width="10" height="10" rx="2" opacity="0.5" />
+          <div className="inline-flex items-center justify-center w-14 h-14 bg-rust-500 mb-4 logo-icon-glow">
+            <svg className="w-8 h-8 text-dark-950" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M5 16h4" strokeLinecap="square" />
+              <path d="M5 12h8" strokeLinecap="square" />
+              <path d="M5 8h6" strokeLinecap="square" />
+              <rect x="16" y="7" width="4" height="4" fill="currentColor" stroke="none" />
+              <rect x="16" y="13" width="4" height="4" fill="currentColor" stroke="none" />
             </svg>
           </div>
-          <h1 className="text-base font-bold text-rust-500 uppercase font-mono tracking-widest">DockPanel</h1>
+          <h1 className="text-lg font-bold uppercase font-mono tracking-widest logo-glow"><span className="text-rust-500">Dock</span><span className="text-dark-50">Panel</span></h1>
           <p className="text-dark-200 text-sm mt-1">
             {twoFaToken ? "Enter your 2FA code" : "Sign in to your panel"}
           </p>

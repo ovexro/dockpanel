@@ -30,7 +30,7 @@ pub async fn list(
     let map: HashMap<String, String> = rows
         .into_iter()
         .map(|r| {
-            if r.key == "smtp_password" && !r.value.is_empty() {
+            if (r.key == "smtp_password" || r.key == "pdns_api_key") && !r.value.is_empty() {
                 (r.key, "********".to_string())
             } else {
                 (r.key, r.value)
@@ -54,6 +54,7 @@ pub async fn update(
         "smtp_from", "smtp_from_name", "smtp_encryption",
         "stripe_price_starter", "stripe_price_pro", "stripe_price_agency",
         "agent_latest_version", "agent_download_url", "agent_checksum",
+        "pdns_api_url", "pdns_api_key",
     ];
     for key in body.keys() {
         if !allowed_keys.contains(&key.as_str()) {

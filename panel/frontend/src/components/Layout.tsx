@@ -1,5 +1,5 @@
 import { ReactNode, useState, useEffect, useRef } from "react";
-import { Navigate, Outlet, NavLink } from "react-router-dom";
+import { Navigate, Outlet, NavLink, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 import CommandPalette from "./CommandPalette";
@@ -153,17 +153,18 @@ export default function Layout() {
       >
         {/* Logo */}
         <div className="px-6 py-5 border-b border-dark-600 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-rust-500 rounded-lg flex items-center justify-center">
-              <svg className="w-5 h-5 text-white" viewBox="0 0 32 32" fill="currentColor" aria-hidden="true">
-                <rect x="4" y="4" width="10" height="10" rx="2" opacity="0.9" />
-                <rect x="18" y="4" width="10" height="10" rx="2" opacity="0.7" />
-                <rect x="4" y="18" width="10" height="10" rx="2" opacity="0.7" />
-                <rect x="18" y="18" width="10" height="10" rx="2" opacity="0.5" />
+          <Link to="/" className="flex items-center gap-3 hover:opacity-90 transition-opacity">
+            <div className="w-10 h-10 bg-rust-500 flex items-center justify-center logo-icon-glow">
+              <svg className="w-6 h-6 text-dark-950" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+                <path d="M5 16h4" strokeLinecap="square" />
+                <path d="M5 12h8" strokeLinecap="square" />
+                <path d="M5 8h6" strokeLinecap="square" />
+                <rect x="16" y="7" width="4" height="4" fill="currentColor" stroke="none" />
+                <rect x="16" y="13" width="4" height="4" fill="currentColor" stroke="none" />
               </svg>
             </div>
-            <span className="text-base font-bold tracking-widest uppercase font-mono text-rust-500">DockPanel</span>
-          </div>
+            <span className="text-lg font-bold tracking-widest uppercase font-mono logo-glow"><span className="text-rust-500">Dock</span><span className="text-dark-50">Panel</span></span>
+          </Link>
           {/* Close button (mobile) */}
           <button
             onClick={() => setSidebarOpen(false)}
@@ -271,7 +272,7 @@ export default function Layout() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
             </svg>
           </button>
-          <span className="text-base font-bold tracking-widest uppercase font-mono text-rust-500">DockPanel</span>
+          <span className="text-base font-bold tracking-widest uppercase font-mono logo-glow"><span className="text-rust-500">Dock</span><span className="text-dark-100">Panel</span></span>
         </div>
         <Outlet />
       </main>

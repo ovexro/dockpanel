@@ -291,23 +291,23 @@ export default function Security() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
             {/* Security Score */}
             {posture && posture.score >= 0 && (
-              <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
+              <div className="bg-dark-800 rounded-lg border border-dark-500 p-5 md:col-span-2 lg:col-span-1">
                 <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-lg bg-indigo-500/10 flex items-center justify-center">
-                    <svg className="w-5 h-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <div className="w-10 h-10 rounded-lg bg-indigo-500/10 flex items-center justify-center">
+                    <svg className="w-6 h-6 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />
                     </svg>
                   </div>
-                  <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Security Score</p>
+                  <p className="text-sm font-medium text-dark-200 uppercase font-mono tracking-wider">Security Score</p>
                 </div>
-                <div className="flex items-end gap-1 mt-2">
-                  <span className={`text-3xl font-bold ${scoreColor(posture.score)}`}>{posture.score}</span>
-                  <span className="text-sm text-dark-300 mb-1">/100</span>
+                <div className="flex items-end gap-1 mt-3">
+                  <span className={`text-4xl font-bold ${scoreColor(posture.score)}`}>{posture.score}</span>
+                  <span className="text-base text-dark-300 mb-1">/100</span>
                 </div>
-                <div className="mt-2 h-1.5 bg-dark-700 rounded-full overflow-hidden">
+                <div className="mt-2.5 h-2 bg-dark-700 rounded-full overflow-hidden">
                   <div className={`h-full rounded-full ${scoreBg(posture.score)}`} style={{ width: `${posture.score}%` }} />
                 </div>
-                <p className="text-xs text-dark-300 mt-1">{posture.total_scans} scans total</p>
+                <p className="text-xs text-dark-300 mt-1.5">{posture.total_scans} {posture.total_scans === 1 ? "scan" : "scans"} total</p>
               </div>
             )}
 
