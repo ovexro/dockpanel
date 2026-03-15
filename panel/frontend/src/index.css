@@ -97,6 +97,15 @@ textarea::placeholder {
   outline-offset: 2px;
 }
 
+/* Logo terminal glow */
+.logo-glow {
+  text-shadow: 0 0 12px rgba(74, 222, 128, 0.35);
+}
+
+.logo-icon-glow {
+  box-shadow: 0 0 16px rgba(74, 222, 128, 0.3), 0 0 4px rgba(74, 222, 128, 0.15);
+}
+
 /* Blinking cursor animation */
 .blinking-cursor {
   animation: blink 1s step-end infinite;

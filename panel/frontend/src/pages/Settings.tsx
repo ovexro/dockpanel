@@ -48,6 +48,11 @@ export default function Settings() {
   // Auto-healing
   const [autoHealEnabled, setAutoHealEnabled] = useState(false);
 
+  // PowerDNS
+  const [pdnsApiUrl, setPdnsApiUrl] = useState("");
+  const [pdnsApiKey, setPdnsApiKey] = useState("");
+  const [showPdnsGuide, setShowPdnsGuide] = useState(false);
+
   // Notification channels
   const [notifySlackUrl, setNotifySlackUrl] = useState("");
   const [notifyDiscordUrl, setNotifyDiscordUrl] = useState("");
@@ -85,6 +90,8 @@ export default function Settings() {
       setSmtpFromName(data.smtp_from_name || "");
       setSmtpEncryption(data.smtp_encryption || "starttls");
       setAutoHealEnabled(data.auto_heal_enabled === "true");
+      setPdnsApiUrl(data.pdns_api_url || "");
+      setPdnsApiKey(data.pdns_api_key || "");
     } catch (e) {
       setMessage({
         text: e instanceof Error ? e.message : "Failed to load settings",
@@ -724,6 +731,107 @@ export default function Settings() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+
+        {/* PowerDNS */}
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">PowerDNS</h3>
+            <p className="text-xs text-dark-200 mt-0.5">Self-hosted authoritative DNS server</p>
+          </div>
+          <div className="p-5 space-y-4">
+            {/* Setup Guide toggle */}
+            <button
+              onClick={() => setShowPdnsGuide(!showPdnsGuide)}
+              className="flex items-center gap-2 text-sm text-blue-400 hover:text-blue-300 transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+              </svg>
+              {showPdnsGuide ? "Hide setup guide" : "How to install PowerDNS"}
+              <svg className={`w-3 h-3 transition-transform ${showPdnsGuide ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+              </svg>
+            </button>
+
+            {showPdnsGuide && (
+              <div className="bg-dark-900 border border-dark-500 p-4 space-y-3 text-sm">
+                <p className="text-dark-200 font-medium">Install PowerDNS with PostgreSQL backend:</p>
+                <pre className="bg-dark-950 border border-dark-600 p-3 text-xs text-dark-100 font-mono overflow-x-auto whitespace-pre">{`# Install PowerDNS
+apt install pdns-server pdns-backend-pgsql
+
+# Create a database for PowerDNS
+sudo -u postgres createdb pdns
+sudo -u postgres psql pdns < /usr/share/doc/pdns-backend-pgsql/schema.pgsql.sql`}</pre>
+                <p className="text-dark-200 font-medium">Configure <span className="text-dark-100 font-mono">/etc/powerdns/pdns.conf</span>:</p>
+                <pre className="bg-dark-950 border border-dark-600 p-3 text-xs text-dark-100 font-mono overflow-x-auto whitespace-pre">{`launch=gpgsql
+gpgsql-host=127.0.0.1
+gpgsql-dbname=pdns
+gpgsql-user=postgres
+
+# Enable HTTP API
+api=yes
+api-key=your-secret-key-here
+webserver=yes
+webserver-address=127.0.0.1
+webserver-port=8081
+webserver-allow-from=127.0.0.1`}</pre>
+                <p className="text-dark-200 font-medium">Then restart and verify:</p>
+                <pre className="bg-dark-950 border border-dark-600 p-3 text-xs text-dark-100 font-mono overflow-x-auto whitespace-pre">{`systemctl restart pdns
+curl -s -H "X-API-Key: your-secret-key-here" \\
+  http://127.0.0.1:8081/api/v1/servers/localhost | jq .`}</pre>
+                <p className="text-xs text-dark-300">After setup, enter the API URL and key below, then create zones from the DNS page.</p>
+              </div>
+            )}
+
+            <div>
+              <label htmlFor="pdns-url" className="block text-sm font-medium text-dark-100 mb-1">API URL</label>
+              <input
+                id="pdns-url"
+                type="url"
+                value={pdnsApiUrl}
+                onChange={(e) => setPdnsApiUrl(e.target.value)}
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 outline-none font-mono"
+                placeholder="http://127.0.0.1:8081"
+              />
+            </div>
+            <div>
+              <label htmlFor="pdns-key" className="block text-sm font-medium text-dark-100 mb-1">API Key</label>
+              <input
+                id="pdns-key"
+                type="password"
+                value={pdnsApiKey}
+                onChange={(e) => setPdnsApiKey(e.target.value)}
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 outline-none font-mono"
+                placeholder="PowerDNS API key"
+              />
+              <p className="text-xs text-dark-300 mt-1">The api-key value from /etc/powerdns/pdns.conf</p>
+            </div>
+            <div className="flex justify-end">
+              <button
+                onClick={async () => {
+                  setSaving("pdns");
+                  setMessage({ text: "", type: "" });
+                  try {
+                    const body: Record<string, string> = { pdns_api_url: pdnsApiUrl };
+                    if (pdnsApiKey && pdnsApiKey !== "********") {
+                      body.pdns_api_key = pdnsApiKey;
+                    }
+                    await api.put("/settings", body);
+                    setMessage({ text: "PowerDNS settings saved", type: "success" });
+                  } catch (e) {
+                    setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
+                  } finally {
+                    setSaving(null);
+                  }
+                }}
+                disabled={saving === "pdns"}
+                className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+              >
+                {saving === "pdns" ? "Saving..." : "Save"}
+              </button>
+            </div>
           </div>
         </div>
 

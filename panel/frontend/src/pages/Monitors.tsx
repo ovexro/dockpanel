@@ -237,15 +237,15 @@ export default function Monitors() {
           {monitors.map((m) => (
             <div key={m.id} className="bg-dark-800 rounded-lg border border-dark-500">
               <div className="p-4 cursor-pointer" onClick={() => toggleExpand(m.id)}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-2.5 h-2.5 rounded-full ${statusDot[m.status] || "bg-gray-400"} ${m.status === "up" ? "animate-pulse" : ""}`} />
-                    <div>
-                      <p className="text-sm font-medium text-dark-50">{m.name}</p>
-                      <p className="text-xs text-dark-300 font-mono">{m.url}</p>
+                <div className="flex items-start sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${statusDot[m.status] || "bg-gray-400"} ${m.status === "up" ? "animate-pulse" : ""}`} />
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-dark-50 truncate">{m.name}</p>
+                      <p className="text-xs text-dark-300 font-mono truncate">{m.url}</p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-2 sm:gap-4 shrink-0">
                     {m.last_response_time != null && (
                       <span className={`text-xs font-medium font-mono ${m.last_response_time > 2000 ? "text-red-500" : m.last_response_time > 500 ? "text-amber-500" : "text-emerald-600"}`}>
                         {m.last_response_time}ms
@@ -259,13 +259,13 @@ export default function Monitors() {
                       role="switch"
                       aria-checked={m.enabled}
                       aria-label={m.enabled ? "Pause monitor" : "Resume monitor"}
-                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${m.enabled ? "bg-rust-500" : "bg-dark-600"}`}
+                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${m.enabled ? "bg-rust-500" : "bg-dark-600"}`}
                     >
                       <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${m.enabled ? "translate-x-4" : "translate-x-1"}`} />
                     </button>
                     <button
                       onClick={(e) => { e.stopPropagation(); handleDelete(m.id, m.name); }}
-                      className="p-1 text-dark-300 hover:text-red-500 transition-colors"
+                      className="p-1 text-dark-300 hover:text-red-500 transition-colors shrink-0"
                       title="Delete"
                       aria-label="Delete monitor"
                     >
