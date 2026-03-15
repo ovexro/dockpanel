@@ -138,10 +138,8 @@ function barColor(pct: number): string {
   return "bg-red-500";
 }
 
-function pctColor(pct: number): string {
-  if (pct < 60) return "text-rust-400";
-  if (pct < 85) return "text-warn-500";
-  return "text-danger-500";
+function pctColor(_pct: number): string {
+  return "text-dark-50";
 }
 
 function tempColor(temp: number): string {
