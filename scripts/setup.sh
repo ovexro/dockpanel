@@ -14,13 +14,15 @@
 #   - Nginx (reverse proxy + static files)
 #
 # Usage:
-#   bash scripts/setup.sh                # Build from source
+#   bash scripts/setup.sh                         # Interactive (asks for domain)
+#   PANEL_DOMAIN=panel.example.com bash scripts/setup.sh  # Non-interactive with domain
 #   INSTALL_FROM_RELEASE=1 bash scripts/setup.sh  # Download pre-built binaries
-#   PANEL_PORT=9090 bash scripts/setup.sh
+#   PANEL_PORT=9090 bash scripts/setup.sh         # Custom port (no domain)
 #
 set -euo pipefail
 
 # ── Configuration (override with env vars) ──────────────────────────────
+PANEL_DOMAIN="${PANEL_DOMAIN:-}"
 PANEL_PORT="${PANEL_PORT:-8443}"
 CONFIG_DIR="/etc/dockpanel"
 AGENT_BIN="/usr/local/bin/dockpanel-agent"
@@ -599,10 +601,17 @@ configure_nginx() {
         FE_ROOT="${FRONTEND_DIR}/dist"
     fi
 
+    local SERVER_NAME="_"
+    local LISTEN_DIRECTIVE="listen ${PANEL_PORT};"
+    if [ -n "$PANEL_DOMAIN" ]; then
+        SERVER_NAME="$PANEL_DOMAIN"
+        LISTEN_DIRECTIVE="listen 80;"
+    fi
+
     cat > "$NGINX_CONF" << NGINXEOF
 server {
-    listen ${PANEL_PORT};
-    server_name _;
+    ${LISTEN_DIRECTIVE}
+    server_name ${SERVER_NAME};
 
     client_max_body_size 100M;
 
@@ -774,6 +783,28 @@ F2BEOF
     log "All recommended services ready"
 }
 
+provision_panel_ssl() {
+    if [ -z "$PANEL_DOMAIN" ]; then
+        log "No domain set — skipping SSL (access via IP:${PANEL_PORT})"
+        return
+    fi
+
+    header "Panel SSL Certificate"
+
+    if ! command -v certbot &> /dev/null; then
+        log "Certbot not found — skipping SSL"
+        return
+    fi
+
+    log "Provisioning Let's Encrypt certificate for $PANEL_DOMAIN..."
+    if certbot --nginx -d "$PANEL_DOMAIN" --non-interactive --agree-tos --register-unsafely-without-email --redirect 2>/dev/null; then
+        log "SSL certificate provisioned for $PANEL_DOMAIN"
+    else
+        log "SSL provisioning failed — you can retry manually: certbot --nginx -d $PANEL_DOMAIN"
+        log "If using Cloudflare proxy, set SSL mode to 'Full' and try again"
+    fi
+}
+
 print_summary() {
     local SERVER_IP
     SERVER_IP=$(curl -sf --max-time 5 https://api.ipify.org 2>/dev/null || \
@@ -785,7 +816,11 @@ print_summary() {
     echo -e "${GREEN}${BOLD}║         DockPanel installed successfully!            ║${NC}"
     echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "  ${BOLD}Panel URL:${NC}      http://${SERVER_IP}:${PANEL_PORT}"
+    if [ -n "$PANEL_DOMAIN" ]; then
+        echo -e "  ${BOLD}Panel URL:${NC}      https://${PANEL_DOMAIN}"
+    else
+        echo -e "  ${BOLD}Panel URL:${NC}      http://${SERVER_IP}:${PANEL_PORT}"
+    fi
     echo ""
     echo -e "  ${BOLD}First step:${NC}     Open the URL and create your admin account"
     echo ""
@@ -867,6 +902,21 @@ main() {
         INSTALL_FROM_RELEASE=1
     fi
 
+    # Ask for domain if not set via env
+    if [ -z "$PANEL_DOMAIN" ]; then
+        echo ""
+        echo -e "${BOLD}Enter your panel domain (e.g. panel.example.com)${NC}"
+        echo -e "Leave blank to access via IP:${PANEL_PORT} instead"
+        echo -n "> "
+        read -r PANEL_DOMAIN
+        PANEL_DOMAIN=$(echo "$PANEL_DOMAIN" | tr -d ' ')
+    fi
+
+    if [ -n "$PANEL_DOMAIN" ]; then
+        log "Panel domain: $PANEL_DOMAIN"
+        PANEL_PORT="80"  # Will be upgraded to 443 by certbot
+    fi
+
     check_source
     install_dependencies
     install_docker
@@ -886,6 +936,7 @@ main() {
     create_services
     configure_nginx
     install_recommended_services
+    provision_panel_ssl
     wait_for_health
     setup_db_backup
     print_summary
