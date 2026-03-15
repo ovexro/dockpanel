@@ -207,7 +207,7 @@ export default function Dns() {
 
   const typeColor: Record<string, string> = {
     A: "bg-blue-500/15 text-blue-400",
-    AAAA: "bg-rust-500/15 text-rust-600",
+    AAAA: "bg-rust-500/15 text-rust-400",
     CNAME: "bg-rust-500/15 text-rust-400",
     MX: "bg-warn-500/15 text-warn-400",
     TXT: "bg-dark-700 text-dark-100",

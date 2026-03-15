@@ -156,10 +156,10 @@ export default function Diagnostics() {
       {/* All clear */}
       {report && report.summary.total === 0 && (
         <div className="text-center py-16 bg-dark-900 rounded-lg border border-dark-500">
-          <svg className="w-16 h-16 mx-auto mb-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <svg className="w-16 h-16 mx-auto mb-4 text-rust-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
           </svg>
-          <p className="text-lg text-green-400 font-medium">All checks passed</p>
+          <p className="text-lg text-rust-400 font-medium">All checks passed</p>
           <p className="text-dark-300 mt-1">No issues detected on your server.</p>
         </div>
       )}
@@ -192,7 +192,7 @@ export default function Diagnostics() {
                         </div>
                         <p className="text-sm text-dark-300 mt-1 font-mono">{finding.description}</p>
                         {result && (
-                          <p className={`text-sm mt-2 ${result.ok ? "text-green-400" : "text-red-400"}`}>
+                          <p className={`text-sm mt-2 ${result.ok ? "text-rust-400" : "text-red-400"}`}>
                             {result.ok ? "\u2713" : "\u2717"} {result.msg}
                           </p>
                         )}
