@@ -7,9 +7,9 @@
   --color-rust-100: #d1fae5;
   --color-rust-200: #a7f3d0;
   --color-rust-300: #6ee7b7;
-  --color-rust-400: #34d399;
-  --color-rust-500: #10b981;
-  --color-rust-600: #059669;
+  --color-rust-400: #10b981;
+  --color-rust-500: #059669;
+  --color-rust-600: #047857;
   --color-rust-700: #047857;
   --color-rust-800: #065f46;
   --color-rust-900: #064e3b;
@@ -150,11 +150,11 @@ textarea::placeholder {
 
 /* Logo terminal glow */
 .logo-glow {
-  text-shadow: 0 0 12px rgba(16, 185, 129, 0.4);
+  text-shadow: 0 0 12px rgba(5, 150, 105, 0.45);
 }
 
 .logo-icon-glow {
-  box-shadow: 0 0 16px rgba(16, 185, 129, 0.3), 0 0 4px rgba(16, 185, 129, 0.15);
+  box-shadow: 0 0 16px rgba(5, 150, 105, 0.3), 0 0 4px rgba(5, 150, 105, 0.15);
 }
 
 /* Blinking cursor animation */
