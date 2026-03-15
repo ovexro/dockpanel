@@ -438,26 +438,21 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* System Information — neofetch style */}
-          <div className="border border-dark-500 bg-dark-800 p-5 mb-6">
-            <h3 className="text-xs text-dark-300 uppercase tracking-widest mb-4">System Information</h3>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-1.5 text-sm">
-              {[
-                ["Hostname", system.hostname],
-                ["OS", system.os],
-                ["Kernel", system.kernel],
-                ["Processor", `${system.cpu_model}, ${system.cpu_count} cores`],
-                ["Temperature", system.cpu_temp != null ? `${system.cpu_temp.toFixed(0)}°C` : "N/A"],
-                ["Processes", system.process_count.toLocaleString()],
-              ].map(([label, value]) => (
-                <div key={label} className="flex items-baseline gap-2 min-w-0">
-                  <span className="text-rust-400 shrink-0">{">"}</span>
-                  <span className="text-dark-300 w-24 shrink-0">{label}</span>
-                  <span className="text-dark-500 flex-1 border-b border-dotted border-dark-500 mx-1 mb-1 min-w-4" />
-                  <span title={String(value)} className={`text-dark-50 shrink-0 max-w-[55%] truncate ${label === "Temperature" && system.cpu_temp != null ? tempColor(system.cpu_temp) : ""}`}>{value}</span>
-                </div>
-              ))}
-            </div>
+          {/* System Information */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-px bg-dark-600 border border-dark-500 mb-6">
+            {[
+              ["Hostname", system.hostname],
+              ["OS", system.os],
+              ["Kernel", system.kernel],
+              ["Processor", system.cpu_model],
+              ["Temperature", system.cpu_temp != null ? `${system.cpu_temp.toFixed(0)}°C` : "N/A"],
+              ["Processes", system.process_count.toLocaleString()],
+            ].map(([label, value]) => (
+              <div key={label} className="bg-dark-800 px-4 py-3 flex flex-col">
+                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">{label}</span>
+                <span title={String(value)} className={`text-sm text-dark-50 font-medium truncate ${label === "Temperature" && system.cpu_temp != null ? tempColor(system.cpu_temp) : ""}`}>{value}</span>
+              </div>
+            ))}
           </div>
 
           {/* Network & Processes */}
