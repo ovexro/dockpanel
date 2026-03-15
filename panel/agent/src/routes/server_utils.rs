@@ -1,0 +1,278 @@
+use axum::{
+    extract::Path,
+    http::StatusCode,
+    routing::{get, post, delete},
+    Json, Router,
+};
+use serde::Deserialize;
+use tokio::process::Command;
+
+use super::AppState;
+use base64::Engine as _;
+
+type ApiErr = (StatusCode, Json<serde_json::Value>);
+
+fn err(status: StatusCode, msg: &str) -> ApiErr {
+    (status, Json(serde_json::json!({ "error": msg })))
+}
+
+fn ok(msg: &str) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "ok": true, "message": msg }))
+}
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        // File upload (binary)
+        .route("/files/{domain}/upload", post(file_upload))
+        // SSH keys
+        .route("/ssh-keys", get(list_ssh_keys).post(add_ssh_key))
+        .route("/ssh-keys/{fingerprint}", delete(remove_ssh_key))
+        // Auto-updates
+        .route("/auto-updates/status", get(auto_updates_status))
+        .route("/auto-updates/enable", post(enable_auto_updates))
+        .route("/auto-updates/disable", post(disable_auto_updates))
+        // IP whitelist for panel
+        .route("/panel-whitelist", get(get_whitelist).post(set_whitelist))
+}
+
+// ── File Upload ─────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct UploadRequest {
+    pub path: String,
+    pub content_base64: String,
+}
+
+async fn file_upload(
+    Path(domain): Path<String>,
+    Json(body): Json<UploadRequest>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    use base64::Engine as _;
+
+    let root = if domain == "_server" {
+        "/".to_string()
+    } else {
+        format!("/var/www/{domain}")
+    };
+
+    let full_path = format!("{root}/{}", body.path.trim_start_matches('/'));
+
+    // Security: prevent path traversal
+    if full_path.contains("..") {
+        return Err(err(StatusCode::BAD_REQUEST, "Path traversal not allowed"));
+    }
+
+    // Decode base64 content
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&body.content_base64)
+        .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid base64 content"))?;
+
+    // Create parent directory
+    if let Some(parent) = std::path::Path::new(&full_path).parent() {
+        tokio::fs::create_dir_all(parent).await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to create directory: {e}")))?;
+    }
+
+    tokio::fs::write(&full_path, &bytes).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write file: {e}")))?;
+
+    tracing::info!("File uploaded: {} ({} bytes)", full_path, bytes.len());
+    Ok(Json(serde_json::json!({ "ok": true, "path": full_path, "size": bytes.len() })))
+}
+
+// ── SSH Key Management ──────────────────────────────────────────────────
+
+async fn list_ssh_keys() -> Result<Json<serde_json::Value>, ApiErr> {
+    let path = "/root/.ssh/authorized_keys";
+    let content = tokio::fs::read_to_string(path).await.unwrap_or_default();
+
+    let keys: Vec<serde_json::Value> = content
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))
+        .map(|line| {
+            let parts: Vec<&str> = line.splitn(3, ' ').collect();
+            let key_type = parts.first().unwrap_or(&"").to_string();
+            let key_data = parts.get(1).unwrap_or(&"").to_string();
+            let comment = parts.get(2).unwrap_or(&"").to_string();
+
+            // Generate fingerprint
+            let fingerprint = if !key_data.is_empty() {
+                use sha2::{Sha256, Digest};
+                let decoded = base64::engine::general_purpose::STANDARD.decode(&key_data).unwrap_or_default();
+                let hash = Sha256::digest(&decoded);
+                format!("SHA256:{}", base64::engine::general_purpose::STANDARD.encode(&hash).trim_end_matches('='))
+            } else {
+                String::new()
+            };
+
+            serde_json::json!({
+                "type": key_type,
+                "fingerprint": fingerprint,
+                "comment": comment,
+                "key": format!("{} {}...", key_type, &key_data[..key_data.len().min(20)]),
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "keys": keys })))
+}
+
+#[derive(Deserialize)]
+pub struct AddKeyRequest {
+    pub key: String,
+}
+
+async fn add_ssh_key(
+    Json(body): Json<AddKeyRequest>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    let key = body.key.trim();
+    if !key.starts_with("ssh-") && !key.starts_with("ecdsa-") && !key.starts_with("sk-") {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid SSH key format"));
+    }
+
+    let path = "/root/.ssh/authorized_keys";
+    tokio::fs::create_dir_all("/root/.ssh").await.ok();
+
+    let mut content = tokio::fs::read_to_string(path).await.unwrap_or_default();
+    if content.contains(key) {
+        return Err(err(StatusCode::CONFLICT, "Key already exists"));
+    }
+
+    if !content.ends_with('\n') && !content.is_empty() {
+        content.push('\n');
+    }
+    content.push_str(key);
+    content.push('\n');
+
+    tokio::fs::write(path, &content).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write: {e}")))?;
+    let _ = Command::new("chmod").args(["600", path]).output().await;
+
+    tracing::info!("SSH key added");
+    Ok(ok("SSH key added"))
+}
+
+async fn remove_ssh_key(
+    Path(fingerprint): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    let path = "/root/.ssh/authorized_keys";
+    let content = tokio::fs::read_to_string(path).await.unwrap_or_default();
+
+    let new_content: String = content
+        .lines()
+        .filter(|line| {
+            if line.trim().is_empty() || line.starts_with('#') {
+                return true;
+            }
+            let parts: Vec<&str> = line.splitn(3, ' ').collect();
+            let key_data = parts.get(1).unwrap_or(&"");
+            if key_data.is_empty() { return true; }
+
+            use sha2::{Sha256, Digest};
+            let decoded = base64::engine::general_purpose::STANDARD.decode(key_data).unwrap_or_default();
+            let hash = Sha256::digest(&decoded);
+            let fp = format!("SHA256:{}", base64::engine::general_purpose::STANDARD.encode(&hash).trim_end_matches('='));
+            fp != fingerprint
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    tokio::fs::write(path, format!("{new_content}\n")).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write: {e}")))?;
+
+    tracing::info!("SSH key removed: {fingerprint}");
+    Ok(ok("SSH key removed"))
+}
+
+// ── Auto-Updates ────────────────────────────────────────────────────────
+
+async fn auto_updates_status() -> Result<Json<serde_json::Value>, ApiErr> {
+    let installed = Command::new("dpkg")
+        .args(["-l", "unattended-upgrades"])
+        .output()
+        .await
+        .map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).contains("ii"))
+        .unwrap_or(false);
+
+    let enabled = if installed {
+        tokio::fs::read_to_string("/etc/apt/apt.conf.d/20auto-upgrades")
+            .await
+            .map(|c| c.contains("\"1\""))
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
+    Ok(Json(serde_json::json!({ "installed": installed, "enabled": enabled })))
+}
+
+async fn enable_auto_updates() -> Result<Json<serde_json::Value>, ApiErr> {
+    // Install unattended-upgrades if not present
+    let _ = Command::new("sh")
+        .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades"])
+        .output()
+        .await;
+
+    let config = "APT::Periodic::Update-Package-Lists \"1\";\nAPT::Periodic::Unattended-Upgrade \"1\";\n";
+    tokio::fs::write("/etc/apt/apt.conf.d/20auto-upgrades", config).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write config: {e}")))?;
+
+    tracing::info!("Auto-updates enabled");
+    Ok(ok("Automatic security updates enabled"))
+}
+
+async fn disable_auto_updates() -> Result<Json<serde_json::Value>, ApiErr> {
+    let config = "APT::Periodic::Update-Package-Lists \"0\";\nAPT::Periodic::Unattended-Upgrade \"0\";\n";
+    tokio::fs::write("/etc/apt/apt.conf.d/20auto-upgrades", config).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write config: {e}")))?;
+
+    tracing::info!("Auto-updates disabled");
+    Ok(ok("Automatic security updates disabled"))
+}
+
+// ── Panel IP Whitelist ──────────────────────────────────────────────────
+
+async fn get_whitelist() -> Result<Json<serde_json::Value>, ApiErr> {
+    let path = "/etc/dockpanel/panel-whitelist.conf";
+    let content = tokio::fs::read_to_string(path).await.unwrap_or_default();
+    let ips: Vec<String> = content
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+        .map(|l| l.trim().to_string())
+        .collect();
+
+    Ok(Json(serde_json::json!({ "ips": ips, "enabled": !ips.is_empty() })))
+}
+
+#[derive(Deserialize)]
+pub struct WhitelistRequest {
+    pub ips: Vec<String>,
+}
+
+async fn set_whitelist(
+    Json(body): Json<WhitelistRequest>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    let path = "/etc/dockpanel/panel-whitelist.conf";
+
+    // Validate IPs
+    for ip in &body.ips {
+        let trimmed = ip.trim();
+        if !trimmed.is_empty() && !trimmed.contains('.') && !trimmed.contains(':') {
+            return Err(err(StatusCode::BAD_REQUEST, &format!("Invalid IP: {trimmed}")));
+        }
+    }
+
+    let content: String = body.ips.iter()
+        .filter(|ip| !ip.trim().is_empty())
+        .map(|ip| ip.trim().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    tokio::fs::write(path, format!("{content}\n")).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write: {e}")))?;
+
+    // Update nginx config to include allow/deny directives
+    // This would be picked up by the panel's nginx config
+    tracing::info!("Panel whitelist updated: {} IPs", body.ips.len());
+    Ok(ok(&format!("Whitelist updated with {} IPs", body.ips.iter().filter(|ip| !ip.trim().is_empty()).count())))
+}

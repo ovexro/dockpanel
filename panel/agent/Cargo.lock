@@ -502,6 +502,7 @@ name = "dockpanel-agent"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64",
  "bollard",
  "chrono",
  "hex",

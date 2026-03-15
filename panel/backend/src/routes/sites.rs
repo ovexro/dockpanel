@@ -154,6 +154,19 @@ pub async fn create(
                 &state.db, claims.sub, &claims.email, "site.create",
                 Some("site"), Some(&body.domain), Some(runtime), None,
             ).await;
+
+            // Auto-SSL: try to provision Let's Encrypt cert in background
+            let ssl_agent = state.agent.clone();
+            let ssl_domain = body.domain.clone();
+            tokio::spawn(async move {
+                // Small delay to let DNS propagate
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                match ssl_agent.post(&format!("/ssl/provision/{ssl_domain}"), None).await {
+                    Ok(_) => tracing::info!("Auto-SSL provisioned for {ssl_domain}"),
+                    Err(e) => tracing::info!("Auto-SSL skipped for {ssl_domain}: {e} (can be provisioned manually)"),
+                }
+            });
+
             Ok((StatusCode::CREATED, Json(updated)))
         }
         Err(e) => {

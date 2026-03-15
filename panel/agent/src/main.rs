@@ -101,6 +101,7 @@ async fn main() {
         .merge(routes::diagnostics::router())
         .merge(routes::mail::router())
         .merge(routes::service_installer::router())
+        .merge(routes::server_utils::router())
         .layer(middleware::from_fn_with_state(state.clone(), routes::auth_middleware))
         .layer(middleware::from_fn(routes::audit_middleware))
         .merge(routes::terminal::router())
