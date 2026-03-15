@@ -102,7 +102,7 @@ export default function Setup() {
           <button
             type="submit"
             disabled={submitting}
-            className="w-full py-2.5 bg-accent-500 text-white rounded-lg font-medium hover:bg-accent-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
+            className="w-full py-2.5 bg-rust-500 text-white rounded-lg font-medium hover:bg-rust-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
           >
             {submitting ? "Creating..." : "Create Admin Account"}
           </button>

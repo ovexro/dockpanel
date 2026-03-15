@@ -69,7 +69,7 @@ export default function Sites() {
         <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Sites</h1>
         <button
           onClick={() => setShowForm(!showForm)}
-          className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 transition-colors"
+          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
         >
           {showForm ? "Cancel" : "Create Site"}
         </button>
@@ -173,7 +173,7 @@ export default function Sites() {
           <button
             type="submit"
             disabled={submitting}
-            className="px-6 py-2.5 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50 transition-colors"
+            className="px-6 py-2.5 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
           >
             {submitting ? "Creating..." : "Create Site"}
           </button>

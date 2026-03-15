@@ -168,7 +168,7 @@ export default function Deploy() {
             <button
               onClick={handleDeploy}
               disabled={deploying}
-              className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50 transition-colors"
+              className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
             >
               {deploying ? "Deploying..." : "Deploy Now"}
             </button>
@@ -246,7 +246,7 @@ export default function Deploy() {
             <button
               onClick={handleSave}
               disabled={saving || !repoUrl.trim()}
-              className="px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50 transition-colors"
+              className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
             >
               {saving ? "Saving..." : config ? "Update Config" : "Save Config"}
             </button>
