@@ -37,6 +37,7 @@ const Settings = lazy(() => import("./pages/Settings"));
 const Updates = lazy(() => import("./pages/Updates"));
 const Alerts = lazy(() => import("./pages/Alerts"));
 const Activity = lazy(() => import("./pages/Activity"));
+const Mail = lazy(() => import("./pages/Mail"));
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -69,6 +70,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/settings" element={<Settings />} />
               <Route path="/updates" element={<Updates />} />
               <Route path="/activity" element={<Activity />} />
+              <Route path="/mail" element={<Mail />} />
               <Route path="/users" element={<Users />} />
               <Route path="/servers" element={<Servers />} />
 
