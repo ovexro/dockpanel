@@ -22,7 +22,7 @@ interface DiagnosticReport {
 }
 
 const severityColors: Record<string, { bg: string; text: string; dot: string }> = {
-  critical: { bg: "bg-red-500/10", text: "text-red-400", dot: "bg-red-500" },
+  critical: { bg: "bg-red-500/10", text: "text-danger-400", dot: "bg-red-500" },
   warning: { bg: "bg-warn-500/10", text: "text-warn-400", dot: "bg-warn-500" },
   info: { bg: "bg-blue-500/10", text: "text-blue-400", dot: "bg-blue-500" },
 };
@@ -123,7 +123,7 @@ export default function Diagnostics() {
             onClick={() => setFilter("critical")}
             className={`p-4 rounded-lg border transition-colors ${filter === "critical" ? "border-red-500 bg-dark-800" : "border-dark-500 bg-dark-900 hover:bg-dark-800"}`}
           >
-            <div className="text-2xl font-bold text-red-400">{report.summary.critical}</div>
+            <div className="text-2xl font-bold text-danger-400">{report.summary.critical}</div>
             <div className="text-sm text-dark-300">Critical</div>
           </button>
           <button
@@ -192,7 +192,7 @@ export default function Diagnostics() {
                         </div>
                         <p className="text-sm text-dark-300 mt-1 font-mono">{finding.description}</p>
                         {result && (
-                          <p className={`text-sm mt-2 ${result.ok ? "text-rust-400" : "text-red-400"}`}>
+                          <p className={`text-sm mt-2 ${result.ok ? "text-rust-400" : "text-danger-400"}`}>
                             {result.ok ? "\u2713" : "\u2717"} {result.msg}
                           </p>
                         )}

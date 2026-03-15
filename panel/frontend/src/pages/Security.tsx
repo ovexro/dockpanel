@@ -183,7 +183,7 @@ export default function Security() {
   const scoreColor = (score: number) => {
     if (score >= 80) return "text-rust-400";
     if (score >= 50) return "text-warn-500";
-    return "text-red-400";
+    return "text-danger-400";
   };
 
   const scoreBg = (score: number) => {
@@ -195,7 +195,7 @@ export default function Security() {
   const severityBadge = (severity: string) => {
     switch (severity) {
       case "critical":
-        return "bg-red-500/15 text-red-400 border-red-500/20";
+        return "bg-red-500/15 text-danger-400 border-red-500/20";
       case "warning":
         return "bg-warn-500/15 text-warn-400 border-warn-400/20";
       default:
@@ -206,7 +206,7 @@ export default function Security() {
   const checkTypeBadge = (type: string) => {
     switch (type) {
       case "malware":
-        return "bg-red-500/10 text-red-400";
+        return "bg-red-500/10 text-danger-400";
       case "file_integrity":
         return "bg-purple-500/10 text-purple-400";
       case "open_port":
@@ -258,7 +258,7 @@ export default function Security() {
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
               ? "bg-rust-500/10 text-rust-400 border-rust-500/20"
-              : "bg-red-500/10 text-red-400 border-red-500/20"
+              : "bg-red-500/10 text-danger-400 border-red-500/20"
           }`}
         >
           {message.text}
@@ -335,7 +335,7 @@ export default function Security() {
                 <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
                   <div className="flex items-center gap-2.5">
                     <div className="w-9 h-9 rounded-lg bg-red-500/10 flex items-center justify-center">
-                      <svg className="w-5 h-5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <svg className="w-5 h-5 text-danger-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 18.364A9 9 0 0 0 5.636 5.636m12.728 12.728A9 9 0 0 1 5.636 5.636m12.728 12.728L5.636 5.636" />
                       </svg>
                     </div>
@@ -394,7 +394,7 @@ export default function Security() {
               </div>
               <div className="px-5 py-3 flex gap-4 text-sm border-b border-dark-600">
                 {posture.latest_scan.critical_count > 0 && (
-                  <span className="text-red-400 font-medium">{posture.latest_scan.critical_count} critical</span>
+                  <span className="text-danger-400 font-medium">{posture.latest_scan.critical_count} critical</span>
                 )}
                 {posture.latest_scan.warning_count > 0 && (
                   <span className="text-warn-500 font-medium">{posture.latest_scan.warning_count} warning</span>
@@ -443,7 +443,7 @@ export default function Security() {
                         <td className="px-5 py-2.5 text-sm text-dark-300 font-mono">{rule.number}</td>
                         <td className="px-5 py-2.5 text-sm text-dark-50 font-mono">{rule.to}</td>
                         <td className="px-5 py-2.5">
-                          <span className={`text-xs font-medium ${rule.action.toLowerCase().includes("allow") ? "text-rust-400" : "text-red-400"}`}>
+                          <span className={`text-xs font-medium ${rule.action.toLowerCase().includes("allow") ? "text-rust-400" : "text-danger-400"}`}>
                             {rule.action}
                           </span>
                         </td>
@@ -455,7 +455,7 @@ export default function Security() {
                               <button onClick={() => setDeleteTarget(null)} className="px-1.5 py-0.5 bg-dark-600 text-dark-200 rounded text-[10px]">No</button>
                             </div>
                           ) : (
-                            <button onClick={() => setDeleteTarget(rule.number)} className="text-dark-300 hover:text-red-500" aria-label="Delete rule">
+                            <button onClick={() => setDeleteTarget(rule.number)} className="text-dark-300 hover:text-danger-500" aria-label="Delete rule">
                               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                               </svg>
@@ -491,7 +491,7 @@ export default function Security() {
                       <tr key={jail.name} className="hover:bg-dark-700/30 transition-colors">
                         <td className="px-5 py-2.5 text-sm text-dark-50 font-mono">{jail.name}</td>
                         <td className="px-5 py-2.5 text-sm text-right">
-                          <span className={`font-medium ${jail.banned_count > 0 ? "text-red-400" : "text-dark-300"}`}>
+                          <span className={`font-medium ${jail.banned_count > 0 ? "text-danger-400" : "text-dark-300"}`}>
                             {jail.banned_count}
                           </span>
                         </td>
@@ -527,7 +527,7 @@ export default function Security() {
                       scan.critical_count > 0 ? "bg-red-500/15" : scan.warning_count > 0 ? "bg-warn-500/15" : "bg-rust-500/15"
                     }`}>
                       <svg className={`w-5 h-5 ${
-                        scan.critical_count > 0 ? "text-red-400" : scan.warning_count > 0 ? "text-warn-400" : "text-rust-400"
+                        scan.critical_count > 0 ? "text-danger-400" : scan.warning_count > 0 ? "text-warn-400" : "text-rust-400"
                       }`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />
                       </svg>
@@ -544,7 +544,7 @@ export default function Security() {
                   </div>
                   <div className="flex items-center gap-3">
                     {scan.critical_count > 0 && (
-                      <span className="px-2 py-0.5 bg-red-500/15 text-red-400 rounded text-xs font-medium">{scan.critical_count} critical</span>
+                      <span className="px-2 py-0.5 bg-red-500/15 text-danger-400 rounded text-xs font-medium">{scan.critical_count} critical</span>
                     )}
                     {scan.warning_count > 0 && (
                       <span className="px-2 py-0.5 bg-warn-500/15 text-warn-400 rounded text-xs font-medium">{scan.warning_count} warning</span>

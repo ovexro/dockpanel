@@ -35,7 +35,7 @@ const TYPE_LABELS: Record<string, string> = {
 };
 
 const SEVERITY_STYLES: Record<string, { bg: string; text: string; dot: string }> = {
-  critical: { bg: "bg-red-500/10", text: "text-red-400", dot: "bg-red-500" },
+  critical: { bg: "bg-red-500/10", text: "text-danger-400", dot: "bg-red-500" },
   warning: { bg: "bg-warn-500/10", text: "text-warn-400", dot: "bg-warn-500" },
   info: { bg: "bg-blue-500/10", text: "text-blue-400", dot: "bg-blue-500" },
 };
@@ -125,7 +125,7 @@ export default function Alerts() {
           }`}
           onClick={() => setStatusFilter(statusFilter === "firing" ? "" : "firing")}
         >
-          <div className="text-2xl font-bold text-red-400">{summary.firing}</div>
+          <div className="text-2xl font-bold text-danger-400">{summary.firing}</div>
           <div className="text-sm text-dark-200">Firing</div>
         </div>
         <div

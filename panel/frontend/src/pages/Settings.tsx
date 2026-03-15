@@ -266,7 +266,7 @@ export default function Settings() {
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
               ? "bg-rust-500/10 text-rust-400 border-rust-500/20"
-              : "bg-red-500/10 text-red-400 border-red-500/20"
+              : "bg-red-500/10 text-danger-400 border-red-500/20"
           }`}
         >
           {message.text}
@@ -589,7 +589,7 @@ export default function Settings() {
                             setMessage({ text: e instanceof Error ? e.message : "Delete failed", type: "error" });
                           }
                         }}
-                        className="px-2 py-1 bg-red-500/10 text-red-400 rounded text-xs font-medium hover:bg-red-500/20"
+                        className="px-2 py-1 bg-red-500/10 text-danger-400 rounded text-xs font-medium hover:bg-red-500/20"
                       >
                         Delete
                       </button>
@@ -640,7 +640,7 @@ export default function Settings() {
                         setTwoFaLoading(false);
                       }
                     }}
-                    className="px-4 py-2 bg-red-500/20 text-red-400 rounded-lg text-sm font-medium hover:bg-red-500/30 disabled:opacity-50"
+                    className="px-4 py-2 bg-red-500/20 text-danger-400 rounded-lg text-sm font-medium hover:bg-red-500/30 disabled:opacity-50"
                   >
                     Disable 2FA
                   </button>
@@ -963,7 +963,7 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
             {healthLoading && !health ? (
               <div className="text-center text-sm text-dark-300 py-4">Checking health...</div>
             ) : !health ? (
-              <div className="text-center text-sm text-red-500 py-4">Could not reach health endpoint</div>
+              <div className="text-center text-sm text-danger-500 py-4">Could not reach health endpoint</div>
             ) : (
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
@@ -971,7 +971,7 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
                     <div className={`w-3 h-3 rounded-full ${health.database ? "bg-rust-500" : "bg-red-500"}`} />
                     <span className="text-sm text-dark-50">Database</span>
                   </div>
-                  <span className={`text-sm font-medium ${health.database ? "text-rust-400" : "text-red-400"}`}>
+                  <span className={`text-sm font-medium ${health.database ? "text-rust-400" : "text-danger-400"}`}>
                     {health.database ? "Connected" : "Error"}
                   </span>
                 </div>
@@ -980,7 +980,7 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
                     <div className={`w-3 h-3 rounded-full ${health.agent ? "bg-rust-500" : "bg-red-500"}`} />
                     <span className="text-sm text-dark-50">Agent</span>
                   </div>
-                  <span className={`text-sm font-medium ${health.agent ? "text-rust-400" : "text-red-400"}`}>
+                  <span className={`text-sm font-medium ${health.agent ? "text-rust-400" : "text-danger-400"}`}>
                     {health.agent ? "Connected" : "Error"}
                   </span>
                 </div>

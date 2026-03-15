@@ -2,22 +2,27 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 @theme {
-  /* Harmonized green — matched to red-400 (#f87171) saturation/lightness */
+  /* Harmonized green — anchored at #22c55e (S:71 L:45) */
   --color-rust-50:  #f0fdf6;
   --color-rust-100: #d6fce4;
   --color-rust-200: #a8f8c4;
-  --color-rust-300: #72f8a3;
-  --color-rust-400: #72f8a3;
-  --color-rust-500: #43ef82;
-  --color-rust-600: #22c55e;
+  --color-rust-300: #46ec83;
+  --color-rust-400: #46ec83;
+  --color-rust-500: #22c55e;
+  --color-rust-600: #16a34a;
   --color-rust-700: #047857;
   --color-rust-800: #065f46;
   --color-rust-900: #064e3b;
 
-  /* Harmonized amber — matched to red-400 saturation/lightness */
-  --color-warn-400: #f8c772;
-  --color-warn-500: #efb043;
-  --color-warn-600: #d99a2e;
+  /* Harmonized amber — matched to green at S:71 L:45 / S:81 L:60 */
+  --color-warn-400: #ecaf46;
+  --color-warn-500: #c48821;
+  --color-warn-600: #a37019;
+
+  /* Harmonized red — matched to green at S:71 L:45 / S:81 L:60 */
+  --color-danger-400: #ec4646;
+  --color-danger-500: #c42121;
+  --color-danger-600: #a31b1b;
 
   /* Interactive accent — buttons, links, focus rings */
   --color-accent-50:  #eef2ff;
@@ -85,9 +90,9 @@ body {
   --color-dark-100: #1e293b;
   --color-dark-50:  #0f172a;
 
-  --color-rust-500: #22c55e;
-  --color-rust-400: #43ef82;
-  --color-rust-600: #16a34a;
+  --color-rust-500: #16a34a;
+  --color-rust-400: #22c55e;
+  --color-rust-600: #15803d;
 
   --color-accent-500: #4f46e5;
   --color-accent-600: #4338ca;
@@ -155,11 +160,11 @@ textarea::placeholder {
 
 /* Logo terminal glow */
 .logo-glow {
-  text-shadow: 0 0 12px rgba(67, 239, 130, 0.35);
+  text-shadow: 0 0 12px rgba(34, 197, 94, 0.4);
 }
 
 .logo-icon-glow {
-  box-shadow: 0 0 16px rgba(67, 239, 130, 0.25), 0 0 4px rgba(67, 239, 130, 0.12);
+  box-shadow: 0 0 16px rgba(34, 197, 94, 0.3), 0 0 4px rgba(34, 197, 94, 0.15);
 }
 
 /* Blinking cursor animation */

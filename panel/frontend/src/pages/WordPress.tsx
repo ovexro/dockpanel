@@ -196,7 +196,7 @@ export default function WordPress() {
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
               ? "bg-rust-50 text-rust-400 border-rust-200"
-              : "bg-red-500/10 text-red-400 border-red-500/20"
+              : "bg-red-500/10 text-danger-400 border-red-500/20"
           }`}
         >
           {message.text}
@@ -542,7 +542,7 @@ export default function WordPress() {
                                   handlePluginAction(p.name, "delete");
                               }}
                               disabled={busy.startsWith("plugin-")}
-                              className="p-1 text-dark-300 hover:text-red-600"
+                              className="p-1 text-dark-300 hover:text-danger-500"
                             >
                               <svg
                                 className="w-3.5 h-3.5"
@@ -652,7 +652,7 @@ export default function WordPress() {
                                   handleThemeAction(t.name, "delete");
                               }}
                               disabled={busy.startsWith("theme-")}
-                              className="p-1 text-dark-300 hover:text-red-600"
+                              className="p-1 text-dark-300 hover:text-danger-500"
                             >
                               <svg
                                 className="w-3.5 h-3.5"

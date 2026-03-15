@@ -178,7 +178,7 @@ export default function Crons() {
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
               ? "bg-rust-50 text-rust-400 border-rust-200"
-              : "bg-red-500/10 text-red-400 border-red-500/20"
+              : "bg-red-500/10 text-danger-400 border-red-500/20"
           }`}
           role="alert"
         >
@@ -301,7 +301,7 @@ export default function Crons() {
                         <span className="text-xs text-dark-300">
                           Last run: {formatDate(cron.last_run)}
                           {cron.last_status && (
-                            <span className={`ml-1 ${cron.last_status === "success" ? "text-rust-400" : "text-red-500"}`}>
+                            <span className={`ml-1 ${cron.last_status === "success" ? "text-rust-400" : "text-danger-500"}`}>
                               ({cron.last_status})
                             </span>
                           )}
@@ -333,7 +333,7 @@ export default function Crons() {
                     ) : (
                       <button
                         onClick={() => setDeleteTarget(cron.id)}
-                        className="px-3 py-1 bg-red-500/10 text-red-400 rounded-md text-xs font-medium hover:bg-red-100 transition-colors"
+                        className="px-3 py-1 bg-red-500/10 text-danger-400 rounded-md text-xs font-medium hover:bg-red-100 transition-colors"
                         aria-label="Delete cron"
                       >
                         Delete
@@ -345,7 +345,7 @@ export default function Crons() {
                 {/* Run output */}
                 {runOutput && runOutput.id === cron.id && (
                   <div className={`mt-3 ml-12 p-3 rounded-lg text-xs font-mono whitespace-pre-wrap max-h-40 overflow-auto ${
-                    runOutput.success ? "bg-dark-900 text-dark-100 border border-dark-500" : "bg-red-500/10 text-red-400 border border-red-500/20"
+                    runOutput.success ? "bg-dark-900 text-dark-100 border border-dark-500" : "bg-red-500/10 text-danger-400 border border-red-500/20"
                   }`}>
                     {runOutput.output || "(no output)"}
                     <button

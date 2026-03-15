@@ -35,7 +35,7 @@ interface Incident {
 
 const statusColors: Record<string, string> = {
   up: "bg-rust-500/15 text-rust-400",
-  down: "bg-red-500/15 text-red-400",
+  down: "bg-red-500/15 text-danger-400",
   pending: "bg-dark-700 text-dark-200",
 };
 
@@ -176,7 +176,7 @@ export default function Monitors() {
       </div>
 
       {error && (
-        <div className="bg-red-500/10 text-red-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-4">
+        <div className="bg-red-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-4">
           {error}
           <button onClick={() => setError("")} className="ml-2 font-medium hover:underline">Dismiss</button>
         </div>
@@ -247,7 +247,7 @@ export default function Monitors() {
                   </div>
                   <div className="flex items-center gap-2 sm:gap-4 shrink-0">
                     {m.last_response_time != null && (
-                      <span className={`text-xs font-medium font-mono ${m.last_response_time > 2000 ? "text-red-500" : m.last_response_time > 500 ? "text-warn-500" : "text-rust-400"}`}>
+                      <span className={`text-xs font-medium font-mono ${m.last_response_time > 2000 ? "text-danger-500" : m.last_response_time > 500 ? "text-warn-500" : "text-rust-400"}`}>
                         {m.last_response_time}ms
                       </span>
                     )}
@@ -265,7 +265,7 @@ export default function Monitors() {
                     </button>
                     <button
                       onClick={(e) => { e.stopPropagation(); handleDelete(m.id, m.name); }}
-                      className="p-1 text-dark-300 hover:text-red-500 transition-colors shrink-0"
+                      className="p-1 text-dark-300 hover:text-danger-500 transition-colors shrink-0"
                       title="Delete"
                       aria-label="Delete monitor"
                     >
@@ -302,7 +302,7 @@ export default function Monitors() {
                               <div className="flex items-center gap-2">
                                 {c.status_code && <span className="text-dark-200 font-mono">{c.status_code}</span>}
                                 {c.response_time != null && <span className="text-dark-300 font-mono">{c.response_time}ms</span>}
-                                {c.error && <span className="text-red-500 truncate max-w-32">{c.error}</span>}
+                                {c.error && <span className="text-danger-500 truncate max-w-32">{c.error}</span>}
                               </div>
                             </div>
                           ))}
@@ -320,7 +320,7 @@ export default function Monitors() {
                           {incidents.map((i) => (
                             <div key={i.id} className="text-xs border border-dark-600 rounded-lg p-2">
                               <div className="flex items-center justify-between">
-                                <span className={`font-medium ${i.resolved_at ? "text-rust-400" : "text-red-400"}`}>
+                                <span className={`font-medium ${i.resolved_at ? "text-rust-400" : "text-danger-400"}`}>
                                   {i.resolved_at ? "Resolved" : "Ongoing"}
                                 </span>
                                 <span className="text-dark-300">{formatDate(i.started_at)}</span>

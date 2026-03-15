@@ -159,7 +159,7 @@ export default function Teams() {
       </div>
 
       {error && (
-        <div className="bg-red-500/10 text-red-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-4">
+        <div className="bg-red-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-4">
           {error}
           <button onClick={() => setError("")} className="ml-2 font-medium hover:underline">Dismiss</button>
         </div>
@@ -215,7 +215,7 @@ export default function Teams() {
                   {t.is_owner && (
                     <button
                       onClick={() => handleDelete(t.id, t.name)}
-                      className="p-1.5 text-dark-300 hover:text-red-500 transition-colors"
+                      className="p-1.5 text-dark-300 hover:text-danger-500 transition-colors"
                       title="Delete team"
                       aria-label="Delete team"
                     >
@@ -274,7 +274,7 @@ export default function Teams() {
                         </select>
                         <button
                           onClick={() => handleRemoveMember(t.id, m.id, m.email)}
-                          className="text-xs text-red-500 hover:text-red-700"
+                          className="text-xs text-danger-500 hover:text-danger-500"
                         >
                           Remove
                         </button>
