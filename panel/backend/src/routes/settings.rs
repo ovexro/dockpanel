@@ -165,6 +165,36 @@ pub async fn test_email(
     Ok(Json(serde_json::json!({ "ok": true, "message": message })))
 }
 
+/// POST /api/settings/test-webhook — Test Slack/Discord webhook
+pub async fn test_webhook(
+    State(_state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+    Json(body): Json<std::collections::HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let url = body.get("url").ok_or_else(|| err(StatusCode::BAD_REQUEST, "URL required"))?;
+    let service = body.get("service").unwrap_or(&"webhook".to_string()).clone();
+
+    if url.is_empty() || !url.starts_with("https://") {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid webhook URL"));
+    }
+
+    let payload = if service == "slack" {
+        serde_json::json!({ "text": "DockPanel test notification — your Slack webhook is working!" })
+    } else {
+        serde_json::json!({ "content": "DockPanel test notification — your Discord webhook is working!" })
+    };
+
+    let client = reqwest::Client::new();
+    let resp = client.post(url).json(&payload).send().await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Webhook request failed: {e}")))?;
+
+    if !resp.status().is_success() {
+        return Err(err(StatusCode::BAD_GATEWAY, &format!("Webhook returned {}", resp.status())));
+    }
+
+    Ok(Json(serde_json::json!({ "ok": true, "message": format!("{} test sent", service) })))
+}
+
 /// GET /api/settings/health — System health check (admin only).
 pub async fn health(
     State(state): State<AppState>,

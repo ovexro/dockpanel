@@ -874,7 +874,37 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
                 placeholder="https://discord.com/api/webhooks/..."
               />
             </div>
-            <div className="flex justify-end">
+            <div className="flex flex-wrap justify-end gap-2">
+              {notifySlackUrl && (
+                <button
+                  onClick={async () => {
+                    try {
+                      await api.post("/settings/test-webhook", { url: notifySlackUrl, service: "slack" });
+                      setMessage({ text: "Slack test sent", type: "success" });
+                    } catch (e) {
+                      setMessage({ text: e instanceof Error ? e.message : "Slack test failed", type: "error" });
+                    }
+                  }}
+                  className="px-3 py-2 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600"
+                >
+                  Test Slack
+                </button>
+              )}
+              {notifyDiscordUrl && (
+                <button
+                  onClick={async () => {
+                    try {
+                      await api.post("/settings/test-webhook", { url: notifyDiscordUrl, service: "discord" });
+                      setMessage({ text: "Discord test sent", type: "success" });
+                    } catch (e) {
+                      setMessage({ text: e instanceof Error ? e.message : "Discord test failed", type: "error" });
+                    }
+                  }}
+                  className="px-3 py-2 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600"
+                >
+                  Test Discord
+                </button>
+              )}
               <button
                 onClick={async () => {
                   setSaving("notify");
@@ -944,6 +974,15 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
             )}
           </div>
         </div>
+
+        {/* SSH Keys */}
+        <SSHKeys />
+
+        {/* Auto-Updates */}
+        <AutoUpdates />
+
+        {/* IP Whitelist */}
+        <IPWhitelist />
 
         {/* Service Installers */}
         <ServiceInstallers />
@@ -1107,6 +1146,142 @@ function ServiceInstallers() {
             );
           })}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── SSH Keys Component ──────────────────────────────────────────────────
+
+function SSHKeys() {
+  const [keys, setKeys] = useState<{ type: string; fingerprint: string; comment: string; key: string }[]>([]);
+  const [newKey, setNewKey] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [msg, setMsg] = useState({ text: "", type: "" });
+
+  useEffect(() => {
+    api.get<{ keys: typeof keys }>("/ssh-keys").then(d => setKeys(d.keys || [])).catch(() => {});
+  }, []);
+
+  return (
+    <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+      <div className="px-5 py-3 border-b border-dark-600">
+        <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">SSH Keys</h3>
+        <p className="text-xs text-dark-200 mt-0.5">Manage authorized SSH keys for root access</p>
+      </div>
+      <div className="p-5 space-y-3">
+        {msg.text && <div className={`px-3 py-2 rounded text-xs ${msg.type === "success" ? "bg-rust-500/10 text-rust-400" : "bg-red-500/10 text-danger-400"}`}>{msg.text}</div>}
+        {keys.map((k) => (
+          <div key={k.fingerprint} className="flex items-center justify-between bg-dark-900 border border-dark-500 px-4 py-2">
+            <div className="min-w-0">
+              <span className="text-xs text-dark-50 font-mono block truncate">{k.comment || k.key}</span>
+              <span className="text-[10px] text-dark-300 font-mono">{k.fingerprint}</span>
+            </div>
+            <button onClick={async () => { await api.delete(`/ssh-keys/${encodeURIComponent(k.fingerprint)}`); setKeys(keys.filter(x => x.fingerprint !== k.fingerprint)); }} className="p-1 text-dark-300 hover:text-danger-400 shrink-0 ml-2">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+          </div>
+        ))}
+        <div className="flex gap-2">
+          <input type="text" value={newKey} onChange={(e) => setNewKey(e.target.value)} placeholder="ssh-ed25519 AAAA... user@host" className="flex-1 px-3 py-2 border border-dark-500 rounded-lg text-xs font-mono focus:ring-2 focus:ring-accent-500 outline-none" />
+          <button disabled={adding || !newKey.startsWith("ssh-")} onClick={async () => {
+            setAdding(true); setMsg({ text: "", type: "" });
+            try { await api.post("/ssh-keys", { key: newKey }); setNewKey(""); const d = await api.get<{ keys: typeof keys }>("/ssh-keys"); setKeys(d.keys || []); setMsg({ text: "Key added", type: "success" }); }
+            catch (e: any) { setMsg({ text: e?.message || "Failed", type: "error" }); }
+            finally { setAdding(false); }
+          }} className="px-3 py-2 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600 disabled:opacity-50 shrink-0">
+            {adding ? "Adding..." : "Add Key"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Auto-Updates Component ──────────────────────────────────────────────
+
+function AutoUpdates() {
+  const [status, setStatus] = useState<{ installed: boolean; enabled: boolean } | null>(null);
+  const [toggling, setToggling] = useState(false);
+
+  useEffect(() => {
+    api.get<{ installed: boolean; enabled: boolean }>("/auto-updates/status").then(setStatus).catch(() => {});
+  }, []);
+
+  const toggle = async () => {
+    if (!status) return;
+    setToggling(true);
+    try {
+      await api.post(status.enabled ? "/auto-updates/disable" : "/auto-updates/enable", {});
+      setStatus({ ...status, installed: true, enabled: !status.enabled });
+    } catch { /* ignore */ }
+    finally { setToggling(false); }
+  };
+
+  return (
+    <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+      <div className="px-5 py-3 border-b border-dark-600">
+        <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Auto-Updates</h3>
+        <p className="text-xs text-dark-200 mt-0.5">Automatically install security patches</p>
+      </div>
+      <div className="p-5">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm text-dark-100">Automatic security updates</p>
+            <p className="text-xs text-dark-300 mt-0.5">Uses unattended-upgrades to apply security patches automatically</p>
+          </div>
+          <button onClick={toggle} disabled={toggling} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 ${status?.enabled ? "bg-rust-500" : "bg-dark-600"}`}>
+            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${status?.enabled ? "translate-x-6" : "translate-x-1"}`} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── IP Whitelist Component ──────────────────────────────────────────────
+
+function IPWhitelist() {
+  const [ips, setIps] = useState<string[]>([]);
+  const [newIp, setNewIp] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState({ text: "", type: "" });
+
+  useEffect(() => {
+    api.get<{ ips: string[] }>("/panel-whitelist").then(d => setIps(d.ips || [])).catch(() => {});
+  }, []);
+
+  const save = async (list: string[]) => {
+    setSaving(true); setMsg({ text: "", type: "" });
+    try {
+      await api.post("/panel-whitelist", { ips: list });
+      setIps(list);
+      setMsg({ text: list.length > 0 ? `Whitelist saved (${list.length} IPs)` : "Whitelist cleared", type: "success" });
+    } catch (e: any) { setMsg({ text: e?.message || "Failed", type: "error" }); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+      <div className="px-5 py-3 border-b border-dark-600">
+        <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Panel IP Whitelist</h3>
+        <p className="text-xs text-dark-200 mt-0.5">Restrict panel access to specific IPs</p>
+      </div>
+      <div className="p-5 space-y-3">
+        {msg.text && <div className={`px-3 py-2 rounded text-xs ${msg.type === "success" ? "bg-rust-500/10 text-rust-400" : "bg-red-500/10 text-danger-400"}`}>{msg.text}</div>}
+        {ips.map((ip, i) => (
+          <div key={i} className="flex items-center justify-between bg-dark-900 border border-dark-500 px-3 py-1.5">
+            <span className="text-xs text-dark-50 font-mono">{ip}</span>
+            <button onClick={() => save(ips.filter((_, j) => j !== i))} className="text-dark-300 hover:text-danger-400">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+          </div>
+        ))}
+        <div className="flex gap-2">
+          <input type="text" value={newIp} onChange={(e) => setNewIp(e.target.value)} placeholder="e.g. 203.0.113.50" className="flex-1 px-3 py-2 border border-dark-500 rounded-lg text-xs font-mono focus:ring-2 focus:ring-accent-500 outline-none" />
+          <button disabled={!newIp || saving} onClick={() => { save([...ips, newIp.trim()]); setNewIp(""); }} className="px-3 py-2 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600 disabled:opacity-50 shrink-0">Add IP</button>
+        </div>
+        {ips.length > 0 && <button onClick={() => save([])} className="text-xs text-dark-300 hover:text-dark-100">Clear whitelist (allow all)</button>}
       </div>
     </div>
   );

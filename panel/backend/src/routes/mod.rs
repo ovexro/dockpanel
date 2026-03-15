@@ -185,6 +185,7 @@ pub fn router() -> Router<AppState> {
         // Settings (admin)
         .route("/api/settings", get(settings::list).put(settings::update))
         .route("/api/settings/smtp/test", post(settings::test_email))
+        .route("/api/settings/test-webhook", post(settings::test_webhook))
         .route("/api/settings/health", get(settings::health))
         // DNS Management
         .route("/api/dns/zones", get(dns::list_zones).post(dns::create_zone))
@@ -251,6 +252,15 @@ pub fn router() -> Router<AppState> {
         // Dashboard Intelligence
         .route("/api/dashboard/intelligence", get(dashboard::intelligence))
         .route("/api/dashboard/metrics-history", get(dashboard::metrics_history))
+        // SSH Keys
+        .route("/api/ssh-keys", get(system::list_ssh_keys).post(system::add_ssh_key))
+        .route("/api/ssh-keys/{fingerprint}", delete(system::remove_ssh_key))
+        // Auto-Updates
+        .route("/api/auto-updates/status", get(system::auto_updates_status))
+        .route("/api/auto-updates/enable", post(system::enable_auto_updates))
+        .route("/api/auto-updates/disable", post(system::disable_auto_updates))
+        // Panel IP Whitelist
+        .route("/api/panel-whitelist", get(system::get_panel_whitelist).post(system::set_panel_whitelist))
         // Service installers
         .route("/api/services/install-status", get(system::install_status))
         .route("/api/services/install/php", post(system::install_php))
