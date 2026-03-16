@@ -94,7 +94,12 @@ async fn deploy(
         match nginx::render_site_config(&state.templates, domain, &site_config) {
             Ok(rendered) => {
                 let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
-                if let Err(e) = std::fs::write(&config_path, &rendered) {
+                let tmp_path = format!("{config_path}.tmp");
+                let write_result = std::fs::write(&tmp_path, &rendered)
+                    .and_then(|_| std::fs::rename(&tmp_path, &config_path));
+                if let Err(e) = write_result {
+                    // Clean up tmp file on failure
+                    std::fs::remove_file(&tmp_path).ok();
                     tracing::warn!("Auto-proxy: failed to write nginx config for {domain}: {e}");
                     response["proxy_warning"] = serde_json::json!(format!("Failed to write nginx config: {e}"));
                 } else {

@@ -241,7 +241,7 @@ async fn main() {
             let removed = {
                 let mut bl = cleanup_blacklist.write().await;
                 let count = bl.len();
-                if count > 1000 {
+                if count > 10000 {
                     bl.clear();
                     count
                 } else {
