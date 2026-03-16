@@ -387,8 +387,9 @@ async fn remove(
         ));
     }
 
-    // Check for associated domain before removing the container
+    // Extract app metadata before removing the container
     let domain = docker_apps::get_app_domain(&container_id).await;
+    let app_name = docker_apps::get_app_name(&container_id).await;
 
     docker_apps::remove_app(&container_id)
         .await
@@ -399,15 +400,51 @@ async fn remove(
             )
         })?;
 
-    // Clean up nginx config if domain was set
     let mut response = serde_json::json!({ "success": true });
+
+    // Clean up nginx config + SSL certs if domain was set
     if let Some(ref domain) = domain {
         response["domain_removed"] = serde_json::json!(domain);
+
+        // Remove nginx config
         let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
         if std::path::Path::new(&config_path).exists() {
             std::fs::remove_file(&config_path).ok();
             nginx::reload().await.ok();
             tracing::info!("Auto-proxy cleanup: removed nginx config for {domain}");
+        }
+
+        // Remove SSL certificates (panel-provisioned)
+        let ssl_dir = format!("/etc/dockpanel/ssl/{domain}");
+        if std::path::Path::new(&ssl_dir).exists() {
+            std::fs::remove_dir_all(&ssl_dir).ok();
+            tracing::info!("SSL cleanup: removed certs for {domain}");
+        }
+
+        // Remove SSL certificates (certbot/Let's Encrypt)
+        let le_live = format!("/etc/letsencrypt/live/{domain}");
+        let le_archive = format!("/etc/letsencrypt/archive/{domain}");
+        let le_renewal = format!("/etc/letsencrypt/renewal/{domain}.conf");
+        if std::path::Path::new(&le_live).exists() {
+            std::fs::remove_dir_all(&le_live).ok();
+            std::fs::remove_dir_all(&le_archive).ok();
+            std::fs::remove_file(&le_renewal).ok();
+            tracing::info!("SSL cleanup: removed Let's Encrypt certs for {domain}");
+        }
+
+        // Remove nginx logs
+        let access_log = format!("/var/log/nginx/{domain}.access.log");
+        let error_log = format!("/var/log/nginx/{domain}.error.log");
+        std::fs::remove_file(&access_log).ok();
+        std::fs::remove_file(&error_log).ok();
+    }
+
+    // Clean up persistent volume data
+    if let Some(ref name) = app_name {
+        let volume_dir = format!("/var/lib/dockpanel/apps/{name}");
+        if std::path::Path::new(&volume_dir).exists() {
+            std::fs::remove_dir_all(&volume_dir).ok();
+            tracing::info!("Volume cleanup: removed {volume_dir}");
         }
     }
 
