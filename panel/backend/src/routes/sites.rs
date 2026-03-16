@@ -243,110 +243,137 @@ pub async fn create(
                 // (For WordPress, the WP task emits complete)
             });
 
-            // One-click CMS install (WordPress, Drupal, Joomla)
-            let is_wordpress = body.cms.as_deref() == Some("wordpress");
-            if is_wordpress {
-                let wp_agent = state.agent.clone();
-                let wp_domain = body.domain.clone();
-                let wp_db = state.db.clone();
-                let wp_title = body.site_title.clone().unwrap_or_else(|| body.domain.clone());
-                let wp_email = body.admin_email.clone().unwrap_or_else(|| "admin@example.com".to_string());
-                let wp_user = body.admin_user.clone().unwrap_or_else(|| "admin".to_string());
-                let wp_pass = body.admin_password.clone().unwrap_or_else(|| {
+            // One-click CMS/framework install
+            let cms_type = body.cms.as_deref().unwrap_or("");
+            let needs_db = matches!(cms_type, "wordpress" | "laravel" | "drupal" | "joomla" | "codeigniter");
+            let needs_install = matches!(cms_type, "wordpress" | "laravel" | "drupal" | "joomla" | "symfony" | "codeigniter");
+
+            if needs_install {
+                let cms_agent = state.agent.clone();
+                let cms_domain = body.domain.clone();
+                let cms_db = state.db.clone();
+                let cms_name = cms_type.to_string();
+                let cms_label = match cms_type {
+                    "wordpress" => "WordPress",
+                    "laravel" => "Laravel",
+                    "drupal" => "Drupal",
+                    "joomla" => "Joomla",
+                    "symfony" => "Symfony",
+                    "codeigniter" => "CodeIgniter",
+                    _ => cms_type,
+                }.to_string();
+                let cms_title = body.site_title.clone().unwrap_or_else(|| body.domain.clone());
+                let cms_email = body.admin_email.clone().unwrap_or_else(|| "admin@example.com".to_string());
+                let cms_user = body.admin_user.clone().unwrap_or_else(|| "admin".to_string());
+                let cms_pass = body.admin_password.clone().unwrap_or_else(|| {
                     use rand::Rng;
                     let mut rng = rand::thread_rng();
                     (0..16).map(|_| rng.sample(rand::distributions::Alphanumeric) as char).collect()
                 });
-                let wp_logs = logs.clone();
+                let cms_logs = logs.clone();
 
                 tokio::spawn(async move {
-                    // 1. Create database via agent
-                    emit_step(&wp_logs, site_id, "database", "Creating MySQL database", "in_progress", None);
-                    let db_name = wp_domain.replace('.', "_").replace('-', "_");
-                    let db_user = db_name.clone();
-                    let db_pass: String = {
+                    let db_name = cms_domain.replace('.', "_").replace('-', "_");
+                    let db_user_name = db_name.clone();
+                    let db_password: String = {
                         use rand::Rng;
                         let mut rng = rand::thread_rng();
                         (0..20).map(|_| rng.sample(rand::distributions::Alphanumeric) as char).collect()
                     };
 
-                    let db_result = wp_agent.post("/databases", Some(serde_json::json!({
-                        "engine": "mysql",
-                        "name": db_name,
-                        "password": db_pass,
-                    }))).await;
+                    // 1. Create database (if needed)
+                    let mut db_host = String::new();
+                    if needs_db {
+                        emit_step(&cms_logs, site_id, "database", "Creating MySQL database", "in_progress", None);
 
-                    let (db_host, db_port, db_container_id) = match db_result {
-                        Ok(resp) => {
-                            let port = resp.get("port").and_then(|v| v.as_u64()).unwrap_or(3306) as u16;
-                            let cid = resp.get("container_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            emit_step(&wp_logs, site_id, "database", "Creating MySQL database", "done", None);
-                            (format!("127.0.0.1:{port}"), port as i32, cid)
-                        }
-                        Err(e) => {
-                            tracing::error!("WordPress DB creation failed for {wp_domain}: {e}");
-                            emit_step(&wp_logs, site_id, "database", "Creating MySQL database", "error",
-                                Some(format!("Database creation failed: {e}")));
-                            emit_step(&wp_logs, site_id, "complete", "Provisioning failed", "error", None);
-                            // Clean up after delay
-                            tokio::time::sleep(Duration::from_secs(30)).await;
-                            wp_logs.lock().unwrap().remove(&site_id);
-                            return;
-                        }
+                        let db_result = cms_agent.post("/databases", Some(serde_json::json!({
+                            "engine": "mysql",
+                            "name": db_name,
+                            "password": db_password,
+                        }))).await;
+
+                        let (host, db_port, db_container_id) = match db_result {
+                            Ok(resp) => {
+                                let port = resp.get("port").and_then(|v| v.as_u64()).unwrap_or(3306) as u16;
+                                let cid = resp.get("container_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                emit_step(&cms_logs, site_id, "database", "Creating MySQL database", "done", None);
+                                (format!("127.0.0.1:{port}"), port as i32, cid)
+                            }
+                            Err(e) => {
+                                tracing::error!("{cms_label} DB creation failed for {cms_domain}: {e}");
+                                emit_step(&cms_logs, site_id, "database", "Creating MySQL database", "error",
+                                    Some(format!("Database creation failed: {e}")));
+                                emit_step(&cms_logs, site_id, "complete", "Provisioning failed", "error", None);
+                                tokio::time::sleep(Duration::from_secs(30)).await;
+                                cms_logs.lock().unwrap().remove(&site_id);
+                                return;
+                            }
+                        };
+                        db_host = host;
+
+                        let _ = sqlx::query(
+                            "INSERT INTO databases (site_id, engine, name, db_user, db_password_enc, container_id, port) \
+                             VALUES ((SELECT id FROM sites WHERE domain = $1), 'mysql', $2, $3, $4, $5, $6) \
+                             ON CONFLICT DO NOTHING",
+                        )
+                        .bind(&cms_domain)
+                        .bind(&db_name)
+                        .bind(&db_user_name)
+                        .bind(&db_password)
+                        .bind(&db_container_id)
+                        .bind(db_port)
+                        .execute(&cms_db)
+                        .await;
+
+                        emit_step(&cms_logs, site_id, "db_init", "Waiting for database engine", "in_progress", None);
+                        tokio::time::sleep(Duration::from_secs(10)).await;
+                        emit_step(&cms_logs, site_id, "db_init", "Database engine ready", "done", None);
+                    }
+
+                    // 2. Install CMS/framework
+                    emit_step(&cms_logs, site_id, "install", &format!("Installing {cms_label}"), "in_progress", None);
+
+                    let install_result = if cms_name == "wordpress" {
+                        cms_agent.post(&format!("/wordpress/{cms_domain}/install"), Some(serde_json::json!({
+                            "url": format!("https://{cms_domain}"),
+                            "title": cms_title,
+                            "admin_user": cms_user,
+                            "admin_pass": cms_pass,
+                            "admin_email": cms_email,
+                            "db_name": db_name,
+                            "db_user": db_user_name,
+                            "db_pass": db_password,
+                            "db_host": db_host,
+                        }))).await
+                    } else {
+                        cms_agent.post(&format!("/cms/{cms_domain}/install"), Some(serde_json::json!({
+                            "cms": cms_name,
+                            "title": cms_title,
+                            "admin_user": cms_user,
+                            "admin_pass": cms_pass,
+                            "admin_email": cms_email,
+                            "db_name": db_name,
+                            "db_user": db_user_name,
+                            "db_pass": db_password,
+                            "db_host": db_host,
+                        }))).await
                     };
-
-                    // Store DB in panel database
-                    let _ = sqlx::query(
-                        "INSERT INTO databases (site_id, engine, name, db_user, db_password_enc, container_id, port) \
-                         VALUES ((SELECT id FROM sites WHERE domain = $1), 'mysql', $2, $3, $4, $5, $6) \
-                         ON CONFLICT DO NOTHING",
-                    )
-                    .bind(&wp_domain)
-                    .bind(&db_name)
-                    .bind(&db_user)
-                    .bind(&db_pass)
-                    .bind(&db_container_id)
-                    .bind(db_port)
-                    .execute(&wp_db)
-                    .await;
-
-                    // Wait for MariaDB to initialize
-                    emit_step(&wp_logs, site_id, "db_init", "Waiting for database engine", "in_progress", None);
-                    tokio::time::sleep(Duration::from_secs(10)).await;
-                    emit_step(&wp_logs, site_id, "db_init", "Database engine ready", "done", None);
-
-                    // 2. Install WordPress via agent
-                    emit_step(&wp_logs, site_id, "wordpress", "Installing WordPress", "in_progress", None);
-                    let install_result = wp_agent.post(&format!("/wordpress/{wp_domain}/install"), Some(serde_json::json!({
-                        "url": format!("https://{wp_domain}"),
-                        "title": wp_title,
-                        "admin_user": wp_user,
-                        "admin_pass": wp_pass,
-                        "admin_email": wp_email,
-                        "db_name": db_name,
-                        "db_user": db_user,
-                        "db_pass": db_pass,
-                        "db_host": db_host,
-                    }))).await;
 
                     match install_result {
                         Ok(_) => {
-                            tracing::info!("WordPress installed on {wp_domain}");
-                            emit_step(&wp_logs, site_id, "wordpress", "Installing WordPress", "done", None);
+                            tracing::info!("{cms_label} installed on {cms_domain}");
+                            emit_step(&cms_logs, site_id, "install", &format!("Installing {cms_label}"), "done", None);
                         }
                         Err(e) => {
-                            tracing::error!("WordPress install failed for {wp_domain}: {e}");
-                            emit_step(&wp_logs, site_id, "wordpress", "Installing WordPress", "error",
-                                Some(format!("WordPress install failed: {e}")));
+                            tracing::error!("{cms_label} install failed for {cms_domain}: {e}");
+                            emit_step(&cms_logs, site_id, "install", &format!("Installing {cms_label}"), "error",
+                                Some(format!("{cms_label} install failed: {e}")));
                         }
                     }
 
-                    // Final: emit complete
-                    emit_step(&wp_logs, site_id, "complete", "Site ready", "done", None);
-
-                    // Keep channel alive briefly so clients receive the final event, then clean up
+                    emit_step(&cms_logs, site_id, "complete", "Site ready", "done", None);
                     tokio::time::sleep(Duration::from_secs(30)).await;
-                    wp_logs.lock().unwrap().remove(&site_id);
+                    cms_logs.lock().unwrap().remove(&site_id);
                 });
             } else {
                 // Non-CMS site: emit complete after SSL (spawned separately)
