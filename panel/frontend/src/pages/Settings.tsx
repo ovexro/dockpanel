@@ -1026,6 +1026,7 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
   setMessage: (v: { text: string; type: string }) => void;
 }) {
   const [status, setStatus] = useState<Record<string, { installed?: boolean; running?: boolean; active?: boolean; version?: string | null }> | null>(null);
+  const [mailStatus, setMailStatus] = useState<{ installed: boolean; running: boolean } | null>(null);
   const [installing, setInstalling] = useState<string | null>(null);
   const [installId, setInstallId] = useState<string | null>(null);
   const [msg, setMsg] = useState({ text: "", type: "" });
@@ -1035,6 +1036,9 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
     api.get<Record<string, unknown>>("/services/install-status")
       .then((d) => setStatus(d as any))
       .catch(() => {});
+    api.get<{ installed: boolean; running: boolean }>("/mail/status")
+      .then((d) => setMailStatus(d))
+      .catch(() => setMailStatus({ installed: false, running: false }));
   };
 
   useEffect(refreshStatus, []);
@@ -1044,7 +1048,8 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
     setInstallId(null);
     setMsg({ text: "", type: "" });
     try {
-      const result = await api.post<{ install_id?: string }>(`/services/install/${service}`, {});
+      const endpoint = service === "mail" ? "/mail/install" : `/services/install/${service}`;
+      const result = await api.post<{ install_id?: string }>(endpoint, {});
       if (result.install_id) {
         setInstallId(result.install_id);
       } else {
@@ -1064,6 +1069,7 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
     { id: "ufw", label: "UFW Firewall", desc: "Firewall with default rules (SSH, HTTP, HTTPS, mail ports)", field: "ufw", checkInstalled: (s: any) => s?.ufw?.installed, checkRunning: (s: any) => s?.ufw?.active, extra: () => null },
     { id: "fail2ban", label: "Fail2Ban", desc: "Intrusion prevention with SSH, Nginx, Postfix jails", field: "fail2ban", checkInstalled: (s: any) => s?.fail2ban?.installed, checkRunning: (s: any) => s?.fail2ban?.running, extra: () => null },
     { id: "powerdns", label: "PowerDNS", desc: "Self-hosted authoritative DNS server with HTTP API", field: "powerdns", checkInstalled: (s: any) => s?.powerdns?.installed, checkRunning: (s: any) => s?.powerdns?.running, extra: () => null },
+    { id: "mail", label: "Mail Server", desc: "Postfix + Dovecot + OpenDKIM for email hosting", field: "mail", checkInstalled: () => mailStatus?.installed ?? null, checkRunning: () => mailStatus?.running ?? false, extra: () => null },
   ];
 
   return (
@@ -1110,6 +1116,7 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
             <p><span className="text-dark-100 font-medium">UFW</span> — Installs firewall, opens SSH/HTTP/HTTPS/SMTP/IMAPS ports, enables with deny-by-default policy.</p>
             <p><span className="text-dark-100 font-medium">Fail2Ban</span> — Installs intrusion prevention. Creates jails for SSH brute-force, nginx auth failures, Postfix, and Dovecot.</p>
             <p><span className="text-dark-100 font-medium">PowerDNS</span> — Installs authoritative DNS server with PostgreSQL backend. Auto-configures HTTP API and saves credentials to Settings.</p>
+            <p><span className="text-dark-100 font-medium">Mail Server</span> — Installs Postfix (SMTP), Dovecot (IMAP/POP3), and OpenDKIM (DKIM signing). Creates vmail user, configures virtual mailbox hosting with SASL auth and submission port (587). Manage domains and mailboxes from the Mail page.</p>
           </div>
         )}
 
