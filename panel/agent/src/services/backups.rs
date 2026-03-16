@@ -64,6 +64,15 @@ pub async fn create_backup(domain: &str) -> Result<BackupInfo, String> {
     let meta = std::fs::metadata(&filepath)
         .map_err(|e| format!("Failed to read backup metadata: {e}"))?;
 
+    // Warn if backup exceeds 5GB — may indicate bloated site or logs in webroot
+    const BACKUP_SIZE_WARN: u64 = 5 * 1024 * 1024 * 1024;
+    if meta.len() > BACKUP_SIZE_WARN {
+        tracing::warn!(
+            "Backup for {domain} is very large: {:.2} GB ({filename}). Consider cleaning up the site directory.",
+            meta.len() as f64 / (1024.0 * 1024.0 * 1024.0)
+        );
+    }
+
     tracing::info!("Backup created: {filename} ({} bytes)", meta.len());
 
     Ok(BackupInfo {
@@ -131,10 +140,11 @@ pub async fn restore_backup(domain: &str, filename: &str) -> Result<(), String> 
         .to_str()
         .ok_or_else(|| "Invalid site root path encoding".to_string())?;
 
+    // Full overwrite (no --no-overwrite-dir) ensures a clean restore without leftover files
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(300),
         Command::new("tar")
-            .args(["xzf", filepath_str, "--no-overwrite-dir", "-C", site_root_str])
+            .args(["xzf", filepath_str, "-C", site_root_str])
             .output(),
     )
     .await
@@ -146,7 +156,13 @@ pub async fn restore_backup(domain: &str, filename: &str) -> Result<(), String> 
         return Err(format!("Restore failed: {stderr}"));
     }
 
-    tracing::info!("Backup restored: {filename} for {domain}");
+    // Verify the restore produced a non-empty site directory
+    let entries = std::fs::read_dir(&site_root).map(|d| d.count()).unwrap_or(0);
+    if entries == 0 {
+        return Err("Restore completed but site directory is empty".to_string());
+    }
+
+    tracing::info!("Backup restored: {filename} for {domain} ({entries} entries)");
     Ok(())
 }
 

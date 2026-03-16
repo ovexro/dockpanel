@@ -207,7 +207,7 @@ async fn check_threshold(
     if exceeds {
         let new_count = consecutive + 1;
 
-        // Upsert state
+        // Upsert state — PostgreSQL serializes concurrent ON CONFLICT upserts
         let _ = sqlx::query(
             "INSERT INTO alert_state (server_id, alert_type, state_key, current_state, consecutive_count, fired_at) \
              VALUES ($1, $2, '', CASE WHEN $3 >= $4 THEN 'firing' ELSE 'pending' END, $3, \
@@ -326,7 +326,7 @@ async fn check_server_offline(pool: &PgPool) {
     };
 
     for (server_id, user_id, name) in &offline {
-        // Create firing state
+        // Create firing state — PostgreSQL serializes concurrent ON CONFLICT upserts
         let _ = sqlx::query(
             "INSERT INTO alert_state (server_id, alert_type, state_key, current_state, fired_at, last_notified_at) \
              VALUES ($1, 'offline', '', 'firing', NOW(), NOW()) \
@@ -450,7 +450,7 @@ async fn check_ssl_expiry(pool: &PgPool) {
 
                     fire_ssl_alert(pool, *user_id, *site_id, domain, days_left, severity).await;
 
-                    // Update state with last_warned_day
+                    // Update state with last_warned_day — PostgreSQL serializes concurrent ON CONFLICT upserts
                     let _ = sqlx::query(
                         "INSERT INTO alert_state (site_id, alert_type, state_key, current_state, last_notified_at, metadata) \
                          VALUES ($1, 'ssl_expiry', '', 'firing', NOW(), $2) \
@@ -570,6 +570,7 @@ async fn check_service_health(pool: &PgPool, agent: &AgentClient) {
             .flatten();
 
             if state.as_ref().map(|s| s.0.as_str()) != Some("firing") {
+                // PostgreSQL serializes concurrent ON CONFLICT upserts
                 let _ = sqlx::query(
                     "INSERT INTO alert_state (server_id, alert_type, state_key, current_state, fired_at, last_notified_at) \
                      VALUES ($1, 'service_down', $2, 'firing', NOW(), NOW()) \

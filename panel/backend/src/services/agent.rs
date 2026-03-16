@@ -190,6 +190,16 @@ impl AgentClient {
 
         let bytes = collected.to_bytes();
 
+        // Guard against oversized agent responses (50MB limit)
+        const MAX_RESPONSE_SIZE: usize = 50 * 1024 * 1024;
+        if bytes.len() > MAX_RESPONSE_SIZE {
+            return Err(AgentError::Response(format!(
+                "agent response too large: {} bytes (limit: {}MB)",
+                bytes.len(),
+                MAX_RESPONSE_SIZE / (1024 * 1024)
+            )));
+        }
+
         if !status.is_success() {
             let msg = String::from_utf8_lossy(&bytes).to_string();
             return Err(AgentError::Status(status.as_u16(), msg));
