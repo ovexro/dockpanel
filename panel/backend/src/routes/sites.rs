@@ -1,8 +1,15 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
+    response::sse::{Event, KeepAlive, Sse},
     Json,
 };
+use futures::stream::StreamExt;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use std::collections::HashMap;
+use tokio::sync::broadcast;
+use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
@@ -11,6 +18,39 @@ use crate::models::Site;
 use crate::routes::is_valid_domain;
 use crate::services::activity;
 use crate::AppState;
+
+/// A single provisioning step event.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ProvisionStep {
+    pub step: String,
+    pub label: String,
+    pub status: String, // "pending", "in_progress", "done", "error"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// Helper: emit a provisioning step to the broadcast channel + history.
+fn emit_step(
+    logs: &Arc<Mutex<HashMap<Uuid, (Vec<ProvisionStep>, broadcast::Sender<ProvisionStep>, Instant)>>>,
+    site_id: Uuid,
+    step: &str,
+    label: &str,
+    status: &str,
+    message: Option<String>,
+) {
+    let ev = ProvisionStep {
+        step: step.into(),
+        label: label.into(),
+        status: status.into(),
+        message,
+    };
+    if let Ok(mut map) = logs.lock() {
+        if let Some((history, tx, _)) = map.get_mut(&site_id) {
+            history.push(ev.clone());
+            let _ = tx.send(ev);
+        }
+    }
+}
 
 #[derive(serde::Deserialize)]
 pub struct ListQuery {
@@ -26,7 +66,7 @@ pub struct CreateSiteRequest {
     pub php_version: Option<String>,
     pub php_preset: Option<String>,
     // One-click CMS install
-    pub cms: Option<String>,  // "wordpress", "drupal", "joomla", "prestashop"
+    pub cms: Option<String>,
     pub site_title: Option<String>,
     pub admin_email: Option<String>,
     pub admin_user: Option<String>,
@@ -55,10 +95,6 @@ pub async fn list(
 }
 
 /// POST /api/sites — Create a new site.
-///
-/// 1. Insert into DB with status "creating"
-/// 2. Call agent to configure nginx
-/// 3. Update status to "active" or "error"
 pub async fn create(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
@@ -120,6 +156,17 @@ pub async fn create(
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
+    // Create provisioning log channel
+    let (tx, _) = broadcast::channel::<ProvisionStep>(64);
+    {
+        let mut logs = state.provision_logs.lock().unwrap();
+        logs.insert(site.id, (Vec::new(), tx, Instant::now()));
+    }
+    let logs = state.provision_logs.clone();
+    let site_id = site.id;
+
+    emit_step(&logs, site_id, "nginx", "Configuring web server", "in_progress", None);
+
     // Build agent request body
     let mut agent_body = serde_json::json!({
         "runtime": runtime,
@@ -139,7 +186,9 @@ pub async fn create(
     let agent_path = format!("/nginx/sites/{}", body.domain);
     match state.agent.put(&agent_path, agent_body).await {
         Ok(_) => {
-            // Update status to active (only if still in 'creating' state)
+            emit_step(&logs, site_id, "nginx", "Configuring web server", "done", None);
+
+            // Update status to active
             sqlx::query(
                 "UPDATE sites SET status = 'active', updated_at = NOW() \
                  WHERE id = $1 AND status = 'creating'"
@@ -164,86 +213,151 @@ pub async fn create(
             // Auto-SSL: try to provision Let's Encrypt cert in background
             let ssl_agent = state.agent.clone();
             let ssl_domain = body.domain.clone();
+            let ssl_email = claims.email.clone();
+            let ssl_runtime = runtime.to_string();
+            let ssl_php_socket = body.php_version.as_ref().map(|v| format!("unix:/run/php/php{v}-fpm.sock"));
+            let ssl_proxy_port = body.proxy_port;
+            let ssl_logs = logs.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                match ssl_agent.post(&format!("/ssl/provision/{ssl_domain}"), None).await {
-                    Ok(_) => tracing::info!("Auto-SSL provisioned for {ssl_domain}"),
-                    Err(e) => tracing::info!("Auto-SSL skipped for {ssl_domain}: {e} (can be provisioned manually)"),
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                emit_step(&ssl_logs, site_id, "ssl", "Provisioning SSL certificate", "in_progress", None);
+                let ssl_body = serde_json::json!({
+                    "email": ssl_email,
+                    "runtime": ssl_runtime,
+                    "php_socket": ssl_php_socket,
+                    "proxy_port": ssl_proxy_port,
+                });
+                match ssl_agent.post(&format!("/ssl/provision/{ssl_domain}"), Some(ssl_body)).await {
+                    Ok(_) => {
+                        tracing::info!("Auto-SSL provisioned for {ssl_domain}");
+                        emit_step(&ssl_logs, site_id, "ssl", "Provisioning SSL certificate", "done", None);
+                    }
+                    Err(e) => {
+                        tracing::info!("Auto-SSL skipped for {ssl_domain}: {e} (can be provisioned manually)");
+                        emit_step(&ssl_logs, site_id, "ssl", "SSL certificate", "error",
+                            Some("Skipped — can be provisioned manually from site settings".into()));
+                    }
                 }
+
+                // If no CMS install, this is the final step — emit complete
+                // (For WordPress, the WP task emits complete)
             });
 
             // One-click CMS install (WordPress, Drupal, Joomla)
-            if let Some(ref cms) = body.cms {
-                if cms == "wordpress" {
-                    let wp_agent = state.agent.clone();
-                    let wp_domain = body.domain.clone();
-                    let wp_db = state.db.clone();
-                    let wp_title = body.site_title.clone().unwrap_or_else(|| body.domain.clone());
-                    let wp_email = body.admin_email.clone().unwrap_or_else(|| "admin@example.com".to_string());
-                    let wp_user = body.admin_user.clone().unwrap_or_else(|| "admin".to_string());
-                    let wp_pass = body.admin_password.clone().unwrap_or_else(|| {
+            let is_wordpress = body.cms.as_deref() == Some("wordpress");
+            if is_wordpress {
+                let wp_agent = state.agent.clone();
+                let wp_domain = body.domain.clone();
+                let wp_db = state.db.clone();
+                let wp_title = body.site_title.clone().unwrap_or_else(|| body.domain.clone());
+                let wp_email = body.admin_email.clone().unwrap_or_else(|| "admin@example.com".to_string());
+                let wp_user = body.admin_user.clone().unwrap_or_else(|| "admin".to_string());
+                let wp_pass = body.admin_password.clone().unwrap_or_else(|| {
+                    use rand::Rng;
+                    let mut rng = rand::thread_rng();
+                    (0..16).map(|_| rng.sample(rand::distributions::Alphanumeric) as char).collect()
+                });
+                let wp_logs = logs.clone();
+
+                tokio::spawn(async move {
+                    // 1. Create database via agent
+                    emit_step(&wp_logs, site_id, "database", "Creating MySQL database", "in_progress", None);
+                    let db_name = wp_domain.replace('.', "_").replace('-', "_");
+                    let db_user = db_name.clone();
+                    let db_pass: String = {
                         use rand::Rng;
                         let mut rng = rand::thread_rng();
-                        (0..16).map(|_| rng.sample(rand::distributions::Alphanumeric) as char).collect()
-                    });
+                        (0..20).map(|_| rng.sample(rand::distributions::Alphanumeric) as char).collect()
+                    };
 
-                    tokio::spawn(async move {
-                        // 1. Create database via agent
-                        let db_name = wp_domain.replace('.', "_").replace('-', "_");
-                        let db_user = db_name.clone();
-                        let db_pass: String = {
-                            use rand::Rng;
-                            let mut rng = rand::thread_rng();
-                            (0..20).map(|_| rng.sample(rand::distributions::Alphanumeric) as char).collect()
-                        };
+                    let db_result = wp_agent.post("/databases", Some(serde_json::json!({
+                        "engine": "mysql",
+                        "name": db_name,
+                        "password": db_pass,
+                    }))).await;
 
-                        let db_result = wp_agent.post("/databases", Some(serde_json::json!({
-                            "engine": "mysql",
-                            "name": db_name,
-                            "user": db_user,
-                            "password": db_pass,
-                        }))).await;
-
-                        let db_host = match db_result {
-                            Ok(resp) => resp.get("host").and_then(|v| v.as_str()).unwrap_or("127.0.0.1").to_string(),
-                            Err(e) => {
-                                tracing::error!("WordPress DB creation failed for {wp_domain}: {e}");
-                                return;
-                            }
-                        };
-
-                        // Store DB in panel database
-                        let _ = sqlx::query(
-                            "INSERT INTO databases (site_id, engine, name, username, host) \
-                             VALUES ((SELECT id FROM sites WHERE domain = $1), 'mysql', $2, $3, $4) \
-                             ON CONFLICT DO NOTHING",
-                        )
-                        .bind(&wp_domain)
-                        .bind(&db_name)
-                        .bind(&db_user)
-                        .bind(&db_host)
-                        .execute(&wp_db)
-                        .await;
-
-                        // 2. Install WordPress via agent
-                        let install_result = wp_agent.post(&format!("/wordpress/{wp_domain}/install"), Some(serde_json::json!({
-                            "url": format!("https://{wp_domain}"),
-                            "title": wp_title,
-                            "admin_user": wp_user,
-                            "admin_pass": wp_pass,
-                            "admin_email": wp_email,
-                            "db_name": db_name,
-                            "db_user": db_user,
-                            "db_pass": db_pass,
-                            "db_host": db_host,
-                        }))).await;
-
-                        match install_result {
-                            Ok(_) => tracing::info!("WordPress installed on {wp_domain}"),
-                            Err(e) => tracing::error!("WordPress install failed for {wp_domain}: {e}"),
+                    let (db_host, db_port, db_container_id) = match db_result {
+                        Ok(resp) => {
+                            let port = resp.get("port").and_then(|v| v.as_u64()).unwrap_or(3306) as u16;
+                            let cid = resp.get("container_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            emit_step(&wp_logs, site_id, "database", "Creating MySQL database", "done", None);
+                            (format!("127.0.0.1:{port}"), port as i32, cid)
                         }
-                    });
-                }
+                        Err(e) => {
+                            tracing::error!("WordPress DB creation failed for {wp_domain}: {e}");
+                            emit_step(&wp_logs, site_id, "database", "Creating MySQL database", "error",
+                                Some(format!("Database creation failed: {e}")));
+                            emit_step(&wp_logs, site_id, "complete", "Provisioning failed", "error", None);
+                            // Clean up after delay
+                            tokio::time::sleep(Duration::from_secs(30)).await;
+                            wp_logs.lock().unwrap().remove(&site_id);
+                            return;
+                        }
+                    };
+
+                    // Store DB in panel database
+                    let _ = sqlx::query(
+                        "INSERT INTO databases (site_id, engine, name, db_user, db_password_enc, container_id, port) \
+                         VALUES ((SELECT id FROM sites WHERE domain = $1), 'mysql', $2, $3, $4, $5, $6) \
+                         ON CONFLICT DO NOTHING",
+                    )
+                    .bind(&wp_domain)
+                    .bind(&db_name)
+                    .bind(&db_user)
+                    .bind(&db_pass)
+                    .bind(&db_container_id)
+                    .bind(db_port)
+                    .execute(&wp_db)
+                    .await;
+
+                    // Wait for MariaDB to initialize
+                    emit_step(&wp_logs, site_id, "db_init", "Waiting for database engine", "in_progress", None);
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    emit_step(&wp_logs, site_id, "db_init", "Database engine ready", "done", None);
+
+                    // 2. Install WordPress via agent
+                    emit_step(&wp_logs, site_id, "wordpress", "Installing WordPress", "in_progress", None);
+                    let install_result = wp_agent.post(&format!("/wordpress/{wp_domain}/install"), Some(serde_json::json!({
+                        "url": format!("https://{wp_domain}"),
+                        "title": wp_title,
+                        "admin_user": wp_user,
+                        "admin_pass": wp_pass,
+                        "admin_email": wp_email,
+                        "db_name": db_name,
+                        "db_user": db_user,
+                        "db_pass": db_pass,
+                        "db_host": db_host,
+                    }))).await;
+
+                    match install_result {
+                        Ok(_) => {
+                            tracing::info!("WordPress installed on {wp_domain}");
+                            emit_step(&wp_logs, site_id, "wordpress", "Installing WordPress", "done", None);
+                        }
+                        Err(e) => {
+                            tracing::error!("WordPress install failed for {wp_domain}: {e}");
+                            emit_step(&wp_logs, site_id, "wordpress", "Installing WordPress", "error",
+                                Some(format!("WordPress install failed: {e}")));
+                        }
+                    }
+
+                    // Final: emit complete
+                    emit_step(&wp_logs, site_id, "complete", "Site ready", "done", None);
+
+                    // Keep channel alive briefly so clients receive the final event, then clean up
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    wp_logs.lock().unwrap().remove(&site_id);
+                });
+            } else {
+                // Non-CMS site: emit complete after SSL (spawned separately)
+                let final_logs = logs.clone();
+                tokio::spawn(async move {
+                    // Wait for SSL task to finish (SSL has 3s delay + ~5s provision)
+                    tokio::time::sleep(Duration::from_secs(12)).await;
+                    emit_step(&final_logs, site_id, "complete", "Site ready", "done", None);
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    final_logs.lock().unwrap().remove(&site_id);
+                });
             }
 
             Ok((StatusCode::CREATED, Json(updated)))
@@ -251,15 +365,83 @@ pub async fn create(
         Err(e) => {
             // Update status to error
             tracing::error!("Agent error creating site {}: {e}", body.domain);
+            emit_step(&logs, site_id, "nginx", "Configuring web server", "error",
+                Some(format!("Agent error: {e}")));
+            emit_step(&logs, site_id, "complete", "Provisioning failed", "error", None);
+
             sqlx::query("UPDATE sites SET status = 'error', updated_at = NOW() WHERE id = $1")
                 .bind(site.id)
                 .execute(&state.db)
                 .await
                 .ok();
 
+            // Clean up after delay
+            let cleanup_logs = logs.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                cleanup_logs.lock().unwrap().remove(&site_id);
+            });
+
             Err(agent_error("Site configuration", e))
         }
     }
+}
+
+/// GET /api/sites/{id}/provision-log — SSE stream of provisioning steps.
+pub async fn provision_log(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Sse<impl futures::Stream<Item = Result<Event, axum::BoxError>>>, ApiError> {
+    // Verify ownership
+    let exists: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM sites WHERE id = $1 AND user_id = $2"
+    )
+    .bind(id).bind(claims.sub)
+    .fetch_optional(&state.db).await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    if exists.is_none() {
+        return Err(err(StatusCode::NOT_FOUND, "Site not found"));
+    }
+
+    // Get broadcast receiver + snapshot of existing steps
+    let (snapshot, rx) = {
+        let logs = state.provision_logs.lock().unwrap();
+        match logs.get(&id) {
+            Some((history, tx, _)) => (history.clone(), Some(tx.subscribe())),
+            None => (Vec::new(), None),
+        }
+    };
+
+    let rx = rx.ok_or_else(|| err(StatusCode::NOT_FOUND, "No active provisioning for this site"))?;
+
+    // First yield snapshot events, then stream live updates
+    let snapshot_stream = futures::stream::iter(
+        snapshot.into_iter().map(|step| {
+            let data = serde_json::to_string(&step).unwrap_or_default();
+            Ok(Event::default().data(data))
+        })
+    );
+
+    let live_stream = BroadcastStream::new(rx)
+        .filter_map(|result| async {
+            match result {
+                Ok(step) => {
+                    let data = serde_json::to_string(&step).ok()?;
+                    Some(Ok(Event::default().data(data)))
+                }
+                Err(_) => None,
+            }
+        });
+
+    let stream = snapshot_stream.chain(live_stream);
+
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("ping"),
+    ))
 }
 
 /// GET /api/sites/{id} — Get site details.
@@ -295,7 +477,6 @@ pub async fn switch_php(
 ) -> Result<Json<Site>, ApiError> {
     let version = body.version.trim();
 
-    // Validate version format (e.g. "8.1", "8.2", "8.3", "8.4")
     if !["8.1", "8.2", "8.3", "8.4"].contains(&version) {
         return Err(err(
             StatusCode::BAD_REQUEST,
@@ -303,7 +484,6 @@ pub async fn switch_php(
         ));
     }
 
-    // Fetch site and verify ownership
     let site: Site = sqlx::query_as(
         "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
     )
@@ -321,23 +501,17 @@ pub async fn switch_php(
         ));
     }
 
-    // Build agent request to re-render nginx config with the new PHP socket
     let mut agent_body = serde_json::json!({
         "runtime": "php",
         "php_socket": format!("unix:/run/php/php{version}-fpm.sock"),
     });
 
-    // Preserve PHP preset
     if let Some(ref preset) = site.php_preset {
         agent_body["php_preset"] = serde_json::json!(preset);
     }
-
-    // Preserve custom nginx directives
     if let Some(ref custom) = site.custom_nginx {
         agent_body["custom_nginx"] = serde_json::json!(custom);
     }
-
-    // Preserve SSL state
     if site.ssl_enabled {
         agent_body["ssl"] = serde_json::json!(true);
         if let Some(ref cert) = site.ssl_cert_path {
@@ -348,7 +522,6 @@ pub async fn switch_php(
         }
     }
 
-    // Call agent to update nginx config
     let agent_path = format!("/nginx/sites/{}", site.domain);
     state
         .agent
@@ -356,7 +529,6 @@ pub async fn switch_php(
         .await
         .map_err(|e| agent_error("Nginx update", e))?;
 
-    // Update DB
     let updated: Site = sqlx::query_as(
         "UPDATE sites SET php_version = $1, updated_at = NOW() WHERE id = $2 RETURNING *",
     )
@@ -419,11 +591,11 @@ pub async fn php_install(
 /// PUT /api/sites/{id}/limits — Update per-site resource limits.
 #[derive(serde::Deserialize)]
 pub struct UpdateLimitsRequest {
-    pub rate_limit: Option<i32>,       // requests/sec per IP, null = unlimited
-    pub max_upload_mb: Option<i32>,    // client_max_body_size
-    pub php_memory_mb: Option<i32>,    // PHP memory_limit
-    pub php_max_workers: Option<i32>,  // PHP-FPM pm.max_children
-    pub custom_nginx: Option<String>,  // custom nginx directives
+    pub rate_limit: Option<i32>,
+    pub max_upload_mb: Option<i32>,
+    pub php_memory_mb: Option<i32>,
+    pub php_max_workers: Option<i32>,
+    pub custom_nginx: Option<String>,
 }
 
 pub async fn update_limits(
@@ -442,7 +614,6 @@ pub async fn update_limits(
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
-    // Validate limits
     if let Some(rl) = body.rate_limit {
         if rl < 1 || rl > 10000 {
             return Err(err(StatusCode::BAD_REQUEST, "Rate limit must be between 1 and 10000"));
@@ -461,7 +632,6 @@ pub async fn update_limits(
         return Err(err(StatusCode::BAD_REQUEST, "PHP workers must be between 1 and 100"));
     }
 
-    // Validate custom_nginx
     if let Some(ref custom) = body.custom_nginx {
         if custom.len() > 10240 {
             return Err(err(StatusCode::BAD_REQUEST, "Custom nginx directives must be under 10KB"));
@@ -471,7 +641,6 @@ pub async fn update_limits(
         }
     }
 
-    // Update DB
     let custom_nginx = body.custom_nginx.as_deref();
     let updated: Site = sqlx::query_as(
         "UPDATE sites SET rate_limit = $1, max_upload_mb = $2, php_memory_mb = $3, php_max_workers = $4, \
@@ -487,7 +656,6 @@ pub async fn update_limits(
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    // Re-render nginx config with new limits
     let mut agent_body = serde_json::json!({
         "runtime": site.runtime,
         "rate_limit": body.rate_limit,
@@ -552,12 +720,10 @@ pub async fn remove(
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
-    // Call agent to remove nginx config (must succeed before DB deletion)
     let agent_path = format!("/nginx/sites/{}", site.domain);
     state.agent.delete(&agent_path).await
         .map_err(|e| agent_error("Site removal", e))?;
 
-    // Delete from DB
     sqlx::query("DELETE FROM sites WHERE id = $1")
         .bind(id)
         .execute(&state.db)
