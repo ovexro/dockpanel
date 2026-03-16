@@ -20,16 +20,22 @@ struct ScheduleRow {
 }
 
 /// Run the backup scheduler loop — checks every 60 seconds for due schedules.
-pub async fn run(db: PgPool, agent: AgentClient) {
+pub async fn run(db: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
     tracing::info!("Backup scheduler started");
 
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
 
     loop {
-        interval.tick().await;
-
-        if let Err(e) = tick(&db, &agent).await {
-            tracing::error!("Backup scheduler error: {e}");
+        tokio::select! {
+            _ = interval.tick() => {
+                if let Err(e) = tick(&db, &agent).await {
+                    tracing::error!("Backup scheduler error: {e}");
+                }
+            }
+            _ = shutdown_rx.recv() => {
+                tracing::info!("Backup scheduler shutting down gracefully");
+                break;
+            }
         }
     }
 }
@@ -124,6 +130,44 @@ async fn run_scheduled_backup(
     agent: &AgentClient,
     row: &ScheduleRow,
 ) -> Result<(), String> {
+    // 0. Pre-flight: check disk space via agent before creating backup
+    if let Ok(sys_info) = agent.get("/system/info").await {
+        let disk_pct = sys_info
+            .get("disk_usage_pct")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+
+        if disk_pct > 90.0 {
+            // Fire alert about low disk space preventing backup
+            if let Ok(Some((user_id,))) = sqlx::query_as::<_, (Uuid,)>(
+                "SELECT user_id FROM sites WHERE id = $1",
+            )
+            .bind(row.site_id)
+            .fetch_optional(db)
+            .await
+            {
+                crate::services::notifications::fire_alert(
+                    db,
+                    user_id,
+                    None,
+                    Some(row.site_id),
+                    "backup_failure",
+                    "warning",
+                    &format!("Backup skipped (low disk): {}", row.domain),
+                    &format!(
+                        "Scheduled backup for {} was skipped because disk usage is {:.1}% (>90%). \
+                         Free up disk space to resume automatic backups.",
+                        row.domain, disk_pct
+                    ),
+                )
+                .await;
+            }
+            return Err(format!(
+                "Disk usage too high ({disk_pct:.1}% > 90%) — backup skipped"
+            ));
+        }
+    }
+
     // 1. Create backup via agent
     let agent_path = format!("/backups/{}/create", row.domain);
     let backup_result = agent
@@ -141,18 +185,10 @@ async fn run_scheduled_backup(
         .unwrap_or(0) as i64;
     let filepath = format!("/var/backups/dockpanel/{}/{}", row.domain, filename);
 
-    // 2. Record in backups table
-    let _ = sqlx::query(
-        "INSERT INTO backups (site_id, filename, size_bytes) VALUES ($1, $2, $3)",
-    )
-    .bind(row.site_id)
-    .bind(filename)
-    .bind(size_bytes)
-    .execute(db)
-    .await;
-
-    // 3. Upload to remote destination (if configured)
-    if let (Some(dest_dtype), Some(dest_config)) = (&row.dest_dtype, &row.dest_config) {
+    // 2. Upload to remote destination (if configured)
+    let _uploaded_remote = if let (Some(dest_dtype), Some(dest_config)) =
+        (&row.dest_dtype, &row.dest_config)
+    {
         let mut dest = dest_config.clone();
         if let Some(obj) = dest.as_object_mut() {
             obj.insert("type".to_string(), serde_json::json!(dest_dtype));
@@ -163,20 +199,60 @@ async fn run_scheduled_backup(
             "destination": dest,
         });
 
-        agent
-            .post("/backups/upload", Some(upload_body))
-            .await
-            .map_err(|e| format!("Upload failed: {e}"))?;
+        // Retry upload with exponential backoff: 5s, 15s, 30s
+        let delays = [5u64, 15, 30];
+        let mut last_err = String::new();
+        let mut uploaded = false;
 
-        // 4. Prune old remote backups
+        for (attempt, delay) in delays.iter().enumerate() {
+            match agent.post("/backups/upload", Some(upload_body.clone())).await {
+                Ok(_) => {
+                    uploaded = true;
+                    break;
+                }
+                Err(e) => {
+                    last_err = e.to_string();
+                    if attempt < delays.len() - 1 {
+                        tracing::warn!(
+                            "Backup upload attempt {} failed for {}: {last_err} — retrying in {delay}s",
+                            attempt + 1,
+                            row.domain
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(*delay)).await;
+                    }
+                }
+            }
+        }
+
+        if !uploaded {
+            // All retries exhausted — don't record in DB since the upload failed.
+            // The local file still exists on disk for manual recovery.
+            return Err(format!("Upload failed after 3 attempts: {last_err}"));
+        }
+
+        // Prune old remote backups
         let prune_body = serde_json::json!({
             "destination": dest,
             "domain": row.domain,
             "retention": row.retention_count,
         });
-
         let _ = agent.post("/backups/prune", Some(prune_body)).await;
-    }
+
+        true
+    } else {
+        false
+    };
+
+    // 3. Record in DB only after successful creation and upload (if configured).
+    // This ensures the DB only contains backups that are fully complete.
+    let _ = sqlx::query(
+        "INSERT INTO backups (site_id, filename, size_bytes) VALUES ($1, $2, $3)",
+    )
+    .bind(row.site_id)
+    .bind(filename)
+    .bind(size_bytes)
+    .execute(db)
+    .await;
 
     tracing::info!("Scheduled backup complete for {}", row.domain);
     Ok(())
