@@ -212,7 +212,7 @@ export default function Sites() {
             </div>
           )}
 
-          {runtime === "php" && (
+          {runtime === "php" && !cms && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label htmlFor="site-php-version" className="block text-sm font-medium text-dark-100 mb-1">PHP Version</label>
@@ -275,6 +275,9 @@ export default function Sites() {
           </svg>
           <p className="text-dark-200 font-medium">No sites yet</p>
           <p className="text-dark-300 text-sm mt-1">Create your first site to get started</p>
+          <button onClick={() => setShowForm(true)} className="mt-3 px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors">
+            Create your first site
+          </button>
         </div>
       ) : (
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-x-auto">

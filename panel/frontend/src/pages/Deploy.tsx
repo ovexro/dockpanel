@@ -40,7 +40,7 @@ export default function Deploy() {
   const [deploying, setDeploying] = useState(false);
   const [deployId, setDeployId] = useState<string | null>(null);
   const [generatingKey, setGeneratingKey] = useState(false);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState({ text: "", type: "" });
   const [expandedLog, setExpandedLog] = useState<string | null>(null);
   const [showSecret, setShowSecret] = useState(false);
 
@@ -75,7 +75,7 @@ export default function Deploy() {
 
   const handleSave = async () => {
     setSaving(true);
-    setMessage("");
+    setMessage({ text: "", type: "" });
     try {
       const cfg = await api.put<DeployConfig>(`/sites/${id}/deploy`, {
         repo_url: repoUrl,
@@ -84,9 +84,9 @@ export default function Deploy() {
         auto_deploy: autoDeploy,
       });
       setConfig(cfg);
-      setMessage("Deploy configuration saved.");
+      setMessage({ text: "Deploy configuration saved.", type: "success" });
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Save failed");
+      setMessage({ text: err instanceof Error ? err.message : "Save failed", type: "error" });
     } finally {
       setSaving(false);
     }
@@ -94,31 +94,31 @@ export default function Deploy() {
 
   const handleDeploy = async () => {
     setDeploying(true);
-    setMessage("");
+    setMessage({ text: "", type: "" });
     try {
       const result = await api.post<{ deploy_id?: string }>(`/sites/${id}/deploy/trigger`);
       if (result.deploy_id) {
         setDeployId(result.deploy_id);
       } else {
-        setMessage("Deployment completed.");
+        setMessage({ text: "Deployment completed.", type: "success" });
         setDeploying(false);
         await load();
       }
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Deploy failed");
+      setMessage({ text: err instanceof Error ? err.message : "Deploy failed", type: "error" });
       setDeploying(false);
     }
   };
 
   const handleKeygen = async () => {
     setGeneratingKey(true);
-    setMessage("");
+    setMessage({ text: "", type: "" });
     try {
       const result = await api.post<{ public_key: string }>(`/sites/${id}/deploy/keygen`);
-      setMessage("Deploy key generated. Add it to your repository's deploy keys.");
+      setMessage({ text: "Deploy key generated. Add it to your repository's deploy keys.", type: "success" });
       setConfig((prev) => prev ? { ...prev, deploy_key_public: result.public_key } : prev);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Key generation failed");
+      setMessage({ text: err instanceof Error ? err.message : "Key generation failed", type: "error" });
     } finally {
       setGeneratingKey(false);
     }
@@ -133,16 +133,16 @@ export default function Deploy() {
       setBranch("main");
       setDeployScript("");
       setAutoDeploy(false);
-      setMessage("Deploy configuration removed.");
+      setMessage({ text: "Deploy configuration removed.", type: "success" });
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Remove failed");
+      setMessage({ text: err instanceof Error ? err.message : "Remove failed", type: "error" });
     }
   };
 
   const copyText = (text: string) => {
     navigator.clipboard.writeText(text);
-    setMessage("Copied to clipboard.");
-    setTimeout(() => setMessage(""), 2000);
+    setMessage({ text: "Copied to clipboard.", type: "success" });
+    setTimeout(() => setMessage({ text: "", type: "" }), 2000);
   };
 
   if (loading) {
@@ -189,13 +189,13 @@ export default function Deploy() {
       </div>
 
       {/* Message */}
-      {message && (
+      {message.text && (
         <div className={`px-4 py-3 rounded-lg text-sm border ${
-          message.includes("success") || message.includes("saved") || message.includes("Copied") || message.includes("generated") || message.includes("removed")
-            ? "bg-rust-50 text-rust-400 border-rust-200"
+          message.type === "success"
+            ? "bg-rust-500/10 text-rust-400 border-rust-500/20"
             : "bg-red-500/10 text-danger-400 border-red-500/20"
         }`}>
-          {message}
+          {message.text}
         </div>
       )}
 

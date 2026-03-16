@@ -255,11 +255,29 @@ export default function Settings() {
     );
   }
 
+  const [tab, setTab] = useState("general");
+
   return (
     <div className="p-6 lg:p-8">
       <div className="mb-6 pb-4 border-b border-dark-600">
         <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Settings</h1>
         <p className="text-sm text-dark-200 font-mono mt-1">Manage panel configuration</p>
+      </div>
+
+      <div className="flex gap-1 mb-6 border-b border-dark-600 pb-1">
+        {[
+          { id: "general", label: "General" },
+          { id: "email", label: "Email" },
+          { id: "security", label: "Security" },
+          { id: "notifications", label: "Notifications" },
+          { id: "destinations", label: "Backup Destinations" },
+          { id: "services", label: "Services" },
+        ].map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            className={`px-3 py-2 text-sm font-medium rounded-t-lg transition-colors ${
+              tab === t.id ? "text-rust-400 border-b-2 border-rust-400" : "text-dark-300 hover:text-dark-100"
+            }`}>{t.label}</button>
+        ))}
       </div>
 
       {message.text && (
@@ -276,6 +294,7 @@ export default function Settings() {
 
       <div className="space-y-6">
         {/* General Settings */}
+        {tab === "general" && (<>
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600">
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">General Settings</h3>
@@ -304,7 +323,53 @@ export default function Settings() {
           </div>
         </div>
 
+        {/* Auto-Healing — part of General tab */}
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Auto-Healing</h3>
+            <p className="text-xs text-dark-200 mt-0.5">Automatically fix common issues when detected</p>
+          </div>
+          <div className="p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">Enable auto-healing</p>
+                <p className="text-xs text-dark-300 mt-0.5">
+                  Auto-restarts crashed services, cleans logs when disk is full, renews expiring SSL certs
+                </p>
+              </div>
+              <button
+                onClick={async () => {
+                  const newVal = !autoHealEnabled;
+                  try {
+                    await api.put("/settings", { auto_heal_enabled: newVal ? "true" : "false" });
+                    setAutoHealEnabled(newVal);
+                    setMessage({ text: `Auto-healing ${newVal ? "enabled" : "disabled"}`, type: "success" });
+                  } catch (e) {
+                    setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
+                  }
+                }}
+                role="switch"
+                aria-checked={autoHealEnabled}
+                aria-label="Enable auto-healing"
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${autoHealEnabled ? "bg-rust-500" : "bg-dark-600"}`}
+              >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${autoHealEnabled ? "translate-x-6" : "translate-x-1"}`} />
+              </button>
+            </div>
+            {autoHealEnabled && (
+              <div className="text-xs text-dark-300 space-y-1 pl-4 border-l-2 border-dark-600">
+                <p>Crashed services are restarted (max once per 10 minutes)</p>
+                <p>Logs are cleaned when disk exceeds 90% (max once per hour)</p>
+                <p>SSL certs are renewed when expiring within 3 days (max once per 6 hours)</p>
+                <p>All actions are logged in the Audit Log page</p>
+              </div>
+            )}
+          </div>
+        </div>
+        </>)}
+
         {/* SMTP Configuration */}
+        {tab === "email" && (
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600">
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">SMTP Configuration</h3>
@@ -434,7 +499,10 @@ export default function Settings() {
           </div>
         </div>
 
+        )}
+
         {/* Backup Destinations */}
+        {tab === "destinations" && (
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600 flex items-center justify-between">
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Backup Destinations</h3>
@@ -602,7 +670,10 @@ export default function Settings() {
           </div>
         </div>
 
+        )}
+
         {/* Two-Factor Authentication */}
+        {tab === "security" && (<>
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600">
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Two-Factor Authentication</h3>
@@ -735,7 +806,116 @@ export default function Settings() {
           </div>
         </div>
 
-        {/* PowerDNS */}
+        {/* SSH Keys — Security tab */}
+        <SSHKeys />
+
+        {/* Auto-Updates — Security tab */}
+        <AutoUpdates />
+
+        {/* IP Whitelist — Security tab */}
+        <IPWhitelist />
+        </>)}
+
+        {/* Notification Channels */}
+        {tab === "notifications" && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Notification Channels</h3>
+            <p className="text-xs text-dark-200 mt-0.5">Where to send alert notifications</p>
+          </div>
+          <div className="p-5 space-y-4">
+            <div className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                id="notify-email"
+                checked={notifyEmail}
+                onChange={(e) => setNotifyEmail(e.target.checked)}
+                className="rounded border-dark-500 text-rust-500 focus:ring-accent-500"
+              />
+              <label htmlFor="notify-email" className="text-sm text-dark-100">Email notifications</label>
+            </div>
+            <div>
+              <label htmlFor="notify-slack" className="block text-sm font-medium text-dark-100 mb-1">Slack Webhook URL</label>
+              <input
+                id="notify-slack"
+                type="url"
+                value={notifySlackUrl}
+                onChange={(e) => setNotifySlackUrl(e.target.value)}
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none font-mono"
+                placeholder="https://hooks.slack.com/services/..."
+              />
+            </div>
+            <div>
+              <label htmlFor="notify-discord" className="block text-sm font-medium text-dark-100 mb-1">Discord Webhook URL</label>
+              <input
+                id="notify-discord"
+                type="url"
+                value={notifyDiscordUrl}
+                onChange={(e) => setNotifyDiscordUrl(e.target.value)}
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none font-mono"
+                placeholder="https://discord.com/api/webhooks/..."
+              />
+            </div>
+            <div className="flex flex-wrap justify-end gap-2">
+              {notifySlackUrl && (
+                <button
+                  onClick={async () => {
+                    try {
+                      await api.post("/settings/test-webhook", { url: notifySlackUrl, service: "slack" });
+                      setMessage({ text: "Slack test sent", type: "success" });
+                    } catch (e) {
+                      setMessage({ text: e instanceof Error ? e.message : "Slack test failed", type: "error" });
+                    }
+                  }}
+                  className="px-3 py-2 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600"
+                >
+                  Test Slack
+                </button>
+              )}
+              {notifyDiscordUrl && (
+                <button
+                  onClick={async () => {
+                    try {
+                      await api.post("/settings/test-webhook", { url: notifyDiscordUrl, service: "discord" });
+                      setMessage({ text: "Discord test sent", type: "success" });
+                    } catch (e) {
+                      setMessage({ text: e instanceof Error ? e.message : "Discord test failed", type: "error" });
+                    }
+                  }}
+                  className="px-3 py-2 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600"
+                >
+                  Test Discord
+                </button>
+              )}
+              <button
+                onClick={async () => {
+                  setSaving("notify");
+                  setMessage({ text: "", type: "" });
+                  try {
+                    await api.put("/alert-rules", {
+                      notify_email: notifyEmail,
+                      notify_slack_url: notifySlackUrl || null,
+                      notify_discord_url: notifyDiscordUrl || null,
+                    });
+                    setMessage({ text: "Notification channels saved", type: "success" });
+                  } catch (e) {
+                    setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
+                  } finally {
+                    setSaving(null);
+                  }
+                }}
+                disabled={saving === "notify"}
+                className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+              >
+                {saving === "notify" ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+        )}
+
+        {/* Services tab: PowerDNS, Service Installers, System Health */}
+        {tab === "services" && (<>
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600">
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">PowerDNS</h3>
@@ -836,155 +1016,6 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
           </div>
         </div>
 
-        {/* Notification Channels */}
-        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
-          <div className="px-5 py-3 border-b border-dark-600">
-            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Notification Channels</h3>
-            <p className="text-xs text-dark-200 mt-0.5">Where to send alert notifications</p>
-          </div>
-          <div className="p-5 space-y-4">
-            <div className="flex items-center gap-3">
-              <input
-                type="checkbox"
-                id="notify-email"
-                checked={notifyEmail}
-                onChange={(e) => setNotifyEmail(e.target.checked)}
-                className="rounded border-dark-500 text-rust-500 focus:ring-accent-500"
-              />
-              <label htmlFor="notify-email" className="text-sm text-dark-100">Email notifications</label>
-            </div>
-            <div>
-              <label htmlFor="notify-slack" className="block text-sm font-medium text-dark-100 mb-1">Slack Webhook URL</label>
-              <input
-                id="notify-slack"
-                type="url"
-                value={notifySlackUrl}
-                onChange={(e) => setNotifySlackUrl(e.target.value)}
-                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none font-mono"
-                placeholder="https://hooks.slack.com/services/..."
-              />
-            </div>
-            <div>
-              <label htmlFor="notify-discord" className="block text-sm font-medium text-dark-100 mb-1">Discord Webhook URL</label>
-              <input
-                id="notify-discord"
-                type="url"
-                value={notifyDiscordUrl}
-                onChange={(e) => setNotifyDiscordUrl(e.target.value)}
-                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none font-mono"
-                placeholder="https://discord.com/api/webhooks/..."
-              />
-            </div>
-            <div className="flex flex-wrap justify-end gap-2">
-              {notifySlackUrl && (
-                <button
-                  onClick={async () => {
-                    try {
-                      await api.post("/settings/test-webhook", { url: notifySlackUrl, service: "slack" });
-                      setMessage({ text: "Slack test sent", type: "success" });
-                    } catch (e) {
-                      setMessage({ text: e instanceof Error ? e.message : "Slack test failed", type: "error" });
-                    }
-                  }}
-                  className="px-3 py-2 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600"
-                >
-                  Test Slack
-                </button>
-              )}
-              {notifyDiscordUrl && (
-                <button
-                  onClick={async () => {
-                    try {
-                      await api.post("/settings/test-webhook", { url: notifyDiscordUrl, service: "discord" });
-                      setMessage({ text: "Discord test sent", type: "success" });
-                    } catch (e) {
-                      setMessage({ text: e instanceof Error ? e.message : "Discord test failed", type: "error" });
-                    }
-                  }}
-                  className="px-3 py-2 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600"
-                >
-                  Test Discord
-                </button>
-              )}
-              <button
-                onClick={async () => {
-                  setSaving("notify");
-                  setMessage({ text: "", type: "" });
-                  try {
-                    await api.put("/alert-rules", {
-                      notify_email: notifyEmail,
-                      notify_slack_url: notifySlackUrl || null,
-                      notify_discord_url: notifyDiscordUrl || null,
-                    });
-                    setMessage({ text: "Notification channels saved", type: "success" });
-                  } catch (e) {
-                    setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
-                  } finally {
-                    setSaving(null);
-                  }
-                }}
-                disabled={saving === "notify"}
-                className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
-              >
-                {saving === "notify" ? "Saving..." : "Save"}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Auto-Healing */}
-        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
-          <div className="px-5 py-3 border-b border-dark-600">
-            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Auto-Healing</h3>
-            <p className="text-xs text-dark-200 mt-0.5">Automatically fix common issues when detected</p>
-          </div>
-          <div className="p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-dark-100">Enable auto-healing</p>
-                <p className="text-xs text-dark-300 mt-0.5">
-                  Auto-restarts crashed services, cleans logs when disk is full, renews expiring SSL certs
-                </p>
-              </div>
-              <button
-                onClick={async () => {
-                  const newVal = !autoHealEnabled;
-                  try {
-                    await api.put("/settings", { auto_heal_enabled: newVal ? "true" : "false" });
-                    setAutoHealEnabled(newVal);
-                    setMessage({ text: `Auto-healing ${newVal ? "enabled" : "disabled"}`, type: "success" });
-                  } catch (e) {
-                    setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
-                  }
-                }}
-                role="switch"
-                aria-checked={autoHealEnabled}
-                aria-label="Enable auto-healing"
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${autoHealEnabled ? "bg-rust-500" : "bg-dark-600"}`}
-              >
-                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${autoHealEnabled ? "translate-x-6" : "translate-x-1"}`} />
-              </button>
-            </div>
-            {autoHealEnabled && (
-              <div className="text-xs text-dark-300 space-y-1 pl-4 border-l-2 border-dark-600">
-                <p>Crashed services are restarted (max once per 10 minutes)</p>
-                <p>Logs are cleaned when disk exceeds 90% (max once per hour)</p>
-                <p>SSL certs are renewed when expiring within 3 days (max once per 6 hours)</p>
-                <p>All actions are logged in the Activity page</p>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* SSH Keys */}
-        <SSHKeys />
-
-        {/* Auto-Updates */}
-        <AutoUpdates />
-
-        {/* IP Whitelist */}
-        <IPWhitelist />
-
         {/* Service Installers */}
         <ServiceInstallers />
 
@@ -1038,6 +1069,7 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
             )}
           </div>
         </div>
+        </>)}
       </div>
     </div>
   );
