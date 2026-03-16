@@ -160,7 +160,7 @@ async fn put_site(
     }
 }
 
-/// DELETE /nginx/sites/:domain — Remove site nginx config.
+/// DELETE /nginx/sites/:domain — Remove site and all associated resources.
 async fn delete_site(
     Path(domain): Path<String>,
 ) -> Result<Json<NginxResponse>, (StatusCode, Json<NginxResponse>)> {
@@ -205,6 +205,50 @@ async fn delete_site(
                 message: format!("Config removed but reload failed: {e}"),
             }),
         ));
+    }
+
+    // Clean up all associated resources (best-effort, don't fail the delete)
+    let pool_name = domain.replace('.', "_");
+
+    // SSL certificates
+    let ssl_dir = format!("/etc/dockpanel/ssl/{domain}");
+    if std::path::Path::new(&ssl_dir).exists() {
+        if let Err(e) = std::fs::remove_dir_all(&ssl_dir) {
+            tracing::warn!("Failed to remove SSL certs for {domain}: {e}");
+        } else {
+            tracing::info!("Removed SSL certs: {ssl_dir}");
+        }
+    }
+
+    // PHP-FPM pool configs (all versions)
+    for version in &["8.1", "8.2", "8.3", "8.4"] {
+        let pool_path = format!("/etc/php/{version}/fpm/pool.d/{pool_name}.conf");
+        if std::path::Path::new(&pool_path).exists() {
+            std::fs::remove_file(&pool_path).ok();
+            tracing::info!("Removed PHP pool: {pool_path}");
+        }
+    }
+
+    // Site files
+    let site_dir = format!("/var/www/{domain}");
+    if std::path::Path::new(&site_dir).exists() {
+        if let Err(e) = std::fs::remove_dir_all(&site_dir) {
+            tracing::warn!("Failed to remove site files for {domain}: {e}");
+        } else {
+            tracing::info!("Removed site files: {site_dir}");
+        }
+    }
+
+    // Nginx logs
+    for suffix in &["access.log", "error.log"] {
+        let log_path = format!("/var/log/nginx/{domain}.{suffix}");
+        std::fs::remove_file(&log_path).ok();
+    }
+
+    // WordPress auto-update cron
+    if crate::services::wordpress::is_auto_update_enabled(&domain) {
+        crate::services::wordpress::set_auto_update(&domain, false).await.ok();
+        tracing::info!("Removed WordPress auto-update cron for {domain}");
     }
 
     Ok(Json(NginxResponse {
