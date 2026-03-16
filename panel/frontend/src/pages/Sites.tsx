@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { formatDate } from "../utils/format";
 import { statusColors, runtimeLabels } from "../constants";
+import ProvisionLog from "../components/ProvisionLog";
 
 interface Site {
   id: string;
@@ -19,6 +20,7 @@ export default function Sites() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState("");
+  const [provisioningSiteId, setProvisioningSiteId] = useState<string | null>(null);
 
   // Form state
   const [domain, setDomain] = useState("");
@@ -64,17 +66,28 @@ export default function Sites() {
         if (adminPassword) body.admin_password = adminPassword;
       }
 
-      await api.post("/sites", body);
+      const created = await api.post<Site>("/sites", body);
       setShowForm(false);
+      setProvisioningSiteId(created.id);
       setDomain("");
       setRuntime("static");
       setProxyPort("");
+      setCms("");
+      setSiteTitle("");
+      setAdminEmail("");
+      setAdminUser("admin");
+      setAdminPassword("");
       fetchSites();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create site");
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleProvisionComplete = () => {
+    setProvisioningSiteId(null);
+    fetchSites();
   };
 
   return (
@@ -94,6 +107,11 @@ export default function Sites() {
           {error}
           <button onClick={() => setError("")} className="float-right font-bold" aria-label="Close error">&times;</button>
         </div>
+      )}
+
+      {/* Provisioning log */}
+      {provisioningSiteId && (
+        <ProvisionLog siteId={provisioningSiteId} onComplete={handleProvisionComplete} />
       )}
 
       {/* Create form */}

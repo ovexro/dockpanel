@@ -15,6 +15,11 @@ const CONFIG_DIR: &str = "/etc/dockpanel";
 
 #[tokio::main]
 async fn main() {
+    // Install rustls CryptoProvider before any TLS usage
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .ok();
+
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
     let log_format = std::env::var("LOG_FORMAT").unwrap_or_default();
     if log_format == "json" {

@@ -109,6 +109,7 @@ pub fn router() -> Router<AppState> {
         // Sites
         .route("/api/sites", get(sites::list).post(sites::create))
         .route("/api/sites/{id}", get(sites::get_one).delete(sites::remove))
+        .route("/api/sites/{id}/provision-log", get(sites::provision_log))
         .route("/api/sites/{id}/php", put(sites::switch_php))
         .route("/api/sites/{id}/limits", put(sites::update_limits))
         // PHP versions

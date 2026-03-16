@@ -33,6 +33,8 @@ pub struct AppState {
     pub webhook_attempts: Arc<Mutex<HashMap<uuid::Uuid, (u32, Instant)>>>,
     /// Rate limiter for agent endpoints: server_id -> (count, window_start)
     pub agent_rate_limits: Arc<Mutex<HashMap<uuid::Uuid, (u32, Instant)>>>,
+    /// Provisioning log channels: site_id -> (step history, broadcast sender)
+    pub provision_logs: Arc<Mutex<HashMap<uuid::Uuid, (Vec<routes::sites::ProvisionStep>, tokio::sync::broadcast::Sender<routes::sites::ProvisionStep>, Instant)>>>,
 }
 
 #[tokio::main]
@@ -127,6 +129,7 @@ async fn main() {
         twofa_attempts: Arc::new(Mutex::new(HashMap::new())),
         webhook_attempts: Arc::new(Mutex::new(HashMap::new())),
         agent_rate_limits: Arc::new(Mutex::new(HashMap::new())),
+        provision_logs: Arc::new(Mutex::new(HashMap::new())),
     };
 
     // Supervised background task spawner: monitors JoinHandle, auto-restarts on panic
@@ -179,6 +182,7 @@ async fn main() {
     let cleanup_twofa = state.twofa_attempts.clone();
     let cleanup_webhook = state.webhook_attempts.clone();
     let cleanup_agent_rl = state.agent_rate_limits.clone();
+    let cleanup_provision = state.provision_logs.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(900));
         loop {
@@ -215,6 +219,10 @@ async fn main() {
             }
             if let Ok(mut map) = cleanup_agent_rl.lock() {
                 map.retain(|_, (_, start)| now.duration_since(*start) < std::time::Duration::from_secs(60));
+            }
+            // Clean stale provisioning logs (older than 5 minutes)
+            if let Ok(mut map) = cleanup_provision.lock() {
+                map.retain(|_, (_, _, created)| now.duration_since(*created) < std::time::Duration::from_secs(300));
             }
         }
     });
