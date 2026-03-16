@@ -27,6 +27,7 @@ pub mod servers;
 pub mod settings;
 pub mod staging;
 pub mod sites;
+pub mod system_logs;
 pub mod teams;
 pub mod ssl;
 pub mod system;
@@ -292,6 +293,9 @@ pub fn router() -> Router<AppState> {
         // Agent Diagnostics proxy
         .route("/api/agent/diagnostics", get(system::diagnostics))
         .route("/api/agent/diagnostics/fix", post(system::diagnostics_fix))
+        // System Logs (admin)
+        .route("/api/system-logs", get(system_logs::list))
+        .route("/api/system-logs/count", get(system_logs::count))
         // Activity (admin)
         .route("/api/activity", get(activity::list))
 }

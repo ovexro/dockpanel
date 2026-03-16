@@ -77,6 +77,14 @@ async fn tick(db: &PgPool, agent: &AgentClient) -> Result<(), String> {
         if let Err(ref e) = result {
             tracing::error!("Scheduled backup failed for {}: {e}", row.domain);
 
+            crate::services::system_log::log_event(
+                db,
+                "error",
+                "backup_scheduler",
+                &format!("Scheduled backup failed for {}", row.domain),
+                Some(&e.to_string()),
+            ).await;
+
             // Fire backup failure alert
             if let Ok(Some((user_id,))) = sqlx::query_as::<_, (Uuid,)>(
                 "SELECT user_id FROM sites WHERE id = $1",
@@ -162,6 +170,14 @@ async fn run_scheduled_backup(
                 )
                 .await;
             }
+            crate::services::system_log::log_event(
+                db,
+                "warning",
+                "backup_scheduler",
+                &format!("Backup skipped for {} — disk at {disk_pct:.1}%", row.domain),
+                None,
+            ).await;
+
             return Err(format!(
                 "Disk usage too high ({disk_pct:.1}% > 90%) — backup skipped"
             ));
@@ -227,6 +243,14 @@ async fn run_scheduled_backup(
         if !uploaded {
             // All retries exhausted — don't record in DB since the upload failed.
             // The local file still exists on disk for manual recovery.
+            crate::services::system_log::log_event(
+                db,
+                "error",
+                "backup_scheduler",
+                &format!("Backup upload failed for {} after 3 attempts", row.domain),
+                Some(&last_err),
+            ).await;
+
             return Err(format!("Upload failed after 3 attempts: {last_err}"));
         }
 

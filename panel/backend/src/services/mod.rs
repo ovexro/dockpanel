@@ -8,4 +8,5 @@ pub mod metrics_collector;
 pub mod notifications;
 pub mod security_scanner;
 pub mod server_monitor;
+pub mod system_log;
 pub mod uptime;

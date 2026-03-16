@@ -116,6 +116,16 @@ async fn auto_restart_services(pool: &PgPool, agent: &AgentClient) {
             Err(e) => e.to_string(),
         };
 
+        if !success {
+            crate::services::system_log::log_event(
+                pool,
+                "error",
+                "auto_healer",
+                &format!("Failed to restart service: {service_name}"),
+                Some(&details),
+            ).await;
+        }
+
         // Log the auto-healing action
         // Use a system UUID for auto-healer activity
         let system_id = uuid::Uuid::nil();
@@ -379,6 +389,14 @@ async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
             )
             .await;
 
+            crate::services::system_log::log_event(
+                pool,
+                "error",
+                "auto_healer",
+                &format!("SSL renewal failed for {domain}"),
+                Some(&details),
+            ).await;
+
             tracing::warn!("Auto-heal: SSL renewal failed for {domain}: {details}");
         }
     }
@@ -433,5 +451,21 @@ async fn run_retention_cleanup(pool: &PgPool) {
             }
         }
         Err(e) => tracing::warn!("Retention cleanup (activity_logs) failed: {e}"),
+    }
+
+    // Delete system_logs older than 30 days
+    match sqlx::query("DELETE FROM system_logs WHERE created_at < NOW() - INTERVAL '30 days'")
+        .execute(pool)
+        .await
+    {
+        Ok(r) => {
+            if r.rows_affected() > 0 {
+                tracing::info!(
+                    "Retention: deleted {} old system_logs",
+                    r.rows_affected()
+                );
+            }
+        }
+        Err(e) => tracing::warn!("Retention cleanup (system_logs) failed: {e}"),
     }
 }

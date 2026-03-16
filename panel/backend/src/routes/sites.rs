@@ -559,6 +559,15 @@ pub async fn create(
         Err(e) => {
             // Agent call failed — roll back the transaction (INSERT is undone)
             tracing::error!("Agent error creating site {}: {e}", body.domain);
+
+            crate::services::system_log::log_event(
+                &state.db,
+                "error",
+                "api",
+                &format!("Site creation failed: {}", body.domain),
+                Some(&e.to_string()),
+            ).await;
+
             // tx is dropped here, automatically rolling back the INSERT
             drop(tx);
 

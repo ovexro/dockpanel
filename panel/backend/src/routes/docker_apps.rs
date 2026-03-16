@@ -320,6 +320,14 @@ pub async fn deploy(
                 emit("pull", "Pulling Docker image", "error", Some(format!("Deploy failed: {e}")));
                 emit("complete", "Deploy failed", "error", None);
                 tracing::error!("App deploy failed: {} ({}): {e}", app_name, template);
+
+                crate::services::system_log::log_event(
+                    &db,
+                    "error",
+                    "api",
+                    &format!("App deploy failed: {} ({})", app_name, template),
+                    Some(&e.to_string()),
+                ).await;
             }
         }
 

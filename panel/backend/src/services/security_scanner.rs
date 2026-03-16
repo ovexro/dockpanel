@@ -65,6 +65,13 @@ async fn run_scan(pool: &PgPool, agent: &AgentClient) {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("Security scan failed: {e}");
+            crate::services::system_log::log_event(
+                pool,
+                "error",
+                "security_scanner",
+                "Scheduled security scan failed",
+                Some(&e.to_string()),
+            ).await;
             let _ = sqlx::query(
                 "UPDATE security_scans SET status = 'failed', completed_at = NOW() WHERE id = $1",
             )
