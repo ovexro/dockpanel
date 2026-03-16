@@ -149,6 +149,7 @@ pub fn router() -> Router<AppState> {
         // Docker Apps (admin)
         .route("/api/apps/templates", get(docker_apps::list_templates))
         .route("/api/apps/deploy", post(docker_apps::deploy))
+        .route("/api/apps/deploy/{deploy_id}/log", get(docker_apps::deploy_log))
         .route("/api/apps/compose/parse", post(docker_apps::compose_parse))
         .route("/api/apps/compose/deploy", post(docker_apps::compose_deploy))
         .route("/api/apps", get(docker_apps::list_apps))
@@ -232,6 +233,7 @@ pub fn router() -> Router<AppState> {
         // API Keys
         .route("/api/api-keys", get(api_keys::list).post(api_keys::create))
         .route("/api/api-keys/{id}", delete(api_keys::revoke))
+        .route("/api/api-keys/{id}/rotate", post(api_keys::rotate))
         // Servers
         .route("/api/servers", get(servers::list).post(servers::create))
         .route("/api/servers/{id}", get(servers::get_one).delete(servers::remove))
@@ -270,6 +272,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/services/install/ufw", post(system::install_ufw))
         .route("/api/services/install/fail2ban", post(system::install_fail2ban))
         .route("/api/services/install/powerdns", post(system::install_powerdns))
+        .route("/api/services/install/{install_id}/log", get(system::install_log))
         // Mail
         .route("/api/mail/status", get(mail::mail_status))
         .route("/api/mail/install", post(mail::mail_install))
