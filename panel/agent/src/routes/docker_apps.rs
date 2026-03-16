@@ -373,11 +373,11 @@ async fn remove(
     // Clean up nginx config if domain was set
     let mut response = serde_json::json!({ "success": true });
     if let Some(ref domain) = domain {
+        response["domain_removed"] = serde_json::json!(domain);
         let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
         if std::path::Path::new(&config_path).exists() {
             std::fs::remove_file(&config_path).ok();
             nginx::reload().await.ok();
-            response["domain_removed"] = serde_json::json!(domain);
             tracing::info!("Auto-proxy cleanup: removed nginx config for {domain}");
         }
     }

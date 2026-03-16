@@ -190,6 +190,35 @@ export default function Crons() {
       {/* Create form */}
       {showForm && (
         <form onSubmit={handleCreate} className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6 space-y-4">
+          {/* Preset Templates */}
+          <div>
+            <label className="block text-sm font-medium text-dark-100 mb-1">Template</label>
+            <select
+              value=""
+              onChange={(e) => {
+                const domain = site?.domain || "DOMAIN";
+                const templates: Record<string, { label: string; command: string; schedule: string }> = {
+                  "wp-cron": { label: "WordPress Cron", command: `cd /var/www/${domain}/public && php wp-cron.php > /dev/null 2>&1`, schedule: "*/15 * * * *" },
+                  "laravel-schedule": { label: "Laravel Scheduler", command: `cd /var/www/${domain} && php artisan schedule:run > /dev/null 2>&1`, schedule: "* * * * *" },
+                  "log-cleanup": { label: "Log Cleanup (30 days)", command: `find /var/log/nginx -name '*.log' -mtime +30 -delete`, schedule: "0 3 * * 0" },
+                  "disk-check": { label: "Disk Usage Alert", command: `df -h / | awk 'NR==2{if($5+0>90)print "DISK WARNING: "$5}'`, schedule: "0 */6 * * *" },
+                };
+                const tmpl = templates[e.target.value];
+                if (tmpl) {
+                  setLabel(tmpl.label);
+                  setCommand(tmpl.command);
+                  setSchedule(tmpl.schedule);
+                }
+              }}
+              className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none text-sm bg-dark-800"
+            >
+              <option value="">Custom (no template)</option>
+              <option value="wp-cron">WordPress Cron</option>
+              <option value="laravel-schedule">Laravel Scheduler</option>
+              <option value="log-cleanup">Log Cleanup (30 days)</option>
+              <option value="disk-check">Disk Usage Alert</option>
+            </select>
+          </div>
           <div>
             <label htmlFor="cron-label" className="block text-sm font-medium text-dark-100 mb-1">Label (optional)</label>
             <input
