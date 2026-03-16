@@ -138,3 +138,60 @@ pub async fn revoke(
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
+
+/// POST /api/api-keys/{id}/rotate — Rotate an API key (atomically replace old key with new one).
+pub async fn rotate(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    // 1. Verify key exists and belongs to user, get name
+    let key_info: Option<(String,)> =
+        sqlx::query_as("SELECT name FROM api_keys WHERE id = $1 AND user_id = $2")
+            .bind(id)
+            .bind(claims.sub)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let name = key_info
+        .map(|(n,)| n)
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "API key not found"))?;
+
+    // 2. Generate new key
+    let raw = Uuid::new_v4().to_string().replace('-', "")
+        + &Uuid::new_v4().to_string().replace('-', "");
+    let key = format!("dp_{raw}");
+    let prefix = &key[..12];
+
+    let mut hasher = Sha256::new();
+    hasher.update(key.as_bytes());
+    let key_hash = hex::encode(hasher.finalize());
+
+    // 3. Update in-place (same ID, same name, new hash + prefix + timestamp)
+    sqlx::query(
+        "UPDATE api_keys SET key_hash = $1, key_prefix = $2, created_at = NOW() WHERE id = $3 AND user_id = $4",
+    )
+    .bind(&key_hash)
+    .bind(prefix)
+    .bind(id)
+    .bind(claims.sub)
+    .execute(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "api_key.rotated",
+        Some("api_key"), Some(&name), None, None,
+    ).await;
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "key": key,
+            "prefix": prefix,
+            "name": name,
+            "message": "Key rotated — save the new key, the old one is now invalid.",
+        })),
+    ))
+}

@@ -260,7 +260,46 @@ async fn upsert_rules(
     server_id: Option<Uuid>,
     body: &UpdateRules,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    sqlx::query(
+    // Check if rule exists (partial unique indexes don't work with ON CONFLICT)
+    let existing: Option<(Uuid,)> = if server_id.is_some() {
+        sqlx::query_as("SELECT id FROM alert_rules WHERE user_id = $1 AND server_id = $2")
+            .bind(user_id).bind(server_id)
+            .fetch_optional(&state.db).await.ok().flatten()
+    } else {
+        sqlx::query_as("SELECT id FROM alert_rules WHERE user_id = $1 AND server_id IS NULL")
+            .bind(user_id)
+            .fetch_optional(&state.db).await.ok().flatten()
+    };
+
+    let query = if existing.is_some() {
+        let where_clause = if server_id.is_some() {
+            "WHERE user_id = $1 AND server_id = $2"
+        } else {
+            "WHERE user_id = $1 AND server_id IS NULL"
+        };
+        format!(
+            "UPDATE alert_rules SET \
+             cpu_threshold = COALESCE($3, cpu_threshold), \
+             cpu_duration = COALESCE($4, cpu_duration), \
+             memory_threshold = COALESCE($5, memory_threshold), \
+             memory_duration = COALESCE($6, memory_duration), \
+             disk_threshold = COALESCE($7, disk_threshold), \
+             alert_cpu = COALESCE($8, alert_cpu), \
+             alert_memory = COALESCE($9, alert_memory), \
+             alert_disk = COALESCE($10, alert_disk), \
+             alert_offline = COALESCE($11, alert_offline), \
+             alert_backup_failure = COALESCE($12, alert_backup_failure), \
+             alert_ssl_expiry = COALESCE($13, alert_ssl_expiry), \
+             alert_service_health = COALESCE($14, alert_service_health), \
+             ssl_warning_days = COALESCE($15, ssl_warning_days), \
+             notify_email = COALESCE($16, notify_email), \
+             notify_slack_url = COALESCE($17, notify_slack_url), \
+             notify_discord_url = COALESCE($18, notify_discord_url), \
+             cooldown_minutes = COALESCE($19, cooldown_minutes), \
+             updated_at = NOW() \
+             {where_clause}"
+        )
+    } else {
         "INSERT INTO alert_rules (user_id, server_id, \
          cpu_threshold, cpu_duration, memory_threshold, memory_duration, disk_threshold, \
          alert_cpu, alert_memory, alert_disk, alert_offline, alert_backup_failure, \
@@ -270,27 +309,10 @@ async fn upsert_rules(
          COALESCE($3, 90), COALESCE($4, 5), COALESCE($5, 90), COALESCE($6, 5), COALESCE($7, 85), \
          COALESCE($8, TRUE), COALESCE($9, TRUE), COALESCE($10, TRUE), COALESCE($11, TRUE), \
          COALESCE($12, TRUE), COALESCE($13, TRUE), COALESCE($14, TRUE), COALESCE($15, '30,14,7,3,1'), \
-         COALESCE($16, TRUE), $17, $18, COALESCE($19, 60)) \
-         ON CONFLICT (user_id, server_id) DO UPDATE SET \
-         cpu_threshold = COALESCE($3, alert_rules.cpu_threshold), \
-         cpu_duration = COALESCE($4, alert_rules.cpu_duration), \
-         memory_threshold = COALESCE($5, alert_rules.memory_threshold), \
-         memory_duration = COALESCE($6, alert_rules.memory_duration), \
-         disk_threshold = COALESCE($7, alert_rules.disk_threshold), \
-         alert_cpu = COALESCE($8, alert_rules.alert_cpu), \
-         alert_memory = COALESCE($9, alert_rules.alert_memory), \
-         alert_disk = COALESCE($10, alert_rules.alert_disk), \
-         alert_offline = COALESCE($11, alert_rules.alert_offline), \
-         alert_backup_failure = COALESCE($12, alert_rules.alert_backup_failure), \
-         alert_ssl_expiry = COALESCE($13, alert_rules.alert_ssl_expiry), \
-         alert_service_health = COALESCE($14, alert_rules.alert_service_health), \
-         ssl_warning_days = COALESCE($15, alert_rules.ssl_warning_days), \
-         notify_email = COALESCE($16, alert_rules.notify_email), \
-         notify_slack_url = COALESCE($17, alert_rules.notify_slack_url), \
-         notify_discord_url = COALESCE($18, alert_rules.notify_discord_url), \
-         cooldown_minutes = COALESCE($19, alert_rules.cooldown_minutes), \
-         updated_at = NOW()",
-    )
+         COALESCE($16, TRUE), $17, $18, COALESCE($19, 60))".to_string()
+    };
+
+    sqlx::query(&query)
     .bind(user_id)
     .bind(server_id)
     .bind(body.cpu_threshold)

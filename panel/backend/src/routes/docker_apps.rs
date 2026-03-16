@@ -1,13 +1,20 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
+    response::sse::{Event, KeepAlive, Sse},
     Json,
 };
+use futures::stream::StreamExt;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
+use tokio::sync::broadcast;
+use tokio_stream::wrappers::BroadcastStream;
+use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::error::{err, agent_error, require_admin, ApiError};
 use crate::routes::{is_valid_container_id, is_valid_name};
+use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
 use crate::AppState;
 
@@ -35,7 +42,7 @@ pub async fn list_templates(
     Ok(Json(result))
 }
 
-/// POST /api/apps/deploy — Deploy a Docker app from template.
+/// POST /api/apps/deploy — Deploy a Docker app from template (async with SSE progress).
 pub async fn deploy(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
@@ -66,6 +73,23 @@ pub async fn deploy(
         }
     }
 
+    let deploy_id = Uuid::new_v4();
+
+    // Create provisioning channel (reuse the same provision_logs map from AppState)
+    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
+    {
+        let mut logs = state.provision_logs.lock().unwrap();
+        logs.insert(deploy_id, (Vec::new(), tx, Instant::now()));
+    }
+
+    let logs = state.provision_logs.clone();
+    let agent = state.agent.clone();
+    let db = state.db.clone();
+    let user_id = claims.sub;
+    let email = claims.email.clone();
+    let app_name = body.name.clone();
+    let template = body.template_id.clone();
+
     let agent_body = serde_json::json!({
         "template_id": body.template_id,
         "name": body.name,
@@ -73,19 +97,91 @@ pub async fn deploy(
         "env": body.env.unwrap_or_default(),
     });
 
-    let result = state
-        .agent
-        .post("/apps/deploy", Some(agent_body))
-        .await
-        .map_err(|e| agent_error("Docker deploy", e))?;
+    // Spawn background deploy task
+    tokio::spawn(async move {
+        let emit = |step: &str, label: &str, status: &str, msg: Option<String>| {
+            let ev = ProvisionStep {
+                step: step.into(),
+                label: label.into(),
+                status: status.into(),
+                message: msg,
+            };
+            if let Ok(mut map) = logs.lock() {
+                if let Some((history, tx, _)) = map.get_mut(&deploy_id) {
+                    history.push(ev.clone());
+                    let _ = tx.send(ev);
+                }
+            }
+        };
 
-    tracing::info!("App deployed: {} ({})", body.name, body.template_id);
-    activity::log_activity(
-        &state.db, claims.sub, &claims.email, "app.deploy",
-        Some("app"), Some(&body.name), Some(&body.template_id), None,
-    ).await;
+        emit("pull", "Pulling Docker image", "in_progress", None);
 
-    Ok((StatusCode::CREATED, Json(result)))
+        match agent.post("/apps/deploy", Some(agent_body)).await {
+            Ok(_) => {
+                emit("pull", "Pulling Docker image", "done", None);
+                emit("start", "Starting container", "done", None);
+                emit("complete", "App deployed", "done", None);
+
+                tracing::info!("App deployed: {} ({})", app_name, template);
+                activity::log_activity(
+                    &db, user_id, &email, "app.deploy",
+                    Some("app"), Some(&app_name), Some(&template), None,
+                ).await;
+            }
+            Err(e) => {
+                emit("pull", "Pulling Docker image", "error", Some(format!("Deploy failed: {e}")));
+                emit("complete", "Deploy failed", "error", None);
+                tracing::error!("App deploy failed: {} ({}): {e}", app_name, template);
+            }
+        }
+
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        logs.lock().unwrap().remove(&deploy_id);
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
+        "deploy_id": deploy_id,
+        "message": "Deployment started",
+    }))))
+}
+
+/// GET /api/apps/deploy/{deploy_id}/log — SSE stream of deploy progress.
+pub async fn deploy_log(
+    State(state): State<AppState>,
+    AuthUser(_claims): AuthUser,
+    Path(deploy_id): Path<Uuid>,
+) -> Result<Sse<impl futures::Stream<Item = Result<Event, axum::BoxError>>>, ApiError> {
+    let (snapshot, rx) = {
+        let logs = state.provision_logs.lock().unwrap();
+        match logs.get(&deploy_id) {
+            Some((history, tx, _)) => (history.clone(), Some(tx.subscribe())),
+            None => (Vec::new(), None),
+        }
+    };
+
+    let rx = rx.ok_or_else(|| err(StatusCode::NOT_FOUND, "No active deploy"))?;
+
+    let snapshot_stream = futures::stream::iter(
+        snapshot.into_iter().map(|step| {
+            let data = serde_json::to_string(&step).unwrap_or_default();
+            Ok(Event::default().data(data))
+        }),
+    );
+
+    let live_stream = BroadcastStream::new(rx).filter_map(|result| async {
+        match result {
+            Ok(step) => {
+                let data = serde_json::to_string(&step).ok()?;
+                Some(Ok(Event::default().data(data)))
+            }
+            Err(_) => None,
+        }
+    });
+
+    Ok(
+        Sse::new(snapshot_stream.chain(live_stream))
+            .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("ping")),
+    )
 }
 
 /// GET /api/apps — List deployed Docker apps.
