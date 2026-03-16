@@ -284,30 +284,74 @@ pub async fn app_logs(
     Ok(Json(result))
 }
 
-/// POST /api/apps/{container_id}/update — Pull latest image and recreate container.
+/// POST /api/apps/{container_id}/update — Pull latest image and recreate container (async with SSE).
 pub async fn update_app(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(container_id): Path<String>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     require_admin(&claims.role)?;
     if !is_valid_container_id(&container_id) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
     }
 
-    let agent_path = format!("/apps/{}/update", container_id);
-    let result = state
-        .agent
-        .post(&agent_path, None)
-        .await
-        .map_err(|e| agent_error("Container update", e))?;
+    let deploy_id = Uuid::new_v4();
 
-    activity::log_activity(
-        &state.db, claims.sub, &claims.email, "app.update",
-        Some("app"), Some(&container_id), None, None,
-    ).await;
+    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
+    {
+        let mut logs = state.provision_logs.lock().unwrap();
+        logs.insert(deploy_id, (Vec::new(), tx, Instant::now()));
+    }
 
-    Ok(Json(result))
+    let logs = state.provision_logs.clone();
+    let agent = state.agent.clone();
+    let db = state.db.clone();
+    let user_id = claims.sub;
+    let email = claims.email.clone();
+    let cid = container_id.clone();
+
+    tokio::spawn(async move {
+        let emit = |step: &str, label: &str, status: &str, msg: Option<String>| {
+            let ev = ProvisionStep {
+                step: step.into(), label: label.into(), status: status.into(), message: msg,
+            };
+            if let Ok(mut map) = logs.lock() {
+                if let Some((history, tx, _)) = map.get_mut(&deploy_id) {
+                    history.push(ev.clone());
+                    let _ = tx.send(ev);
+                }
+            }
+        };
+
+        emit("pull", "Pulling latest image", "in_progress", None);
+
+        let agent_path = format!("/apps/{}/update", cid);
+        match agent.post(&agent_path, None).await {
+            Ok(_) => {
+                emit("pull", "Pulling latest image", "done", None);
+                emit("recreate", "Recreating container", "done", None);
+                emit("complete", "App updated", "done", None);
+                activity::log_activity(
+                    &db, user_id, &email, "app.update",
+                    Some("app"), Some(&cid), None, None,
+                ).await;
+                tracing::info!("App updated: {cid}");
+            }
+            Err(e) => {
+                emit("pull", "Pulling latest image", "error", Some(format!("{e}")));
+                emit("complete", "Update failed", "error", None);
+                tracing::error!("App update failed: {cid}: {e}");
+            }
+        }
+
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        logs.lock().unwrap().remove(&deploy_id);
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
+        "deploy_id": deploy_id,
+        "message": "Update started",
+    }))))
 }
 
 /// GET /api/apps/{container_id}/env — Get container environment variables.

@@ -284,6 +284,8 @@ export default function Apps() {
   const [envTarget, setEnvTarget] = useState<string | null>(null);
   const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([]);
   const [envLoading, setEnvLoading] = useState(false);
+  // Update SSE state
+  const [updateDeployId, setUpdateDeployId] = useState<string | null>(null);
 
   // Compose import state
   const [showCompose, setShowCompose] = useState(false);
@@ -438,9 +440,13 @@ export default function Apps() {
     setActionLoading(`${containerId}-update`);
     setMessage({ text: "", type: "" });
     try {
-      await api.post(`/apps/${containerId}/update`);
-      setMessage({ text: "App updated to latest image", type: "success" });
-      loadApps();
+      const result = await api.post<{ deploy_id?: string }>(`/apps/${containerId}/update`);
+      if (result.deploy_id) {
+        setUpdateDeployId(result.deploy_id);
+      } else {
+        setMessage({ text: "App updated to latest image", type: "success" });
+        loadApps();
+      }
     } catch (e) {
       setMessage({ text: e instanceof Error ? e.message : "Update failed", type: "error" });
     } finally {
@@ -542,6 +548,17 @@ export default function Apps() {
           onComplete={() => {
             setDeployId(null);
             setDeploying(false);
+            loadApps();
+          }}
+        />
+      )}
+
+      {/* Update provisioning log */}
+      {updateDeployId && (
+        <ProvisionLog
+          sseUrl={`/api/apps/deploy/${updateDeployId}/log`}
+          onComplete={() => {
+            setUpdateDeployId(null);
             loadApps();
           }}
         />
