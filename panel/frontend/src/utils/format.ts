@@ -31,6 +31,14 @@ export function formatDate(dateStr: string): string {
   });
 }
 
+/** Format bytes/sec to human-readable rate string. */
+export function formatRate(bytesPerSec: number): string {
+  if (bytesPerSec < 1024) return `${bytesPerSec.toFixed(0)} B/s`;
+  if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
+  if (bytesPerSec < 1024 * 1024 * 1024) return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`;
+  return `${(bytesPerSec / (1024 * 1024 * 1024)).toFixed(1)} GB/s`;
+}
+
 /** Format uptime in seconds to human-readable string. */
 export function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);

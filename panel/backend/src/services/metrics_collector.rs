@@ -2,12 +2,12 @@ use sqlx::PgPool;
 use std::time::Duration;
 use crate::services::agent::AgentClient;
 
-/// Background task that collects system metrics every 60 seconds for historical charts.
+/// Background task that collects system metrics every 30 seconds for historical charts.
 pub async fn run(pool: PgPool, agent: AgentClient) {
-    tracing::info!("Metrics collector started (60s interval)");
+    tracing::info!("Metrics collector started (30s interval)");
 
     loop {
-        tokio::time::sleep(Duration::from_secs(60)).await;
+        tokio::time::sleep(Duration::from_secs(30)).await;
 
         // Get the local server's ID for multi-server charting
         let local_server_id: Option<uuid::Uuid> = sqlx::query_scalar(

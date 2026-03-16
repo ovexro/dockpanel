@@ -1,8 +1,9 @@
 use axum::{extract::State, routing::get, Json, Router};
 use serde::Serialize;
+use std::collections::HashMap;
 use sysinfo::{Components, Networks, System};
 
-use super::AppState;
+use super::{AppState, NetworkSnapshot};
 
 #[derive(Serialize)]
 struct SystemInfo {
@@ -41,6 +42,8 @@ struct NetworkInfo {
     name: String,
     rx_bytes: u64,
     tx_bytes: u64,
+    rx_rate: u64,
+    tx_rate: u64,
 }
 
 async fn system_info(State(state): State<AppState>) -> Json<SystemInfo> {
@@ -147,17 +150,59 @@ async fn processes() -> Json<Vec<ProcessInfo>> {
     Json(procs)
 }
 
-async fn network() -> Json<Vec<NetworkInfo>> {
+async fn network(State(state): State<AppState>) -> Json<Vec<NetworkInfo>> {
     let networks = Networks::new_with_refreshed_list();
+    let now = std::time::Instant::now();
 
-    let interfaces: Vec<NetworkInfo> = networks
+    // Build current readings
+    let mut current_readings = HashMap::new();
+    for (name, data) in networks.iter() {
+        current_readings.insert(
+            name.to_string(),
+            (data.total_received(), data.total_transmitted()),
+        );
+    }
+
+    // Compute rates from previous snapshot
+    let mut prev = state.network_snapshot.lock().await;
+    let prev_snapshot = prev.take();
+
+    let interfaces: Vec<NetworkInfo> = current_readings
         .iter()
-        .map(|(name, data)| NetworkInfo {
-            name: name.to_string(),
-            rx_bytes: data.total_received(),
-            tx_bytes: data.total_transmitted(),
+        .map(|(name, &(rx, tx))| {
+            let (rx_rate, tx_rate) = prev_snapshot
+                .as_ref()
+                .and_then(|snap| {
+                    let elapsed = now.duration_since(snap.timestamp).as_secs_f64();
+                    if elapsed <= 0.0 {
+                        return None;
+                    }
+                    snap.readings.get(name).map(|&(prev_rx, prev_tx)| {
+                        let rx_diff = rx.saturating_sub(prev_rx);
+                        let tx_diff = tx.saturating_sub(prev_tx);
+                        (
+                            (rx_diff as f64 / elapsed) as u64,
+                            (tx_diff as f64 / elapsed) as u64,
+                        )
+                    })
+                })
+                .unwrap_or((0, 0));
+
+            NetworkInfo {
+                name: name.clone(),
+                rx_bytes: rx,
+                tx_bytes: tx,
+                rx_rate,
+                tx_rate,
+            }
         })
         .collect();
+
+    // Store current snapshot for next call
+    *prev = Some(NetworkSnapshot {
+        readings: current_readings,
+        timestamp: now,
+    });
 
     Json(interfaces)
 }
