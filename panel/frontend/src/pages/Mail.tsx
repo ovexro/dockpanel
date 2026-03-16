@@ -328,7 +328,7 @@ export default function Mail() {
             <input type="text" value={newDomain} onChange={(e) => setNewDomain(e.target.value)} placeholder="example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
             <p className="text-[11px] text-dark-300 mt-1">Your domain name, e.g., example.com</p>
           </div>
-          <p className="text-xs text-dark-300">DKIM keys will be generated automatically. You'll need to add DNS records after creation.</p>
+          <p className="text-xs text-dark-300">DKIM keys and DNS records (MX, SPF, DKIM, DMARC) will be created automatically.</p>
           <div className="flex justify-end">
             <button onClick={handleAddDomain} disabled={savingDomain || !newDomain} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 flex items-center gap-2">
               {savingDomain && (
