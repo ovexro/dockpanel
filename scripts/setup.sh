@@ -49,11 +49,47 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-log()    { echo -e "${GREEN}[+]${NC} $1"; }
-warn()   { echo -e "${YELLOW}[!]${NC} $1"; }
-error()  { echo -e "${RED}[x]${NC} $1" >&2; }
-info()   { echo -e "${CYAN}[i]${NC} $1"; }
-header() { echo -e "\n${CYAN}${BOLD}── $1 ──${NC}\n"; }
+DIM='\033[2m'
+WHITE='\033[1;37m'
+
+log()    { echo -e "  ${GREEN}✓${NC} $1"; }
+warn()   { echo -e "  ${YELLOW}⚠${NC} $1"; }
+error()  { echo -e "  ${RED}✗${NC} $1" >&2; }
+info()   { echo -e "  ${CYAN}→${NC} $1"; }
+
+# ── Progress tracking ─────────────────────────────────────────────────
+TOTAL_STEPS=15
+CURRENT_STEP=0
+SETUP_START=0
+
+progress_bar() {
+    local pct=$1
+    local width=40
+    local filled=$((pct * width / 100))
+    local empty=$((width - filled))
+    local bar=""
+    for ((i=0; i<filled; i++)); do bar+="█"; done
+    for ((i=0; i<empty; i++)); do bar+="░"; done
+    echo -n "$bar"
+}
+
+step() {
+    CURRENT_STEP=$((CURRENT_STEP + 1))
+    local pct=$((CURRENT_STEP * 100 / TOTAL_STEPS))
+    local elapsed=""
+    if [ "$SETUP_START" -gt 0 ]; then
+        local now
+        now=$(date +%s)
+        local secs=$((now - SETUP_START))
+        elapsed=" ${DIM}${secs}s${NC}"
+    fi
+    echo ""
+    echo -e "  ${DIM}[${CURRENT_STEP}/${TOTAL_STEPS}]${NC} ${CYAN}$(progress_bar $pct)${NC} ${WHITE}${pct}%${NC}${elapsed}"
+    echo -e "  ${BOLD}$1${NC}"
+    echo ""
+}
+
+header() { step "$1"; }
 
 # ── Pre-flight Checks ───────────────────────────────────────────────────
 preflight_checks() {
@@ -825,6 +861,12 @@ print_summary() {
                 hostname -I 2>/dev/null | awk '{print $1}' || \
                 echo "YOUR_SERVER_IP")
 
+    local elapsed_total=$(( $(date +%s) - SETUP_START ))
+    local mins=$((elapsed_total / 60))
+    local secs=$((elapsed_total % 60))
+
+    echo ""
+    echo -e "  ${CYAN}$(progress_bar 100)${NC} ${WHITE}100%${NC} ${DIM}${mins}m ${secs}s${NC}"
     echo ""
     echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════════════════╗${NC}"
     echo -e "${GREEN}${BOLD}║         DockPanel installed successfully!            ║${NC}"
@@ -904,6 +946,7 @@ BKEOF
 
 # ── Main ─────────────────────────────────────────────────────────────────
 main() {
+    SETUP_START=$(date +%s)
     print_banner
     check_root
     detect_pkg_manager
