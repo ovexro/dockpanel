@@ -79,23 +79,71 @@ pub async fn updates_list(
 }
 
 /// POST /api/system/updates/apply — Apply package updates (admin only).
+/// Returns install_id for SSE progress tracking via /api/services/install/{id}/log.
 pub async fn updates_apply(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
     Json(body): Json<serde_json::Value>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let data = state
-        .agent
-        .post("/system/updates/apply", Some(body))
-        .await
-        .map_err(|e| agent_error("Apply updates", e))?;
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let install_id = uuid::Uuid::new_v4();
 
-    activity::log_activity(
-        &state.db, claims.sub, &claims.email, "system.updates.apply",
-        Some("system"), Some("packages"), None, None,
-    ).await;
+    let (tx, _) = tokio::sync::broadcast::channel::<crate::routes::sites::ProvisionStep>(32);
+    {
+        let mut logs = state.provision_logs.lock().unwrap();
+        logs.insert(install_id, (Vec::new(), tx, std::time::Instant::now()));
+    }
 
-    Ok(Json(data))
+    let logs = state.provision_logs.clone();
+    let agent = state.agent.clone();
+    let db = state.db.clone();
+    let email = claims.email.clone();
+    let user_id = claims.sub;
+
+    tokio::spawn(async move {
+        let emit = |step: &str, label: &str, status: &str, msg: Option<String>| {
+            let ev = crate::routes::sites::ProvisionStep {
+                step: step.into(), label: label.into(), status: status.into(), message: msg,
+            };
+            if let Ok(mut map) = logs.lock() {
+                if let Some((history, tx, _)) = map.get_mut(&install_id) {
+                    history.push(ev.clone());
+                    let _ = tx.send(ev);
+                }
+            }
+        };
+
+        emit("update", "Applying system updates", "in_progress", None);
+
+        match agent.post("/system/updates/apply", Some(body)).await {
+            Ok(data) => {
+                let success = data.get("success").and_then(|v| v.as_bool()).unwrap_or(true);
+                let output = data.get("output").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+                if success {
+                    emit("update", "Applying system updates", "done", None);
+                    emit("complete", "Updates applied", "done", Some(output));
+                } else {
+                    emit("update", "Applying system updates", "error", None);
+                    emit("complete", "Updates finished with errors", "error", Some(output));
+                }
+
+                activity::log_activity(&db, user_id, &email, "system.updates.apply",
+                    Some("system"), Some("packages"), None, None).await;
+            }
+            Err(e) => {
+                emit("update", "Applying system updates", "error", Some(format!("{e}")));
+                emit("complete", "Update failed", "error", None);
+            }
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        logs.lock().unwrap().remove(&install_id);
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
+        "install_id": install_id,
+        "message": "Updates started",
+    }))))
 }
 
 /// GET /api/system/updates/count — Get count of available updates (any authenticated user).
