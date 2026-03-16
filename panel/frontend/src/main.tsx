@@ -54,7 +54,7 @@ const Register = lazyRetry(() => import("./pages/Register"));
 const ForgotPassword = lazyRetry(() => import("./pages/ForgotPassword"));
 const ResetPassword = lazyRetry(() => import("./pages/ResetPassword"));
 const VerifyEmail = lazyRetry(() => import("./pages/VerifyEmail"));
-const Monitors = lazyRetry(() => import("./pages/Monitors"));
+const Monitoring = lazyRetry(() => import("./pages/Monitoring"));
 
 // Lazy-loaded pages (split into separate chunks)
 const Sites = lazyRetry(() => import("./pages/Sites"));
@@ -68,15 +68,9 @@ const Deploy = lazyRetry(() => import("./pages/Deploy"));
 const Dns = lazyRetry(() => import("./pages/Dns"));
 const WordPress = lazyRetry(() => import("./pages/WordPress"));
 const Logs = lazyRetry(() => import("./pages/Logs"));
-const Users = lazyRetry(() => import("./pages/Users"));
 const Apps = lazyRetry(() => import("./pages/Apps"));
 const Security = lazyRetry(() => import("./pages/Security"));
-const Diagnostics = lazyRetry(() => import("./pages/Diagnostics"));
 const Settings = lazyRetry(() => import("./pages/Settings"));
-const Updates = lazyRetry(() => import("./pages/Updates"));
-const Alerts = lazyRetry(() => import("./pages/Alerts"));
-const Activity = lazyRetry(() => import("./pages/Activity"));
-const SystemLogs = lazyRetry(() => import("./pages/SystemLogs"));
 const Mail = lazyRetry(() => import("./pages/Mail"));
 
 createRoot(document.getElementById("root")!).render(
@@ -107,15 +101,16 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/logs" element={<Logs />} />
               <Route path="/apps" element={<Apps />} />
               <Route path="/security" element={<Security />} />
-              <Route path="/diagnostics" element={<Diagnostics />} />
+              <Route path="/diagnostics" element={<Navigate to="/security" replace />} />
               <Route path="/settings" element={<Settings />} />
-              <Route path="/updates" element={<Updates />} />
-              <Route path="/activity" element={<Activity />} />
-              <Route path="/system-logs" element={<SystemLogs />} />
+              <Route path="/updates" element={<Navigate to="/settings" replace />} />
+              <Route path="/activity" element={<Navigate to="/logs" replace />} />
+              <Route path="/system-logs" element={<Navigate to="/logs" replace />} />
               <Route path="/mail" element={<Mail />} />
-              <Route path="/users" element={<Users />} />
-              <Route path="/alerts" element={<Alerts />} />
-              <Route path="/monitors" element={<Monitors />} />
+              <Route path="/users" element={<Navigate to="/settings" replace />} />
+              <Route path="/monitoring" element={<Monitoring />} />
+              <Route path="/monitors" element={<Navigate to="/monitoring" replace />} />
+              <Route path="/alerts" element={<Navigate to="/monitoring" replace />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

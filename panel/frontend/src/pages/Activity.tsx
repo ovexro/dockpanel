@@ -1,6 +1,4 @@
 import { useState, useEffect, useRef } from "react";
-import { Navigate } from "react-router-dom";
-import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 import { timeAgo } from "../utils/format";
 
@@ -40,8 +38,7 @@ const FILTERS = [
 
 const LIMIT = 50;
 
-export default function Activity() {
-  const { user } = useAuth();
+export default function AuditLogContent() {
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -88,20 +85,14 @@ export default function Activity() {
     return () => clearInterval(refreshTimer.current);
   }, [filter]);
 
-  if (user?.role !== "admin") return <Navigate to="/" replace />;
-
   const handleLoadMore = () => {
     setLoadingMore(true);
     loadEntries(entries.length, true);
   };
 
   return (
-    <div className="p-6 lg:p-8 animate-fade-up">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
-        <div>
-          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Activity Log</h1>
-          <p className="text-sm text-dark-200 font-mono mt-1">Track all admin actions</p>
-        </div>
+    <div className="px-6 pb-6 animate-fade-up">
+      <div className="flex items-center justify-end mb-4">
         <select
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
