@@ -66,6 +66,8 @@ async fn main() {
         match PgPoolOptions::new()
             .max_connections(config.db_max_connections)
             .min_connections(2)
+            // Note: slow query logging (log_min_duration_statement) should be configured
+            // in postgresql.conf, not per-connection. Set to 1000ms for production.
             .after_connect(|conn, _meta| {
                 Box::pin(async move {
                     sqlx::query("SET statement_timeout = '30000'")
@@ -277,6 +279,8 @@ async fn main() {
         }
     });
 
+    let shutdown_db = state.db.clone();
+
     let app = Router::new()
         .merge(routes::router())
         .layer(cors)
@@ -302,6 +306,10 @@ async fn main() {
     let _ = shutdown_tx.send(());
     // Give services a moment to finish their current work
     tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Drain the connection pool so active queries finish before process exits
+    shutdown_db.close().await;
+    tracing::info!("Database connection pool closed");
 
     tracing::info!("DockPanel API shut down gracefully");
 }

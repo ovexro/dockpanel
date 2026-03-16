@@ -74,6 +74,13 @@ pub async fn provision(
         .and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f UTC").ok())
         .map(|dt| dt.and_utc());
 
+    if ssl_expiry.is_none() {
+        tracing::warn!(
+            "Could not parse SSL expiry for site {} (domain: {}). Raw value: {:?}",
+            id, site.domain, result.get("expiry")
+        );
+    }
+
     let cert_path = result
         .get("cert_path")
         .and_then(|v| v.as_str())
