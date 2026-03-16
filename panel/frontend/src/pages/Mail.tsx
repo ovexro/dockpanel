@@ -283,7 +283,12 @@ export default function Mail() {
             Cancel
           </button>
         ) : (
-          <button onClick={() => setShowAddDomain(true)} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors">
+          <button
+            onClick={() => setShowAddDomain(true)}
+            disabled={!mailStatus?.installed}
+            title={!mailStatus?.installed ? "Install Mail Server in Settings → Services first" : ""}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${mailStatus?.installed ? "bg-rust-500 text-white hover:bg-rust-600" : "bg-dark-700 text-dark-400 cursor-not-allowed"}`}
+          >
             Add Domain
           </button>
         )}
