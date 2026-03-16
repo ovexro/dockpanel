@@ -9,6 +9,24 @@ pub struct CmdOutput {
     pub stderr: String,
 }
 
+/// Detect the server's primary (non-loopback, non-docker) interface IP for nginx listen directives.
+/// Returns empty string if detection fails (templates fall back to wildcard listen).
+fn detect_bind_ip() -> String {
+    use std::net::UdpSocket;
+    // Connect to a public IP (doesn't actually send data) to find the outbound interface
+    if let Ok(sock) = UdpSocket::bind("0.0.0.0:0") {
+        if sock.connect("8.8.8.8:53").is_ok() {
+            if let Ok(addr) = sock.local_addr() {
+                let ip = addr.ip().to_string();
+                if ip != "127.0.0.1" {
+                    return ip;
+                }
+            }
+        }
+    }
+    String::new()
+}
+
 /// Initialize Tera templates with embedded nginx templates.
 pub fn init_templates() -> Arc<Tera> {
     let mut tera = Tera::default();
@@ -169,6 +187,7 @@ pub fn render_site_config(
     let mut ctx = Context::new();
     ctx.insert("domain", domain);
     ctx.insert("root", config.root.as_deref().unwrap_or("/var/www"));
+    ctx.insert("bind_ip", &detect_bind_ip());
     ctx.insert("runtime", &config.runtime);
 
     // Resource limits
