@@ -210,6 +210,68 @@ pub async fn create(
                 Some("site"), Some(&body.domain), Some(runtime), None,
             ).await;
 
+            // Auto-DNS: create A record if user has a DNS zone for this domain
+            {
+                let dns_domain = body.domain.clone();
+                let dns_db = state.db.clone();
+                let dns_logs = logs.clone();
+                let dns_user_id = claims.sub;
+                tokio::spawn(async move {
+                    // Extract parent domain
+                    let parts: Vec<&str> = dns_domain.splitn(3, '.').collect();
+                    let parent = if parts.len() >= 3 {
+                        format!("{}.{}", parts[parts.len() - 2], parts[parts.len() - 1])
+                    } else {
+                        dns_domain.clone()
+                    };
+
+                    let zone: Option<(String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+                        "SELECT provider, cf_zone_id, cf_api_token, cf_api_email FROM dns_zones WHERE domain = $1 AND user_id = $2"
+                    ).bind(&parent).bind(dns_user_id).fetch_optional(&dns_db).await.ok().flatten();
+
+                    if let Some((provider, cf_zone_id, cf_api_token, cf_api_email)) = zone {
+                        let server_ip = std::net::UdpSocket::bind("0.0.0.0:0")
+                            .and_then(|s| { s.connect("8.8.8.8:53")?; s.local_addr() })
+                            .map(|a| a.ip().to_string()).unwrap_or_default();
+
+                        if provider == "cloudflare" {
+                            if let (Some(zid), Some(tok)) = (cf_zone_id, cf_api_token) {
+                                let client = reqwest::Client::new();
+                                let mut headers = reqwest::header::HeaderMap::new();
+                                if let Some(em) = cf_api_email {
+                                    headers.insert("X-Auth-Email", em.parse().unwrap_or_else(|_| "".parse().unwrap()));
+                                    headers.insert("X-Auth-Key", tok.parse().unwrap_or_else(|_| "".parse().unwrap()));
+                                } else {
+                                    headers.insert("Authorization", format!("Bearer {tok}").parse().unwrap_or_else(|_| "".parse().unwrap()));
+                                }
+                                let _ = client.post(&format!("https://api.cloudflare.com/client/v4/zones/{zid}/dns_records"))
+                                    .headers(headers)
+                                    .json(&serde_json::json!({"type":"A","name":dns_domain,"content":server_ip,"proxied":false,"ttl":1}))
+                                    .send().await;
+                                tracing::info!("Auto-DNS: created A record {dns_domain} → {server_ip}");
+                                emit_step(&dns_logs, site_id, "dns", "Creating DNS record", "done", None);
+                            }
+                        } else if provider == "powerdns" {
+                            let pdns: Vec<(String, String)> = sqlx::query_as(
+                                "SELECT key, value FROM settings WHERE key IN ('pdns_api_url', 'pdns_api_key')"
+                            ).fetch_all(&dns_db).await.unwrap_or_default();
+                            let purl = pdns.iter().find(|(k,_)| k == "pdns_api_url").map(|(_,v)| v.clone());
+                            let pkey = pdns.iter().find(|(k,_)| k == "pdns_api_key").map(|(_,v)| v.clone());
+                            if let (Some(url), Some(key)) = (purl, pkey) {
+                                let zfqdn = if parent.ends_with('.') { parent.clone() } else { format!("{parent}.") };
+                                let _ = reqwest::Client::new()
+                                    .patch(&format!("{url}/api/v1/servers/localhost/zones/{zfqdn}"))
+                                    .header("X-API-Key", &key)
+                                    .json(&serde_json::json!({"rrsets":[{"name":format!("{dns_domain}."),"type":"A","ttl":300,"changetype":"REPLACE","records":[{"content":server_ip,"disabled":false}]}]}))
+                                    .send().await;
+                                tracing::info!("Auto-DNS (PowerDNS): created A record {dns_domain} → {server_ip}");
+                                emit_step(&dns_logs, site_id, "dns", "Creating DNS record", "done", None);
+                            }
+                        }
+                    }
+                });
+            }
+
             // Auto-SSL: try to provision Let's Encrypt cert in background
             let ssl_agent = state.agent.clone();
             let ssl_domain = body.domain.clone();
