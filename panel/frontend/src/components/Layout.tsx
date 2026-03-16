@@ -108,8 +108,8 @@ export default function Layout() {
 
   useEffect(() => {
     const checkHealth = () => {
-      api.get<{ database: boolean; agent: boolean }>("/settings/health")
-        .then((h) => setApiHealthy(h.database && h.agent))
+      api.get<{ db: string; agent: string }>("/settings/health")
+        .then((h) => setApiHealthy(h.db === "ok" && h.agent === "ok"))
         .catch(() => setApiHealthy(false));
     };
     checkHealth();

@@ -3,9 +3,11 @@ import { api } from "../api";
 import ProvisionLog from "../components/ProvisionLog";
 
 interface HealthStatus {
-  database: boolean;
-  agent: boolean;
+  db: string;
+  agent: string;
   uptime: string;
+  database: boolean; // computed
+  agentOk: boolean;  // computed
 }
 
 interface BackupDestination {
@@ -105,8 +107,8 @@ export default function Settings() {
 
   const loadHealth = async () => {
     try {
-      const data = await api.get<HealthStatus>("/settings/health");
-      setHealth(data);
+      const raw = await api.get<{ db: string; agent: string; uptime: string }>("/settings/health");
+      setHealth({ ...raw, database: raw.db === "ok", agentOk: raw.agent === "ok" });
     } catch {
       setHealth(null);
     } finally {
@@ -1051,11 +1053,11 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
                 </div>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className={`w-3 h-3 rounded-full ${health.agent ? "bg-rust-500" : "bg-red-500"}`} />
+                    <div className={`w-3 h-3 rounded-full ${health.agentOk ? "bg-rust-500" : "bg-red-500"}`} />
                     <span className="text-sm text-dark-50">Agent</span>
                   </div>
-                  <span className={`text-sm font-medium ${health.agent ? "text-rust-400" : "text-danger-400"}`}>
-                    {health.agent ? "Connected" : "Error"}
+                  <span className={`text-sm font-medium ${health.agentOk ? "text-rust-400" : "text-danger-400"}`}>
+                    {health.agentOk ? "Connected" : "Error"}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
