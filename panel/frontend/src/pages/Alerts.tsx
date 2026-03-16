@@ -46,6 +46,7 @@ export default function Alerts() {
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("firing");
   const [typeFilter, setTypeFilter] = useState("");
+  const [message, setMessage] = useState<{text: string; type: string} | null>(null);
   const refreshTimer = useRef<ReturnType<typeof setInterval>>(undefined);
 
   const fetchAlerts = async () => {
@@ -78,18 +79,26 @@ export default function Alerts() {
   const handleAcknowledge = async (id: string) => {
     try {
       await api.put(`/alerts/${id}/acknowledge`, {});
+      setMessage({ text: "Alert acknowledged", type: "success" });
+      setTimeout(() => setMessage(null), 3000);
       fetchAlerts();
     } catch (e) {
       logger.error("Failed to acknowledge alert:", e);
+      setMessage({ text: "Failed to acknowledge alert", type: "error" });
+      setTimeout(() => setMessage(null), 3000);
     }
   };
 
   const handleResolve = async (id: string) => {
     try {
       await api.put(`/alerts/${id}/resolve`, {});
+      setMessage({ text: "Alert resolved", type: "success" });
+      setTimeout(() => setMessage(null), 3000);
       fetchAlerts();
     } catch (e) {
       logger.error("Failed to resolve alert:", e);
+      setMessage({ text: "Failed to resolve alert", type: "error" });
+      setTimeout(() => setMessage(null), 3000);
     }
   };
 
@@ -114,6 +123,16 @@ export default function Alerts() {
           Refresh
         </button>
       </div>
+
+      {message && (
+        <div className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
+          message.type === "success"
+            ? "bg-rust-500/10 text-rust-400 border-rust-500/20"
+            : "bg-red-500/10 text-danger-400 border-red-500/20"
+        }`}>
+          {message.text}
+        </div>
+      )}
 
       {/* Summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">

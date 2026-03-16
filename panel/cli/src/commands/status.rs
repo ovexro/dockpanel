@@ -10,8 +10,13 @@ pub fn usage_color(pct: f64) -> &'static str {
     }
 }
 
-pub async fn cmd_status(token: &str) -> Result<(), String> {
+pub async fn cmd_status(token: &str, output: &str) -> Result<(), String> {
     let info = client::agent_get("/system/info", token).await?;
+
+    if output == "json" {
+        println!("{}", serde_json::to_string_pretty(&info).unwrap_or_default());
+        return Ok(());
+    }
 
     let hostname = info["hostname"].as_str().unwrap_or("unknown");
     let os = info["os"].as_str().unwrap_or("unknown");
@@ -68,8 +73,14 @@ pub async fn cmd_status(token: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub async fn cmd_top(token: &str) -> Result<(), String> {
+pub async fn cmd_top(token: &str, output: &str) -> Result<(), String> {
     let procs = client::agent_get("/system/processes", token).await?;
+
+    if output == "json" {
+        println!("{}", serde_json::to_string_pretty(&procs).unwrap_or_default());
+        return Ok(());
+    }
+
     let procs = procs
         .as_array()
         .ok_or("Expected array from /system/processes")?;
@@ -95,15 +106,37 @@ pub async fn cmd_top(token: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub async fn cmd_services(token: &str) -> Result<(), String> {
+pub async fn cmd_services(token: &str, output: &str, filter: Option<&str>) -> Result<(), String> {
     let svcs = client::agent_get("/services/health", token).await?;
     let svcs = svcs
         .as_array()
         .ok_or("Expected array from /services/health")?;
 
+    // Apply filter
+    let filtered: Vec<_> = if let Some(f) = filter {
+        let f_lower = f.to_lowercase();
+        svcs.iter()
+            .filter(|svc| {
+                svc["name"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .contains(&f_lower)
+            })
+            .collect()
+    } else {
+        svcs.iter().collect()
+    };
+
+    if output == "json" {
+        let json_arr: Vec<_> = filtered.into_iter().cloned().collect();
+        println!("{}", serde_json::to_string_pretty(&json_arr).unwrap_or_default());
+        return Ok(());
+    }
+
     println!("\x1b[1m{:<25} {:<15}\x1b[0m", "SERVICE", "STATUS");
 
-    for svc in svcs {
+    for svc in &filtered {
         let name = svc["name"].as_str().unwrap_or("-");
         let status = svc["status"].as_str().unwrap_or("-");
 
@@ -120,9 +153,15 @@ pub async fn cmd_services(token: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub async fn cmd_diagnose(token: &str) -> Result<(), String> {
-    println!("Running diagnostics...\n");
+pub async fn cmd_diagnose(token: &str, output: &str) -> Result<(), String> {
     let report = client::agent_get("/diagnostics", token).await?;
+
+    if output == "json" {
+        println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+        return Ok(());
+    }
+
+    println!("Running diagnostics...\n");
 
     let summary = &report["summary"];
     let critical = summary["critical"].as_u64().unwrap_or(0);

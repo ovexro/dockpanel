@@ -1,8 +1,14 @@
 use crate::client;
 use serde_json::json;
 
-pub async fn cmd_php_list(token: &str) -> Result<(), String> {
+pub async fn cmd_php_list(token: &str, output: &str) -> Result<(), String> {
     let result = client::agent_get("/php/versions", token).await?;
+
+    if output == "json" {
+        println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+        return Ok(());
+    }
+
     let versions = result["versions"]
         .as_array()
         .ok_or("Expected versions array from /php/versions")?;

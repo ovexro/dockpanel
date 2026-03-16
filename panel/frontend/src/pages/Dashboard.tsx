@@ -197,31 +197,31 @@ export default function Dashboard() {
     api
       .get<Process[]>("/system/processes")
       .then(setProcesses)
-      .catch(() => {}); // Non-critical: processes panel simply stays empty
+      .catch(() => console.warn("Optional: failed to load processes"));
     api
       .get<NetworkIface[]>("/system/network")
       .then(setNetwork)
-      .catch(() => {}); // Non-critical: network panel simply stays empty
+      .catch(() => console.warn("Optional: failed to load network interfaces"));
     api
       .get<Intelligence>("/dashboard/intelligence")
       .then(setIntel)
-      .catch(() => {}); // Non-critical: intelligence panel simply stays empty
+      .catch(() => setError("Failed to load dashboard intelligence"));
     api
       .get<{ container_id: string }[]>("/apps")
       .then((list) => setAppCount(list.length))
-      .catch(() => {}); // Non-critical: only affects onboarding step count
+      .catch(() => console.warn("Optional: failed to load app count"));
     api
       .get<{ count: number; security: number; reboot_required: boolean }>("/system/updates/count")
       .then((d) => { setUpdateCount(d.count); setRebootRequired(d.reboot_required); })
-      .catch(() => {});
+      .catch(() => setError("Failed to load system update status"));
     api
       .get<{ points: MetricPoint[] }>("/dashboard/metrics-history")
       .then((d) => setMetricsHistory(d.points || []))
-      .catch(() => {});
+      .catch(() => console.warn("Optional: failed to load metrics history"));
     api
       .get<{ enabled: boolean }>("/auth/2fa/status")
       .then((d) => setTwoFaEnabled(d.enabled))
-      .catch(() => {});
+      .catch(() => console.warn("Optional: failed to load 2FA status"));
   };
 
   useEffect(() => {
