@@ -57,6 +57,8 @@ export default function Databases() {
   const [credentials, setCredentials] = useState<Credentials | null>(null);
   const [credentialsLoading, setCredentialsLoading] = useState(false);
   const [copied, setCopied] = useState("");
+  const [search, setSearch] = useState("");
+  const [displayCount, setDisplayCount] = useState(25);
 
   const fetchData = async () => {
     try {
@@ -151,12 +153,23 @@ export default function Databases() {
     <div className="p-6 lg:p-8 animate-fade-up">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
         <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Databases</h1>
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
-        >
-          {showForm ? "Cancel" : "Create Database"}
-        </button>
+        <div className="flex items-center gap-3">
+          {databases.length >= 2 && (
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search databases..."
+              className="px-3 py-1.5 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-400 focus:outline-none focus:border-dark-400"
+            />
+          )}
+          <button
+            onClick={() => setShowForm(!showForm)}
+            className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
+          >
+            {showForm ? "Cancel" : "Create Database"}
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -302,7 +315,10 @@ export default function Databases() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-dark-600">
-                {databases.map((db) => (
+                {(() => {
+                  const filtered = databases.filter((db) => db.name.toLowerCase().includes(search.toLowerCase()));
+                  const displayed = filtered.slice(0, displayCount);
+                  return displayed.map((db) => (
                   <tr key={db.id} className="hover:bg-dark-700/30 transition-colors">
                     <td className="px-5 py-4 text-sm font-medium text-dark-50 font-mono">
                       {db.name}
@@ -359,9 +375,22 @@ export default function Databases() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                ));
+                })()}
               </tbody>
             </table>
+            {(() => {
+              const filtered = databases.filter((db) => db.name.toLowerCase().includes(search.toLowerCase()));
+              const remaining = filtered.length - displayCount;
+              return remaining > 0 ? (
+                <button
+                  onClick={() => setDisplayCount((c) => c + 25)}
+                  className="w-full py-2 text-sm text-dark-300 hover:text-dark-100 border-t border-dark-600 hover:bg-dark-700/30 transition-colors"
+                >
+                  Show more ({remaining} remaining)
+                </button>
+              ) : null;
+            })()}
           </div>
 
           {/* Credentials panel */}

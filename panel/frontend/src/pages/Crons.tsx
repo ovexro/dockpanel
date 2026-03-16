@@ -284,7 +284,9 @@ export default function Crons() {
       {/* Crons list */}
       <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
         {loading ? (
-          <div className="p-8 text-center text-dark-300">Loading...</div>
+          <div className="flex items-center justify-center py-12">
+            <div className="w-6 h-6 border-2 border-dark-600 border-t-rust-500 rounded-full animate-spin" />
+          </div>
         ) : crons.length === 0 ? (
           <div className="p-12 text-center">
             <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>

@@ -1,11 +1,31 @@
 use crate::client;
 use serde_json::json;
 
-pub async fn cmd_apps_list(token: &str) -> Result<(), String> {
+pub async fn cmd_apps_list(token: &str, output: &str, filter: Option<&str>) -> Result<(), String> {
     let apps = client::agent_get("/apps", token).await?;
     let apps = apps.as_array().ok_or("Expected array from /apps")?;
 
-    if apps.is_empty() {
+    // Apply filter (matches name or domain)
+    let filtered: Vec<_> = if let Some(f) = filter {
+        let f_lower = f.to_lowercase();
+        apps.iter()
+            .filter(|app| {
+                let name = app["name"].as_str().unwrap_or("").to_lowercase();
+                let domain = app["domain"].as_str().unwrap_or("").to_lowercase();
+                name.contains(&f_lower) || domain.contains(&f_lower)
+            })
+            .collect()
+    } else {
+        apps.iter().collect()
+    };
+
+    if output == "json" {
+        let json_arr: Vec<_> = filtered.into_iter().cloned().collect();
+        println!("{}", serde_json::to_string_pretty(&json_arr).unwrap_or_default());
+        return Ok(());
+    }
+
+    if filtered.is_empty() {
         println!("No Docker apps deployed.");
         return Ok(());
     }
@@ -15,7 +35,7 @@ pub async fn cmd_apps_list(token: &str) -> Result<(), String> {
         "CONTAINER", "NAME", "TEMPLATE", "DOMAIN", "PORT", "STATUS"
     );
 
-    for app in apps {
+    for app in &filtered {
         let cid = app["container_id"].as_str().unwrap_or("-");
         let short_id = &cid[..cid.len().min(12)];
         let name = app["name"].as_str().unwrap_or("-");
@@ -39,12 +59,18 @@ pub async fn cmd_apps_list(token: &str) -> Result<(), String> {
         );
     }
 
-    println!("\n{} app(s)", apps.len());
+    println!("\n{} app(s)", filtered.len());
     Ok(())
 }
 
-pub async fn cmd_apps_templates(token: &str) -> Result<(), String> {
+pub async fn cmd_apps_templates(token: &str, output: &str) -> Result<(), String> {
     let templates = client::agent_get("/apps/templates", token).await?;
+
+    if output == "json" {
+        println!("{}", serde_json::to_string_pretty(&templates).unwrap_or_default());
+        return Ok(());
+    }
+
     let templates = templates
         .as_array()
         .ok_or("Expected array from /apps/templates")?;

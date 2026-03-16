@@ -10,11 +10,33 @@ pub(crate) fn rand_byte() -> u8 {
     buf[0]
 }
 
-pub async fn cmd_db_list(token: &str) -> Result<(), String> {
+pub async fn cmd_db_list(token: &str, output: &str, filter: Option<&str>) -> Result<(), String> {
     let dbs = client::agent_get("/databases", token).await?;
     let dbs = dbs.as_array().ok_or("Expected array from /databases")?;
 
-    if dbs.is_empty() {
+    // Apply filter
+    let filtered: Vec<_> = if let Some(f) = filter {
+        let f_lower = f.to_lowercase();
+        dbs.iter()
+            .filter(|db| {
+                db["name"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .contains(&f_lower)
+            })
+            .collect()
+    } else {
+        dbs.iter().collect()
+    };
+
+    if output == "json" {
+        let json_arr: Vec<_> = filtered.into_iter().cloned().collect();
+        println!("{}", serde_json::to_string_pretty(&json_arr).unwrap_or_default());
+        return Ok(());
+    }
+
+    if filtered.is_empty() {
         println!("No databases.");
         return Ok(());
     }
@@ -24,7 +46,7 @@ pub async fn cmd_db_list(token: &str) -> Result<(), String> {
         "NAME", "ENGINE", "PORT", "STATUS"
     );
 
-    for db in dbs {
+    for db in &filtered {
         let name = db["name"].as_str().unwrap_or("-");
         let engine = db["engine"].as_str().unwrap_or("-");
         let port = db["port"].as_u64().unwrap_or(0);
@@ -42,7 +64,7 @@ pub async fn cmd_db_list(token: &str) -> Result<(), String> {
         );
     }
 
-    println!("\n{} database(s)", dbs.len());
+    println!("\n{} database(s)", filtered.len());
     Ok(())
 }
 

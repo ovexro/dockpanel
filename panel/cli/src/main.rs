@@ -1,7 +1,7 @@
 mod client;
 mod commands;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(
@@ -10,6 +10,10 @@ use clap::{Parser, Subcommand};
     version
 )]
 struct Cli {
+    /// Output format: table (default) or json
+    #[arg(short, long, default_value = "table", global = true)]
+    output: String,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -20,21 +24,34 @@ enum Commands {
     Status,
     /// Manage nginx sites
     Sites {
+        /// Filter sites by domain substring (case-insensitive)
+        #[arg(short, long)]
+        filter: Option<String>,
         #[command(subcommand)]
         command: Option<SitesCmd>,
     },
     /// Manage databases
     Db {
+        /// Filter databases by name substring (case-insensitive)
+        #[arg(short, long)]
+        filter: Option<String>,
         #[command(subcommand)]
         command: Option<DbCmd>,
     },
     /// Manage Docker apps
     Apps {
+        /// Filter apps by name/domain substring (case-insensitive)
+        #[arg(short, long)]
+        filter: Option<String>,
         #[command(subcommand)]
         command: Option<AppsCmd>,
     },
     /// Check service health
-    Services,
+    Services {
+        /// Filter services by name substring (case-insensitive)
+        #[arg(short, long)]
+        filter: Option<String>,
+    },
     /// SSL certificate management
     Ssl {
         #[command(subcommand)]
@@ -80,7 +97,7 @@ enum Commands {
     /// Export server configuration as YAML (Infrastructure as Code)
     Export {
         /// Output file (default: stdout)
-        #[arg(long, short = 'o')]
+        #[arg(long, short = 'O')]
         output: Option<String>,
     },
     /// Apply server configuration from YAML file
@@ -93,6 +110,12 @@ enum Commands {
         /// Email for Let's Encrypt SSL provisioning
         #[arg(long)]
         email: Option<String>,
+    },
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
     },
 }
 
@@ -301,6 +324,14 @@ enum PhpCmd {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+    let output = cli.output.clone();
+
+    // Handle completions before token loading (no agent needed)
+    if let Commands::Completions { shell } = cli.command {
+        clap_complete::generate(shell, &mut Cli::command(), "dockpanel", &mut std::io::stdout());
+        return;
+    }
+
     let token = match client::load_token() {
         Ok(t) => t,
         Err(e) => {
@@ -310,9 +341,9 @@ async fn main() {
     };
 
     let result = match cli.command {
-        Commands::Status => commands::status::cmd_status(&token).await,
-        Commands::Sites { command } => match command {
-            None => commands::sites::cmd_sites_list(&token).await,
+        Commands::Status => commands::status::cmd_status(&token, &output).await,
+        Commands::Sites { filter, command } => match command {
+            None => commands::sites::cmd_sites_list(&token, &output, filter.as_deref()).await,
             Some(SitesCmd::Create {
                 domain,
                 runtime,
@@ -323,8 +354,8 @@ async fn main() {
             Some(SitesCmd::Delete { domain }) => commands::sites::cmd_sites_delete(&token, &domain).await,
             Some(SitesCmd::Info { domain }) => commands::sites::cmd_sites_info(&token, &domain).await,
         },
-        Commands::Db { command } => match command {
-            None => commands::db::cmd_db_list(&token).await,
+        Commands::Db { filter, command } => match command {
+            None => commands::db::cmd_db_list(&token, &output, filter.as_deref()).await,
             Some(DbCmd::Create {
                 name,
                 engine,
@@ -333,9 +364,9 @@ async fn main() {
             }) => commands::db::cmd_db_create(&token, &name, &engine, &password, port).await,
             Some(DbCmd::Delete { container_id }) => commands::db::cmd_db_delete(&token, &container_id).await,
         },
-        Commands::Apps { command } => match command {
-            None => commands::apps::cmd_apps_list(&token).await,
-            Some(AppsCmd::Templates) => commands::apps::cmd_apps_templates(&token).await,
+        Commands::Apps { filter, command } => match command {
+            None => commands::apps::cmd_apps_list(&token, &output, filter.as_deref()).await,
+            Some(AppsCmd::Templates) => commands::apps::cmd_apps_templates(&token, &output).await,
             Some(AppsCmd::Deploy {
                 template,
                 name,
@@ -350,7 +381,7 @@ async fn main() {
             Some(AppsCmd::Logs { container_id }) => commands::apps::cmd_apps_logs(&token, &container_id).await,
             Some(AppsCmd::Compose { file }) => commands::apps::cmd_apps_compose(&token, &file).await,
         },
-        Commands::Services => commands::status::cmd_services(&token).await,
+        Commands::Services { filter } => commands::status::cmd_services(&token, &output, filter.as_deref()).await,
         Commands::Ssl { command } => match command {
             SslCmd::Status { domain } => commands::ssl::cmd_ssl_status(&token, &domain).await,
             SslCmd::Provision {
@@ -362,7 +393,7 @@ async fn main() {
         },
         Commands::Backup { command } => match command {
             BackupCmd::Create { domain } => commands::backup::cmd_backup_create(&token, &domain).await,
-            BackupCmd::List { domain } => commands::backup::cmd_backup_list(&token, &domain).await,
+            BackupCmd::List { domain } => commands::backup::cmd_backup_list(&token, &domain, &output).await,
             BackupCmd::Restore { domain, filename } => {
                 commands::backup::cmd_backup_restore(&token, &domain, &filename).await
             }
@@ -378,10 +409,10 @@ async fn main() {
             search,
         } => commands::logs::cmd_logs(&token, domain.as_deref(), &r#type, lines, filter.as_deref(), search.as_deref()).await,
         Commands::Security { command } => match command {
-            None => commands::security::cmd_security_overview(&token).await,
-            Some(SecurityCmd::Scan) => commands::security::cmd_security_scan(&token).await,
+            None => commands::security::cmd_security_overview(&token, &output).await,
+            Some(SecurityCmd::Scan) => commands::security::cmd_security_scan(&token, &output).await,
             Some(SecurityCmd::Firewall { command }) => match command {
-                None => commands::security::cmd_firewall_list(&token).await,
+                None => commands::security::cmd_firewall_list(&token, &output).await,
                 Some(FirewallCmd::Add {
                     port,
                     proto,
@@ -391,14 +422,15 @@ async fn main() {
                 Some(FirewallCmd::Remove { number }) => commands::security::cmd_firewall_remove(&token, number).await,
             },
         },
-        Commands::Top => commands::status::cmd_top(&token).await,
+        Commands::Top => commands::status::cmd_top(&token, &output).await,
         Commands::Php { command } => match command {
-            None => commands::php::cmd_php_list(&token).await,
+            None => commands::php::cmd_php_list(&token, &output).await,
             Some(PhpCmd::Install { version }) => commands::php::cmd_php_install(&token, &version).await,
         },
-        Commands::Diagnose => commands::status::cmd_diagnose(&token).await,
-        Commands::Export { output } => commands::iac::cmd_export(&token, output.as_deref()).await,
+        Commands::Diagnose => commands::status::cmd_diagnose(&token, &output).await,
+        Commands::Export { output: out_file } => commands::iac::cmd_export(&token, out_file.as_deref()).await,
         Commands::Apply { file, dry_run, email } => commands::iac::cmd_apply(&token, &file, dry_run, email.as_deref()).await,
+        Commands::Completions { .. } => unreachable!(),
     };
 
     if let Err(e) = result {

@@ -7,6 +7,7 @@ use axum::{
 use crate::auth::AuthUser;
 use crate::error::{err, agent_error, require_admin, ApiError};
 use crate::services::activity;
+use crate::services::notifications;
 use crate::AppState;
 
 #[derive(sqlx::FromRow, serde::Serialize)]
@@ -191,6 +192,32 @@ pub async fn trigger_scan(
         None,
     )
     .await;
+
+    // Create alerts for critical/warning findings
+    if critical > 0 || warning > 0 {
+        let severity = if critical > 0 { "critical" } else { "warning" };
+        let alert_title = format!(
+            "Security scan: {} critical, {} warning findings",
+            critical, warning
+        );
+        let alert_message = format!(
+            "A security scan completed with {} total findings ({} critical, {} warning). \
+             Review the scan results in the Security section.",
+            total, critical, warning
+        );
+
+        notifications::fire_alert(
+            &state.db,
+            claims.sub,
+            None,
+            None,
+            "security",
+            severity,
+            &alert_title,
+            &alert_message,
+        )
+        .await;
+    }
 
     Ok(Json(serde_json::json!({
         "id": scan_id,

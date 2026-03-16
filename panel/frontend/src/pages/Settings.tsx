@@ -60,6 +60,8 @@ export default function Settings() {
   const [notifySlackUrl, setNotifySlackUrl] = useState("");
   const [notifyDiscordUrl, setNotifyDiscordUrl] = useState("");
   const [notifyEmail, setNotifyEmail] = useState(true);
+  const [testingWebhook, setTestingWebhook] = useState<string | null>(null);
+  const [webhookResult, setWebhookResult] = useState<{ type: string; msg: string }>({ type: "", msg: "" });
 
   // Backup destinations
   const [destinations, setDestinations] = useState<BackupDestination[]>([]);
@@ -838,57 +840,71 @@ export default function Settings() {
             </div>
             <div>
               <label htmlFor="notify-slack" className="block text-sm font-medium text-dark-100 mb-1">Slack Webhook URL</label>
-              <input
-                id="notify-slack"
-                type="url"
-                value={notifySlackUrl}
-                onChange={(e) => setNotifySlackUrl(e.target.value)}
-                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none font-mono"
-                placeholder="https://hooks.slack.com/services/..."
-              />
+              <div className="flex gap-2">
+                <input
+                  id="notify-slack"
+                  type="url"
+                  value={notifySlackUrl}
+                  onChange={(e) => setNotifySlackUrl(e.target.value)}
+                  className="flex-1 px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none font-mono"
+                  placeholder="https://hooks.slack.com/services/..."
+                />
+                <button
+                  disabled={!notifySlackUrl || testingWebhook === "slack"}
+                  onClick={async () => {
+                    setTestingWebhook("slack");
+                    setWebhookResult({ type: "", msg: "" });
+                    try {
+                      await api.post("/settings/test-webhook", { url: notifySlackUrl, service: "slack" });
+                      setWebhookResult({ type: "slack-ok", msg: "Sent!" });
+                    } catch (e) {
+                      setWebhookResult({ type: "slack-err", msg: e instanceof Error ? e.message : "Failed" });
+                    } finally {
+                      setTestingWebhook(null);
+                    }
+                  }}
+                  className="px-3 py-2 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600 disabled:opacity-50 shrink-0"
+                >
+                  {testingWebhook === "slack" ? "Testing..." : "Test"}
+                </button>
+              </div>
+              {webhookResult.type === "slack-ok" && <p className="text-xs text-rust-400 mt-1">{webhookResult.msg}</p>}
+              {webhookResult.type === "slack-err" && <p className="text-xs text-danger-400 mt-1">{webhookResult.msg}</p>}
             </div>
             <div>
               <label htmlFor="notify-discord" className="block text-sm font-medium text-dark-100 mb-1">Discord Webhook URL</label>
-              <input
-                id="notify-discord"
-                type="url"
-                value={notifyDiscordUrl}
-                onChange={(e) => setNotifyDiscordUrl(e.target.value)}
-                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none font-mono"
-                placeholder="https://discord.com/api/webhooks/..."
-              />
-            </div>
-            <div className="flex flex-wrap justify-end gap-2">
-              {notifySlackUrl && (
+              <div className="flex gap-2">
+                <input
+                  id="notify-discord"
+                  type="url"
+                  value={notifyDiscordUrl}
+                  onChange={(e) => setNotifyDiscordUrl(e.target.value)}
+                  className="flex-1 px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none font-mono"
+                  placeholder="https://discord.com/api/webhooks/..."
+                />
                 <button
+                  disabled={!notifyDiscordUrl || testingWebhook === "discord"}
                   onClick={async () => {
-                    try {
-                      await api.post("/settings/test-webhook", { url: notifySlackUrl, service: "slack" });
-                      setMessage({ text: "Slack test sent", type: "success" });
-                    } catch (e) {
-                      setMessage({ text: e instanceof Error ? e.message : "Slack test failed", type: "error" });
-                    }
-                  }}
-                  className="px-3 py-2 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600"
-                >
-                  Test Slack
-                </button>
-              )}
-              {notifyDiscordUrl && (
-                <button
-                  onClick={async () => {
+                    setTestingWebhook("discord");
+                    setWebhookResult({ type: "", msg: "" });
                     try {
                       await api.post("/settings/test-webhook", { url: notifyDiscordUrl, service: "discord" });
-                      setMessage({ text: "Discord test sent", type: "success" });
+                      setWebhookResult({ type: "discord-ok", msg: "Sent!" });
                     } catch (e) {
-                      setMessage({ text: e instanceof Error ? e.message : "Discord test failed", type: "error" });
+                      setWebhookResult({ type: "discord-err", msg: e instanceof Error ? e.message : "Failed" });
+                    } finally {
+                      setTestingWebhook(null);
                     }
                   }}
-                  className="px-3 py-2 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600"
+                  className="px-3 py-2 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600 disabled:opacity-50 shrink-0"
                 >
-                  Test Discord
+                  {testingWebhook === "discord" ? "Testing..." : "Test"}
                 </button>
-              )}
+              </div>
+              {webhookResult.type === "discord-ok" && <p className="text-xs text-rust-400 mt-1">{webhookResult.msg}</p>}
+              {webhookResult.type === "discord-err" && <p className="text-xs text-danger-400 mt-1">{webhookResult.msg}</p>}
+            </div>
+            <div className="flex justify-end">
               <button
                 onClick={async () => {
                   setSaving("notify");
@@ -916,110 +932,20 @@ export default function Settings() {
         </div>
         )}
 
-        {/* Services tab: PowerDNS, Service Installers, System Health */}
+        {/* Services tab: Service Installers (incl. PowerDNS config), System Health */}
         {tab === "services" && (<>
-        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
-          <div className="px-5 py-3 border-b border-dark-600">
-            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">PowerDNS</h3>
-            <p className="text-xs text-dark-200 mt-0.5">Self-hosted authoritative DNS server</p>
-          </div>
-          <div className="p-5 space-y-4">
-            {/* Setup Guide toggle */}
-            <button
-              onClick={() => setShowPdnsGuide(!showPdnsGuide)}
-              className="flex items-center gap-2 text-sm text-blue-400 hover:text-blue-300 transition-colors"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
-              </svg>
-              {showPdnsGuide ? "Hide setup guide" : "How to install PowerDNS"}
-              <svg className={`w-3 h-3 transition-transform ${showPdnsGuide ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-              </svg>
-            </button>
-
-            {showPdnsGuide && (
-              <div className="bg-dark-900 border border-dark-500 p-4 space-y-3 text-sm">
-                <p className="text-dark-200 font-medium">Install PowerDNS with PostgreSQL backend:</p>
-                <pre className="bg-dark-950 border border-dark-600 p-3 text-xs text-dark-100 font-mono overflow-x-auto whitespace-pre">{`# Install PowerDNS
-apt install pdns-server pdns-backend-pgsql
-
-# Create a database for PowerDNS
-sudo -u postgres createdb pdns
-sudo -u postgres psql pdns < /usr/share/doc/pdns-backend-pgsql/schema.pgsql.sql`}</pre>
-                <p className="text-dark-200 font-medium">Configure <span className="text-dark-100 font-mono">/etc/powerdns/pdns.conf</span>:</p>
-                <pre className="bg-dark-950 border border-dark-600 p-3 text-xs text-dark-100 font-mono overflow-x-auto whitespace-pre">{`launch=gpgsql
-gpgsql-host=127.0.0.1
-gpgsql-dbname=pdns
-gpgsql-user=postgres
-
-# Enable HTTP API
-api=yes
-api-key=your-secret-key-here
-webserver=yes
-webserver-address=127.0.0.1
-webserver-port=8081
-webserver-allow-from=127.0.0.1`}</pre>
-                <p className="text-dark-200 font-medium">Then restart and verify:</p>
-                <pre className="bg-dark-950 border border-dark-600 p-3 text-xs text-dark-100 font-mono overflow-x-auto whitespace-pre">{`systemctl restart pdns
-curl -s -H "X-API-Key: your-secret-key-here" \\
-  http://127.0.0.1:8081/api/v1/servers/localhost | jq .`}</pre>
-                <p className="text-xs text-dark-300">After setup, enter the API URL and key below, then create zones from the DNS page.</p>
-              </div>
-            )}
-
-            <div>
-              <label htmlFor="pdns-url" className="block text-sm font-medium text-dark-100 mb-1">API URL</label>
-              <input
-                id="pdns-url"
-                type="url"
-                value={pdnsApiUrl}
-                onChange={(e) => setPdnsApiUrl(e.target.value)}
-                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none font-mono"
-                placeholder="http://127.0.0.1:8081"
-              />
-            </div>
-            <div>
-              <label htmlFor="pdns-key" className="block text-sm font-medium text-dark-100 mb-1">API Key</label>
-              <input
-                id="pdns-key"
-                type="password"
-                value={pdnsApiKey}
-                onChange={(e) => setPdnsApiKey(e.target.value)}
-                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none font-mono"
-                placeholder="PowerDNS API key"
-              />
-              <p className="text-xs text-dark-300 mt-1">The api-key value from /etc/powerdns/pdns.conf</p>
-            </div>
-            <div className="flex justify-end">
-              <button
-                onClick={async () => {
-                  setSaving("pdns");
-                  setMessage({ text: "", type: "" });
-                  try {
-                    const body: Record<string, string> = { pdns_api_url: pdnsApiUrl };
-                    if (pdnsApiKey && pdnsApiKey !== "********") {
-                      body.pdns_api_key = pdnsApiKey;
-                    }
-                    await api.put("/settings", body);
-                    setMessage({ text: "PowerDNS settings saved", type: "success" });
-                  } catch (e) {
-                    setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
-                  } finally {
-                    setSaving(null);
-                  }
-                }}
-                disabled={saving === "pdns"}
-                className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
-              >
-                {saving === "pdns" ? "Saving..." : "Save"}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Service Installers */}
-        <ServiceInstallers />
+        {/* Service Installers with integrated PowerDNS config */}
+        <ServiceInstallers
+          pdnsApiUrl={pdnsApiUrl}
+          setPdnsApiUrl={setPdnsApiUrl}
+          pdnsApiKey={pdnsApiKey}
+          setPdnsApiKey={setPdnsApiKey}
+          showPdnsGuide={showPdnsGuide}
+          setShowPdnsGuide={setShowPdnsGuide}
+          saving={saving}
+          setSaving={setSaving}
+          setMessage={setMessage}
+        />
 
         {/* System Health */}
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
@@ -1079,7 +1005,17 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
 
 // ── Service Installers Component ────────────────────────────────────────
 
-function ServiceInstallers() {
+function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKey, showPdnsGuide, setShowPdnsGuide, saving, setSaving, setMessage }: {
+  pdnsApiUrl: string;
+  setPdnsApiUrl: (v: string) => void;
+  pdnsApiKey: string;
+  setPdnsApiKey: (v: string) => void;
+  showPdnsGuide: boolean;
+  setShowPdnsGuide: (v: boolean) => void;
+  saving: string | null;
+  setSaving: (v: string | null) => void;
+  setMessage: (v: { text: string; type: string }) => void;
+}) {
   const [status, setStatus] = useState<Record<string, { installed?: boolean; running?: boolean; active?: boolean; version?: string | null }> | null>(null);
   const [installing, setInstalling] = useState<string | null>(null);
   const [installId, setInstallId] = useState<string | null>(null);
@@ -1200,6 +1136,102 @@ function ServiceInstallers() {
               </div>
             );
           })}
+        </div>
+
+        {/* PowerDNS API Configuration */}
+        <div className="border-t border-dark-600 pt-4 mt-2 space-y-3">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-medium text-dark-200 uppercase font-mono tracking-widest">PowerDNS API Configuration</h4>
+            <button
+              onClick={() => setShowPdnsGuide(!showPdnsGuide)}
+              className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+              </svg>
+              {showPdnsGuide ? "Hide guide" : "Setup guide"}
+            </button>
+          </div>
+
+          {showPdnsGuide && (
+            <div className="bg-dark-900 border border-dark-500 p-4 space-y-3 text-sm">
+              <p className="text-dark-200 font-medium">Install PowerDNS with PostgreSQL backend:</p>
+              <pre className="bg-dark-950 border border-dark-600 p-3 text-xs text-dark-100 font-mono overflow-x-auto whitespace-pre">{`# Install PowerDNS
+apt install pdns-server pdns-backend-pgsql
+
+# Create a database for PowerDNS
+sudo -u postgres createdb pdns
+sudo -u postgres psql pdns < /usr/share/doc/pdns-backend-pgsql/schema.pgsql.sql`}</pre>
+              <p className="text-dark-200 font-medium">Configure <span className="text-dark-100 font-mono">/etc/powerdns/pdns.conf</span>:</p>
+              <pre className="bg-dark-950 border border-dark-600 p-3 text-xs text-dark-100 font-mono overflow-x-auto whitespace-pre">{`launch=gpgsql
+gpgsql-host=127.0.0.1
+gpgsql-dbname=pdns
+gpgsql-user=postgres
+
+# Enable HTTP API
+api=yes
+api-key=your-secret-key-here
+webserver=yes
+webserver-address=127.0.0.1
+webserver-port=8081
+webserver-allow-from=127.0.0.1`}</pre>
+              <p className="text-dark-200 font-medium">Then restart and verify:</p>
+              <pre className="bg-dark-950 border border-dark-600 p-3 text-xs text-dark-100 font-mono overflow-x-auto whitespace-pre">{`systemctl restart pdns
+curl -s -H "X-API-Key: your-secret-key-here" \\
+  http://127.0.0.1:8081/api/v1/servers/localhost | jq .`}</pre>
+              <p className="text-xs text-dark-300">After setup, enter the API URL and key below, then create zones from the DNS page.</p>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label htmlFor="pdns-url" className="block text-xs font-medium text-dark-100 mb-1">API URL</label>
+              <input
+                id="pdns-url"
+                type="url"
+                value={pdnsApiUrl}
+                onChange={(e) => setPdnsApiUrl(e.target.value)}
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none font-mono"
+                placeholder="http://127.0.0.1:8081"
+              />
+            </div>
+            <div>
+              <label htmlFor="pdns-key" className="block text-xs font-medium text-dark-100 mb-1">API Key</label>
+              <input
+                id="pdns-key"
+                type="password"
+                value={pdnsApiKey}
+                onChange={(e) => setPdnsApiKey(e.target.value)}
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none font-mono"
+                placeholder="PowerDNS API key"
+              />
+              <p className="text-xs text-dark-300 mt-1">The api-key value from /etc/powerdns/pdns.conf</p>
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <button
+              onClick={async () => {
+                setSaving("pdns");
+                setMessage({ text: "", type: "" });
+                try {
+                  const body: Record<string, string> = { pdns_api_url: pdnsApiUrl };
+                  if (pdnsApiKey && pdnsApiKey !== "********") {
+                    body.pdns_api_key = pdnsApiKey;
+                  }
+                  await api.put("/settings", body);
+                  setMessage({ text: "PowerDNS settings saved", type: "success" });
+                } catch (e) {
+                  setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
+                } finally {
+                  setSaving(null);
+                }
+              }}
+              disabled={saving === "pdns"}
+              className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+            >
+              {saving === "pdns" ? "Saving..." : "Save PowerDNS Config"}
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use crate::services::activity;
 use crate::services::agent::AgentClient;
+use crate::services::notifications;
 
 /// Background task: auto-heals common issues when detected.
 /// Runs every 120 seconds (offset from alert engine to spread load).
@@ -115,6 +116,45 @@ async fn auto_restart_services(pool: &PgPool, agent: &AgentClient) {
             None,
         )
         .await;
+
+        // If the restart succeeded, update alert_state to "ok" and resolve firing alerts
+        // so the alert engine doesn't re-fire before its next health check confirms recovery
+        if success {
+            let _ = sqlx::query(
+                "UPDATE alert_state SET current_state = 'ok', fired_at = NULL, last_notified_at = NULL \
+                 WHERE alert_type = 'service_down' AND state_key = $1 AND current_state = 'firing'",
+            )
+            .bind(service_name)
+            .execute(pool)
+            .await;
+
+            // Get the local server for the resolve notification
+            let server: Option<(uuid::Uuid, uuid::Uuid, String)> = sqlx::query_as(
+                "SELECT id, user_id, name FROM servers ORDER BY created_at ASC LIMIT 1",
+            )
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+
+            if let Some((server_id, user_id, server_name)) = server {
+                notifications::resolve_alert(
+                    pool,
+                    user_id,
+                    Some(server_id),
+                    None,
+                    "service_down",
+                    &format!("Service {} auto-healed on {}", service_name, server_name),
+                    &format!(
+                        "The {} service was automatically restarted by auto-healer on server {}.",
+                        service_name, server_name
+                    ),
+                )
+                .await;
+            }
+
+            tracing::info!("Auto-heal: service {service_name} restarted successfully, alert resolved");
+        }
     }
 }
 
@@ -171,6 +211,20 @@ async fn auto_clean_disk(pool: &PgPool, agent: &AgentClient) {
         None,
     )
     .await;
+
+    // If cleanup succeeded, reset the disk alert_state so the alert engine doesn't
+    // re-fire immediately (let it re-evaluate on the next cycle with fresh metrics)
+    if success {
+        let _ = sqlx::query(
+            "UPDATE alert_state SET current_state = 'ok', consecutive_count = 0, \
+             fired_at = NULL, last_notified_at = NULL \
+             WHERE alert_type = 'disk' AND current_state = 'firing'",
+        )
+        .execute(pool)
+        .await;
+
+        tracing::info!("Auto-heal: disk cleanup succeeded, disk alert state reset");
+    }
 }
 
 /// Auto-renew SSL certs expiring within 3 days.

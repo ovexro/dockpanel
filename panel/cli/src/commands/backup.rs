@@ -16,8 +16,14 @@ pub async fn cmd_backup_create(token: &str, domain: &str) -> Result<(), String> 
     Ok(())
 }
 
-pub async fn cmd_backup_list(token: &str, domain: &str) -> Result<(), String> {
+pub async fn cmd_backup_list(token: &str, domain: &str, output: &str) -> Result<(), String> {
     let backups = client::agent_get(&format!("/backups/{domain}/list"), token).await?;
+
+    if output == "json" {
+        println!("{}", serde_json::to_string_pretty(&backups).unwrap_or_default());
+        return Ok(());
+    }
+
     let backups = backups.as_array().ok_or("Expected array from /backups")?;
 
     if backups.is_empty() {

@@ -495,6 +495,24 @@ async fn check_service_health(pool: &PgPool, agent: &AgentClient) {
         }
 
         if status == "stopped" || status == "failed" {
+            // Skip alerting if auto-healer recently handled this service (within 5 minutes)
+            let recently_healed: Option<(i64,)> = sqlx::query_as(
+                "SELECT COUNT(*) FROM activity_logs \
+                 WHERE action = 'auto_heal.restart_service' \
+                 AND target_name = $1 \
+                 AND created_at > NOW() - INTERVAL '5 minutes'",
+            )
+            .bind(name)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+
+            if recently_healed.map(|r| r.0).unwrap_or(0) > 0 {
+                tracing::debug!("Alert engine: skipping {name} alert (auto-healer recently handled it)");
+                continue;
+            }
+
             // Check if already firing
             let state: Option<(String,)> = sqlx::query_as(
                 "SELECT current_state FROM alert_state \
