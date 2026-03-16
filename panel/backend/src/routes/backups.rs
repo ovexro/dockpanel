@@ -3,10 +3,13 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use std::time::{Duration, Instant};
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::error::{err, agent_error, paginate, ApiError};
+use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
 use crate::AppState;
 
@@ -39,49 +42,82 @@ async fn get_site_domain(state: &AppState, site_id: Uuid, user_id: Uuid) -> Resu
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))
 }
 
-/// POST /api/sites/{id}/backups — Create a backup.
+/// POST /api/sites/{id}/backups — Create a backup (async with SSE).
 pub async fn create(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
-) -> Result<(StatusCode, Json<Backup>), ApiError> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let domain = get_site_domain(&state, id, claims.sub).await?;
 
-    let agent_path = format!("/backups/{}/create", domain);
-    let result = state
-        .agent
-        .post(&agent_path, None)
-        .await
-        .map_err(|e| agent_error("Backup creation", e))?;
+    let backup_id = Uuid::new_v4();
 
-    let filename = result
-        .get("filename")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let size_bytes = result
-        .get("size_bytes")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as i64;
+    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
+    {
+        let mut logs = state.provision_logs.lock().unwrap();
+        logs.insert(backup_id, (Vec::new(), tx, Instant::now()));
+    }
 
-    // Record in DB
-    let backup: Backup = sqlx::query_as(
-        "INSERT INTO backups (site_id, filename, size_bytes) VALUES ($1, $2, $3) RETURNING *",
-    )
-    .bind(id)
-    .bind(&filename)
-    .bind(size_bytes)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    let logs = state.provision_logs.clone();
+    let agent = state.agent.clone();
+    let db = state.db.clone();
+    let user_id = claims.sub;
+    let email = claims.email.clone();
+    let domain_clone = domain.clone();
 
-    tracing::info!("Backup created: {filename} for {domain}");
-    activity::log_activity(
-        &state.db, claims.sub, &claims.email, "backup.create",
-        Some("backup"), Some(&domain), Some(&filename), None,
-    ).await;
+    tokio::spawn(async move {
+        let emit = |step: &str, label: &str, status: &str, msg: Option<String>| {
+            let ev = ProvisionStep {
+                step: step.into(), label: label.into(), status: status.into(), message: msg,
+            };
+            if let Ok(mut map) = logs.lock() {
+                if let Some((history, tx, _)) = map.get_mut(&backup_id) {
+                    history.push(ev.clone());
+                    let _ = tx.send(ev);
+                }
+            }
+        };
 
-    Ok((StatusCode::CREATED, Json(backup)))
+        emit("backup", "Creating backup", "in_progress", None);
+
+        let agent_path = format!("/backups/{}/create", domain_clone);
+        match agent.post(&agent_path, None).await {
+            Ok(result) => {
+                let filename = result.get("filename").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let size_bytes = result.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0) as i64;
+
+                let _ = sqlx::query(
+                    "INSERT INTO backups (site_id, filename, size_bytes) VALUES ($1, $2, $3)",
+                )
+                .bind(id)
+                .bind(&filename)
+                .bind(size_bytes)
+                .execute(&db)
+                .await;
+
+                emit("backup", "Creating backup", "done", None);
+                emit("complete", "Backup created", "done", Some(filename.clone()));
+                tracing::info!("Backup created: {filename} for {domain_clone}");
+                activity::log_activity(
+                    &db, user_id, &email, "backup.create",
+                    Some("backup"), Some(&domain_clone), Some(&filename), None,
+                ).await;
+            }
+            Err(e) => {
+                emit("backup", "Creating backup", "error", Some(format!("{e}")));
+                emit("complete", "Backup failed", "error", None);
+                tracing::error!("Backup creation failed for {domain_clone}: {e}");
+            }
+        }
+
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        logs.lock().unwrap().remove(&backup_id);
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
+        "backup_id": backup_id,
+        "message": "Backup creation started",
+    }))))
 }
 
 /// GET /api/sites/{id}/backups — List backups.
@@ -109,12 +145,12 @@ pub async fn list(
     Ok(Json(backups))
 }
 
-/// POST /api/sites/{id}/backups/{backup_id}/restore — Restore a backup.
+/// POST /api/sites/{id}/backups/{backup_id}/restore — Restore a backup (async with SSE).
 pub async fn restore(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path((id, backup_id)): Path<(Uuid, Uuid)>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let domain = get_site_domain(&state, id, claims.sub).await?;
 
     let backup: Backup = sqlx::query_as(
@@ -127,20 +163,63 @@ pub async fn restore(
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Backup not found"))?;
 
-    let agent_path = format!("/backups/{}/restore/{}", domain, backup.filename);
-    state
-        .agent
-        .post(&agent_path, None)
-        .await
-        .map_err(|e| agent_error("Backup restore", e))?;
+    let restore_id = Uuid::new_v4();
 
-    tracing::info!("Backup restored: {} for {domain}", backup.filename);
-    activity::log_activity(
-        &state.db, claims.sub, &claims.email, "backup.restore",
-        Some("backup"), Some(&domain), Some(&backup.filename), None,
-    ).await;
+    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
+    {
+        let mut logs = state.provision_logs.lock().unwrap();
+        logs.insert(restore_id, (Vec::new(), tx, Instant::now()));
+    }
 
-    Ok(Json(serde_json::json!({ "ok": true })))
+    let logs = state.provision_logs.clone();
+    let agent = state.agent.clone();
+    let db = state.db.clone();
+    let user_id = claims.sub;
+    let email = claims.email.clone();
+    let domain_clone = domain.clone();
+    let filename = backup.filename.clone();
+
+    tokio::spawn(async move {
+        let emit = |step: &str, label: &str, status: &str, msg: Option<String>| {
+            let ev = ProvisionStep {
+                step: step.into(), label: label.into(), status: status.into(), message: msg,
+            };
+            if let Ok(mut map) = logs.lock() {
+                if let Some((history, tx, _)) = map.get_mut(&restore_id) {
+                    history.push(ev.clone());
+                    let _ = tx.send(ev);
+                }
+            }
+        };
+
+        emit("restore", "Restoring backup", "in_progress", None);
+
+        let agent_path = format!("/backups/{}/restore/{}", domain_clone, filename);
+        match agent.post(&agent_path, None).await {
+            Ok(_) => {
+                emit("restore", "Restoring backup", "done", None);
+                emit("complete", "Backup restored", "done", None);
+                tracing::info!("Backup restored: {filename} for {domain_clone}");
+                activity::log_activity(
+                    &db, user_id, &email, "backup.restore",
+                    Some("backup"), Some(&domain_clone), Some(&filename), None,
+                ).await;
+            }
+            Err(e) => {
+                emit("restore", "Restoring backup", "error", Some(format!("{e}")));
+                emit("complete", "Restore failed", "error", None);
+                tracing::error!("Backup restore failed for {domain_clone}: {e}");
+            }
+        }
+
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        logs.lock().unwrap().remove(&restore_id);
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
+        "restore_id": restore_id,
+        "message": "Restore started",
+    }))))
 }
 
 /// DELETE /api/sites/{id}/backups/{backup_id} — Delete a backup.

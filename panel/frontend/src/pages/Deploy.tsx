@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
 import { api } from "../api";
 import { formatDate } from "../utils/format";
+import ProvisionLog from "../components/ProvisionLog";
 
 interface DeployConfig {
   id: string;
@@ -37,6 +38,7 @@ export default function Deploy() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deploying, setDeploying] = useState(false);
+  const [deployId, setDeployId] = useState<string | null>(null);
   const [generatingKey, setGeneratingKey] = useState(false);
   const [message, setMessage] = useState("");
   const [expandedLog, setExpandedLog] = useState<string | null>(null);
@@ -94,12 +96,16 @@ export default function Deploy() {
     setDeploying(true);
     setMessage("");
     try {
-      const log = await api.post<DeployLog>(`/sites/${id}/deploy/trigger`);
-      setMessage(log.status === "success" ? "Deployment completed successfully!" : "Deployment failed. Check logs below.");
-      await load();
+      const result = await api.post<{ deploy_id?: string }>(`/sites/${id}/deploy/trigger`);
+      if (result.deploy_id) {
+        setDeployId(result.deploy_id);
+      } else {
+        setMessage("Deployment completed.");
+        setDeploying(false);
+        await load();
+      }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Deploy failed");
-    } finally {
       setDeploying(false);
     }
   };
@@ -191,6 +197,18 @@ export default function Deploy() {
         }`}>
           {message}
         </div>
+      )}
+
+      {/* Deploy provisioning log */}
+      {deployId && (
+        <ProvisionLog
+          sseUrl={`/api/services/install/${deployId}/log`}
+          onComplete={() => {
+            setDeployId(null);
+            setDeploying(false);
+            load();
+          }}
+        />
       )}
 
       {/* Configuration */}
