@@ -69,7 +69,7 @@ async fn install_php() -> Result<Json<serde_json::Value>, ApiErr> {
     );
 
     let output = Command::new("sh")
-        .args(["-c", &format!("DEBIAN_FRONTEND=noninteractive apt-get install -y {packages}")])
+        .args(["-c", &format!("DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confnew install -y {packages}")])
         .output()
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("apt install failed: {e}")))?;
@@ -93,7 +93,7 @@ async fn install_certbot() -> Result<Json<serde_json::Value>, ApiErr> {
     tracing::info!("Installing Certbot...");
 
     let output = Command::new("sh")
-        .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get install -y certbot python3-certbot-nginx"])
+        .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confnew install -y certbot python3-certbot-nginx"])
         .output()
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("apt install failed: {e}")))?;
@@ -117,7 +117,7 @@ async fn install_ufw() -> Result<Json<serde_json::Value>, ApiErr> {
     tracing::info!("Installing UFW...");
 
     let output = Command::new("sh")
-        .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get install -y ufw"])
+        .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confnew install -y ufw"])
         .output()
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("apt install failed: {e}")))?;
@@ -151,7 +151,7 @@ async fn install_fail2ban() -> Result<Json<serde_json::Value>, ApiErr> {
     tracing::info!("Installing Fail2Ban...");
 
     let output = Command::new("sh")
-        .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get install -y fail2ban"])
+        .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confnew install -y fail2ban"])
         .output()
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("apt install failed: {e}")))?;
@@ -199,7 +199,7 @@ async fn install_powerdns() -> Result<Json<serde_json::Value>, ApiErr> {
 
     // 1. Install packages
     let output = Command::new("sh")
-        .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get install -y pdns-server pdns-backend-pgsql"])
+        .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confnew install -y pdns-server pdns-backend-pgsql"])
         .output()
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("apt install failed: {e}")))?;

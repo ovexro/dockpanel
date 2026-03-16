@@ -115,7 +115,8 @@ async fn mail_install() -> Result<Json<serde_json::Value>, ApiErr> {
 
     // 1. Install packages
     let output = Command::new("apt-get")
-        .args(["install", "-y", "postfix", "dovecot-imapd", "dovecot-pop3d", "dovecot-lmtpd", "opendkim", "opendkim-tools"])
+        .args(["-o", "Dpkg::Options::=--force-confnew", "install", "-y",
+               "postfix", "dovecot-imapd", "dovecot-pop3d", "dovecot-lmtpd", "opendkim", "opendkim-tools"])
         .env("DEBIAN_FRONTEND", "noninteractive")
         .output()
         .await
