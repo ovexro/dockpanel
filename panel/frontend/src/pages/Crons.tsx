@@ -189,7 +189,7 @@ export default function Crons() {
 
       {/* Create form */}
       {showForm && (
-        <form onSubmit={handleCreate} className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6 space-y-4 max-w-3xl">
+        <form onSubmit={handleCreate} className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6 space-y-4 max-w-5xl">
           {/* Preset Templates */}
           <div>
             <label className="block text-sm font-medium text-dark-100 mb-1">Template</label>
@@ -243,7 +243,7 @@ export default function Crons() {
             />
             <p className="text-xs text-dark-300 mt-1">Shell command to execute</p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
             <div>
               <label htmlFor="cron-preset" className="block text-sm font-medium text-dark-100 mb-1">Schedule Preset</label>
               <select
