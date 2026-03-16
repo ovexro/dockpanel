@@ -12,8 +12,6 @@ const Register = lazy(() => import("./pages/Register"));
 const ForgotPassword = lazy(() => import("./pages/ForgotPassword"));
 const ResetPassword = lazy(() => import("./pages/ResetPassword"));
 const VerifyEmail = lazy(() => import("./pages/VerifyEmail"));
-const Servers = lazy(() => import("./pages/Servers"));
-
 const Monitors = lazy(() => import("./pages/Monitors"));
 const Teams = lazy(() => import("./pages/Teams"));
 
@@ -72,8 +70,6 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/activity" element={<Activity />} />
               <Route path="/mail" element={<Mail />} />
               <Route path="/users" element={<Users />} />
-              <Route path="/servers" element={<Servers />} />
-
               <Route path="/alerts" element={<Alerts />} />
               <Route path="/monitors" element={<Monitors />} />
               <Route path="/teams" element={<Teams />} />
