@@ -39,22 +39,20 @@ export default function Updates() {
 
   if (user?.role !== "admin") return <Navigate to="/" replace />;
 
-  // Check reboot + auto-load updates on mount
+  // Auto-load updates on mount
   useEffect(() => {
-    api
-      .get<{ count: number; security: number; reboot_required: boolean }>("/system/updates/count")
-      .then((d) => {
-        setRebootRequired(d.reboot_required);
-        // Auto-load package list if updates available
-        if (d.count > 0) {
-          setLoading(true);
-          api.get<PackageUpdate[]>("/system/updates")
-            .then(data => { setPackages(Array.isArray(data) ? data : []); setChecked(true); })
-            .catch(() => {})
-            .finally(() => setLoading(false));
-        }
+    setLoading(true);
+    Promise.all([
+      api.get<{ count: number; security: number; reboot_required: boolean }>("/system/updates/count"),
+      api.get<PackageUpdate[]>("/system/updates"),
+    ])
+      .then(([countData, listData]) => {
+        setRebootRequired(countData.reboot_required);
+        setPackages(Array.isArray(listData) ? listData : []);
+        setChecked(true);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, []);
 
   // Auto-scroll terminal to bottom
