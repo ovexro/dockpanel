@@ -7,6 +7,7 @@ pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync:
     tracing::info!("Metrics collector started (30s interval)");
 
     let mut interval = tokio::time::interval(Duration::from_secs(30));
+    let mut consecutive_failures: u32 = 0;
 
     loop {
         tokio::select! {
@@ -29,6 +30,7 @@ pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync:
         // Fetch current system info from agent
         match agent.get("/system/info").await {
             Ok(info) => {
+                consecutive_failures = 0;
                 let cpu = info.get("cpu_usage").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                 let mem = info.get("mem_usage_pct").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                 let disk = info.get("disk_usage_pct").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
@@ -47,7 +49,18 @@ pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync:
                 }
             }
             Err(e) => {
+                consecutive_failures += 1;
                 tracing::warn!("Metrics collector: agent unreachable: {e}");
+                // Only log to system_logs after 3 consecutive failures (avoid noise during brief restarts)
+                if consecutive_failures == 3 {
+                    crate::services::system_log::log_event(
+                        &pool,
+                        "warning",
+                        "metrics_collector",
+                        "Agent unreachable for 3+ consecutive checks",
+                        Some(&e.to_string()),
+                    ).await;
+                }
             }
         }
 

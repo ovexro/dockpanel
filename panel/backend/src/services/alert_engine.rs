@@ -73,6 +73,16 @@ async fn fire_alert_with_retry(
             Ok(_) => return,
             Err(e) => {
                 tracing::warn!("Alert fire attempt {} failed: {}", attempt + 1, e);
+                if attempt == 1 {
+                    // Both attempts failed — log to system_logs
+                    crate::services::system_log::log_event(
+                        pool,
+                        "error",
+                        "alert_engine",
+                        &format!("Failed to fire alert: {title}"),
+                        Some(&e.to_string()),
+                    ).await;
+                }
                 if attempt < 1 {
                     tokio::time::sleep(Duration::from_secs(3)).await;
                 }

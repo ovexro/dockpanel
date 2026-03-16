@@ -76,6 +76,7 @@ const Settings = lazyRetry(() => import("./pages/Settings"));
 const Updates = lazyRetry(() => import("./pages/Updates"));
 const Alerts = lazyRetry(() => import("./pages/Alerts"));
 const Activity = lazyRetry(() => import("./pages/Activity"));
+const SystemLogs = lazyRetry(() => import("./pages/SystemLogs"));
 const Mail = lazyRetry(() => import("./pages/Mail"));
 
 createRoot(document.getElementById("root")!).render(
@@ -110,6 +111,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/settings" element={<Settings />} />
               <Route path="/updates" element={<Updates />} />
               <Route path="/activity" element={<Activity />} />
+              <Route path="/system-logs" element={<SystemLogs />} />
               <Route path="/mail" element={<Mail />} />
               <Route path="/users" element={<Users />} />
               <Route path="/alerts" element={<Alerts />} />
