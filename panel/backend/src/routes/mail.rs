@@ -227,6 +227,22 @@ pub async fn create_domain(
         .post("/mail/domains/configure", Some(serde_json::json!({ "domain": domain })))
         .await;
 
+    // ── Auto-DNS: create MX, A, SPF, DMARC, DKIM records ─────────────────
+    let dns_domain = domain.clone();
+    let dns_dkim_pub = public_key.clone();
+    let dns_db = state.db.clone();
+    let dns_agent = state.agent.clone();
+    let dns_user = claims.sub;
+    let dns_email = claims.email.clone();
+    tokio::spawn(async move {
+        if let Err(e) = auto_create_mail_dns(
+            &dns_db, &dns_agent, dns_user, &dns_email,
+            &dns_domain, dns_dkim_pub.as_deref(),
+        ).await {
+            tracing::warn!("Auto-DNS for mail domain {dns_domain} failed: {e}");
+        }
+    });
+
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "mail.domain.create",
         Some("mail"), Some(&domain), None, None,
@@ -290,6 +306,17 @@ pub async fn delete_domain(
 
     let domain = domain.ok_or_else(|| err(StatusCode::NOT_FOUND, "Domain not found"))?;
 
+    // Fetch DKIM selector before deletion (needed for DNS cleanup)
+    let dkim_info: Option<(String,)> = sqlx::query_as(
+        "SELECT dkim_selector FROM mail_domains WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    let dkim_selector = dkim_info.map(|d| d.0).unwrap_or_else(|| "dockpanel".to_string());
+
     // Remove from Postfix/Dovecot via agent
     let _ = state.agent
         .post("/mail/domains/remove", Some(serde_json::json!({ "domain": domain.0 })))
@@ -300,6 +327,18 @@ pub async fn delete_domain(
         .execute(&state.db)
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    // ── Auto-DNS cleanup: delete MX, A, SPF, DMARC, DKIM records ─────────
+    let dns_domain = domain.0.clone();
+    let dns_db = state.db.clone();
+    let dns_user = claims.sub;
+    tokio::spawn(async move {
+        if let Err(e) = auto_delete_mail_dns(
+            &dns_db, dns_user, &dns_domain, &dkim_selector,
+        ).await {
+            tracing::warn!("Auto-DNS cleanup for mail domain {dns_domain} failed: {e}");
+        }
+    });
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "mail.domain.delete",
@@ -733,6 +772,346 @@ pub async fn delete_queued(
     ).await;
 
     Ok(Json(result))
+}
+
+// ── Auto-DNS helpers for mail domains ───────────────────────────────────
+
+/// Extract the parent/root domain from a subdomain.
+/// e.g. "mail.example.com" → "example.com", "example.com" → "example.com"
+fn extract_parent_domain(domain: &str) -> String {
+    let parts: Vec<&str> = domain.split('.').collect();
+    if parts.len() > 2 {
+        parts[parts.len() - 2..].join(".")
+    } else {
+        domain.to_string()
+    }
+}
+
+/// Detect the server's public IPv4 address.
+async fn detect_public_ip() -> String {
+    match reqwest::Client::new()
+        .get("https://api.ipify.org")
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let ip = resp.text().await.unwrap_or_default().trim().to_string();
+            if ip.is_empty() { String::new() } else { ip }
+        }
+        Err(_) => {
+            use std::net::UdpSocket;
+            UdpSocket::bind("0.0.0.0:0")
+                .and_then(|s| { s.connect("8.8.8.8:53")?; s.local_addr() })
+                .map(|a| a.ip().to_string())
+                .unwrap_or_default()
+        }
+    }
+}
+
+/// Build Cloudflare API headers from credentials.
+fn cf_headers(token: &str, email: Option<&str>) -> reqwest::header::HeaderMap {
+    let mut headers = reqwest::header::HeaderMap::new();
+    if let Some(em) = email {
+        if let (Ok(e_val), Ok(k_val)) = (em.parse(), token.parse()) {
+            headers.insert("X-Auth-Email", e_val);
+            headers.insert("X-Auth-Key", k_val);
+        }
+    } else if let Ok(bearer) = format!("Bearer {token}").parse() {
+        headers.insert("Authorization", bearer);
+    }
+    headers
+}
+
+/// Auto-create DNS records (MX, A, SPF, DMARC, DKIM) for a new mail domain.
+/// Runs in a background task — errors are logged, not returned to the user.
+async fn auto_create_mail_dns(
+    db: &sqlx::PgPool,
+    agent: &crate::services::agent::AgentClient,
+    user_id: uuid::Uuid,
+    user_email: &str,
+    domain: &str,
+    dkim_public_key: Option<&str>,
+) -> Result<(), String> {
+    let parent = extract_parent_domain(domain);
+
+    // Look up DNS zone for the parent domain
+    let zone: Option<(String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT provider, cf_zone_id, cf_api_token, cf_api_email FROM dns_zones WHERE domain = $1 AND user_id = $2"
+    )
+    .bind(&parent)
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let (provider, cf_zone_id, cf_api_token, cf_api_email) = match zone {
+        Some(z) => z,
+        None => {
+            tracing::info!("No DNS zone found for {parent} — skipping auto-DNS for mail domain {domain}");
+            return Ok(());
+        }
+    };
+
+    let server_ip = detect_public_ip().await;
+    if server_ip.is_empty() {
+        return Err("Could not detect server public IP".into());
+    }
+
+    // Prepare DKIM TXT value if key is available
+    let dkim_txt = dkim_public_key.map(|pk| {
+        let key_data = pk
+            .replace("-----BEGIN PUBLIC KEY-----", "")
+            .replace("-----END PUBLIC KEY-----", "")
+            .replace('\n', "")
+            .replace('\r', "");
+        format!("v=DKIM1; k=rsa; p={key_data}")
+    });
+
+    if provider == "cloudflare" {
+        let (zone_id, token) = match (cf_zone_id, cf_api_token) {
+            (Some(z), Some(t)) => (z, t),
+            _ => return Err("Cloudflare zone missing zone_id or token".into()),
+        };
+
+        let client = reqwest::Client::new();
+        let headers = cf_headers(&token, cf_api_email.as_deref());
+        let cf_url = format!("https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records");
+
+        // All mail records MUST be proxied: false (DNS-only)
+
+        // 1. A record (DNS-only — SMTP cannot traverse CF proxy)
+        let _ = client.post(&cf_url).headers(headers.clone()).json(&serde_json::json!({
+            "type": "A", "name": domain, "content": server_ip, "proxied": false, "ttl": 1,
+        })).send().await;
+        tracing::info!("Auto-DNS (mail): created A record {domain} → {server_ip}");
+
+        // 2. MX record
+        let _ = client.post(&cf_url).headers(headers.clone()).json(&serde_json::json!({
+            "type": "MX", "name": domain, "content": domain, "priority": 10, "ttl": 1,
+        })).send().await;
+        tracing::info!("Auto-DNS (mail): created MX record {domain} → {domain} (pri 10)");
+
+        // 3. SPF TXT record
+        let spf = format!("v=spf1 ip4:{server_ip} -all");
+        let _ = client.post(&cf_url).headers(headers.clone()).json(&serde_json::json!({
+            "type": "TXT", "name": domain, "content": spf, "ttl": 1,
+        })).send().await;
+        tracing::info!("Auto-DNS (mail): created SPF TXT for {domain}");
+
+        // 4. DMARC TXT record
+        let dmarc = format!("v=DMARC1; p=quarantine; rua=mailto:postmaster@{domain}");
+        let dmarc_name = format!("_dmarc.{domain}");
+        let _ = client.post(&cf_url).headers(headers.clone()).json(&serde_json::json!({
+            "type": "TXT", "name": dmarc_name, "content": dmarc, "ttl": 1,
+        })).send().await;
+        tracing::info!("Auto-DNS (mail): created DMARC TXT for {domain}");
+
+        // 5. DKIM TXT record (if key available)
+        if let Some(dkim_val) = &dkim_txt {
+            let dkim_name = format!("dockpanel._domainkey.{domain}");
+            let _ = client.post(&cf_url).headers(headers.clone()).json(&serde_json::json!({
+                "type": "TXT", "name": dkim_name, "content": dkim_val, "ttl": 1,
+            })).send().await;
+            tracing::info!("Auto-DNS (mail): created DKIM TXT for {domain}");
+        }
+
+        // ── Auto-SSL: provision certificate for the mail domain ───────────
+        // Wait briefly for DNS propagation before attempting ACME HTTP-01
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        match agent.post(&format!("/ssl/provision/{domain}"), Some(serde_json::json!({
+            "email": user_email,
+            "runtime": "static",
+        }))).await {
+            Ok(_) => tracing::info!("Auto-SSL (mail): provisioned certificate for {domain}"),
+            Err(e) => tracing::warn!("Auto-SSL (mail): failed for {domain}: {e} — provision manually"),
+        }
+    } else if provider == "powerdns" {
+        // Get PowerDNS settings
+        let pdns: Vec<(String, String)> = sqlx::query_as(
+            "SELECT key, value FROM settings WHERE key IN ('pdns_api_url', 'pdns_api_key')"
+        ).fetch_all(db).await.unwrap_or_default();
+        let pdns_url = pdns.iter().find(|(k,_)| k == "pdns_api_url").map(|(_,v)| v.clone());
+        let pdns_key = pdns.iter().find(|(k,_)| k == "pdns_api_key").map(|(_,v)| v.clone());
+
+        let (url, key) = match (pdns_url, pdns_key) {
+            (Some(u), Some(k)) => (u, k),
+            _ => return Err("PowerDNS not configured".into()),
+        };
+
+        let client = reqwest::Client::new();
+        let zone_fqdn = if parent.ends_with('.') { parent.clone() } else { format!("{parent}.") };
+        let domain_fqdn = format!("{domain}.");
+
+        let mut rrsets = vec![
+            // A record
+            serde_json::json!({
+                "name": &domain_fqdn, "type": "A", "ttl": 300, "changetype": "REPLACE",
+                "records": [{ "content": &server_ip, "disabled": false }]
+            }),
+            // MX record (PowerDNS includes priority in content)
+            serde_json::json!({
+                "name": &domain_fqdn, "type": "MX", "ttl": 300, "changetype": "REPLACE",
+                "records": [{ "content": format!("10 {domain_fqdn}"), "disabled": false }]
+            }),
+        ];
+
+        // SPF + DMARC as separate TXT rrsets (different names)
+        let spf = format!("\"v=spf1 ip4:{server_ip} -all\"");
+        rrsets.push(serde_json::json!({
+            "name": &domain_fqdn, "type": "TXT", "ttl": 300, "changetype": "REPLACE",
+            "records": [{ "content": &spf, "disabled": false }]
+        }));
+
+        let dmarc_name = format!("_dmarc.{domain_fqdn}");
+        let dmarc = format!("\"v=DMARC1; p=quarantine; rua=mailto:postmaster@{domain}\"");
+        rrsets.push(serde_json::json!({
+            "name": &dmarc_name, "type": "TXT", "ttl": 300, "changetype": "REPLACE",
+            "records": [{ "content": &dmarc, "disabled": false }]
+        }));
+
+        // DKIM TXT record
+        if let Some(dkim_val) = &dkim_txt {
+            let dkim_name = format!("dockpanel._domainkey.{domain_fqdn}");
+            let dkim_quoted = format!("\"{dkim_val}\"");
+            rrsets.push(serde_json::json!({
+                "name": &dkim_name, "type": "TXT", "ttl": 300, "changetype": "REPLACE",
+                "records": [{ "content": &dkim_quoted, "disabled": false }]
+            }));
+        }
+
+        let result = client
+            .patch(&format!("{url}/api/v1/servers/localhost/zones/{zone_fqdn}"))
+            .header("X-API-Key", &key)
+            .json(&serde_json::json!({ "rrsets": rrsets }))
+            .send()
+            .await;
+
+        match result {
+            Ok(resp) if resp.status().is_success() => {
+                tracing::info!("Auto-DNS (mail/PowerDNS): created all records for {domain}");
+            }
+            Ok(resp) => {
+                let text = resp.text().await.unwrap_or_default();
+                return Err(format!("PowerDNS error: {text}"));
+            }
+            Err(e) => return Err(format!("PowerDNS API error: {e}")),
+        }
+
+        // ── Auto-SSL for PowerDNS ────────────────────────────────────────
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        match agent.post(&format!("/ssl/provision/{domain}"), Some(serde_json::json!({
+            "email": user_email,
+            "runtime": "static",
+        }))).await {
+            Ok(_) => tracing::info!("Auto-SSL (mail): provisioned certificate for {domain}"),
+            Err(e) => tracing::warn!("Auto-SSL (mail): failed for {domain}: {e} — provision manually"),
+        }
+    }
+
+    Ok(())
+}
+
+/// Auto-delete all DNS records for a removed mail domain.
+/// Runs in a background task — errors are logged, not returned to the user.
+async fn auto_delete_mail_dns(
+    db: &sqlx::PgPool,
+    user_id: uuid::Uuid,
+    domain: &str,
+    dkim_selector: &str,
+) -> Result<(), String> {
+    let parent = extract_parent_domain(domain);
+
+    let zone: Option<(String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT provider, cf_zone_id, cf_api_token, cf_api_email FROM dns_zones WHERE domain = $1 AND user_id = $2"
+    )
+    .bind(&parent)
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let (provider, cf_zone_id, cf_api_token, cf_api_email) = match zone {
+        Some(z) => z,
+        None => {
+            tracing::info!("No DNS zone found for {parent} — skipping DNS cleanup for mail domain {domain}");
+            return Ok(());
+        }
+    };
+
+    if provider == "cloudflare" {
+        let (zone_id, token) = match (cf_zone_id, cf_api_token) {
+            (Some(z), Some(t)) => (z, t),
+            _ => return Err("Cloudflare zone missing zone_id or token".into()),
+        };
+
+        let client = reqwest::Client::new();
+        let headers = cf_headers(&token, cf_api_email.as_deref());
+
+        // Collect all record names we need to clean up
+        let names_to_check = vec![
+            domain.to_string(),
+            format!("_dmarc.{domain}"),
+            format!("{dkim_selector}._domainkey.{domain}"),
+        ];
+
+        for name in &names_to_check {
+            // Query all record types for this name (A, MX, TXT, CNAME, etc.)
+            let list_url = format!(
+                "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?name={name}&per_page=50"
+            );
+            if let Ok(resp) = client.get(&list_url).headers(headers.clone()).send().await {
+                if let Ok(data) = resp.json::<serde_json::Value>().await {
+                    if let Some(records) = data.get("result").and_then(|r| r.as_array()) {
+                        for record in records {
+                            if let Some(rid) = record.get("id").and_then(|v| v.as_str()) {
+                                let del_url = format!(
+                                    "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{rid}"
+                                );
+                                let _ = client.delete(&del_url).headers(headers.clone()).send().await;
+                                let rtype = record.get("type").and_then(|v| v.as_str()).unwrap_or("?");
+                                tracing::info!("Auto-DNS cleanup (mail): deleted {rtype} record for {name}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else if provider == "powerdns" {
+        let pdns: Vec<(String, String)> = sqlx::query_as(
+            "SELECT key, value FROM settings WHERE key IN ('pdns_api_url', 'pdns_api_key')"
+        ).fetch_all(db).await.unwrap_or_default();
+        let pdns_url = pdns.iter().find(|(k,_)| k == "pdns_api_url").map(|(_,v)| v.clone());
+        let pdns_key = pdns.iter().find(|(k,_)| k == "pdns_api_key").map(|(_,v)| v.clone());
+
+        if let (Some(url), Some(key)) = (pdns_url, pdns_key) {
+            let zone_fqdn = if parent.ends_with('.') { parent.clone() } else { format!("{parent}.") };
+            let domain_fqdn = format!("{domain}.");
+            let dmarc_fqdn = format!("_dmarc.{domain}.");
+            let dkim_fqdn = format!("{dkim_selector}._domainkey.{domain}.");
+
+            let rrsets = serde_json::json!({
+                "rrsets": [
+                    { "name": &domain_fqdn, "type": "A", "changetype": "DELETE" },
+                    { "name": &domain_fqdn, "type": "MX", "changetype": "DELETE" },
+                    { "name": &domain_fqdn, "type": "TXT", "changetype": "DELETE" },
+                    { "name": &dmarc_fqdn, "type": "TXT", "changetype": "DELETE" },
+                    { "name": &dkim_fqdn, "type": "TXT", "changetype": "DELETE" },
+                ]
+            });
+
+            let _ = reqwest::Client::new()
+                .patch(&format!("{url}/api/v1/servers/localhost/zones/{zone_fqdn}"))
+                .header("X-API-Key", &key)
+                .json(&rrsets)
+                .send()
+                .await;
+
+            tracing::info!("Auto-DNS cleanup (mail/PowerDNS): deleted all records for {domain}");
+        }
+    }
+
+    Ok(())
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
