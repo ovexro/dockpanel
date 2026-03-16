@@ -153,6 +153,13 @@ async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &Pg
         }
 
         tracing::warn!("Monitor {} ({}) is DOWN: {}", monitor.name, monitor.url, cause);
+        crate::services::system_log::log_event(
+            pool,
+            "warning",
+            "uptime",
+            &format!("Monitor down: {} ({})", monitor.name, monitor.url),
+            Some(cause),
+        ).await;
         send_alerts(pool, monitor, &format!("{} is down: {cause}", monitor.name)).await;
     } else if new_status == "up" && monitor.status == "down" {
         // Just recovered — resolve incident
