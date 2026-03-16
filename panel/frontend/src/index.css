@@ -36,18 +36,18 @@
   --color-accent-800: #3730a3;
   --color-accent-900: #312e81;
 
-  /* Terminal dark surfaces */
-  --color-dark-950: #020202;
-  --color-dark-900: #050505;
-  --color-dark-800: #0a0a0a;
-  --color-dark-700: #141414;
-  --color-dark-600: #1a1a1a;
-  --color-dark-500: #262626;
-  --color-dark-400: #525252;
-  --color-dark-300: #737373;
-  --color-dark-200: #a3a3a3;
-  --color-dark-100: #d4d4d4;
-  --color-dark-50:  #e5e5e5;
+  /* Dark surfaces — Zinc-tinted for depth and separation */
+  --color-dark-950: #09090b;
+  --color-dark-900: #111113;
+  --color-dark-800: #18181b;
+  --color-dark-700: #27272a;
+  --color-dark-600: #3f3f46;
+  --color-dark-500: #52525b;
+  --color-dark-400: #71717a;
+  --color-dark-300: #a1a1aa;
+  --color-dark-200: #d4d4d8;
+  --color-dark-100: #e4e4e7;
+  --color-dark-50:  #fafafa;
 
   /* Typography — all mono */
   --font-sans: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
@@ -131,7 +131,7 @@ select {
   padding: 0.625rem 2.5rem 0.625rem 0.75rem;
   color: var(--color-dark-100);
   font-size: 0.875rem;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%2371717a' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
   background-position: right 0.5rem center;
   background-repeat: no-repeat;
   background-size: 1.5em 1.5em;
