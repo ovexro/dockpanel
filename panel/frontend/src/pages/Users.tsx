@@ -273,7 +273,7 @@ export default function Users() {
                   placeholder="user@example.com"
                   autoFocus
                 />
-                <p className="text-xs text-dark-300 mt-1">User's email address for login</p>
+                <p className="text-xs text-dark-400 mt-1">User's email address for login</p>
               </div>
               <div>
                 <label htmlFor="create-user-password" className="block text-sm font-medium text-dark-100 mb-1">
@@ -301,7 +301,7 @@ export default function Users() {
                   <option value="user">User</option>
                   <option value="admin">Admin</option>
                 </select>
-                <p className="text-xs text-dark-300 mt-1">Admin has full access, User has limited access</p>
+                <p className="text-xs text-dark-400 mt-1">Admin has full access, User has limited access</p>
               </div>
             </div>
             <div className="flex justify-end gap-2 mt-6">

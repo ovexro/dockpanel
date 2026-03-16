@@ -185,9 +185,9 @@ export default function Databases() {
       {showForm && (
         <form
           onSubmit={handleCreate}
-          className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6 space-y-4 max-w-3xl"
+          className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6 space-y-4 max-w-5xl"
         >
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
             <div>
               <label htmlFor="db-site" className="block text-sm font-medium text-dark-100 mb-1">
                 Site
