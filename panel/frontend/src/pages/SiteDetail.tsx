@@ -392,22 +392,24 @@ export default function SiteDetail() {
             </div>
           </div>
         </Link>
-        <Link
-          to={`/sites/${id}/wordpress`}
-          className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
-        >
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-500/10 rounded-lg text-blue-400 group-hover:bg-blue-500/20 transition-colors">
-              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 2C6.486 2 2 6.486 2 12s4.486 10 10 10 10-4.486 10-10S17.514 2 12 2zm0 2c1.67 0 3.214.52 4.488 1.401L5.401 16.488A7.957 7.957 0 0 1 4 12c0-4.411 3.589-8 8-8zm0 16c-1.67 0-3.214-.52-4.488-1.401L18.599 7.512A7.957 7.957 0 0 1 20 12c0 4.411-3.589 8-8 8z" />
-              </svg>
+        {site.php_preset === "wordpress" && (
+          <Link
+            to={`/sites/${id}/wordpress`}
+            className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
+          >
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-blue-500/10 rounded-lg text-blue-400 group-hover:bg-blue-500/20 transition-colors">
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 2C6.486 2 2 6.486 2 12s4.486 10 10 10 10-4.486 10-10S17.514 2 12 2zm0 2c1.67 0 3.214.52 4.488 1.401L5.401 16.488A7.957 7.957 0 0 1 4 12c0-4.411 3.589-8 8-8zm0 16c-1.67 0-3.214-.52-4.488-1.401L18.599 7.512A7.957 7.957 0 0 1 20 12c0 4.411-3.589 8-8 8z" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-dark-50">WordPress</p>
+                <p className="text-xs text-dark-200">Manage WP</p>
+              </div>
             </div>
-            <div>
-              <p className="text-sm font-medium text-dark-50">WordPress</p>
-              <p className="text-xs text-dark-200">Manage WP</p>
-            </div>
-          </div>
-        </Link>
+          </Link>
+        )}
       </div>
 
       {/* Resource Limits */}

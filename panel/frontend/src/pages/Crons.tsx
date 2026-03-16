@@ -309,7 +309,7 @@ export default function Crons() {
                       )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center gap-2 shrink-0 flex-wrap">
                     <button
                       onClick={() => handleRun(cron)}
                       disabled={running === cron.id}
