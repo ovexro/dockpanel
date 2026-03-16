@@ -77,14 +77,11 @@ export default function Diagnostics() {
   }, {});
 
   return (
-    <div className="p-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
-        <div>
-          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Diagnostics</h1>
-          <p className="text-dark-300 text-sm font-mono mt-1">
-            Scan your server for misconfigurations, resource issues, and security concerns.
-          </p>
-        </div>
+    <div>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
+        <p className="text-dark-300 text-sm font-mono">
+          Scan your server for misconfigurations, resource issues, and security concerns.
+        </p>
         <button
           onClick={runDiagnostics}
           disabled={loading}

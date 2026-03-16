@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
+import DiagnosticsContent from "./Diagnostics";
 
 interface SecurityOverview {
   firewall_active: boolean;
@@ -82,7 +83,7 @@ export default function Security() {
   const [ruleFrom, setRuleFrom] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
   const [message, setMessage] = useState({ text: "", type: "" });
-  const [tab, setTab] = useState<"overview" | "scans">("overview");
+  const [tab, setTab] = useState<"overview" | "scans" | "diagnostics">("overview");
 
   const loadData = async () => {
     try {
@@ -282,6 +283,14 @@ export default function Security() {
           }`}
         >
           Scan History
+        </button>
+        <button
+          onClick={() => setTab("diagnostics")}
+          className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+            tab === "diagnostics" ? "bg-dark-800 text-dark-50 shadow-sm" : "text-dark-200 hover:text-dark-100"
+          }`}
+        >
+          Diagnostics
         </button>
       </div>
 
@@ -601,6 +610,10 @@ export default function Security() {
             ))
           )}
         </div>
+      )}
+
+      {tab === "diagnostics" && (
+        <DiagnosticsContent />
       )}
 
       {/* Add Rule Dialog */}

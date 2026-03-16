@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { api } from "../api";
 import ProvisionLog from "../components/ProvisionLog";
+import UpdatesContent from "./Updates";
+import UsersContent from "./Users";
 
 interface HealthStatus {
   db: string;
@@ -268,7 +270,7 @@ export default function Settings() {
         <p className="text-sm text-dark-200 font-mono mt-1">Manage panel configuration</p>
       </div>
 
-      <div className="flex gap-1 mb-6 border-b border-dark-600 pb-1">
+      <div className="flex gap-1 mb-6 border-b border-dark-600 pb-1 overflow-x-auto">
         {[
           { id: "general", label: "General" },
           { id: "email", label: "Email" },
@@ -276,9 +278,11 @@ export default function Settings() {
           { id: "notifications", label: "Notifications" },
           { id: "destinations", label: "Backup Destinations" },
           { id: "services", label: "Services" },
+          { id: "updates", label: "Updates" },
+          { id: "users", label: "Users" },
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
-            className={`px-3 py-2 text-sm font-medium rounded-t-lg transition-colors ${
+            className={`px-3 py-2 text-sm font-medium rounded-t-lg transition-colors whitespace-nowrap shrink-0 ${
               tab === t.id ? "text-rust-400 border-b-2 border-rust-400" : "text-dark-300 hover:text-dark-100"
             }`}>{t.label}</button>
         ))}
@@ -1007,6 +1011,14 @@ export default function Settings() {
           </div>
         </div>
         </>)}
+
+        {tab === "updates" && (
+          <UpdatesContent />
+        )}
+
+        {tab === "users" && (
+          <UsersContent />
+        )}
       </div>
     </div>
   );
