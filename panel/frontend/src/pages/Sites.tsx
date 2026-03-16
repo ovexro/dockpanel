@@ -129,14 +129,15 @@ export default function Sites() {
 
       {/* Create form */}
       {showForm && (
+        <div className="max-w-3xl mb-6">
         <form
           onSubmit={handleCreate}
-          className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6 space-y-4"
+          className="bg-dark-800 rounded-lg border border-dark-500 p-5 space-y-4"
         >
           {/* Quick CMS Install */}
           <div>
             <label className="block text-xs font-medium text-dark-200 mb-2">Quick Install</label>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex gap-2 overflow-x-auto pb-2 -mx-1 px-1">
               {[
                 { id: "", label: "Custom Site", desc: "" },
                 { id: "wordpress", label: "WordPress", desc: "Blog & CMS" },
@@ -147,7 +148,7 @@ export default function Sites() {
                 { id: "codeigniter", label: "CodeIgniter", desc: "PHP Framework" },
               ].map((c) => (
                 <button key={c.id} type="button" onClick={() => { setCms(c.id); if (c.id) { setRuntime("php"); setPhpPreset(c.id || "generic"); } else { setRuntime("static"); } }}
-                  className={`px-3 py-2 border text-sm transition-colors ${cms === c.id ? "border-dark-50/30 bg-dark-50/5 text-dark-50" : "border-dark-500 bg-dark-900/50 text-dark-300 hover:border-dark-400"}`}
+                  className={`flex-shrink-0 px-3 py-2 border text-sm transition-colors ${cms === c.id ? "border-dark-50/30 bg-dark-50/5 text-dark-50" : "border-dark-500 bg-dark-900/50 text-dark-300 hover:border-dark-400"}`}
                 >
                   {c.label}
                 </button>
@@ -158,6 +159,7 @@ export default function Sites() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label htmlFor="site-domain" className="block text-sm font-medium text-dark-100 mb-1">Domain</label>
+              <p className="text-xs text-dark-400 mb-1.5">Your site's public domain name (e.g., example.com)</p>
               <input
                 id="site-domain"
                 type="text"
@@ -171,6 +173,7 @@ export default function Sites() {
             {!cms ? (
               <div>
                 <label htmlFor="site-runtime" className="block text-sm font-medium text-dark-100 mb-1">Runtime</label>
+                <p className="text-xs text-dark-400 mb-1.5">Static for HTML/CSS/JS, PHP for WordPress/Laravel, Reverse Proxy for Docker apps</p>
                 <select
                   id="site-runtime"
                   value={runtime}
@@ -185,6 +188,7 @@ export default function Sites() {
             ) : (
               <div>
                 <label className="block text-sm font-medium text-dark-100 mb-1">Site Title</label>
+                <p className="text-xs text-dark-400 mb-1.5">The title for your {cms.charAt(0).toUpperCase() + cms.slice(1)} site</p>
                 <input type="text" value={siteTitle} onChange={(e) => setSiteTitle(e.target.value)} placeholder={`My ${cms.charAt(0).toUpperCase() + cms.slice(1)} Site`} className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none text-sm" />
               </div>
             )}
@@ -192,9 +196,14 @@ export default function Sites() {
 
           {/* CMS Admin Fields */}
           {cms && (
+            <>
+            <div className="col-span-2 border-t border-dark-700 pt-3 mt-1">
+              <span className="text-xs font-medium text-dark-400 uppercase tracking-wider">{cms.charAt(0).toUpperCase() + cms.slice(1)} Configuration</span>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="block text-sm font-medium text-dark-100 mb-1">Admin Email</label>
+                <p className="text-xs text-dark-400 mb-1.5">{cms.charAt(0).toUpperCase() + cms.slice(1)} admin email address</p>
                 <input type="email" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} placeholder="you@example.com" className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none text-sm" />
               </div>
               <div>
@@ -206,11 +215,13 @@ export default function Sites() {
                 <input type="password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} placeholder="Auto-generated if blank" className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none text-sm" />
               </div>
             </div>
+            </>
           )}
 
           {runtime === "proxy" && (
             <div>
               <label htmlFor="site-proxy-port" className="block text-sm font-medium text-dark-100 mb-1">Proxy Port</label>
+              <p className="text-xs text-dark-400 mb-1.5">The local port your application listens on</p>
               <input
                 id="site-proxy-port"
                 type="number"
@@ -243,6 +254,7 @@ export default function Sites() {
               </div>
               <div>
                 <label htmlFor="site-php-preset" className="block text-sm font-medium text-dark-100 mb-1">Framework</label>
+                <p className="text-xs text-dark-400 mb-1.5">Nginx configuration preset for your PHP framework</p>
                 <select
                   id="site-php-preset"
                   value={phpPreset}
@@ -262,14 +274,29 @@ export default function Sites() {
             </div>
           )}
 
-          <button
-            type="submit"
-            disabled={submitting}
-            className="px-6 py-2.5 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
-          >
-            {submitting ? "Creating..." : "Create Site"}
-          </button>
+          <div className="flex items-center gap-3 pt-2">
+            <button
+              type="submit"
+              disabled={submitting}
+              className="inline-flex items-center gap-2 px-6 py-2.5 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
+            >
+              {submitting ? (
+                <>
+                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  Creating...
+                </>
+              ) : "Create Site"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowForm(false)}
+              className="px-4 py-2 text-sm text-dark-300 border border-dark-600 rounded-lg hover:text-dark-100 hover:border-dark-400 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
         </form>
+        </div>
       )}
 
       {/* Sites list */}
@@ -281,7 +308,7 @@ export default function Sites() {
             </div>
           ))}
         </div>
-      ) : sites.length === 0 ? (
+      ) : !showForm && sites.length === 0 ? (
         <div className="bg-dark-800 rounded-lg border border-dark-500 p-12 text-center">
           <svg className="w-12 h-12 mx-auto text-gray-300 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0 1 12 16.5a17.92 17.92 0 0 1-8.716-2.247m0 0A9 9 0 0 1 3 12c0-1.47.353-2.856.978-4.082" />
@@ -292,7 +319,7 @@ export default function Sites() {
             Create your first site
           </button>
         </div>
-      ) : (
+      ) : sites.length > 0 ? (
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-x-auto">
           <table className="w-full">
             <thead>
@@ -364,7 +391,7 @@ export default function Sites() {
             ) : null;
           })()}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
