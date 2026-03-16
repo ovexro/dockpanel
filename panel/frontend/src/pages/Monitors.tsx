@@ -226,7 +226,7 @@ export default function Monitors() {
       {showForm && (
         <form onSubmit={handleCreate} className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6 max-w-5xl">
           <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-3">New Monitor</h3>
-          <div className="grid grid-cols-2 gap-4 mb-4 items-end">
+          <div className="grid grid-cols-2 gap-4 mb-4">
             <div>
               <label className="block text-xs font-medium text-dark-200 mb-1">Name</label>
               <input type="text" value={formName} onChange={(e) => setFormName(e.target.value)} required placeholder="My Website" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
@@ -247,7 +247,7 @@ export default function Monitors() {
               <p className="text-xs text-dark-300 mt-1">How often to check, in seconds</p>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4 mb-4 items-end">
+          <div className="grid grid-cols-2 gap-4 mb-4">
             <div>
               <label className="block text-xs font-medium text-dark-200 mb-1">Slack Webhook URL</label>
               <input type="url" value={formSlackUrl} onChange={(e) => setFormSlackUrl(e.target.value)} placeholder="https://hooks.slack.com/services/..." className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none font-mono" />
