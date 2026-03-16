@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
-import { formatSize, formatUptime } from "../utils/format";
+import { formatSize, formatRate, formatUptime } from "../utils/format";
 
 interface SiteDetail {
   id: string;
@@ -77,6 +77,8 @@ interface NetworkIface {
   name: string;
   rx_bytes: number;
   tx_bytes: number;
+  rx_rate?: number;
+  tx_rate?: number;
 }
 
 interface SiteSummary {
@@ -169,17 +171,18 @@ export default function Dashboard() {
   const [metricsHistory, setMetricsHistory] = useState<MetricPoint[]>([]);
   const [twoFaEnabled, setTwoFaEnabled] = useState(false);
   const [sitesList, setSitesList] = useState<SiteDetail[]>([]);
+  const [wsConnected, setWsConnected] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
+  const wsConnectedRef = useRef(false);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const dismissOnboarding = useCallback(() => {
     setDismissed(true);
     localStorage.setItem("dp-onboarding-dismissed", "1");
   }, []);
 
-  const fetchData = () => {
-    api
-      .get<SystemInfo>("/system/info")
-      .then(setSystem)
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load system info"));
+  // Fetch endpoints NOT covered by WebSocket (slow-changing data)
+  const fetchSlowData = useCallback(() => {
     api
       .get<SiteDetail[]>("/sites")
       .then((list) => {
@@ -194,14 +197,6 @@ export default function Dashboard() {
       .get<{ id: string }[]>("/databases")
       .then((list) => setDbCount(list.length))
       .catch(() => setError("Failed to load databases. Please try again."));
-    api
-      .get<Process[]>("/system/processes")
-      .then(setProcesses)
-      .catch(() => console.warn("Optional: failed to load processes"));
-    api
-      .get<NetworkIface[]>("/system/network")
-      .then(setNetwork)
-      .catch(() => console.warn("Optional: failed to load network interfaces"));
     api
       .get<Intelligence>("/dashboard/intelligence")
       .then(setIntel)
@@ -222,18 +217,107 @@ export default function Dashboard() {
       .get<{ enabled: boolean }>("/auth/2fa/status")
       .then((d) => setTwoFaEnabled(d.enabled))
       .catch(() => console.warn("Optional: failed to load 2FA status"));
-  };
-
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 10000);
-    return () => clearInterval(interval);
   }, []);
+
+  // Fetch real-time system endpoints (only needed when WS is disconnected)
+  const fetchRealtimeData = useCallback(() => {
+    api
+      .get<SystemInfo>("/system/info")
+      .then(setSystem)
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load system info"));
+    api
+      .get<Process[]>("/system/processes")
+      .then(setProcesses)
+      .catch(() => console.warn("Optional: failed to load processes"));
+    api
+      .get<NetworkIface[]>("/system/network")
+      .then(setNetwork)
+      .catch(() => console.warn("Optional: failed to load network interfaces"));
+  }, []);
+
+  // WebSocket connection for live metrics
+  useEffect(() => {
+    function connect() {
+      if (reconnectTimer.current) {
+        clearTimeout(reconnectTimer.current);
+        reconnectTimer.current = null;
+      }
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const ws = new WebSocket(`${protocol}//${window.location.host}/api/ws/metrics`);
+
+      ws.onopen = () => {
+        setWsConnected(true);
+        wsConnectedRef.current = true;
+      };
+
+      ws.onclose = () => {
+        setWsConnected(false);
+        wsConnectedRef.current = false;
+        wsRef.current = null;
+        // Reconnect after 3 seconds
+        reconnectTimer.current = setTimeout(connect, 3000);
+      };
+
+      ws.onerror = () => {
+        setWsConnected(false);
+        wsConnectedRef.current = false;
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === "metrics") {
+            if (data.system) setSystem(data.system);
+            if (data.processes) setProcesses(data.processes);
+            if (data.network) setNetwork(data.network);
+          }
+        } catch {
+          console.warn("Failed to parse WebSocket message");
+        }
+      };
+
+      wsRef.current = ws;
+    }
+
+    connect();
+
+    return () => {
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      if (wsRef.current) {
+        // Prevent reconnect on intentional close
+        wsRef.current.onclose = null;
+        wsRef.current.close();
+      }
+    };
+  }, []);
+
+  // Polling logic — interval depends on WebSocket state
+  useEffect(() => {
+    // Initial fetch of everything
+    fetchSlowData();
+    if (!wsConnectedRef.current) fetchRealtimeData();
+
+    const tick = () => {
+      fetchSlowData();
+      // Only poll real-time endpoints when WS is disconnected
+      if (!wsConnectedRef.current) fetchRealtimeData();
+    };
+
+    // WS connected: poll slow data every 15s; disconnected: poll everything every 5s
+    const interval = setInterval(tick, wsConnected ? 15000 : 5000);
+    return () => clearInterval(interval);
+  }, [wsConnected, fetchSlowData, fetchRealtimeData]);
 
   return (
     <div className="p-6 lg:p-8 animate-fade-up">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
-        <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Dashboard</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Dashboard</h1>
+          <span className="flex items-center gap-1.5" title={wsConnected ? "Receiving live metrics via WebSocket" : "Polling metrics via HTTP"}>
+            <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? "bg-emerald-500 animate-pulse" : "bg-dark-400"}`} />
+            <span className="text-[10px] text-dark-400 font-mono">{wsConnected ? "Live" : "Polling"}</span>
+          </span>
+        </div>
         <div className="flex items-center gap-2 flex-wrap">
           <Link to="/apps" className="px-3 py-1.5 bg-dark-800 border border-dark-500 rounded-lg text-xs font-medium text-dark-100 hover:bg-dark-700 hover:text-dark-50 flex items-center gap-1.5">
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
@@ -520,11 +604,23 @@ export default function Dashboard() {
                     {network.filter(n => n.rx_bytes > 0 || n.tx_bytes > 0).map((iface) => (
                       <tr key={iface.name} className="hover:bg-dark-700/30 transition-colors">
                         <td className="px-5 py-2.5 text-sm text-dark-50 font-mono">{iface.name}</td>
-                        <td className="px-5 py-2.5 text-sm text-dark-200 text-right font-mono">
-                          <span className="text-rust-400">{formatSize(iface.rx_bytes)}</span>
+                        <td className="px-5 py-2.5 text-right font-mono">
+                          <div className="text-sm text-rust-400">
+                            <span className="text-dark-400 mr-0.5">{"\u2193"}</span>
+                            {iface.rx_rate != null ? formatRate(iface.rx_rate) : formatSize(iface.rx_bytes)}
+                          </div>
+                          {iface.rx_rate != null && (
+                            <div className="text-[10px] text-dark-400 mt-0.5">{formatSize(iface.rx_bytes)} total</div>
+                          )}
                         </td>
-                        <td className="px-5 py-2.5 text-sm text-dark-200 text-right font-mono">
-                          <span className="text-blue-600">{formatSize(iface.tx_bytes)}</span>
+                        <td className="px-5 py-2.5 text-right font-mono">
+                          <div className="text-sm text-blue-400">
+                            <span className="text-dark-400 mr-0.5">{"\u2191"}</span>
+                            {iface.tx_rate != null ? formatRate(iface.tx_rate) : formatSize(iface.tx_bytes)}
+                          </div>
+                          {iface.tx_rate != null && (
+                            <div className="text-[10px] text-dark-400 mt-0.5">{formatSize(iface.tx_bytes)} total</div>
+                          )}
                         </td>
                       </tr>
                     ))}

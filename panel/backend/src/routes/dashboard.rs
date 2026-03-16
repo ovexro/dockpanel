@@ -1,14 +1,29 @@
 use axum::{extract::State, http::StatusCode, Json};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use crate::auth::AuthUser;
 use crate::error::{err, ApiError};
 use crate::AppState;
+
+static INTELLIGENCE_CACHE: std::sync::LazyLock<Mutex<Option<(serde_json::Value, Instant)>>> =
+    std::sync::LazyLock::new(|| Mutex::new(None));
+const CACHE_TTL: Duration = Duration::from_secs(30);
 
 /// GET /api/dashboard/intelligence — Server health score + top issues + SSL countdowns.
 pub async fn intelligence(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Check cache first
+    if let Ok(guard) = INTELLIGENCE_CACHE.lock() {
+        if let Some((ref cached, ref stored_at)) = *guard {
+            if stored_at.elapsed() < CACHE_TTL {
+                return Ok(Json(cached.clone()));
+            }
+        }
+    }
+
     // 1. Get firing alerts count
     let (firing_count,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM alerts WHERE status = 'firing'",
@@ -119,7 +134,7 @@ pub async fn intelligence(
         _ => "F",
     };
 
-    Ok(Json(serde_json::json!({
+    let result = serde_json::json!({
         "health_score": score,
         "grade": grade,
         "firing_alerts": firing_count,
@@ -127,18 +142,33 @@ pub async fn intelligence(
         "ssl_countdowns": ssl_countdowns,
         "top_issues": issues,
         "diagnostics": diagnostics_summary,
-    })))
+    });
+
+    // Store in cache
+    if let Ok(mut guard) = INTELLIGENCE_CACHE.lock() {
+        *guard = Some((result.clone(), Instant::now()));
+    }
+
+    Ok(Json(result))
 }
 
 /// GET /api/dashboard/metrics-history — Historical CPU/memory/disk data for charts.
+/// Downsampled to ~96 points (one per 15-minute bucket) for efficient chart rendering.
 pub async fn metrics_history(
     AuthUser(_claims): AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let rows: Vec<(f32, f32, f32, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT cpu_pct, mem_pct, disk_pct, created_at FROM metrics_history \
+    let rows: Vec<(f64, f64, f64, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT \
+            AVG(cpu_pct)::float8 AS cpu_pct, \
+            AVG(mem_pct)::float8 AS mem_pct, \
+            AVG(disk_pct)::float8 AS disk_pct, \
+            date_trunc('hour', created_at) + \
+                (EXTRACT(minute FROM created_at)::int / 15) * INTERVAL '15 minutes' AS bucket \
+         FROM metrics_history \
          WHERE created_at > NOW() - INTERVAL '24 hours' \
-         ORDER BY created_at ASC",
+         GROUP BY bucket \
+         ORDER BY bucket ASC",
     )
     .fetch_all(&state.db)
     .await
@@ -148,9 +178,9 @@ pub async fn metrics_history(
         .iter()
         .map(|(cpu, mem, disk, ts)| {
             serde_json::json!({
-                "cpu": cpu,
-                "mem": mem,
-                "disk": disk,
+                "cpu": (*cpu * 10.0).round() / 10.0,
+                "mem": (*mem * 10.0).round() / 10.0,
+                "disk": (*disk * 10.0).round() / 10.0,
                 "time": ts.format("%H:%M").to_string(),
             })
         })
