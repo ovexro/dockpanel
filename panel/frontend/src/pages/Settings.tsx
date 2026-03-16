@@ -510,12 +510,21 @@ export default function Settings() {
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600 flex items-center justify-between">
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Backup Destinations</h3>
-            <button
-              onClick={() => setShowDestForm(!showDestForm)}
-              className="px-3 py-1 bg-rust-500 text-white rounded-md text-xs font-medium hover:bg-rust-600"
-            >
-              {showDestForm ? "Cancel" : "Add Destination"}
-            </button>
+            {showDestForm ? (
+              <button
+                onClick={() => setShowDestForm(false)}
+                className="px-3 py-1 text-dark-300 border border-dark-600 rounded-md text-xs font-medium hover:text-dark-100 hover:border-dark-400"
+              >
+                Cancel
+              </button>
+            ) : (
+              <button
+                onClick={() => setShowDestForm(true)}
+                className="px-3 py-1 bg-rust-500 text-white rounded-md text-xs font-medium hover:bg-rust-600"
+              >
+                Add Destination
+              </button>
+            )}
           </div>
           <div className="p-5">
             {showDestForm && (
@@ -764,7 +773,7 @@ export default function Settings() {
                   </button>
                   <button
                     onClick={() => { setTwoFaSetup(null); setTwoFaCode(""); }}
-                    className="px-4 py-2 text-dark-300 text-sm hover:text-dark-100"
+                    className="px-4 py-2 text-dark-300 border border-dark-600 rounded-lg text-sm font-medium hover:text-dark-100 hover:border-dark-400"
                   >
                     Cancel
                   </button>

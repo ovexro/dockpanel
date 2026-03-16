@@ -185,7 +185,7 @@ export default function Databases() {
       {showForm && (
         <form
           onSubmit={handleCreate}
-          className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6 space-y-4"
+          className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6 space-y-4 max-w-3xl"
         >
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
@@ -229,6 +229,7 @@ export default function Databases() {
                 pattern="[a-zA-Z0-9_]+"
                 className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm"
               />
+              <p className="text-xs text-dark-300 mt-1">Name for your database instance</p>
             </div>
             <div>
               <label htmlFor="db-engine" className="block text-sm font-medium text-dark-100 mb-1">
@@ -243,15 +244,26 @@ export default function Databases() {
                 <option value="postgres">PostgreSQL 16</option>
                 <option value="mariadb">MariaDB 11</option>
               </select>
+              <p className="text-xs text-dark-300 mt-1">MySQL, MariaDB, or PostgreSQL</p>
             </div>
           </div>
-          <button
-            type="submit"
-            disabled={submitting}
-            className="px-6 py-2.5 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
-          >
-            {submitting ? "Creating..." : "Create Database"}
-          </button>
+          <div className="flex gap-3">
+            <button
+              type="submit"
+              disabled={submitting}
+              className="flex items-center gap-2 px-6 py-2.5 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
+            >
+              {submitting && <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+              {submitting ? "Creating..." : "Create Database"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowForm(false)}
+              className="px-4 py-2 text-sm text-dark-300 border border-dark-600 rounded-lg hover:text-dark-100 hover:border-dark-400 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
         </form>
       )}
 
@@ -264,7 +276,7 @@ export default function Databases() {
             </div>
           ))}
         </div>
-      ) : databases.length === 0 ? (
+      ) : !showForm && databases.length === 0 ? (
         <div className="bg-dark-800 rounded-lg border border-dark-500 p-12 text-center">
           <svg
             className="w-12 h-12 mx-auto text-dark-300 mb-4"
@@ -288,7 +300,7 @@ export default function Databases() {
             Create your first database
           </button>
         </div>
-      ) : (
+      ) : databases.length > 0 ? (
         <div className="space-y-0">
           <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-x-auto">
             <table className="w-full">
@@ -466,7 +478,7 @@ export default function Databases() {
             </div>
           )}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

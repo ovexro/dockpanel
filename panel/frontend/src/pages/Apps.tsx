@@ -989,7 +989,7 @@ export default function Apps() {
             <div className="flex justify-end gap-2 mt-6">
               <button
                 onClick={() => setSelected(null)}
-                className="px-4 py-2 text-sm text-dark-200 hover:text-gray-800"
+                className="px-4 py-2 text-dark-300 border border-dark-600 rounded-lg text-sm font-medium hover:text-dark-100 hover:border-dark-400"
               >
                 Cancel
               </button>
@@ -1113,7 +1113,7 @@ export default function Apps() {
               <div className="flex justify-end gap-2">
                 <button
                   onClick={() => { setShowCompose(false); setComposeYaml(""); setComposeParsed(null); setComposeError(""); }}
-                  className="px-4 py-2 text-sm text-dark-200"
+                  className="px-4 py-2 text-dark-300 border border-dark-600 rounded-lg text-sm font-medium hover:text-dark-100 hover:border-dark-400"
                 >
                   Cancel
                 </button>

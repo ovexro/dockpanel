@@ -695,7 +695,7 @@ export default function Security() {
             </div>
 
             <div className="flex justify-end gap-2 mt-5">
-              <button onClick={() => setShowAddRule(false)} className="px-4 py-2 text-sm text-dark-200">Cancel</button>
+              <button onClick={() => setShowAddRule(false)} className="px-4 py-2 text-dark-300 border border-dark-600 rounded-lg text-sm font-medium hover:text-dark-100 hover:border-dark-400">Cancel</button>
               <button
                 onClick={handleAddRule}
                 disabled={!rulePort || isBlocked}

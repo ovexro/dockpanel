@@ -224,7 +224,7 @@ export default function Monitors() {
 
       {/* Create form */}
       {showForm && (
-        <form onSubmit={handleCreate} className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6">
+        <form onSubmit={handleCreate} className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6 max-w-3xl">
           <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-3">New Monitor</h3>
           <div className="grid grid-cols-2 gap-4 mb-4">
             <div>
@@ -234,6 +234,7 @@ export default function Monitors() {
             <div>
               <label className="block text-xs font-medium text-dark-200 mb-1">URL</label>
               <input type="url" value={formUrl} onChange={(e) => handleUrlChange(e.target.value)} required placeholder="https://example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
+              <p className="text-xs text-dark-300 mt-1">The full URL to monitor, including https://</p>
             </div>
             <div>
               <label className="block text-xs font-medium text-dark-200 mb-1">Check Interval</label>
@@ -243,6 +244,7 @@ export default function Monitors() {
                 <option value="300">5 minutes</option>
                 <option value="600">10 minutes</option>
               </select>
+              <p className="text-xs text-dark-300 mt-1">How often to check, in seconds</p>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4 mb-4">
@@ -258,10 +260,11 @@ export default function Monitors() {
             </div>
           </div>
           <div className="flex gap-3">
-            <button type="submit" disabled={submitting} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50">
-              {submitting ? "Creating..." : "Create Monitor"}
+            <button type="submit" disabled={submitting} className="flex items-center gap-2 px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50">
+              {submitting && <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+              {submitting ? "Adding..." : "Create Monitor"}
             </button>
-            <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600">
+            <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 text-sm text-dark-300 border border-dark-600 rounded-lg hover:text-dark-100 hover:border-dark-400 transition-colors">
               Cancel
             </button>
           </div>
@@ -269,7 +272,7 @@ export default function Monitors() {
       )}
 
       {/* Monitor list */}
-      {monitors.length === 0 ? (
+      {!showForm && monitors.length === 0 ? (
         <div className="bg-dark-800 rounded-lg border border-dark-500 p-12 text-center">
           <svg className="w-12 h-12 text-dark-300 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
@@ -279,7 +282,7 @@ export default function Monitors() {
             Add your first monitor
           </button>
         </div>
-      ) : (
+      ) : monitors.length > 0 ? (
         <div className="space-y-3">
           {monitors.slice(0, displayCount).map((m) => (
             <div key={m.id} className="bg-dark-800 rounded-lg border border-dark-500">
@@ -404,7 +407,7 @@ export default function Monitors() {
             </button>
           )}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
