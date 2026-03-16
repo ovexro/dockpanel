@@ -157,6 +157,15 @@ pub async fn remove(
 ) -> Result<Json<serde_json::Value>, ApiError> {
 
 
+    // Check for dependent backup schedules
+    let dependent_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM backup_schedules WHERE destination_id = $1"
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
     let deleted = sqlx::query("DELETE FROM backup_destinations WHERE id = $1")
         .bind(id)
         .execute(&state.db)
@@ -167,7 +176,16 @@ pub async fn remove(
         return Err(err(StatusCode::NOT_FOUND, "Destination not found"));
     }
 
-    Ok(Json(serde_json::json!({ "ok": true })))
+    // Nullify destination_id on dependent schedules (FK is SET NULL)
+    let mut resp = serde_json::json!({ "ok": true });
+    if dependent_count.0 > 0 {
+        resp["warning"] = serde_json::json!(format!(
+            "{} backup schedule(s) were using this destination and are now unassigned",
+            dependent_count.0
+        ));
+    }
+
+    Ok(Json(resp))
 }
 
 /// POST /api/backup-destinations/{id}/test — Test connection.
