@@ -128,7 +128,7 @@ select {
   background-color: var(--color-dark-800);
   border: 1px solid var(--color-dark-600);
   border-radius: 0.5rem;
-  padding: 0.5rem 2.5rem 0.5rem 0.75rem;
+  padding: 0.625rem 2.5rem 0.625rem 0.75rem;
   color: var(--color-dark-100);
   font-size: 0.875rem;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
