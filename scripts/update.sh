@@ -75,6 +75,17 @@ log "Building API..."
 log "Building CLI..."
 (cd "$CLI_SRC" && $CARGO_CMD build --release 2>&1 | tail -1)
 
+# ── Backup database before upgrade ────────────────────────────────────────
+BACKUP_DIR="/var/backups/dockpanel/db"
+mkdir -p "$BACKUP_DIR"
+log "Backing up database..."
+if docker exec dockpanel-postgres pg_dump -U dockpanel dockpanel | gzip > "$BACKUP_DIR/pre-upgrade-$(date +%Y%m%d%H%M%S).sql.gz"; then
+    log "Database backup saved to $BACKUP_DIR/"
+else
+    error "Database backup failed, aborting upgrade"
+    exit 1
+fi
+
 # ── Deploy binaries ───────────────────────────────────────────────────────
 log "Backing up current binaries..."
 cp "$AGENT_BIN" "${AGENT_BIN}.bak" 2>/dev/null || true
@@ -90,26 +101,48 @@ cp "$CLI_SRC/target/release/dockpanel" "$CLI_BIN"
 chmod +x "$AGENT_BIN" "$API_BIN" "$CLI_BIN"
 log "Binaries updated (agent: $(du -h "$AGENT_BIN" | cut -f1), api: $(du -h "$API_BIN" | cut -f1), cli: $(du -h "$CLI_BIN" | cut -f1))"
 
+systemctl daemon-reload
 systemctl start dockpanel-agent
 sleep 1
 systemctl start dockpanel-api
 log "Services restarted"
 
 # ── Health check with rollback ───────────────────────────────────────────
-log "Running post-deploy health check..."
-sleep 5
-if ! curl -sf --max-time 15 http://127.0.0.1:3080/api/health > /dev/null 2>&1; then
+rollback() {
     error "Health check failed, rolling back..."
     cp "${AGENT_BIN}.bak" "$AGENT_BIN" 2>/dev/null || true
     cp "${API_BIN}.bak" "$API_BIN" 2>/dev/null || true
     cp "${CLI_BIN}.bak" "$CLI_BIN" 2>/dev/null || true
+    systemctl daemon-reload
     systemctl restart dockpanel-agent dockpanel-api
     warn "Rolled back to previous binaries"
-else
-    log "Health check passed"
-    # Clean up backups
-    rm -f "${AGENT_BIN}.bak" "${API_BIN}.bak" "${CLI_BIN}.bak"
+    exit 1
+}
+
+log "Running post-deploy health check..."
+sleep 5
+
+# Basic health endpoint
+if ! curl -sf --max-time 15 http://127.0.0.1:3080/api/health > /dev/null 2>&1; then
+    rollback
 fi
+log "Health check: /api/health OK"
+
+# Auth subsystem (setup-status is unauthenticated, tests DB connectivity)
+if ! curl -sf --max-time 15 -X POST http://127.0.0.1:3080/api/auth/setup-status \
+    -H "Content-Type: application/json" > /dev/null 2>&1; then
+    rollback
+fi
+log "Health check: /api/auth/setup-status OK"
+
+# Agent reachable (non-fatal — agent may start slower)
+if ! curl -sf --max-time 15 http://127.0.0.1:3080/api/system/info > /dev/null 2>&1; then
+    warn "Agent connectivity check failed (non-fatal, agent may still be starting)"
+fi
+
+log "Health checks passed"
+# Clean up backups
+rm -f "${AGENT_BIN}.bak" "${API_BIN}.bak" "${CLI_BIN}.bak"
 
 # ── Build frontend ────────────────────────────────────────────────────────
 if [ -d "$FRONTEND_DIR" ]; then

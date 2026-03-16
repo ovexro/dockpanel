@@ -235,6 +235,7 @@ pub async fn get_thresholds(
 }
 
 /// Fire an alert: check cooldown, record in alerts table, send notification.
+/// Convenience wrapper that ignores errors (for callers that don't need retry).
 pub async fn fire_alert(
     pool: &PgPool,
     user_id: Uuid,
@@ -245,13 +246,27 @@ pub async fn fire_alert(
     title: &str,
     message: &str,
 ) {
+    let _ = try_fire_alert(pool, user_id, server_id, site_id, alert_type, severity, title, message).await;
+}
+
+/// Fire an alert with Result return for retry support.
+pub async fn try_fire_alert(
+    pool: &PgPool,
+    user_id: Uuid,
+    server_id: Option<Uuid>,
+    site_id: Option<Uuid>,
+    alert_type: &str,
+    severity: &str,
+    title: &str,
+    message: &str,
+) -> Result<(), String> {
     // Check if this alert type is enabled
     if !is_alert_enabled(pool, user_id, server_id, alert_type).await {
-        return;
+        return Ok(());
     }
 
     // Record in alerts table
-    if let Err(e) = sqlx::query(
+    sqlx::query(
         "INSERT INTO alerts (user_id, server_id, site_id, alert_type, severity, title, message) \
          VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
@@ -264,10 +279,7 @@ pub async fn fire_alert(
     .bind(message)
     .execute(pool)
     .await
-    {
-        tracing::error!("Failed to record alert: {e}");
-        return;
-    }
+    .map_err(|e| format!("Failed to record alert: {e}"))?;
 
     // Send notification
     if let Some(channels) = get_user_channels(pool, user_id, server_id).await {
@@ -287,6 +299,8 @@ pub async fn fire_alert(
         );
         send_notification(pool, &channels, &subject, message, &html).await;
     }
+
+    Ok(())
 }
 
 /// Resolve a firing alert and send recovery notification.

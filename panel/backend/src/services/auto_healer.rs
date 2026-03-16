@@ -7,17 +7,31 @@ use crate::services::notifications;
 
 /// Background task: auto-heals common issues when detected.
 /// Runs every 120 seconds (offset from alert engine to spread load).
-pub async fn run(pool: PgPool, agent: AgentClient) {
+pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
     tracing::info!("Auto-healer started");
 
-    // Initial delay (90s offset from alert engine's 30s)
-    tokio::time::sleep(Duration::from_secs(90)).await;
+    // Initial delay (90s offset from alert engine's 30s, respects shutdown)
+    tokio::select! {
+        _ = tokio::time::sleep(Duration::from_secs(90)) => {}
+        _ = shutdown_rx.recv() => {
+            tracing::info!("Auto-healer shutting down gracefully (during initial delay)");
+            return;
+        }
+    }
 
     // Track when we last ran retention cleanup (once per day)
     let mut last_retention = std::time::Instant::now() - Duration::from_secs(86400);
 
+    let mut interval = tokio::time::interval(Duration::from_secs(120));
+
     loop {
-        tokio::time::sleep(Duration::from_secs(120)).await;
+        tokio::select! {
+            _ = interval.tick() => {}
+            _ = shutdown_rx.recv() => {
+                tracing::info!("Auto-healer shutting down gracefully");
+                return;
+            }
+        }
 
         // Data retention cleanup runs daily regardless of auto-heal setting
         if last_retention.elapsed() >= Duration::from_secs(86400) {
@@ -227,12 +241,17 @@ async fn auto_clean_disk(pool: &PgPool, agent: &AgentClient) {
     }
 }
 
-/// Auto-renew SSL certs expiring within 3 days.
+/// Auto-renew SSL certs expiring within 30 days.
+/// Let's Encrypt certs last 90 days; renewing at 30 days gives a comfortable margin
+/// and aligns with the standard certbot renewal window.
 async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
-    let sites: Vec<(uuid::Uuid, String)> = match sqlx::query_as(
-        "SELECT id, domain FROM sites \
-         WHERE ssl_enabled = TRUE AND ssl_expiry IS NOT NULL \
-         AND ssl_expiry < NOW() + INTERVAL '3 days'",
+    // Fetch sites with SSL expiring within 30 days, along with owner email and site details
+    // needed to call the agent's /ssl/provision/{domain} endpoint.
+    let sites: Vec<(uuid::Uuid, String, uuid::Uuid, String, Option<i32>, Option<String>, Option<String>)> = match sqlx::query_as(
+        "SELECT s.id, s.domain, s.user_id, s.runtime, s.proxy_port, s.php_version, s.root_path \
+         FROM sites s \
+         WHERE s.ssl_enabled = TRUE AND s.ssl_expiry IS NOT NULL \
+         AND s.ssl_expiry < NOW() + INTERVAL '30 days'",
     )
     .fetch_all(pool)
     .await
@@ -241,8 +260,9 @@ async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
         Err(_) => return,
     };
 
-    for (site_id, domain) in &sites {
-        // Check if we already tried recently
+    for (site_id, domain, user_id, runtime, proxy_port, php_version, root_path) in &sites {
+        // 6-hour cooldown prevents hammering Let's Encrypt if renewal keeps failing.
+        // With a 30-day threshold, we get ~120 retry windows before expiry.
         let recent: Option<(i64,)> = sqlx::query_as(
             "SELECT COUNT(*) FROM activity_logs \
              WHERE action = 'auto_heal.renew_ssl' \
@@ -261,14 +281,46 @@ async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
 
         tracing::info!("Auto-heal: renewing SSL for {domain}");
 
-        let result = agent
-            .post(
-                "/ssl/renew",
-                Some(serde_json::json!({ "domain": domain })),
-            )
-            .await;
+        // Look up the site owner's email for ACME registration
+        let email: String = match sqlx::query_scalar(
+            "SELECT email FROM users WHERE id = $1",
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        {
+            Ok(Some(e)) => e,
+            _ => {
+                tracing::warn!("Auto-heal: cannot renew SSL for {domain} — owner email not found");
+                continue;
+            }
+        };
+
+        // Build the provision request body (same format as /api/sites/{id}/ssl)
+        let mut agent_body = serde_json::json!({
+            "email": email,
+            "runtime": runtime,
+        });
+        if let Some(port) = proxy_port {
+            agent_body["proxy_port"] = serde_json::json!(port);
+        }
+        if let Some(php) = php_version {
+            agent_body["php_socket"] = serde_json::json!(format!("/run/php/php{php}-fpm.sock"));
+        }
+        if let Some(root) = root_path {
+            agent_body["root"] = serde_json::json!(root);
+        }
+
+        // Call the correct agent endpoint: /ssl/provision/{domain}
+        let agent_path = format!("/ssl/provision/{domain}");
+        let result = agent.post(&agent_path, Some(agent_body)).await;
 
         let success = result.is_ok();
+        let details = match &result {
+            Ok(v) => v.to_string(),
+            Err(e) => e.to_string(),
+        };
+
         let system_id = uuid::Uuid::nil();
         activity::log_activity(
             pool,
@@ -277,10 +329,58 @@ async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
             "auto_heal.renew_ssl",
             Some("site"),
             Some(domain),
-            Some(&format!("site_id={site_id}, success={success}")),
+            Some(&format!("site_id={site_id}, success={success}, result={details}")),
             None,
         )
         .await;
+
+        if success {
+            // Update ssl_expiry from the agent response if available
+            if let Ok(ref resp) = result {
+                let new_expiry = resp
+                    .get("expiry")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f UTC").ok())
+                    .map(|dt| dt.and_utc());
+
+                if let Some(expiry) = new_expiry {
+                    let _ = sqlx::query(
+                        "UPDATE sites SET ssl_expiry = $1, updated_at = NOW() WHERE id = $2",
+                    )
+                    .bind(expiry)
+                    .bind(site_id)
+                    .execute(pool)
+                    .await;
+                }
+            }
+            tracing::info!("Auto-heal: SSL renewed for {domain}");
+        } else {
+            // Fire an alert so the user is notified about the SSL renewal failure
+            let server: Option<(uuid::Uuid,)> = sqlx::query_as(
+                "SELECT id FROM servers ORDER BY created_at ASC LIMIT 1",
+            )
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+
+            notifications::fire_alert(
+                pool,
+                *user_id,
+                server.map(|s| s.0),
+                Some(*site_id),
+                "ssl_renewal_failure",
+                "critical",
+                &format!("SSL renewal failed: {domain}"),
+                &format!(
+                    "Auto-healer failed to renew the SSL certificate for {domain}: {details}. \
+                     The certificate may expire soon — check the domain configuration and DNS."
+                ),
+            )
+            .await;
+
+            tracing::warn!("Auto-heal: SSL renewal failed for {domain}: {details}");
+        }
     }
 }
 
