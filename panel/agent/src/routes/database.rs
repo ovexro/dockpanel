@@ -17,10 +17,34 @@ struct CreateDbRequest {
     port: Option<u16>,
 }
 
-/// Find an available port for a database container (scans 3307-3399).
-fn find_free_port(engine: &str) -> Result<u16, String> {
-    let base = if engine == "postgres" { 5433 } else { 3307 };
+/// Find an available port for a database container.
+/// Uses both TCP bind check AND Docker container inspection to avoid races.
+async fn find_free_port(engine: &str) -> Result<u16, String> {
+    let base: u16 = if engine == "postgres" { 5433 } else { 3307 };
+
+    // Collect ports already used by Docker containers
+    let mut used_ports = std::collections::HashSet::new();
+    if let Ok(docker) = bollard::Docker::connect_with_local_defaults() {
+        use bollard::container::ListContainersOptions;
+        let containers = docker
+            .list_containers(Some(ListContainersOptions::<String> { all: true, ..Default::default() }))
+            .await
+            .unwrap_or_default();
+        for c in &containers {
+            if let Some(ports) = &c.ports {
+                for p in ports {
+                    if let Some(pub_port) = p.public_port {
+                        used_ports.insert(pub_port);
+                    }
+                }
+            }
+        }
+    }
+
     for port in base..(base + 100) {
+        if used_ports.contains(&port) {
+            continue;
+        }
         if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
             return Ok(port);
         }
@@ -48,7 +72,7 @@ async fn create(
 
     let port = match body.port {
         Some(p) => p,
-        None => find_free_port(&body.engine).map_err(|e| {
+        None => find_free_port(&body.engine).await.map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": e })),
