@@ -3,10 +3,13 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use std::time::Instant;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::auth::AdminUser;
 use crate::error::{err, agent_error, ApiError};
+use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
 use crate::AppState;
 
@@ -96,20 +99,65 @@ pub async fn mail_status(
     Ok(Json(result))
 }
 
-/// POST /api/mail/install
+/// POST /api/mail/install — Returns 202 + install_id for SSE progress tracking.
 pub async fn mail_install(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.post("/mail/install", None).await
-        .map_err(|e| agent_error("Mail install", e))?;
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let install_id = Uuid::new_v4();
 
-    activity::log_activity(
-        &state.db, claims.sub, &claims.email, "mail.server.install",
-        Some("mail"), None, None, None,
-    ).await;
+    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
+    {
+        let mut logs = state.provision_logs.lock().unwrap();
+        logs.insert(install_id, (Vec::new(), tx, Instant::now()));
+    }
 
-    Ok(Json(result))
+    let logs = state.provision_logs.clone();
+    let agent = state.agent.clone();
+    let db = state.db.clone();
+    let user_id = claims.sub;
+    let email = claims.email.clone();
+
+    tokio::spawn(async move {
+        let emit = |step: &str, label: &str, status: &str, msg: Option<String>| {
+            let ev = ProvisionStep {
+                step: step.into(), label: label.into(), status: status.into(), message: msg,
+            };
+            if let Ok(mut map) = logs.lock() {
+                if let Some((history, tx, _)) = map.get_mut(&install_id) {
+                    history.push(ev.clone());
+                    let _ = tx.send(ev);
+                }
+            }
+        };
+
+        emit("install", "Installing mail server", "in_progress", None);
+
+        match agent.post("/mail/install", None).await {
+            Ok(_) => {
+                emit("install", "Installing mail server", "done", None);
+                emit("complete", "Mail server installed", "done", None);
+                activity::log_activity(
+                    &db, user_id, &email, "mail.server.install",
+                    Some("mail"), None, None, None,
+                ).await;
+                tracing::info!("Mail server installed");
+            }
+            Err(e) => {
+                emit("install", "Installing mail server", "error", Some(format!("{e}")));
+                emit("complete", "Install failed", "error", None);
+                tracing::error!("Mail server install failed: {e}");
+            }
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        logs.lock().unwrap().remove(&install_id);
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
+        "install_id": install_id,
+        "message": "Mail server installation started",
+    }))))
 }
 
 // ── Domain routes ───────────────────────────────────────────────────────

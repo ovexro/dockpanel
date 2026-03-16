@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
 import { api } from "../api";
 import { formatSize, formatDate } from "../utils/format";
+import ProvisionLog from "../components/ProvisionLog";
 
 interface Backup {
   id: string;
@@ -49,6 +50,8 @@ export default function Backups() {
   const [restoring, setRestoring] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [message, setMessage] = useState({ text: "", type: "" });
+  const [backupSseId, setBackupSseId] = useState<string | null>(null);
+  const [restoreSseId, setRestoreSseId] = useState<string | null>(null);
 
   // Schedule state
   const [schedule, setSchedule] = useState<BackupSchedule | null>(null);
@@ -100,15 +103,19 @@ export default function Backups() {
     setCreating(true);
     setMessage({ text: "", type: "" });
     try {
-      await api.post(`/sites/${id}/backups`);
-      setMessage({ text: "Backup created successfully", type: "success" });
-      loadBackups();
+      const result = await api.post<{ backup_id?: string }>(`/sites/${id}/backups`);
+      if (result.backup_id) {
+        setBackupSseId(result.backup_id);
+      } else {
+        setMessage({ text: "Backup created successfully", type: "success" });
+        setCreating(false);
+        loadBackups();
+      }
     } catch (e) {
       setMessage({
         text: e instanceof Error ? e.message : "Backup failed",
         type: "error",
       });
-    } finally {
       setCreating(false);
     }
   };
@@ -117,14 +124,18 @@ export default function Backups() {
     setRestoring(backupId);
     setMessage({ text: "", type: "" });
     try {
-      await api.post(`/sites/${id}/backups/${backupId}/restore`);
-      setMessage({ text: "Backup restored successfully", type: "success" });
+      const result = await api.post<{ restore_id?: string }>(`/sites/${id}/backups/${backupId}/restore`);
+      if (result.restore_id) {
+        setRestoreSseId(result.restore_id);
+      } else {
+        setMessage({ text: "Backup restored successfully", type: "success" });
+        setRestoring(null);
+      }
     } catch (e) {
       setMessage({
         text: e instanceof Error ? e.message : "Restore failed",
         type: "error",
       });
-    } finally {
       setRestoring(null);
     }
   };
@@ -195,6 +206,27 @@ export default function Backups() {
         >
           {message.text}
         </div>
+      )}
+
+      {/* Backup/Restore provisioning logs */}
+      {backupSseId && (
+        <ProvisionLog
+          sseUrl={`/api/services/install/${backupSseId}/log`}
+          onComplete={() => {
+            setBackupSseId(null);
+            setCreating(false);
+            loadBackups();
+          }}
+        />
+      )}
+      {restoreSseId && (
+        <ProvisionLog
+          sseUrl={`/api/services/install/${restoreSseId}/log`}
+          onComplete={() => {
+            setRestoreSseId(null);
+            setRestoring(null);
+          }}
+        />
       )}
 
       {/* Scheduled Backups */}

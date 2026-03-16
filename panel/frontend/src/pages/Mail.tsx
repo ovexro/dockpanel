@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { api } from "../api";
+import ProvisionLog from "../components/ProvisionLog";
 
 interface MailDomain {
   id: string;
@@ -87,6 +88,7 @@ export default function Mail() {
   // Mail server status
   const [mailStatus, setMailStatus] = useState<{ installed: boolean; running: boolean } | null>(null);
   const [installing, setInstalling] = useState(false);
+  const [installId, setInstallId] = useState<string | null>(null);
   const [showSetupGuide, setShowSetupGuide] = useState(false);
 
   const loadMailStatus = async () => {
@@ -100,12 +102,18 @@ export default function Mail() {
     setInstalling(true);
     setMessage({ text: "", type: "" });
     try {
-      await api.post("/mail/install", {});
-      setMessage({ text: "Mail server installed and configured", type: "success" });
-      loadMailStatus();
+      const result = await api.post<{ install_id?: string }>("/mail/install", {});
+      if (result.install_id) {
+        setInstallId(result.install_id);
+      } else {
+        setMessage({ text: "Mail server installed and configured", type: "success" });
+        setInstalling(false);
+        loadMailStatus();
+      }
     } catch (e) {
       setMessage({ text: e instanceof Error ? e.message : "Installation failed", type: "error" });
-    } finally { setInstalling(false); }
+      setInstalling(false);
+    }
   };
 
   const loadDomains = async () => {
@@ -352,6 +360,19 @@ groupadd -g 5000 vmail
 useradd -g 5000 -u 5000 -d /var/vmail -s /usr/sbin/nologin -m vmail`}</pre>
             </div>
           )}
+        </div>
+      )}
+
+      {installId && (
+        <div className="mb-6">
+          <ProvisionLog
+            sseUrl={`/api/services/install/${installId}/log`}
+            onComplete={() => {
+              setInstallId(null);
+              setInstalling(false);
+              loadMailStatus();
+            }}
+          />
         </div>
       )}
 

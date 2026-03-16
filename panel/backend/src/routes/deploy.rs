@@ -4,11 +4,13 @@ use axum::{
     Json,
 };
 use sha2::{Sha256, Digest};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::error::{err, agent_error, paginate, ApiError};
+use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
 use crate::AppState;
 
@@ -148,12 +150,12 @@ pub async fn remove_config(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-/// POST /api/sites/{id}/deploy/trigger — Trigger a deployment.
+/// POST /api/sites/{id}/deploy/trigger — Trigger a deployment (async with SSE).
 pub async fn trigger(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
-) -> Result<Json<DeployLog>, ApiError> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let domain = get_site(&state, id, claims.sub).await?;
 
     let config: DeployConfig = sqlx::query_as(
@@ -165,14 +167,65 @@ pub async fn trigger(
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "No deploy config found"))?;
 
-    let log = execute_deploy(&state, id, &domain, &config, "manual").await?;
+    let deploy_id = Uuid::new_v4();
 
-    activity::log_activity(
-        &state.db, claims.sub, &claims.email, "deploy.trigger",
-        Some("deploy"), Some(&domain), log.commit_hash.as_deref(), Some(&log.status),
-    ).await;
+    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
+    {
+        let mut logs = state.provision_logs.lock().unwrap();
+        logs.insert(deploy_id, (Vec::new(), tx, Instant::now()));
+    }
 
-    Ok(Json(log))
+    let logs = state.provision_logs.clone();
+    let state_clone = state.clone();
+    let user_id = claims.sub;
+    let email = claims.email.clone();
+    let domain_clone = domain.clone();
+
+    tokio::spawn(async move {
+        let emit = |step: &str, label: &str, status: &str, msg: Option<String>| {
+            let ev = ProvisionStep {
+                step: step.into(), label: label.into(), status: status.into(), message: msg,
+            };
+            if let Ok(mut map) = logs.lock() {
+                if let Some((history, tx, _)) = map.get_mut(&deploy_id) {
+                    history.push(ev.clone());
+                    let _ = tx.send(ev);
+                }
+            }
+        };
+
+        emit("deploy", "Running deployment", "in_progress", None);
+
+        match execute_deploy(&state_clone, id, &domain_clone, &config, "manual").await {
+            Ok(log) => {
+                let ok = log.status == "success";
+                emit("deploy", "Running deployment", if ok { "done" } else { "error" },
+                    log.output.as_ref().map(|o| o.chars().take(500).collect()));
+                emit("complete",
+                    if ok { "Deployment complete" } else { "Deployment failed" },
+                    if ok { "done" } else { "error" }, None);
+
+                activity::log_activity(
+                    &state_clone.db, user_id, &email, "deploy.trigger",
+                    Some("deploy"), Some(&domain_clone), log.commit_hash.as_deref(), Some(&log.status),
+                ).await;
+            }
+            Err((_status, body)) => {
+                let msg = body.0.get("error").and_then(|v| v.as_str())
+                    .unwrap_or("Unknown error").to_string();
+                emit("deploy", "Running deployment", "error", Some(msg));
+                emit("complete", "Deployment failed", "error", None);
+            }
+        }
+
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        logs.lock().unwrap().remove(&deploy_id);
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
+        "deploy_id": deploy_id,
+        "message": "Deployment started",
+    }))))
 }
 
 /// POST /api/sites/{id}/deploy/keygen — Generate deploy key.
