@@ -127,8 +127,11 @@ export default function Sites() {
               {[
                 { id: "", label: "Custom Site", desc: "" },
                 { id: "wordpress", label: "WordPress", desc: "Blog & CMS" },
+                { id: "laravel", label: "Laravel", desc: "PHP Framework" },
                 { id: "drupal", label: "Drupal", desc: "Enterprise CMS" },
                 { id: "joomla", label: "Joomla", desc: "CMS" },
+                { id: "symfony", label: "Symfony", desc: "PHP Framework" },
+                { id: "codeigniter", label: "CodeIgniter", desc: "PHP Framework" },
               ].map((c) => (
                 <button key={c.id} type="button" onClick={() => { setCms(c.id); if (c.id) { setRuntime("php"); setPhpPreset(c.id || "generic"); } else { setRuntime("static"); } }}
                   className={`px-3 py-2 border text-sm transition-colors ${cms === c.id ? "border-dark-50/30 bg-dark-50/5 text-dark-50" : "border-dark-500 bg-dark-900/50 text-dark-300 hover:border-dark-400"}`}
