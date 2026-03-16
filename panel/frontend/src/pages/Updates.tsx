@@ -48,8 +48,8 @@ export default function Updates() {
         // Auto-load package list if updates available
         if (d.count > 0) {
           setLoading(true);
-          api.get<{ updates: PackageUpdate[] }>("/system/updates")
-            .then(data => { setPackages(data.updates || []); setChecked(true); })
+          api.get<PackageUpdate[]>("/system/updates")
+            .then(data => { setPackages(Array.isArray(data) ? data : []); setChecked(true); })
             .catch(() => {})
             .finally(() => setLoading(false));
         }
@@ -68,8 +68,8 @@ export default function Updates() {
     setLoading(true);
     setMessage({ text: "", type: "" });
     try {
-      const data = await api.get<{ updates: PackageUpdate[] }>("/system/updates");
-      setPackages(data.updates || []);
+      const data = await api.get<PackageUpdate[]>("/system/updates");
+      setPackages(Array.isArray(data) ? data : []);
       setSelected(new Set());
       setChecked(true);
     } catch (e) {
@@ -107,8 +107,8 @@ export default function Updates() {
         type: result.success ? "success" : "error",
       });
       // Refresh the list
-      const data = await api.get<{ updates: PackageUpdate[] }>("/system/updates");
-      setPackages(data.updates || []);
+      const data = await api.get<PackageUpdate[]>("/system/updates");
+      setPackages(Array.isArray(data) ? data : []);
       setSelected(new Set());
     } catch (e) {
       setMessage({
