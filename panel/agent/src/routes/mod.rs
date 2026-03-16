@@ -32,10 +32,19 @@ use axum::{
     response::Response,
 };
 use bollard::Docker;
+use std::collections::HashMap;
 use std::sync::Arc;
 use sysinfo::System;
 use tera::Tera;
 use tokio::sync::Mutex;
+
+/// Snapshot of network counters for rate calculation.
+pub struct NetworkSnapshot {
+    /// Per-interface (rx_bytes, tx_bytes) at the time of the snapshot.
+    pub readings: HashMap<String, (u64, u64)>,
+    /// When the snapshot was taken.
+    pub timestamp: std::time::Instant,
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -43,6 +52,7 @@ pub struct AppState {
     pub templates: Arc<Tera>,
     pub system: Arc<Mutex<System>>,
     pub docker: Docker,
+    pub network_snapshot: Arc<Mutex<Option<NetworkSnapshot>>>,
 }
 
 /// Validate a domain name format (shared across route modules).

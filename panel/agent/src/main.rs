@@ -78,6 +78,7 @@ async fn main() {
         templates,
         system: Arc::new(Mutex::new(sys)),
         docker,
+        network_snapshot: Arc::new(Mutex::new(None)),
     };
 
     // Build router with auth middleware

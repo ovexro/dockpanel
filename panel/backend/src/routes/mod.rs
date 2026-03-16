@@ -33,6 +33,7 @@ pub mod system;
 pub mod terminal;
 pub mod users;
 pub mod wordpress;
+pub mod ws_metrics;
 
 use axum::{
     routing::{delete, get, post, put},
@@ -256,6 +257,8 @@ pub fn router() -> Router<AppState> {
         // Dashboard Intelligence
         .route("/api/dashboard/intelligence", get(dashboard::intelligence))
         .route("/api/dashboard/metrics-history", get(dashboard::metrics_history))
+        // Live metrics WebSocket
+        .route("/api/ws/metrics", get(ws_metrics::handler))
         // SSH Keys
         .route("/api/ssh-keys", get(system::list_ssh_keys).post(system::add_ssh_key))
         .route("/api/ssh-keys/{fingerprint}", delete(system::remove_ssh_key))
