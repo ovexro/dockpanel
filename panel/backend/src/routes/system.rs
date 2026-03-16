@@ -1,7 +1,18 @@
-use axum::{extract::State, Json};
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::sse::{Event, KeepAlive, Sse},
+    Json,
+};
+use futures::stream::StreamExt;
+use std::time::{Duration, Instant};
+use tokio::sync::broadcast;
+use tokio_stream::wrappers::BroadcastStream;
+use uuid::Uuid;
 
 use crate::auth::{AdminUser, AuthUser};
-use crate::error::{agent_error, ApiError};
+use crate::error::{err, agent_error, ApiError};
+use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
 use crate::AppState;
 
@@ -119,7 +130,7 @@ pub async fn system_reboot(
     Ok(Json(data))
 }
 
-// ── Service installers (proxy to agent) ─────────────────────────────────
+// ── Service installers (proxy to agent, async with SSE progress) ─────────
 
 pub async fn install_status(
     State(state): State<AppState>,
@@ -130,34 +141,132 @@ pub async fn install_status(
     Ok(Json(result))
 }
 
+/// Generic service install with provisioning log (async SSE).
+async fn install_service_with_log(
+    state: &AppState,
+    claims_sub: Uuid,
+    claims_email: &str,
+    service_name: &str,
+    agent_path: &str,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let install_id = Uuid::new_v4();
+
+    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
+    {
+        let mut logs = state.provision_logs.lock().unwrap();
+        logs.insert(install_id, (Vec::new(), tx, Instant::now()));
+    }
+
+    let logs = state.provision_logs.clone();
+    let agent = state.agent.clone();
+    let db = state.db.clone();
+    let svc = service_name.to_string();
+    let path = agent_path.to_string();
+    let email = claims_email.to_string();
+
+    tokio::spawn(async move {
+        let emit = |step: &str, lbl: &str, status: &str, msg: Option<String>| {
+            let ev = ProvisionStep {
+                step: step.into(),
+                label: lbl.into(),
+                status: status.into(),
+                message: msg,
+            };
+            if let Ok(mut map) = logs.lock() {
+                if let Some((history, tx, _)) = map.get_mut(&install_id) {
+                    history.push(ev.clone());
+                    let _ = tx.send(ev);
+                }
+            }
+        };
+
+        emit("install", &format!("Installing {svc}"), "in_progress", None);
+
+        match agent.post(&path, None).await {
+            Ok(_) => {
+                emit("install", &format!("Installing {svc}"), "done", None);
+                emit("complete", &format!("{svc} installed"), "done", None);
+                activity::log_activity(
+                    &db, claims_sub, &email, "service.install",
+                    Some("system"), Some(&svc), None, None,
+                ).await;
+                tracing::info!("Service installed: {svc}");
+            }
+            Err(e) => {
+                emit("install", &format!("Installing {svc}"), "error", Some(format!("{e}")));
+                emit("complete", "Install failed", "error", None);
+                tracing::error!("Service install failed: {svc}: {e}");
+            }
+        }
+
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        logs.lock().unwrap().remove(&install_id);
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
+        "install_id": install_id,
+        "message": format!("{service_name} installation started"),
+    }))))
+}
+
 pub async fn install_php(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.post("/services/install/php", None).await
-        .map_err(|e| agent_error("PHP install", e))?;
-    activity::log_activity(&state.db, claims.sub, &claims.email, "service.install", Some("system"), Some("php"), None, None).await;
-    Ok(Json(result))
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    install_service_with_log(&state, claims.sub, &claims.email, "PHP", "/services/install/php").await
 }
 
 pub async fn install_certbot(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.post("/services/install/certbot", None).await
-        .map_err(|e| agent_error("Certbot install", e))?;
-    activity::log_activity(&state.db, claims.sub, &claims.email, "service.install", Some("system"), Some("certbot"), None, None).await;
-    Ok(Json(result))
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    install_service_with_log(&state, claims.sub, &claims.email, "Certbot", "/services/install/certbot").await
 }
 
 pub async fn install_ufw(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.post("/services/install/ufw", None).await
-        .map_err(|e| agent_error("UFW install", e))?;
-    activity::log_activity(&state.db, claims.sub, &claims.email, "service.install", Some("system"), Some("ufw"), None, None).await;
-    Ok(Json(result))
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    install_service_with_log(&state, claims.sub, &claims.email, "UFW Firewall", "/services/install/ufw").await
+}
+
+/// GET /api/services/install/{install_id}/log — SSE stream of install progress.
+pub async fn install_log(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+    Path(install_id): Path<Uuid>,
+) -> Result<Sse<impl futures::Stream<Item = Result<Event, axum::BoxError>>>, ApiError> {
+    let (snapshot, rx) = {
+        let logs = state.provision_logs.lock().unwrap();
+        match logs.get(&install_id) {
+            Some((history, tx, _)) => (history.clone(), Some(tx.subscribe())),
+            None => (Vec::new(), None),
+        }
+    };
+
+    let rx = rx.ok_or_else(|| err(StatusCode::NOT_FOUND, "No active install"))?;
+
+    let snapshot_stream = futures::stream::iter(
+        snapshot.into_iter().map(|step| {
+            let data = serde_json::to_string(&step).unwrap_or_default();
+            Ok(Event::default().data(data))
+        }),
+    );
+
+    let live_stream = BroadcastStream::new(rx).filter_map(|result| async {
+        match result {
+            Ok(step) => {
+                let data = serde_json::to_string(&step).ok()?;
+                Some(Ok(Event::default().data(data)))
+            }
+            Err(_) => None,
+        }
+    });
+
+    Ok(
+        Sse::new(snapshot_stream.chain(live_stream))
+            .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("ping")),
+    )
 }
 
 // ── SSH Keys ────────────────────────────────────────────────────────────
@@ -241,35 +350,84 @@ pub async fn set_panel_whitelist(
 pub async fn install_powerdns(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.post("/services/install/powerdns", None).await
-        .map_err(|e| agent_error("PowerDNS install", e))?;
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let install_id = Uuid::new_v4();
 
-    // Auto-save API URL and key to settings
-    if let (Some(url), Some(key)) = (
-        result.get("api_url").and_then(|v| v.as_str()),
-        result.get("api_key").and_then(|v| v.as_str()),
-    ) {
-        let _ = sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES ('pdns_api_url', $1, NOW()) ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()")
-            .bind(url)
-            .execute(&state.db)
-            .await;
-        let _ = sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES ('pdns_api_key', $1, NOW()) ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()")
-            .bind(key)
-            .execute(&state.db)
-            .await;
+    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
+    {
+        let mut logs = state.provision_logs.lock().unwrap();
+        logs.insert(install_id, (Vec::new(), tx, Instant::now()));
     }
 
-    activity::log_activity(&state.db, claims.sub, &claims.email, "service.install", Some("system"), Some("powerdns"), None, None).await;
-    Ok(Json(result))
+    let logs = state.provision_logs.clone();
+    let agent = state.agent.clone();
+    let db = state.db.clone();
+    let user_id = claims.sub;
+    let email = claims.email.clone();
+
+    tokio::spawn(async move {
+        let emit = |step: &str, lbl: &str, status: &str, msg: Option<String>| {
+            let ev = ProvisionStep {
+                step: step.into(),
+                label: lbl.into(),
+                status: status.into(),
+                message: msg,
+            };
+            if let Ok(mut map) = logs.lock() {
+                if let Some((history, tx, _)) = map.get_mut(&install_id) {
+                    history.push(ev.clone());
+                    let _ = tx.send(ev);
+                }
+            }
+        };
+
+        emit("install", "Installing PowerDNS", "in_progress", None);
+
+        match agent.post("/services/install/powerdns", None).await {
+            Ok(result) => {
+                // Auto-save API URL and key to settings
+                if let (Some(url), Some(key)) = (
+                    result.get("api_url").and_then(|v| v.as_str()),
+                    result.get("api_key").and_then(|v| v.as_str()),
+                ) {
+                    let _ = sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES ('pdns_api_url', $1, NOW()) ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()")
+                        .bind(url)
+                        .execute(&db)
+                        .await;
+                    let _ = sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES ('pdns_api_key', $1, NOW()) ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()")
+                        .bind(key)
+                        .execute(&db)
+                        .await;
+                }
+
+                emit("install", "Installing PowerDNS", "done", None);
+                emit("complete", "PowerDNS installed", "done", None);
+                activity::log_activity(
+                    &db, user_id, &email, "service.install",
+                    Some("system"), Some("powerdns"), None, None,
+                ).await;
+                tracing::info!("Service installed: PowerDNS");
+            }
+            Err(e) => {
+                emit("install", "Installing PowerDNS", "error", Some(format!("{e}")));
+                emit("complete", "Install failed", "error", None);
+                tracing::error!("Service install failed: PowerDNS: {e}");
+            }
+        }
+
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        logs.lock().unwrap().remove(&install_id);
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
+        "install_id": install_id,
+        "message": "PowerDNS installation started",
+    }))))
 }
 
 pub async fn install_fail2ban(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.post("/services/install/fail2ban", None).await
-        .map_err(|e| agent_error("Fail2Ban install", e))?;
-    activity::log_activity(&state.db, claims.sub, &claims.email, "service.install", Some("system"), Some("fail2ban"), None, None).await;
-    Ok(Json(result))
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    install_service_with_log(&state, claims.sub, &claims.email, "Fail2Ban", "/services/install/fail2ban").await
 }

@@ -84,6 +84,32 @@ pub async fn create(
 
     let interval = body.check_interval.unwrap_or(60).max(30).min(3600);
 
+    // Inherit alert URLs from global alert rules if not provided
+    let mut slack_url = body.alert_slack_url.clone();
+    let mut discord_url = body.alert_discord_url.clone();
+
+    if slack_url.as_ref().map_or(true, |s| s.is_empty())
+        || discord_url.as_ref().map_or(true, |s| s.is_empty())
+    {
+        let global: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT notify_slack_url, notify_discord_url FROM alert_rules WHERE user_id = $1 AND server_id IS NULL LIMIT 1",
+        )
+        .bind(claims.sub)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+
+        if let Some((global_slack, global_discord)) = global {
+            if slack_url.as_ref().map_or(true, |s| s.is_empty()) {
+                slack_url = global_slack;
+            }
+            if discord_url.as_ref().map_or(true, |s| s.is_empty()) {
+                discord_url = global_discord;
+            }
+        }
+    }
+
     // Limit monitors per user (50)
     let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM monitors WHERE user_id = $1")
         .bind(claims.sub)
@@ -105,8 +131,8 @@ pub async fn create(
     .bind(name)
     .bind(interval)
     .bind(body.alert_email.unwrap_or(true))
-    .bind(&body.alert_slack_url)
-    .bind(&body.alert_discord_url)
+    .bind(&slack_url)
+    .bind(&discord_url)
     .fetch_one(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
