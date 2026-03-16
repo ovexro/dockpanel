@@ -621,11 +621,82 @@ pub async fn remove_app(
     }
 
     let agent_path = format!("/apps/{}", container_id);
-    state
+    let result = state
         .agent
         .delete(&agent_path)
         .await
         .map_err(|e| agent_error("Container removal", e))?;
+
+    // Auto-cleanup DNS record if a domain was removed
+    if let Some(domain_removed) = result.get("domain_removed").and_then(|v| v.as_str()) {
+        let dns_domain = domain_removed.to_string();
+        let dns_db = state.db.clone();
+        let dns_user = claims.sub;
+        tokio::spawn(async move {
+            // Extract parent domain
+            let parts: Vec<&str> = dns_domain.splitn(3, '.').collect();
+            let parent = if parts.len() >= 3 {
+                format!("{}.{}", parts[parts.len() - 2], parts[parts.len() - 1])
+            } else {
+                dns_domain.clone()
+            };
+
+            let zone: Option<(String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+                "SELECT provider, cf_zone_id, cf_api_token, cf_api_email FROM dns_zones WHERE domain = $1 AND user_id = $2"
+            ).bind(&parent).bind(dns_user).fetch_optional(&dns_db).await.ok().flatten();
+
+            if let Some((provider, cf_zone_id, cf_api_token, cf_api_email)) = zone {
+                let server_ip = std::net::UdpSocket::bind("0.0.0.0:0")
+                    .and_then(|s| { s.connect("8.8.8.8:53")?; s.local_addr() })
+                    .map(|a| a.ip().to_string()).unwrap_or_default();
+
+                if provider == "cloudflare" {
+                    if let (Some(zid), Some(tok)) = (cf_zone_id, cf_api_token) {
+                        let client = reqwest::Client::new();
+                        let mut headers = reqwest::header::HeaderMap::new();
+                        if let Some(em) = cf_api_email {
+                            headers.insert("X-Auth-Email", em.parse().unwrap_or_else(|_| "".parse().unwrap()));
+                            headers.insert("X-Auth-Key", tok.parse().unwrap_or_else(|_| "".parse().unwrap()));
+                        } else {
+                            headers.insert("Authorization", format!("Bearer {tok}").parse().unwrap_or_else(|_| "".parse().unwrap()));
+                        }
+                        // Find the A record for this domain
+                        if let Ok(resp) = client.get(&format!("https://api.cloudflare.com/client/v4/zones/{zid}/dns_records?type=A&name={dns_domain}"))
+                            .headers(headers.clone()).send().await {
+                            if let Ok(data) = resp.json::<serde_json::Value>().await {
+                                if let Some(records) = data.get("result").and_then(|r| r.as_array()) {
+                                    for record in records {
+                                        if let (Some(rid), Some(content)) = (record.get("id").and_then(|v| v.as_str()), record.get("content").and_then(|v| v.as_str())) {
+                                            if content == server_ip {
+                                                let _ = client.delete(&format!("https://api.cloudflare.com/client/v4/zones/{zid}/dns_records/{rid}"))
+                                                    .headers(headers.clone()).send().await;
+                                                tracing::info!("Auto-DNS cleanup: deleted A record for app domain {dns_domain}");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if provider == "powerdns" {
+                    let pdns: Vec<(String, String)> = sqlx::query_as(
+                        "SELECT key, value FROM settings WHERE key IN ('pdns_api_url', 'pdns_api_key')"
+                    ).fetch_all(&dns_db).await.unwrap_or_default();
+                    let purl = pdns.iter().find(|(k,_)| k == "pdns_api_url").map(|(_,v)| v.clone());
+                    let pkey = pdns.iter().find(|(k,_)| k == "pdns_api_key").map(|(_,v)| v.clone());
+                    if let (Some(url), Some(key)) = (purl, pkey) {
+                        let zfqdn = if parent.ends_with('.') { parent } else { format!("{parent}.") };
+                        let _ = reqwest::Client::new()
+                            .patch(&format!("{url}/api/v1/servers/localhost/zones/{zfqdn}"))
+                            .header("X-API-Key", &key)
+                            .json(&serde_json::json!({"rrsets":[{"name":format!("{dns_domain}."),"type":"A","ttl":300,"changetype":"DELETE","records":[]}]}))
+                            .send().await;
+                        tracing::info!("Auto-DNS cleanup (PowerDNS): deleted A record for app domain {dns_domain}");
+                    }
+                }
+            }
+        });
+    }
 
     tracing::info!("App removed: {}", container_id);
     activity::log_activity(

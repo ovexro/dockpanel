@@ -210,6 +210,50 @@ pub async fn create(
                 Some("site"), Some(&body.domain), Some(runtime), None,
             ).await;
 
+            // Auto-create uptime monitor (linked to site for cascade cleanup)
+            {
+                let monitor_db = state.db.clone();
+                let monitor_domain = body.domain.clone();
+                let monitor_user = claims.sub;
+                let monitor_site_id = site.id;
+                tokio::spawn(async move {
+                    let url = format!("https://{monitor_domain}");
+                    let _ = sqlx::query(
+                        "INSERT INTO monitors (user_id, site_id, url, name, check_interval, alert_email) \
+                         VALUES ($1, $2, $3, $4, 60, true) ON CONFLICT DO NOTHING"
+                    )
+                    .bind(monitor_user)
+                    .bind(monitor_site_id)
+                    .bind(&url)
+                    .bind(&monitor_domain)
+                    .execute(&monitor_db)
+                    .await;
+                    tracing::info!("Auto-monitor created for {monitor_domain}");
+                });
+            }
+
+            // Auto-create backup schedule for first site
+            {
+                let backup_db = state.db.clone();
+                let backup_site_id = site.id;
+                let backup_user_id = claims.sub;
+                tokio::spawn(async move {
+                    // Check if user has any other sites
+                    let site_count: Option<(i64,)> = sqlx::query_as(
+                        "SELECT COUNT(*) FROM sites WHERE user_id = $1"
+                    ).bind(backup_user_id).fetch_optional(&backup_db).await.ok().flatten();
+
+                    if site_count.map(|(c,)| c).unwrap_or(0) <= 1 {
+                        // First site — create default backup schedule (daily 3 AM, 7 retention)
+                        let _ = sqlx::query(
+                            "INSERT INTO backup_schedules (site_id, schedule, retention_count, enabled) \
+                             VALUES ($1, '0 3 * * *', 7, true) ON CONFLICT (site_id) DO NOTHING"
+                        ).bind(backup_site_id).execute(&backup_db).await;
+                        tracing::info!("Auto-backup: created daily schedule for first site");
+                    }
+                });
+            }
+
             // Auto-DNS: create A record if user has a DNS zone for this domain
             {
                 let dns_domain = body.domain.clone();
@@ -281,23 +325,33 @@ pub async fn create(
             let ssl_proxy_port = body.proxy_port;
             let ssl_logs = logs.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_secs(3)).await;
-                emit_step(&ssl_logs, site_id, "ssl", "Provisioning SSL certificate", "in_progress", None);
-                let ssl_body = serde_json::json!({
-                    "email": ssl_email,
-                    "runtime": ssl_runtime,
-                    "php_socket": ssl_php_socket,
-                    "proxy_port": ssl_proxy_port,
-                });
-                match ssl_agent.post(&format!("/ssl/provision/{ssl_domain}"), Some(ssl_body)).await {
-                    Ok(_) => {
-                        tracing::info!("Auto-SSL provisioned for {ssl_domain}");
-                        emit_step(&ssl_logs, site_id, "ssl", "Provisioning SSL certificate", "done", None);
-                    }
-                    Err(e) => {
-                        tracing::info!("Auto-SSL skipped for {ssl_domain}: {e} (can be provisioned manually)");
-                        emit_step(&ssl_logs, site_id, "ssl", "SSL certificate", "error",
-                            Some("Skipped — can be provisioned manually from site settings".into()));
+                // Retry SSL with backoff: 3s, 30s, 2m, 5m
+                let delays = [3u64, 30, 120, 300];
+                for (i, delay) in delays.iter().enumerate() {
+                    tokio::time::sleep(Duration::from_secs(*delay)).await;
+                    emit_step(&ssl_logs, site_id, "ssl", "Provisioning SSL certificate", "in_progress", None);
+                    let ssl_body = serde_json::json!({
+                        "email": ssl_email,
+                        "runtime": ssl_runtime,
+                        "php_socket": ssl_php_socket,
+                        "proxy_port": ssl_proxy_port,
+                    });
+                    match ssl_agent.post(&format!("/ssl/provision/{ssl_domain}"), Some(ssl_body)).await {
+                        Ok(_) => {
+                            tracing::info!("Auto-SSL provisioned for {ssl_domain} (attempt {})", i + 1);
+                            emit_step(&ssl_logs, site_id, "ssl", "Provisioning SSL certificate", "done", None);
+                            return; // Success, stop retrying
+                        }
+                        Err(e) => {
+                            if i == delays.len() - 1 {
+                                // Last attempt failed
+                                tracing::info!("Auto-SSL failed for {ssl_domain} after {} attempts: {e}", i + 1);
+                                emit_step(&ssl_logs, site_id, "ssl", "SSL certificate", "error",
+                                    Some("Skipped — can be provisioned manually from site settings".into()));
+                            } else {
+                                tracing::info!("Auto-SSL attempt {} for {ssl_domain} failed, retrying in {}s", i + 1, delays[i + 1]);
+                            }
+                        }
                     }
                 }
 
@@ -439,6 +493,25 @@ pub async fn create(
                         Ok(_) => {
                             tracing::info!("{cms_label} installed on {cms_domain}");
                             emit_step(&cms_logs, site_id, "install", &format!("Installing {cms_label}"), "done", None);
+
+                            // Auto-create WordPress system cron
+                            if cms_name == "wordpress" {
+                                let cron_db = cms_db.clone();
+                                let cron_domain = cms_domain.clone();
+                                let cron_site_id = site_id;
+                                tokio::spawn(async move {
+                                    let command = format!("cd /var/www/{cron_domain}/public && php wp-cron.php > /dev/null 2>&1");
+                                    let _ = sqlx::query(
+                                        "INSERT INTO crons (site_id, label, command, schedule, enabled) \
+                                         VALUES ($1, 'WordPress Cron', $2, '*/15 * * * *', true)"
+                                    )
+                                    .bind(cron_site_id)
+                                    .bind(&command)
+                                    .execute(&cron_db)
+                                    .await;
+                                    tracing::info!("Auto-cron: created WordPress cron for {cron_domain}");
+                                });
+                            }
                         }
                         Err(e) => {
                             tracing::error!("{cms_label} install failed for {cms_domain}: {e}");
@@ -843,6 +916,13 @@ pub async fn remove(
     state.agent.delete(&agent_path).await
         .map_err(|e| agent_error("Site removal", e))?;
 
+    // Delete monitors linked to this site (FK is SET NULL, not CASCADE)
+    sqlx::query("DELETE FROM monitors WHERE site_id = $1")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .ok();
+
     // Delete from DB (CASCADE removes databases, backups, crons, etc.)
     sqlx::query("DELETE FROM sites WHERE id = $1")
         .bind(id)
@@ -855,6 +935,77 @@ pub async fn remove(
         &state.db, claims.sub, &claims.email, "site.delete",
         Some("site"), Some(&site.domain), None, None,
     ).await;
+
+    // Auto-cleanup DNS record (best-effort, don't fail the delete)
+    {
+        let dns_domain = site.domain.clone();
+        let dns_db = state.db.clone();
+        let dns_user = claims.sub;
+        tokio::spawn(async move {
+            // Extract parent domain
+            let parts: Vec<&str> = dns_domain.splitn(3, '.').collect();
+            let parent = if parts.len() >= 3 {
+                format!("{}.{}", parts[parts.len() - 2], parts[parts.len() - 1])
+            } else {
+                dns_domain.clone()
+            };
+
+            let zone: Option<(String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+                "SELECT provider, cf_zone_id, cf_api_token, cf_api_email FROM dns_zones WHERE domain = $1 AND user_id = $2"
+            ).bind(&parent).bind(dns_user).fetch_optional(&dns_db).await.ok().flatten();
+
+            if let Some((provider, cf_zone_id, cf_api_token, cf_api_email)) = zone {
+                let server_ip = std::net::UdpSocket::bind("0.0.0.0:0")
+                    .and_then(|s| { s.connect("8.8.8.8:53")?; s.local_addr() })
+                    .map(|a| a.ip().to_string()).unwrap_or_default();
+
+                if provider == "cloudflare" {
+                    if let (Some(zid), Some(tok)) = (cf_zone_id, cf_api_token) {
+                        let client = reqwest::Client::new();
+                        let mut headers = reqwest::header::HeaderMap::new();
+                        if let Some(em) = cf_api_email {
+                            headers.insert("X-Auth-Email", em.parse().unwrap_or_else(|_| "".parse().unwrap()));
+                            headers.insert("X-Auth-Key", tok.parse().unwrap_or_else(|_| "".parse().unwrap()));
+                        } else {
+                            headers.insert("Authorization", format!("Bearer {tok}").parse().unwrap_or_else(|_| "".parse().unwrap()));
+                        }
+                        // Find the A record for this domain
+                        if let Ok(resp) = client.get(&format!("https://api.cloudflare.com/client/v4/zones/{zid}/dns_records?type=A&name={dns_domain}"))
+                            .headers(headers.clone()).send().await {
+                            if let Ok(data) = resp.json::<serde_json::Value>().await {
+                                if let Some(records) = data.get("result").and_then(|r| r.as_array()) {
+                                    for record in records {
+                                        if let (Some(rid), Some(content)) = (record.get("id").and_then(|v| v.as_str()), record.get("content").and_then(|v| v.as_str())) {
+                                            if content == server_ip {
+                                                let _ = client.delete(&format!("https://api.cloudflare.com/client/v4/zones/{zid}/dns_records/{rid}"))
+                                                    .headers(headers.clone()).send().await;
+                                                tracing::info!("Auto-DNS cleanup: deleted A record {dns_domain}");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if provider == "powerdns" {
+                    let pdns: Vec<(String, String)> = sqlx::query_as(
+                        "SELECT key, value FROM settings WHERE key IN ('pdns_api_url', 'pdns_api_key')"
+                    ).fetch_all(&dns_db).await.unwrap_or_default();
+                    let purl = pdns.iter().find(|(k,_)| k == "pdns_api_url").map(|(_,v)| v.clone());
+                    let pkey = pdns.iter().find(|(k,_)| k == "pdns_api_key").map(|(_,v)| v.clone());
+                    if let (Some(url), Some(key)) = (purl, pkey) {
+                        let zfqdn = if parent.ends_with('.') { parent } else { format!("{parent}.") };
+                        let _ = reqwest::Client::new()
+                            .patch(&format!("{url}/api/v1/servers/localhost/zones/{zfqdn}"))
+                            .header("X-API-Key", &key)
+                            .json(&serde_json::json!({"rrsets":[{"name":format!("{dns_domain}."),"type":"A","ttl":300,"changetype":"DELETE","records":[]}]}))
+                            .send().await;
+                        tracing::info!("Auto-DNS cleanup (PowerDNS): deleted A record {dns_domain}");
+                    }
+                }
+            }
+        });
+    }
 
     Ok(Json(serde_json::json!({ "ok": true, "domain": site.domain })))
 }
