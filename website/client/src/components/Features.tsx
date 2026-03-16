@@ -6,7 +6,7 @@ const features = [
       </svg>
     ),
     title: 'Site Management',
-    description: 'Create and manage websites with automatic Nginx configuration. Support for PHP (multiple versions), Node.js, static sites, and reverse proxies. Custom Nginx directives per site with validation.',
+    description: 'One-click install for WordPress, Laravel, Drupal, Joomla, Symfony, and CodeIgniter. Auto-creates database, configures Nginx, installs the framework, and provisions SSL — with real-time progress indicators.',
     iconBg: 'bg-brand-500/10',
     iconColor: 'text-brand-400',
   },
@@ -50,7 +50,7 @@ const features = [
       </svg>
     ),
     title: 'Docker Apps & Compose',
-    description: '36 one-click app templates across 11 categories — databases, CMS, monitoring, analytics, mail, and more. Auto reverse proxy with SSL, container health checks, and CPU/memory resource limits.',
+    description: '53 one-click app templates across 11 categories — databases, CMS, monitoring, analytics, mail, and more. Real-time deploy progress, auto reverse proxy with SSL, container health checks, and CPU/memory resource limits.',
     iconBg: 'bg-brand-500/10',
     iconColor: 'text-brand-400',
   },

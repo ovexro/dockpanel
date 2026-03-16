@@ -11,7 +11,7 @@ const faqs = [
   },
   {
     q: 'How does Docker-native work? Are sites in containers?',
-    a: 'Sites run on the host with Nginx, which keeps things fast and simple. Docker is used for databases (MySQL/PostgreSQL containers), 32 one-click app templates (Ghost, Grafana, Nextcloud, n8n, Roundcube, Rspamd, and more), and Docker Compose imports. Containers get health monitoring, CPU/memory limits, and auto reverse proxy with SSL.',
+    a: 'Sites run on the host with Nginx, which keeps things fast and simple. Docker is used for databases (MySQL/PostgreSQL containers), 53 one-click app templates (Ghost, Grafana, Nextcloud, n8n, Roundcube, Rspamd, and more), and Docker Compose imports. Containers get health monitoring, CPU/memory limits, and auto reverse proxy with SSL.',
   },
   {
     q: 'What happens if DockPanel goes down?',
@@ -23,7 +23,7 @@ const faqs = [
   },
   {
     q: 'How is this different from CloudPanel, RunCloud, or cPanel?',
-    a: 'DockPanel is fully self-hosted (no SaaS dependency), Docker-native (databases and apps run in containers), and built in Rust (~10MB binary, 12MB RAM vs 250-800MB for PHP panels). It includes features other panels charge for: 2FA authentication, developer CLI, infrastructure as code (YAML export/import), smart diagnostics with one-click fixes, auto-healing engine, 34 app templates, and more. All free.',
+    a: 'DockPanel is fully self-hosted (no SaaS dependency), Docker-native (databases and apps run in containers), and built in Rust (~10MB binary, 12MB RAM vs 250-800MB for PHP panels). It includes features other panels charge for: one-click install for 6 PHP frameworks, 2FA, developer CLI, infrastructure as code, smart diagnostics, auto-healing, 53 app templates, real-time provisioning logs, and more. All free.',
   },
   {
     q: 'Can I manage multiple servers?',
@@ -46,8 +46,8 @@ const faqs = [
     a: 'The install script sets up everything: Docker, Nginx, PHP-FPM, Certbot (SSL), UFW (firewall), Fail2Ban (intrusion prevention), and the DockPanel agent + API + frontend. Mail server, webmail, and DNS server are optional one-click installs from the panel. Zero manual configuration needed.',
   },
   {
-    q: 'Can I install WordPress with one click?',
-    a: 'Yes. On the Sites page, select WordPress and enter your domain. DockPanel automatically creates the site, provisions a database, downloads WordPress, configures wp-config.php, runs the install, and provisions an SSL certificate — all in one click.',
+    q: 'Can I install WordPress / Laravel / Drupal with one click?',
+    a: 'Yes. DockPanel supports one-click install for 6 frameworks: WordPress, Laravel, Drupal, Joomla, Symfony, and CodeIgniter. Select one, enter your domain, and DockPanel auto-creates the database, downloads the framework, configures everything, and provisions SSL — with real-time progress indicators showing each step as it completes.',
   },
 ];
 
