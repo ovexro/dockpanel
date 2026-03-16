@@ -58,8 +58,7 @@ export default function Monitors() {
   const [formName, setFormName] = useState("");
   const [formUrl, setFormUrl] = useState("");
   const [formInterval, setFormInterval] = useState("60");
-  const [formSlack, setFormSlack] = useState("");
-  const [formDiscord, setFormDiscord] = useState("");
+  const [prevAutoName, setPrevAutoName] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   const fetchMonitors = () => {
@@ -75,6 +74,17 @@ export default function Monitors() {
     return () => clearInterval(id);
   }, []);
 
+  const handleUrlChange = (url: string) => {
+    setFormUrl(url);
+    try {
+      const hostname = new URL(url).hostname;
+      if (!formName || formName === prevAutoName) {
+        setFormName(hostname);
+        setPrevAutoName(hostname);
+      }
+    } catch {}
+  };
+
   const handleCreate = async (e: FormEvent) => {
     e.preventDefault();
     setError("");
@@ -84,15 +94,12 @@ export default function Monitors() {
         name: formName,
         url: formUrl,
         check_interval: parseInt(formInterval),
-        alert_slack_url: formSlack || null,
-        alert_discord_url: formDiscord || null,
       });
       setShowForm(false);
       setFormName("");
       setFormUrl("");
       setFormInterval("60");
-      setFormSlack("");
-      setFormDiscord("");
+      setPrevAutoName("");
       fetchMonitors();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create monitor");
@@ -193,7 +200,7 @@ export default function Monitors() {
             </div>
             <div>
               <label className="block text-xs font-medium text-dark-200 mb-1">URL</label>
-              <input type="url" value={formUrl} onChange={(e) => setFormUrl(e.target.value)} required placeholder="https://example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
+              <input type="url" value={formUrl} onChange={(e) => handleUrlChange(e.target.value)} required placeholder="https://example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
             </div>
             <div>
               <label className="block text-xs font-medium text-dark-200 mb-1">Check Interval</label>
@@ -204,14 +211,6 @@ export default function Monitors() {
                 <option value="600">10 minutes</option>
               </select>
             </div>
-            <div>
-              <label className="block text-xs font-medium text-dark-200 mb-1">Slack Webhook (optional)</label>
-              <input type="url" value={formSlack} onChange={(e) => setFormSlack(e.target.value)} placeholder="https://hooks.slack.com/..." className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
-            </div>
-          </div>
-          <div className="mb-4">
-            <label className="block text-xs font-medium text-dark-200 mb-1">Discord Webhook (optional)</label>
-            <input type="url" value={formDiscord} onChange={(e) => setFormDiscord(e.target.value)} placeholder="https://discord.com/api/webhooks/..." className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
           </div>
           <div className="flex gap-3">
             <button type="submit" disabled={submitting} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50">
@@ -231,6 +230,9 @@ export default function Monitors() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
           </svg>
           <p className="text-dark-200 text-sm">No monitors yet. Add one to start tracking uptime.</p>
+          <button onClick={() => setShowForm(true)} className="mt-3 px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors">
+            Add your first monitor
+          </button>
         </div>
       ) : (
         <div className="space-y-3">

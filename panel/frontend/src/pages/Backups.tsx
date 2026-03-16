@@ -402,7 +402,7 @@ export default function Backups() {
                     {formatDate(backup.created_at)}
                   </td>
                   <td className="px-5 py-4 text-right">
-                    <div className="flex items-center justify-end gap-2">
+                    <div className="flex items-center justify-end gap-2 flex-wrap">
                       <button
                         onClick={() => handleRestore(backup.id)}
                         disabled={restoring === backup.id}

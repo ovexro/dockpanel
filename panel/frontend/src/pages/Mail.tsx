@@ -477,7 +477,12 @@ useradd -g 5000 -u 5000 -d /var/vmail -s /usr/sbin/nologin -m vmail`}</pre>
                           </div>
                           <div>
                             <label className="block text-xs text-dark-200 mb-1">Quota (MB)</label>
-                            <input type="number" value={accQuota} onChange={(e) => setAccQuota(e.target.value)} className="w-full px-3 py-1.5 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+                            <div className="flex items-center">
+                              <input type="number" value={accQuota} onChange={(e) => setAccQuota(e.target.value)} className="w-full px-3 py-1.5 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+                              <span className="text-xs text-dark-300 ml-2 shrink-0">
+                                {parseInt(accQuota) >= 1024 ? `${(parseInt(accQuota) / 1024).toFixed(1)} GB` : `${accQuota} MB`}
+                              </span>
+                            </div>
                           </div>
                         </div>
                         <div className="flex justify-end">
@@ -528,7 +533,12 @@ useradd -g 5000 -u 5000 -d /var/vmail -s /usr/sbin/nologin -m vmail`}</pre>
                             </div>
                             <div>
                               <label className="block text-xs text-dark-200 mb-1">Quota (MB)</label>
-                              <input type="number" value={editQuota} onChange={(e) => setEditQuota(e.target.value)} className="w-full px-3 py-1.5 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+                              <div className="flex items-center">
+                                <input type="number" value={editQuota} onChange={(e) => setEditQuota(e.target.value)} className="w-full px-3 py-1.5 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+                                <span className="text-xs text-dark-300 ml-2 shrink-0">
+                                  {parseInt(editQuota) >= 1024 ? `${(parseInt(editQuota) / 1024).toFixed(1)} GB` : `${editQuota} MB`}
+                                </span>
+                              </div>
                             </div>
                             <div>
                               <label className="block text-xs text-dark-200 mb-1">Forward To (optional)</label>

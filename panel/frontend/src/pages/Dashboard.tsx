@@ -3,6 +3,12 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { formatSize, formatUptime } from "../utils/format";
 
+interface SiteDetail {
+  id: string;
+  status: string;
+  backup_schedule?: string;
+}
+
 function useCountUp(target: number, duration = 800): number {
   const [value, setValue] = useState(0);
   const prev = useRef(0);
@@ -161,6 +167,8 @@ export default function Dashboard() {
   const [rebootRequired, setRebootRequired] = useState(false);
   const [dismissed, setDismissed] = useState(() => localStorage.getItem("dp-onboarding-dismissed") === "1");
   const [metricsHistory, setMetricsHistory] = useState<MetricPoint[]>([]);
+  const [twoFaEnabled, setTwoFaEnabled] = useState(false);
+  const [sitesList, setSitesList] = useState<SiteDetail[]>([]);
 
   const dismissOnboarding = useCallback(() => {
     setDismissed(true);
@@ -173,13 +181,14 @@ export default function Dashboard() {
       .then(setSystem)
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load system info"));
     api
-      .get<{ id: string; status: string }[]>("/sites")
-      .then((list) =>
+      .get<SiteDetail[]>("/sites")
+      .then((list) => {
+        setSitesList(list);
         setSites({
           total: list.length,
           active: list.filter((s) => s.status === "active").length,
-        })
-      )
+        });
+      })
       .catch(() => setError("Failed to load sites. Please try again."));
     api
       .get<{ id: string }[]>("/databases")
@@ -208,6 +217,10 @@ export default function Dashboard() {
     api
       .get<{ points: MetricPoint[] }>("/dashboard/metrics-history")
       .then((d) => setMetricsHistory(d.points || []))
+      .catch(() => {});
+    api
+      .get<{ enabled: boolean }>("/auth/2fa/status")
+      .then((d) => setTwoFaEnabled(d.enabled))
       .catch(() => {});
   };
 
@@ -260,9 +273,9 @@ export default function Dashboard() {
         const steps: OnboardingStep[] = [
           { id: "site", label: "Create your first site", description: "Set up a website with Nginx, PHP, or reverse proxy", link: "/sites", check: () => sites.total > 0 },
           { id: "app", label: "Deploy a Docker app", description: "One-click deploy from 34 templates", link: "/apps", check: () => appCount > 0 },
-          { id: "2fa", label: "Enable 2FA", description: "Protect your panel with two-factor authentication", link: "/settings", check: () => false },
-          { id: "backup", label: "Set up backups", description: "Configure scheduled backups for your sites", link: "/sites", check: () => false },
-          { id: "diagnostics", label: "Run diagnostics", description: "Check your server health and fix issues", link: "/diagnostics", check: () => false },
+          { id: "2fa", label: "Enable 2FA", description: "Protect your panel with two-factor authentication", link: "/settings", check: () => twoFaEnabled },
+          { id: "backup", label: "Set up backups", description: "Set up backups for any site", link: sitesList.length > 0 ? `/sites/${sitesList[0].id}` : "/sites", check: () => sitesList.some(s => !!s.backup_schedule) },
+          { id: "diagnostics", label: "Run diagnostics", description: "Check your server health and fix issues", link: "/diagnostics", check: () => true },
         ];
         const completed = steps.filter(s => s.check()).length;
         if (completed >= 3) return null;
@@ -435,7 +448,7 @@ export default function Dashboard() {
                 <div className="border border-dark-500 bg-dark-800 p-4">
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="text-xs text-dark-300 uppercase tracking-widest">Active Issues</h3>
-                    <Link to="/alerts" className="text-xs text-rust-400 hover:text-rust-300">View all</Link>
+                    <Link to="/monitors" className="text-xs text-rust-400 hover:text-rust-300">View all</Link>
                   </div>
                   <div className="space-y-2">
                     {intel.top_issues.slice(0, 4).map((issue, i) => (
