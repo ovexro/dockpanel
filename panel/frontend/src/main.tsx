@@ -1,4 +1,4 @@
-import { StrictMode, Suspense, lazy } from "react";
+import { StrictMode, Suspense, lazy, Component, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
@@ -8,39 +8,82 @@ import Setup from "./pages/Setup";
 import Dashboard from "./pages/Dashboard";
 import "./index.css";
 
-const Register = lazy(() => import("./pages/Register"));
-const ForgotPassword = lazy(() => import("./pages/ForgotPassword"));
-const ResetPassword = lazy(() => import("./pages/ResetPassword"));
-const VerifyEmail = lazy(() => import("./pages/VerifyEmail"));
-const Monitors = lazy(() => import("./pages/Monitors"));
+// Retry lazy import — handles stale chunks after deploy
+function lazyRetry(importFn: () => Promise<{ default: React.ComponentType }>) {
+  return lazy(() =>
+    importFn().catch(() => {
+      // Chunk failed to load (likely stale hash after deploy) — reload once
+      const key = "chunk_reload";
+      if (!sessionStorage.getItem(key)) {
+        sessionStorage.setItem(key, "1");
+        window.location.reload();
+      }
+      return importFn(); // return promise anyway to satisfy types
+    })
+  );
+}
+
+// Error boundary — catches chunk load failures and shows reload button
+class ChunkErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex flex-col items-center justify-center h-screen gap-4 bg-dark-900">
+          <p className="text-dark-200 text-sm font-mono">Page failed to load — a new version may have been deployed.</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600"
+          >
+            Reload
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+const Register = lazyRetry(() => import("./pages/Register"));
+const ForgotPassword = lazyRetry(() => import("./pages/ForgotPassword"));
+const ResetPassword = lazyRetry(() => import("./pages/ResetPassword"));
+const VerifyEmail = lazyRetry(() => import("./pages/VerifyEmail"));
+const Monitors = lazyRetry(() => import("./pages/Monitors"));
 
 // Lazy-loaded pages (split into separate chunks)
-const Sites = lazy(() => import("./pages/Sites"));
-const SiteDetail = lazy(() => import("./pages/SiteDetail"));
-const Databases = lazy(() => import("./pages/Databases"));
-const Files = lazy(() => import("./pages/Files"));
-const Terminal = lazy(() => import("./pages/Terminal"));
-const Backups = lazy(() => import("./pages/Backups"));
-const Crons = lazy(() => import("./pages/Crons"));
-const Deploy = lazy(() => import("./pages/Deploy"));
-const Dns = lazy(() => import("./pages/Dns"));
-const WordPress = lazy(() => import("./pages/WordPress"));
-const Logs = lazy(() => import("./pages/Logs"));
-const Users = lazy(() => import("./pages/Users"));
-const Apps = lazy(() => import("./pages/Apps"));
-const Security = lazy(() => import("./pages/Security"));
-const Diagnostics = lazy(() => import("./pages/Diagnostics"));
-const Settings = lazy(() => import("./pages/Settings"));
-const Updates = lazy(() => import("./pages/Updates"));
-const Alerts = lazy(() => import("./pages/Alerts"));
-const Activity = lazy(() => import("./pages/Activity"));
-const Mail = lazy(() => import("./pages/Mail"));
+const Sites = lazyRetry(() => import("./pages/Sites"));
+const SiteDetail = lazyRetry(() => import("./pages/SiteDetail"));
+const Databases = lazyRetry(() => import("./pages/Databases"));
+const Files = lazyRetry(() => import("./pages/Files"));
+const Terminal = lazyRetry(() => import("./pages/Terminal"));
+const Backups = lazyRetry(() => import("./pages/Backups"));
+const Crons = lazyRetry(() => import("./pages/Crons"));
+const Deploy = lazyRetry(() => import("./pages/Deploy"));
+const Dns = lazyRetry(() => import("./pages/Dns"));
+const WordPress = lazyRetry(() => import("./pages/WordPress"));
+const Logs = lazyRetry(() => import("./pages/Logs"));
+const Users = lazyRetry(() => import("./pages/Users"));
+const Apps = lazyRetry(() => import("./pages/Apps"));
+const Security = lazyRetry(() => import("./pages/Security"));
+const Diagnostics = lazyRetry(() => import("./pages/Diagnostics"));
+const Settings = lazyRetry(() => import("./pages/Settings"));
+const Updates = lazyRetry(() => import("./pages/Updates"));
+const Alerts = lazyRetry(() => import("./pages/Alerts"));
+const Activity = lazyRetry(() => import("./pages/Activity"));
+const Mail = lazyRetry(() => import("./pages/Mail"));
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <AuthProvider>
       <BrowserRouter>
-        <Suspense fallback={<div className="flex items-center justify-center h-screen text-dark-300">Loading...</div>}>
+        <ChunkErrorBoundary>
+        <Suspense fallback={<div className="flex items-center justify-center h-screen bg-dark-900"><div className="w-6 h-6 border-2 border-dark-600 border-t-rust-500 rounded-full animate-spin" /></div>}>
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/setup" element={<Setup />} />
@@ -75,6 +118,7 @@ createRoot(document.getElementById("root")!).render(
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>
+        </ChunkErrorBoundary>
       </BrowserRouter>
     </AuthProvider>
   </StrictMode>
