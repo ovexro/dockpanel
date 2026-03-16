@@ -2,6 +2,7 @@ use sqlx::PgPool;
 use std::time::Duration;
 
 use crate::services::agent::AgentClient;
+use crate::services::notifications;
 
 /// Background task: runs weekly security scans automatically.
 pub async fn run(pool: PgPool, agent: AgentClient) {
@@ -158,32 +159,43 @@ async fn run_scan(pool: &PgPool, agent: &AgentClient) {
         "Security scan completed: {total} findings ({critical} critical, {warning} warning, {info} info)"
     );
 
-    // Send alerts if critical findings
-    if critical > 0 {
+    // Send alerts if critical or warning findings
+    if critical > 0 || warning > 0 {
         send_scan_alerts(pool, critical, warning, total).await;
     }
 }
 
 async fn send_scan_alerts(pool: &PgPool, critical: i32, warning: i32, total: i32) {
-    // Get admin emails
-    let admins: Vec<(String,)> = sqlx::query_as("SELECT email FROM users WHERE role = 'admin'")
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
+    // Get admin users to create alerts for
+    let admins: Vec<(uuid::Uuid, String)> =
+        sqlx::query_as("SELECT id, email FROM users WHERE role = 'admin'")
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
 
-    let subject = format!("DockPanel Security Alert: {critical} critical findings");
-    let body = format!(
-        "<h2>Security Scan Results</h2>\
-         <p>A scheduled security scan has completed with <strong>{critical} critical</strong> findings.</p>\
-         <ul>\
-         <li>Critical: {critical}</li>\
-         <li>Warning: {warning}</li>\
-         <li>Total: {total}</li>\
-         </ul>\
-         <p>Log in to your DockPanel to review the findings.</p>"
+    let severity = if critical > 0 { "critical" } else { "warning" };
+    let title = format!(
+        "Security scan: {} critical, {} warning findings",
+        critical, warning
+    );
+    let message = format!(
+        "A scheduled security scan completed with {} total findings ({} critical, {} warning). \
+         Review the scan results in the Security section.",
+        total, critical, warning
     );
 
-    for (email,) in &admins {
-        let _ = crate::services::email::send_email(pool, email, &subject, &body).await;
+    // Create an alert for each admin user via the alerts system
+    for (user_id, _email) in &admins {
+        notifications::fire_alert(
+            pool,
+            *user_id,
+            None,
+            None,
+            "security",
+            severity,
+            &title,
+            &message,
+        )
+        .await;
     }
 }

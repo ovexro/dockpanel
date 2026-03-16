@@ -1,8 +1,13 @@
 use crate::client;
 use serde_json::json;
 
-pub async fn cmd_security_overview(token: &str) -> Result<(), String> {
+pub async fn cmd_security_overview(token: &str, output: &str) -> Result<(), String> {
     let overview = client::agent_get("/security/overview", token).await?;
+
+    if output == "json" {
+        println!("{}", serde_json::to_string_pretty(&overview).unwrap_or_default());
+        return Ok(());
+    }
 
     println!("\x1b[1mSecurity Overview\x1b[0m");
 
@@ -25,10 +30,15 @@ pub async fn cmd_security_overview(token: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub async fn cmd_security_scan(token: &str) -> Result<(), String> {
+pub async fn cmd_security_scan(token: &str, output: &str) -> Result<(), String> {
     println!("Running security scan...");
 
     let result = client::agent_post_empty("/security/scan", token).await?;
+
+    if output == "json" {
+        println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+        return Ok(());
+    }
 
     let risk = result["risk_level"].as_str().unwrap_or("unknown");
     let risk_color = match risk {
@@ -63,8 +73,13 @@ pub async fn cmd_security_scan(token: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub async fn cmd_firewall_list(token: &str) -> Result<(), String> {
+pub async fn cmd_firewall_list(token: &str, output: &str) -> Result<(), String> {
     let fw = client::agent_get("/security/firewall", token).await?;
+
+    if output == "json" {
+        println!("{}", serde_json::to_string_pretty(&fw).unwrap_or_default());
+        return Ok(());
+    }
 
     let enabled = fw["enabled"].as_bool().unwrap_or(false);
     println!(

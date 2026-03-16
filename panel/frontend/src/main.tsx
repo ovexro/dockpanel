@@ -13,7 +13,6 @@ const ForgotPassword = lazy(() => import("./pages/ForgotPassword"));
 const ResetPassword = lazy(() => import("./pages/ResetPassword"));
 const VerifyEmail = lazy(() => import("./pages/VerifyEmail"));
 const Monitors = lazy(() => import("./pages/Monitors"));
-const Teams = lazy(() => import("./pages/Teams"));
 
 // Lazy-loaded pages (split into separate chunks)
 const Sites = lazy(() => import("./pages/Sites"));
@@ -72,8 +71,6 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/users" element={<Users />} />
               <Route path="/alerts" element={<Alerts />} />
               <Route path="/monitors" element={<Monitors />} />
-              <Route path="/teams" element={<Teams />} />
-              <Route path="/teams/accept" element={<Teams />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

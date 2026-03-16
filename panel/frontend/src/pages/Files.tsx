@@ -243,7 +243,9 @@ export default function Files() {
         {/* File listing */}
         <div className={`bg-dark-800 rounded-lg border border-dark-500 overflow-x-auto ${editing ? "w-1/2" : "w-full"}`}>
           {loading ? (
-            <div className="p-8 text-center text-dark-300">Loading...</div>
+            <div className="flex items-center justify-center py-12">
+              <div className="w-6 h-6 border-2 border-dark-600 border-t-rust-500 rounded-full animate-spin" />
+            </div>
           ) : (
             <table className="w-full">
               <thead>

@@ -21,6 +21,8 @@ export default function Sites() {
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState("");
   const [provisioningSiteId, setProvisioningSiteId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [displayCount, setDisplayCount] = useState(25);
 
   // Form state
   const [domain, setDomain] = useState("");
@@ -94,12 +96,23 @@ export default function Sites() {
     <div className="p-6 lg:p-8 animate-fade-up">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
         <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Sites</h1>
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
-        >
-          {showForm ? "Cancel" : "Create Site"}
-        </button>
+        <div className="flex items-center gap-3">
+          {sites.length >= 2 && (
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search sites..."
+              className="px-3 py-1.5 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-400 focus:outline-none focus:border-dark-400"
+            />
+          )}
+          <button
+            onClick={() => setShowForm(!showForm)}
+            className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
+          >
+            {showForm ? "Cancel" : "Create Site"}
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -292,7 +305,13 @@ export default function Sites() {
               </tr>
             </thead>
             <tbody className="divide-y divide-dark-600">
-              {sites.filter((s) => !s.parent_site_id).map((site) => (
+              {(() => {
+                const filtered = sites.filter((s) => !s.parent_site_id && s.domain.toLowerCase().includes(search.toLowerCase()));
+                const displayed = filtered.slice(0, displayCount);
+                const remaining = filtered.length - displayed.length;
+                return (
+                  <>
+                  {displayed.map((site) => (
                 <tr key={site.id} className="hover:bg-dark-700/30 transition-colors">
                   <td className="px-5 py-4">
                     <Link
@@ -327,8 +346,23 @@ export default function Sites() {
                   </td>
                 </tr>
               ))}
+              </>
+                );
+              })()}
             </tbody>
           </table>
+          {(() => {
+            const filtered = sites.filter((s) => !s.parent_site_id && s.domain.toLowerCase().includes(search.toLowerCase()));
+            const remaining = filtered.length - displayCount;
+            return remaining > 0 ? (
+              <button
+                onClick={() => setDisplayCount((c) => c + 25)}
+                className="w-full py-2 text-sm text-dark-300 hover:text-dark-100 border-t border-dark-600 hover:bg-dark-700/30 transition-colors"
+              >
+                Show more ({remaining} remaining)
+              </button>
+            ) : null;
+          })()}
         </div>
       )}
     </div>

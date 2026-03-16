@@ -34,6 +34,7 @@ export default function WordPress() {
   const [tab, setTab] = useState<"plugins" | "themes">("plugins");
   const [message, setMessage] = useState({ text: "", type: "" });
   const [busy, setBusy] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   // Install form
   const [showInstall, setShowInstall] = useState(false);
@@ -536,28 +537,38 @@ export default function WordPress() {
                             </button>
                           )}
                           {p.status !== "must-use" && (
-                            <button
-                              onClick={() => {
-                                if (confirm(`Delete plugin "${p.name}"?`))
-                                  handlePluginAction(p.name, "delete");
-                              }}
-                              disabled={busy.startsWith("plugin-")}
-                              className="p-1 text-dark-300 hover:text-danger-500"
-                            >
-                              <svg
-                                className="w-3.5 h-3.5"
-                                fill="none"
-                                viewBox="0 0 24 24"
-                                stroke="currentColor"
-                                strokeWidth={1.5}
+                            deleteTarget === `plugin-${p.name}` ? (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => { handlePluginAction(p.name, "delete"); setDeleteTarget(null); }}
+                                  className="px-2 py-1 bg-red-600 text-white rounded-md text-xs"
+                                >Confirm</button>
+                                <button
+                                  onClick={() => setDeleteTarget(null)}
+                                  className="px-2 py-1 bg-dark-600 text-dark-200 rounded-md text-xs"
+                                >Cancel</button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => setDeleteTarget(`plugin-${p.name}`)}
+                                disabled={busy.startsWith("plugin-")}
+                                className="p-1 text-dark-300 hover:text-danger-500"
                               >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0"
-                                />
-                              </svg>
-                            </button>
+                                <svg
+                                  className="w-3.5 h-3.5"
+                                  fill="none"
+                                  viewBox="0 0 24 24"
+                                  stroke="currentColor"
+                                  strokeWidth={1.5}
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0"
+                                  />
+                                </svg>
+                              </button>
+                            )
                           )}
                         </div>
                       </td>
@@ -646,28 +657,38 @@ export default function WordPress() {
                             </button>
                           )}
                           {t.status !== "active" && (
-                            <button
-                              onClick={() => {
-                                if (confirm(`Delete theme "${t.name}"?`))
-                                  handleThemeAction(t.name, "delete");
-                              }}
-                              disabled={busy.startsWith("theme-")}
-                              className="p-1 text-dark-300 hover:text-danger-500"
-                            >
-                              <svg
-                                className="w-3.5 h-3.5"
-                                fill="none"
-                                viewBox="0 0 24 24"
-                                stroke="currentColor"
-                                strokeWidth={1.5}
+                            deleteTarget === `theme-${t.name}` ? (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => { handleThemeAction(t.name, "delete"); setDeleteTarget(null); }}
+                                  className="px-2 py-1 bg-red-600 text-white rounded-md text-xs"
+                                >Confirm</button>
+                                <button
+                                  onClick={() => setDeleteTarget(null)}
+                                  className="px-2 py-1 bg-dark-600 text-dark-200 rounded-md text-xs"
+                                >Cancel</button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => setDeleteTarget(`theme-${t.name}`)}
+                                disabled={busy.startsWith("theme-")}
+                                className="p-1 text-dark-300 hover:text-danger-500"
                               >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0"
-                                />
-                              </svg>
-                            </button>
+                                <svg
+                                  className="w-3.5 h-3.5"
+                                  fill="none"
+                                  viewBox="0 0 24 24"
+                                  stroke="currentColor"
+                                  strokeWidth={1.5}
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0"
+                                  />
+                                </svg>
+                              </button>
+                            )
                           )}
                         </div>
                       </td>

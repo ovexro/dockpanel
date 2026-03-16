@@ -67,11 +67,32 @@ pub fn list_nginx_sites() -> Vec<SiteInfo> {
     sites
 }
 
-pub async fn cmd_sites_list(token: &str) -> Result<(), String> {
+pub async fn cmd_sites_list(token: &str, output: &str, filter: Option<&str>) -> Result<(), String> {
     let info = client::agent_get("/system/info", token).await?;
     let _ = info;
 
-    let sites = list_nginx_sites();
+    let mut sites = list_nginx_sites();
+
+    // Apply filter
+    if let Some(f) = filter {
+        let f_lower = f.to_lowercase();
+        sites.retain(|s| s.domain.to_lowercase().contains(&f_lower));
+    }
+
+    if output == "json" {
+        let json_arr: Vec<serde_json::Value> = sites
+            .iter()
+            .map(|s| {
+                json!({
+                    "domain": s.domain,
+                    "runtime": s.runtime,
+                    "ssl": s.ssl,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&json_arr).unwrap_or_default());
+        return Ok(());
+    }
 
     if sites.is_empty() {
         println!("No sites configured.");
