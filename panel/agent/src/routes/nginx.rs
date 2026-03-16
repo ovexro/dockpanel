@@ -106,9 +106,13 @@ async fn put_site(
         }
     };
 
-    // Write config file
+    // Write config file atomically (write to .tmp, then rename)
     let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
-    if let Err(e) = std::fs::write(&config_path, &rendered) {
+    let tmp_path = format!("{config_path}.tmp");
+    let write_result = std::fs::write(&tmp_path, &rendered)
+        .and_then(|_| std::fs::rename(&tmp_path, &config_path));
+    if let Err(e) = write_result {
+        std::fs::remove_file(&tmp_path).ok();
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(NginxResponse {

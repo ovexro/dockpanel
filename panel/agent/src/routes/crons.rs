@@ -185,6 +185,7 @@ async fn read_crontab() -> String {
 /// Write a new crontab for root.
 async fn write_crontab(content: &str) -> Result<(), String> {
     use tokio::io::AsyncWriteExt;
+    use std::time::Duration;
 
     let mut child = tokio::process::Command::new("crontab")
         .arg("-")
@@ -199,13 +200,19 @@ async fn write_crontab(content: &str) -> Result<(), String> {
             .map_err(|e| format!("Failed to write crontab newline: {e}"))?;
     }
 
-    let status = child.wait().await
-        .map_err(|e| format!("Failed to wait for crontab: {e}"))?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err("crontab command failed".into())
+    match tokio::time::timeout(Duration::from_secs(10), child.wait()).await {
+        Ok(Ok(status)) => {
+            if status.success() {
+                Ok(())
+            } else {
+                Err("crontab command failed".into())
+            }
+        }
+        Ok(Err(e)) => Err(format!("crontab failed: {e}")),
+        Err(_) => {
+            let _ = child.kill().await;
+            Err("crontab timed out after 10s".to_string())
+        }
     }
 }
 

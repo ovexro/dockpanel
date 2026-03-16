@@ -171,9 +171,9 @@ pub async fn provision_cert(account: &Account, domain: &str) -> Result<CertInfo,
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        tokio::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
-            .await
-            .ok();
+        if let Err(e) = tokio::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).await {
+            tracing::error!("Failed to set key file permissions for {}: {}", domain, e);
+        }
     }
 
     // Clean up challenge files
