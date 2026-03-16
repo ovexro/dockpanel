@@ -129,7 +129,7 @@ export default function Sites() {
 
       {/* Create form */}
       {showForm && (
-        <div className="max-w-5xl mb-6">
+        <div className="mb-6">
         <form
           onSubmit={handleCreate}
           className="bg-dark-800 rounded-lg border border-dark-500 p-5 space-y-4"
