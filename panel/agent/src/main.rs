@@ -99,6 +99,7 @@ async fn main() {
         .merge(routes::deploy::router())
         .merge(routes::smtp::router())
         .merge(routes::wordpress::router())
+        .merge(routes::cms::router())
         .merge(routes::staging::router())
         .merge(routes::services::router())
         .merge(routes::iac::router())
