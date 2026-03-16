@@ -279,7 +279,7 @@ create_directories() {
     mkdir -p /var/www/acme
 
     # Ensure socket directory persists across tmpfiles cleanup/reboot
-    echo "d /var/run/dockpanel 0755 root root -" > /etc/tmpfiles.d/dockpanel.conf
+    echo "d /run/dockpanel 0755 root root -" > /etc/tmpfiles.d/dockpanel.conf
 
     # Create all directories/files required by systemd ReadWritePaths
     # (these may not exist yet on a fresh install — services are installed later)
@@ -491,11 +491,10 @@ RestartSec=5
 StartLimitBurst=5
 StartLimitIntervalSec=60
 Environment=RUST_LOG=info
-RuntimeDirectory=dockpanel
-ReadWritePaths=/etc/nginx /etc/dockpanel /var/run/dockpanel /var/backups/dockpanel /var/www /var/log /etc/letsencrypt /var/lib/nginx /run/nginx.pid /etc/postfix /etc/dovecot /etc/opendkim.conf /var/vmail /var/spool/postfix /var/lib/dpkg /var/cache/apt /var/lib/apt /usr /run/opendkim
+ReadWritePaths=/etc/nginx /etc/dockpanel /var/run/dockpanel /var/backups/dockpanel /var/www /var/log /etc/letsencrypt /var/lib/nginx /run/nginx.pid /etc/postfix /etc/dovecot /etc/opendkim.conf /var/vmail /var/spool/postfix /var/lib/dpkg /var/cache/apt /var/lib/apt /usr /run/opendkim /etc/php /var/spool/cron
 NoNewPrivileges=no
-ProtectSystem=strict
-ProtectHome=read-only
+ProtectSystem=no
+ProtectHome=no
 PrivateTmp=yes
 ProtectKernelLogs=yes
 ProtectKernelModules=yes
@@ -527,8 +526,7 @@ PrivateTmp=yes
 ProtectHome=yes
 ProtectKernelLogs=yes
 ProtectKernelModules=yes
-ProtectSystem=strict
-RuntimeDirectory=dockpanel
+ProtectSystem=no
 ReadWritePaths=/var/run/dockpanel /tmp
 MemoryMax=1G
 LimitNOFILE=65535
