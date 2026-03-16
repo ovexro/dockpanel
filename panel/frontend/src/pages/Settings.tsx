@@ -239,6 +239,8 @@ export default function Settings() {
     }
   };
 
+  const [tab, setTab] = useState("general");
+
   if (loading) {
     return (
       <div className="p-6 lg:p-8">
@@ -254,8 +256,6 @@ export default function Settings() {
       </div>
     );
   }
-
-  const [tab, setTab] = useState("general");
 
   return (
     <div className="p-6 lg:p-8">
