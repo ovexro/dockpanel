@@ -26,6 +26,9 @@ pub fn router() -> Router<AppState> {
         .route("/services/install/ufw", post(install_ufw))
         .route("/services/install/fail2ban", post(install_fail2ban))
         .route("/services/install/powerdns", post(install_powerdns))
+        .route("/services/install/redis", post(install_redis))
+        .route("/services/install/nodejs", post(install_nodejs))
+        .route("/services/install/composer", post(install_composer))
 }
 
 // ── Status check ────────────────────────────────────────────────────────
@@ -45,12 +48,21 @@ async fn install_status() -> Result<Json<serde_json::Value>, ApiErr> {
     // Detect installed PHP version
     let php_version = detect_php_version().await;
 
+    let redis_installed = which("redis-server").await || is_installed("redis-server").await;
+    let redis_running = is_active("redis-server").await;
+
+    let nodejs_installed = which("node").await;
+    let composer_installed = which("composer").await;
+
     Ok(Json(serde_json::json!({
         "php": { "installed": php_installed, "running": php_running, "version": php_version },
         "certbot": { "installed": certbot_installed },
         "ufw": { "installed": ufw_installed, "active": ufw_active },
         "fail2ban": { "installed": fail2ban_installed, "running": fail2ban_running },
         "powerdns": { "installed": pdns_installed, "running": pdns_running },
+        "redis": { "installed": redis_installed, "running": redis_running },
+        "nodejs": { "installed": nodejs_installed },
+        "composer": { "installed": composer_installed },
     })))
 }
 
@@ -301,6 +313,110 @@ default-soa-content=ns1.@ hostmaster.@ 0 10800 3600 604800 3600
         "api_url": "http://127.0.0.1:8081",
         "api_key": api_key,
     })))
+}
+
+// ── Redis installer ────────────────────────────────────────────────
+
+async fn install_redis() -> Result<Json<serde_json::Value>, ApiErr> {
+    tracing::info!("Installing Redis...");
+
+    let output = tokio::time::timeout(
+        Duration::from_secs(300),
+        Command::new("sh")
+            .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confnew install -y redis-server"])
+            .output()
+    ).await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Redis install timed out after 300s"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("apt install failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Redis install failed: {}", stderr.chars().take(300).collect::<String>())));
+    }
+
+    // Enable and start Redis
+    let _ = tokio::time::timeout(Duration::from_secs(120), Command::new("systemctl").args(["enable", "redis-server"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(120), Command::new("systemctl").args(["start", "redis-server"]).output()).await;
+
+    // Verify Redis is responding
+    let verify = tokio::time::timeout(
+        Duration::from_secs(10),
+        Command::new("redis-cli").arg("ping").output()
+    ).await;
+    let verified = verify
+        .ok()
+        .and_then(|r| r.ok())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_uppercase() == "PONG")
+        .unwrap_or(false);
+
+    tracing::info!("Redis installed, ping verified: {verified}");
+    Ok(ok("Redis installed and started"))
+}
+
+// ── Node.js installer ──────────────────────────────────────────────
+
+async fn install_nodejs() -> Result<Json<serde_json::Value>, ApiErr> {
+    tracing::info!("Installing Node.js...");
+
+    let output = tokio::time::timeout(
+        Duration::from_secs(300),
+        Command::new("sh")
+            .args(["-c", "curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confnew install -y nodejs"])
+            .output()
+    ).await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Node.js install timed out after 300s"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Node.js install failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Node.js install failed: {}", stderr.chars().take(300).collect::<String>())));
+    }
+
+    // Verify
+    let ver = tokio::time::timeout(
+        Duration::from_secs(10),
+        Command::new("node").arg("--version").output()
+    ).await
+        .ok()
+        .and_then(|r| r.ok())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    tracing::info!("Node.js {ver} installed");
+    Ok(ok(&format!("Node.js {ver} with npm installed")))
+}
+
+// ── Composer installer ─────────────────────────────────────────────
+
+async fn install_composer() -> Result<Json<serde_json::Value>, ApiErr> {
+    tracing::info!("Installing Composer...");
+
+    let output = tokio::time::timeout(
+        Duration::from_secs(300),
+        Command::new("sh")
+            .args(["-c", "curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer"])
+            .output()
+    ).await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Composer install timed out after 300s"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Composer install failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Composer install failed: {}", stderr.chars().take(300).collect::<String>())));
+    }
+
+    // Verify
+    let ver = tokio::time::timeout(
+        Duration::from_secs(10),
+        Command::new("composer").arg("--version").output()
+    ).await
+        .ok()
+        .and_then(|r| r.ok())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    tracing::info!("Composer installed: {ver}");
+    Ok(ok("Composer installed globally at /usr/local/bin/composer"))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
