@@ -132,6 +132,27 @@ async fn deploy(
         // SSL provisioning (only if proxy was set up successfully)
         if response.get("proxy").is_some() {
             if let Some(ref email) = body.ssl_email {
+                // Wait for DNS propagation before attempting SSL (up to 30 seconds)
+                for i in 0..6u32 {
+                    if i > 0 {
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    }
+                    match tokio::net::lookup_host(format!("{}:80", domain)).await {
+                        Ok(_) => {
+                            tracing::info!("DNS resolved for {domain} (attempt {}/6)", i + 1);
+                            break;
+                        }
+                        Err(_) if i < 5 => {
+                            tracing::info!("Waiting for DNS propagation for {}... ({}/6)", domain, i + 1);
+                            continue;
+                        }
+                        Err(e) => {
+                            tracing::warn!("DNS not propagated for {}: {} — trying SSL anyway", domain, e);
+                            break;
+                        }
+                    }
+                }
+
                 match ssl::load_or_create_account(email).await {
                     Ok(account) => {
                         match ssl::provision_cert(&account, domain).await {
@@ -158,19 +179,22 @@ async fn deploy(
                                     }
                                     Err(e) => {
                                         tracing::warn!("Auto-SSL: enable_ssl_for_site failed for {domain}: {e}");
-                                        response["ssl_warning"] = serde_json::json!(format!("SSL enable failed: {e}"));
+                                        response["ssl_warning"] = serde_json::json!(format!("SSL enable failed: {e} — retry from panel"));
+                                        response["ssl_pending"] = serde_json::json!(true);
                                     }
                                 }
                             }
                             Err(e) => {
                                 tracing::warn!("Auto-SSL: cert provisioning failed for {domain}: {e}");
-                                response["ssl_warning"] = serde_json::json!(format!("SSL provisioning failed: {e}"));
+                                response["ssl_warning"] = serde_json::json!(format!("SSL provisioning failed: {e} — retry from panel"));
+                                response["ssl_pending"] = serde_json::json!(true);
                             }
                         }
                     }
                     Err(e) => {
                         tracing::warn!("Auto-SSL: ACME account failed: {e}");
-                        response["ssl_warning"] = serde_json::json!(format!("ACME account failed: {e}"));
+                        response["ssl_warning"] = serde_json::json!(format!("ACME account failed: {e} — retry from panel"));
+                        response["ssl_pending"] = serde_json::json!(true);
                     }
                 }
             }
