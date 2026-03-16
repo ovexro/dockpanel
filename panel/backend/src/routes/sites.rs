@@ -282,9 +282,19 @@ pub async fn create(
                     ).bind(&parent).bind(dns_user_id).fetch_optional(&dns_db).await.ok().flatten();
 
                     if let Some((provider, cf_zone_id, cf_api_token, cf_api_email)) = zone {
-                        let server_ip = std::net::UdpSocket::bind("0.0.0.0:0")
-                            .and_then(|s| { s.connect("8.8.8.8:53")?; s.local_addr() })
-                            .map(|a| a.ip().to_string()).unwrap_or_default();
+                        // Detect server's public IP (try external service first, fallback to local detection)
+                        let server_ip = match reqwest::Client::new()
+                            .get("https://api.ipify.org")
+                            .timeout(std::time::Duration::from_secs(5))
+                            .send().await
+                        {
+                            Ok(resp) => resp.text().await.unwrap_or_default().trim().to_string(),
+                            Err(_) => {
+                                std::net::UdpSocket::bind("0.0.0.0:0")
+                                    .and_then(|s| { s.connect("8.8.8.8:53")?; s.local_addr() })
+                                    .map(|a| a.ip().to_string()).unwrap_or_default()
+                            }
+                        };
 
                         if provider == "cloudflare" {
                             if let (Some(zid), Some(tok)) = (cf_zone_id, cf_api_token) {
@@ -298,7 +308,7 @@ pub async fn create(
                                 }
                                 let _ = client.post(&format!("https://api.cloudflare.com/client/v4/zones/{zid}/dns_records"))
                                     .headers(headers)
-                                    .json(&serde_json::json!({"type":"A","name":dns_domain,"content":server_ip,"proxied":false,"ttl":1}))
+                                    .json(&serde_json::json!({"type":"A","name":dns_domain,"content":server_ip,"proxied":true,"ttl":1}))
                                     .send().await;
                                 tracing::info!("Auto-DNS: created A record {dns_domain} → {server_ip}");
                                 emit_step(&dns_logs, site_id, "dns", "Creating DNS record", "done", None);
@@ -960,9 +970,18 @@ pub async fn remove(
             ).bind(&parent).bind(dns_user).fetch_optional(&dns_db).await.ok().flatten();
 
             if let Some((provider, cf_zone_id, cf_api_token, cf_api_email)) = zone {
-                let server_ip = std::net::UdpSocket::bind("0.0.0.0:0")
-                    .and_then(|s| { s.connect("8.8.8.8:53")?; s.local_addr() })
-                    .map(|a| a.ip().to_string()).unwrap_or_default();
+                let server_ip = match reqwest::Client::new()
+                    .get("https://api.ipify.org")
+                    .timeout(std::time::Duration::from_secs(5))
+                    .send().await
+                {
+                    Ok(resp) => resp.text().await.unwrap_or_default().trim().to_string(),
+                    Err(_) => {
+                        std::net::UdpSocket::bind("0.0.0.0:0")
+                            .and_then(|s| { s.connect("8.8.8.8:53")?; s.local_addr() })
+                            .map(|a| a.ip().to_string()).unwrap_or_default()
+                    }
+                };
 
                 if provider == "cloudflare" {
                     if let (Some(zid), Some(tok)) = (cf_zone_id, cf_api_token) {

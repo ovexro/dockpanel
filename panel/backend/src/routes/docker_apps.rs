@@ -161,13 +161,23 @@ pub async fn deploy(
             .flatten();
 
             if let Some((_zone_id, provider, cf_zone_id, cf_api_token, cf_api_email)) = zone {
-                // Detect server IP
-                let server_ip = {
-                    use std::net::UdpSocket;
-                    UdpSocket::bind("0.0.0.0:0")
-                        .and_then(|s| { s.connect("8.8.8.8:53")?; s.local_addr() })
-                        .map(|a| a.ip().to_string())
-                        .unwrap_or_default()
+                // Detect server's public IP (try external service first, fallback to local detection)
+                let server_ip = match reqwest::Client::new()
+                    .get("https://api.ipify.org")
+                    .timeout(std::time::Duration::from_secs(5))
+                    .send().await
+                {
+                    Ok(resp) => {
+                        let ip = resp.text().await.unwrap_or_default().trim().to_string();
+                        if ip.is_empty() { String::new() } else { ip }
+                    }
+                    Err(_) => {
+                        use std::net::UdpSocket;
+                        UdpSocket::bind("0.0.0.0:0")
+                            .and_then(|s| { s.connect("8.8.8.8:53")?; s.local_addr() })
+                            .map(|a| a.ip().to_string())
+                            .unwrap_or_default()
+                    }
                 };
 
                 if provider == "cloudflare" {
@@ -188,7 +198,7 @@ pub async fn deploy(
                                 "type": "A",
                                 "name": domain,
                                 "content": server_ip,
-                                "proxied": false,
+                                "proxied": true,
                                 "ttl": 1,
                             }))
                             .send()
@@ -646,9 +656,18 @@ pub async fn remove_app(
             ).bind(&parent).bind(dns_user).fetch_optional(&dns_db).await.ok().flatten();
 
             if let Some((provider, cf_zone_id, cf_api_token, cf_api_email)) = zone {
-                let server_ip = std::net::UdpSocket::bind("0.0.0.0:0")
-                    .and_then(|s| { s.connect("8.8.8.8:53")?; s.local_addr() })
-                    .map(|a| a.ip().to_string()).unwrap_or_default();
+                let server_ip = match reqwest::Client::new()
+                    .get("https://api.ipify.org")
+                    .timeout(std::time::Duration::from_secs(5))
+                    .send().await
+                {
+                    Ok(resp) => resp.text().await.unwrap_or_default().trim().to_string(),
+                    Err(_) => {
+                        std::net::UdpSocket::bind("0.0.0.0:0")
+                            .and_then(|s| { s.connect("8.8.8.8:53")?; s.local_addr() })
+                            .map(|a| a.ip().to_string()).unwrap_or_default()
+                    }
+                };
 
                 if provider == "cloudflare" {
                     if let (Some(zid), Some(tok)) = (cf_zone_id, cf_api_token) {
