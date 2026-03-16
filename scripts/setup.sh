@@ -609,7 +609,14 @@ configure_nginx() {
     local LISTEN_DIRECTIVE="listen ${PANEL_PORT};"
     if [ -n "$PANEL_DOMAIN" ]; then
         SERVER_NAME="$PANEL_DOMAIN"
-        LISTEN_DIRECTIVE="listen 80;"
+        # Use interface IP to match agent-generated site configs (prevents nginx routing conflicts)
+        local BIND_IP
+        BIND_IP=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'src \K\S+' || true)
+        if [ -n "$BIND_IP" ]; then
+            LISTEN_DIRECTIVE="listen ${BIND_IP}:80;"
+        else
+            LISTEN_DIRECTIVE="listen 80;"
+        fi
     fi
 
     cat > "$NGINX_CONF" << NGINXEOF
