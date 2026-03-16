@@ -75,6 +75,14 @@ log "Building API..."
 log "Building CLI..."
 (cd "$CLI_SRC" && $CARGO_CMD build --release 2>&1 | tail -1)
 
+# ── Build frontend (before service restart to minimize downtime) ──────────
+if [ -d "$FRONTEND_DIR" ]; then
+    log "Building frontend..."
+    (cd "$FRONTEND_DIR" && npm ci --silent 2>/dev/null || npm install --silent 2>/dev/null)
+    (cd "$FRONTEND_DIR" && npx vite build 2>&1 | tail -3)
+    log "Frontend rebuilt"
+fi
+
 # ── Backup database before upgrade ────────────────────────────────────────
 BACKUP_DIR="/var/backups/dockpanel/db"
 mkdir -p "$BACKUP_DIR"
@@ -87,6 +95,8 @@ else
 fi
 
 # ── Deploy binaries ───────────────────────────────────────────────────────
+# Note: ~2-5s downtime during binary swap is expected for self-hosted deployments.
+# Zero-downtime upgrades would require load balancer or socket activation.
 log "Backing up current binaries..."
 cp "$AGENT_BIN" "${AGENT_BIN}.bak" 2>/dev/null || true
 cp "$API_BIN" "${API_BIN}.bak" 2>/dev/null || true
@@ -107,7 +117,7 @@ sleep 1
 systemctl start dockpanel-api
 log "Services restarted"
 
-# ── Health check with rollback ───────────────────────────────────────────
+# ── Health check with rollback ────────────────────────────────────────────
 rollback() {
     error "Health check failed, rolling back..."
     cp "${AGENT_BIN}.bak" "$AGENT_BIN" 2>/dev/null || true
@@ -140,17 +150,14 @@ if ! curl -sf --max-time 15 http://127.0.0.1:3080/api/system/info > /dev/null 2>
     warn "Agent connectivity check failed (non-fatal, agent may still be starting)"
 fi
 
+# CLI health check (non-fatal)
+if ! dockpanel --version > /dev/null 2>&1; then
+    warn "CLI health check failed (non-fatal)"
+fi
+
 log "Health checks passed"
 # Clean up backups
 rm -f "${AGENT_BIN}.bak" "${API_BIN}.bak" "${CLI_BIN}.bak"
-
-# ── Build frontend ────────────────────────────────────────────────────────
-if [ -d "$FRONTEND_DIR" ]; then
-    log "Building frontend..."
-    (cd "$FRONTEND_DIR" && npm ci --silent 2>/dev/null || npm install --silent 2>/dev/null)
-    (cd "$FRONTEND_DIR" && npx vite build 2>&1 | tail -3)
-    log "Frontend rebuilt"
-fi
 
 # ── Wait for health ──────────────────────────────────────────────────────
 log "Waiting for API..."

@@ -8,9 +8,9 @@ use crate::services::notifications;
 pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
     tracing::info!("Security scanner background task started (weekly)");
 
-    // Initial delay: 1 hour after startup (respects shutdown)
+    // Initial delay: 5 minutes after startup (respects shutdown)
     tokio::select! {
-        _ = tokio::time::sleep(Duration::from_secs(3600)) => {}
+        _ = tokio::time::sleep(Duration::from_secs(300)) => {}
         _ = shutdown_rx.recv() => {
             tracing::info!("Security scanner shutting down gracefully (during initial delay)");
             return;

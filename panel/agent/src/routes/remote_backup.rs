@@ -156,8 +156,21 @@ async fn prune(
     Json(body): Json<PruneRequest>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
     if body.destination.dtype != "s3" {
-        // SFTP pruning would need ssh+ls+rm — skip for now
-        return Ok(Json(serde_json::json!({ "pruned": 0, "message": "Pruning only supported for S3/R2" })));
+        // SFTP pruning requires an SSH client to list+delete remote files — not yet implemented.
+        // Old SFTP backups must be pruned manually or via a cron job on the remote server.
+        tracing::warn!(
+            "Backup pruning skipped for {} destination (domain: {}). Only S3/R2 pruning is supported. \
+             SFTP backups for '{}' must be pruned manually on the remote server.",
+            body.destination.dtype, body.domain, body.domain
+        );
+        return Ok(Json(serde_json::json!({
+            "pruned": 0,
+            "message": format!(
+                "Automatic pruning is not supported for {} destinations. \
+                 Old backups for '{}' must be pruned manually on the remote server.",
+                body.destination.dtype, body.domain
+            )
+        })));
     }
 
     let bucket = body.destination.bucket.as_deref()
