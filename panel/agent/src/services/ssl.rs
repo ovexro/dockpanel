@@ -85,45 +85,49 @@ pub async fn provision_cert(account: &Account, domain: &str) -> Result<CertInfo,
         .map_err(|e| format!("Failed to create ACME order: {e}"))?;
 
     let state = order.state();
-    if !matches!(state.status, OrderStatus::Pending) {
+    let needs_challenge = matches!(state.status, OrderStatus::Pending);
+
+    if !needs_challenge && !matches!(state.status, OrderStatus::Ready) {
         return Err(format!("Unexpected order status: {:?}", state.status));
     }
 
-    // Get authorizations and solve HTTP-01 challenge
-    let mut authorizations = order.authorizations();
-    while let Some(result) = authorizations.next().await {
-        let mut authz = result.map_err(|e| format!("Failed to get authorization: {e}"))?;
+    if needs_challenge {
+        // Get authorizations and solve HTTP-01 challenge
+        let mut authorizations = order.authorizations();
+        while let Some(result) = authorizations.next().await {
+            let mut authz = result.map_err(|e| format!("Failed to get authorization: {e}"))?;
 
-        match authz.status {
-            AuthorizationStatus::Valid => continue,
-            AuthorizationStatus::Pending => {}
-            status => return Err(format!("Unexpected authorization status: {status:?}")),
+            match authz.status {
+                AuthorizationStatus::Valid => continue,
+                AuthorizationStatus::Pending => {}
+                status => return Err(format!("Unexpected authorization status: {status:?}")),
+            }
+
+            let mut challenge = authz
+                .challenge(ChallengeType::Http01)
+                .ok_or("No HTTP-01 challenge found")?;
+
+            let token = challenge.token.clone();
+            let key_auth = challenge.key_authorization();
+
+            // Write challenge file to ACME webroot
+            let challenge_dir = format!("{ACME_WEBROOT}/.well-known/acme-challenge");
+            tokio::fs::create_dir_all(&challenge_dir)
+                .await
+                .map_err(|e| format!("Failed to create challenge dir: {e}"))?;
+            let challenge_path = format!("{challenge_dir}/{token}");
+            tokio::fs::write(&challenge_path, key_auth.as_str())
+                .await
+                .map_err(|e| format!("Failed to write challenge file: {e}"))?;
+
+            tracing::info!("Challenge file written for {domain}");
+
+            // Tell ACME server the challenge is ready
+            challenge
+                .set_ready()
+                .await
+                .map_err(|e| format!("Failed to set challenge ready: {e}"))?;
         }
-
-        let mut challenge = authz
-            .challenge(ChallengeType::Http01)
-            .ok_or("No HTTP-01 challenge found")?;
-
-        let token = challenge.token.clone();
-        let key_auth = challenge.key_authorization();
-
-        // Write challenge file to ACME webroot
-        let challenge_dir = format!("{ACME_WEBROOT}/.well-known/acme-challenge");
-        tokio::fs::create_dir_all(&challenge_dir)
-            .await
-            .map_err(|e| format!("Failed to create challenge dir: {e}"))?;
-        let challenge_path = format!("{challenge_dir}/{token}");
-        tokio::fs::write(&challenge_path, key_auth.as_str())
-            .await
-            .map_err(|e| format!("Failed to write challenge file: {e}"))?;
-
-        tracing::info!("Challenge file written for {domain}");
-
-        // Tell ACME server the challenge is ready
-        challenge
-            .set_ready()
-            .await
-            .map_err(|e| format!("Failed to set challenge ready: {e}"))?;
     }
 
     // Poll until order is ready for finalization

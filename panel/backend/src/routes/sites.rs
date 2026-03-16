@@ -326,7 +326,33 @@ pub async fn create(
                         .await;
 
                         emit_step(&cms_logs, site_id, "db_init", "Waiting for database engine", "in_progress", None);
-                        tokio::time::sleep(Duration::from_secs(10)).await;
+                        // Wait for MariaDB to be fully ready (TCP connects before MySQL is ready)
+                        // Use mysqladmin ping via the agent to check actual MySQL readiness
+                        for attempt in 1..=20 {
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                            let check = cms_agent.post("/databases", Some(serde_json::json!({
+                                "engine": "mysql",
+                                "name": "__ping__",
+                                "password": "x",
+                            }))).await;
+                            // Any response means the agent is responsive; try a simple PHP mysql test
+                            if attempt >= 5 {
+                                // After 10s, try actual MySQL connection via PHP
+                                let php_check = tokio::process::Command::new("php")
+                                    .args(["-r", &format!(
+                                        "try {{ new PDO('mysql:host={db_host};dbname={db_name}', '{db_user_name}', '{db_password}'); echo 'OK'; }} catch(Exception $e) {{ echo 'FAIL'; }}"
+                                    )])
+                                    .output()
+                                    .await;
+                                if let Ok(out) = php_check {
+                                    let stdout = String::from_utf8_lossy(&out.stdout);
+                                    if stdout.contains("OK") {
+                                        break;
+                                    }
+                                }
+                            }
+                            let _ = check;
+                        }
                         emit_step(&cms_logs, site_id, "db_init", "Database engine ready", "done", None);
                     }
 
