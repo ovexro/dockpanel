@@ -1294,6 +1294,13 @@ pub async fn get_app_domain(container_id: &str) -> Option<String> {
     info.config?.labels?.get("dockpanel.app.domain").cloned()
 }
 
+/// Get the app name label from a container, if set.
+pub async fn get_app_name(container_id: &str) -> Option<String> {
+    let docker = Docker::connect_with_local_defaults().ok()?;
+    let info = docker.inspect_container(container_id, None).await.ok()?;
+    info.config?.labels?.get("dockpanel.app.name").cloned()
+}
+
 /// Stop and remove an app container, optionally removing its volumes.
 pub async fn remove_app(container_id: &str) -> Result<(), String> {
     let docker =
