@@ -129,7 +129,7 @@ export default function Sites() {
 
       {/* Create form */}
       {showForm && (
-        <div className="max-w-3xl mb-6">
+        <div className="max-w-5xl mb-6">
         <form
           onSubmit={handleCreate}
           className="bg-dark-800 rounded-lg border border-dark-500 p-5 space-y-4"
@@ -156,10 +156,9 @@ export default function Sites() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
             <div>
               <label htmlFor="site-domain" className="block text-sm font-medium text-dark-100 mb-1">Domain</label>
-              <p className="text-xs text-dark-400 mb-1.5">Your site's public domain name (e.g., example.com)</p>
               <input
                 id="site-domain"
                 type="text"
@@ -169,11 +168,11 @@ export default function Sites() {
                 placeholder="example.com"
                 className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm"
               />
+              <p className="text-xs text-dark-400 mt-1.5">Your site's public domain name (e.g., example.com)</p>
             </div>
             {!cms ? (
               <div>
                 <label htmlFor="site-runtime" className="block text-sm font-medium text-dark-100 mb-1">Runtime</label>
-                <p className="text-xs text-dark-400 mb-1.5">Static for HTML/CSS/JS, PHP for WordPress/Laravel, Reverse Proxy for Docker apps</p>
                 <select
                   id="site-runtime"
                   value={runtime}
@@ -184,12 +183,13 @@ export default function Sites() {
                   <option value="php">PHP</option>
                   <option value="proxy">Reverse Proxy (Docker/Node)</option>
                 </select>
+                <p className="text-xs text-dark-400 mt-1.5">Static for HTML/CSS/JS, PHP for WordPress/Laravel, Reverse Proxy for Docker apps</p>
               </div>
             ) : (
               <div>
                 <label className="block text-sm font-medium text-dark-100 mb-1">Site Title</label>
-                <p className="text-xs text-dark-400 mb-1.5">The title for your {cms.charAt(0).toUpperCase() + cms.slice(1)} site</p>
                 <input type="text" value={siteTitle} onChange={(e) => setSiteTitle(e.target.value)} placeholder={`My ${cms.charAt(0).toUpperCase() + cms.slice(1)} Site`} className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none text-sm" />
+                <p className="text-xs text-dark-400 mt-1.5">The title for your {cms.charAt(0).toUpperCase() + cms.slice(1)} site</p>
               </div>
             )}
           </div>
@@ -200,11 +200,11 @@ export default function Sites() {
             <div className="col-span-2 border-t border-dark-700 pt-3 mt-1">
               <span className="text-xs font-medium text-dark-400 uppercase tracking-wider">{cms.charAt(0).toUpperCase() + cms.slice(1)} Configuration</span>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
               <div>
                 <label className="block text-sm font-medium text-dark-100 mb-1">Admin Email</label>
-                <p className="text-xs text-dark-400 mb-1.5">{cms.charAt(0).toUpperCase() + cms.slice(1)} admin email address</p>
                 <input type="email" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} placeholder="you@example.com" className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none text-sm" />
+                <p className="text-xs text-dark-400 mt-1.5">{cms.charAt(0).toUpperCase() + cms.slice(1)} admin email address</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-dark-100 mb-1">Admin Username</label>
@@ -221,7 +221,6 @@ export default function Sites() {
           {runtime === "proxy" && (
             <div>
               <label htmlFor="site-proxy-port" className="block text-sm font-medium text-dark-100 mb-1">Proxy Port</label>
-              <p className="text-xs text-dark-400 mb-1.5">The local port your application listens on</p>
               <input
                 id="site-proxy-port"
                 type="number"
@@ -233,11 +232,12 @@ export default function Sites() {
                 max="65535"
                 className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm max-w-xs"
               />
+              <p className="text-xs text-dark-400 mt-1.5">The local port your application listens on</p>
             </div>
           )}
 
           {runtime === "php" && !cms && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
               <div>
                 <label htmlFor="site-php-version" className="block text-sm font-medium text-dark-100 mb-1">PHP Version</label>
                 <select
@@ -254,7 +254,6 @@ export default function Sites() {
               </div>
               <div>
                 <label htmlFor="site-php-preset" className="block text-sm font-medium text-dark-100 mb-1">Framework</label>
-                <p className="text-xs text-dark-400 mb-1.5">Nginx configuration preset for your PHP framework</p>
                 <select
                   id="site-php-preset"
                   value={phpPreset}
@@ -270,6 +269,7 @@ export default function Sites() {
                   <option value="codeigniter">CodeIgniter</option>
                   <option value="magento">Magento</option>
                 </select>
+                <p className="text-xs text-dark-400 mt-1.5">Nginx configuration preset for your PHP framework</p>
               </div>
             </div>
           )}

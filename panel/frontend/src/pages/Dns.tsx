@@ -306,7 +306,7 @@ export default function Dns() {
           {zoneProvider === "cloudflare" ? (
             <>
               <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Connect Cloudflare Zone</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
                 <div>
                   <label className="block text-xs font-medium text-dark-100 mb-1">Domain</label>
                   <input type="text" value={zoneDomain} onChange={(e) => setZoneDomain(e.target.value)} placeholder="example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
@@ -330,7 +330,7 @@ export default function Dns() {
                   </label>
                 </div>
               </div>
-              <div className={`grid grid-cols-1 ${authMethod === "key" ? "md:grid-cols-2" : ""} gap-4`}>
+              <div className={`grid grid-cols-1 ${authMethod === "key" ? "md:grid-cols-2" : ""} gap-4 items-end`}>
                 {authMethod === "key" && (
                   <div>
                     <label className="block text-xs font-medium text-dark-100 mb-1">Cloudflare Email</label>
@@ -488,7 +488,7 @@ export default function Dns() {
               {/* Record Form */}
               {showRecordForm && (
                 <div className="px-5 py-4 bg-dark-900 border-b border-dark-500 space-y-3">
-                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 items-end">
                     <div>
                       <label className="block text-xs font-medium text-dark-200 mb-1">Type</label>
                       <select
