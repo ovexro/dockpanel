@@ -24,6 +24,10 @@ pub struct DeployRequest {
     pub name: String,
     pub port: u16,
     pub env: Option<HashMap<String, String>>,
+    pub domain: Option<String>,
+    pub ssl_email: Option<String>,
+    pub memory_mb: Option<u64>,
+    pub cpu_percent: Option<u64>,
 }
 
 /// GET /api/apps/templates — List available app templates.
@@ -90,12 +94,31 @@ pub async fn deploy(
     let app_name = body.name.clone();
     let template = body.template_id.clone();
 
-    let agent_body = serde_json::json!({
+    let deploy_domain = body.domain.clone().filter(|d| !d.is_empty());
+    let deploy_ssl_email = body.ssl_email.clone().or_else(|| Some(claims.email.clone()));
+    let deploy_memory = body.memory_mb;
+    let deploy_cpu = body.cpu_percent;
+
+    let mut agent_body = serde_json::json!({
         "template_id": body.template_id,
         "name": body.name,
         "port": body.port,
         "env": body.env.unwrap_or_default(),
     });
+    if let Some(ref domain) = deploy_domain {
+        agent_body["domain"] = serde_json::json!(domain);
+    }
+    if let Some(ref ssl_email) = deploy_ssl_email {
+        if deploy_domain.is_some() {
+            agent_body["ssl_email"] = serde_json::json!(ssl_email);
+        }
+    }
+    if let Some(mem) = deploy_memory {
+        agent_body["memory_mb"] = serde_json::json!(mem);
+    }
+    if let Some(cpu) = deploy_cpu {
+        agent_body["cpu_percent"] = serde_json::json!(cpu);
+    }
 
     // Spawn background deploy task
     tokio::spawn(async move {
@@ -114,15 +137,170 @@ pub async fn deploy(
             }
         };
 
+        // Step 1: Auto-create DNS record if domain is provided
+        if let Some(ref domain) = deploy_domain {
+            emit("dns", "Creating DNS record", "in_progress", None);
+
+            // Extract parent domain (e.g., "mail.dockpanel.dev" → "dockpanel.dev")
+            let parts: Vec<&str> = domain.splitn(3, '.').collect();
+            let parent_domain = if parts.len() >= 3 {
+                format!("{}.{}", parts[parts.len() - 2], parts[parts.len() - 1])
+            } else {
+                domain.clone()
+            };
+
+            // Look up DNS zone for this domain
+            let zone: Option<(Uuid, String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+                "SELECT id, provider, cf_zone_id, cf_api_token, cf_api_email FROM dns_zones WHERE domain = $1 AND user_id = $2"
+            )
+            .bind(&parent_domain)
+            .bind(user_id)
+            .fetch_optional(&db)
+            .await
+            .ok()
+            .flatten();
+
+            if let Some((_zone_id, provider, cf_zone_id, cf_api_token, cf_api_email)) = zone {
+                // Detect server IP
+                let server_ip = {
+                    use std::net::UdpSocket;
+                    UdpSocket::bind("0.0.0.0:0")
+                        .and_then(|s| { s.connect("8.8.8.8:53")?; s.local_addr() })
+                        .map(|a| a.ip().to_string())
+                        .unwrap_or_default()
+                };
+
+                if provider == "cloudflare" {
+                    if let (Some(zone_id), Some(token)) = (cf_zone_id, cf_api_token) {
+                        let client = reqwest::Client::new();
+                        let mut headers = reqwest::header::HeaderMap::new();
+                        if let Some(em) = cf_api_email {
+                            headers.insert("X-Auth-Email", em.parse().unwrap_or_else(|_| "".parse().unwrap()));
+                            headers.insert("X-Auth-Key", token.parse().unwrap_or_else(|_| "".parse().unwrap()));
+                        } else {
+                            headers.insert("Authorization", format!("Bearer {token}").parse().unwrap_or_else(|_| "".parse().unwrap()));
+                        }
+
+                        let result = client
+                            .post(&format!("https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records"))
+                            .headers(headers)
+                            .json(&serde_json::json!({
+                                "type": "A",
+                                "name": domain,
+                                "content": server_ip,
+                                "proxied": false,
+                                "ttl": 1,
+                            }))
+                            .send()
+                            .await;
+
+                        match result {
+                            Ok(resp) => {
+                                let body = resp.json::<serde_json::Value>().await.ok();
+                                let success = body.as_ref().and_then(|b| b.get("success")).and_then(|v| v.as_bool()).unwrap_or(false);
+                                if success {
+                                    emit("dns", "Creating DNS record", "done", None);
+                                    tracing::info!("Auto-DNS: created A record {domain} → {server_ip}");
+                                } else {
+                                    let err_msg = body.as_ref()
+                                        .and_then(|b| b.get("errors"))
+                                        .and_then(|e| e.as_array())
+                                        .and_then(|a| a.first())
+                                        .and_then(|e| e.get("message"))
+                                        .and_then(|m| m.as_str())
+                                        .unwrap_or("Unknown error");
+                                    emit("dns", "Creating DNS record", "error",
+                                        Some(format!("DNS failed: {err_msg} — create manually")));
+                                    tracing::warn!("Auto-DNS failed for {domain}: {err_msg}");
+                                }
+                            }
+                            Err(e) => {
+                                emit("dns", "Creating DNS record", "error",
+                                    Some(format!("DNS API error: {e} — create manually")));
+                            }
+                        }
+                    }
+                }
+                else if provider == "powerdns" {
+                    // Get PowerDNS settings
+                    let pdns: Vec<(String, String)> = sqlx::query_as(
+                        "SELECT key, value FROM settings WHERE key IN ('pdns_api_url', 'pdns_api_key')"
+                    ).fetch_all(&db).await.unwrap_or_default();
+                    let pdns_url = pdns.iter().find(|(k,_)| k == "pdns_api_url").map(|(_,v)| v.clone());
+                    let pdns_key = pdns.iter().find(|(k,_)| k == "pdns_api_key").map(|(_,v)| v.clone());
+
+                    if let (Some(url), Some(key)) = (pdns_url, pdns_key) {
+                        let client = reqwest::Client::new();
+                        let zone_fqdn = if parent_domain.ends_with('.') { parent_domain.clone() } else { format!("{parent_domain}.") };
+
+                        let result = client
+                            .patch(&format!("{url}/api/v1/servers/localhost/zones/{zone_fqdn}"))
+                            .header("X-API-Key", &key)
+                            .json(&serde_json::json!({
+                                "rrsets": [{
+                                    "name": format!("{domain}."),
+                                    "type": "A",
+                                    "ttl": 300,
+                                    "changetype": "REPLACE",
+                                    "records": [{ "content": server_ip, "disabled": false }]
+                                }]
+                            }))
+                            .send()
+                            .await;
+
+                        match result {
+                            Ok(resp) if resp.status().is_success() => {
+                                emit("dns", "Creating DNS record", "done", None);
+                                tracing::info!("Auto-DNS (PowerDNS): created A record {domain} → {server_ip}");
+                            }
+                            Ok(resp) => {
+                                let text = resp.text().await.unwrap_or_default();
+                                emit("dns", "Creating DNS record", "error",
+                                    Some(format!("PowerDNS error: {text} — create manually")));
+                            }
+                            Err(e) => {
+                                emit("dns", "Creating DNS record", "error",
+                                    Some(format!("PowerDNS API error: {e} — create manually")));
+                            }
+                        }
+                    } else {
+                        emit("dns", "Creating DNS record", "error",
+                            Some("PowerDNS not configured — create record manually".into()));
+                    }
+                }
+            } else {
+                emit("dns", "Creating DNS record", "error",
+                    Some(format!("No DNS zone found for {parent_domain} — create record manually")));
+            }
+        }
+
+        // Step 2: Pull image + deploy container (+ proxy + SSL handled by agent)
         emit("pull", "Pulling Docker image", "in_progress", None);
 
         match agent.post("/apps/deploy", Some(agent_body)).await {
-            Ok(_) => {
+            Ok(result) => {
                 emit("pull", "Pulling Docker image", "done", None);
                 emit("start", "Starting container", "done", None);
+
+                // Check if proxy/SSL were set up
+                if deploy_domain.is_some() {
+                    let has_proxy = result.get("proxy").is_some();
+                    let has_ssl = result.get("ssl").and_then(|v| v.as_bool()).unwrap_or(false);
+                    if has_proxy {
+                        emit("proxy", "Configuring reverse proxy", "done", None);
+                    }
+                    if has_ssl {
+                        emit("ssl", "Provisioning SSL certificate", "done", None);
+                    } else if has_proxy {
+                        emit("ssl", "SSL certificate", "error",
+                            Some("Skipped — can be provisioned later".into()));
+                    }
+                }
+
                 emit("complete", "App deployed", "done", None);
 
-                tracing::info!("App deployed: {} ({})", app_name, template);
+                tracing::info!("App deployed: {} ({}){}", app_name, template,
+                    deploy_domain.as_ref().map(|d| format!(" → {d}")).unwrap_or_default());
                 activity::log_activity(
                     &db, user_id, &email, "app.deploy",
                     Some("app"), Some(&app_name), Some(&template), None,
