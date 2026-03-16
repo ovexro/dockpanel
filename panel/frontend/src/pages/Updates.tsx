@@ -83,37 +83,69 @@ export default function Updates() {
   const applyUpdates = async () => {
     setApplying(true);
     setMessage({ text: "", type: "" });
-    setAptOutput(null);
+    setAptOutput(["$ apt upgrade ...", ""]);
     try {
       const body = selected.size > 0 ? { packages: Array.from(selected) } : {};
-      const result = await api.post<ApplyResult>("/system/updates/apply", body);
+      const result = await api.post<{ install_id?: string } & ApplyResult>("/system/updates/apply", body);
 
-      // Show terminal output
-      if (result.output) {
-        setAptOutput(result.output.split("\n"));
+      if (result.install_id) {
+        // SSE mode — stream progress
+        const es = new EventSource(`/api/services/install/${result.install_id}/log`);
+        es.onmessage = (event) => {
+          try {
+            const step = JSON.parse(event.data);
+            if (step.step === "update") {
+              if (step.status === "in_progress") {
+                setAptOutput(prev => [...(prev || []), "> Updating packages..."]);
+              }
+            }
+            if (step.step === "complete") {
+              es.close();
+              // The message field contains the full apt output
+              if (step.message) {
+                setAptOutput(step.message.split("\n"));
+              }
+              setMessage({
+                text: step.status === "done"
+                  ? selected.size > 0
+                    ? `Successfully updated ${selected.size} package(s)`
+                    : "All packages updated successfully"
+                  : "Update completed with errors — check the output below",
+                type: step.status === "done" ? "success" : "error",
+              });
+              // Refresh
+              api.get<PackageUpdate[]>("/system/updates")
+                .then(data => { setPackages(Array.isArray(data) ? data : []); setSelected(new Set()); })
+                .catch(() => {});
+              api.get<{ reboot_required: boolean }>("/system/updates/count")
+                .then(d => setRebootRequired(d.reboot_required))
+                .catch(() => {});
+              setApplying(false);
+            }
+          } catch { /* ignore */ }
+        };
+        es.onerror = () => {
+          es.close();
+          setApplying(false);
+        };
+      } else {
+        // Fallback: synchronous response (old behavior)
+        if (result.output) setAptOutput(result.output.split("\n"));
+        setRebootRequired(result.reboot_required);
+        setMessage({
+          text: result.success ? "All packages updated" : "Update completed with errors",
+          type: result.success ? "success" : "error",
+        });
+        const data = await api.get<PackageUpdate[]>("/system/updates");
+        setPackages(Array.isArray(data) ? data : []);
+        setSelected(new Set());
+        setApplying(false);
       }
-
-      // Check reboot status from response
-      setRebootRequired(result.reboot_required);
-
-      setMessage({
-        text: result.success
-          ? selected.size > 0
-            ? `Successfully updated ${selected.size} package(s)`
-            : "All packages updated successfully"
-          : "Update completed with errors — check the output below",
-        type: result.success ? "success" : "error",
-      });
-      // Refresh the list
-      const data = await api.get<PackageUpdate[]>("/system/updates");
-      setPackages(Array.isArray(data) ? data : []);
-      setSelected(new Set());
     } catch (e) {
       setMessage({
         text: e instanceof Error ? e.message : "Failed to apply updates",
         type: "error",
       });
-    } finally {
       setApplying(false);
     }
   };
