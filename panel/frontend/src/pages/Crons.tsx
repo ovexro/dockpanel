@@ -189,7 +189,7 @@ export default function Crons() {
 
       {/* Create form */}
       {showForm && (
-        <form onSubmit={handleCreate} className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6 space-y-4 max-w-5xl">
+        <form onSubmit={handleCreate} className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6 space-y-4">
           {/* Preset Templates */}
           <div>
             <label className="block text-sm font-medium text-dark-100 mb-1">Template</label>
