@@ -37,7 +37,7 @@ export default function Pricing() {
                 'Unlimited sites',
                 'Free SSL certificates',
                 'Database management',
-                '34 Docker app templates',
+                '53 Docker app templates',
                 'Scheduled backups & S3',
                 'Web terminal & file manager',
                 'Git deploy & staging',
@@ -52,6 +52,8 @@ export default function Pricing() {
                 'Developer CLI',
                 'Infrastructure as Code (YAML)',
                 'Teams & multi-user',
+                'One-click WordPress / Laravel / Drupal',
+                'Real-time provisioning logs',
                 'Activity audit log',
                 'ARM64 / homelab support',
               ].map((feature) => (
