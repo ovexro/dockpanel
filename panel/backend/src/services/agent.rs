@@ -4,8 +4,21 @@ use hyper::client::conn::http1;
 use hyper::Request;
 use hyper_util::rt::TokioIo;
 use std::fmt;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UnixStream;
+use tokio::sync::Semaphore;
+
+/// Circuit breaker threshold: after this many consecutive failures,
+/// requests fast-fail without attempting a connection.
+const CIRCUIT_BREAKER_THRESHOLD: u32 = 5;
+
+/// Seconds to wait before retrying after circuit opens.
+const CIRCUIT_BREAKER_RESET_SECS: u64 = 30;
+
+/// Maximum concurrent agent connections (prevents FD exhaustion).
+const MAX_CONCURRENT_CONNECTIONS: usize = 20;
 
 #[derive(Debug)]
 pub enum AgentError {
@@ -14,6 +27,7 @@ pub enum AgentError {
     Response(String),
     Status(u16, String),
     Parse(String),
+    CircuitOpen(String),
 }
 
 impl fmt::Display for AgentError {
@@ -24,6 +38,7 @@ impl fmt::Display for AgentError {
             Self::Response(e) => write!(f, "agent response error: {e}"),
             Self::Status(code, msg) => write!(f, "agent returned {code}: {msg}"),
             Self::Parse(e) => write!(f, "agent response parse error: {e}"),
+            Self::CircuitOpen(e) => write!(f, "agent circuit breaker open: {e}"),
         }
     }
 }
@@ -32,11 +47,60 @@ impl fmt::Display for AgentError {
 pub struct AgentClient {
     socket_path: String,
     token: String,
+    /// Limits concurrent connections to prevent FD exhaustion.
+    semaphore: Arc<Semaphore>,
+    /// Number of consecutive connection failures (circuit breaker).
+    consecutive_failures: Arc<AtomicU32>,
+    /// Epoch seconds of last connection failure (for circuit reset).
+    last_failure_time: Arc<AtomicU64>,
 }
 
 impl AgentClient {
     pub fn new(socket_path: String, token: String) -> Self {
-        Self { socket_path, token }
+        Self {
+            socket_path,
+            token,
+            semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS)),
+            consecutive_failures: Arc::new(AtomicU32::new(0)),
+            last_failure_time: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// Check if the circuit breaker allows a request through.
+    fn check_circuit_breaker(&self) -> Result<(), AgentError> {
+        let failures = self.consecutive_failures.load(Ordering::Relaxed);
+        if failures >= CIRCUIT_BREAKER_THRESHOLD {
+            let last_fail = self.last_failure_time.load(Ordering::Relaxed);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+
+            if now - last_fail < CIRCUIT_BREAKER_RESET_SECS {
+                return Err(AgentError::CircuitOpen(format!(
+                    "agent unreachable ({failures} consecutive failures), retry in {}s",
+                    CIRCUIT_BREAKER_RESET_SECS - (now - last_fail)
+                )));
+            }
+            // Reset period elapsed — allow one attempt (half-open)
+            tracing::info!("agent circuit breaker half-open, allowing probe request");
+        }
+        Ok(())
+    }
+
+    /// Record a successful response — reset circuit breaker.
+    fn record_success(&self) {
+        self.consecutive_failures.store(0, Ordering::Relaxed);
+    }
+
+    /// Record a connection failure — increment circuit breaker counter.
+    fn record_failure(&self) {
+        self.consecutive_failures.fetch_add(1, Ordering::Relaxed);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.last_failure_time.store(now, Ordering::Relaxed);
     }
 
     async fn request(
@@ -45,9 +109,28 @@ impl AgentClient {
         path: &str,
         body: Option<serde_json::Value>,
     ) -> Result<serde_json::Value, AgentError> {
-        tokio::time::timeout(Duration::from_secs(60), self.request_inner(method, path, body))
-            .await
-            .map_err(|_| AgentError::Request("agent request timed out after 60s".into()))?
+        // Circuit breaker: fast-fail if agent is known to be down
+        self.check_circuit_breaker()?;
+
+        // Connection semaphore: limit concurrent FDs
+        let _permit = self.semaphore.acquire().await.map_err(|e| {
+            AgentError::Connection(format!("connection semaphore closed: {e}"))
+        })?;
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(60),
+            self.request_inner(method, path, body),
+        )
+        .await
+        .map_err(|_| AgentError::Request("agent request timed out after 60s".into()))?;
+
+        match &result {
+            Ok(_) => self.record_success(),
+            Err(AgentError::Connection(_)) => self.record_failure(),
+            _ => {} // Status/Parse errors mean agent is reachable
+        }
+
+        result
     }
 
     async fn request_inner(

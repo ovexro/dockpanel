@@ -9,6 +9,7 @@ use axum::{
 };
 use serde::Deserialize;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::AppState;
@@ -290,12 +291,21 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, cols: u16, rows:
         }
     }
 
-    // Cleanup: kill child process
+    // Cleanup: kill child process and reap to prevent zombies
     read_task.abort();
     unsafe {
         libc::kill(child_pid as i32, libc::SIGTERM);
-        // Reap zombie
-        libc::waitpid(child_pid as i32, std::ptr::null_mut(), libc::WNOHANG);
+    }
+    // Give process 500ms to exit gracefully after SIGTERM
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    unsafe {
+        let mut status = 0i32;
+        let ret = libc::waitpid(child_pid as i32, &mut status, libc::WNOHANG);
+        if ret == 0 {
+            // Still alive after SIGTERM — force kill and blocking reap
+            libc::kill(child_pid as i32, libc::SIGKILL);
+            libc::waitpid(child_pid as i32, &mut status, 0);
+        }
     }
 }
 

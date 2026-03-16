@@ -171,6 +171,12 @@ async fn run_scan(pool: &PgPool, agent: &AgentClient) {
         "Security scan completed: {total} findings ({critical} critical, {warning} warning, {info} info)"
     );
 
+    // Keep only last 90 days of scans
+    let _ = sqlx::query("DELETE FROM security_findings WHERE scan_id IN (SELECT id FROM security_scans WHERE created_at < NOW() - INTERVAL '90 days')")
+        .execute(pool).await;
+    let _ = sqlx::query("DELETE FROM security_scans WHERE created_at < NOW() - INTERVAL '90 days'")
+        .execute(pool).await;
+
     // Send alerts if critical or warning findings
     if critical > 0 || warning > 0 {
         send_scan_alerts(pool, critical, warning, total).await;

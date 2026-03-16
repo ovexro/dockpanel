@@ -2,13 +2,17 @@ use axum::{
     extract::{Query, State, WebSocketUpgrade},
     extract::ws::{Message, WebSocket},
     response::IntoResponse,
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
 };
 use jsonwebtoken::{decode, DecodingKey, Validation};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use crate::auth::Claims;
 use crate::AppState;
+
+static WS_CONNECTIONS: AtomicU32 = AtomicU32::new(0);
+const MAX_WS_CONNECTIONS: u32 = 50;
 
 #[derive(serde::Deserialize)]
 pub struct WsQuery {
@@ -92,6 +96,13 @@ pub async fn handler(
         }
     }
 
+    // Enforce connection limit
+    let current = WS_CONNECTIONS.fetch_add(1, Ordering::SeqCst);
+    if current >= MAX_WS_CONNECTIONS {
+        WS_CONNECTIONS.fetch_sub(1, Ordering::SeqCst);
+        return (StatusCode::TOO_MANY_REQUESTS, "Too many WebSocket connections").into_response();
+    }
+
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
@@ -133,5 +144,6 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         }
     }
 
+    WS_CONNECTIONS.fetch_sub(1, Ordering::SeqCst);
     tracing::debug!("WebSocket metrics client disconnected");
 }
