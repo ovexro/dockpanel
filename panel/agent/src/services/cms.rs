@@ -8,6 +8,8 @@ const SITE_ROOT: &str = "/var/www";
 async fn run_cmd(program: &str, args: &[&str]) -> Result<String, String> {
     let out = Command::new(program)
         .args(args)
+        .env("HOME", "/root")
+        .env("COMPOSER_HOME", "/root/.composer")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -15,8 +17,10 @@ async fn run_cmd(program: &str, args: &[&str]) -> Result<String, String> {
         .map_err(|e| format!("Failed to execute {program}: {e}"))?;
 
     if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        return Err(stderr.trim().to_string());
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        // Some tools (e.g. Joomla CLI) output errors to stdout
+        return Err(if stderr.is_empty() { stdout } else { stderr });
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
@@ -26,6 +30,8 @@ async fn run_cmd_in(dir: &str, program: &str, args: &[&str]) -> Result<String, S
     let out = Command::new(program)
         .args(args)
         .current_dir(dir)
+        .env("HOME", "/root")
+        .env("COMPOSER_HOME", "/root/.composer")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -33,8 +39,9 @@ async fn run_cmd_in(dir: &str, program: &str, args: &[&str]) -> Result<String, S
         .map_err(|e| format!("Failed to execute {program}: {e}"))?;
 
     if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        return Err(stderr.trim().to_string());
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        return Err(if stderr.is_empty() { stdout } else { stderr });
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
@@ -395,15 +402,21 @@ pub async fn install_codeigniter(
 }
 
 /// Replace or add a KEY=value line in a .env file (Laravel-style: KEY=value).
+/// Quotes values that contain spaces.
 fn replace_env_line(content: &str, key: &str, value: &str) -> String {
     let prefix = format!("{key}=");
+    let quoted = if value.contains(' ') {
+        format!("\"{value}\"")
+    } else {
+        value.to_string()
+    };
     let mut found = false;
     let mut lines: Vec<String> = content
         .lines()
         .map(|line| {
             if line.starts_with(&prefix) || line.starts_with(&format!("# {prefix}")) {
                 found = true;
-                format!("{key}={value}")
+                format!("{key}={quoted}")
             } else {
                 line.to_string()
             }
@@ -411,7 +424,7 @@ fn replace_env_line(content: &str, key: &str, value: &str) -> String {
         .collect();
 
     if !found {
-        lines.push(format!("{key}={value}"));
+        lines.push(format!("{key}={quoted}"));
     }
     let mut result = lines.join("\n");
     if content.ends_with('\n') {
