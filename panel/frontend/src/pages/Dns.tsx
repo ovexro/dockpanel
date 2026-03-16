@@ -244,12 +244,21 @@ export default function Dns() {
           <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">DNS Management</h1>
           <p className="text-sm text-dark-200 font-mono mt-1 hidden sm:block">Manage DNS records via Cloudflare or PowerDNS</p>
         </div>
-        <button
-          onClick={() => setShowAddZone(!showAddZone)}
-          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
-        >
-          {showAddZone ? "Cancel" : "Add Zone"}
-        </button>
+        {showAddZone ? (
+          <button
+            onClick={() => setShowAddZone(false)}
+            className="px-4 py-2 text-dark-300 border border-dark-600 rounded-lg text-sm font-medium hover:text-dark-100 hover:border-dark-400 transition-colors"
+          >
+            Cancel
+          </button>
+        ) : (
+          <button
+            onClick={() => setShowAddZone(true)}
+            className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
+          >
+            Add Zone
+          </button>
+        )}
       </div>
 
       {message.text && (
@@ -301,6 +310,7 @@ export default function Dns() {
                 <div>
                   <label className="block text-xs font-medium text-dark-100 mb-1">Domain</label>
                   <input type="text" value={zoneDomain} onChange={(e) => setZoneDomain(e.target.value)} placeholder="example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
+                  <p className="text-[11px] text-dark-300 mt-1">Your domain name, e.g., example.com</p>
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-dark-100 mb-1">Cloudflare Zone ID</label>
@@ -341,8 +351,14 @@ export default function Dns() {
                 <button
                   onClick={handleAddZone}
                   disabled={savingZone || !zoneDomain || !zoneId || !zoneToken || (authMethod === "key" && !zoneEmail)}
-                  className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+                  className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 flex items-center gap-2"
                 >
+                  {savingZone && (
+                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                  )}
                   {savingZone ? "Verifying..." : "Connect Zone"}
                 </button>
               </div>
@@ -353,6 +369,7 @@ export default function Dns() {
               <div>
                 <label className="block text-xs font-medium text-dark-100 mb-1">Domain</label>
                 <input type="text" value={zoneDomain} onChange={(e) => setZoneDomain(e.target.value)} placeholder="example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
+                <p className="text-[11px] text-dark-300 mt-1">Your domain name, e.g., example.com</p>
               </div>
               <div className="flex items-start gap-2 bg-blue-500/5 border border-blue-500/20 px-3 py-2.5">
                 <svg className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -368,8 +385,14 @@ export default function Dns() {
                 <button
                   onClick={handleAddZone}
                   disabled={savingZone || !zoneDomain}
-                  className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+                  className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 flex items-center gap-2"
                 >
+                  {savingZone && (
+                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                  )}
                   {savingZone ? "Creating..." : "Create Zone"}
                 </button>
               </div>
@@ -422,9 +445,11 @@ export default function Dns() {
         {/* Records Table */}
         <div className="flex-1 min-w-0">
           {!selectedZone ? (
-            <div className="bg-dark-800 rounded-lg border border-dark-500 p-12 text-center">
-              <p className="text-dark-300">{zones.length === 0 ? "Add a zone to get started" : "Select a zone"}</p>
-            </div>
+            !showAddZone && (
+              <div className="bg-dark-800 rounded-lg border border-dark-500 p-12 text-center">
+                <p className="text-dark-300">{zones.length === 0 ? "Add a zone to get started" : "Select a zone"}</p>
+              </div>
+            )
           ) : loadingRecords ? (
             <div className="bg-dark-800 rounded-lg border border-dark-500 p-6 animate-pulse">
               <div className="h-6 bg-dark-700 rounded w-48 mb-4" />
@@ -478,10 +503,12 @@ export default function Dns() {
                     <div>
                       <label className="block text-xs font-medium text-dark-200 mb-1">Name</label>
                       <input type="text" value={recName} onChange={(e) => setRecName(e.target.value)} placeholder="@" className="w-full px-2 py-1.5 border border-dark-500 rounded-md text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+                      <p className="text-[10px] text-dark-300 mt-0.5">Subdomain or @ for root</p>
                     </div>
                     <div className="col-span-2 sm:col-span-1">
                       <label className="block text-xs font-medium text-dark-200 mb-1">Content</label>
                       <input type="text" value={recContent} onChange={(e) => setRecContent(e.target.value)} placeholder={recType === "A" ? "1.2.3.4" : recType === "CNAME" ? "target.com" : ""} className="w-full px-2 py-1.5 border border-dark-500 rounded-md text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+                      <p className="text-[10px] text-dark-300 mt-0.5">IP address or target</p>
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-dark-200 mb-1">TTL</label>
@@ -510,13 +537,19 @@ export default function Dns() {
                     <button
                       onClick={handleSaveRecord}
                       disabled={savingRecord || !recName || !recContent}
-                      className="px-4 py-1.5 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+                      className="px-4 py-1.5 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 flex items-center gap-2"
                     >
+                      {savingRecord && (
+                        <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                      )}
                       {savingRecord ? "Saving..." : editingRecord ? "Update" : "Create"}
                     </button>
                     <button
                       onClick={() => setShowRecordForm(false)}
-                      className="px-4 py-1.5 bg-dark-600 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-500"
+                      className="px-4 py-1.5 text-dark-300 border border-dark-600 rounded-lg text-sm font-medium hover:text-dark-100 hover:border-dark-400"
                     >
                       Cancel
                     </button>

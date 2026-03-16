@@ -278,9 +278,15 @@ export default function Mail() {
           <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Mail</h1>
           <p className="text-sm text-dark-200 font-mono mt-1 hidden sm:block">Manage email domains, mailboxes, and aliases</p>
         </div>
-        <button onClick={() => setShowAddDomain(!showAddDomain)} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors">
-          {showAddDomain ? "Cancel" : "Add Domain"}
-        </button>
+        {showAddDomain ? (
+          <button onClick={() => setShowAddDomain(false)} className="px-4 py-2 text-dark-300 border border-dark-600 rounded-lg text-sm font-medium hover:text-dark-100 hover:border-dark-400 transition-colors">
+            Cancel
+          </button>
+        ) : (
+          <button onClick={() => setShowAddDomain(true)} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors">
+            Add Domain
+          </button>
+        )}
       </div>
 
       {message.text && (
@@ -389,10 +395,17 @@ useradd -g 5000 -u 5000 -d /var/vmail -s /usr/sbin/nologin -m vmail`}</pre>
           <div>
             <label className="block text-xs font-medium text-dark-100 mb-1">Domain</label>
             <input type="text" value={newDomain} onChange={(e) => setNewDomain(e.target.value)} placeholder="example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+            <p className="text-[11px] text-dark-300 mt-1">Your domain name, e.g., example.com</p>
           </div>
           <p className="text-xs text-dark-300">DKIM keys will be generated automatically. You'll need to add DNS records after creation.</p>
           <div className="flex justify-end">
-            <button onClick={handleAddDomain} disabled={savingDomain || !newDomain} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50">
+            <button onClick={handleAddDomain} disabled={savingDomain || !newDomain} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 flex items-center gap-2">
+              {savingDomain && (
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+              )}
               {savingDomain ? "Creating..." : "Add Domain"}
             </button>
           </div>
@@ -427,10 +440,12 @@ useradd -g 5000 -u 5000 -d /var/vmail -s /usr/sbin/nologin -m vmail`}</pre>
         {/* Content */}
         <div className="flex-1 min-w-0">
           {!selectedDomain ? (
-            <div className="bg-dark-800 border border-dark-500 p-12 text-center">
-              <svg className="w-12 h-12 text-dark-300 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75" /></svg>
-              <p className="text-dark-300">{domains.length === 0 ? "Add a mail domain to get started" : "Select a domain"}</p>
-            </div>
+            !showAddDomain && (
+              <div className="bg-dark-800 border border-dark-500 p-12 text-center">
+                <svg className="w-12 h-12 text-dark-300 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75" /></svg>
+                <p className="text-dark-300">{domains.length === 0 ? "Add a mail domain to get started" : "Select a domain"}</p>
+              </div>
+            )
           ) : (
             <div className="bg-dark-800 border border-dark-500">
               {/* Domain header + tabs */}
@@ -452,9 +467,15 @@ useradd -g 5000 -u 5000 -d /var/vmail -s /usr/sbin/nologin -m vmail`}</pre>
                   <div>
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="text-xs text-dark-300 uppercase tracking-widest">Mailboxes</h3>
-                      <button onClick={() => setShowAddAccount(!showAddAccount)} className="px-3 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600">
-                        {showAddAccount ? "Cancel" : "Add Mailbox"}
-                      </button>
+                      {showAddAccount ? (
+                        <button onClick={() => setShowAddAccount(false)} className="px-3 py-1.5 text-dark-300 border border-dark-600 rounded-lg text-xs font-medium hover:text-dark-100 hover:border-dark-400">
+                          Cancel
+                        </button>
+                      ) : (
+                        <button onClick={() => setShowAddAccount(true)} className="px-3 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600">
+                          Add Mailbox
+                        </button>
+                      )}
                     </div>
 
                     {showAddAccount && (
@@ -466,6 +487,7 @@ useradd -g 5000 -u 5000 -d /var/vmail -s /usr/sbin/nologin -m vmail`}</pre>
                               <input type="text" value={accEmail} onChange={(e) => setAccEmail(e.target.value)} placeholder="user" className="flex-1 px-3 py-1.5 border border-dark-500 rounded-l-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
                               <span className="px-3 py-1.5 bg-dark-700 border border-l-0 border-dark-500 rounded-r-lg text-sm text-dark-300">@{selectedDomain.domain}</span>
                             </div>
+                            <p className="text-[10px] text-dark-300 mt-0.5">Full email address, e.g., user@example.com</p>
                           </div>
                           <div>
                             <label className="block text-xs text-dark-200 mb-1">Password</label>
@@ -483,10 +505,17 @@ useradd -g 5000 -u 5000 -d /var/vmail -s /usr/sbin/nologin -m vmail`}</pre>
                                 {parseInt(accQuota) >= 1024 ? `${(parseInt(accQuota) / 1024).toFixed(1)} GB` : `${accQuota} MB`}
                               </span>
                             </div>
+                            <p className="text-[10px] text-dark-300 mt-0.5">Storage limit in MB, 0 for unlimited</p>
                           </div>
                         </div>
                         <div className="flex justify-end">
-                          <button onClick={handleAddAccount} disabled={savingAccount || !accEmail || !accPassword} className="px-4 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600 disabled:opacity-50">
+                          <button onClick={handleAddAccount} disabled={savingAccount || !accEmail || !accPassword} className="px-4 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600 disabled:opacity-50 flex items-center gap-2">
+                            {savingAccount && (
+                              <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                              </svg>
+                            )}
                             {savingAccount ? "Creating..." : "Create Mailbox"}
                           </button>
                         </div>
@@ -558,7 +587,7 @@ useradd -g 5000 -u 5000 -d /var/vmail -s /usr/sbin/nologin -m vmail`}</pre>
                             </div>
                           </div>
                           <div className="flex justify-end gap-2 mt-4">
-                            <button onClick={() => setEditAccount(null)} className="px-4 py-1.5 text-dark-300 text-sm">Cancel</button>
+                            <button onClick={() => setEditAccount(null)} className="px-4 py-1.5 text-dark-300 border border-dark-600 rounded-lg text-sm font-medium hover:text-dark-100 hover:border-dark-400">Cancel</button>
                             <button onClick={handleUpdateAccount} className="px-4 py-1.5 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600">Save</button>
                           </div>
                         </div>
@@ -572,9 +601,15 @@ useradd -g 5000 -u 5000 -d /var/vmail -s /usr/sbin/nologin -m vmail`}</pre>
                   <div>
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="text-xs text-dark-300 uppercase tracking-widest">Aliases & Forwarding</h3>
-                      <button onClick={() => setShowAddAlias(!showAddAlias)} className="px-3 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600">
-                        {showAddAlias ? "Cancel" : "Add Alias"}
-                      </button>
+                      {showAddAlias ? (
+                        <button onClick={() => setShowAddAlias(false)} className="px-3 py-1.5 text-dark-300 border border-dark-600 rounded-lg text-xs font-medium hover:text-dark-100 hover:border-dark-400">
+                          Cancel
+                        </button>
+                      ) : (
+                        <button onClick={() => setShowAddAlias(true)} className="px-3 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600">
+                          Add Alias
+                        </button>
+                      )}
                     </div>
 
                     {showAddAlias && (
@@ -583,14 +618,22 @@ useradd -g 5000 -u 5000 -d /var/vmail -s /usr/sbin/nologin -m vmail`}</pre>
                           <div>
                             <label className="block text-xs text-dark-200 mb-1">From</label>
                             <input type="text" value={aliasSource} onChange={(e) => setAliasSource(e.target.value)} placeholder={`alias@${selectedDomain.domain}`} className="w-full px-3 py-1.5 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+                            <p className="text-[10px] text-dark-300 mt-0.5">Source address that will be redirected</p>
                           </div>
                           <div>
                             <label className="block text-xs text-dark-200 mb-1">Deliver To</label>
                             <input type="email" value={aliasDest} onChange={(e) => setAliasDest(e.target.value)} placeholder="user@example.com" className="w-full px-3 py-1.5 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+                            <p className="text-[10px] text-dark-300 mt-0.5">Destination mailbox for forwarded mail</p>
                           </div>
                         </div>
                         <div className="flex justify-end">
-                          <button onClick={handleAddAlias} disabled={savingAlias || !aliasSource || !aliasDest} className="px-4 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600 disabled:opacity-50">
+                          <button onClick={handleAddAlias} disabled={savingAlias || !aliasSource || !aliasDest} className="px-4 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600 disabled:opacity-50 flex items-center gap-2">
+                            {savingAlias && (
+                              <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                              </svg>
+                            )}
                             {savingAlias ? "Creating..." : "Create Alias"}
                           </button>
                         </div>

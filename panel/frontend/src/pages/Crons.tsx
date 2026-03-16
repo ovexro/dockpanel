@@ -189,7 +189,7 @@ export default function Crons() {
 
       {/* Create form */}
       {showForm && (
-        <form onSubmit={handleCreate} className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6 space-y-4">
+        <form onSubmit={handleCreate} className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6 space-y-4 max-w-3xl">
           {/* Preset Templates */}
           <div>
             <label className="block text-sm font-medium text-dark-100 mb-1">Template</label>
@@ -241,6 +241,7 @@ export default function Crons() {
               placeholder="/usr/bin/php /var/www/example.com/artisan schedule:run"
               className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm font-mono"
             />
+            <p className="text-xs text-dark-300 mt-1">Shell command to execute</p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
@@ -268,16 +269,26 @@ export default function Crons() {
                 placeholder="* * * * *"
                 className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm font-mono"
               />
-              <p className="text-xs text-dark-300 mt-1">minute hour day month weekday</p>
+              <p className="text-xs text-dark-300 mt-1">Cron expression, e.g., */5 * * * * for every 5 minutes</p>
             </div>
           </div>
-          <button
-            type="submit"
-            disabled={submitting}
-            className="px-6 py-2.5 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
-          >
-            {submitting ? "Creating..." : "Create Cron Job"}
-          </button>
+          <div className="flex gap-3">
+            <button
+              type="submit"
+              disabled={submitting}
+              className="flex items-center gap-2 px-6 py-2.5 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
+            >
+              {submitting && <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+              {submitting ? "Adding..." : "Create Cron Job"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowForm(false)}
+              className="px-4 py-2 text-sm text-dark-300 border border-dark-600 rounded-lg hover:text-dark-100 hover:border-dark-400 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
         </form>
       )}
 
@@ -287,7 +298,7 @@ export default function Crons() {
           <div className="flex items-center justify-center py-12">
             <div className="w-6 h-6 border-2 border-dark-600 border-t-rust-500 rounded-full animate-spin" />
           </div>
-        ) : crons.length === 0 ? (
+        ) : !showForm && crons.length === 0 ? (
           <div className="p-12 text-center">
             <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
