@@ -1,6 +1,4 @@
 import { useState, useEffect, useRef } from "react";
-import { Navigate } from "react-router-dom";
-import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 import { timeAgo } from "../utils/format";
 
@@ -59,8 +57,7 @@ function levelBadge(level: string): { bg: string; text: string } {
   }
 }
 
-export default function SystemLogs() {
-  const { user } = useAuth();
+export default function SystemLogsContent() {
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [counts, setCounts] = useState<LogCounts>({ error: 0, warning: 0, info: 0 });
   const [loading, setLoading] = useState(true);
@@ -125,23 +122,13 @@ export default function SystemLogs() {
     return () => clearInterval(refreshTimer.current);
   }, [levelFilter, sourceFilter, timeRange]);
 
-  if (user?.role !== "admin") return <Navigate to="/" replace />;
-
   const handleLoadMore = () => {
     setLoadingMore(true);
     loadEntries(entries.length, true);
   };
 
   return (
-    <div className="p-6 lg:p-8 animate-fade-up">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
-        <div>
-          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">System Logs</h1>
-          <p className="text-sm text-dark-200 font-mono mt-1">Backend errors, warnings, and events</p>
-        </div>
-      </div>
-
+    <div className="px-6 pb-6 animate-fade-up">
       {/* Summary Cards */}
       <div className="grid grid-cols-3 gap-4 mb-6">
         <div className="bg-dark-800 rounded-lg border border-dark-500 px-4 py-3">

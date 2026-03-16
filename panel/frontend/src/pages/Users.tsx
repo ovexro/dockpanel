@@ -95,7 +95,7 @@ export default function Users() {
 
   if (error) {
     return (
-      <div className="p-6 lg:p-8 animate-fade-up">
+      <div>
         <div className="bg-red-500/10 text-danger-400 px-4 py-3 rounded-lg border border-red-500/20">
           {error}
         </div>
@@ -104,14 +104,11 @@ export default function Users() {
   }
 
   return (
-    <div className="p-6 lg:p-8">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
-        <div>
-          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Users</h1>
-          <p className="text-sm text-dark-200 font-mono mt-1">
-            Manage user accounts and permissions
-          </p>
-        </div>
+    <div>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
+        <p className="text-sm text-dark-200 font-mono">
+          Manage user accounts and permissions
+        </p>
         <div className="flex items-center gap-3">
           {users.length >= 2 && (
             <input

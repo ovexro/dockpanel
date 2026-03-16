@@ -1,5 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { Navigate } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
+import SystemLogsContent from "./SystemLogs";
+import AuditLogContent from "./Activity";
 
 interface Site {
   id: string;
@@ -19,7 +23,7 @@ const SITE_LOG_TYPES = [
   { value: "error", label: "Error Log" },
 ];
 
-export default function Logs() {
+function SiteLogsContent() {
   const [lines, setLines] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [logType, setLogType] = useState("nginx_access");
@@ -252,8 +256,7 @@ export default function Logs() {
       {/* Header */}
       <div className="px-4 sm:px-6 py-4 border-b border-dark-500 bg-dark-800 shrink-0">
         <div className="flex items-center justify-between mb-3 gap-3">
-          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest shrink-0">Log Viewer</h1>
-          <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap justify-end">
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap justify-end ml-auto">
             {/* Mode toggle */}
             <div className="flex bg-dark-700 rounded-lg p-0.5">
               <button
@@ -449,6 +452,42 @@ export default function Logs() {
             </div>
           ))
         )}
+      </div>
+    </div>
+  );
+}
+
+type LogTab = "site" | "system" | "audit";
+
+export default function Logs() {
+  const { user } = useAuth();
+  const [tab, setTab] = useState<LogTab>("site");
+
+  if (!user) return <Navigate to="/login" replace />;
+  if (user.role !== "admin") return <Navigate to="/" replace />;
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Header */}
+      <div className="px-6 pt-6 pb-0">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 pb-4 border-b border-dark-600">
+          <div>
+            <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Logs</h1>
+            <p className="text-sm text-dark-200 font-mono mt-1">Site logs, system events, and audit trail</p>
+          </div>
+        </div>
+        {/* Tabs */}
+        <div className="flex gap-6 mb-6 text-sm font-mono">
+          <button onClick={() => setTab("site")} className={tab === "site" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}>Site Logs</button>
+          <button onClick={() => setTab("system")} className={tab === "system" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}>System Logs</button>
+          <button onClick={() => setTab("audit")} className={tab === "audit" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}>Audit Log</button>
+        </div>
+      </div>
+      {/* Content */}
+      <div className="flex-1 overflow-auto">
+        {tab === "site" && <SiteLogsContent />}
+        {tab === "system" && <SystemLogsContent />}
+        {tab === "audit" && <AuditLogContent />}
       </div>
     </div>
   );
