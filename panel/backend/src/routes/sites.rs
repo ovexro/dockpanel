@@ -704,7 +704,7 @@ pub async fn update_limits(
     Ok(Json(updated))
 }
 
-/// DELETE /api/sites/{id} — Delete a site and its nginx config.
+/// DELETE /api/sites/{id} — Delete a site and all associated resources.
 pub async fn remove(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
@@ -720,10 +720,27 @@ pub async fn remove(
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
+    // Remove database containers before CASCADE deletes the records
+    let databases: Vec<(String,)> = sqlx::query_as(
+        "SELECT container_id FROM databases WHERE site_id = $1 AND container_id IS NOT NULL AND container_id != ''",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    for (container_id,) in &databases {
+        if let Err(e) = state.agent.delete(&format!("/databases/{container_id}")).await {
+            tracing::warn!("Failed to remove database container {container_id}: {e}");
+        }
+    }
+
+    // Remove nginx config + SSL + PHP pool + site files + logs
     let agent_path = format!("/nginx/sites/{}", site.domain);
     state.agent.delete(&agent_path).await
         .map_err(|e| agent_error("Site removal", e))?;
 
+    // Delete from DB (CASCADE removes databases, backups, crons, etc.)
     sqlx::query("DELETE FROM sites WHERE id = $1")
         .bind(id)
         .execute(&state.db)
