@@ -243,7 +243,7 @@ export default function Crons() {
             />
             <p className="text-xs text-dark-300 mt-1">Shell command to execute</p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label htmlFor="cron-preset" className="block text-sm font-medium text-dark-100 mb-1">Schedule Preset</label>
               <select

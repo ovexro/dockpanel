@@ -480,7 +480,7 @@ useradd -g 5000 -u 5000 -d /var/vmail -s /usr/sbin/nologin -m vmail`}</pre>
 
                     {showAddAccount && (
                       <div className="bg-dark-900 border border-dark-500 p-4 mb-4 space-y-3">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           <div>
                             <label className="block text-xs text-dark-200 mb-1">Email</label>
                             <div className="flex">
@@ -614,7 +614,7 @@ useradd -g 5000 -u 5000 -d /var/vmail -s /usr/sbin/nologin -m vmail`}</pre>
 
                     {showAddAlias && (
                       <div className="bg-dark-900 border border-dark-500 p-4 mb-4 space-y-3">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           <div>
                             <label className="block text-xs text-dark-200 mb-1">From</label>
                             <input type="text" value={aliasSource} onChange={(e) => setAliasSource(e.target.value)} placeholder={`alias@${selectedDomain.domain}`} className="w-full px-3 py-1.5 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
