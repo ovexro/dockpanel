@@ -26,6 +26,7 @@ bollard = "0.18"
 tokio-stream = "0.1"
 jsonwebtoken = "9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rustls = "0.23"
 sha2 = "0.10"
 hex = "0.4"
 base64 = "0.22"

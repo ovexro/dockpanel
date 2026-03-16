@@ -14,7 +14,18 @@ struct CreateDbRequest {
     name: String,
     engine: String,
     password: String,
-    port: u16,
+    port: Option<u16>,
+}
+
+/// Find an available port for a database container (scans 3307-3399).
+fn find_free_port(engine: &str) -> Result<u16, String> {
+    let base = if engine == "postgres" { 5433 } else { 3307 };
+    for port in base..(base + 100) {
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return Ok(port);
+        }
+    }
+    Err("No free port available for database".into())
 }
 
 /// POST /databases — Create a new database container.
@@ -35,7 +46,17 @@ async fn create(
         ));
     }
 
-    let db = database::create_database(&body.name, &body.engine, &body.password, body.port)
+    let port = match body.port {
+        Some(p) => p,
+        None => find_free_port(&body.engine).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e })),
+            )
+        })?,
+    };
+
+    let db = database::create_database(&body.name, &body.engine, &body.password, port)
         .await
         .map_err(|e| {
             (

@@ -182,6 +182,11 @@ pub async fn install(
     ensure_cli().await?;
     let path = site_path(domain);
 
+    // Ensure document root exists before wp-cli tries to write
+    tokio::fs::create_dir_all(&path)
+        .await
+        .map_err(|e| format!("Failed to create site directory {path}: {e}"))?;
+
     // Download WordPress core files
     wp(domain, &["core", "download", "--force"]).await?;
 
