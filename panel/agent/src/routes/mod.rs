@@ -1,4 +1,5 @@
 pub mod backups;
+pub mod cms;
 pub mod crons;
 pub mod database;
 pub mod deploy;

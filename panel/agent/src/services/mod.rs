@@ -1,4 +1,5 @@
 pub mod backups;
+pub mod cms;
 pub mod compose;
 pub mod deploy;
 pub mod diagnostics;
