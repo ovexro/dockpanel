@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { api } from "../api";
+import ProvisionLog from "../components/ProvisionLog";
 
 interface HealthStatus {
   database: boolean;
@@ -1047,26 +1048,33 @@ curl -s -H "X-API-Key: your-secret-key-here" \\
 function ServiceInstallers() {
   const [status, setStatus] = useState<Record<string, { installed?: boolean; running?: boolean; active?: boolean; version?: string | null }> | null>(null);
   const [installing, setInstalling] = useState<string | null>(null);
+  const [installId, setInstallId] = useState<string | null>(null);
   const [msg, setMsg] = useState({ text: "", type: "" });
   const [showGuide, setShowGuide] = useState(false);
 
-  useEffect(() => {
+  const refreshStatus = () => {
     api.get<Record<string, unknown>>("/services/install-status")
       .then((d) => setStatus(d as any))
       .catch(() => {});
-  }, []);
+  };
 
-  const install = async (service: string, label: string) => {
+  useEffect(refreshStatus, []);
+
+  const install = async (service: string, _label: string) => {
     setInstalling(service);
+    setInstallId(null);
     setMsg({ text: "", type: "" });
     try {
-      await api.post(`/services/install/${service}`, {});
-      setMsg({ text: `${label} installed successfully`, type: "success" });
-      const d = await api.get<Record<string, unknown>>("/services/install-status");
-      setStatus(d as any);
+      const result = await api.post<{ install_id?: string }>(`/services/install/${service}`, {});
+      if (result.install_id) {
+        setInstallId(result.install_id);
+      } else {
+        setMsg({ text: `${_label} installed successfully`, type: "success" });
+        refreshStatus();
+        setInstalling(null);
+      }
     } catch (e) {
       setMsg({ text: e instanceof Error ? e.message : "Installation failed", type: "error" });
-    } finally {
       setInstalling(null);
     }
   };
@@ -1086,6 +1094,17 @@ function ServiceInstallers() {
         <p className="text-xs text-dark-200 mt-0.5">One-click install for common server software</p>
       </div>
       <div className="p-5 space-y-4">
+        {installId && (
+          <ProvisionLog
+            sseUrl={`/api/services/install/${installId}/log`}
+            onComplete={() => {
+              setInstallId(null);
+              setInstalling(null);
+              refreshStatus();
+            }}
+          />
+        )}
+
         {msg.text && (
           <div className={`px-4 py-2 rounded-lg text-sm border ${msg.type === "success" ? "bg-rust-500/10 text-rust-400 border-rust-500/20" : "bg-red-500/10 text-danger-400 border-red-500/20"}`}>
             {msg.text}

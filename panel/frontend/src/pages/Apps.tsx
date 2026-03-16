@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
 import { api } from "../api";
+import ProvisionLog from "../components/ProvisionLog";
 
 interface EnvVar {
   name: string;
@@ -260,6 +261,7 @@ export default function Apps() {
   const [apps, setApps] = useState<DeployedApp[]>([]);
   const [loading, setLoading] = useState(true);
   const [deploying, setDeploying] = useState(false);
+  const [deployId, setDeployId] = useState<string | null>(null);
   const [selected, setSelected] = useState<AppTemplate | null>(null);
   const [appName, setAppName] = useState("");
   const [appPort, setAppPort] = useState(0);
@@ -323,7 +325,7 @@ export default function Apps() {
     setDeploying(true);
     setMessage({ text: "", type: "" });
     try {
-      await api.post("/apps/deploy", {
+      const result = await api.post<{ deploy_id?: string }>("/apps/deploy", {
         template_id: selected.id,
         name: appName,
         port: appPort,
@@ -334,17 +336,21 @@ export default function Apps() {
         ...(cpuPercent ? { cpu_percent: parseInt(cpuPercent) } : {}),
       });
       setSelected(null);
-      setMessage({
-        text: `${selected.name} deployed successfully${appDomain ? ` → ${appDomain}` : ""}${sslEmail ? " (with SSL)" : ""}`,
-        type: "success",
-      });
-      loadApps();
+      if (result.deploy_id) {
+        setDeployId(result.deploy_id);
+      } else {
+        setMessage({
+          text: `${selected.name} deployed successfully`,
+          type: "success",
+        });
+        loadApps();
+        setDeploying(false);
+      }
     } catch (e) {
       setMessage({
         text: e instanceof Error ? e.message : "Deploy failed",
         type: "error",
       });
-    } finally {
       setDeploying(false);
     }
   };
@@ -528,6 +534,18 @@ export default function Apps() {
           Import Compose
         </button>
       </div>
+
+      {/* Deploy provisioning log */}
+      {deployId && (
+        <ProvisionLog
+          sseUrl={`/api/apps/deploy/${deployId}/log`}
+          onComplete={() => {
+            setDeployId(null);
+            setDeploying(false);
+            loadApps();
+          }}
+        />
+      )}
 
       {message.text && (
         <div

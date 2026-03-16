@@ -8,16 +8,20 @@ interface ProvisionStep {
 }
 
 interface Props {
-  siteId: string;
+  siteId?: string;
+  sseUrl?: string;
   onComplete?: () => void;
 }
 
-export default function ProvisionLog({ siteId, onComplete }: Props) {
+export default function ProvisionLog({ siteId, sseUrl, onComplete }: Props) {
   const [steps, setSteps] = useState<ProvisionStep[]>([]);
   const [done, setDone] = useState(false);
 
+  const url = sseUrl || (siteId ? `/api/sites/${siteId}/provision-log` : "");
+
   useEffect(() => {
-    const es = new EventSource(`/api/sites/${siteId}/provision-log`);
+    if (!url) return;
+    const es = new EventSource(url);
 
     es.onmessage = (event) => {
       try {
@@ -43,15 +47,14 @@ export default function ProvisionLog({ siteId, onComplete }: Props) {
 
     es.onerror = () => {
       es.close();
-      // If SSE fails (404 = no provisioning), just complete
-      if (steps.length === 0) {
-        setDone(true);
-        onComplete?.();
-      }
+      setSteps((prev) => {
+        if (prev.length === 0) { setDone(true); onComplete?.(); }
+        return prev;
+      });
     };
 
     return () => es.close();
-  }, [siteId]);
+  }, [url]);
 
   // Don't render the "complete" pseudo-step
   const visibleSteps = steps.filter((s) => s.step !== "complete");
