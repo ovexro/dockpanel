@@ -5,11 +5,17 @@ use crate::services::agent::AgentClient;
 use crate::services::notifications;
 
 /// Background task: runs weekly security scans automatically.
-pub async fn run(pool: PgPool, agent: AgentClient) {
+pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
     tracing::info!("Security scanner background task started (weekly)");
 
-    // Initial delay: 1 hour after startup
-    tokio::time::sleep(Duration::from_secs(3600)).await;
+    // Initial delay: 1 hour after startup (respects shutdown)
+    tokio::select! {
+        _ = tokio::time::sleep(Duration::from_secs(3600)) => {}
+        _ = shutdown_rx.recv() => {
+            tracing::info!("Security scanner shutting down gracefully (during initial delay)");
+            return;
+        }
+    }
 
     loop {
         // Check if a scan was done in the last 7 days
@@ -28,8 +34,14 @@ pub async fn run(pool: PgPool, agent: AgentClient) {
             run_scan(&pool, &agent).await;
         }
 
-        // Check every 6 hours if a weekly scan is due
-        tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
+        // Check every 6 hours if a weekly scan is due (respects shutdown)
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(6 * 3600)) => {}
+            _ = shutdown_rx.recv() => {
+                tracing::info!("Security scanner shutting down gracefully");
+                return;
+            }
+        }
     }
 }
 

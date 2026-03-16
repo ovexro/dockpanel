@@ -6,33 +6,77 @@ use crate::services::agent::AgentClient;
 use crate::services::notifications;
 
 /// Background task: checks all alert conditions every 60 seconds.
-pub async fn run(pool: PgPool, agent: AgentClient) {
+pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
     tracing::info!("Alert engine started");
 
-    // Initial delay
-    tokio::time::sleep(Duration::from_secs(30)).await;
+    // Initial delay (respects shutdown)
+    tokio::select! {
+        _ = tokio::time::sleep(Duration::from_secs(30)) => {}
+        _ = shutdown_rx.recv() => {
+            tracing::info!("Alert engine shutting down gracefully (during initial delay)");
+            return;
+        }
+    }
 
+    let mut interval = tokio::time::interval(Duration::from_secs(60));
     let mut tick_count: u64 = 0;
     loop {
-        tokio::time::sleep(Duration::from_secs(60)).await;
-        tick_count += 1;
+        tokio::select! {
+            _ = interval.tick() => {
+                tick_count += 1;
 
-        check_resource_thresholds(&pool).await;
-        check_server_offline(&pool).await;
-        check_ssl_expiry(&pool).await;
+                check_resource_thresholds(&pool).await;
+                check_server_offline(&pool).await;
+                check_ssl_expiry(&pool).await;
 
-        // Service health every 2 minutes (every other tick)
-        if tick_count % 2 == 0 {
-            check_service_health(&pool, &agent).await;
+                // Service health every 2 minutes (every other tick)
+                if tick_count % 2 == 0 {
+                    check_service_health(&pool, &agent).await;
+                }
+
+                // Purge old resolved alerts (keep 30 days) — every hour
+                if tick_count % 60 == 0 {
+                    let _ = sqlx::query(
+                        "DELETE FROM alerts WHERE status = 'resolved' AND resolved_at < NOW() - INTERVAL '30 days'",
+                    )
+                    .execute(&pool)
+                    .await;
+                }
+            }
+            _ = shutdown_rx.recv() => {
+                tracing::info!("Alert engine shutting down gracefully");
+                break;
+            }
         }
+    }
+}
 
-        // Purge old resolved alerts (keep 30 days) — every hour
-        if tick_count % 60 == 0 {
-            let _ = sqlx::query(
-                "DELETE FROM alerts WHERE status = 'resolved' AND resolved_at < NOW() - INTERVAL '30 days'",
-            )
-            .execute(&pool)
-            .await;
+// ─── Alert Fire with Retry ──────────────────────────────────────────────
+
+/// Fire an alert with retry (2 attempts, 3s delay between).
+async fn fire_alert_with_retry(
+    pool: &PgPool,
+    user_id: Uuid,
+    server_id: Option<Uuid>,
+    site_id: Option<Uuid>,
+    alert_type: &str,
+    severity: &str,
+    title: &str,
+    message: &str,
+) {
+    for attempt in 0..2 {
+        match notifications::try_fire_alert(
+            pool, user_id, server_id, site_id, alert_type, severity, title, message,
+        )
+        .await
+        {
+            Ok(_) => return,
+            Err(e) => {
+                tracing::warn!("Alert fire attempt {} failed: {}", attempt + 1, e);
+                if attempt < 1 {
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                }
+            }
         }
     }
 }
@@ -188,7 +232,7 @@ async fn check_threshold(
                 "warning"
             };
 
-            notifications::fire_alert(
+            fire_alert_with_retry(
                 pool,
                 server.user_id,
                 Some(server.id),
@@ -293,7 +337,7 @@ async fn check_server_offline(pool: &PgPool) {
         .execute(pool)
         .await;
 
-        notifications::fire_alert(
+        fire_alert_with_retry(
             pool,
             *user_id,
             Some(*server_id),
@@ -449,7 +493,7 @@ async fn fire_ssl_alert(
         )
     };
 
-    notifications::fire_alert(
+    fire_alert_with_retry(
         pool, user_id, None, Some(site_id), "ssl_expiry", severity, &title, &message,
     )
     .await;
@@ -537,7 +581,7 @@ async fn check_service_health(pool: &PgPool, agent: &AgentClient) {
                 .execute(pool)
                 .await;
 
-                notifications::fire_alert(
+                fire_alert_with_retry(
                     pool,
                     user_id,
                     Some(server_id),

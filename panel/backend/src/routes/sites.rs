@@ -141,7 +141,10 @@ pub async fn create(
         return Err(err(StatusCode::CONFLICT, "Domain already exists"));
     }
 
-    // Insert site with status "creating"
+    // Insert site with status "creating" inside a transaction
+    let mut tx = state.db.begin().await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Transaction start failed: {e}")))?;
+
     let site: Site = sqlx::query_as(
         "INSERT INTO sites (user_id, domain, runtime, status, proxy_port, php_version, php_preset) \
          VALUES ($1, $2, $3, 'creating', $4, $5, $6) RETURNING *",
@@ -152,15 +155,15 @@ pub async fn create(
     .bind(body.proxy_port)
     .bind(&body.php_version)
     .bind(body.php_preset.as_deref().unwrap_or("generic"))
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     // Create provisioning log channel
-    let (tx, _) = broadcast::channel::<ProvisionStep>(64);
+    let (broadcast_tx, _) = broadcast::channel::<ProvisionStep>(64);
     {
         let mut logs = state.provision_logs.lock().unwrap();
-        logs.insert(site.id, (Vec::new(), tx, Instant::now()));
+        logs.insert(site.id, (Vec::new(), broadcast_tx, Instant::now()));
     }
     let logs = state.provision_logs.clone();
     let site_id = site.id;
@@ -187,6 +190,11 @@ pub async fn create(
     match state.agent.put(&agent_path, agent_body).await {
         Ok(_) => {
             emit_step(&logs, site_id, "nginx", "Configuring web server", "done", None);
+
+            // Agent succeeded — commit the transaction so the site record is persisted
+            // (background tasks like monitors, backups, SSL need the site to exist)
+            tx.commit().await
+                .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Transaction commit failed: {e}")))?;
 
             // Update status to active
             sqlx::query(
@@ -539,19 +547,16 @@ pub async fn create(
             Ok((StatusCode::CREATED, Json(updated)))
         }
         Err(e) => {
-            // Update status to error
+            // Agent call failed — roll back the transaction (INSERT is undone)
             tracing::error!("Agent error creating site {}: {e}", body.domain);
+            // tx is dropped here, automatically rolling back the INSERT
+            drop(tx);
+
             emit_step(&logs, site_id, "nginx", "Configuring web server", "error",
                 Some(format!("Agent error: {e}")));
             emit_step(&logs, site_id, "complete", "Provisioning failed", "error", None);
 
-            sqlx::query("UPDATE sites SET status = 'error', updated_at = NOW() WHERE id = $1")
-                .bind(site.id)
-                .execute(&state.db)
-                .await
-                .ok();
-
-            // Clean up after delay
+            // Clean up provision log after delay
             let cleanup_logs = logs.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_secs(30)).await;

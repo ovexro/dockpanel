@@ -10,7 +10,7 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
@@ -58,6 +58,9 @@ async fn main() {
     let connect_opts = PgConnectOptions::from_str(&config.database_url)
         .expect("Invalid DATABASE_URL");
 
+    const DB_MAX_RETRIES: u32 = 5;
+    const DB_RETRY_DELAY: Duration = Duration::from_secs(3);
+
     let mut retries = 0u32;
     let db = loop {
         match PgPoolOptions::new()
@@ -77,14 +80,17 @@ async fn main() {
             Ok(pool) => break pool,
             Err(e) => {
                 retries += 1;
-                if retries >= 30 {
+                if retries >= DB_MAX_RETRIES {
                     tracing::error!(
                         "Failed to connect to database after {retries} attempts: {e}"
                     );
-                    std::process::exit(1);
+                    return;
                 }
-                tracing::warn!("Database not ready ({retries}/30): {e}, retrying in 2s...");
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                tracing::warn!(
+                    "Database not ready (attempt {retries}/{DB_MAX_RETRIES}): {e}, retrying in {}s...",
+                    DB_RETRY_DELAY.as_secs()
+                );
+                tokio::time::sleep(DB_RETRY_DELAY).await;
             }
         }
     };
@@ -132,49 +138,86 @@ async fn main() {
         provision_logs: Arc::new(Mutex::new(HashMap::new())),
     };
 
+    // Shutdown broadcast channel — all background services listen for this signal
+    let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
+
     // Supervised background task spawner: monitors JoinHandle, auto-restarts on panic
-    fn spawn_supervised<F, Fut>(name: &'static str, f: F)
-    where
-        F: Fn() -> Fut + Send + 'static,
+    // with exponential backoff, and respects shutdown signal.
+    fn spawn_supervised<F, Fut>(
+        name: &'static str,
+        shutdown_tx: &tokio::sync::broadcast::Sender<()>,
+        f: F,
+    ) where
+        F: Fn(tokio::sync::broadcast::Receiver<()>) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
+        let shutdown_tx = shutdown_tx.clone();
         tokio::spawn(async move {
+            let mut delay = Duration::from_secs(1);
+            const MAX_DELAY: Duration = Duration::from_secs(300);
+            // If the task runs longer than this without panicking, reset backoff
+            const HEALTHY_THRESHOLD: Duration = Duration::from_secs(60);
+
             loop {
-                let handle = tokio::spawn(f());
-                match handle.await {
-                    Ok(()) => {
-                        tracing::warn!("Background task '{name}' exited, restarting in 10s");
+                let mut shutdown_rx = shutdown_tx.subscribe();
+                let started = Instant::now();
+                let handle = tokio::spawn(f(shutdown_tx.subscribe()));
+
+                tokio::select! {
+                    result = handle => {
+                        match result {
+                            Ok(()) => {
+                                tracing::warn!("Background task '{name}' exited");
+                            }
+                            Err(e) => {
+                                tracing::error!("Background task '{name}' panicked: {e}");
+                            }
+                        }
+
+                        // Reset backoff if the task ran healthily for a while
+                        if started.elapsed() >= HEALTHY_THRESHOLD {
+                            delay = Duration::from_secs(1);
+                        }
+
+                        // Check if shutdown was requested before restarting
+                        if shutdown_tx.receiver_count() == 0 {
+                            break;
+                        }
+
+                        tracing::info!("Restarting '{name}' in {}s (backoff)", delay.as_secs());
+                        tokio::time::sleep(delay).await;
+                        delay = (delay * 2).min(MAX_DELAY);
                     }
-                    Err(e) => {
-                        tracing::error!("Background task '{name}' panicked: {e}, restarting in 10s");
+                    _ = shutdown_rx.recv() => {
+                        tracing::info!("Supervisor for '{name}' received shutdown signal");
+                        break;
                     }
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
             }
         });
     }
 
     // Spawn supervised background tasks
     let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
-    spawn_supervised("backup_scheduler", move || services::backup_scheduler::run(s_db.clone(), s_agent.clone()));
+    spawn_supervised("backup_scheduler", &shutdown_tx, move |rx| services::backup_scheduler::run(s_db.clone(), s_agent.clone(), rx));
 
     let s_db = state.db.clone();
-    spawn_supervised("server_monitor", move || services::server_monitor::run(s_db.clone()));
+    spawn_supervised("server_monitor", &shutdown_tx, move |rx| services::server_monitor::run(s_db.clone(), rx));
 
     let s_db = state.db.clone();
-    spawn_supervised("uptime_monitor", move || services::uptime::run(s_db.clone()));
+    spawn_supervised("uptime_monitor", &shutdown_tx, move |rx| services::uptime::run(s_db.clone(), rx));
 
     let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
-    spawn_supervised("security_scanner", move || services::security_scanner::run(s_db.clone(), s_agent.clone()));
+    spawn_supervised("security_scanner", &shutdown_tx, move |rx| services::security_scanner::run(s_db.clone(), s_agent.clone(), rx));
 
     let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
-    spawn_supervised("alert_engine", move || services::alert_engine::run(s_db.clone(), s_agent.clone()));
+    spawn_supervised("alert_engine", &shutdown_tx, move |rx| services::alert_engine::run(s_db.clone(), s_agent.clone(), rx));
 
     let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
-    spawn_supervised("auto_healer", move || services::auto_healer::run(s_db.clone(), s_agent.clone()));
+    spawn_supervised("auto_healer", &shutdown_tx, move |rx| services::auto_healer::run(s_db.clone(), s_agent.clone(), rx));
 
     let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
-    spawn_supervised("metrics_collector", move || services::metrics_collector::run(s_db.clone(), s_agent.clone()));
+    spawn_supervised("metrics_collector", &shutdown_tx, move |rx| services::metrics_collector::run(s_db.clone(), s_agent.clone(), rx));
 
     // Periodic cleanup of token blacklist and rate limiters (every 15 minutes)
     let cleanup_blacklist = state.token_blacklist.clone();
@@ -183,10 +226,17 @@ async fn main() {
     let cleanup_webhook = state.webhook_attempts.clone();
     let cleanup_agent_rl = state.agent_rate_limits.clone();
     let cleanup_provision = state.provision_logs.clone();
+    let mut cleanup_shutdown_rx = shutdown_tx.subscribe();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(900));
+        let mut interval = tokio::time::interval(Duration::from_secs(900));
         loop {
-            interval.tick().await;
+            tokio::select! {
+                _ = interval.tick() => {}
+                _ = cleanup_shutdown_rx.recv() => {
+                    tracing::info!("Cleanup task shutting down gracefully");
+                    break;
+                }
+            }
             // Clear all blacklisted tokens (JWT expiry is 2h, cleanup runs every 15m)
             let removed = {
                 let mut bl = cleanup_blacklist.write().await;
@@ -203,8 +253,8 @@ async fn main() {
             }
             // Clean expired rate limit entries
             let now = Instant::now();
-            let window_15m = std::time::Duration::from_secs(900);
-            let window_5m = std::time::Duration::from_secs(300);
+            let window_15m = Duration::from_secs(900);
+            let window_5m = Duration::from_secs(300);
             if let Ok(mut map) = cleanup_login.lock() {
                 map.retain(|_, attempts| {
                     attempts.retain(|t| now.duration_since(*t) < window_15m);
@@ -218,11 +268,11 @@ async fn main() {
                 map.retain(|_, (_, start)| now.duration_since(*start) < window_5m);
             }
             if let Ok(mut map) = cleanup_agent_rl.lock() {
-                map.retain(|_, (_, start)| now.duration_since(*start) < std::time::Duration::from_secs(60));
+                map.retain(|_, (_, start)| now.duration_since(*start) < Duration::from_secs(60));
             }
             // Clean stale provisioning logs (older than 5 minutes)
             if let Ok(mut map) = cleanup_provision.lock() {
-                map.retain(|_, (_, _, created)| now.duration_since(*created) < std::time::Duration::from_secs(300));
+                map.retain(|_, (_, _, created)| now.duration_since(*created) < Duration::from_secs(300));
             }
         }
     });
@@ -246,6 +296,12 @@ async fn main() {
         .with_graceful_shutdown(shutdown_signal())
         .await
         .unwrap();
+
+    // Signal all background services to stop
+    tracing::info!("Sending shutdown signal to background services...");
+    let _ = shutdown_tx.send(());
+    // Give services a moment to finish their current work
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     tracing::info!("DockPanel API shut down gracefully");
 }

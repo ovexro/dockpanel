@@ -3,11 +3,19 @@ use std::time::Duration;
 use crate::services::agent::AgentClient;
 
 /// Background task that collects system metrics every 30 seconds for historical charts.
-pub async fn run(pool: PgPool, agent: AgentClient) {
+pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
     tracing::info!("Metrics collector started (30s interval)");
 
+    let mut interval = tokio::time::interval(Duration::from_secs(30));
+
     loop {
-        tokio::time::sleep(Duration::from_secs(30)).await;
+        tokio::select! {
+            _ = interval.tick() => {}
+            _ = shutdown_rx.recv() => {
+                tracing::info!("Metrics collector shutting down gracefully");
+                break;
+            }
+        }
 
         // Get the local server's ID for multi-server charting
         let local_server_id: Option<uuid::Uuid> = sqlx::query_scalar(

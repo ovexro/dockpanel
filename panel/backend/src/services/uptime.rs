@@ -1,7 +1,7 @@
 use sqlx::PgPool;
 use std::time::{Duration, Instant};
 
-#[derive(sqlx::FromRow)]
+#[derive(sqlx::FromRow, Clone)]
 struct MonitorRow {
     id: uuid::Uuid,
     user_id: uuid::Uuid,
@@ -14,7 +14,7 @@ struct MonitorRow {
 }
 
 /// Background task: checks all enabled monitors periodically.
-pub async fn run(pool: PgPool) {
+pub async fn run(pool: PgPool, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
     tracing::info!("Uptime monitor started");
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -23,8 +23,19 @@ pub async fn run(pool: PgPool) {
         .build()
         .unwrap();
 
+    let mut interval = tokio::time::interval(Duration::from_secs(60));
+    let mut tick_count: u64 = 0;
+
     loop {
-        tokio::time::sleep(Duration::from_secs(60)).await;
+        tokio::select! {
+            _ = interval.tick() => {}
+            _ = shutdown_rx.recv() => {
+                tracing::info!("Uptime monitor shutting down gracefully");
+                return;
+            }
+        }
+
+        tick_count += 1;
 
         // Get monitors due for checking
         let monitors: Vec<MonitorRow> = match sqlx::query_as(
@@ -42,101 +53,121 @@ pub async fn run(pool: PgPool) {
             }
         };
 
-        for monitor in &monitors {
-            let start = Instant::now();
-            let result = client.get(&monitor.url).send().await;
-            let response_time = start.elapsed().as_millis() as i32;
+        // Process monitors concurrently (max 10 at a time)
+        let mut set = tokio::task::JoinSet::new();
+        for monitor in monitors {
+            let c = client.clone();
+            let p = pool.clone();
+            set.spawn(async move {
+                check_monitor(&monitor, &c, &p).await;
+            });
+            // Cap concurrency at 10 — wait for one to finish before spawning more
+            if set.len() >= 10 {
+                let _ = set.join_next().await;
+            }
+        }
+        // Drain remaining tasks
+        while let Some(_) = set.join_next().await {}
 
-            let (status_code, error, new_status) = match result {
-                Ok(resp) => {
-                    let code = resp.status().as_u16() as i32;
-                    if resp.status().is_success() {
-                        (Some(code), None, "up")
-                    } else {
-                        (Some(code), Some(format!("HTTP {code}")), "down")
-                    }
-                }
-                Err(e) => (None, Some(e.to_string()), "down"),
-            };
-
-            // Insert check record
+        // Purge old data only every hour (every 60th tick at 60s interval)
+        if tick_count % 60 == 0 {
+            // Purge old check records (keep last 24h)
             if let Err(e) = sqlx::query(
-                "INSERT INTO monitor_checks (monitor_id, status_code, response_time, error) \
-                 VALUES ($1, $2, $3, $4)",
+                "DELETE FROM monitor_checks WHERE checked_at < NOW() - INTERVAL '24 hours'",
             )
-            .bind(monitor.id)
-            .bind(status_code)
-            .bind(response_time)
-            .bind(&error)
             .execute(&pool)
             .await {
-                tracing::error!("Failed to insert monitor check for {}: {e}", monitor.name);
+                tracing::error!("Failed to purge old monitor checks: {e}");
             }
 
-            // Update monitor status
+            // Purge old performance metrics (keep last 7 days)
             if let Err(e) = sqlx::query(
-                "UPDATE monitors SET status = $1, last_checked_at = NOW(), \
-                 last_response_time = $2, last_status_code = $3 WHERE id = $4",
+                "DELETE FROM metrics WHERE recorded_at < NOW() - INTERVAL '7 days'",
             )
-            .bind(new_status)
-            .bind(response_time)
-            .bind(status_code)
-            .bind(monitor.id)
             .execute(&pool)
             .await {
-                tracing::error!("Failed to update monitor status for {}: {e}", monitor.name);
-            }
-
-            // Handle status transitions
-            if new_status == "down" && monitor.status != "down" {
-                // Just went down — create incident and send alerts
-                let cause = error.as_deref().unwrap_or("Unknown error");
-                if let Err(e) = sqlx::query(
-                    "INSERT INTO incidents (monitor_id, cause, alerted) VALUES ($1, $2, TRUE)",
-                )
-                .bind(monitor.id)
-                .bind(cause)
-                .execute(&pool)
-                .await {
-                    tracing::error!("Failed to create incident for {}: {e}", monitor.name);
-                }
-
-                tracing::warn!("Monitor {} ({}) is DOWN: {}", monitor.name, monitor.url, cause);
-                send_alerts(&pool, monitor, &format!("{} is down: {cause}", monitor.name)).await;
-            } else if new_status == "up" && monitor.status == "down" {
-                // Just recovered — resolve incident
-                if let Err(e) = sqlx::query(
-                    "UPDATE incidents SET resolved_at = NOW() \
-                     WHERE monitor_id = $1 AND resolved_at IS NULL",
-                )
-                .bind(monitor.id)
-                .execute(&pool)
-                .await {
-                    tracing::error!("Failed to resolve incident for {}: {e}", monitor.name);
-                }
-
-                tracing::info!("Monitor {} ({}) is back UP", monitor.name, monitor.url);
-                send_alerts(&pool, monitor, &format!("{} is back up ({}ms)", monitor.name, response_time)).await;
+                tracing::error!("Failed to purge old metrics: {e}");
             }
         }
+    }
+}
 
-        // Purge old check records (keep last 24h)
+/// Check a single monitor: HTTP request, record result, handle status transitions.
+async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &PgPool) {
+    let start = Instant::now();
+    let result = client.get(&monitor.url).send().await;
+    let response_time = start.elapsed().as_millis() as i32;
+
+    let (status_code, error, new_status) = match result {
+        Ok(resp) => {
+            let code = resp.status().as_u16() as i32;
+            if resp.status().is_success() {
+                (Some(code), None, "up")
+            } else {
+                (Some(code), Some(format!("HTTP {code}")), "down")
+            }
+        }
+        Err(e) => (None, Some(e.to_string()), "down"),
+    };
+
+    // Insert check record
+    if let Err(e) = sqlx::query(
+        "INSERT INTO monitor_checks (monitor_id, status_code, response_time, error) \
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(monitor.id)
+    .bind(status_code)
+    .bind(response_time)
+    .bind(&error)
+    .execute(pool)
+    .await {
+        tracing::error!("Failed to insert monitor check for {}: {e}", monitor.name);
+    }
+
+    // Update monitor status
+    if let Err(e) = sqlx::query(
+        "UPDATE monitors SET status = $1, last_checked_at = NOW(), \
+         last_response_time = $2, last_status_code = $3 WHERE id = $4",
+    )
+    .bind(new_status)
+    .bind(response_time)
+    .bind(status_code)
+    .bind(monitor.id)
+    .execute(pool)
+    .await {
+        tracing::error!("Failed to update monitor status for {}: {e}", monitor.name);
+    }
+
+    // Handle status transitions
+    if new_status == "down" && monitor.status != "down" {
+        // Just went down — create incident and send alerts
+        let cause = error.as_deref().unwrap_or("Unknown error");
         if let Err(e) = sqlx::query(
-            "DELETE FROM monitor_checks WHERE checked_at < NOW() - INTERVAL '24 hours'",
+            "INSERT INTO incidents (monitor_id, cause, alerted) VALUES ($1, $2, TRUE)",
         )
-        .execute(&pool)
+        .bind(monitor.id)
+        .bind(cause)
+        .execute(pool)
         .await {
-            tracing::error!("Failed to purge old monitor checks: {e}");
+            tracing::error!("Failed to create incident for {}: {e}", monitor.name);
         }
 
-        // Purge old performance metrics (keep last 7 days)
+        tracing::warn!("Monitor {} ({}) is DOWN: {}", monitor.name, monitor.url, cause);
+        send_alerts(pool, monitor, &format!("{} is down: {cause}", monitor.name)).await;
+    } else if new_status == "up" && monitor.status == "down" {
+        // Just recovered — resolve incident
         if let Err(e) = sqlx::query(
-            "DELETE FROM metrics WHERE recorded_at < NOW() - INTERVAL '7 days'",
+            "UPDATE incidents SET resolved_at = NOW() \
+             WHERE monitor_id = $1 AND resolved_at IS NULL",
         )
-        .execute(&pool)
+        .bind(monitor.id)
+        .execute(pool)
         .await {
-            tracing::error!("Failed to purge old metrics: {e}");
+            tracing::error!("Failed to resolve incident for {}: {e}", monitor.name);
         }
+
+        tracing::info!("Monitor {} ({}) is back UP", monitor.name, monitor.url);
+        send_alerts(pool, monitor, &format!("{} is back up ({}ms)", monitor.name, response_time)).await;
     }
 }
 
