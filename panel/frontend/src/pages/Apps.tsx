@@ -297,8 +297,35 @@ export default function Apps() {
   const [envTarget, setEnvTarget] = useState<string | null>(null);
   const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([]);
   const [envLoading, setEnvLoading] = useState(false);
+  const [envEditing, setEnvEditing] = useState(false);
+  const [envEditValues, setEnvEditValues] = useState<Record<string, string>>({});
+  const [envSaving, setEnvSaving] = useState(false);
   // Update SSE state
   const [updateDeployId, setUpdateDeployId] = useState<string | null>(null);
+
+  // Container stats state
+  const [statsTarget, setStatsTarget] = useState<string | null>(null);
+  const [statsData, setStatsData] = useState<{ cpu_percent?: string; memory_usage?: string; memory_percent?: string; network_io?: string; block_io?: string; pids?: string } | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+
+  // Container shell state
+  const [shellContainer, setShellContainer] = useState<{ id: string; name: string } | null>(null);
+  const [shellCmd, setShellCmd] = useState("");
+  const [shellOutput, setShellOutput] = useState("");
+  const shellOutputRef = useRef<HTMLDivElement>(null);
+
+  // Volume browser state
+  const [volumeTarget, setVolumeTarget] = useState<string | null>(null);
+  const [volumeData, setVolumeData] = useState<{ source: string; destination: string; type: string; size_bytes: number; size_mb: number; listing: string }[]>([]);
+  const [volumeLoading, setVolumeLoading] = useState(false);
+
+  // Private registry state
+  const [showRegistries, setShowRegistries] = useState(false);
+  const [registries, setRegistries] = useState<string[]>([]);
+  const [regServer, setRegServer] = useState("");
+  const [regUsername, setRegUsername] = useState("");
+  const [regPassword, setRegPassword] = useState("");
+  const [regLoading, setRegLoading] = useState(false);
 
   // Compose import state
   const [showCompose, setShowCompose] = useState(false);
@@ -444,6 +471,13 @@ export default function Apps() {
     }
   }, [logLines, logAutoScroll]);
 
+  // Shell output auto-scroll
+  useEffect(() => {
+    if (shellOutputRef.current) {
+      shellOutputRef.current.scrollTop = shellOutputRef.current.scrollHeight;
+    }
+  }, [shellOutput]);
+
   const handleEnv = async (containerId: string) => {
     setEnvTarget(containerId);
     setEnvLoading(true);
@@ -455,6 +489,95 @@ export default function Apps() {
       setEnvTarget(null);
     } finally {
       setEnvLoading(false);
+    }
+  };
+
+  const handleEnvSave = async () => {
+    if (!envTarget) return;
+    setEnvSaving(true);
+    try {
+      await api.put(`/apps/${envTarget}/env`, { env: envEditValues });
+      setMessage({ text: "Environment variables updated. Container was recreated.", type: "success" });
+      setEnvTarget(null);
+      setEnvEditing(false);
+      loadApps();
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : "Failed to update env vars", type: "error" });
+    } finally {
+      setEnvSaving(false);
+    }
+  };
+
+  const handleStats = async (containerId: string) => {
+    if (statsTarget === containerId) {
+      setStatsTarget(null);
+      setStatsData(null);
+      return;
+    }
+    setStatsTarget(containerId);
+    setStatsLoading(true);
+    try {
+      const data = await api.get<{ cpu_percent?: string; memory_usage?: string; memory_percent?: string; network_io?: string; block_io?: string; pids?: string }>(`/apps/${containerId}/stats`);
+      setStatsData(data);
+    } catch {
+      setStatsData(null);
+    } finally {
+      setStatsLoading(false);
+    }
+  };
+
+  const handleShell = async (containerId: string, name: string) => {
+    setShellContainer({ id: containerId, name });
+    setShellCmd("");
+    setShellOutput("");
+  };
+
+  const handleVolumes = async (containerId: string) => {
+    setVolumeTarget(containerId);
+    setVolumeLoading(true);
+    try {
+      const data = await api.get<{ volumes: typeof volumeData }>(`/apps/${containerId}/volumes`);
+      setVolumeData(data.volumes || []);
+    } catch {
+      setVolumeData([]);
+    } finally {
+      setVolumeLoading(false);
+    }
+  };
+
+  const loadRegistries = async () => {
+    try {
+      const data = await api.get<{ registries: string[] }>("/apps/registries");
+      setRegistries(data.registries || []);
+    } catch {
+      setRegistries([]);
+    }
+  };
+
+  const handleRegistryLogin = async () => {
+    if (!regServer || !regUsername || !regPassword) return;
+    setRegLoading(true);
+    try {
+      await api.post("/apps/registry-login", { server: regServer, username: regUsername, password: regPassword });
+      setMessage({ text: `Logged in to ${regServer}`, type: "success" });
+      setRegServer("");
+      setRegUsername("");
+      setRegPassword("");
+      loadRegistries();
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : "Registry login failed", type: "error" });
+    } finally {
+      setRegLoading(false);
+    }
+  };
+
+  const handleRegistryLogout = async (server: string) => {
+    try {
+      await api.post("/apps/registry-logout", { server });
+      setMessage({ text: `Logged out from ${server}`, type: "success" });
+      loadRegistries();
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : "Registry logout failed", type: "error" });
     }
   };
 
@@ -575,15 +698,26 @@ export default function Apps() {
             One-click deploy popular applications
           </p>
         </div>
-        <button
-          onClick={() => setShowCompose(true)}
-          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 flex items-center gap-2"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m6.75 12l-3-3m0 0l-3 3m3-3v6m-1.5-15H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-          </svg>
-          Import Compose
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => { setShowRegistries(true); loadRegistries(); }}
+            className="px-4 py-2 bg-dark-700 text-dark-200 rounded-lg text-sm font-medium hover:bg-dark-600 flex items-center gap-2 border border-dark-500"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+            </svg>
+            Registries
+          </button>
+          <button
+            onClick={() => setShowCompose(true)}
+            className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 flex items-center gap-2"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m6.75 12l-3-3m0 0l-3 3m3-3v6m-1.5-15H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+            </svg>
+            Import Compose
+          </button>
+        </div>
       </div>
 
       {/* Deploy provisioning log */}
@@ -823,6 +957,30 @@ export default function Apps() {
                           Env
                         </button>
                         <button
+                          onClick={() => handleStats(app.container_id)}
+                          className={`px-2 py-1 rounded text-xs font-medium ${
+                            statsTarget === app.container_id
+                              ? "bg-teal-200 text-teal-700"
+                              : "bg-teal-50 text-teal-600 hover:bg-teal-100"
+                          }`}
+                        >
+                          Stats
+                        </button>
+                        {app.status === "running" && (
+                          <button
+                            onClick={() => handleShell(app.container_id, app.name)}
+                            className="px-2 py-1 rounded text-xs font-medium bg-dark-600 text-dark-100 hover:bg-dark-500"
+                          >
+                            Shell
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleVolumes(app.container_id)}
+                          className="px-2 py-1 rounded text-xs font-medium bg-amber-50 text-amber-600 hover:bg-amber-100"
+                        >
+                          Volumes
+                        </button>
+                        <button
                           onClick={() => handleUpdate(app.container_id)}
                           disabled={!!actionLoading}
                           className="px-2 py-1 bg-cyan-50 text-cyan-600 rounded text-xs font-medium hover:bg-cyan-100 disabled:opacity-50"
@@ -844,6 +1002,55 @@ export default function Apps() {
               </tbody>
             </table>
           </div>
+
+          {/* Stats inline */}
+          {statsTarget && (
+            <div className="mt-3 bg-dark-800 rounded-lg border border-dark-500 p-4">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">
+                  Resource Stats: {apps.find(a => a.container_id === statsTarget)?.name}
+                </h3>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => handleStats(statsTarget)} className="text-xs text-dark-300 hover:text-dark-100">Refresh</button>
+                  <button onClick={() => { setStatsTarget(null); setStatsData(null); }} className="text-dark-300 hover:text-dark-50">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                  </button>
+                </div>
+              </div>
+              {statsLoading ? (
+                <div className="flex items-center gap-2 text-dark-300 text-sm">
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                  Loading stats...
+                </div>
+              ) : statsData?.cpu_percent ? (
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                  <div className="bg-dark-900 rounded-lg p-3 border border-dark-600">
+                    <div className="text-[10px] text-dark-300 uppercase">CPU</div>
+                    <div className="text-lg font-mono text-dark-50 font-medium">{statsData.cpu_percent}%</div>
+                  </div>
+                  <div className="bg-dark-900 rounded-lg p-3 border border-dark-600">
+                    <div className="text-[10px] text-dark-300 uppercase">Memory</div>
+                    <div className="text-sm font-mono text-dark-50">{statsData.memory_usage}</div>
+                    <div className="text-[10px] text-dark-300">{statsData.memory_percent}%</div>
+                  </div>
+                  <div className="bg-dark-900 rounded-lg p-3 border border-dark-600">
+                    <div className="text-[10px] text-dark-300 uppercase">Network I/O</div>
+                    <div className="text-sm font-mono text-dark-50">{statsData.network_io}</div>
+                  </div>
+                  <div className="bg-dark-900 rounded-lg p-3 border border-dark-600">
+                    <div className="text-[10px] text-dark-300 uppercase">Block I/O</div>
+                    <div className="text-sm font-mono text-dark-50">{statsData.block_io}</div>
+                  </div>
+                  <div className="bg-dark-900 rounded-lg p-3 border border-dark-600">
+                    <div className="text-[10px] text-dark-300 uppercase">PIDs</div>
+                    <div className="text-lg font-mono text-dark-50 font-medium">{statsData.pids}</div>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-dark-300">Container not running or stats unavailable</p>
+              )}
+            </div>
+          )}
 
           {/* Logs modal */}
           {logsTarget && (() => {
@@ -1160,20 +1367,40 @@ export default function Apps() {
           className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
           role="dialog"
           aria-labelledby="env-dialog-title"
-          onKeyDown={(e) => { if (e.key === "Escape") setEnvTarget(null); }}
+          onKeyDown={(e) => { if (e.key === "Escape") { setEnvTarget(null); setEnvEditing(false); }}}
         >
           <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto border border-dark-500">
             <div className="flex items-center justify-between mb-4">
               <h3 id="env-dialog-title" className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">
                 Environment Variables
               </h3>
-              <button onClick={() => setEnvTarget(null)} className="text-dark-300 hover:text-dark-50">
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
-              </button>
+              <div className="flex items-center gap-2">
+                {!envEditing && envVars.length > 0 && (
+                  <button
+                    onClick={() => {
+                      setEnvEditing(true);
+                      const vals: Record<string, string> = {};
+                      envVars.forEach(ev => { vals[ev.key] = ev.value; });
+                      setEnvEditValues(vals);
+                    }}
+                    className="px-2 py-1 text-xs font-medium bg-purple-500/15 text-purple-400 rounded hover:bg-purple-500/25"
+                  >
+                    Edit
+                  </button>
+                )}
+                <button onClick={() => { setEnvTarget(null); setEnvEditing(false); }} className="text-dark-300 hover:text-dark-50">
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+              </div>
             </div>
             <p className="text-xs text-dark-300 mb-3">
               {apps.find(a => a.container_id === envTarget)?.name}
             </p>
+            {envEditing && (
+              <div className="mb-3 px-3 py-2 bg-warn-500/10 border border-warn-500/20 rounded-lg">
+                <p className="text-xs text-warn-400">Container will be recreated with the new environment variables. This causes brief downtime.</p>
+              </div>
+            )}
             {envLoading ? (
               <div className="flex items-center justify-center py-8 text-dark-300">
                 <svg className="w-5 h-5 animate-spin mr-2" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
@@ -1181,6 +1408,34 @@ export default function Apps() {
               </div>
             ) : envVars.length === 0 ? (
               <div className="text-center py-8 text-dark-300 text-sm">No environment variables set</div>
+            ) : envEditing ? (
+              <div className="space-y-2">
+                {envVars.map((ev, i) => (
+                  <div key={i} className="flex gap-2 items-start">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-mono text-dark-200 truncate">{ev.key}</div>
+                      <input
+                        type="text"
+                        value={envEditValues[ev.key] || ""}
+                        onChange={(e) => setEnvEditValues({ ...envEditValues, [ev.key]: e.target.value })}
+                        className="w-full text-xs font-mono text-dark-100 bg-dark-900 rounded px-2 py-1.5 mt-0.5 border border-dark-600 focus:ring-1 focus:ring-purple-500 focus:border-purple-500"
+                      />
+                    </div>
+                  </div>
+                ))}
+                <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-dark-600">
+                  <button onClick={() => setEnvEditing(false)} className="px-3 py-1.5 text-xs text-dark-300 border border-dark-600 rounded hover:text-dark-100">
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleEnvSave}
+                    disabled={envSaving}
+                    className="px-3 py-1.5 text-xs bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50"
+                  >
+                    {envSaving ? "Saving..." : "Save & Recreate"}
+                  </button>
+                </div>
+              </div>
             ) : (
               <div className="space-y-2">
                 {envVars.map((ev, i) => (
@@ -1198,7 +1453,7 @@ export default function Apps() {
               </div>
             )}
             {/* Volumes */}
-            {(() => {
+            {!envEditing && (() => {
               const app = apps.find(a => a.container_id === envTarget);
               return app && app.volumes && app.volumes.length > 0 ? (
                 <div className="mt-4 pt-3 border-t border-dark-600">
@@ -1214,9 +1469,184 @@ export default function Apps() {
                 </div>
               ) : null;
             })()}
-            <div className="mt-4 pt-3 border-t border-dark-600">
-              <p className="text-[10px] text-dark-300">
-                Environment variables are set at deploy time. To change them, redeploy the app with updated values.
+            {!envEditing && (
+              <div className="mt-4 pt-3 border-t border-dark-600">
+                <p className="text-[10px] text-dark-300">
+                  Click "Edit" to modify environment variables. The container will be recreated with updated values.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Container Shell Modal */}
+      {shellContainer && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-dark-800 rounded-lg border border-dark-500 w-full max-w-2xl max-h-[80vh] flex flex-col">
+            <div className="px-4 py-3 border-b border-dark-600 flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <svg className="w-4 h-4 text-dark-200" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                <h3 className="text-sm font-medium text-dark-100 font-mono">{shellContainer.name}</h3>
+                <span className="text-[10px] text-dark-300">30s timeout per command</span>
+              </div>
+              <button onClick={() => setShellContainer(null)} className="text-dark-300 hover:text-dark-100">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+            <div ref={shellOutputRef} className="flex-1 overflow-y-auto p-4 bg-[#1e1e2e] font-mono text-xs text-dark-200 whitespace-pre-wrap min-h-[300px]">
+              {shellOutput || "Type a command and press Enter.\n"}
+            </div>
+            <div className="px-4 py-3 border-t border-dark-600 flex gap-2 items-center">
+              <span className="text-rust-400 font-mono text-sm">$</span>
+              <input
+                value={shellCmd}
+                onChange={(e) => setShellCmd(e.target.value)}
+                onKeyDown={async (e) => {
+                  if (e.key === "Enter" && shellCmd.trim()) {
+                    const cmd = shellCmd;
+                    setShellCmd("");
+                    setShellOutput((prev) => prev + `$ ${cmd}\n`);
+                    try {
+                      const result = await api.post<{ stdout?: string; stderr?: string; exit_code?: number }>(`/apps/${shellContainer.id}/exec`, { command: cmd });
+                      setShellOutput((prev) => prev + (result.stdout || "") + (result.stderr ? result.stderr : "") + "\n");
+                    } catch (err) {
+                      setShellOutput((prev) => prev + `Error: ${err}\n`);
+                    }
+                  }
+                }}
+                placeholder="Enter command..."
+                autoFocus
+                className="flex-1 bg-transparent text-dark-100 font-mono text-sm outline-none"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Volume Browser Modal */}
+      {volumeTarget && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          onKeyDown={(e) => { if (e.key === "Escape") setVolumeTarget(null); }}
+        >
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-2xl max-h-[80vh] overflow-y-auto border border-dark-500">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">
+                Volume Browser: {apps.find(a => a.container_id === volumeTarget)?.name}
+              </h3>
+              <button onClick={() => setVolumeTarget(null)} className="text-dark-300 hover:text-dark-50">
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+            {volumeLoading ? (
+              <div className="flex items-center justify-center py-8 text-dark-300">
+                <svg className="w-5 h-5 animate-spin mr-2" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                Loading volumes...
+              </div>
+            ) : volumeData.length === 0 ? (
+              <div className="text-center py-8 text-dark-300 text-sm">No volumes mounted</div>
+            ) : (
+              <div className="space-y-4">
+                {volumeData.map((vol, i) => (
+                  <div key={i} className="bg-dark-900 rounded-lg border border-dark-600 p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <svg className="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg>
+                        <span className="text-xs font-mono text-dark-100">{vol.destination}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={`px-1.5 py-0.5 text-[10px] rounded ${vol.type === "bind" ? "bg-blue-500/15 text-blue-400" : "bg-purple-500/15 text-purple-400"}`}>
+                          {vol.type}
+                        </span>
+                        <span className="text-xs text-dark-300">{vol.size_mb} MB</span>
+                      </div>
+                    </div>
+                    <div className="text-[10px] text-dark-300 mb-2 font-mono">{vol.source}</div>
+                    {vol.listing && (
+                      <pre className="text-[10px] font-mono text-dark-200 bg-dark-800 rounded p-2 overflow-x-auto max-h-40 overflow-y-auto border border-dark-700">
+                        {vol.listing}
+                      </pre>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Private Registries Section */}
+      {showRegistries && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          onKeyDown={(e) => { if (e.key === "Escape") setShowRegistries(false); }}
+        >
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto border border-dark-500">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">
+                Private Registries
+              </h3>
+              <button onClick={() => setShowRegistries(false)} className="text-dark-300 hover:text-dark-50">
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+
+            {/* Configured registries */}
+            {registries.length > 0 && (
+              <div className="mb-4">
+                <p className="text-xs font-medium text-dark-200 mb-2">Configured Registries</p>
+                <div className="space-y-1.5">
+                  {registries.map((reg) => (
+                    <div key={reg} className="flex items-center justify-between bg-dark-900 rounded px-3 py-2 border border-dark-600">
+                      <span className="text-xs font-mono text-dark-100">{reg}</span>
+                      <button
+                        onClick={() => handleRegistryLogout(reg)}
+                        className="text-xs text-danger-400 hover:text-danger-300"
+                      >
+                        Logout
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Login form */}
+            <div className="border-t border-dark-600 pt-4">
+              <p className="text-xs font-medium text-dark-200 mb-3">Add Registry</p>
+              <div className="space-y-3">
+                <input
+                  type="text"
+                  value={regServer}
+                  onChange={(e) => setRegServer(e.target.value)}
+                  placeholder="registry.example.com"
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
+                />
+                <input
+                  type="text"
+                  value={regUsername}
+                  onChange={(e) => setRegUsername(e.target.value)}
+                  placeholder="Username"
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
+                />
+                <input
+                  type="password"
+                  value={regPassword}
+                  onChange={(e) => setRegPassword(e.target.value)}
+                  placeholder="Password or token"
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
+                />
+                <button
+                  onClick={handleRegistryLogin}
+                  disabled={regLoading || !regServer || !regUsername || !regPassword}
+                  className="w-full px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+                >
+                  {regLoading ? "Logging in..." : "Login"}
+                </button>
+              </div>
+              <p className="text-[10px] text-dark-300 mt-3">
+                Registry credentials persist on the server. Images from private registries can be used in templates and compose deployments.
               </p>
             </div>
           </div>

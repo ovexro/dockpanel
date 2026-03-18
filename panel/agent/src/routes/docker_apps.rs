@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use serde::Deserialize;
@@ -383,6 +383,335 @@ async fn get_env(
     Ok(Json(serde_json::json!({ "env": env_map })))
 }
 
+#[derive(Deserialize)]
+struct UpdateEnvRequest {
+    env: HashMap<String, String>,
+}
+
+/// PUT /apps/{container_id}/env — Update environment variables and recreate container.
+async fn update_env(
+    Path(container_id): Path<String>,
+    Json(body): Json<UpdateEnvRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_container_id(&container_id) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid container ID" })),
+        ));
+    }
+
+    let new_id = docker_apps::update_env(&container_id, body.env)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e })),
+            )
+        })?;
+
+    Ok(Json(serde_json::json!({ "success": true, "container_id": new_id })))
+}
+
+/// GET /apps/{container_id}/stats — Get live resource usage for a container.
+async fn container_stats(
+    Path(container_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_container_id(&container_id) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid container ID" })),
+        ));
+    }
+
+    // Use docker stats --no-stream for a single snapshot
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::process::Command::new("docker")
+            .args(["stats", "--no-stream", "--format", "{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.BlockIO}}|{{.PIDs}}", &container_id])
+            .output(),
+    )
+    .await
+    .map_err(|_| (StatusCode::GATEWAY_TIMEOUT, Json(serde_json::json!({"error": "Timeout"}))))?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parts: Vec<&str> = stdout.trim().split('|').collect();
+
+    if parts.len() >= 6 {
+        Ok(Json(serde_json::json!({
+            "cpu_percent": parts[0].trim_end_matches('%').trim(),
+            "memory_usage": parts[1].trim(),
+            "memory_percent": parts[2].trim_end_matches('%').trim(),
+            "network_io": parts[3].trim(),
+            "block_io": parts[4].trim(),
+            "pids": parts[5].trim(),
+        })))
+    } else {
+        Ok(Json(serde_json::json!({ "error": "Container not running or stats unavailable" })))
+    }
+}
+
+/// GET /apps/{container_id}/shell-info — Get shell availability for a container.
+async fn shell_info(
+    Path(container_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_container_id(&container_id) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid container ID" })),
+        ));
+    }
+
+    let name_output = tokio::process::Command::new("docker")
+        .args(["inspect", "--format", "{{.Name}}", &container_id])
+        .output()
+        .await;
+    let name = name_output
+        .ok()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .trim_start_matches('/')
+                .to_string()
+        })
+        .unwrap_or_default();
+
+    let bash = tokio::process::Command::new("docker")
+        .args(["exec", &container_id, "which", "bash"])
+        .output()
+        .await;
+    let has_bash = bash.map(|o| o.status.success()).unwrap_or(false);
+
+    let sh = tokio::process::Command::new("docker")
+        .args(["exec", &container_id, "which", "sh"])
+        .output()
+        .await;
+    let has_sh = sh.map(|o| o.status.success()).unwrap_or(false);
+
+    Ok(Json(serde_json::json!({
+        "name": name,
+        "has_bash": has_bash,
+        "has_sh": has_sh,
+        "shell": if has_bash { "/bin/bash" } else if has_sh { "/bin/sh" } else { "" },
+    })))
+}
+
+/// POST /apps/{container_id}/exec — Execute a command inside a container.
+async fn exec_command(
+    Path(container_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_container_id(&container_id) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid container ID" })),
+        ));
+    }
+    let command = body
+        .get("command")
+        .and_then(|v| v.as_str())
+        .unwrap_or("ls");
+    if command.is_empty() || command.len() > 1000 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid command" })),
+        ));
+    }
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        tokio::process::Command::new("docker")
+            .args(["exec", &container_id, "sh", "-c", command])
+            .output(),
+    )
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(serde_json::json!({"error": "Command timed out (30s)"})),
+        )
+    })?
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+    })?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    Ok(Json(serde_json::json!({
+        "success": output.status.success(),
+        "stdout": stdout.chars().take(50000).collect::<String>(),
+        "stderr": stderr.chars().take(10000).collect::<String>(),
+        "exit_code": output.status.code(),
+    })))
+}
+
+/// GET /apps/{container_id}/volumes — Get volume info and sizes.
+async fn container_volumes(
+    Path(container_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_container_id(&container_id) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid container ID" })),
+        ));
+    }
+
+    let output = tokio::process::Command::new("docker")
+        .args([
+            "inspect",
+            "--format",
+            "{{range .Mounts}}{{.Source}}|{{.Destination}}|{{.Type}}\n{{end}}",
+            &container_id,
+        ])
+        .output()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut volumes = Vec::new();
+
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split('|').collect();
+        if parts.len() >= 3 {
+            let source = parts[0];
+            let dest = parts[1];
+            let mount_type = parts[2];
+
+            let du = tokio::process::Command::new("du")
+                .args(["-sb", source])
+                .output()
+                .await;
+            let size: u64 = du
+                .ok()
+                .map(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("0")
+                        .parse()
+                        .unwrap_or(0)
+                })
+                .unwrap_or(0);
+
+            let ls = tokio::process::Command::new("ls")
+                .args(["-la", source])
+                .output()
+                .await;
+            let listing = ls
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_default();
+
+            volumes.push(serde_json::json!({
+                "source": source,
+                "destination": dest,
+                "type": mount_type,
+                "size_bytes": size,
+                "size_mb": (size as f64 / 1024.0 / 1024.0 * 10.0).round() / 10.0,
+                "listing": listing.lines().take(20).collect::<Vec<_>>().join("\n"),
+            }));
+        }
+    }
+
+    Ok(Json(serde_json::json!({ "volumes": volumes })))
+}
+
+#[derive(Deserialize)]
+struct RegistryLoginRequest {
+    server: String,
+    username: String,
+    password: String,
+}
+
+/// POST /apps/registry-login — Login to a private Docker registry.
+async fn registry_login(
+    Json(body): Json<RegistryLoginRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if body.server.is_empty() || body.username.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Server and username required" })),
+        ));
+    }
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        tokio::process::Command::new("docker")
+            .args(["login", &body.server, "-u", &body.username, "-p", &body.password])
+            .output(),
+    )
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(serde_json::json!({"error": "Login timed out"})),
+        )
+    })?
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+    })?;
+
+    if output.status.success() {
+        tracing::info!("Docker registry login: {} @ {}", body.username, body.server);
+        Ok(Json(serde_json::json!({ "success": true, "server": body.server })))
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": format!("Login failed: {}", stderr.chars().take(200).collect::<String>()) })),
+        ))
+    }
+}
+
+/// GET /apps/registries — List configured registries.
+async fn list_registries() -> Json<serde_json::Value> {
+    let config_path = "/root/.docker/config.json";
+    let content = std::fs::read_to_string(config_path).unwrap_or_default();
+    let config: serde_json::Value =
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}));
+
+    let auths = config.get("auths").and_then(|a| a.as_object());
+    let servers: Vec<String> = auths
+        .map(|a| a.keys().cloned().collect())
+        .unwrap_or_default();
+
+    Json(serde_json::json!({ "registries": servers }))
+}
+
+/// POST /apps/registry-logout — Logout from a registry.
+async fn registry_logout(
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let server = body
+        .get("server")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if server.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Server required"})),
+        ));
+    }
+
+    let _ = tokio::process::Command::new("docker")
+        .args(["logout", server])
+        .output()
+        .await;
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
 /// DELETE /apps/{container_id} — Remove a deployed app and clean up its proxy.
 async fn remove(
     Path(container_id): Path<String>,
@@ -565,12 +894,19 @@ pub fn router() -> Router<AppState> {
         .route("/apps/compose/parse", post(compose_parse))
         .route("/apps/compose/deploy", post(compose_deploy))
         .route("/apps/stack/action", post(stack_action))
+        .route("/apps/registries", get(list_registries))
+        .route("/apps/registry-login", post(registry_login))
+        .route("/apps/registry-logout", post(registry_logout))
         .route("/apps", get(list))
         .route("/apps/{container_id}", delete(remove))
         .route("/apps/{container_id}/stop", post(stop))
         .route("/apps/{container_id}/start", post(start))
         .route("/apps/{container_id}/restart", post(restart))
         .route("/apps/{container_id}/logs", get(logs))
-        .route("/apps/{container_id}/env", get(get_env))
+        .route("/apps/{container_id}/env", get(get_env).put(update_env))
         .route("/apps/{container_id}/update", post(update))
+        .route("/apps/{container_id}/stats", get(container_stats))
+        .route("/apps/{container_id}/shell-info", get(shell_info))
+        .route("/apps/{container_id}/exec", post(exec_command))
+        .route("/apps/{container_id}/volumes", get(container_volumes))
 }

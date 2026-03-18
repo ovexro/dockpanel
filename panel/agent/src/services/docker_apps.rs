@@ -1649,6 +1649,87 @@ pub async fn get_app_name(container_id: &str) -> Option<String> {
     info.config?.labels?.get("dockpanel.app.name").cloned()
 }
 
+/// Update a container's environment variables by recreating it with the new env.
+pub async fn update_env(
+    container_id: &str,
+    new_env: HashMap<String, String>,
+) -> Result<String, String> {
+    let docker =
+        Docker::connect_with_local_defaults().map_err(|e| format!("Docker connect failed: {e}"))?;
+
+    let info = docker
+        .inspect_container(container_id, None)
+        .await
+        .map_err(|e| format!("Failed to inspect container: {e}"))?;
+
+    let config = info.config.ok_or("No container config found")?;
+    let host_config = info.host_config.ok_or("No host config found")?;
+    let name = info
+        .name
+        .unwrap_or_default()
+        .trim_start_matches('/')
+        .to_string();
+
+    // Build new env list
+    let env_list: Vec<String> = new_env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+
+    // Stop and remove old container
+    docker
+        .stop_container(container_id, Some(StopContainerOptions { t: 10 }))
+        .await
+        .ok();
+    docker
+        .remove_container(
+            container_id,
+            Some(RemoveContainerOptions {
+                v: false,
+                force: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .map_err(|e| format!("Failed to remove old container: {e}"))?;
+
+    // Recreate with new env
+    let new_config = Config {
+        image: config.image,
+        env: Some(env_list),
+        exposed_ports: config.exposed_ports,
+        labels: config.labels,
+        host_config: Some(host_config),
+        cmd: config.cmd,
+        entrypoint: config.entrypoint,
+        working_dir: if config.working_dir.as_deref() == Some("") {
+            None
+        } else {
+            config.working_dir
+        },
+        ..Default::default()
+    };
+
+    let container = docker
+        .create_container(
+            Some(CreateContainerOptions {
+                name: name.as_str(),
+                platform: None,
+            }),
+            new_config,
+        )
+        .await
+        .map_err(|e| format!("Failed to create container: {e}"))?;
+
+    docker
+        .start_container(&container.id, None::<StartContainerOptions<String>>)
+        .await
+        .map_err(|e| format!("Failed to start container: {e}"))?;
+
+    tracing::info!(
+        "Container env updated: {name} ({} vars)",
+        new_env.len()
+    );
+    Ok(container.id)
+}
+
 /// Stop and remove an app container, optionally removing its volumes.
 pub async fn remove_app(container_id: &str) -> Result<(), String> {
     let docker =
