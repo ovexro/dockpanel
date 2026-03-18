@@ -52,7 +52,7 @@ interface QueueItem {
 export default function Mail() {
   const [domains, setDomains] = useState<MailDomain[]>([]);
   const [selectedDomain, setSelectedDomain] = useState<MailDomain | null>(null);
-  const [tab, setTab] = useState<"accounts" | "aliases" | "dns" | "queue">("accounts");
+  const [tab, setTab] = useState<"accounts" | "aliases" | "dns" | "queue" | "logs">("accounts");
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [aliases, setAliases] = useState<MailAlias[]>([]);
   const [dnsRecords, setDnsRecords] = useState<DnsRecord[]>([]);
@@ -102,6 +102,21 @@ export default function Mail() {
   const [showRelayForm, setShowRelayForm] = useState(false);
   const [blacklist, setBlacklist] = useState<{ ip: string; results: { rbl: string; name: string; listed: boolean }[]; clean: boolean } | null>(null);
   const [checkingBl, setCheckingBl] = useState(false);
+
+  // DNS verification
+  const [dnsCheck, setDnsCheck] = useState<{ checks: any[]; all_pass: boolean } | null>(null);
+  const [checkingDns, setCheckingDns] = useState(false);
+
+  // Mail logs
+  const [mailLogs, setMailLogs] = useState<{ stats: any; recent: any[] } | null>(null);
+
+  // Storage usage
+  const [storage, setStorage] = useState<Record<string, { bytes: number; mb: number }>>({});
+
+  // Bulk import
+  const [showBulkImport, setShowBulkImport] = useState(false);
+  const [bulkImportText, setBulkImportText] = useState("");
+  const [importing, setImporting] = useState(false);
 
   const loadMailStatus = async () => {
     try {
@@ -155,14 +170,29 @@ export default function Mail() {
     } catch { setQueue([]); }
   };
 
+  const loadMailLogs = async () => {
+    try { const data = await api.get<any>("/mail/logs"); setMailLogs(data); }
+    catch { setMailLogs(null); }
+  };
+
+  const loadStorage = () => {
+    api.get<{ accounts: any[] }>("/mail/storage").then(d => {
+      const map: Record<string, any> = {};
+      d.accounts.forEach((a: any) => { map[a.email] = { bytes: a.bytes, mb: a.mb }; });
+      setStorage(map);
+    }).catch(() => {});
+  };
+
   useEffect(() => {
     loadMailStatus();
     loadDomains();
+    loadStorage();
     api.get<{ installed: boolean; running: boolean }>("/mail/rspamd/status").then(setRspamd).catch(() => {});
     api.get<{ installed: boolean; running: boolean; port: number }>("/mail/webmail/status").then(setWebmail).catch(() => {});
     api.get<{ configured: boolean; relayhost: string }>("/mail/relay/status").then(setRelay).catch(() => {});
   }, []);
   useEffect(() => { if (tab === "queue") loadQueue(); }, [tab]);
+  useEffect(() => { if (tab === "logs") loadMailLogs(); }, [tab]);
 
   const handleAddDomain = async () => {
     setSavingDomain(true);
@@ -568,9 +598,9 @@ export default function Mail() {
                 <p className="text-xs text-dark-200">{accounts.length} mailbox{accounts.length !== 1 ? "es" : ""} · {aliases.length} alias{aliases.length !== 1 ? "es" : ""}</p>
               </div>
               <div className="flex border-b border-dark-600 px-5">
-                {(["accounts", "aliases", "dns", "queue"] as const).map((t) => (
+                {(["accounts", "aliases", "dns", "queue", "logs"] as const).map((t) => (
                   <button key={t} onClick={() => setTab(t)} className={`px-4 py-2.5 text-xs font-medium uppercase tracking-wider transition-colors ${tab === t ? "text-dark-50 border-b-2 border-dark-50" : "text-dark-300 hover:text-dark-100"}`}>
-                    {t === "dns" ? "DNS Records" : t === "queue" ? "Queue" : t.charAt(0).toUpperCase() + t.slice(1)}
+                    {t === "dns" ? "DNS Records" : t === "queue" ? "Queue" : t === "logs" ? "Logs" : t.charAt(0).toUpperCase() + t.slice(1)}
                   </button>
                 ))}
               </div>
@@ -581,15 +611,20 @@ export default function Mail() {
                   <div>
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="text-xs text-dark-300 uppercase tracking-widest">Mailboxes</h3>
-                      {showAddAccount ? (
-                        <button onClick={() => setShowAddAccount(false)} className="px-3 py-1.5 text-dark-300 border border-dark-600 rounded-lg text-xs font-medium hover:text-dark-100 hover:border-dark-400">
-                          Cancel
+                      <div className="flex gap-2">
+                        <button onClick={() => setShowBulkImport(!showBulkImport)} className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded text-xs font-medium hover:bg-dark-600">
+                          {showBulkImport ? "Cancel Import" : "Bulk Import"}
                         </button>
-                      ) : (
-                        <button onClick={() => setShowAddAccount(true)} className="px-3 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600">
-                          Add Mailbox
-                        </button>
-                      )}
+                        {showAddAccount ? (
+                          <button onClick={() => setShowAddAccount(false)} className="px-3 py-1.5 text-dark-300 border border-dark-600 rounded-lg text-xs font-medium hover:text-dark-100 hover:border-dark-400">
+                            Cancel
+                          </button>
+                        ) : (
+                          <button onClick={() => setShowAddAccount(true)} className="px-3 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600">
+                            Add Mailbox
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     {showAddAccount && (
@@ -636,6 +671,54 @@ export default function Mail() {
                       </div>
                     )}
 
+                    {showBulkImport && (
+                      <div className="bg-dark-900 border border-dark-500 p-4 mb-4">
+                        <h4 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-2">Bulk Import Accounts</h4>
+                        <p className="text-xs text-dark-200 mb-2">One account per line: <code className="bg-dark-700 px-1 rounded">email:password</code> or <code className="bg-dark-700 px-1 rounded">email:password:quota_mb</code></p>
+                        <textarea
+                          value={bulkImportText}
+                          onChange={(e) => setBulkImportText(e.target.value)}
+                          placeholder={"user1@domain.com:StrongPass123\nuser2@domain.com:AnotherPass:2048\ninfo@domain.com:Secret456:512"}
+                          rows={6}
+                          className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none mb-3"
+                        />
+                        <button
+                          disabled={importing || !bulkImportText.trim()}
+                          onClick={async () => {
+                            if (!selectedDomain) return;
+                            setImporting(true);
+                            const lines = bulkImportText.split("\n").filter(l => l.trim() && !l.startsWith("#"));
+                            let created = 0;
+                            const errors: string[] = [];
+                            for (const line of lines) {
+                              const parts = line.trim().split(":");
+                              if (parts.length < 2) { errors.push(`Invalid: ${line}`); continue; }
+                              const [email, password, quotaStr] = parts;
+                              const quota = quotaStr ? parseInt(quotaStr) : 1024;
+                              try {
+                                await api.post(`/mail/domains/${selectedDomain.id}/accounts`, { email: email.trim(), password, quota_mb: quota });
+                                created++;
+                              } catch (e) {
+                                errors.push(`${email}: ${e instanceof Error ? e.message : "failed"}`);
+                              }
+                            }
+                            setMessage({
+                              text: `Imported ${created} account(s)${errors.length > 0 ? `. Errors: ${errors.join("; ")}` : ""}`,
+                              type: errors.length > 0 ? "error" : "success",
+                            });
+                            setBulkImportText("");
+                            setShowBulkImport(false);
+                            setImporting(false);
+                            loadDomainData(selectedDomain.id);
+                            loadStorage();
+                          }}
+                          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+                        >
+                          {importing ? "Importing..." : `Import ${bulkImportText.split("\n").filter(l => l.trim() && !l.startsWith("#")).length} Accounts`}
+                        </button>
+                      </div>
+                    )}
+
                     {accounts.length === 0 ? (
                       <p className="text-dark-300 text-sm text-center py-8">No mailboxes yet</p>
                     ) : (
@@ -649,7 +732,17 @@ export default function Mail() {
                                 {acc.forward_to && <span className="px-1.5 py-0.5 text-[9px] bg-blue-500/15 text-blue-400 uppercase">Fwd</span>}
                                 {acc.autoresponder_enabled && <span className="px-1.5 py-0.5 text-[9px] bg-purple-500/15 text-purple-400 uppercase">Auto</span>}
                               </div>
-                              <span className="text-xs text-dark-300">{acc.display_name || ""} · {acc.quota_mb} MB quota</span>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs text-dark-300">{acc.display_name || ""} · {acc.quota_mb} MB quota</span>
+                                {storage[acc.email] && (
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-20 h-1.5 bg-dark-600 rounded-full overflow-hidden">
+                                      <div className="h-full bg-rust-500 rounded-full" style={{ width: `${Math.min(100, (storage[acc.email].mb / acc.quota_mb) * 100)}%` }} />
+                                    </div>
+                                    <span className="text-xs text-dark-300 font-mono">{storage[acc.email].mb} / {acc.quota_mb} MB</span>
+                                  </div>
+                                )}
+                              </div>
                             </div>
                             <div className="flex items-center gap-1 shrink-0 ml-2">
                               <button onClick={() => openEditAccount(acc)} className="p-1.5 text-dark-300 hover:text-blue-400" title="Edit">
@@ -778,7 +871,38 @@ export default function Mail() {
                 {/* DNS Records Tab */}
                 {tab === "dns" && (
                   <div>
-                    <h3 className="text-xs text-dark-300 uppercase tracking-widest mb-4">Required DNS Records</h3>
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-xs text-dark-300 uppercase tracking-widest">Required DNS Records</h3>
+                      <button disabled={checkingDns} onClick={async () => {
+                        if (!selectedDomain) return;
+                        setCheckingDns(true);
+                        try {
+                          const data = await api.get<any>(`/mail/domains/${selectedDomain.id}/dns-check`);
+                          setDnsCheck(data);
+                        } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Check failed", type: "error" }); }
+                        finally { setCheckingDns(false); }
+                      }} className="px-3 py-1.5 bg-rust-500 text-white rounded text-xs font-medium hover:bg-rust-600 disabled:opacity-50">
+                        {checkingDns ? "Checking..." : "Verify DNS"}
+                      </button>
+                    </div>
+
+                    {dnsCheck && (
+                      <div className="mb-4 bg-dark-900 border border-dark-500 p-4 space-y-2">
+                        <p className={`text-sm font-medium ${dnsCheck.all_pass ? "text-rust-400" : "text-warn-400"}`}>
+                          {dnsCheck.all_pass ? "All DNS records verified" : `${dnsCheck.checks.filter((c: any) => c.status === "pass").length}/${dnsCheck.checks.length} records verified`}
+                        </p>
+                        {dnsCheck.checks.map((c: any, i: number) => (
+                          <div key={i} className="flex items-center gap-3 text-sm">
+                            <div className={`w-2.5 h-2.5 rounded-full ${c.status === "pass" ? "bg-rust-500" : "bg-danger-400"}`} />
+                            <span className="font-mono text-dark-100 w-16">{c.type}</span>
+                            <span className={c.status === "pass" ? "text-dark-200" : "text-danger-400"}>
+                              {c.status === "pass" ? "Verified" : "Not found"}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
                     <p className="text-xs text-dark-200 mb-4">Add these records to your DNS provider for {selectedDomain.domain} to send and receive email properly.</p>
                     {dnsRecords.length === 0 ? (
                       <p className="text-dark-300 text-sm text-center py-8">Loading DNS records...</p>
@@ -836,6 +960,46 @@ export default function Mail() {
                           </div>
                         ))}
                       </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Logs Tab */}
+                {tab === "logs" && (
+                  <div className="space-y-4">
+                    <div className="flex justify-end">
+                      <button onClick={loadMailLogs} className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded text-xs font-medium hover:bg-dark-600">Refresh</button>
+                    </div>
+                    {mailLogs && (
+                      <>
+                        <div className="grid grid-cols-4 gap-3">
+                          {[
+                            { label: "Sent", value: mailLogs.stats.sent, color: "text-rust-400" },
+                            { label: "Received", value: mailLogs.stats.received, color: "text-blue-400" },
+                            { label: "Bounced", value: mailLogs.stats.bounced, color: "text-warn-400" },
+                            { label: "Rejected", value: mailLogs.stats.rejected, color: "text-danger-400" },
+                          ].map(s => (
+                            <div key={s.label} className="bg-dark-800 rounded-lg border border-dark-500 p-4 text-center">
+                              <p className="text-xs text-dark-300 uppercase font-mono">{s.label}</p>
+                              <p className={`text-2xl font-bold mt-1 ${s.color}`}>{s.value}</p>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+                          <div className="px-5 py-3 border-b border-dark-600">
+                            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Recent Activity</h3>
+                          </div>
+                          <div className="divide-y divide-dark-600 max-h-96 overflow-y-auto">
+                            {mailLogs.recent.map((entry: any, i: number) => (
+                              <div key={i} className="px-5 py-2 flex items-start gap-3">
+                                <span className="text-xs text-dark-300 font-mono shrink-0 mt-0.5">{entry.time}</span>
+                                <span className={`text-xs font-mono break-all ${entry.level === "error" ? "text-danger-400" : "text-dark-200"}`}>{entry.message}</span>
+                              </div>
+                            ))}
+                            {mailLogs.recent.length === 0 && <p className="px-5 py-4 text-sm text-dark-300">No recent mail activity</p>}
+                          </div>
+                        </div>
+                      </>
                     )}
                   </div>
                 )}

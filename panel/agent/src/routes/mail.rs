@@ -96,6 +96,9 @@ pub fn router() -> Router<AppState> {
         .route("/mail/relay/configure", post(relay_configure))
         .route("/mail/relay/status", get(relay_status))
         .route("/mail/relay/remove", post(relay_remove))
+        // Logs & Storage
+        .route("/mail/logs", get(mail_logs))
+        .route("/mail/storage", get(storage_usage))
 }
 
 // ── Mail server status + installation ────────────────────────────────────
@@ -800,6 +803,93 @@ async fn relay_remove() -> Result<Json<serde_json::Value>, ApiErr> {
     let _ = Command::new("systemctl").args(["reload", "postfix"]).output().await;
 
     Ok(ok("SMTP relay removed"))
+}
+
+// ── Mail Logs ───────────────────────────────────────────────────────────
+
+/// GET /mail/logs — Parse mail.log for recent activity and stats.
+async fn mail_logs() -> Result<Json<serde_json::Value>, ApiErr> {
+    // Read last portion of mail.log (tail -5000 to avoid reading huge files)
+    let output = Command::new("tail")
+        .args(["-n", "5000", "/var/log/mail.log"])
+        .output().await;
+    let content = output.ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+
+    let mut sent = 0u32;
+    let mut received = 0u32;
+    let mut bounced = 0u32;
+    let mut rejected = 0u32;
+    let mut recent: Vec<serde_json::Value> = Vec::new();
+
+    for line in content.lines().rev() {
+        if line.contains("status=sent") { sent += 1; }
+        if line.contains("status=bounced") { bounced += 1; }
+        if line.contains("NOQUEUE: reject") || line.contains("status=rejected") { rejected += 1; }
+        if line.contains("delivered to maildir") || line.contains("lmtp(") { received += 1; }
+
+        // Collect recent entries (last 50 interesting lines)
+        if recent.len() < 50 && (line.contains("status=") || line.contains("NOQUEUE") || line.contains("delivered")) {
+            let time = if line.len() >= 15 { &line[..15] } else { "" };
+            let is_error = line.contains("bounced") || line.contains("reject") || line.contains("error");
+            recent.push(serde_json::json!({
+                "time": time,
+                "message": if line.len() > 16 { &line[16..line.len().min(200)] } else { line },
+                "level": if is_error { "error" } else { "info" },
+            }));
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "stats": { "sent": sent, "received": received, "bounced": bounced, "rejected": rejected },
+        "recent": recent,
+    })))
+}
+
+// ── Storage Usage ───────────────────────────────────────────────────────
+
+/// GET /mail/storage — Get storage usage for all mailboxes.
+async fn storage_usage() -> Result<Json<serde_json::Value>, ApiErr> {
+    let mut usage = Vec::new();
+
+    // Scan /var/vmail for domain/user directories
+    let mut domains = match tokio::fs::read_dir("/var/vmail").await {
+        Ok(d) => d,
+        Err(_) => return Ok(Json(serde_json::json!({ "accounts": [] }))),
+    };
+
+    while let Ok(Some(domain_entry)) = domains.next_entry().await {
+        if !domain_entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) { continue; }
+        let domain = domain_entry.file_name().to_string_lossy().to_string();
+
+        let mut users = match tokio::fs::read_dir(domain_entry.path()).await {
+            Ok(u) => u,
+            Err(_) => continue,
+        };
+
+        while let Ok(Some(user_entry)) = users.next_entry().await {
+            if !user_entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) { continue; }
+            let user = user_entry.file_name().to_string_lossy().to_string();
+
+            // Get directory size using du
+            let output = Command::new("du")
+                .args(["-sb", &user_entry.path().to_string_lossy()])
+                .output().await;
+
+            let bytes: u64 = output.ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().next().unwrap_or("0").parse().unwrap_or(0))
+                .unwrap_or(0);
+
+            usage.push(serde_json::json!({
+                "email": format!("{user}@{domain}"),
+                "bytes": bytes,
+                "mb": (bytes as f64 / 1024.0 / 1024.0 * 10.0).round() / 10.0,
+            }));
+        }
+    }
+
+    Ok(Json(serde_json::json!({ "accounts": usage })))
 }
 
 // ── Helper ──────────────────────────────────────────────────────────────

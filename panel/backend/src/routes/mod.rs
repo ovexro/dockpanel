@@ -346,6 +346,11 @@ pub fn router() -> Router<AppState> {
         .route("/api/mail/relay/configure", post(mail::relay_configure))
         .route("/api/mail/relay/status", get(mail::relay_status))
         .route("/api/mail/relay/remove", post(mail::relay_remove))
+        // Mail: DNS Verification
+        .route("/api/mail/domains/{id}/dns-check", get(mail::dns_check))
+        // Mail: Logs & Storage
+        .route("/api/mail/logs", get(mail::mail_logs))
+        .route("/api/mail/storage", get(mail::mail_storage))
         // Mail: Blacklist/Reputation Check
         .route("/api/mail/blacklist-check", get(mail::blacklist_check))
         // Agent Diagnostics proxy
