@@ -29,6 +29,21 @@ interface GitDeploy {
   last_deploy: string | null;
   last_commit: string | null;
   created_at: string;
+  github_token: string | null;
+  deploy_cron: string | null;
+}
+
+interface GitPreview {
+  id: string;
+  git_deploy_id: string;
+  branch: string;
+  container_name: string;
+  container_id: string | null;
+  host_port: number;
+  domain: string | null;
+  status: string;
+  commit_hash: string | null;
+  created_at: string;
 }
 
 interface DeployHistory {
@@ -73,6 +88,7 @@ export default function GitDeploys() {
   const [showEnvPaste, setShowEnvPaste] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [containerLogs, setContainerLogs] = useState("");
+  const [previews, setPreviews] = useState<GitPreview[]>([]);
 
   // Form state
   const [formName, setFormName] = useState("");
@@ -88,6 +104,8 @@ export default function GitDeploys() {
   const [formPostDeploy, setFormPostDeploy] = useState("");
   const [formBuildArgs, setFormBuildArgs] = useState<{ key: string; value: string }[]>([]);
   const [formBuildContext, setFormBuildContext] = useState(".");
+  const [formGithubToken, setFormGithubToken] = useState("");
+  const [formCron, setFormCron] = useState("");
 
   const loadDeploys = async () => {
     try {
@@ -121,8 +139,8 @@ export default function GitDeploys() {
   }, []);
 
   useEffect(() => {
-    if (selected) loadHistory(selected.id);
-    else setHistory([]);
+    if (selected) { loadHistory(selected.id); loadPreviews(selected.id); }
+    else { setHistory([]); setPreviews([]); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id]);
 
@@ -140,6 +158,8 @@ export default function GitDeploys() {
     setFormPostDeploy("");
     setFormBuildArgs([]);
     setFormBuildContext(".");
+    setFormGithubToken("");
+    setFormCron("");
   };
 
   const openCreate = () => {
@@ -167,6 +187,8 @@ export default function GitDeploys() {
       Object.entries(selected.build_args || {}).map(([key, value]) => ({ key, value }))
     );
     setFormBuildContext(selected.build_context || ".");
+    setFormGithubToken(selected.github_token && selected.github_token !== "\u25CF\u25CF\u25CF\u25CF\u25CF\u25CF\u25CF\u25CF" ? selected.github_token : "");
+    setFormCron(selected.deploy_cron || "");
     setEditing(true);
     setShowModal(true);
   };
@@ -196,6 +218,8 @@ export default function GitDeploys() {
       post_deploy_cmd: formPostDeploy.trim() || null,
       build_args: buildArgs,
       build_context: formBuildContext.trim() || ".",
+      github_token: formGithubToken.trim() || null,
+      deploy_cron: formCron.trim() || null,
     };
     try {
       if (editing && selected) {
@@ -285,6 +309,17 @@ export default function GitDeploys() {
       const data = await api.get<{ logs: string }>(`/git-deploys/${selected.id}/logs`);
       setContainerLogs(data.logs);
     } catch { setContainerLogs("Failed to load logs"); }
+  };
+
+  const loadPreviews = async (id: string) => {
+    try { const data = await api.get<GitPreview[]>(`/git-deploys/${id}/previews`); setPreviews(data); }
+    catch { setPreviews([]); }
+  };
+
+  const deletePreview = async (previewId: string) => {
+    if (!selected || !confirm("Delete this preview deployment?")) return;
+    try { await api.delete(`/git-deploys/${selected.id}/previews/${previewId}`); loadPreviews(selected.id); }
+    catch (e) { setMessage({ text: e instanceof Error ? e.message : "Delete failed", type: "error" }); }
   };
 
   return (
@@ -441,6 +476,8 @@ export default function GitDeploys() {
                   { label: "Pre-build Cmd", value: selected.pre_build_cmd || "\u2014" },
                   { label: "Post-deploy Cmd", value: selected.post_deploy_cmd || "\u2014" },
                   { label: "Build Context", value: selected.build_context || "." },
+                  { label: "GitHub", value: selected.github_token ? "Connected" : "Not configured" },
+                  { label: "Deploy Schedule", value: selected.deploy_cron || "\u2014" },
                 ].map((field) => (
                   <div key={field.label}>
                     <span className="block text-xs font-medium text-dark-300 mb-0.5">{field.label}</span>
@@ -671,6 +708,31 @@ export default function GitDeploys() {
                         </pre>
                       </div>
                     )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Preview Deployments */}
+          {previews.length > 0 && (
+            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+              <div className="px-5 py-4 border-b border-dark-600">
+                <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Preview Deployments</h2>
+              </div>
+              <div className="divide-y divide-dark-600">
+                {previews.map(p => (
+                  <div key={p.id} className="px-5 py-3 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusBadge(p.status)}`}>{p.status}</span>
+                      <code className="text-sm text-dark-50 font-mono">{p.branch}</code>
+                      {p.commit_hash && <code className="text-xs text-dark-300 font-mono">{p.commit_hash.substring(0, 8)}</code>}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {p.domain && <a href={`http://${p.domain}`} target="_blank" rel="noreferrer" className="text-xs text-rust-400 hover:text-rust-300">Open</a>}
+                      <span className="text-xs text-dark-300 font-mono">:{p.host_port}</span>
+                      <button onClick={() => deletePreview(p.id)} className="text-xs text-danger-400 hover:text-danger-300">Delete</button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -973,6 +1035,22 @@ export default function GitDeploys() {
                   className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none"
                 />
                 <p className="text-xs text-dark-300 mt-1">Subdirectory for Docker build context (default: repo root)</p>
+              </div>
+
+              {/* GitHub Token */}
+              <div>
+                <label className="block text-sm font-medium text-dark-100 mb-1">GitHub Token</label>
+                <input type="password" value={formGithubToken} onChange={(e) => setFormGithubToken(e.target.value)}
+                  placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none" />
+                <p className="text-xs text-dark-300 mt-1">Sets commit status in GitHub after deploy (optional)</p>
+              </div>
+
+              {/* Deploy Schedule */}
+              <div>
+                <label className="block text-sm font-medium text-dark-100 mb-1">Deploy Schedule (cron)</label>
+                <input type="text" value={formCron} onChange={(e) => setFormCron(e.target.value)}
+                  placeholder="0 3 * * * (daily at 3 AM UTC)" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none" />
+                <p className="text-xs text-dark-300 mt-1">Auto-deploy on schedule (cron format: minute hour day month weekday)</p>
               </div>
             </div>
 
