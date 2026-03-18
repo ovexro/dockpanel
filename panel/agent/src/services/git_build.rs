@@ -210,6 +210,8 @@ pub async fn deploy_or_update(
     env_vars: HashMap<String, String>,
     domain: Option<&str>,
     templates: &Tera,
+    memory_mb: Option<u64>,
+    cpu_percent: Option<u64>,
 ) -> Result<GitDeployResult, String> {
     let docker =
         Docker::connect_with_local_defaults().map_err(|e| format!("Docker connect failed: {e}"))?;
@@ -246,7 +248,7 @@ pub async fn deploy_or_update(
     let mut exposed_ports = HashMap::new();
     exposed_ports.insert(container_port_key, HashMap::new());
 
-    let host_config = bollard::service::HostConfig {
+    let mut host_config = bollard::service::HostConfig {
         port_bindings: Some(port_bindings),
         restart_policy: Some(bollard::service::RestartPolicy {
             name: Some(bollard::service::RestartPolicyNameEnum::UNLESS_STOPPED),
@@ -254,6 +256,19 @@ pub async fn deploy_or_update(
         }),
         ..Default::default()
     };
+
+    if let Some(mem) = memory_mb {
+        if mem > 0 {
+            host_config.memory = Some((mem * 1024 * 1024) as i64);
+            host_config.memory_swap = Some((mem * 2 * 1024 * 1024) as i64);
+        }
+    }
+    if let Some(cpu) = cpu_percent {
+        if cpu > 0 && cpu <= 100 {
+            host_config.cpu_period = Some(100_000);
+            host_config.cpu_quota = Some((cpu * 1000) as i64);
+        }
+    }
 
     // Check if container already exists
     let existing = find_container(&docker, &container_name).await;

@@ -65,6 +65,9 @@ export default function GitDeploys() {
   const [expandedLog, setExpandedLog] = useState<string | null>(null);
   const [showDeployKey, setShowDeployKey] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [showEnvPaste, setShowEnvPaste] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
+  const [containerLogs, setContainerLogs] = useState("");
 
   // Form state
   const [formName, setFormName] = useState("");
@@ -243,6 +246,14 @@ export default function GitDeploys() {
     navigator.clipboard.writeText(text);
     setMessage({ text: "Copied to clipboard.", type: "success" });
     setTimeout(() => setMessage({ text: "", type: "" }), 2000);
+  };
+
+  const loadContainerLogs = async () => {
+    if (!selected) return;
+    try {
+      const data = await api.get<{ logs: string }>(`/git-deploys/${selected.id}/logs`);
+      setContainerLogs(data.logs);
+    } catch { setContainerLogs("Failed to load logs"); }
   };
 
   return (
@@ -429,6 +440,15 @@ export default function GitDeploys() {
               {deploying === selected.id && <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
               {deploying === selected.id ? "Deploying..." : "Deploy Now"}
             </button>
+            {selected.status === "running" && (
+              <>
+                <button onClick={async () => { await api.post(`/git-deploys/${selected.id}/stop`); loadDeploys(); }} className="px-3 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 transition-colors">Stop</button>
+                <button onClick={async () => { await api.post(`/git-deploys/${selected.id}/restart`); loadDeploys(); }} className="px-3 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 transition-colors">Restart</button>
+              </>
+            )}
+            {selected.status === "stopped" && (
+              <button onClick={async () => { await api.post(`/git-deploys/${selected.id}/start`); loadDeploys(); setMessage({ text: "Container started", type: "success" }); }} className="px-3 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors">Start</button>
+            )}
             <button
               onClick={() => handleDelete(selected.id)}
               className="px-4 py-2 bg-red-500/10 text-danger-400 rounded-lg text-sm font-medium hover:bg-red-500/20 transition-colors"
@@ -484,6 +504,29 @@ export default function GitDeploys() {
               </div>
             )}
           </div>
+
+          {/* Container Logs */}
+          {selected.container_id && (
+            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+              <button onClick={() => { setShowLogs(!showLogs); if (!showLogs) loadContainerLogs(); }} className="w-full px-5 py-4 flex items-center justify-between hover:bg-dark-700/30 transition-colors">
+                <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Container Logs</h2>
+                <svg className={`w-4 h-4 text-dark-300 transition-transform ${showLogs ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                </svg>
+              </button>
+              {showLogs && (
+                <div className="border-t border-dark-600">
+                  <div className="flex items-center justify-between px-5 py-2 bg-dark-900">
+                    <span className="text-xs text-dark-300 font-mono">stdout + stderr</span>
+                    <button onClick={loadContainerLogs} className="text-xs text-rust-400 hover:text-rust-300 transition-colors">Refresh</button>
+                  </div>
+                  <pre className="p-4 text-[11px] font-mono text-dark-200 bg-[#020202] max-h-80 overflow-y-auto overflow-x-auto whitespace-pre-wrap">
+                    {containerLogs || "No logs available"}
+                  </pre>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Webhook URL */}
           {selected.auto_deploy && (
@@ -688,56 +731,89 @@ export default function GitDeploys() {
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-sm font-medium text-dark-100">Environment Variables</label>
-                  <button
-                    type="button"
-                    onClick={() => setFormEnvVars([...formEnvVars, { key: "", value: "" }])}
-                    className="px-2 py-0.5 text-xs text-rust-400 hover:text-rust-300 font-medium transition-colors"
-                  >
-                    + Add
-                  </button>
-                </div>
-                {formEnvVars.length === 0 && (
-                  <p className="text-xs text-dark-300">No environment variables defined</p>
-                )}
-                <div className="space-y-2">
-                  {formEnvVars.map((ev, i) => (
-                    <div key={i} className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={ev.key}
-                        onChange={(e) => {
-                          const next = [...formEnvVars];
-                          next[i] = { ...next[i], key: e.target.value };
-                          setFormEnvVars(next);
-                        }}
-                        placeholder="KEY"
-                        className="flex-1 px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none"
-                      />
-                      <span className="text-dark-300">=</span>
-                      <input
-                        type="text"
-                        value={ev.value}
-                        onChange={(e) => {
-                          const next = [...formEnvVars];
-                          next[i] = { ...next[i], value: e.target.value };
-                          setFormEnvVars(next);
-                        }}
-                        placeholder="value"
-                        className="flex-1 px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none"
-                      />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowEnvPaste(!showEnvPaste)}
+                      className="text-xs text-rust-400 hover:text-rust-300 transition-colors"
+                    >
+                      {showEnvPaste ? "Manual entry" : "Paste .env"}
+                    </button>
+                    {!showEnvPaste && (
                       <button
                         type="button"
-                        onClick={() => setFormEnvVars(formEnvVars.filter((_, j) => j !== i))}
-                        className="p-1.5 text-danger-400 hover:text-danger-300 transition-colors"
-                        title="Remove variable"
+                        onClick={() => setFormEnvVars([...formEnvVars, { key: "", value: "" }])}
+                        className="px-2 py-0.5 text-xs text-rust-400 hover:text-rust-300 font-medium transition-colors"
                       >
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-                        </svg>
+                        + Add
                       </button>
-                    </div>
-                  ))}
+                    )}
+                  </div>
                 </div>
+                {showEnvPaste ? (
+                  <textarea
+                    placeholder={"KEY=value\nDATABASE_URL=postgres://...\nSECRET_KEY=abc123"}
+                    rows={6}
+                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none"
+                    onBlur={(e) => {
+                      const lines = e.target.value.split("\n").filter((l) => l.trim() && !l.startsWith("#"));
+                      const parsed = lines.map((l) => {
+                        const eq = l.indexOf("=");
+                        if (eq === -1) return { key: l.trim(), value: "" };
+                        return { key: l.substring(0, eq).trim(), value: l.substring(eq + 1).trim().replace(/^["']|["']$/g, "") };
+                      }).filter((p) => p.key);
+                      if (parsed.length > 0) {
+                        setFormEnvVars(parsed);
+                        setShowEnvPaste(false);
+                      }
+                    }}
+                  />
+                ) : (
+                  <>
+                    {formEnvVars.length === 0 && (
+                      <p className="text-xs text-dark-300">No environment variables defined</p>
+                    )}
+                    <div className="space-y-2">
+                      {formEnvVars.map((ev, i) => (
+                        <div key={i} className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={ev.key}
+                            onChange={(e) => {
+                              const next = [...formEnvVars];
+                              next[i] = { ...next[i], key: e.target.value };
+                              setFormEnvVars(next);
+                            }}
+                            placeholder="KEY"
+                            className="flex-1 px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none"
+                          />
+                          <span className="text-dark-300">=</span>
+                          <input
+                            type="text"
+                            value={ev.value}
+                            onChange={(e) => {
+                              const next = [...formEnvVars];
+                              next[i] = { ...next[i], value: e.target.value };
+                              setFormEnvVars(next);
+                            }}
+                            placeholder="value"
+                            className="flex-1 px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setFormEnvVars(formEnvVars.filter((_, j) => j !== i))}
+                            className="p-1.5 text-danger-400 hover:text-danger-300 transition-colors"
+                            title="Remove variable"
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Auto-deploy toggle */}
