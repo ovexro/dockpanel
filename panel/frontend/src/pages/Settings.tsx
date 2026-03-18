@@ -69,6 +69,20 @@ export default function Settings() {
   const [testingWebhook, setTestingWebhook] = useState<string | null>(null);
   const [webhookResult, setWebhookResult] = useState<{ type: string; msg: string }>({ type: "", msg: "" });
 
+  // Password change
+  const [currentPass, setCurrentPass] = useState("");
+  const [newPass, setNewPass] = useState("");
+  const [confirmPass, setConfirmPass] = useState("");
+
+  // API Keys
+  const [apiKeys, setApiKeys] = useState<any[]>([]);
+  const [showNewKey, setShowNewKey] = useState(false);
+  const [newKeyName, setNewKeyName] = useState("");
+  const [newKeyResult, setNewKeyResult] = useState<string | null>(null);
+
+  // Hostname
+  const [hostname, setHostname] = useState("");
+
   // Backup destinations
   const [destinations, setDestinations] = useState<BackupDestination[]>([]);
   const [showDestForm, setShowDestForm] = useState(false);
@@ -161,6 +175,10 @@ export default function Settings() {
     loadNotifyChannels();
     api.get<{ count: number }>("/system/updates/count")
       .then((d) => setUpdateCount(d.count))
+      .catch(() => {});
+    api.get<any[]>("/api-keys").then(setApiKeys).catch(() => {});
+    api.get<{ hostname?: string }>("/system/info")
+      .then((d) => { if (d.hostname) setHostname(d.hostname); })
       .catch(() => {});
     healthTimer.current = setInterval(loadHealth, 30000);
     return () => clearInterval(healthTimer.current);
@@ -422,6 +440,164 @@ export default function Settings() {
               >
                 <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${settings.status_page_enabled === "true" ? "translate-x-6" : "translate-x-1"}`} />
               </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Feature #1: Timezone */}
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Timezone</h3>
+          </div>
+          <div className="p-5">
+            <select value={settings.timezone || "UTC"} onChange={async (e) => {
+              try {
+                await api.put("/settings", { timezone: e.target.value });
+                setSettings({ ...settings, timezone: e.target.value });
+                setMessage({ text: "Timezone updated", type: "success" });
+              } catch (err) { setMessage({ text: err instanceof Error ? err.message : "Failed", type: "error" }); }
+            }} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none">
+              {["UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+                "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Bucharest", "Europe/Moscow",
+                "Asia/Tokyo", "Asia/Shanghai", "Asia/Kolkata", "Asia/Dubai",
+                "Australia/Sydney", "Pacific/Auckland"].map(tz => (
+                <option key={tz} value={tz}>{tz}</option>
+              ))}
+            </select>
+            <p className="text-xs text-dark-300 mt-1">Affects displayed timestamps throughout the panel</p>
+          </div>
+        </div>
+
+        {/* Feature #2: Branding */}
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Branding</h3>
+          </div>
+          <div className="p-5 space-y-3">
+            <div>
+              <label className="block text-sm font-medium text-dark-100 mb-1">Logo URL</label>
+              <input type="url" value={settings.logo_url || ""} onChange={e => setSettings({ ...settings, logo_url: e.target.value })}
+                placeholder="https://example.com/logo.png" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-dark-100 mb-1">Accent Color</label>
+              <div className="flex gap-2">
+                {["#22c55e", "#3b82f6", "#8b5cf6", "#ec4899", "#f59e0b", "#ef4444"].map(color => (
+                  <button key={color} onClick={() => setSettings({ ...settings, accent_color: color })}
+                    className={`w-8 h-8 rounded-full border-2 ${settings.accent_color === color ? "border-white" : "border-transparent"}`}
+                    style={{ backgroundColor: color }} />
+                ))}
+              </div>
+            </div>
+            <button onClick={async () => {
+              try {
+                await api.put("/settings", { logo_url: settings.logo_url || "", accent_color: settings.accent_color || "" });
+                setMessage({ text: "Branding saved", type: "success" });
+              } catch (err) { setMessage({ text: err instanceof Error ? err.message : "Failed", type: "error" }); }
+            }} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50">Save Branding</button>
+          </div>
+        </div>
+
+        {/* Feature #5: Configuration Backup */}
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Configuration Backup</h3>
+          </div>
+          <div className="p-5 flex gap-3">
+            <button onClick={async () => {
+              try {
+                const data = await api.get<any>("/settings/export");
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a"); a.href = url; a.download = "dockpanel-config.json"; a.click();
+                URL.revokeObjectURL(url);
+              } catch (err) { setMessage({ text: err instanceof Error ? err.message : "Export failed", type: "error" }); }
+            }} className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600">Export Config</button>
+            <label className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 cursor-pointer">
+              Import Config
+              <input type="file" accept=".json" className="hidden" onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const text = await file.text();
+                try {
+                  const data = JSON.parse(text);
+                  if (!confirm(`Import ${Object.keys(data.settings || {}).length} settings? This will overwrite existing values.`)) return;
+                  await api.post("/settings/import", data);
+                  setMessage({ text: "Config imported", type: "success" });
+                  window.location.reload();
+                } catch { setMessage({ text: "Invalid config file", type: "error" }); }
+                e.target.value = "";
+              }} />
+            </label>
+          </div>
+        </div>
+
+        {/* Feature #9: Disk Cleanup */}
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Disk Cleanup</h3>
+          </div>
+          <div className="p-5 flex items-center justify-between">
+            <div>
+              <p className="text-sm text-dark-100">Free disk space</p>
+              <p className="text-xs text-dark-300 mt-0.5">Clears apt cache, old logs, temp files, dangling Docker images</p>
+            </div>
+            <button onClick={async () => {
+              try {
+                const result = await api.post<any>("/system/cleanup");
+                setMessage({ text: `Cleaned: ${result.cleaned?.join(", ") || "done"}`, type: "success" });
+              } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+            }} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600">Clean Up</button>
+          </div>
+        </div>
+
+        {/* Feature #10: Hostname */}
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Server Hostname</h3>
+          </div>
+          <div className="p-5">
+            <div className="flex gap-2">
+              <input type="text" value={hostname} onChange={e => setHostname(e.target.value)}
+                placeholder="server.example.com" className="flex-1 px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none" />
+              <button onClick={async () => {
+                try {
+                  await api.post("/system/hostname", { hostname });
+                  setMessage({ text: "Hostname updated", type: "success" });
+                } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+              }} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 shrink-0">Save</button>
+            </div>
+            <p className="text-xs text-dark-300 mt-1">Only alphanumeric characters, hyphens, and dots allowed</p>
+          </div>
+        </div>
+
+        {/* Feature #11: Theme Toggle */}
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Appearance</h3>
+          </div>
+          <div className="p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">Theme</p>
+              </div>
+              <select defaultValue={localStorage.getItem("dp-theme") || "dark"} onChange={e => {
+                localStorage.setItem("dp-theme", e.target.value);
+                document.documentElement.setAttribute("data-theme", e.target.value);
+              }} className="px-2 py-1.5 border border-dark-500 rounded text-sm">
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+              </select>
+            </div>
+            {/* Feature #12: Locale Selector */}
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">Language</p>
+                <p className="text-xs text-dark-300">More languages coming soon</p>
+              </div>
+              <select disabled className="px-2 py-1.5 border border-dark-500 rounded text-sm opacity-50">
+                <option>English</option>
+              </select>
             </div>
           </div>
         </div>
@@ -908,10 +1084,116 @@ export default function Settings() {
 
         {/* IP Whitelist — Security tab */}
         <IPWhitelist />
+
+        {/* Feature #6: Password Change */}
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-4">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Change Password</h3>
+          </div>
+          <div className="p-5 space-y-3">
+            <input type="password" value={currentPass} onChange={e => setCurrentPass(e.target.value)} placeholder="Current password"
+              className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+            <input type="password" value={newPass} onChange={e => setNewPass(e.target.value)} placeholder="New password (min 8 chars)"
+              className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+            <input type="password" value={confirmPass} onChange={e => setConfirmPass(e.target.value)} placeholder="Confirm new password"
+              className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+            <button disabled={!currentPass || !newPass || newPass !== confirmPass || newPass.length < 8} onClick={async () => {
+              try {
+                await api.post("/auth/change-password", { current_password: currentPass, new_password: newPass });
+                setMessage({ text: "Password changed successfully", type: "success" });
+                setCurrentPass(""); setNewPass(""); setConfirmPass("");
+              } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+            }} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50">
+              Change Password
+            </button>
+          </div>
+        </div>
+
+        {/* Feature #3: Session Management */}
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-4">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Sessions</h3>
+          </div>
+          <div className="p-5 flex items-center justify-between">
+            <div>
+              <p className="text-sm text-dark-100">Active Sessions</p>
+              <p className="text-xs text-dark-300 mt-0.5">Force all users to re-login</p>
+            </div>
+            <button onClick={async () => {
+              if (!confirm("Revoke all sessions? All users (including you) will be logged out.")) return;
+              try {
+                await api.post("/auth/revoke-all");
+                setMessage({ text: "All sessions revoked", type: "success" });
+                setTimeout(() => { window.location.href = "/login"; }, 2000);
+              } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+            }} className="px-3 py-1.5 bg-red-500/10 text-danger-400 rounded text-xs font-medium hover:bg-red-500/20">Revoke All Sessions</button>
+          </div>
+        </div>
+
+        {/* Feature #4: API Key Management */}
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-4">
+          <div className="px-5 py-3 border-b border-dark-600 flex justify-between items-center">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">API Keys</h3>
+            <button onClick={() => setShowNewKey(!showNewKey)} className="text-xs text-rust-400 hover:text-rust-300">
+              {showNewKey ? "Cancel" : "+ Create Key"}
+            </button>
+          </div>
+          {showNewKey && (
+            <div className="px-5 py-3 border-b border-dark-600 flex gap-2">
+              <input value={newKeyName} onChange={e => setNewKeyName(e.target.value)} placeholder="Key name"
+                className="flex-1 px-3 py-1.5 border border-dark-500 rounded text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+              <button onClick={async () => {
+                try {
+                  const result = await api.post<{ key: string }>("/api-keys", { name: newKeyName || "API Key" });
+                  setNewKeyResult(result.key);
+                  setNewKeyName("");
+                  setShowNewKey(false);
+                  api.get<any[]>("/api-keys").then(setApiKeys).catch(() => {});
+                } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+              }} className="px-3 py-1.5 bg-rust-500 text-white rounded text-xs font-medium hover:bg-rust-600">Create</button>
+            </div>
+          )}
+          {newKeyResult && (
+            <div className="px-5 py-3 border-b border-dark-600 bg-rust-500/5">
+              <p className="text-xs text-rust-400 mb-1">Copy this key now — it won't be shown again:</p>
+              <div className="flex gap-2">
+                <code className="flex-1 px-2 py-1 bg-dark-900 rounded text-xs font-mono text-dark-100 break-all">{newKeyResult}</code>
+                <button onClick={() => { navigator.clipboard.writeText(newKeyResult); setNewKeyResult(null); }} className="px-2 py-1 bg-dark-700 rounded text-xs text-dark-200 shrink-0">Copy</button>
+              </div>
+            </div>
+          )}
+          <div className="divide-y divide-dark-600">
+            {apiKeys.map((k: any) => (
+              <div key={k.id} className="px-5 py-2.5 flex items-center justify-between text-xs">
+                <div>
+                  <span className="text-dark-100">{k.name}</span>
+                  <span className="text-dark-400 ml-2">Created {new Date(k.created_at).toLocaleDateString()}</span>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={async () => {
+                    try {
+                      const r = await api.post<{ key: string }>(`/api-keys/${k.id}/rotate`);
+                      setNewKeyResult(r.key);
+                      api.get<any[]>("/api-keys").then(setApiKeys).catch(() => {});
+                    } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                  }} className="text-dark-300 hover:text-dark-100">Rotate</button>
+                  <button onClick={async () => {
+                    if (!confirm("Revoke this API key?")) return;
+                    try {
+                      await api.delete(`/api-keys/${k.id}`);
+                      setApiKeys(apiKeys.filter((a: any) => a.id !== k.id));
+                    } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                  }} className="text-danger-400 hover:text-danger-300">Revoke</button>
+                </div>
+              </div>
+            ))}
+            {apiKeys.length === 0 && <p className="px-5 py-3 text-xs text-dark-300">No API keys created</p>}
+          </div>
+        </div>
         </>)}
 
         {/* Notification Channels */}
-        {tab === "notifications" && (
+        {tab === "notifications" && (<>
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600">
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Notification Channels</h3>
@@ -1033,7 +1315,44 @@ export default function Settings() {
             </div>
           </div>
         </div>
-        )}
+
+        {/* Feature #8: Email Footer + Feature #13: Events Webhook */}
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-4">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Additional Settings</h3>
+          </div>
+          <div className="p-5 space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-dark-100 mb-1">Email Footer Text</label>
+              <input type="text" value={settings.email_footer || ""} onChange={e => setSettings({ ...settings, email_footer: e.target.value })}
+                placeholder="Sent by DockPanel" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+              <p className="text-xs text-dark-300 mt-1">Custom footer text appended to notification emails</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-dark-100 mb-1">Panel Events Webhook</label>
+              <input type="url" value={settings.events_webhook_url || ""} onChange={e => setSettings({ ...settings, events_webhook_url: e.target.value })}
+                placeholder="https://example.com/webhook" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none" />
+              <p className="text-xs text-dark-300 mt-1">Receives POST for site.create, app.deploy, security.scan events</p>
+            </div>
+            <div className="flex justify-end">
+              <button onClick={async () => {
+                setSaving("notifyExtra");
+                setMessage({ text: "", type: "" });
+                try {
+                  await api.put("/settings", {
+                    email_footer: settings.email_footer || "",
+                    events_webhook_url: settings.events_webhook_url || "",
+                  });
+                  setMessage({ text: "Settings saved", type: "success" });
+                } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                finally { setSaving(null); }
+              }} disabled={saving === "notifyExtra"} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50">
+                {saving === "notifyExtra" ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+        </>)}
 
         {/* Services tab: Service Installers (incl. PowerDNS config), System Health */}
         {tab === "services" && (<>

@@ -55,6 +55,9 @@ pub async fn update(
         "stripe_price_starter", "stripe_price_pro", "stripe_price_agency",
         "agent_latest_version", "agent_download_url", "agent_checksum",
         "pdns_api_url", "pdns_api_key",
+        "auto_heal_enabled", "status_page_enabled", "enforce_2fa",
+        "timezone", "logo_url", "accent_color",
+        "email_footer", "events_webhook_url",
     ];
     for key in body.keys() {
         if !allowed_keys.contains(&key.as_str()) {
@@ -193,6 +196,58 @@ pub async fn test_webhook(
     }
 
     Ok(Json(serde_json::json!({ "ok": true, "message": format!("{} test sent", service) })))
+}
+
+/// GET /api/settings/export — Export all panel settings as JSON.
+pub async fn export_config(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let rows: Vec<SettingRow> = sqlx::query_as("SELECT key, value FROM settings")
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let map: HashMap<String, String> = rows
+        .into_iter()
+        .filter(|r| r.key != "smtp_password" && r.key != "pdns_api_key")
+        .map(|r| (r.key, r.value))
+        .collect();
+
+    Ok(Json(serde_json::json!({ "settings": map, "exported_at": chrono::Utc::now().to_rfc3339() })))
+}
+
+/// POST /api/settings/import — Import panel settings from JSON.
+pub async fn import_config(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let settings_obj = body.get("settings").and_then(|s| s.as_object())
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Invalid format: missing 'settings' object"))?;
+
+    let mut imported = 0;
+    for (key, value) in settings_obj {
+        if let Some(val) = value.as_str() {
+            sqlx::query(
+                "INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, NOW()) \
+                 ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()",
+            )
+            .bind(key)
+            .bind(val)
+            .execute(&state.db)
+            .await
+            .ok();
+            imported += 1;
+        }
+    }
+
+    crate::services::activity::log_activity(
+        &state.db, claims.sub, &claims.email, "settings.import",
+        Some("settings"), None, None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({ "ok": true, "imported": imported })))
 }
 
 /// GET /api/settings/health — System health check (admin only).

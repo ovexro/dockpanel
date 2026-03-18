@@ -248,10 +248,57 @@ async fn read_diskstats() -> (u64, u64) {
     (reads, writes)
 }
 
+/// POST /system/cleanup — Free disk space by clearing caches and temp files.
+async fn disk_cleanup() -> Json<serde_json::Value> {
+    let mut freed = Vec::new();
+
+    // 1. apt cache
+    if tokio::process::Command::new("apt-get").args(["clean"]).output().await.is_ok() {
+        freed.push("apt cache");
+    }
+
+    // 2. journal logs older than 3 days
+    if tokio::process::Command::new("journalctl").args(["--vacuum-time=3d"]).output().await.is_ok() {
+        freed.push("old journal logs");
+    }
+
+    // 3. tmp files older than 7 days
+    if tokio::process::Command::new("find").args(["/tmp", "-type", "f", "-mtime", "+7", "-delete"]).output().await.is_ok() {
+        freed.push("old temp files");
+    }
+
+    // 4. Docker dangling images
+    if tokio::process::Command::new("docker").args(["image", "prune", "-f"]).output().await.is_ok() {
+        freed.push("dangling Docker images");
+    }
+
+    // Get disk usage after cleanup
+    let df = tokio::process::Command::new("df").args(["-h", "/"]).output().await;
+    let disk_info = df.ok().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+
+    Json(serde_json::json!({
+        "cleaned": freed,
+        "disk_after": disk_info.lines().nth(1).unwrap_or("")
+    }))
+}
+
+/// POST /system/hostname — Change server hostname.
+async fn change_hostname(Json(body): Json<serde_json::Value>) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let hostname = body.get("hostname").and_then(|v| v.as_str()).unwrap_or("");
+    if hostname.is_empty() || hostname.len() > 63 || !hostname.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.') {
+        return Err((axum::http::StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid hostname"}))));
+    }
+
+    let _ = tokio::process::Command::new("hostnamectl").args(["set-hostname", hostname]).output().await;
+    Ok(Json(serde_json::json!({ "ok": true, "hostname": hostname })))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/system/info", get(system_info))
         .route("/system/processes", get(processes))
         .route("/system/network", get(network))
         .route("/system/disk-io", get(disk_io))
+        .route("/system/cleanup", axum::routing::post(disk_cleanup))
+        .route("/system/hostname", axum::routing::post(change_hostname))
 }
