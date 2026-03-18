@@ -887,6 +887,97 @@ async fn stack_action(
     })))
 }
 
+/// GET /apps/images — List Docker images.
+async fn list_images() -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let output = tokio::process::Command::new("docker")
+        .args(["images", "--format", "{{.Repository}}|{{.Tag}}|{{.ID}}|{{.Size}}|{{.CreatedSince}}", "--no-trunc"])
+        .output().await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let images: Vec<serde_json::Value> = stdout.lines().filter(|l| !l.is_empty()).map(|l| {
+        let parts: Vec<&str> = l.split('|').collect();
+        serde_json::json!({
+            "repository": parts.first().unwrap_or(&""),
+            "tag": parts.get(1).unwrap_or(&""),
+            "id": parts.get(2).unwrap_or(&""),
+            "size": parts.get(3).unwrap_or(&""),
+            "created": parts.get(4).unwrap_or(&""),
+        })
+    }).collect();
+
+    Ok(Json(serde_json::json!({ "images": images })))
+}
+
+/// POST /apps/images/prune — Remove unused Docker images.
+async fn prune_images_all() -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let output = tokio::process::Command::new("docker")
+        .args(["image", "prune", "-af"])
+        .output().await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(Json(serde_json::json!({ "success": true, "output": stdout.trim() })))
+}
+
+/// DELETE /apps/images/{id} — Remove a specific Docker image.
+async fn remove_image(Path(id): Path<String>) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // Strip sha256: prefix if present (docker images --no-trunc includes it)
+    let image_ref = if id.starts_with("sha256:") { &id } else { &id };
+    let output = tokio::process::Command::new("docker")
+        .args(["rmi", image_ref])
+        .output().await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err((StatusCode::CONFLICT, Json(serde_json::json!({"error": format!("Cannot remove: {}", stderr.chars().take(200).collect::<String>())}))));
+    }
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+#[derive(Deserialize)]
+struct SnapshotRequest {
+    tag: Option<String>,
+}
+
+/// POST /apps/{container_id}/snapshot — Commit container to image.
+async fn snapshot_container(
+    Path(container_id): Path<String>,
+    Json(body): Json<SnapshotRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_container_id(&container_id) {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Invalid container ID" }))));
+    }
+
+    let tag = body.tag.unwrap_or_else(|| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        format!("dockpanel-snapshot:{}", now)
+    });
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        tokio::process::Command::new("docker")
+            .args(["commit", &container_id, &tag])
+            .output()
+    ).await
+        .map_err(|_| (StatusCode::GATEWAY_TIMEOUT, Json(serde_json::json!({"error": "Snapshot timed out"}))))?
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Snapshot failed: {stderr}")}))));
+    }
+
+    let image_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    tracing::info!("Container snapshot: {container_id} → {tag} ({image_id})");
+
+    Ok(Json(serde_json::json!({ "success": true, "tag": tag, "image_id": image_id })))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/apps/templates", get(templates))
@@ -897,6 +988,9 @@ pub fn router() -> Router<AppState> {
         .route("/apps/registries", get(list_registries))
         .route("/apps/registry-login", post(registry_login))
         .route("/apps/registry-logout", post(registry_logout))
+        .route("/apps/images", get(list_images))
+        .route("/apps/images/prune", post(prune_images_all))
+        .route("/apps/images/{id}", delete(remove_image))
         .route("/apps", get(list))
         .route("/apps/{container_id}", delete(remove))
         .route("/apps/{container_id}/stop", post(stop))
@@ -909,4 +1003,5 @@ pub fn router() -> Router<AppState> {
         .route("/apps/{container_id}/shell-info", get(shell_info))
         .route("/apps/{container_id}/exec", post(exec_command))
         .route("/apps/{container_id}/volumes", get(container_volumes))
+        .route("/apps/{container_id}/snapshot", post(snapshot_container))
 }
