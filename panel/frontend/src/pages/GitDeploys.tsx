@@ -21,6 +21,9 @@ interface GitDeploy {
   status: string;
   memory_mb: number | null;
   cpu_percent: number | null;
+  ssl_email: string | null;
+  pre_build_cmd: string | null;
+  post_deploy_cmd: string | null;
   last_deploy: string | null;
   last_commit: string | null;
   created_at: string;
@@ -78,6 +81,9 @@ export default function GitDeploys() {
   const [formDomain, setFormDomain] = useState("");
   const [formEnvVars, setFormEnvVars] = useState<{ key: string; value: string }[]>([]);
   const [formAutoDeploy, setFormAutoDeploy] = useState(false);
+  const [formSslEmail, setFormSslEmail] = useState("");
+  const [formPreBuild, setFormPreBuild] = useState("");
+  const [formPostDeploy, setFormPostDeploy] = useState("");
 
   const loadDeploys = async () => {
     try {
@@ -125,6 +131,9 @@ export default function GitDeploys() {
     setFormDomain("");
     setFormEnvVars([]);
     setFormAutoDeploy(false);
+    setFormSslEmail("");
+    setFormPreBuild("");
+    setFormPostDeploy("");
   };
 
   const openCreate = () => {
@@ -145,6 +154,9 @@ export default function GitDeploys() {
       Object.entries(selected.env_vars).map(([key, value]) => ({ key, value }))
     );
     setFormAutoDeploy(selected.auto_deploy);
+    setFormSslEmail(selected.ssl_email || "");
+    setFormPreBuild(selected.pre_build_cmd || "");
+    setFormPostDeploy(selected.post_deploy_cmd || "");
     setEditing(true);
     setShowModal(true);
   };
@@ -165,6 +177,9 @@ export default function GitDeploys() {
       domain: formDomain.trim() || null,
       env_vars: envVars,
       auto_deploy: formAutoDeploy,
+      ssl_email: formSslEmail.trim() || null,
+      pre_build_cmd: formPreBuild.trim() || null,
+      post_deploy_cmd: formPostDeploy.trim() || null,
     };
     try {
       if (editing && selected) {
@@ -406,6 +421,9 @@ export default function GitDeploys() {
                   { label: "Last Commit", value: selected.last_commit ? selected.last_commit.substring(0, 8) : "\u2014" },
                   { label: "Memory Limit", value: selected.memory_mb ? `${selected.memory_mb} MB` : "None" },
                   { label: "CPU Limit", value: selected.cpu_percent ? `${selected.cpu_percent}%` : "None" },
+                  { label: "SSL Email", value: selected.ssl_email || "\u2014" },
+                  { label: "Pre-build Cmd", value: selected.pre_build_cmd || "\u2014" },
+                  { label: "Post-deploy Cmd", value: selected.post_deploy_cmd || "\u2014" },
                 ].map((field) => (
                   <div key={field.label}>
                     <span className="block text-xs font-medium text-dark-300 mb-0.5">{field.label}</span>
@@ -727,6 +745,16 @@ export default function GitDeploys() {
                 </div>
               </div>
 
+              {/* SSL Email */}
+              {formDomain && (
+                <div>
+                  <label className="block text-sm font-medium text-dark-100 mb-1">SSL Email (Let's Encrypt)</label>
+                  <input type="email" value={formSslEmail} onChange={(e) => setFormSslEmail(e.target.value)}
+                    placeholder="admin@example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+                  <p className="text-xs text-dark-300 mt-1">Auto-provisions HTTPS certificate on first deploy</p>
+                </div>
+              )}
+
               {/* Environment Variables */}
               <div>
                 <div className="flex items-center justify-between mb-1">
@@ -828,6 +856,22 @@ export default function GitDeploys() {
                   <span className="text-sm text-dark-100">Auto-deploy on push</span>
                 </label>
                 <p className="text-xs text-dark-300 mt-1 ml-6">Automatically deploy when commits are pushed via webhook</p>
+              </div>
+
+              {/* Pre-build Command */}
+              <div>
+                <label className="block text-sm font-medium text-dark-100 mb-1">Pre-build Command</label>
+                <input type="text" value={formPreBuild} onChange={(e) => setFormPreBuild(e.target.value)}
+                  placeholder="npm install, composer install, etc." className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none" />
+                <p className="text-xs text-dark-300 mt-1">Runs in the git repo directory before docker build</p>
+              </div>
+
+              {/* Post-deploy Command */}
+              <div>
+                <label className="block text-sm font-medium text-dark-100 mb-1">Post-deploy Command</label>
+                <input type="text" value={formPostDeploy} onChange={(e) => setFormPostDeploy(e.target.value)}
+                  placeholder="php artisan migrate, npx prisma migrate deploy, etc." className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none" />
+                <p className="text-xs text-dark-300 mt-1">Runs inside the container after deploy (docker exec)</p>
               </div>
             </div>
 
