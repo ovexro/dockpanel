@@ -1,6 +1,6 @@
 use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
-    StartContainerOptions, StopContainerOptions,
+    RenameContainerOptions, StartContainerOptions, StopContainerOptions,
 };
 use bollard::image::CreateImageOptions;
 use bollard::Docker;
@@ -57,6 +57,12 @@ pub struct DeployResult {
     pub container_id: String,
     pub name: String,
     pub port: u16,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UpdateResult {
+    pub container_id: String,
+    pub blue_green: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1185,8 +1191,328 @@ pub async fn get_app_logs(container_id: &str, tail: usize) -> Result<String, Str
     Ok(logs)
 }
 
-/// Update an app by pulling the latest image and recreating the container.
-pub async fn update_app(container_id: &str) -> Result<String, String> {
+/// Find a free port for the blue-green container by asking the OS.
+fn find_free_port() -> Result<u16, String> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| format!("Failed to find free port: {e}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| format!("Failed to get port: {e}"))?
+        .port();
+    drop(listener);
+    Ok(port)
+}
+
+/// Health check: wait for a container to accept TCP connections on a port.
+async fn health_check_port(port: u16, timeout_secs: u64) -> Result<(), String> {
+    let deadline =
+        tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    loop {
+        match tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await {
+            Ok(_) => return Ok(()),
+            Err(_) => {
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(format!(
+                        "Container failed health check on port {port} after {timeout_secs}s"
+                    ));
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+        }
+    }
+}
+
+/// Swap the proxy_pass port in an existing nginx config file.
+/// Returns Ok(()) on success, Err on failure.
+fn swap_nginx_proxy_port(domain: &str, old_port: u16, new_port: u16) -> Result<(), String> {
+    let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+    let content = std::fs::read_to_string(&config_path)
+        .map_err(|e| format!("Failed to read nginx config: {e}"))?;
+
+    let old_pattern = format!("proxy_pass http://127.0.0.1:{old_port};");
+    let new_pattern = format!("proxy_pass http://127.0.0.1:{new_port};");
+
+    if !content.contains(&old_pattern) {
+        return Err(format!(
+            "Nginx config for {domain} does not contain proxy_pass on port {old_port}"
+        ));
+    }
+
+    let new_content = content.replace(&old_pattern, &new_pattern);
+
+    // Atomic write
+    let tmp_path = format!("{config_path}.tmp");
+    std::fs::write(&tmp_path, &new_content)
+        .map_err(|e| format!("Failed to write nginx config: {e}"))?;
+    std::fs::rename(&tmp_path, &config_path).map_err(|e| {
+        std::fs::remove_file(&tmp_path).ok();
+        format!("Failed to rename nginx config: {e}")
+    })?;
+
+    Ok(())
+}
+
+/// Extract the host port from a container's HostConfig port bindings.
+fn extract_host_port(
+    host_config: &bollard::service::HostConfig,
+) -> Option<u16> {
+    host_config
+        .port_bindings
+        .as_ref()?
+        .values()
+        .next()?
+        .as_ref()?
+        .first()?
+        .host_port
+        .as_ref()?
+        .parse::<u16>()
+        .ok()
+}
+
+/// Blue-green update: start new container → health check → swap nginx → remove old.
+/// Returns UpdateResult on success. On ANY failure, rolls back and returns Err
+/// so the caller can fall back to stop/start.
+async fn blue_green_update(
+    docker: &Docker,
+    old_container_id: &str,
+    name: &str,
+    config: &bollard::models::ContainerConfig,
+    host_config: &bollard::service::HostConfig,
+    domain: &str,
+    old_port: u16,
+) -> Result<UpdateResult, String> {
+    let temp_port = find_free_port()?;
+    tracing::info!(
+        "Blue-green update for {name}: old_port={old_port}, temp_port={temp_port}"
+    );
+
+    // Build new host_config with temp port
+    let mut new_host_config = host_config.clone();
+    if let Some(ref mut pb) = new_host_config.port_bindings {
+        for bindings in pb.values_mut() {
+            if let Some(bindings) = bindings {
+                for binding in bindings.iter_mut() {
+                    binding.host_port = Some(temp_port.to_string());
+                }
+            }
+        }
+    }
+
+    // Create new container with a temp name
+    let new_name = format!("{name}-blue");
+
+    // Clean up stale blue container from a failed previous attempt
+    if docker.inspect_container(&new_name, None).await.is_ok() {
+        docker
+            .stop_container(&new_name, Some(StopContainerOptions { t: 5 }))
+            .await
+            .ok();
+        docker
+            .remove_container(
+                &new_name,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    v: false,
+                    ..Default::default()
+                }),
+            )
+            .await
+            .ok();
+    }
+
+    let new_config = Config {
+        image: config.image.clone(),
+        env: config.env.clone(),
+        exposed_ports: config.exposed_ports.clone(),
+        labels: config.labels.clone(),
+        host_config: Some(new_host_config),
+        cmd: config.cmd.clone(),
+        entrypoint: config.entrypoint.clone(),
+        working_dir: if config.working_dir.as_deref() == Some("") {
+            None
+        } else {
+            config.working_dir.clone()
+        },
+        ..Default::default()
+    };
+
+    let new_container = docker
+        .create_container(
+            Some(CreateContainerOptions {
+                name: new_name.as_str(),
+                platform: None,
+            }),
+            new_config,
+        )
+        .await
+        .map_err(|e| format!("Failed to create blue container: {e}"))?;
+
+    // Start new container
+    if let Err(e) = docker
+        .start_container(&new_container.id, None::<StartContainerOptions<String>>)
+        .await
+    {
+        docker
+            .remove_container(
+                &new_container.id,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    v: false,
+                    ..Default::default()
+                }),
+            )
+            .await
+            .ok();
+        return Err(format!("Failed to start blue container: {e}"));
+    }
+
+    // Health check the new container (30s timeout)
+    if let Err(e) = health_check_port(temp_port, 30).await {
+        docker
+            .stop_container(&new_container.id, Some(StopContainerOptions { t: 5 }))
+            .await
+            .ok();
+        docker
+            .remove_container(
+                &new_container.id,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    v: false,
+                    ..Default::default()
+                }),
+            )
+            .await
+            .ok();
+        return Err(format!("Blue container health check failed: {e}"));
+    }
+
+    // Swap nginx to point to new container's port
+    if let Err(e) = swap_nginx_proxy_port(domain, old_port, temp_port) {
+        docker
+            .stop_container(&new_container.id, Some(StopContainerOptions { t: 5 }))
+            .await
+            .ok();
+        docker
+            .remove_container(
+                &new_container.id,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    v: false,
+                    ..Default::default()
+                }),
+            )
+            .await
+            .ok();
+        return Err(format!("Nginx port swap failed: {e}"));
+    }
+
+    // Test nginx config before reloading
+    match crate::services::nginx::test_config().await {
+        Ok(output) if output.success => {
+            if let Err(e) = crate::services::nginx::reload().await {
+                // Rollback nginx
+                swap_nginx_proxy_port(domain, temp_port, old_port).ok();
+                docker
+                    .stop_container(&new_container.id, Some(StopContainerOptions { t: 5 }))
+                    .await
+                    .ok();
+                docker
+                    .remove_container(
+                        &new_container.id,
+                        Some(RemoveContainerOptions {
+                            force: true,
+                            v: false,
+                            ..Default::default()
+                        }),
+                    )
+                    .await
+                    .ok();
+                return Err(format!("Nginx reload failed: {e}"));
+            }
+        }
+        Ok(output) => {
+            // Rollback nginx + cleanup blue container
+            swap_nginx_proxy_port(domain, temp_port, old_port).ok();
+            docker
+                .stop_container(&new_container.id, Some(StopContainerOptions { t: 5 }))
+                .await
+                .ok();
+            docker
+                .remove_container(
+                    &new_container.id,
+                    Some(RemoveContainerOptions {
+                        force: true,
+                        v: false,
+                        ..Default::default()
+                    }),
+                )
+                .await
+                .ok();
+            return Err(format!("Nginx config test failed: {}", output.stderr));
+        }
+        Err(e) => {
+            swap_nginx_proxy_port(domain, temp_port, old_port).ok();
+            docker
+                .stop_container(&new_container.id, Some(StopContainerOptions { t: 5 }))
+                .await
+                .ok();
+            docker
+                .remove_container(
+                    &new_container.id,
+                    Some(RemoveContainerOptions {
+                        force: true,
+                        v: false,
+                        ..Default::default()
+                    }),
+                )
+                .await
+                .ok();
+            return Err(format!("Nginx test error: {e}"));
+        }
+    }
+
+    // Traffic is now flowing to the new container. Stop and remove old container.
+    docker
+        .stop_container(old_container_id, Some(StopContainerOptions { t: 10 }))
+        .await
+        .ok();
+    docker
+        .remove_container(
+            old_container_id,
+            Some(RemoveContainerOptions {
+                v: false,
+                force: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .ok();
+
+    // Rename blue container to the original name
+    docker
+        .rename_container(
+            &new_container.id,
+            RenameContainerOptions {
+                name: name.to_string(),
+            },
+        )
+        .await
+        .ok();
+
+    tracing::info!(
+        "App updated (blue-green, zero-downtime): {name}, port {old_port} → {temp_port}"
+    );
+
+    Ok(UpdateResult {
+        container_id: new_container.id,
+        blue_green: true,
+    })
+}
+
+/// Update an app by pulling the latest image.
+/// Uses blue-green deployment (zero-downtime) when the app has a domain with nginx reverse proxy.
+/// Falls back to stop/start when no reverse proxy is configured.
+pub async fn update_app(container_id: &str) -> Result<UpdateResult, String> {
     let docker =
         Docker::connect_with_local_defaults().map_err(|e| format!("Docker connect failed: {e}"))?;
 
@@ -1198,8 +1524,20 @@ pub async fn update_app(container_id: &str) -> Result<String, String> {
 
     let config = info.config.ok_or("No container config found")?;
     let host_config = info.host_config.ok_or("No host config found")?;
-    let name = info.name.unwrap_or_default().trim_start_matches('/').to_string();
+    let name = info
+        .name
+        .unwrap_or_default()
+        .trim_start_matches('/')
+        .to_string();
     let image = config.image.clone().ok_or("No image found")?;
+
+    // Check if this app has a domain (nginx reverse proxy) for blue-green
+    let domain = config
+        .labels
+        .as_ref()
+        .and_then(|l| l.get("dockpanel.app.domain"))
+        .cloned();
+    let old_port = extract_host_port(&host_config);
 
     // Pull the latest image
     tracing::info!("Updating app {name}: pulling {image}");
@@ -1217,7 +1555,33 @@ pub async fn update_app(container_id: &str) -> Result<String, String> {
         }
     }
 
-    // Stop and remove the old container
+    // Try blue-green if app has a domain and a known port
+    if let (Some(domain), Some(old_port)) = (&domain, old_port) {
+        // Check that nginx config exists for this domain
+        let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+        if std::path::Path::new(&config_path).exists() {
+            match blue_green_update(
+                &docker,
+                container_id,
+                &name,
+                &config,
+                &host_config,
+                domain,
+                old_port,
+            )
+            .await
+            {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    tracing::warn!(
+                        "Blue-green failed for {name}, falling back to stop/start: {e}"
+                    );
+                }
+            }
+        }
+    }
+
+    // Fallback: stop old → remove → create new → start (causes brief downtime)
     docker
         .stop_container(container_id, Some(StopContainerOptions { t: 10 }))
         .await
@@ -1226,7 +1590,7 @@ pub async fn update_app(container_id: &str) -> Result<String, String> {
         .remove_container(
             container_id,
             Some(RemoveContainerOptions {
-                v: false, // keep volumes
+                v: false,
                 force: true,
                 ..Default::default()
             }),
@@ -1234,7 +1598,6 @@ pub async fn update_app(container_id: &str) -> Result<String, String> {
         .await
         .map_err(|e| format!("Failed to remove old container: {e}"))?;
 
-    // Recreate with same config
     let new_config = Config {
         image: config.image,
         env: config.env,
@@ -1243,7 +1606,11 @@ pub async fn update_app(container_id: &str) -> Result<String, String> {
         host_config: Some(host_config),
         cmd: config.cmd,
         entrypoint: config.entrypoint,
-        working_dir: if config.working_dir.as_deref() == Some("") { None } else { config.working_dir },
+        working_dir: if config.working_dir.as_deref() == Some("") {
+            None
+        } else {
+            config.working_dir
+        },
         ..Default::default()
     };
 
@@ -1263,8 +1630,11 @@ pub async fn update_app(container_id: &str) -> Result<String, String> {
         .await
         .map_err(|e| format!("Failed to start updated container: {e}"))?;
 
-    tracing::info!("App updated: {name} ({image})");
-    Ok(container.id)
+    tracing::info!("App updated (stop/start): {name} ({image})");
+    Ok(UpdateResult {
+        container_id: container.id,
+        blue_green: false,
+    })
 }
 
 /// Get environment variables from a running container.
