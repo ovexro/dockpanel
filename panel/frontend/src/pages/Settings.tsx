@@ -387,6 +387,42 @@ export default function Settings() {
             )}
           </div>
         </div>
+
+        {/* Public Status Page — part of General tab */}
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Public Status Page</h3>
+            <p className="text-xs text-dark-200 mt-0.5">Share monitor status publicly at /api/status-page</p>
+          </div>
+          <div className="p-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">Enable public status page</p>
+                <p className="text-xs text-dark-300 mt-0.5">
+                  Exposes all enabled monitor statuses (name + status only, no URLs) at a public JSON endpoint
+                </p>
+              </div>
+              <button
+                onClick={async () => {
+                  const newVal = settings.status_page_enabled !== "true";
+                  try {
+                    await api.put("/settings", { status_page_enabled: newVal ? "true" : "false" });
+                    setSettings({ ...settings, status_page_enabled: newVal ? "true" : "false" });
+                    setMessage({ text: `Status page ${newVal ? "enabled" : "disabled"}`, type: "success" });
+                  } catch (e) {
+                    setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
+                  }
+                }}
+                role="switch"
+                aria-checked={settings.status_page_enabled === "true"}
+                aria-label="Enable public status page"
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${settings.status_page_enabled === "true" ? "bg-rust-500" : "bg-dark-600"}`}
+              >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${settings.status_page_enabled === "true" ? "translate-x-6" : "translate-x-1"}`} />
+              </button>
+            </div>
+          </div>
+        </div>
         </>)}
 
         {/* SMTP Configuration */}
