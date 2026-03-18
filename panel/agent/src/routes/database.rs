@@ -1,7 +1,7 @@
 use axum::{
     extract::Path,
     http::StatusCode,
-    routing::{delete, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::Deserialize;
@@ -134,8 +134,67 @@ async fn list() -> Result<Json<Vec<database::DbContainer>>, (StatusCode, Json<se
     Ok(Json(dbs))
 }
 
+#[derive(Deserialize)]
+struct QueryDbRequest {
+    container: String,
+    engine: String,
+    user: String,
+    password: String,
+    database: String,
+    sql: String,
+}
+
+/// POST /databases/query — Execute a SQL query inside a database container.
+async fn query_db(
+    Json(body): Json<QueryDbRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if body.sql.len() > 10_000 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Query too long (max 10KB)" })),
+        ));
+    }
+    if body.sql.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Query is empty" })),
+        ));
+    }
+    if !body.container.starts_with("dockpanel-db-") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid container name" })),
+        ));
+    }
+
+    let result = database::execute_query(
+        &body.container,
+        &body.engine,
+        &body.user,
+        &body.password,
+        &body.database,
+        &body.sql,
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e })),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "columns": result.columns,
+        "rows": result.rows,
+        "row_count": result.row_count,
+        "execution_time_ms": result.execution_time_ms,
+        "truncated": result.truncated,
+    })))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/databases", post(create).get(list))
+        .route("/databases/query", post(query_db))
         .route("/databases/{container_id}", delete(remove))
 }
