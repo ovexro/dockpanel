@@ -821,6 +821,164 @@ async fn remove_alias(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+// ──────────────────────────────────────────────────────────────
+// Site Logs & Stats
+// ──────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct LogQuery {
+    lines: Option<usize>,
+    log_type: Option<String>, // "access" or "error"
+}
+
+/// GET /nginx/site-logs/{domain} — Get nginx access or error logs for a site.
+async fn site_logs(
+    Path(domain): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<LogQuery>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    let lines = params.lines.unwrap_or(200).min(1000);
+    let log_type = params.log_type.as_deref().unwrap_or("access");
+
+    let log_file = match log_type {
+        "error" => format!("/var/log/nginx/{domain}.error.log"),
+        _ => format!("/var/log/nginx/{domain}.access.log"),
+    };
+
+    if !std::path::Path::new(&log_file).exists() {
+        return Ok(Json(serde_json::json!({ "logs": "", "lines": 0, "file": log_file })));
+    }
+
+    let output = tokio::process::Command::new("tail")
+        .args(["-n", &lines.to_string(), &log_file])
+        .output()
+        .await
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+
+    let content = String::from_utf8_lossy(&output.stdout).to_string();
+    let line_count = content.lines().count();
+
+    Ok(Json(serde_json::json!({ "logs": content, "lines": line_count, "file": log_file })))
+}
+
+/// GET /nginx/site-stats/{domain} — Basic traffic stats from access log.
+async fn site_stats(Path(domain): Path<String>) -> Result<Json<serde_json::Value>, ApiErr> {
+    let log_file = format!("/var/log/nginx/{domain}.access.log");
+
+    if !std::path::Path::new(&log_file).exists() {
+        return Ok(Json(serde_json::json!({ "requests": 0, "bandwidth": 0, "unique_ips": 0, "top_pages": [], "status_codes": {} })));
+    }
+
+    // Read last 10000 lines for stats
+    let output = tokio::process::Command::new("tail")
+        .args(["-n", "10000", &log_file])
+        .output()
+        .await
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+
+    let content = String::from_utf8_lossy(&output.stdout);
+    let mut requests = 0u32;
+    let mut bandwidth: u64 = 0;
+    let mut ips = std::collections::HashSet::new();
+    let mut pages: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut status_codes: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+
+    for line in content.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        requests += 1;
+
+        // Parse nginx combined log format:
+        // IP - - [date] "METHOD /path HTTP/x.x" STATUS SIZE "referrer" "user-agent"
+        let parts: Vec<&str> = line.splitn(2, ' ').collect();
+        if let Some(ip) = parts.first() {
+            ips.insert(ip.to_string());
+        }
+
+        // Extract status code and size
+        if let Some(rest) = line.split("\" ").nth(1) {
+            let fields: Vec<&str> = rest.split_whitespace().collect();
+            if let Some(status) = fields.first() {
+                *status_codes.entry(status.to_string()).or_insert(0) += 1;
+            }
+            if let Some(size) = fields.get(1) {
+                if let Ok(s) = size.parse::<u64>() {
+                    bandwidth += s;
+                }
+            }
+        }
+
+        // Extract path
+        if let Some(request_line) = line.split('"').nth(1) {
+            let req_parts: Vec<&str> = request_line.split_whitespace().collect();
+            if let Some(path) = req_parts.get(1) {
+                let clean_path = path.split('?').next().unwrap_or(path);
+                if clean_path != "/favicon.ico" && !clean_path.starts_with("/api/") {
+                    *pages.entry(clean_path.to_string()).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+
+    // Top 10 pages
+    let mut top_pages: Vec<(&String, &u32)> = pages.iter().collect();
+    top_pages.sort_by(|a, b| b.1.cmp(a.1));
+    let top: Vec<serde_json::Value> = top_pages
+        .iter()
+        .take(10)
+        .map(|(path, count)| serde_json::json!({ "path": path, "count": count }))
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "requests": requests,
+        "bandwidth": bandwidth,
+        "bandwidth_mb": (bandwidth as f64 / 1024.0 / 1024.0 * 10.0).round() / 10.0,
+        "unique_ips": ips.len(),
+        "top_pages": top,
+        "status_codes": status_codes,
+    })))
+}
+
+/// GET /nginx/php-errors/{domain} — Get PHP-FPM error log for a site.
+async fn php_errors(
+    Path(domain): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<LogQuery>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    let lines = params.lines.unwrap_or(100).min(500);
+
+    // PHP error log locations to check
+    let pool_name = domain.replace('.', "_");
+    let log_candidates = [
+        format!("/var/log/php-fpm/{pool_name}.error.log"),
+        format!("/var/log/php-fpm/{domain}.error.log"),
+        format!("/var/www/{domain}/storage/logs/laravel.log"),
+        "/var/log/php8.3-fpm.log".to_string(),
+        "/var/log/php8.2-fpm.log".to_string(),
+    ];
+
+    let mut content = String::new();
+    let mut found_file = String::new();
+
+    for candidate in &log_candidates {
+        if std::path::Path::new(candidate).exists() {
+            let output = tokio::process::Command::new("tail")
+                .args(["-n", &lines.to_string(), candidate])
+                .output()
+                .await;
+            if let Ok(out) = output {
+                let text = String::from_utf8_lossy(&out.stdout).to_string();
+                if !text.trim().is_empty() {
+                    content = text;
+                    found_file = candidate.clone();
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(Json(serde_json::json!({ "logs": content, "file": found_file, "lines": content.lines().count() })))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/nginx/sites/{domain}", put(put_site))
@@ -849,4 +1007,8 @@ pub fn router() -> Router<AppState> {
         .route("/nginx/aliases/add", post(add_alias))
         .route("/nginx/aliases/{domain}", get(list_aliases))
         .route("/nginx/aliases/{domain}/remove", post(remove_alias))
+        // Site Logs & Stats
+        .route("/nginx/site-logs/{domain}", get(site_logs))
+        .route("/nginx/site-stats/{domain}", get(site_stats))
+        .route("/nginx/php-errors/{domain}", get(php_errors))
 }

@@ -282,6 +282,11 @@ pub fn router() -> Router<AppState> {
         // Domain Aliases
         .route("/api/sites/{id}/aliases", get(sites::list_aliases).post(sites::add_alias))
         .route("/api/sites/{id}/aliases/remove", post(sites::remove_alias))
+        // Access Logs, Traffic Stats, PHP Errors, Health Check
+        .route("/api/sites/{id}/access-logs", get(sites::access_logs))
+        .route("/api/sites/{id}/stats", get(sites::site_stats))
+        .route("/api/sites/{id}/php-errors", get(sites::php_errors))
+        .route("/api/sites/{id}/health", get(sites::health_check))
         // Agent endpoints (no cookie auth — uses Bearer token from servers table)
         .route("/api/agent/version", get(agent_updates::latest_version))
         .route("/api/agent/checkin", post(agent_checkin::checkin))
