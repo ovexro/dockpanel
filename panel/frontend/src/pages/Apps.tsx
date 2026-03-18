@@ -31,6 +31,19 @@ interface DeployedApp {
   health: string | null;
   image: string | null;
   volumes: string[];
+  stack_id: string | null;
+}
+
+interface StackInfo {
+  id: string;
+  name: string;
+  service_count: number;
+  running: number;
+  total: number;
+  status: string;
+  services: DeployedApp[];
+  created_at: string;
+  updated_at: string;
 }
 
 interface ComposeService {
@@ -293,20 +306,29 @@ export default function Apps() {
   const [composeParsed, setComposeParsed] = useState<ComposeService[] | null>(null);
   const [composeDeploying, setComposeDeploying] = useState(false);
   const [composeError, setComposeError] = useState("");
+  const [composeName, setComposeName] = useState("");
+
+  // Stacks state
+  const [stacks, setStacks] = useState<StackInfo[]>([]);
+  const [expandedStack, setExpandedStack] = useState<string | null>(null);
+  const [stackActionLoading, setStackActionLoading] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
       api.get<AppTemplate[]>("/apps/templates").catch(() => []),
       api.get<DeployedApp[]>("/apps").catch(() => []),
-    ]).then(([tmpl, deployed]) => {
+      api.get<StackInfo[]>("/stacks").catch(() => []),
+    ]).then(([tmpl, deployed, stacksData]) => {
       setTemplates(tmpl);
       setApps(deployed);
+      setStacks(stacksData);
       setLoading(false);
     });
   }, []);
 
   const loadApps = () => {
     api.get<DeployedApp[]>("/apps").then(setApps).catch((e) => console.error("Failed to load apps:", e));
+    api.get<StackInfo[]>("/stacks").then(setStacks).catch(() => {});
   };
 
   const openDeploy = (tmpl: AppTemplate) => {
@@ -497,19 +519,24 @@ export default function Apps() {
 
   const handleComposeDeploy = async () => {
     if (!composeYaml.trim()) return;
+    const stackName = composeName.trim() || `stack-${Date.now()}`;
     setComposeDeploying(true);
     setComposeError("");
     try {
-      const result = await api.post<ComposeDeployResult>("/apps/compose/deploy", { yaml: composeYaml });
-      const failed = result.services.filter(s => s.status === "failed");
+      const result = await api.post<{ id: string; deploy_result: ComposeDeployResult }>("/stacks", {
+        name: stackName,
+        yaml: composeYaml,
+      });
+      const failed = result.deploy_result.services.filter(s => s.status === "failed");
       if (failed.length > 0) {
         setComposeError(`${failed.length} service(s) failed: ${failed.map(s => `${s.name}: ${s.error}`).join(", ")}`);
       } else {
         setShowCompose(false);
         setComposeYaml("");
         setComposeParsed(null);
+        setComposeName("");
         setMessage({
-          text: `Compose import: ${result.services.length} service(s) deployed`,
+          text: `Stack "${stackName}" deployed with ${result.deploy_result.services.length} service(s)`,
           type: "success",
         });
         loadApps();
@@ -518,6 +545,24 @@ export default function Apps() {
       setComposeError(e instanceof Error ? e.message : "Deploy failed");
     } finally {
       setComposeDeploying(false);
+    }
+  };
+
+  const handleStackAction = async (stackId: string, action: string) => {
+    setStackActionLoading(`${stackId}-${action}`);
+    try {
+      if (action === "remove") {
+        await api.delete(`/stacks/${stackId}`);
+        setMessage({ text: "Stack removed", type: "success" });
+      } else {
+        await api.post(`/stacks/${stackId}/${action}`);
+        setMessage({ text: `Stack ${action}ed`, type: "success" });
+      }
+      loadApps();
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : `Stack ${action} failed`, type: "error" });
+    } finally {
+      setStackActionLoading(null);
     }
   };
 
@@ -576,8 +621,112 @@ export default function Apps() {
         </div>
       )}
 
-      {/* Deployed Apps */}
-      {apps.length > 0 && (
+      {/* Compose Stacks */}
+      {stacks.length > 0 && (
+        <div className="mb-8">
+          <h2 className="text-sm font-medium text-dark-200 uppercase font-mono tracking-widest mb-3">
+            Compose Stacks
+          </h2>
+          <div className="space-y-3">
+            {stacks.map((stack) => (
+              <div key={stack.id} className="bg-dark-800 rounded-lg border border-dark-500">
+                <div
+                  className="flex items-center justify-between px-5 py-3 cursor-pointer hover:bg-dark-700/30 transition-colors"
+                  onClick={() => setExpandedStack(expandedStack === stack.id ? null : stack.id)}
+                >
+                  <div className="flex items-center gap-3">
+                    <svg className="w-4 h-4 text-dark-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6.429 9.75L2.25 12l4.179 2.25m0-4.5l5.571 3 5.571-3m-11.142 0L2.25 7.5 12 2.25l9.75 5.25-4.179 2.25m0 0L12 12.75 6.429 9.75m11.142 0l4.179 2.25-4.179 2.25m0 0L12 17.25l-5.571-3m11.142 0l4.179 2.25L12 21.75l-9.75-5.25 4.179-2.25" />
+                    </svg>
+                    <span className="font-mono text-sm text-dark-50 font-medium">{stack.name}</span>
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                      stack.status === "running" ? "bg-rust-500/15 text-rust-400" :
+                      stack.status === "stopped" ? "bg-dark-600 text-dark-300" :
+                      stack.status === "partial" ? "bg-warn-500/15 text-warn-400" :
+                      "bg-dark-600 text-dark-400"
+                    }`}>
+                      {stack.status === "running" ? `${stack.running}/${stack.total} running` :
+                       stack.status === "stopped" ? "stopped" :
+                       stack.status === "partial" ? `${stack.running}/${stack.total} running` :
+                       "removed"}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {stack.status !== "running" && stack.total > 0 && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleStackAction(stack.id, "start"); }}
+                        disabled={stackActionLoading !== null}
+                        className="px-2 py-1 text-xs bg-dark-700 text-dark-200 rounded hover:bg-dark-600 disabled:opacity-50"
+                      >
+                        {stackActionLoading === `${stack.id}-start` ? "..." : "Start"}
+                      </button>
+                    )}
+                    {stack.status === "running" && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleStackAction(stack.id, "stop"); }}
+                        disabled={stackActionLoading !== null}
+                        className="px-2 py-1 text-xs bg-dark-700 text-dark-200 rounded hover:bg-dark-600 disabled:opacity-50"
+                      >
+                        {stackActionLoading === `${stack.id}-stop` ? "..." : "Stop"}
+                      </button>
+                    )}
+                    {stack.total > 0 && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleStackAction(stack.id, "restart"); }}
+                        disabled={stackActionLoading !== null}
+                        className="px-2 py-1 text-xs bg-dark-700 text-dark-200 rounded hover:bg-dark-600 disabled:opacity-50"
+                      >
+                        {stackActionLoading === `${stack.id}-restart` ? "..." : "Restart"}
+                      </button>
+                    )}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleStackAction(stack.id, "remove"); }}
+                      disabled={stackActionLoading !== null}
+                      className="px-2 py-1 text-xs text-danger-400 hover:text-danger-300 disabled:opacity-50"
+                    >
+                      {stackActionLoading === `${stack.id}-remove` ? "..." : "Remove"}
+                    </button>
+                    <svg className={`w-4 h-4 text-dark-400 transition-transform ${expandedStack === stack.id ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                    </svg>
+                  </div>
+                </div>
+                {expandedStack === stack.id && stack.services.length > 0 && (
+                  <div className="border-t border-dark-600 px-5 py-3">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="text-left">
+                          <th className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest pb-2">Service</th>
+                          <th className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest pb-2 hidden sm:table-cell">Image</th>
+                          <th className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest pb-2 w-20">Port</th>
+                          <th className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest pb-2 w-24">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-dark-700">
+                        {stack.services.map((svc) => (
+                          <tr key={svc.container_id} className="text-sm">
+                            <td className="py-1.5 font-mono text-dark-100">{svc.name}</td>
+                            <td className="py-1.5 text-dark-300 text-xs font-mono hidden sm:table-cell">{svc.image}</td>
+                            <td className="py-1.5 text-dark-200 font-mono">{svc.port || "\u2014"}</td>
+                            <td className="py-1.5">
+                              <span className={`text-xs font-medium ${svc.status === "running" ? "text-rust-400" : "text-dark-400"}`}>
+                                {svc.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Deployed Apps (standalone, not in stacks) */}
+      {apps.filter(a => !a.stack_id).length > 0 && (
         <div className="mb-8">
           <h2 className="text-sm font-medium text-dark-200 uppercase font-mono tracking-widest mb-3">
             Running Apps
@@ -596,7 +745,7 @@ export default function Apps() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-dark-600">
-                {apps.map((app) => (
+                {apps.filter(a => !a.stack_id).map((app) => (
                   <tr key={app.container_id} className="hover:bg-dark-700/30 transition-colors">
                     <td className="px-5 py-4 text-sm text-dark-50 font-medium font-mono">{app.name}</td>
                     <td className="px-5 py-4 text-sm text-dark-200 hidden sm:table-cell">{app.template}</td>
@@ -1095,6 +1244,19 @@ export default function Apps() {
                 {composeError}
               </div>
             )}
+
+            <div className="mb-4">
+              <label htmlFor="compose-name" className="block text-sm font-medium text-dark-100 mb-1">Stack Name</label>
+              <input
+                id="compose-name"
+                type="text"
+                value={composeName}
+                onChange={(e) => setComposeName(e.target.value)}
+                placeholder="my-stack"
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
+              />
+              <p className="text-xs text-dark-300 mt-1">Name for this stack (used for grouping services)</p>
+            </div>
 
             <div className="mb-4">
               <label htmlFor="compose-yaml" className="block text-sm font-medium text-dark-100 mb-1">docker-compose.yml</label>

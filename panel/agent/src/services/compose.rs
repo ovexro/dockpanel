@@ -191,7 +191,11 @@ fn parse_ports(ports_val: &Option<Vec<serde_yaml::Value>>) -> Vec<PortMapping> {
 }
 
 /// Deploy all services from a parsed compose file.
-pub async fn deploy_compose(services: &[ComposeService]) -> ComposeDeployResult {
+/// If `stack_id` is provided, all containers get a `dockpanel.stack_id` label.
+pub async fn deploy_compose(
+    services: &[ComposeService],
+    stack_id: Option<&str>,
+) -> ComposeDeployResult {
     let docker = match Docker::connect_with_local_defaults() {
         Ok(d) => d,
         Err(e) => {
@@ -212,7 +216,7 @@ pub async fn deploy_compose(services: &[ComposeService]) -> ComposeDeployResult 
     let mut results = Vec::new();
 
     for svc in services {
-        match deploy_service(&docker, svc).await {
+        match deploy_service(&docker, svc, stack_id).await {
             Ok(container_id) => {
                 results.push(ServiceDeployResult {
                     name: svc.name.clone(),
@@ -235,7 +239,11 @@ pub async fn deploy_compose(services: &[ComposeService]) -> ComposeDeployResult 
     ComposeDeployResult { services: results }
 }
 
-async fn deploy_service(docker: &Docker, svc: &ComposeService) -> Result<String, String> {
+async fn deploy_service(
+    docker: &Docker,
+    svc: &ComposeService,
+    stack_id: Option<&str>,
+) -> Result<String, String> {
     // Pull image
     let mut pull = docker.create_image(
         Some(CreateImageOptions {
@@ -316,11 +324,17 @@ async fn deploy_service(docker: &Docker, svc: &ComposeService) -> Result<String,
             Some(exposed_ports)
         },
         host_config: Some(host_config),
-        labels: Some(HashMap::from([
-            ("dockpanel.managed".to_string(), "true".to_string()),
-            ("dockpanel.app.template".to_string(), "compose".to_string()),
-            ("dockpanel.app.name".to_string(), svc.name.clone()),
-        ])),
+        labels: Some({
+            let mut labels = HashMap::from([
+                ("dockpanel.managed".to_string(), "true".to_string()),
+                ("dockpanel.app.template".to_string(), "compose".to_string()),
+                ("dockpanel.app.name".to_string(), svc.name.clone()),
+            ]);
+            if let Some(sid) = stack_id {
+                labels.insert("dockpanel.stack_id".to_string(), sid.to_string());
+            }
+            labels
+        }),
         ..Default::default()
     };
 
