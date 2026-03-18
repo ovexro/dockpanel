@@ -31,6 +31,7 @@ interface GitDeploy {
   created_at: string;
   github_token: string | null;
   deploy_cron: string | null;
+  deploy_protected: boolean;
 }
 
 interface GitPreview {
@@ -106,6 +107,7 @@ export default function GitDeploys() {
   const [formBuildContext, setFormBuildContext] = useState(".");
   const [formGithubToken, setFormGithubToken] = useState("");
   const [formCron, setFormCron] = useState("");
+  const [formProtected, setFormProtected] = useState(false);
 
   const loadDeploys = async () => {
     try {
@@ -160,6 +162,7 @@ export default function GitDeploys() {
     setFormBuildContext(".");
     setFormGithubToken("");
     setFormCron("");
+    setFormProtected(false);
   };
 
   const openCreate = () => {
@@ -189,6 +192,7 @@ export default function GitDeploys() {
     setFormBuildContext(selected.build_context || ".");
     setFormGithubToken(selected.github_token && selected.github_token !== "\u25CF\u25CF\u25CF\u25CF\u25CF\u25CF\u25CF\u25CF" ? selected.github_token : "");
     setFormCron(selected.deploy_cron || "");
+    setFormProtected(selected.deploy_protected || false);
     setEditing(true);
     setShowModal(true);
   };
@@ -220,6 +224,7 @@ export default function GitDeploys() {
       build_context: formBuildContext.trim() || ".",
       github_token: formGithubToken.trim() || null,
       deploy_cron: formCron.trim() || null,
+      deploy_protected: formProtected,
     };
     try {
       if (editing && selected) {
@@ -241,6 +246,13 @@ export default function GitDeploys() {
   };
 
   const handleDeploy = async (id: string) => {
+    const deploy = deploys.find(d => d.id === id);
+    if (deploy?.deploy_protected) {
+      const confirmed = window.confirm(
+        `PROTECTED DEPLOY\n\nThis deployment is protected. You are about to deploy "${deploy.name}" to production.\n\nAre you sure you want to proceed?`
+      );
+      if (!confirmed) return;
+    }
     setDeploying(id);
     setMessage({ text: "", type: "" });
     try {
@@ -405,7 +417,15 @@ export default function GitDeploys() {
                     selected?.id === d.id ? "bg-dark-700/50" : "hover:bg-dark-700/30"
                   }`}
                 >
-                  <td className="px-5 py-4 text-sm font-medium text-dark-50 font-mono">{d.name}</td>
+                  <td className="px-5 py-4 text-sm font-medium text-dark-50 font-mono">
+                    {d.name}
+                    {d.deploy_protected && (
+                      <span className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-warn-500/15 text-warn-400" title="Deploy protection enabled">
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" /></svg>
+                        Protected
+                      </span>
+                    )}
+                  </td>
                   <td className="px-5 py-4 text-sm text-dark-200 font-mono truncate max-w-xs hidden md:table-cell">
                     {d.repo_url.replace(/^https?:\/\//, "").replace(/\.git$/, "")}
                   </td>
@@ -478,6 +498,7 @@ export default function GitDeploys() {
                   { label: "Build Context", value: selected.build_context || "." },
                   { label: "GitHub", value: selected.github_token ? "Connected" : "Not configured" },
                   { label: "Deploy Schedule", value: selected.deploy_cron || "\u2014" },
+                  { label: "Deploy Protection", value: selected.deploy_protected ? "Enabled" : "Disabled" },
                 ].map((field) => (
                   <div key={field.label}>
                     <span className="block text-xs font-medium text-dark-300 mb-0.5">{field.label}</span>
@@ -949,6 +970,20 @@ export default function GitDeploys() {
                   <span className="text-sm text-dark-100">Auto-deploy on push</span>
                 </label>
                 <p className="text-xs text-dark-300 mt-1 ml-6">Automatically deploy when commits are pushed via webhook</p>
+              </div>
+
+              {/* Deploy Protection */}
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formProtected}
+                    onChange={(e) => setFormProtected(e.target.checked)}
+                    className="w-4 h-4 text-warn-500 border-dark-500 rounded focus:ring-accent-500"
+                  />
+                  <span className="text-sm text-dark-100">Require confirmation before deploy</span>
+                </label>
+                <p className="text-xs text-dark-300 mt-1 ml-6">Shows a confirmation prompt before deploying to prevent accidental deployments</p>
               </div>
 
               {/* Pre-build Command */}

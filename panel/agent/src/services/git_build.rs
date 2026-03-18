@@ -589,6 +589,82 @@ pub async fn prune_images(name: &str, keep: usize) -> Result<Vec<String>, String
     Ok(removed)
 }
 
+/// Auto-detect language and generate a Dockerfile if none exists.
+/// Returns the dockerfile path to use (either the existing one or "Dockerfile" for the generated one).
+pub fn auto_generate_dockerfile(name: &str, dockerfile_path: &str, build_context: &str) -> Result<String, String> {
+    let deploy_dir = format!("{GIT_BASE_DIR}/{name}");
+    let context_dir = if build_context == "." { deploy_dir.clone() } else { format!("{deploy_dir}/{build_context}") };
+    let df_path = std::path::Path::new(&context_dir).join(dockerfile_path);
+
+    // If Dockerfile exists, use it as-is
+    if df_path.exists() {
+        return Ok(dockerfile_path.to_string());
+    }
+
+    tracing::info!("No Dockerfile found at {dockerfile_path} in {context_dir}, auto-detecting...");
+
+    let generated = if std::path::Path::new(&context_dir).join("package.json").exists() {
+        // Node.js
+        let pkg = std::fs::read_to_string(std::path::Path::new(&context_dir).join("package.json")).unwrap_or_default();
+        let has_build = pkg.contains("\"build\"");
+        let has_next = pkg.contains("\"next\"");
+        let has_nuxt = pkg.contains("\"nuxt\"");
+
+        if has_next {
+            // Next.js
+            "FROM node:20-alpine AS builder\nWORKDIR /app\nCOPY package*.json ./\nRUN npm install\nCOPY . .\nRUN npm run build\n\nFROM node:20-alpine\nWORKDIR /app\nCOPY --from=builder /app/.next ./.next\nCOPY --from=builder /app/node_modules ./node_modules\nCOPY --from=builder /app/package.json ./\nCOPY --from=builder /app/public ./public\nEXPOSE 3000\nCMD [\"npm\", \"start\"]\n".to_string()
+        } else if has_nuxt {
+            // Nuxt
+            "FROM node:20-alpine AS builder\nWORKDIR /app\nCOPY package*.json ./\nRUN npm install\nCOPY . .\nRUN npm run build\n\nFROM node:20-alpine\nWORKDIR /app\nCOPY --from=builder /app/.output ./.output\nEXPOSE 3000\nCMD [\"node\", \".output/server/index.mjs\"]\n".to_string()
+        } else if has_build {
+            // Generic Node.js with build step (SPA/React/Vue)
+            "FROM node:20-alpine AS builder\nWORKDIR /app\nCOPY package*.json ./\nRUN npm install\nCOPY . .\nRUN npm run build\n\nFROM nginx:alpine\nCOPY --from=builder /app/dist /usr/share/nginx/html\nEXPOSE 80\n".to_string()
+        } else {
+            // Plain Node.js server
+            "FROM node:20-alpine\nWORKDIR /app\nCOPY package*.json ./\nRUN npm install --omit=dev\nCOPY . .\nEXPOSE 3000\nCMD [\"node\", \"index.js\"]\n".to_string()
+        }
+    } else if std::path::Path::new(&context_dir).join("requirements.txt").exists() {
+        // Python
+        let reqs = std::fs::read_to_string(std::path::Path::new(&context_dir).join("requirements.txt"))
+            .unwrap_or_default().to_lowercase();
+        let has_django = reqs.contains("django");
+        let has_flask = reqs.contains("flask");
+
+        if has_django {
+            "FROM python:3.12-slim\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install --no-cache-dir -r requirements.txt\nCOPY . .\nRUN python manage.py collectstatic --noinput 2>/dev/null || true\nEXPOSE 8000\nCMD [\"gunicorn\", \"--bind\", \"0.0.0.0:8000\", \"--workers\", \"2\", \"config.wsgi:application\"]\n".to_string()
+        } else if has_flask {
+            "FROM python:3.12-slim\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install --no-cache-dir -r requirements.txt\nCOPY . .\nEXPOSE 5000\nCMD [\"gunicorn\", \"--bind\", \"0.0.0.0:5000\", \"--workers\", \"2\", \"app:app\"]\n".to_string()
+        } else {
+            "FROM python:3.12-slim\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install --no-cache-dir -r requirements.txt\nCOPY . .\nEXPOSE 8000\nCMD [\"python\", \"app.py\"]\n".to_string()
+        }
+    } else if std::path::Path::new(&context_dir).join("go.mod").exists() {
+        // Go
+        "FROM golang:1.23-alpine AS builder\nWORKDIR /app\nCOPY go.mod go.sum ./\nRUN go mod download\nCOPY . .\nRUN CGO_ENABLED=0 go build -o server .\n\nFROM alpine:3.20\nWORKDIR /app\nCOPY --from=builder /app/server .\nEXPOSE 8080\nCMD [\"./server\"]\n".to_string()
+    } else if std::path::Path::new(&context_dir).join("Cargo.toml").exists() {
+        // Rust
+        "FROM rust:1.82-slim AS builder\nWORKDIR /app\nCOPY . .\nRUN cargo build --release\n\nFROM debian:bookworm-slim\nCOPY --from=builder /app/target/release/* /usr/local/bin/\nEXPOSE 8080\nCMD [\"app\"]\n".to_string()
+    } else if std::path::Path::new(&context_dir).join("composer.json").exists() {
+        // PHP/Laravel
+        "FROM php:8.3-fpm-alpine\nRUN apk add --no-cache nginx\nWORKDIR /app\nCOPY . .\nRUN curl -sS https://getcomposer.org/installer | php && php composer.phar install --no-dev --optimize-autoloader\nEXPOSE 80\nCMD [\"php\", \"-S\", \"0.0.0.0:80\", \"-t\", \"public\"]\n".to_string()
+    } else if std::path::Path::new(&context_dir).join("Gemfile").exists() {
+        // Ruby
+        "FROM ruby:3.3-slim\nWORKDIR /app\nCOPY Gemfile Gemfile.lock ./\nRUN bundle install --without development test\nCOPY . .\nEXPOSE 3000\nCMD [\"bundle\", \"exec\", \"rails\", \"server\", \"-b\", \"0.0.0.0\"]\n".to_string()
+    } else if std::path::Path::new(&context_dir).join("index.html").exists() {
+        // Static site
+        "FROM nginx:alpine\nCOPY . /usr/share/nginx/html\nEXPOSE 80\n".to_string()
+    } else {
+        return Err("No Dockerfile found and could not auto-detect project type. Supported: Node.js (package.json), Python (requirements.txt), Go (go.mod), Rust (Cargo.toml), PHP (composer.json), Ruby (Gemfile), Static (index.html)".into());
+    };
+
+    // Write generated Dockerfile
+    let generated_path = std::path::Path::new(&context_dir).join("Dockerfile");
+    std::fs::write(&generated_path, &generated)
+        .map_err(|e| format!("Failed to write generated Dockerfile: {e}"))?;
+
+    tracing::info!("Auto-generated Dockerfile for {name} in {context_dir}");
+    Ok("Dockerfile".to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
