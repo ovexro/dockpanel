@@ -79,6 +79,21 @@ export default function SiteDetail() {
   const [aliasMsg, setAliasMsg] = useState("");
   const [showAliases, setShowAliases] = useState(false);
 
+  // Access Logs
+  const [accessLogs, setAccessLogs] = useState("");
+  const [errorLogs, setErrorLogs] = useState("");
+  const [phpErrors, setPhpErrors] = useState("");
+  const [showAccessLogs, setShowAccessLogs] = useState(false);
+  const [logType, setLogType] = useState<"access" | "error" | "php">("access");
+
+  // Traffic Stats
+  const [stats, setStats] = useState<any>(null);
+  const [showStats, setShowStats] = useState(false);
+
+  // Health Check
+  const [health, setHealth] = useState<{ healthy: boolean; status: number; response_time_ms: number } | null>(null);
+  const [checkingHealth, setCheckingHealth] = useState(false);
+
   const fetchStaging = () => {
     api.get<StagingInfo>(`/sites/${id}/staging`).then(setStaging).catch(() => { /* no staging */ });
   };
@@ -99,6 +114,30 @@ export default function SiteDetail() {
     api.get<{ aliases: string[] }>(`/sites/${id}/aliases`)
       .then((d) => setAliases(d.aliases || []))
       .catch(() => {});
+  };
+
+  const loadLogs = async (type: "access" | "error") => {
+    try {
+      const data = await api.get<{ logs: string }>(`/sites/${id}/access-logs?type=${type}&lines=200`);
+      if (type === "access") setAccessLogs(data.logs);
+      else setErrorLogs(data.logs);
+    } catch {}
+  };
+
+  const loadPhpErrors = async () => {
+    try {
+      const data = await api.get<{ logs: string }>(`/sites/${id}/php-errors`);
+      setPhpErrors(data.logs);
+    } catch {
+      setPhpErrors("");
+    }
+  };
+
+  const loadStats = async () => {
+    try {
+      const data = await api.get<any>(`/sites/${id}/stats`);
+      setStats(data);
+    } catch {}
   };
 
   useEffect(() => {
@@ -200,6 +239,19 @@ export default function SiteDetail() {
             <span className="text-sm text-dark-200">
               {runtimeLabels[site.runtime] || site.runtime}
             </span>
+            <button disabled={checkingHealth} onClick={async () => {
+              setCheckingHealth(true);
+              try { const data = await api.get<any>(`/sites/${id}/health`); setHealth(data); }
+              catch { setHealth({ healthy: false, status: 0, response_time_ms: 0 }); }
+              finally { setCheckingHealth(false); }
+            }} className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded text-xs font-medium hover:bg-dark-600 disabled:opacity-50 transition-colors">
+              {checkingHealth ? "Checking..." : "Health Check"}
+            </button>
+            {health && (
+              <span className={`text-xs font-mono ${health.healthy ? "text-rust-400" : "text-danger-400"}`}>
+                {health.status > 0 ? `${health.status}` : "Down"} · {health.response_time_ms}ms
+              </span>
+            )}
           </div>
         </div>
         <div>
@@ -1102,6 +1154,95 @@ export default function SiteDetail() {
                 <p className={`text-xs ${aliasMsg.includes("Failed") || aliasMsg.includes("failed") ? "text-danger-400" : "text-rust-400"}`}>
                   {aliasMsg}
                 </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Access Logs */}
+      {site.status === "active" && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-6">
+          <button onClick={() => { setShowAccessLogs(!showAccessLogs); if (!showAccessLogs) loadLogs(logType === "php" ? "access" : logType as "access" | "error"); }}
+            className="w-full px-5 py-4 flex items-center justify-between hover:bg-dark-700/30 transition-colors">
+            <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Access Logs</h2>
+            <svg className={`w-4 h-4 text-dark-300 transition-transform ${showAccessLogs ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+            </svg>
+          </button>
+          {showAccessLogs && (
+            <div className="border-t border-dark-600">
+              <div className="flex items-center justify-between px-5 py-2 bg-dark-900">
+                <div className="flex gap-2">
+                  <button onClick={() => { setLogType("access"); loadLogs("access"); }}
+                    className={`px-2 py-1 rounded text-xs font-medium ${logType === "access" ? "bg-rust-500/15 text-rust-400" : "text-dark-300 hover:text-dark-100"}`}>Access</button>
+                  <button onClick={() => { setLogType("error"); loadLogs("error"); }}
+                    className={`px-2 py-1 rounded text-xs font-medium ${logType === "error" ? "bg-danger-400/15 text-danger-400" : "text-dark-300 hover:text-dark-100"}`}>Error</button>
+                  {site.runtime === "php" && (
+                    <button onClick={() => { setLogType("php"); loadPhpErrors(); }}
+                      className={`px-2 py-1 rounded text-xs font-medium ${logType === "php" ? "bg-warn-500/15 text-warn-400" : "text-dark-300 hover:text-dark-100"}`}>PHP Errors</button>
+                  )}
+                </div>
+                <button onClick={() => logType === "php" ? loadPhpErrors() : loadLogs(logType as "access" | "error")} className="text-xs text-rust-400 hover:text-rust-300">Refresh</button>
+              </div>
+              <pre className="p-4 text-[11px] font-mono text-dark-200 bg-[#020202] max-h-80 overflow-y-auto overflow-x-auto whitespace-pre-wrap">
+                {(logType === "access" ? accessLogs : logType === "error" ? errorLogs : phpErrors) || "No logs available"}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Traffic Stats */}
+      {site.status === "active" && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-6">
+          <button onClick={() => { setShowStats(!showStats); if (!showStats) loadStats(); }}
+            className="w-full px-5 py-4 flex items-center justify-between hover:bg-dark-700/30 transition-colors">
+            <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Traffic Stats</h2>
+            <svg className={`w-4 h-4 text-dark-300 transition-transform ${showStats ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+            </svg>
+          </button>
+          {showStats && stats && (
+            <div className="border-t border-dark-600 p-5">
+              <div className="grid grid-cols-3 gap-4 mb-4">
+                <div className="text-center">
+                  <p className="text-2xl font-bold text-dark-50">{stats.requests.toLocaleString()}</p>
+                  <p className="text-xs text-dark-300">Requests</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-2xl font-bold text-dark-50">{stats.unique_ips.toLocaleString()}</p>
+                  <p className="text-xs text-dark-300">Unique IPs</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-2xl font-bold text-dark-50">{stats.bandwidth_mb} MB</p>
+                  <p className="text-xs text-dark-300">Bandwidth</p>
+                </div>
+              </div>
+              {stats.top_pages && stats.top_pages.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-2">Top Pages</h4>
+                  <div className="space-y-1">
+                    {stats.top_pages.map((p: any, i: number) => (
+                      <div key={i} className="flex items-center justify-between text-xs">
+                        <span className="text-dark-100 font-mono truncate flex-1">{p.path}</span>
+                        <span className="text-dark-300 ml-2 font-mono">{p.count}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {stats.status_codes && Object.keys(stats.status_codes).length > 0 && (
+                <div className="mt-4">
+                  <h4 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-2">Status Codes</h4>
+                  <div className="flex gap-3 flex-wrap">
+                    {Object.entries(stats.status_codes).sort().map(([code, count]: [string, any]) => (
+                      <div key={code} className={`px-2 py-1 rounded text-xs font-mono ${code.startsWith("2") ? "bg-rust-500/15 text-rust-400" : code.startsWith("3") ? "bg-blue-500/15 text-blue-400" : code.startsWith("4") ? "bg-warn-500/15 text-warn-400" : "bg-red-500/15 text-danger-400"}`}>
+                        {code}: {count}
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
             </div>
           )}
