@@ -836,6 +836,32 @@ export default function Settings() {
           </div>
         </div>
 
+        {/* 2FA Enforcement (admin only) */}
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-4">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">2FA Enforcement</h3>
+          </div>
+          <div className="p-5 flex items-center justify-between">
+            <div>
+              <p className="text-sm text-dark-100">Require 2FA for all users</p>
+              <p className="text-xs text-dark-300 mt-0.5">Users without 2FA will see a warning banner on every page</p>
+            </div>
+            <button
+              onClick={async () => {
+                const newVal = settings.enforce_2fa !== "true";
+                try {
+                  await api.put("/settings", { enforce_2fa: newVal ? "true" : "false" });
+                  setSettings({ ...settings, enforce_2fa: newVal ? "true" : "false" });
+                  setMessage({ text: `2FA enforcement ${newVal ? "enabled" : "disabled"}`, type: "success" });
+                } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+              }}
+              className={`relative w-11 h-6 rounded-full transition-colors ${settings.enforce_2fa === "true" ? "bg-rust-500" : "bg-dark-600"}`}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform ${settings.enforce_2fa === "true" ? "translate-x-5" : ""}`} />
+            </button>
+          </div>
+        </div>
+
         {/* SSH Keys — Security tab */}
         <SSHKeys />
 

@@ -654,6 +654,53 @@ pub async fn get_login_audit() -> Result<Vec<LoginEntry>, String> {
     Ok(entries)
 }
 
+/// Create a Fail2Ban jail for the DockPanel panel login endpoint.
+/// Monitors nginx access log for repeated 401 responses to /api/auth/login.
+pub async fn setup_panel_jail() -> Result<(), String> {
+    // 1. Create filter file
+    let filter = r#"[Definition]
+failregex = ^<HOST> .* "POST /api/auth/login HTTP/.*" 401
+ignoreregex =
+"#;
+    tokio::fs::write("/etc/fail2ban/filter.d/dockpanel.conf", filter).await
+        .map_err(|e| format!("Failed to write filter: {e}"))?;
+
+    // 2. Create jail config
+    // Find the nginx access log for the panel
+    let jail = r#"[dockpanel]
+enabled = true
+filter = dockpanel
+port = http,https
+logpath = /var/log/nginx/*.access.log
+maxretry = 5
+findtime = 600
+bantime = 3600
+"#;
+    tokio::fs::write("/etc/fail2ban/jail.d/dockpanel.conf", jail).await
+        .map_err(|e| format!("Failed to write jail config: {e}"))?;
+
+    // 3. Restart fail2ban
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        Command::new("systemctl").args(["restart", "fail2ban"]).output(),
+    ).await
+        .map_err(|_| "fail2ban restart timed out".to_string())?
+        .map_err(|e| format!("Failed to restart fail2ban: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("fail2ban restart failed: {stderr}"));
+    }
+
+    tracing::info!("DockPanel Fail2Ban jail created and activated");
+    Ok(())
+}
+
+/// Check if the DockPanel Fail2Ban jail is configured.
+pub async fn panel_jail_status() -> bool {
+    std::path::Path::new("/etc/fail2ban/jail.d/dockpanel.conf").exists()
+}
+
 /// Apply a recommended fix for a security finding.
 pub async fn apply_fix(fix_type: &str, target: &str) -> Result<String, String> {
     match fix_type {

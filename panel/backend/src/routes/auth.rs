@@ -232,16 +232,36 @@ pub async fn login(
 
     let (token, cookie) = issue_session(&state, &user)?;
 
+    // Check if 2FA is enforced
+    let enforce_2fa: bool = sqlx::query_scalar::<_, String>(
+        "SELECT COALESCE(value, 'false') FROM settings WHERE key = 'enforce_2fa'"
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .map(|v| v == "true")
+    .unwrap_or(false);
+
+    let user_has_2fa: bool = user.totp_enabled;
+
+    let mut response = serde_json::json!({
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "role": user.role,
+        }
+    });
+
+    // If 2FA enforced but user hasn't set it up, include flag in response
+    if enforce_2fa && !user_has_2fa {
+        response["twofa_required"] = serde_json::json!(true);
+    }
+
     Ok((
         StatusCode::OK,
         [(header::SET_COOKIE, cookie)],
-        Json(serde_json::json!({
-            "user": {
-                "id": user.id,
-                "email": user.email,
-                "role": user.role,
-            }
-        })),
+        Json(response),
     ))
 }
 

@@ -90,6 +90,7 @@ export default function Security() {
   const [bannedIps, setBannedIps] = useState<string[]>([]);
   const [banIp, setBanIp] = useState("");
   const [banJail, setBanJail] = useState("");
+  const [panelJail, setPanelJail] = useState(false);
 
   const loadData = async () => {
     try {
@@ -105,6 +106,7 @@ export default function Security() {
       setFail2ban(fb);
       setPosture(pos);
       setScans(sc || []);
+      api.get<{ active: boolean }>("/security/panel-jail/status").then(d => setPanelJail(d.active)).catch(() => {});
     } finally {
       setLoading(false);
     }
@@ -275,19 +277,28 @@ export default function Security() {
     <div className="p-6 lg:p-8">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
         <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Security</h1>
-        <button
-          onClick={handleScan}
-          disabled={scanning}
-          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 flex items-center gap-2"
-        >
-          {scanning && (
-            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
-          )}
-          {scanning ? "Scanning..." : "Run Security Scan"}
-        </button>
+        <div className="flex items-center gap-2">
+          <a
+            href="/api/security/report"
+            target="_blank"
+            className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 transition-colors"
+          >
+            Download Report
+          </a>
+          <button
+            onClick={handleScan}
+            disabled={scanning}
+            className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 flex items-center gap-2"
+          >
+            {scanning && (
+              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+            )}
+            {scanning ? "Scanning..." : "Run Security Scan"}
+          </button>
+        </div>
       </div>
 
       {message.text && (
@@ -483,6 +494,36 @@ export default function Security() {
                   </div>
                   <p className="text-3xl font-bold text-dark-50 mt-2">{overview.ssl_certs_count}</p>
                   <p className="text-xs text-dark-300 mt-1">Active certificates</p>
+                </div>
+
+                <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                      <svg className="w-5 h-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+                      </svg>
+                    </div>
+                    <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-wider">Panel Protection</p>
+                  </div>
+                  <div className="flex items-center gap-2 mt-2">
+                    <div className={`w-3 h-3 rounded-full ${panelJail ? "bg-rust-500" : "bg-gray-300"}`} />
+                    <span className="text-sm text-dark-50">{panelJail ? "Active" : "Not configured"}</span>
+                  </div>
+                  {!panelJail && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          await api.post("/security/panel-jail/setup");
+                          setPanelJail(true);
+                          setMessage({ text: "Panel Fail2Ban jail activated", type: "success" });
+                        } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                      }}
+                      className="mt-3 px-3 py-1.5 bg-rust-500 text-white rounded text-xs font-medium hover:bg-rust-600 transition-colors"
+                    >
+                      Enable Protection
+                    </button>
+                  )}
+                  {panelJail && <p className="text-xs text-dark-300 mt-1">Bans IPs after 5 failed logins</p>}
                 </div>
               </>
             )}
