@@ -30,6 +30,7 @@ export default function Sites() {
   const [proxyPort, setProxyPort] = useState("");
   const [phpVersion, setPhpVersion] = useState("8.3");
   const [phpPreset, setPhpPreset] = useState("generic");
+  const [appCommand, setAppCommand] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [cms, setCms] = useState("");
   const [siteTitle, setSiteTitle] = useState("");
@@ -56,6 +57,9 @@ export default function Sites() {
       const effectivePreset = cms || phpPreset;
       const body: Record<string, unknown> = { domain, runtime: effectiveRuntime };
       if (effectiveRuntime === "proxy") body.proxy_port = parseInt(proxyPort);
+      if (effectiveRuntime === "node" || effectiveRuntime === "python") {
+        body.app_command = appCommand;
+      }
       if (effectiveRuntime === "php") {
         body.php_version = phpVersion;
         body.php_preset = effectivePreset;
@@ -181,9 +185,17 @@ export default function Sites() {
                 >
                   <option value="static">Static (HTML/CSS/JS)</option>
                   <option value="php">PHP</option>
-                  <option value="proxy">Reverse Proxy (Docker/Node)</option>
+                  <option value="node">Node.js</option>
+                  <option value="python">Python</option>
+                  <option value="proxy">Reverse Proxy</option>
                 </select>
-                <p className="text-xs text-dark-400 mt-1.5">Static for HTML/CSS/JS, PHP for WordPress/Laravel, Reverse Proxy for Docker apps</p>
+                <p className="text-xs text-dark-400 mt-1.5">
+                  {runtime === "node" ? "Node.js app with managed process (systemd + nginx reverse proxy)" :
+                   runtime === "python" ? "Python app with managed process (systemd + nginx reverse proxy)" :
+                   runtime === "proxy" ? "Reverse proxy to a port (Docker container or external service)" :
+                   runtime === "php" ? "PHP with PHP-FPM — WordPress, Laravel, Drupal, etc." :
+                   "Static HTML/CSS/JS files served by nginx"}
+                </p>
               </div>
             ) : (
               <div>
@@ -233,6 +245,27 @@ export default function Sites() {
                 className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm max-w-xs"
               />
               <p className="text-xs text-dark-400 mt-1.5">The local port your application listens on</p>
+            </div>
+          )}
+
+          {(runtime === "node" || runtime === "python") && (
+            <div>
+              <label htmlFor="site-app-command" className="block text-sm font-medium text-dark-100 mb-1">Start Command</label>
+              <input
+                id="site-app-command"
+                type="text"
+                value={appCommand}
+                onChange={(e) => setAppCommand(e.target.value)}
+                required
+                placeholder={runtime === "node" ? "npm start" : "gunicorn app:app"}
+                className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm font-mono"
+              />
+              <p className="text-xs text-dark-400 mt-1.5">
+                {runtime === "node"
+                  ? "e.g., npm start, node server.js, npx next start"
+                  : "e.g., gunicorn app:app, uvicorn main:app, flask run"}
+                {" "}— port auto-allocated via $PORT env var
+              </p>
             </div>
           )}
 
