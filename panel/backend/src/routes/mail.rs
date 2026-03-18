@@ -1218,6 +1218,107 @@ pub async fn relay_remove(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+// ── DNS Verification ─────────────────────────────────────────────────────
+
+/// GET /api/mail/domains/{id}/dns-check — Verify DNS records are propagated.
+pub async fn dns_check(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT domain, dkim_selector, dkim_public_key FROM mail_domains WHERE id = $1"
+    ).bind(id).fetch_optional(&state.db).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let (domain, selector, _dkim_pub) = domain.ok_or_else(|| err(StatusCode::NOT_FOUND, "Domain not found"))?;
+    let selector = selector.unwrap_or_else(|| "dockpanel".to_string());
+
+    let mut checks = Vec::new();
+
+    // MX record
+    let mx_result = tokio::process::Command::new("dig")
+        .args(["+short", "MX", &domain])
+        .output().await;
+    let mx_value = mx_result.ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+    checks.push(serde_json::json!({
+        "type": "MX",
+        "status": if !mx_value.is_empty() { "pass" } else { "fail" },
+        "value": mx_value,
+    }));
+
+    // SPF (TXT record containing v=spf1)
+    let spf_result = tokio::process::Command::new("dig")
+        .args(["+short", "TXT", &domain])
+        .output().await;
+    let spf_raw = spf_result.ok().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+    let has_spf = spf_raw.contains("v=spf1");
+    checks.push(serde_json::json!({
+        "type": "SPF",
+        "status": if has_spf { "pass" } else { "fail" },
+        "value": if has_spf { spf_raw.lines().find(|l| l.contains("v=spf1")).unwrap_or("").trim().to_string() } else { "Not found".to_string() },
+    }));
+
+    // DKIM (TXT record at selector._domainkey.domain)
+    let dkim_host = format!("{selector}._domainkey.{domain}");
+    let dkim_result = tokio::process::Command::new("dig")
+        .args(["+short", "TXT", &dkim_host])
+        .output().await;
+    let dkim_raw = dkim_result.ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+    let has_dkim = dkim_raw.contains("v=DKIM1") || dkim_raw.contains("p=");
+    checks.push(serde_json::json!({
+        "type": "DKIM",
+        "status": if has_dkim { "pass" } else { "fail" },
+        "value": if has_dkim { dkim_raw.chars().take(100).collect::<String>() } else { "Not found".to_string() },
+        "host": dkim_host,
+    }));
+
+    // DMARC (TXT record at _dmarc.domain)
+    let dmarc_host = format!("_dmarc.{domain}");
+    let dmarc_result = tokio::process::Command::new("dig")
+        .args(["+short", "TXT", &dmarc_host])
+        .output().await;
+    let dmarc_raw = dmarc_result.ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+    let has_dmarc = dmarc_raw.contains("v=DMARC1");
+    checks.push(serde_json::json!({
+        "type": "DMARC",
+        "status": if has_dmarc { "pass" } else { "fail" },
+        "value": if has_dmarc { dmarc_raw } else { "Not found".to_string() },
+    }));
+
+    let pass_count = checks.iter().filter(|c| c["status"] == "pass").count();
+
+    Ok(Json(serde_json::json!({
+        "domain": domain,
+        "checks": checks,
+        "pass_count": pass_count,
+        "total": checks.len(),
+        "all_pass": pass_count == checks.len(),
+    })))
+}
+
+// ── Mail Logs & Storage (agent proxies) ──────────────────────────────────
+
+/// GET /api/mail/logs — Parse mail.log for recent activity and stats.
+pub async fn mail_logs(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.get("/mail/logs").await
+        .map_err(|e| agent_error("Mail logs", e))?;
+    Ok(Json(result))
+}
+
+/// GET /api/mail/storage — Get storage usage for all mailboxes.
+pub async fn mail_storage(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.get("/mail/storage").await
+        .map_err(|e| agent_error("Mail storage", e))?;
+    Ok(Json(result))
+}
+
 // ── Blacklist / Reputation Check ────────────────────────────────────────
 
 /// GET /api/mail/blacklist-check — Check server IP against email blacklists.
