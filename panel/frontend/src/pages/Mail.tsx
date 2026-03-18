@@ -91,6 +91,18 @@ export default function Mail() {
   const [installId, setInstallId] = useState<string | null>(null);
   const [showSetupGuide, setShowSetupGuide] = useState(false);
 
+  // Mail services
+  const [rspamd, setRspamd] = useState<{ installed: boolean; running: boolean } | null>(null);
+  const [webmail, setWebmail] = useState<{ installed: boolean; running: boolean; port: number } | null>(null);
+  const [relay, setRelay] = useState<{ configured: boolean; relayhost: string } | null>(null);
+  const [relayHost, setRelayHost] = useState("");
+  const [relayPort, setRelayPort] = useState("587");
+  const [relayUser, setRelayUser] = useState("");
+  const [relayPass, setRelayPass] = useState("");
+  const [showRelayForm, setShowRelayForm] = useState(false);
+  const [blacklist, setBlacklist] = useState<{ ip: string; results: { rbl: string; name: string; listed: boolean }[]; clean: boolean } | null>(null);
+  const [checkingBl, setCheckingBl] = useState(false);
+
   const loadMailStatus = async () => {
     try {
       const data = await api.get<{ installed: boolean; running: boolean }>("/mail/status");
@@ -143,7 +155,13 @@ export default function Mail() {
     } catch { setQueue([]); }
   };
 
-  useEffect(() => { loadMailStatus(); loadDomains(); }, []);
+  useEffect(() => {
+    loadMailStatus();
+    loadDomains();
+    api.get<{ installed: boolean; running: boolean }>("/mail/rspamd/status").then(setRspamd).catch(() => {});
+    api.get<{ installed: boolean; running: boolean; port: number }>("/mail/webmail/status").then(setWebmail).catch(() => {});
+    api.get<{ configured: boolean; relayhost: string }>("/mail/relay/status").then(setRelay).catch(() => {});
+  }, []);
   useEffect(() => { if (tab === "queue") loadQueue(); }, [tab]);
 
   const handleAddDomain = async () => {
@@ -321,6 +339,166 @@ export default function Mail() {
       {mailStatus && mailStatus.installed && !mailStatus.running && (
         <div className="mb-4 px-4 py-3 rounded-lg text-sm border bg-warn-500/10 text-warn-400 border-warn-500/20">
           Mail server is installed but not running. Check Postfix and Dovecot services.
+        </div>
+      )}
+
+      {/* Mail Services */}
+      {mailStatus?.installed && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          {/* Spam Filter (Rspamd) */}
+          {rspamd && (
+            <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Spam Filter</h3>
+                <div className={`w-2.5 h-2.5 rounded-full ${rspamd.running ? "bg-rust-500" : rspamd.installed ? "bg-warn-500" : "bg-dark-500"}`} />
+              </div>
+              <p className="text-sm text-dark-100 mb-3">
+                {rspamd.running ? "Active" : rspamd.installed ? "Stopped" : "Not installed"}
+              </p>
+              {!rspamd.installed ? (
+                <button onClick={async () => {
+                  try { await api.post("/mail/rspamd/install", {}); setRspamd({ installed: true, running: true }); setMessage({ text: "Rspamd installed", type: "success" }); }
+                  catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                }} className="w-full px-3 py-1.5 bg-rust-500 text-white rounded text-xs font-medium hover:bg-rust-600 transition-colors">Install Rspamd</button>
+              ) : (
+                <button onClick={async () => {
+                  try { await api.post("/mail/rspamd/toggle", { enable: !rspamd.running }); setRspamd({ ...rspamd, running: !rspamd.running }); }
+                  catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                }} className={`w-full px-3 py-1.5 rounded text-xs font-medium transition-colors ${rspamd.running ? "bg-dark-700 text-dark-100 hover:bg-dark-600" : "bg-rust-500 text-white hover:bg-rust-600"}`}>
+                  {rspamd.running ? "Disable" : "Enable"}
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Webmail (Roundcube) */}
+          {webmail && (
+            <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Webmail</h3>
+                <div className={`w-2.5 h-2.5 rounded-full ${webmail.running ? "bg-rust-500" : webmail.installed ? "bg-warn-500" : "bg-dark-500"}`} />
+              </div>
+              <p className="text-sm text-dark-100 mb-3">
+                {webmail.running ? `Running (:${webmail.port})` : webmail.installed ? "Stopped" : "Not installed"}
+              </p>
+              {!webmail.installed ? (
+                <button onClick={async () => {
+                  const domain = selectedDomain?.domain || "localhost";
+                  try { const r = await api.post<{ port: number }>("/mail/webmail/install", { domain, port: 8888 }); setWebmail({ installed: true, running: true, port: r.port || 8888 }); setMessage({ text: "Roundcube deployed", type: "success" }); }
+                  catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                }} className="w-full px-3 py-1.5 bg-rust-500 text-white rounded text-xs font-medium hover:bg-rust-600 transition-colors">Install Roundcube</button>
+              ) : (
+                <div className="flex gap-2">
+                  {webmail.running && (
+                    <a href={`http://${window.location.hostname}:${webmail.port}`} target="_blank" rel="noopener noreferrer" className="flex-1 px-3 py-1.5 bg-dark-700 text-dark-100 rounded text-xs font-medium hover:bg-dark-600 transition-colors text-center">Open</a>
+                  )}
+                  <button onClick={async () => {
+                    if (!confirm("Remove Roundcube webmail?")) return;
+                    try { await api.post("/mail/webmail/remove", {}); setWebmail({ installed: false, running: false, port: 0 }); setMessage({ text: "Roundcube removed", type: "success" }); }
+                    catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                  }} className="flex-1 px-3 py-1.5 bg-dark-700 text-dark-100 rounded text-xs font-medium hover:bg-dark-600 transition-colors">Remove</button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* SMTP Relay */}
+          <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">SMTP Relay</h3>
+              <div className={`w-2.5 h-2.5 rounded-full ${relay?.configured ? "bg-rust-500" : "bg-dark-500"}`} />
+            </div>
+            <p className="text-sm text-dark-100 mb-3 truncate" title={relay?.relayhost || ""}>
+              {relay?.configured ? relay.relayhost : "Direct delivery"}
+            </p>
+            {relay?.configured ? (
+              <button onClick={async () => {
+                try { await api.post("/mail/relay/remove", {}); setRelay({ configured: false, relayhost: "" }); setMessage({ text: "Relay removed", type: "success" }); }
+                catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+              }} className="w-full px-3 py-1.5 bg-dark-700 text-dark-100 rounded text-xs font-medium hover:bg-dark-600 transition-colors">Remove Relay</button>
+            ) : (
+              <button onClick={() => setShowRelayForm(!showRelayForm)} className="w-full px-3 py-1.5 bg-rust-500 text-white rounded text-xs font-medium hover:bg-rust-600 transition-colors">Configure</button>
+            )}
+          </div>
+
+          {/* Email Reputation */}
+          <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Reputation</h3>
+              {blacklist && <div className={`w-2.5 h-2.5 rounded-full ${blacklist.clean ? "bg-rust-500" : "bg-danger-400"}`} />}
+            </div>
+            {blacklist ? (
+              <p className={`text-sm mb-3 ${blacklist.clean ? "text-dark-100" : "text-danger-400"}`}>
+                {blacklist.clean ? "Clean" : `${blacklist.results.filter(r => r.listed).length} listed`}
+              </p>
+            ) : (
+              <p className="text-sm text-dark-100 mb-3">Not checked</p>
+            )}
+            <button disabled={checkingBl} onClick={async () => {
+              setCheckingBl(true);
+              try { const data = await api.get<{ ip: string; results: { rbl: string; name: string; listed: boolean }[]; clean: boolean }>("/mail/blacklist-check"); setBlacklist(data); }
+              catch (e) { setMessage({ text: e instanceof Error ? e.message : "Check failed", type: "error" }); }
+              finally { setCheckingBl(false); }
+            }} className="w-full px-3 py-1.5 bg-rust-500 text-white rounded text-xs font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors">
+              {checkingBl ? "Checking..." : "Check"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Blacklist Detail */}
+      {blacklist && !blacklist.clean && (
+        <div className="mb-4 bg-dark-800 rounded-lg border border-dark-500 p-4">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Blacklist Results</h3>
+            <span className="text-xs text-dark-300 font-mono">{blacklist.ip}</span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1">
+            {blacklist.results.map((r) => (
+              <div key={r.rbl} className="flex items-center gap-2 text-xs py-1">
+                <div className={`w-2 h-2 rounded-full shrink-0 ${r.listed ? "bg-danger-400" : "bg-rust-500"}`} />
+                <span className={r.listed ? "text-danger-400" : "text-dark-300"}>{r.name}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* SMTP Relay Configuration Form */}
+      {showRelayForm && (
+        <div className="mb-6 bg-dark-800 border border-dark-500 p-5 space-y-4">
+          <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Configure SMTP Relay</h3>
+          <p className="text-xs text-dark-200">Route outbound mail through an external SMTP relay (SendGrid, SES, Mailgun, etc.).</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-dark-200 mb-1">SMTP Host</label>
+              <input type="text" value={relayHost} onChange={(e) => setRelayHost(e.target.value)} placeholder="smtp.sendgrid.net" className="w-full px-3 py-1.5 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+            </div>
+            <div>
+              <label className="block text-xs text-dark-200 mb-1">Port</label>
+              <input type="text" value={relayPort} onChange={(e) => setRelayPort(e.target.value)} placeholder="587" className="w-full px-3 py-1.5 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+            </div>
+            <div>
+              <label className="block text-xs text-dark-200 mb-1">Username</label>
+              <input type="text" value={relayUser} onChange={(e) => setRelayUser(e.target.value)} placeholder="apikey" className="w-full px-3 py-1.5 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+            </div>
+            <div>
+              <label className="block text-xs text-dark-200 mb-1">Password</label>
+              <input type="password" value={relayPass} onChange={(e) => setRelayPass(e.target.value)} placeholder="API key or password" className="w-full px-3 py-1.5 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setShowRelayForm(false)} className="px-4 py-1.5 text-dark-300 border border-dark-600 rounded-lg text-sm font-medium hover:text-dark-100 hover:border-dark-400">Cancel</button>
+            <button onClick={async () => {
+              try {
+                await api.post("/mail/relay/configure", { host: relayHost, port: parseInt(relayPort), username: relayUser, password: relayPass });
+                setRelay({ configured: true, relayhost: `[${relayHost}]:${relayPort}` });
+                setShowRelayForm(false);
+                setRelayHost(""); setRelayPort("587"); setRelayUser(""); setRelayPass("");
+                setMessage({ text: "SMTP relay configured", type: "success" });
+              } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+            }} disabled={!relayHost || !relayUser || !relayPass} className="px-4 py-1.5 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50">Save Relay</button>
+          </div>
         </div>
       )}
 
