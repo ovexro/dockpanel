@@ -103,6 +103,17 @@ export default function Mail() {
   const [blacklist, setBlacklist] = useState<{ ip: string; results: { rbl: string; name: string; listed: boolean }[]; clean: boolean } | null>(null);
   const [checkingBl, setCheckingBl] = useState(false);
 
+  // Rate limiting
+  const [rateLimit, setRateLimit] = useState<{ configured: boolean; rate: string } | null>(null);
+  const [rateLimitValue, setRateLimitValue] = useState("100/hour");
+
+  // TLS enforcement
+  const [tls, setTls] = useState<{ inbound_tls: string; outbound_tls: string; inbound_enforced: boolean; outbound_enforced: boolean } | null>(null);
+
+  // Mailbox backups
+  const [backups, setBackups] = useState<any[]>([]);
+  const [backingUp, setBackingUp] = useState<string | null>(null);
+
   // DNS verification
   const [dnsCheck, setDnsCheck] = useState<{ checks: any[]; all_pass: boolean } | null>(null);
   const [checkingDns, setCheckingDns] = useState(false);
@@ -183,6 +194,11 @@ export default function Mail() {
     }).catch(() => {});
   };
 
+  const loadBackups = async () => {
+    try { const data = await api.get<{ backups: any[] }>("/mail/backups"); setBackups(data.backups); }
+    catch { setBackups([]); }
+  };
+
   useEffect(() => {
     loadMailStatus();
     loadDomains();
@@ -190,6 +206,9 @@ export default function Mail() {
     api.get<{ installed: boolean; running: boolean }>("/mail/rspamd/status").then(setRspamd).catch(() => {});
     api.get<{ installed: boolean; running: boolean; port: number }>("/mail/webmail/status").then(setWebmail).catch(() => {});
     api.get<{ configured: boolean; relayhost: string }>("/mail/relay/status").then(setRelay).catch(() => {});
+    api.get<{ configured: boolean; rate: string }>("/mail/rate-limit/status").then(setRateLimit).catch(() => {});
+    api.get<any>("/mail/tls/status").then(setTls).catch(() => {});
+    loadBackups();
   }, []);
   useEffect(() => { if (tab === "queue") loadQueue(); }, [tab]);
   useEffect(() => { if (tab === "logs") loadMailLogs(); }, [tab]);
@@ -374,7 +393,7 @@ export default function Mail() {
 
       {/* Mail Services */}
       {mailStatus?.installed && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
           {/* Spam Filter (Rspamd) */}
           {rspamd && (
             <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
@@ -472,6 +491,67 @@ export default function Mail() {
             }} className="w-full px-3 py-1.5 bg-rust-500 text-white rounded text-xs font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors">
               {checkingBl ? "Checking..." : "Check"}
             </button>
+          </div>
+
+          {/* Rate Limiting */}
+          <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Rate Limiting</h3>
+            <div className="flex items-center gap-2 mt-2">
+              <div className={`w-2.5 h-2.5 rounded-full ${rateLimit?.configured ? "bg-rust-500" : "bg-dark-500"}`} />
+              <span className="text-sm text-dark-100">{rateLimit?.configured ? rateLimit.rate : "No limit"}</span>
+            </div>
+            <div className="flex items-center gap-2 mt-3">
+              <select value={rateLimitValue} onChange={e => setRateLimitValue(e.target.value)} className="px-2 py-1.5 border border-dark-500 rounded text-xs bg-transparent text-dark-100 focus:ring-2 focus:ring-accent-500 outline-none">
+                <option value="50/hour">50/hour</option>
+                <option value="100/hour">100/hour</option>
+                <option value="500/hour">500/hour</option>
+                <option value="1000/day">1000/day</option>
+                <option value="5000/day">5000/day</option>
+              </select>
+              <button onClick={async () => {
+                try { await api.post("/mail/rate-limit/set", { rate: rateLimitValue }); setRateLimit({ configured: true, rate: rateLimitValue }); setMessage({ text: "Rate limit set", type: "success" }); }
+                catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+              }} className="px-2 py-1.5 bg-rust-500 text-white rounded text-xs font-medium hover:bg-rust-600">Set</button>
+              {rateLimit?.configured && (
+                <button onClick={async () => {
+                  try { await api.post("/mail/rate-limit/remove"); setRateLimit({ configured: false, rate: "" }); setMessage({ text: "Rate limit removed", type: "success" }); }
+                  catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                }} className="px-2 py-1.5 bg-dark-700 text-dark-100 rounded text-xs font-medium hover:bg-dark-600">Remove</button>
+              )}
+            </div>
+          </div>
+
+          {/* TLS Encryption */}
+          <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">TLS Encryption</h3>
+            {tls && (
+              <>
+                <div className="mt-2 space-y-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-dark-200">Inbound (SMTP)</span>
+                    <span className={tls.inbound_enforced ? "text-rust-400 font-medium" : "text-dark-300"}>{tls.inbound_tls || "not set"}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-dark-200">Outbound (relay)</span>
+                    <span className={tls.outbound_enforced ? "text-rust-400 font-medium" : "text-dark-300"}>{tls.outbound_tls || "not set"}</span>
+                  </div>
+                </div>
+                <div className="flex gap-2 mt-3">
+                  <button onClick={async () => {
+                    try { await api.post("/mail/tls/enforce", { inbound: "encrypt", outbound: "encrypt" }); setTls({ ...tls, inbound_tls: "encrypt", outbound_tls: "encrypt", inbound_enforced: true, outbound_enforced: true }); setMessage({ text: "TLS enforced", type: "success" }); }
+                    catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                  }} className={`px-2 py-1.5 rounded text-xs font-medium transition-colors ${tls.inbound_enforced && tls.outbound_enforced ? "bg-rust-500/15 text-rust-400" : "bg-dark-700 text-dark-100 hover:bg-dark-600"}`}>
+                    {tls.inbound_enforced && tls.outbound_enforced ? "Enforced" : "Enforce TLS"}
+                  </button>
+                  {(tls.inbound_enforced || tls.outbound_enforced) && (
+                    <button onClick={async () => {
+                      try { await api.post("/mail/tls/enforce", { inbound: "may", outbound: "may" }); setTls({ ...tls, inbound_tls: "may", outbound_tls: "may", inbound_enforced: false, outbound_enforced: false }); setMessage({ text: "TLS set to opportunistic", type: "success" }); }
+                      catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                    }} className="px-2 py-1.5 bg-dark-700 text-dark-100 rounded text-xs font-medium hover:bg-dark-600">Opportunistic</button>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -745,6 +825,18 @@ export default function Mail() {
                               </div>
                             </div>
                             <div className="flex items-center gap-1 shrink-0 ml-2">
+                              <button disabled={backingUp === acc.email} onClick={async () => {
+                                setBackingUp(acc.email);
+                                try { await api.post("/mail/backup", { email: acc.email }); setMessage({ text: `Backup created for ${acc.email}`, type: "success" }); loadBackups(); }
+                                catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                                finally { setBackingUp(null); }
+                              }} className="p-1.5 text-dark-300 hover:text-rust-400 disabled:opacity-50" title="Backup">
+                                {backingUp === acc.email ? (
+                                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                                ) : (
+                                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5m8.25 3v6.75m0 0l-3-3m3 3l3-3M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" /></svg>
+                                )}
+                              </button>
                               <button onClick={() => openEditAccount(acc)} className="p-1.5 text-dark-300 hover:text-blue-400" title="Edit">
                                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125" /></svg>
                               </button>
@@ -797,6 +889,37 @@ export default function Mail() {
                             <button onClick={() => setEditAccount(null)} className="px-4 py-1.5 text-dark-300 border border-dark-600 rounded-lg text-sm font-medium hover:text-dark-100 hover:border-dark-400">Cancel</button>
                             <button onClick={handleUpdateAccount} className="px-4 py-1.5 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600">Save</button>
                           </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Mailbox Backups */}
+                    {backups.length > 0 && (
+                      <div className="mt-4 bg-dark-900 border border-dark-500 rounded-lg overflow-hidden">
+                        <div className="px-4 py-2 border-b border-dark-600">
+                          <h4 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Mailbox Backups</h4>
+                        </div>
+                        <div className="divide-y divide-dark-600">
+                          {backups.map((b: any) => (
+                            <div key={b.file} className="px-4 py-2 flex items-center justify-between text-xs">
+                              <div>
+                                <span className="text-dark-100 font-mono">{b.email}</span>
+                                <span className="text-dark-300 ml-2">{(b.size / 1024 / 1024).toFixed(1)} MB</span>
+                              </div>
+                              <div className="flex gap-2">
+                                <button onClick={async () => {
+                                  if (!confirm(`Restore ${b.email} from this backup? Current mail data will be overwritten.`)) return;
+                                  try { await api.post("/mail/restore", { email: b.email, file: b.file }); setMessage({ text: "Mailbox restored", type: "success" }); }
+                                  catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                                }} className="text-rust-400 hover:text-rust-300">Restore</button>
+                                <button onClick={async () => {
+                                  if (!confirm("Delete this backup?")) return;
+                                  try { await api.post("/mail/backups/delete", { file: b.file }); loadBackups(); }
+                                  catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                                }} className="text-danger-400 hover:text-danger-300">Delete</button>
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       </div>
                     )}
