@@ -223,8 +223,10 @@ pub fn render_site_config(
     }
 
     match config.runtime.as_str() {
-        "proxy" => {
+        "proxy" | "node" | "python" => {
             ctx.insert("proxy_port", &config.proxy_port.unwrap_or(3000));
+            // Node/Python use same proxy template as "proxy" runtime
+            ctx.insert("runtime", &"proxy");
             if ssl {
                 templates.render("https.conf", &ctx)
             } else {

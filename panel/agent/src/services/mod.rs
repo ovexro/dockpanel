@@ -1,3 +1,4 @@
+pub mod app_process;
 pub mod backups;
 pub mod cms;
 pub mod compose;
