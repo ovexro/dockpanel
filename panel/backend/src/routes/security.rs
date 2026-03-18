@@ -212,6 +212,51 @@ pub async fn fail2ban_banned(
     Ok(Json(result))
 }
 
+/// GET /api/security/login-audit — Recent login attempts (panel + SSH).
+pub async fn login_audit(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Panel logins from activity_logs
+    let panel_logins: Vec<(String, String, Option<String>, chrono::DateTime<chrono::Utc>)> =
+        sqlx::query_as(
+            "SELECT action, COALESCE(details, ''), target_name, created_at FROM activity_logs \
+             WHERE action IN ('auth.login', 'auth.login_failed', 'auth.2fa_verify') \
+             ORDER BY created_at DESC LIMIT 50",
+        )
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+
+    let panel: Vec<serde_json::Value> = panel_logins
+        .iter()
+        .map(|(action, details, target, time)| {
+            serde_json::json!({
+                "type": "panel",
+                "action": action,
+                "details": details,
+                "user": target,
+                "time": time,
+                "success": !action.contains("failed"),
+            })
+        })
+        .collect();
+
+    // SSH logins from agent (parse auth.log)
+    let ssh = match state.agent.get("/security/login-audit").await {
+        Ok(result) => result
+            .get("entries")
+            .cloned()
+            .unwrap_or(serde_json::json!([])),
+        Err(_) => serde_json::json!([]),
+    };
+
+    Ok(Json(serde_json::json!({
+        "panel": panel,
+        "ssh": ssh,
+    })))
+}
+
 /// POST /api/security/fix — Apply a recommended security fix.
 pub async fn apply_security_fix(
     State(state): State<AppState>,

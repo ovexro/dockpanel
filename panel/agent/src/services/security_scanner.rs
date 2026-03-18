@@ -1,5 +1,6 @@
 use serde::Serialize;
 use sha2::Digest;
+use std::collections::HashMap;
 use tokio::process::Command;
 
 #[derive(Serialize)]
@@ -57,19 +58,23 @@ const SUSPICIOUS_FILES: &[&str] = &[
     ".htaccess.bak", "wp-config.php.bak",
 ];
 
-/// Run a full security scan: file integrity, malware, ports, SSL.
+/// Run a full security scan: file integrity, malware, ports, SSL, container vulns, security headers.
 pub async fn run_full_scan() -> ScanResult {
-    let (integrity, malware, ports, ssl) = tokio::join!(
+    let (integrity, malware, ports, ssl, container_vulns, headers) = tokio::join!(
         scan_file_integrity(),
         scan_malware(),
         scan_open_ports(),
         scan_ssl_expiry(),
+        scan_container_vulnerabilities(),
+        scan_security_headers(),
     );
 
     let mut findings = Vec::new();
     findings.extend(malware);
     findings.extend(ports);
     findings.extend(ssl);
+    findings.extend(container_vulns);
+    findings.extend(headers);
 
     ScanResult {
         findings,
@@ -325,6 +330,212 @@ async fn scan_ssl_expiry() -> Vec<Finding> {
                 file_path: Some(cert_path),
                 remediation: Some("Renew the SSL certificate via the Sites panel".into()),
             });
+        }
+    }
+
+    findings
+}
+
+/// Scan Docker images for known vulnerabilities.
+/// Tries `grype` first (if installed), falls back to `docker scout` (if available).
+async fn scan_container_vulnerabilities() -> Vec<Finding> {
+    let docker = match bollard::Docker::connect_with_local_defaults() {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+
+    // List DockPanel-managed containers
+    let containers = docker
+        .list_containers(Some(bollard::container::ListContainersOptions::<String> {
+            all: false,
+            filters: {
+                let mut f = HashMap::new();
+                f.insert(
+                    "label".to_string(),
+                    vec!["dockpanel.managed=true".to_string()],
+                );
+                f
+            },
+            ..Default::default()
+        }))
+        .await
+        .unwrap_or_default();
+
+    let mut findings = Vec::new();
+    let mut scanned_images = std::collections::HashSet::new();
+
+    for container in &containers {
+        let image = match &container.image {
+            Some(img) => img.clone(),
+            None => continue,
+        };
+
+        if scanned_images.contains(&image) {
+            continue;
+        }
+        scanned_images.insert(image.clone());
+
+        // Try grype first
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            Command::new("grype")
+                .args([&image, "-o", "json", "--only-fixed"])
+                .output(),
+        )
+        .await;
+
+        match result {
+            Ok(Ok(output)) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if let Ok(report) = serde_json::from_str::<serde_json::Value>(&stdout) {
+                    if let Some(matches) = report.get("matches").and_then(|m| m.as_array()) {
+                        let critical = matches
+                            .iter()
+                            .filter(|m| {
+                                m.get("vulnerability")
+                                    .and_then(|v| v.get("severity"))
+                                    .and_then(|s| s.as_str())
+                                    == Some("Critical")
+                            })
+                            .count();
+                        let high = matches
+                            .iter()
+                            .filter(|m| {
+                                m.get("vulnerability")
+                                    .and_then(|v| v.get("severity"))
+                                    .and_then(|s| s.as_str())
+                                    == Some("High")
+                            })
+                            .count();
+                        let total = matches.len();
+
+                        if critical > 0 || high > 0 {
+                            findings.push(Finding {
+                                check_type: "container_vuln".to_string(),
+                                severity: if critical > 0 {
+                                    "critical"
+                                } else {
+                                    "warning"
+                                }
+                                .to_string(),
+                                title: format!(
+                                    "Image {}: {} vulnerabilities ({} critical, {} high)",
+                                    image, total, critical, high
+                                ),
+                                description: format!(
+                                    "{total} known vulnerabilities with fixes available"
+                                ),
+                                file_path: Some(image.clone()),
+                                remediation: Some(
+                                    "Update the base image to the latest version and rebuild"
+                                        .to_string(),
+                                ),
+                            });
+                        }
+                    }
+                }
+                continue; // grype worked, skip docker scout
+            }
+            _ => {} // grype not available or failed, try docker scout
+        }
+
+        // Fallback: docker scout (simpler output)
+        let scout_result = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            Command::new("docker")
+                .args(["scout", "quickview", &image])
+                .output(),
+        )
+        .await;
+
+        if let Ok(Ok(output)) = scout_result {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // Parse "X critical, Y high, Z medium" from output
+            let has_critical = stdout.contains("critical") && !stdout.contains("0C");
+            let has_high = stdout.contains("high") && !stdout.contains("0H");
+
+            if has_critical || has_high {
+                findings.push(Finding {
+                    check_type: "container_vuln".to_string(),
+                    severity: if has_critical {
+                        "critical"
+                    } else {
+                        "warning"
+                    }
+                    .to_string(),
+                    title: format!("Image {} has known vulnerabilities", image),
+                    description: stdout
+                        .lines()
+                        .find(|l| l.contains("critical") || l.contains("high"))
+                        .unwrap_or("")
+                        .trim()
+                        .to_string(),
+                    file_path: Some(image.clone()),
+                    remediation: Some("Update the base image and rebuild".to_string()),
+                });
+            }
+        }
+    }
+
+    findings
+}
+
+/// Check security headers on nginx-served sites.
+async fn scan_security_headers() -> Vec<Finding> {
+    let mut findings = Vec::new();
+
+    // Get list of nginx sites
+    let sites_dir = "/etc/nginx/sites-enabled";
+    let mut entries = match tokio::fs::read_dir(sites_dir).await {
+        Ok(e) => e,
+        Err(_) => return findings,
+    };
+
+    let required_headers: &[(&str, &str)] = &[
+        (
+            "Strict-Transport-Security",
+            "HSTS protects against protocol downgrade attacks",
+        ),
+        (
+            "X-Content-Type-Options",
+            "Prevents MIME-type sniffing",
+        ),
+        (
+            "X-Frame-Options",
+            "Prevents clickjacking attacks",
+        ),
+        (
+            "Content-Security-Policy",
+            "Prevents XSS and data injection attacks",
+        ),
+    ];
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
+
+        // Skip non-site configs
+        if !filename.ends_with(".conf") || filename == "dockpanel.dev.conf" {
+            continue;
+        }
+        let domain = filename.trim_end_matches(".conf");
+
+        let content = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+
+        for (header, description) in required_headers {
+            if !content.contains(header) {
+                findings.push(Finding {
+                    check_type: "security_headers".to_string(),
+                    severity: "info".to_string(),
+                    title: format!("Missing {} header on {}", header, domain),
+                    description: description.to_string(),
+                    file_path: Some(path.to_string_lossy().to_string()),
+                    remediation: Some(format!(
+                        "Add 'add_header {} \"...\" always;' to the nginx config",
+                        header
+                    )),
+                });
+            }
         }
     }
 
