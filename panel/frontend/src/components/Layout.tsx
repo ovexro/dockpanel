@@ -37,6 +37,7 @@ const navGroups: NavGroup[] = [
       { to: "/sites", label: "Sites", icon: icon("M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.86-2.07a4.5 4.5 0 00-6.364-6.364L4.5 8.257a4.5 4.5 0 006.364 6.364") },
       { to: "/databases", label: "Databases", icon: icon("M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125") },
       { to: "/apps", label: "Docker Apps", adminOnly: true, icon: icon("M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9") },
+      { to: "/git-deploys", label: "Git Deploy", adminOnly: true, icon: icon("M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5") },
     ],
   },
   {
@@ -62,7 +63,6 @@ export default function Layout() {
   const { user, logout, loading } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [firingCount, setFiringCount] = useState(0);
-  const [updateCount, setUpdateCount] = useState(0);
   const [apiHealthy, setApiHealthy] = useState<boolean | null>(null);
   const [theme, setTheme] = useState(() => localStorage.getItem("dp-theme") || "dark");
 
@@ -71,7 +71,6 @@ export default function Layout() {
     localStorage.setItem("dp-theme", theme);
   }, [theme]);
   const alertTimer = useRef<ReturnType<typeof setInterval>>(undefined);
-  const updateTimer = useRef<ReturnType<typeof setInterval>>(undefined);
   const healthTimer = useRef<ReturnType<typeof setInterval>>(undefined);
 
   useEffect(() => {
@@ -83,17 +82,6 @@ export default function Layout() {
     fetchFiring();
     alertTimer.current = setInterval(fetchFiring, 30000);
     return () => { if (alertTimer.current) clearInterval(alertTimer.current); };
-  }, []);
-
-  useEffect(() => {
-    const fetchUpdateCount = () => {
-      api.get<{ count: number }>("/system/updates/count")
-        .then((d) => setUpdateCount(d.count))
-        .catch(() => {});
-    };
-    fetchUpdateCount();
-    updateTimer.current = setInterval(fetchUpdateCount, 60000);
-    return () => { if (updateTimer.current) clearInterval(updateTimer.current); };
   }, []);
 
   useEffect(() => {
@@ -210,10 +198,6 @@ export default function Layout() {
                         {item.to === "/monitoring" && firingCount > 0 ? (
                           <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-red-500 text-white rounded-full min-w-[20px] text-center">
                             {firingCount}
-                          </span>
-                        ) : item.to === "/settings" && updateCount > 0 ? (
-                          <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-red-500 text-white rounded-full min-w-[20px] text-center">
-                            {updateCount}
                           </span>
                         ) : isActive ? (
                           <span className="ml-auto blinking-cursor text-xs">_</span>
