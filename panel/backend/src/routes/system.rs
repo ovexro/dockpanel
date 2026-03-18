@@ -473,6 +473,19 @@ pub async fn install_powerdns(
     }))))
 }
 
+/// GET /api/system/disk-io — Proxy to agent's disk I/O stats (authenticated).
+pub async fn disk_io(
+    State(state): State<AppState>,
+    AuthUser(_claims): AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let data = state
+        .agent
+        .get("/system/disk-io")
+        .await
+        .map_err(|e| agent_error("Disk I/O", e))?;
+    Ok(Json(data))
+}
+
 pub async fn install_fail2ban(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
