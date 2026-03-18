@@ -312,6 +312,7 @@ async fn logs(
 }
 
 /// POST /apps/{container_id}/update — Pull latest image and recreate container.
+/// Uses blue-green deployment (zero-downtime) when the app has a domain with nginx reverse proxy.
 async fn update(
     Path(container_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
@@ -322,7 +323,7 @@ async fn update(
         ));
     }
 
-    let new_id = docker_apps::update_app(&container_id)
+    let result = docker_apps::update_app(&container_id)
         .await
         .map_err(|e| {
             (
@@ -331,7 +332,11 @@ async fn update(
             )
         })?;
 
-    Ok(Json(serde_json::json!({ "success": true, "container_id": new_id })))
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "container_id": result.container_id,
+        "blue_green": result.blue_green,
+    })))
 }
 
 /// GET /apps/{container_id}/env — Get container environment variables.
