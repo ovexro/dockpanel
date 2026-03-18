@@ -56,8 +56,49 @@ export default function SiteDetail() {
   const [stagingDomain, setStagingDomain] = useState("");
   const [showStagingForm, setShowStagingForm] = useState(false);
 
+  // Redirects
+  const [redirects, setRedirects] = useState<{ source: string; target: string; type: string }[]>([]);
+  const [redirectSource, setRedirectSource] = useState("");
+  const [redirectTarget, setRedirectTarget] = useState("");
+  const [redirectType, setRedirectType] = useState("301");
+  const [redirectMsg, setRedirectMsg] = useState("");
+  const [showRedirects, setShowRedirects] = useState(false);
+
+  // Password Protection
+  const [protectedPaths, setProtectedPaths] = useState<string[]>([]);
+  const [protectedUsers, setProtectedUsers] = useState<string[]>([]);
+  const [protectPath, setProtectPath] = useState("/");
+  const [protectUser, setProtectUser] = useState("");
+  const [protectPass, setProtectPass] = useState("");
+  const [protectMsg, setProtectMsg] = useState("");
+  const [showProtect, setShowProtect] = useState(false);
+
+  // Domain Aliases
+  const [aliases, setAliases] = useState<string[]>([]);
+  const [newAlias, setNewAlias] = useState("");
+  const [aliasMsg, setAliasMsg] = useState("");
+  const [showAliases, setShowAliases] = useState(false);
+
   const fetchStaging = () => {
     api.get<StagingInfo>(`/sites/${id}/staging`).then(setStaging).catch(() => { /* no staging */ });
+  };
+
+  const loadRedirects = () => {
+    api.get<{ redirects: { source: string; target: string; type: string }[] }>(`/sites/${id}/redirects`)
+      .then((d) => setRedirects(d.redirects || []))
+      .catch(() => {});
+  };
+
+  const loadProtected = () => {
+    api.get<{ paths: string[]; users: string[] }>(`/sites/${id}/password-protect`)
+      .then((d) => { setProtectedPaths(d.paths || []); setProtectedUsers(d.users || []); })
+      .catch(() => {});
+  };
+
+  const loadAliases = () => {
+    api.get<{ aliases: string[] }>(`/sites/${id}/aliases`)
+      .then((d) => setAliases(d.aliases || []))
+      .catch(() => {});
   };
 
   useEffect(() => {
@@ -74,6 +115,9 @@ export default function SiteDetail() {
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
     fetchStaging();
+    loadRedirects();
+    loadProtected();
+    loadAliases();
   }, [id]);
 
   const handleDelete = async () => {
@@ -724,6 +768,343 @@ export default function SiteDetail() {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Redirect Rules */}
+      {site.status === "active" && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-6">
+          <button
+            onClick={() => setShowRedirects(!showRedirects)}
+            className="w-full px-5 py-4 border-b border-dark-600 flex items-center justify-between text-left"
+          >
+            <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Redirect Rules</h2>
+            <div className="flex items-center gap-2">
+              {redirects.length > 0 && (
+                <span className="text-xs text-dark-200">{redirects.length} rule{redirects.length !== 1 ? "s" : ""}</span>
+              )}
+              <svg className={`w-4 h-4 text-dark-300 transition-transform ${showRedirects ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+              </svg>
+            </div>
+          </button>
+          {showRedirects && (
+            <div className="p-5 space-y-4">
+              {/* Existing redirects */}
+              {redirects.length > 0 && (
+                <div className="space-y-2">
+                  {redirects.map((r, i) => (
+                    <div key={i} className="flex items-center justify-between bg-dark-900 rounded-lg px-4 py-3">
+                      <div className="flex items-center gap-3 text-sm">
+                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${r.type === "301" ? "bg-rust-500/10 text-rust-400" : "bg-warn-500/10 text-warn-400"}`}>
+                          {r.type}
+                        </span>
+                        <span className="text-dark-100 font-mono">{r.source}</span>
+                        <svg className="w-4 h-4 text-dark-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+                        </svg>
+                        <span className="text-dark-200 font-mono truncate max-w-[300px]">{r.target}</span>
+                      </div>
+                      <button
+                        onClick={async () => {
+                          try {
+                            await api.post(`/sites/${id}/redirects/remove`, { source: r.source });
+                            loadRedirects();
+                            setRedirectMsg("Redirect removed");
+                          } catch (e) {
+                            setRedirectMsg(e instanceof Error ? e.message : "Failed");
+                          }
+                        }}
+                        className="p-1 text-dark-300 hover:text-danger-500 transition-colors"
+                        title="Remove"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Add redirect form */}
+              <div className="flex items-end gap-3">
+                <div className="flex-1">
+                  <label className="block text-xs font-medium text-dark-200 mb-1">Source Path</label>
+                  <input
+                    type="text"
+                    value={redirectSource}
+                    onChange={(e) => setRedirectSource(e.target.value)}
+                    placeholder="/old-page"
+                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-xs font-medium text-dark-200 mb-1">Target URL</label>
+                  <input
+                    type="text"
+                    value={redirectTarget}
+                    onChange={(e) => setRedirectTarget(e.target.value)}
+                    placeholder="https://example.com/new-page"
+                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+                  />
+                </div>
+                <div className="w-24">
+                  <label className="block text-xs font-medium text-dark-200 mb-1">Type</label>
+                  <select
+                    value={redirectType}
+                    onChange={(e) => setRedirectType(e.target.value)}
+                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm bg-dark-800 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+                  >
+                    <option value="301">301</option>
+                    <option value="302">302</option>
+                  </select>
+                </div>
+                <button
+                  onClick={async () => {
+                    if (!redirectSource || !redirectTarget) return;
+                    setRedirectMsg("");
+                    try {
+                      await api.post(`/sites/${id}/redirects`, {
+                        source: redirectSource,
+                        target: redirectTarget,
+                        redirect_type: redirectType,
+                      });
+                      setRedirectSource("");
+                      setRedirectTarget("");
+                      loadRedirects();
+                      setRedirectMsg("Redirect added");
+                    } catch (e) {
+                      setRedirectMsg(e instanceof Error ? e.message : "Failed");
+                    }
+                  }}
+                  className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
+                >
+                  Add
+                </button>
+              </div>
+
+              {redirectMsg && (
+                <p className={`text-xs ${redirectMsg.includes("Failed") || redirectMsg.includes("failed") ? "text-danger-400" : "text-rust-400"}`}>
+                  {redirectMsg}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Password Protection */}
+      {site.status === "active" && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-6">
+          <button
+            onClick={() => setShowProtect(!showProtect)}
+            className="w-full px-5 py-4 border-b border-dark-600 flex items-center justify-between text-left"
+          >
+            <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Password Protection</h2>
+            <div className="flex items-center gap-2">
+              {protectedPaths.length > 0 && (
+                <span className="text-xs text-dark-200">{protectedPaths.length} path{protectedPaths.length !== 1 ? "s" : ""}</span>
+              )}
+              <svg className={`w-4 h-4 text-dark-300 transition-transform ${showProtect ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+              </svg>
+            </div>
+          </button>
+          {showProtect && (
+            <div className="p-5 space-y-4">
+              {/* Current protection */}
+              {protectedPaths.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-4 text-xs text-dark-200 mb-2">
+                    <span>Protected paths: {protectedPaths.join(", ")}</span>
+                    <span>Users: {protectedUsers.join(", ")}</span>
+                  </div>
+                  {protectedPaths.map((p, i) => (
+                    <div key={i} className="flex items-center justify-between bg-dark-900 rounded-lg px-4 py-3">
+                      <div className="flex items-center gap-2 text-sm">
+                        <svg className="w-4 h-4 text-warn-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+                        </svg>
+                        <span className="text-dark-100 font-mono">{p}</span>
+                      </div>
+                      <button
+                        onClick={async () => {
+                          try {
+                            await api.post(`/sites/${id}/password-protect/remove`, { path: p });
+                            loadProtected();
+                            setProtectMsg("Protection removed");
+                          } catch (e) {
+                            setProtectMsg(e instanceof Error ? e.message : "Failed");
+                          }
+                        }}
+                        className="p-1 text-dark-300 hover:text-danger-500 transition-colors"
+                        title="Remove"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Add protection form */}
+              <div className="flex items-end gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-dark-200 mb-1">Path</label>
+                  <input
+                    type="text"
+                    value={protectPath}
+                    onChange={(e) => setProtectPath(e.target.value)}
+                    placeholder="/"
+                    className="w-32 px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-dark-200 mb-1">Username</label>
+                  <input
+                    type="text"
+                    value={protectUser}
+                    onChange={(e) => setProtectUser(e.target.value)}
+                    placeholder="admin"
+                    className="w-36 px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-dark-200 mb-1">Password</label>
+                  <input
+                    type="password"
+                    value={protectPass}
+                    onChange={(e) => setProtectPass(e.target.value)}
+                    placeholder="password"
+                    className="w-36 px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+                  />
+                </div>
+                <button
+                  onClick={async () => {
+                    if (!protectUser || !protectPass) return;
+                    setProtectMsg("");
+                    try {
+                      await api.post(`/sites/${id}/password-protect`, {
+                        path: protectPath || "/",
+                        username: protectUser,
+                        password: protectPass,
+                      });
+                      setProtectUser("");
+                      setProtectPass("");
+                      loadProtected();
+                      setProtectMsg("Protection enabled");
+                    } catch (e) {
+                      setProtectMsg(e instanceof Error ? e.message : "Failed");
+                    }
+                  }}
+                  className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
+                >
+                  Protect
+                </button>
+              </div>
+
+              {protectMsg && (
+                <p className={`text-xs ${protectMsg.includes("Failed") || protectMsg.includes("failed") ? "text-danger-400" : "text-rust-400"}`}>
+                  {protectMsg}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Domain Aliases */}
+      {site.status === "active" && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-6">
+          <button
+            onClick={() => setShowAliases(!showAliases)}
+            className="w-full px-5 py-4 border-b border-dark-600 flex items-center justify-between text-left"
+          >
+            <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Domain Aliases</h2>
+            <div className="flex items-center gap-2">
+              {aliases.length > 0 && (
+                <span className="text-xs text-dark-200">{aliases.length} alias{aliases.length !== 1 ? "es" : ""}</span>
+              )}
+              <svg className={`w-4 h-4 text-dark-300 transition-transform ${showAliases ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+              </svg>
+            </div>
+          </button>
+          {showAliases && (
+            <div className="p-5 space-y-4">
+              <p className="text-xs text-dark-300">
+                Additional domains that serve the same site content. DNS must point to this server.
+              </p>
+
+              {/* Current aliases */}
+              {aliases.length > 0 && (
+                <div className="space-y-2">
+                  {aliases.map((alias, i) => (
+                    <div key={i} className="flex items-center justify-between bg-dark-900 rounded-lg px-4 py-3">
+                      <span className="text-sm text-dark-100 font-mono">{alias}</span>
+                      <button
+                        onClick={async () => {
+                          try {
+                            await api.post(`/sites/${id}/aliases/remove`, { alias });
+                            loadAliases();
+                            setAliasMsg("Alias removed");
+                          } catch (e) {
+                            setAliasMsg(e instanceof Error ? e.message : "Failed");
+                          }
+                        }}
+                        className="p-1 text-dark-300 hover:text-danger-500 transition-colors"
+                        title="Remove"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Add alias form */}
+              <div className="flex items-end gap-3">
+                <div className="flex-1">
+                  <label className="block text-xs font-medium text-dark-200 mb-1">Domain Alias</label>
+                  <input
+                    type="text"
+                    value={newAlias}
+                    onChange={(e) => setNewAlias(e.target.value)}
+                    placeholder="www.example.com"
+                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+                  />
+                </div>
+                <button
+                  onClick={async () => {
+                    if (!newAlias.trim()) return;
+                    setAliasMsg("");
+                    try {
+                      await api.post(`/sites/${id}/aliases`, { alias: newAlias.trim() });
+                      setNewAlias("");
+                      loadAliases();
+                      setAliasMsg("Alias added");
+                    } catch (e) {
+                      setAliasMsg(e instanceof Error ? e.message : "Failed");
+                    }
+                  }}
+                  className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
+                >
+                  Add Alias
+                </button>
+              </div>
+
+              {aliasMsg && (
+                <p className={`text-xs ${aliasMsg.includes("Failed") || aliasMsg.includes("failed") ? "text-danger-400" : "text-rust-400"}`}>
+                  {aliasMsg}
+                </p>
+              )}
+            </div>
+          )}
         </div>
       )}
 

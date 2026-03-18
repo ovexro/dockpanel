@@ -51,6 +51,9 @@ export default function Files() {
   const [renameTo, setRenameTo] = useState("");
   // Delete confirm
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  // Upload
+  const [uploading, setUploading] = useState(false);
+  const [uploadMessage, setUploadMessage] = useState("");
 
   useEffect(() => {
     api.get<Site>(`/sites/${id}`).then(setSite).catch((e) => console.error("Failed to load site:", e));
@@ -195,12 +198,58 @@ export default function Files() {
           <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">File Manager</h1>
           <p className="text-sm text-dark-200 mt-1 font-mono">{site?.domain}</p>
         </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
-        >
-          New File/Folder
-        </button>
+        <div className="flex items-center gap-2">
+          <label className={`px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 cursor-pointer transition-colors ${uploading ? "opacity-50 pointer-events-none" : ""}`}>
+            {uploading ? "Uploading..." : "Upload"}
+            <input
+              type="file"
+              className="hidden"
+              multiple
+              disabled={uploading}
+              onChange={async (e) => {
+                const files = e.target.files;
+                if (!files || files.length === 0) return;
+                setUploading(true);
+                setUploadMessage("");
+                let success = 0;
+                let failed = 0;
+                for (const file of Array.from(files)) {
+                  try {
+                    const base64 = await new Promise<string>((resolve, reject) => {
+                      const reader = new FileReader();
+                      reader.onload = () => resolve((reader.result as string).split(",")[1]);
+                      reader.onerror = reject;
+                      reader.readAsDataURL(file);
+                    });
+                    await api.post(`/sites/${id}/files/upload`, {
+                      path: currentPath,
+                      filename: file.name,
+                      content: base64,
+                    });
+                    success++;
+                  } catch {
+                    failed++;
+                  }
+                }
+                setUploading(false);
+                if (failed > 0) {
+                  setUploadMessage(`${success} uploaded, ${failed} failed`);
+                } else {
+                  setUploadMessage(`${success} file(s) uploaded`);
+                }
+                loadDir(currentPath);
+                e.target.value = "";
+                setTimeout(() => setUploadMessage(""), 3000);
+              }}
+            />
+          </label>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
+          >
+            New File/Folder
+          </button>
+        </div>
       </div>
 
       {/* Path breadcrumb bar */}
@@ -236,6 +285,16 @@ export default function Files() {
           <button onClick={() => setError("")} className="ml-2 underline">
             dismiss
           </button>
+        </div>
+      )}
+
+      {uploadMessage && (
+        <div className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
+          uploadMessage.includes("failed")
+            ? "bg-red-500/10 text-danger-400 border-red-500/20"
+            : "bg-rust-500/10 text-rust-400 border-rust-500/20"
+        }`}>
+          {uploadMessage}
         </div>
       )}
 
@@ -324,6 +383,20 @@ export default function Files() {
                       </td>
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          {!entry.is_dir && (
+                            <a
+                              href={`/api/sites/${id}/files/download?path=${encodeURIComponent(
+                                (currentPath === "." ? "" : currentPath + "/") + entry.name
+                              )}`}
+                              className="p-1 text-dark-300 hover:text-dark-50 transition-colors"
+                              title="Download"
+                              download
+                            >
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                              </svg>
+                            </a>
+                          )}
                           <button
                             onClick={() => {
                               setRenaming(entry.name);

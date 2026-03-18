@@ -10,6 +10,13 @@ use super::{is_valid_domain, AppState};
 use crate::services::files;
 
 #[derive(Deserialize)]
+struct UploadRequest {
+    path: String,
+    content: String, // base64-encoded
+    filename: String,
+}
+
+#[derive(Deserialize)]
 struct PathQuery {
     path: Option<String>,
 }
@@ -157,10 +164,121 @@ async fn delete_entry(
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
+/// GET /files/{domain}/download?path= — Download a file as raw bytes.
+async fn download_file(
+    Path(domain): Path<String>,
+    Query(q): Query<PathQuery>,
+) -> Result<impl axum::response::IntoResponse, ApiErr> {
+    if !is_valid_domain(&domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
+    let rel = q.path.as_deref().ok_or_else(|| err(StatusCode::BAD_REQUEST, "path required"))?;
+    let safe = files::resolve_safe_path(&domain, rel)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
+
+    if safe.is_dir() {
+        return Err(err(StatusCode::BAD_REQUEST, "Cannot download a directory"));
+    }
+
+    let bytes = tokio::fs::read(&safe)
+        .await
+        .map_err(|_| err(StatusCode::NOT_FOUND, "File not found"))?;
+
+    let filename = safe
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("download");
+
+    Ok((
+        [
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/octet-stream".to_string(),
+            ),
+        ],
+        bytes,
+    ))
+}
+
+/// POST /files/{domain}/upload — Upload a file (base64-encoded content).
+async fn upload_file(
+    Path(domain): Path<String>,
+    Json(body): Json<UploadRequest>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    if !is_valid_domain(&domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
+    if body.filename.contains("..") || body.filename.contains('/') || body.filename.contains('\\') {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid filename"));
+    }
+    if body.path.contains("..") {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid path"));
+    }
+
+    let site_dir = format!("/var/www/{domain}");
+    if !std::path::Path::new(&site_dir).exists() {
+        return Err(err(StatusCode::NOT_FOUND, "Site not found"));
+    }
+
+    let target_dir = if body.path.is_empty() || body.path == "/" || body.path == "." {
+        site_dir.clone()
+    } else {
+        format!("{site_dir}/{}", body.path.trim_start_matches('/'))
+    };
+
+    let full_path = format!("{target_dir}/{}", body.filename);
+
+    // Ensure target directory exists
+    tokio::fs::create_dir_all(&target_dir).await.ok();
+
+    // Validate path stays within site dir
+    let canon_site = std::path::Path::new(&site_dir)
+        .canonicalize()
+        .map_err(|_| err(StatusCode::NOT_FOUND, "Site not found"))?;
+    let canon_target = std::path::Path::new(&target_dir)
+        .canonicalize()
+        .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid target directory"))?;
+    if !canon_target.starts_with(&canon_site) {
+        return Err(err(StatusCode::FORBIDDEN, "Access denied"));
+    }
+
+    // Decode base64
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&body.content)
+        .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid base64 content"))?;
+
+    // Limit: 50MB
+    if bytes.len() > 50 * 1024 * 1024 {
+        return Err(err(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "File too large (max 50MB)",
+        ));
+    }
+
+    tokio::fs::write(&full_path, &bytes)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Write failed: {e}")))?;
+
+    // Fix ownership
+    let _ = tokio::process::Command::new("chown")
+        .args(["www-data:www-data", &full_path])
+        .output()
+        .await;
+
+    tracing::info!("File uploaded: {full_path} ({} bytes)", bytes.len());
+    Ok(Json(serde_json::json!({ "ok": true, "size": bytes.len() })))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/files/{domain}/list", get(list_dir))
         .route("/files/{domain}/read", get(read_file))
+        .route("/files/{domain}/download", get(download_file))
         .route("/files/{domain}/write", put(write_file))
         .route("/files/{domain}/create", post(create_entry))
         .route("/files/{domain}/rename", post(rename_entry))
