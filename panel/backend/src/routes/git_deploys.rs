@@ -51,6 +51,7 @@ pub struct GitDeploy {
     pub updated_at: chrono::DateTime<chrono::Utc>,
     pub github_token: Option<String>,
     pub deploy_cron: Option<String>,
+    pub deploy_protected: bool,
 }
 
 #[derive(serde::Serialize, sqlx::FromRow)]
@@ -100,6 +101,7 @@ pub struct CreateRequest {
     pub build_context: Option<String>,
     pub github_token: Option<String>,
     pub deploy_cron: Option<String>,
+    pub deploy_protected: Option<bool>,
 }
 
 #[derive(serde::Deserialize)]
@@ -120,6 +122,7 @@ pub struct UpdateRequest {
     pub build_context: Option<String>,
     pub github_token: Option<String>,
     pub deploy_cron: Option<String>,
+    pub deploy_protected: Option<bool>,
 }
 
 /// GET /api/git-deploys — List all git deploys for the current user.
@@ -197,9 +200,11 @@ pub async fn create(
         .unwrap_or(serde_json::json!({}));
     let build_context = body.build_context.as_deref().unwrap_or(".");
 
+    let deploy_protected = body.deploy_protected.unwrap_or(false);
+
     let deploy: GitDeploy = sqlx::query_as(
-        "INSERT INTO git_deploys (user_id, name, repo_url, branch, dockerfile, container_port, host_port, domain, env_vars, auto_deploy, webhook_secret, memory_mb, cpu_percent, ssl_email, pre_build_cmd, post_deploy_cmd, build_args, build_context, github_token, deploy_cron) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) \
+        "INSERT INTO git_deploys (user_id, name, repo_url, branch, dockerfile, container_port, host_port, domain, env_vars, auto_deploy, webhook_secret, memory_mb, cpu_percent, ssl_email, pre_build_cmd, post_deploy_cmd, build_args, build_context, github_token, deploy_cron, deploy_protected) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) \
          RETURNING *",
     )
     .bind(claims.sub)
@@ -222,6 +227,7 @@ pub async fn create(
     .bind(build_context)
     .bind(&body.github_token)
     .bind(&body.deploy_cron)
+    .bind(deploy_protected)
     .fetch_one(&state.db)
     .await
     .map_err(|e| {
@@ -306,8 +312,9 @@ pub async fn update(
          build_context = COALESCE($14, build_context), \
          github_token = COALESCE($15, github_token), \
          deploy_cron = COALESCE($16, deploy_cron), \
+         deploy_protected = COALESCE($17, deploy_protected), \
          updated_at = NOW() \
-         WHERE id = $17 AND user_id = $18 \
+         WHERE id = $18 AND user_id = $19 \
          RETURNING *",
     )
     .bind(body.repo_url.as_deref())
@@ -326,6 +333,7 @@ pub async fn update(
     .bind(body.build_context.as_deref())
     .bind(body.github_token.as_deref())
     .bind(body.deploy_cron.as_deref())
+    .bind(body.deploy_protected)
     .bind(id)
     .bind(claims.sub)
     .fetch_one(&state.db)
@@ -1002,6 +1010,86 @@ fn spawn_deploy_task(
             }
         };
 
+        // Check for docker-compose.yml — if found, use compose deployment path
+        let compose_result = agent.post("/git/compose-check", Some(serde_json::json!({
+            "name": config.name, "build_context": config.build_context,
+        }))).await.ok();
+
+        let is_compose = compose_result.as_ref()
+            .and_then(|r| r.get("found"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        if is_compose {
+            // Compose deployment path
+            emit("compose", "Deploying with Docker Compose", "in_progress", None);
+            let yaml = compose_result.as_ref()
+                .and_then(|r| r.get("content"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            match agent.post_long("/apps/compose/deploy", Some(serde_json::json!({
+                "yaml": yaml,
+                "stack_id": config.id.to_string(),
+            })), 660).await {
+                Ok(_) => {
+                    emit("compose", "Docker Compose deployed", "done", None);
+                    emit("complete", "Deploy complete (Compose)", "done", None);
+
+                    let duration_ms = started.elapsed().as_millis() as i32;
+                    sqlx::query("INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by, duration_ms) VALUES ($1, $2, $3, 'compose', 'success', 'Deployed via Docker Compose', $4, $5)")
+                        .bind(git_deploy_id).bind(&commit_hash).bind(&commit_message).bind(&triggered).bind(duration_ms)
+                        .execute(&db).await.ok();
+
+                    sqlx::query("UPDATE git_deploys SET status = 'running', last_deploy = NOW(), last_commit = $1, updated_at = NOW() WHERE id = $2")
+                        .bind(&commit_hash).bind(git_deploy_id).execute(&db).await.ok();
+
+                    tracing::info!("Git deploy (compose) success: {deploy_name} ({commit_hash})");
+                    crate::services::activity::log_activity(&db, user_id, &email, "git_deploy.compose", Some("git_deploy"), Some(&deploy_name), Some(&commit_hash), Some("success")).await;
+                }
+                Err(e) => {
+                    emit("compose", "Docker Compose deploy failed", "error", Some(format!("{e}")));
+                    emit("complete", "Deploy failed", "error", None);
+                    let duration_ms = started.elapsed().as_millis() as i32;
+                    sqlx::query("INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by, duration_ms) VALUES ($1, $2, $3, '', 'failed', $4, $5, $6)")
+                        .bind(git_deploy_id).bind(&commit_hash).bind(&commit_message).bind(format!("Compose failed: {e}")).bind(&triggered).bind(duration_ms)
+                        .execute(&db).await.ok();
+                    sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                        .bind(git_deploy_id).execute(&db).await.ok();
+                }
+            }
+
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            logs.lock().unwrap().remove(&deploy_id);
+            return; // Skip single-container deployment path
+        }
+
+        // Auto-detect: generate Dockerfile if missing
+        match agent.post("/git/auto-detect", Some(serde_json::json!({
+            "name": config.name, "dockerfile": config.dockerfile, "build_context": config.build_context,
+        }))).await {
+            Ok(result) => {
+                let auto = result.get("auto_generated").and_then(|v| v.as_bool()).unwrap_or(false);
+                if auto {
+                    emit("detect", "Auto-detected project type", "done", None);
+                }
+            }
+            Err(e) => {
+                emit("detect", "No Dockerfile and auto-detect failed", "error", Some(format!("{e}")));
+                emit("complete", "Deploy failed", "error", None);
+                let duration_ms = started.elapsed().as_millis() as i32;
+                sqlx::query("INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by, duration_ms) VALUES ($1, $2, $3, '', 'failed', $4, $5, $6)")
+                    .bind(git_deploy_id).bind(&commit_hash).bind(&commit_message)
+                    .bind(format!("Auto-detect failed: {e}")).bind(&triggered).bind(duration_ms)
+                    .execute(&db).await.ok();
+                sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                    .bind(git_deploy_id).execute(&db).await.ok();
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                logs.lock().unwrap().remove(&deploy_id);
+                return;
+            }
+        }
+
         // Pre-build hook (runs in git dir on host, before docker build)
         if let Some(ref cmd) = config.pre_build_cmd {
             if !cmd.trim().is_empty() {
@@ -1494,6 +1582,48 @@ pub async fn trigger_deploy_task(
             return;
         }
     };
+
+    // Check for docker-compose.yml — if found, use compose deployment path
+    if let Ok(compose_result) = agent.post("/git/compose-check", Some(serde_json::json!({
+        "name": config.name, "build_context": config.build_context,
+    }))).await {
+        let is_compose = compose_result.get("found").and_then(|v| v.as_bool()).unwrap_or(false);
+        if is_compose {
+            let yaml = compose_result.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            match agent.post_long("/apps/compose/deploy", Some(serde_json::json!({
+                "yaml": yaml, "stack_id": config.id.to_string(),
+            })), 660).await {
+                Ok(_) => {
+                    let duration_ms = started.elapsed().as_millis() as i32;
+                    sqlx::query("INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by, duration_ms) VALUES ($1, $2, $3, 'compose', 'success', 'Deployed via Docker Compose', $4, $5)")
+                        .bind(git_deploy_id).bind(&commit_hash).bind(&commit_message).bind(&triggered_by).bind(duration_ms)
+                        .execute(&db).await.ok();
+                    sqlx::query("UPDATE git_deploys SET status = 'running', last_deploy = NOW(), last_commit = $1, updated_at = NOW() WHERE id = $2")
+                        .bind(&commit_hash).bind(git_deploy_id).execute(&db).await.ok();
+                    tracing::info!("Deploy success (compose/{}): {} ({commit_hash})", triggered_by, config.name);
+                    crate::services::activity::log_activity(&db, user_id, &email, "git_deploy.compose", Some("git_deploy"), Some(&config.name), Some(&commit_hash), Some(&triggered_by)).await;
+                }
+                Err(e) => {
+                    tracing::error!("Compose deploy failed ({}): {}: {e}", triggered_by, config.name);
+                    record_failed_history(&db, git_deploy_id, &commit_hash, &commit_message, &format!("Compose failed: {e}"), &triggered_by).await;
+                    sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                        .bind(git_deploy_id).execute(&db).await.ok();
+                }
+            }
+            return; // Skip single-container path
+        }
+    }
+
+    // Auto-detect: generate Dockerfile if missing
+    if let Err(e) = agent.post("/git/auto-detect", Some(serde_json::json!({
+        "name": config.name, "dockerfile": config.dockerfile, "build_context": config.build_context,
+    }))).await {
+        tracing::error!("Auto-detect failed ({}): {}: {e}", triggered_by, config.name);
+        record_failed_history(&db, git_deploy_id, &commit_hash, &commit_message, &format!("Auto-detect failed: {e}"), &triggered_by).await;
+        sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+            .bind(git_deploy_id).execute(&db).await.ok();
+        return;
+    }
 
     // Pre-build hook
     if let Some(ref cmd) = config.pre_build_cmd {
