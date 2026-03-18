@@ -2,6 +2,15 @@ use serde::Serialize;
 use tokio::process::Command;
 
 #[derive(Serialize)]
+pub struct LoginEntry {
+    pub time: String,
+    pub user: String,
+    pub ip: String,
+    pub method: String,
+    pub success: bool,
+}
+
+#[derive(Serialize)]
 pub struct FirewallStatus {
     pub active: bool,
     pub default_policy: String,
@@ -565,6 +574,86 @@ pub async fn fail2ban_banned_ips(jail: &str) -> Result<Vec<String>, String> {
     Ok(ips)
 }
 
+/// Parse recent SSH login attempts from /var/log/auth.log.
+pub async fn get_login_audit() -> Result<Vec<LoginEntry>, String> {
+    let content = tokio::fs::read_to_string("/var/log/auth.log")
+        .await
+        .or_else(|_| std::fs::read_to_string("/var/log/auth.log"))
+        .unwrap_or_default();
+
+    let mut entries = Vec::new();
+
+    // Parse lines like:
+    // Mar 18 12:34:56 host sshd[1234]: Accepted publickey for user from 1.2.3.4 port 5678
+    // Mar 18 12:34:56 host sshd[1234]: Failed password for user from 1.2.3.4 port 5678
+    // Mar 18 12:34:56 host sshd[1234]: Failed password for invalid user admin from 1.2.3.4 port 5678
+    for line in content.lines().rev().take(500) {
+        if !line.contains("sshd[") {
+            continue;
+        }
+
+        let success = line.contains("Accepted");
+        let failed = line.contains("Failed password") || line.contains("Failed publickey");
+
+        if !success && !failed {
+            continue;
+        }
+
+        // Extract IP
+        let ip = line
+            .split(" from ")
+            .nth(1)
+            .and_then(|s| s.split_whitespace().next())
+            .unwrap_or("unknown")
+            .to_string();
+
+        // Extract user
+        let user = if line.contains("invalid user") {
+            line.split("invalid user ")
+                .nth(1)
+                .and_then(|s| s.split(" from").next())
+                .unwrap_or("unknown")
+                .to_string()
+        } else {
+            line.split(" for ")
+                .nth(1)
+                .and_then(|s| s.split(" from").next())
+                .unwrap_or("unknown")
+                .to_string()
+        };
+
+        // Extract timestamp (first 15 chars: "Mar 18 12:34:56")
+        let time = if line.len() >= 15 {
+            &line[..15]
+        } else {
+            "unknown"
+        };
+
+        // Extract method
+        let method = if line.contains("publickey") {
+            "publickey"
+        } else if line.contains("password") {
+            "password"
+        } else {
+            "unknown"
+        };
+
+        entries.push(LoginEntry {
+            time: time.to_string(),
+            user,
+            ip,
+            method: method.to_string(),
+            success,
+        });
+
+        if entries.len() >= 50 {
+            break;
+        }
+    }
+
+    Ok(entries)
+}
+
 /// Apply a recommended fix for a security finding.
 pub async fn apply_fix(fix_type: &str, target: &str) -> Result<String, String> {
     match fix_type {
@@ -590,6 +679,26 @@ pub async fn apply_fix(fix_type: &str, target: &str) -> Result<String, String> {
             tokio::fs::remove_file(target).await
                 .map_err(|e| format!("Failed to remove {target}: {e}"))?;
             Ok(format!("File removed: {target}"))
+        }
+        "quarantine_file" => {
+            if target.contains("..") || !target.starts_with("/var/www") {
+                return Err("Can only quarantine files under /var/www".into());
+            }
+            let quarantine_dir = "/var/lib/dockpanel/quarantine";
+            std::fs::create_dir_all(quarantine_dir).ok();
+            let filename = std::path::Path::new(target)
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or("unknown");
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let quarantine_path = format!("{quarantine_dir}/{timestamp}_{filename}");
+            tokio::fs::rename(target, &quarantine_path)
+                .await
+                .map_err(|e| format!("Failed to quarantine {target}: {e}"))?;
+            Ok(format!("File quarantined: {target} -> {quarantine_path}"))
         }
         _ => Err(format!("Unknown fix type: {fix_type}")),
     }

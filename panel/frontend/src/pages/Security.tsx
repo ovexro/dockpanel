@@ -84,7 +84,8 @@ export default function Security() {
   const [ruleFrom, setRuleFrom] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
   const [message, setMessage] = useState({ text: "", type: "" });
-  const [tab, setTab] = useState<"overview" | "scans" | "diagnostics">("overview");
+  const [tab, setTab] = useState<"overview" | "scans" | "diagnostics" | "audit">("overview");
+  const [loginAudit, setLoginAudit] = useState<{ panel: any[]; ssh: any[] }>({ panel: [], ssh: [] });
   const [selectedJail, setSelectedJail] = useState<string | null>(null);
   const [bannedIps, setBannedIps] = useState<string[]>([]);
   const [banIp, setBanIp] = useState("");
@@ -115,6 +116,13 @@ export default function Security() {
       setBannedIps(data.ips);
       setSelectedJail(jail);
     } catch { setBannedIps([]); }
+  };
+
+  const loadLoginAudit = async () => {
+    try {
+      const data = await api.get<{ panel: any[]; ssh: any[] }>("/security/login-audit");
+      setLoginAudit(data);
+    } catch {}
   };
 
   const getFixAction = (finding: ScanFinding): { type: string; target: string; label: string } | null => {
@@ -238,6 +246,10 @@ export default function Security() {
         return "bg-warn-500/10 text-warn-400";
       case "ssl_expiry":
         return "bg-orange-500/10 text-orange-400";
+      case "container_vuln":
+        return "bg-red-500/10 text-red-400";
+      case "security_headers":
+        return "bg-blue-500/10 text-blue-400";
       default:
         return "bg-dark-900 text-dark-200";
     }
@@ -315,6 +327,14 @@ export default function Security() {
           }`}
         >
           Diagnostics
+        </button>
+        <button
+          onClick={() => { setTab("audit"); loadLoginAudit(); }}
+          className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+            tab === "audit" ? "bg-dark-800 text-dark-50 shadow-sm" : "text-dark-200 hover:text-dark-100"
+          }`}
+        >
+          Login Audit
         </button>
       </div>
 
@@ -762,12 +782,45 @@ export default function Security() {
                                   <p className="text-xs text-rust-500 mt-1 inline-flex items-center gap-1">
                                     {f.remediation}
                                     {(() => {
+                                      // Malware findings get Quarantine + Delete buttons
+                                      if (f.check_type === "malware" && f.file_path) {
+                                        return (
+                                          <span className="flex gap-1 ml-2">
+                                            <button
+                                              onClick={async () => {
+                                                if (!confirm(`Quarantine ${f.file_path}? (moves to /var/lib/dockpanel/quarantine/)`)) return;
+                                                try {
+                                                  await api.post("/security/fix", { fix_type: "quarantine_file", target: f.file_path });
+                                                  setMessage({ text: "File quarantined", type: "success" });
+                                                  handleScan();
+                                                } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                                              }}
+                                              className="px-2 py-0.5 bg-warn-500/15 text-warn-400 rounded text-xs font-medium hover:bg-warn-500/25"
+                                            >
+                                              Quarantine
+                                            </button>
+                                            <button
+                                              onClick={async () => {
+                                                if (!confirm(`DELETE ${f.file_path}? This cannot be undone!`)) return;
+                                                try {
+                                                  await api.post("/security/fix", { fix_type: "remove_file", target: f.file_path });
+                                                  setMessage({ text: "File deleted", type: "success" });
+                                                  handleScan();
+                                                } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                                              }}
+                                              className="px-2 py-0.5 bg-red-500/15 text-danger-400 rounded text-xs font-medium hover:bg-red-500/25"
+                                            >
+                                              Delete
+                                            </button>
+                                          </span>
+                                        );
+                                      }
                                       const fix = getFixAction(f);
                                       if (!fix) return null;
                                       return (
                                         <button
                                           onClick={async () => {
-                                            if (!confirm(`Apply fix: ${fix.label}?\n\nThis will ${fix.type === "block_port" ? `block port ${fix.target}/tcp` : fix.type === "remove_file" ? `delete ${fix.target}` : fix.label.toLowerCase()}`)) return;
+                                            if (!confirm(`Apply fix: ${fix.label}?\n\nThis will ${fix.type === "block_port" ? `block port ${fix.target}/tcp` : fix.label.toLowerCase()}`)) return;
                                             try {
                                               await api.post("/security/fix", { fix_type: fix.type, target: fix.target });
                                               setMessage({ text: `Fix applied: ${fix.label}`, type: "success" });
@@ -798,6 +851,74 @@ export default function Security() {
 
       {tab === "diagnostics" && (
         <DiagnosticsContent />
+      )}
+
+      {tab === "audit" && (
+        <div className="space-y-6">
+          {/* SSH Logins */}
+          <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+            <div className="px-5 py-3 border-b border-dark-600">
+              <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">SSH Login Attempts</h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead><tr className="bg-dark-900">
+                  <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Time</th>
+                  <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">User</th>
+                  <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">IP</th>
+                  <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Method</th>
+                  <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Status</th>
+                </tr></thead>
+                <tbody className="divide-y divide-dark-600">
+                  {loginAudit.ssh.map((e: any, i: number) => (
+                    <tr key={i} className="hover:bg-dark-700/30">
+                      <td className="px-5 py-2 text-xs text-dark-200 font-mono">{e.time}</td>
+                      <td className="px-5 py-2 text-sm text-dark-50 font-mono">{e.user}</td>
+                      <td className="px-5 py-2 text-sm text-dark-100 font-mono">{e.ip}</td>
+                      <td className="px-5 py-2 text-xs text-dark-300">{e.method}</td>
+                      <td className="px-5 py-2">
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${e.success ? "bg-rust-500/15 text-rust-400" : "bg-red-500/15 text-danger-400"}`}>
+                          {e.success ? "Success" : "Failed"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {loginAudit.ssh.length === 0 && <p className="px-5 py-4 text-sm text-dark-300">No SSH login attempts found</p>}
+            </div>
+          </div>
+
+          {/* Panel Logins */}
+          <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+            <div className="px-5 py-3 border-b border-dark-600">
+              <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Panel Login Activity</h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead><tr className="bg-dark-900">
+                  <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Time</th>
+                  <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Action</th>
+                  <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Status</th>
+                </tr></thead>
+                <tbody className="divide-y divide-dark-600">
+                  {loginAudit.panel.map((e: any, i: number) => (
+                    <tr key={i} className="hover:bg-dark-700/30">
+                      <td className="px-5 py-2 text-xs text-dark-200 font-mono">{new Date(e.time).toLocaleString()}</td>
+                      <td className="px-5 py-2 text-sm text-dark-50">{e.action}</td>
+                      <td className="px-5 py-2">
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${e.success ? "bg-rust-500/15 text-rust-400" : "bg-red-500/15 text-danger-400"}`}>
+                          {e.success ? "Success" : "Failed"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {loginAudit.panel.length === 0 && <p className="px-5 py-4 text-sm text-dark-300">No panel login activity found</p>}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Add Rule Dialog */}

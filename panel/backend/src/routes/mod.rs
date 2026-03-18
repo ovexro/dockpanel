@@ -205,6 +205,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/security/fail2ban/{jail}/banned", get(security::fail2ban_banned))
         // Security Fix
         .route("/api/security/fix", post(security::apply_security_fix))
+        // Login Audit
+        .route("/api/security/login-audit", get(security::login_audit))
         // Security Scanning
         .route("/api/security/scan", post(security_scans::trigger_scan))
         .route("/api/security/scans", get(security_scans::list_scans))
