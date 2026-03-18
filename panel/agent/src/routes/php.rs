@@ -1,4 +1,5 @@
 use axum::{
+    extract::Path,
     http::StatusCode,
     routing::{get, post},
     Json, Router,
@@ -213,8 +214,92 @@ async fn install_version(
     }))
 }
 
+// ──────────────────────────────────────────────────────────────
+// PHP Extensions Manager
+// ──────────────────────────────────────────────────────────────
+
+type PhpApiErr = (StatusCode, Json<serde_json::Value>);
+
+fn php_api_err(status: StatusCode, msg: &str) -> PhpApiErr {
+    (status, Json(serde_json::json!({ "error": msg })))
+}
+
+/// GET /php/extensions/{version} — List installed PHP extensions.
+async fn list_extensions(Path(version): Path<String>) -> Result<Json<serde_json::Value>, PhpApiErr> {
+    // List all installed extensions
+    let output = Command::new("php")
+        .args([&format!("-d"), "error_reporting=0", "-m"])
+        .env("PATH", "/usr/bin:/usr/sbin:/bin")
+        .output().await
+        .map_err(|e| php_api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let extensions: Vec<String> = stdout.lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('['))
+        .map(|l| l.trim().to_lowercase())
+        .collect();
+
+    // List available (installable) extensions
+    let avail_output = Command::new("apt-cache")
+        .args(["search", &format!("php{version}-")])
+        .output().await;
+
+    let available: Vec<String> = avail_output.ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines()
+            .filter_map(|l| {
+                let pkg = l.split_whitespace().next()?;
+                let ext = pkg.strip_prefix(&format!("php{version}-"))?;
+                if ["common", "cli", "fpm", "dev", "dbg"].contains(&ext) { return None; }
+                Some(ext.to_string())
+            })
+            .collect())
+        .unwrap_or_default();
+
+    Ok(Json(serde_json::json!({ "installed": extensions, "available": available, "version": version })))
+}
+
+/// POST /php/extensions/install — Install a PHP extension.
+async fn install_extension(Json(body): Json<serde_json::Value>) -> Result<Json<serde_json::Value>, PhpApiErr> {
+    let version = body.get("version").and_then(|v| v.as_str()).unwrap_or("8.3");
+    let extension = body.get("extension").and_then(|v| v.as_str()).unwrap_or("");
+
+    if extension.is_empty() || !extension.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err(php_api_err(StatusCode::BAD_REQUEST, "Invalid extension name"));
+    }
+
+    let package = format!("php{version}-{extension}");
+    tracing::info!("Installing PHP extension: {package}");
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        Command::new("apt-get")
+            .args(["install", "-y", &package])
+            .env("DEBIAN_FRONTEND", "noninteractive")
+            .output()
+    ).await
+        .map_err(|_| php_api_err(StatusCode::GATEWAY_TIMEOUT, "Install timed out"))?
+        .map_err(|e| php_api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let msg = &stderr[..200.min(stderr.len())];
+        return Err(php_api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Install failed: {msg}")));
+    }
+
+    // Restart PHP-FPM
+    let _ = Command::new("systemctl")
+        .args(["restart", &format!("php{version}-fpm")])
+        .output().await;
+
+    tracing::info!("PHP extension installed: {package}");
+    Ok(Json(serde_json::json!({ "ok": true, "package": package })))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/php/versions", get(list_versions))
         .route("/php/install", post(install_version))
+        // PHP Extensions
+        .route("/php/extensions/{version}", get(list_extensions))
+        .route("/php/extensions/install", post(install_extension))
 }
