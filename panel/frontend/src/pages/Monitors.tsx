@@ -19,6 +19,7 @@ interface Monitor {
   port: number | null;
   keyword: string | null;
   keyword_must_contain: boolean;
+  custom_headers: Record<string, string> | null;
   created_at: string;
 }
 
@@ -73,6 +74,13 @@ const statusDot: Record<string, string> = {
   pending: "bg-gray-400",
 };
 
+const TYPE_LABELS: Record<string, string> = {
+  http: "HTTP(S)",
+  tcp: "TCP Port",
+  ping: "Ping",
+  heartbeat: "Heartbeat",
+};
+
 export default function Monitors() {
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [loading, setLoading] = useState(true);
@@ -98,6 +106,10 @@ export default function Monitors() {
   const [prevAutoName, setPrevAutoName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [displayCount, setDisplayCount] = useState(25);
+
+  // Custom headers state
+  const [customHeaders, setCustomHeaders] = useState<{ key: string; value: string }[]>([]);
+  const [showHeaders, setShowHeaders] = useState(false);
 
   // Uptime + chart data (per expanded monitor)
   const [uptimeData, setUptimeData] = useState<UptimeData | null>(null);
@@ -134,13 +146,13 @@ export default function Monitors() {
 
   const handleUrlChange = (url: string) => {
     setFormUrl(url);
-    if (formMonitorType === "tcp") {
-      // For TCP, the URL is just a hostname — use it as auto-name
+    if (formMonitorType === "tcp" || formMonitorType === "ping") {
+      // For TCP/ping, the URL is just a hostname — use it as auto-name
       if (!formName || formName === prevAutoName) {
         setFormName(url.trim());
         setPrevAutoName(url.trim());
       }
-    } else {
+    } else if (formMonitorType === "http") {
       try {
         const hostname = new URL(url).hostname;
         if (!formName || formName === prevAutoName) {
@@ -156,9 +168,15 @@ export default function Monitors() {
     setError("");
     setSubmitting(true);
     try {
+      // Build custom headers object
+      const headers: Record<string, string> = {};
+      customHeaders.forEach((h) => {
+        if (h.key.trim()) headers[h.key.trim()] = h.value;
+      });
+
       await api.post("/monitors", {
         name: formName,
-        url: formUrl,
+        url: formMonitorType === "heartbeat" ? (formUrl || formName) : formUrl,
         check_interval: parseInt(formInterval),
         alert_slack_url: formSlackUrl || null,
         alert_discord_url: formDiscordUrl || null,
@@ -166,6 +184,7 @@ export default function Monitors() {
         port: formMonitorType === "tcp" && formPort ? parseInt(formPort) : null,
         keyword: formKeyword || null,
         keyword_must_contain: formKeywordMustContain,
+        custom_headers: Object.keys(headers).length > 0 ? headers : null,
       });
       setShowForm(false);
       setFormName("");
@@ -178,6 +197,8 @@ export default function Monitors() {
       setFormKeyword("");
       setFormKeywordMustContain(true);
       setPrevAutoName("");
+      setCustomHeaders([]);
+      setShowHeaders(false);
       fetchMonitors();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create monitor");
@@ -242,6 +263,34 @@ export default function Monitors() {
     }
   };
 
+  // URL label depends on monitor type
+  const getUrlLabel = () => {
+    switch (formMonitorType) {
+      case "tcp": return "Host";
+      case "ping": return "Host / IP";
+      case "heartbeat": return "Identifier";
+      default: return "URL";
+    }
+  };
+
+  const getUrlPlaceholder = () => {
+    switch (formMonitorType) {
+      case "tcp": return "db.example.com";
+      case "ping": return "192.168.1.1 or example.com";
+      case "heartbeat": return "my-cron-job";
+      default: return "https://example.com";
+    }
+  };
+
+  const getUrlHint = () => {
+    switch (formMonitorType) {
+      case "tcp": return "Hostname or IP address";
+      case "ping": return "Hostname or IP to ping via ICMP";
+      case "heartbeat": return "Name/identifier for this heartbeat endpoint";
+      default: return "The full URL to monitor, including https://";
+    }
+  };
+
   // Summary
   const upCount = monitors.filter((m) => m.status === "up").length;
   const downCount = monitors.filter((m) => m.status === "down").length;
@@ -296,20 +345,31 @@ export default function Monitors() {
           <div className="grid grid-cols-2 gap-4 mb-4">
             <div>
               <label className="block text-xs font-medium text-dark-200 mb-1">Monitor Type</label>
-              <select value={formMonitorType} onChange={(e) => { setFormMonitorType(e.target.value); setFormUrl(""); setFormPort(""); }} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none">
+              <select value={formMonitorType} onChange={(e) => { setFormMonitorType(e.target.value); setFormUrl(""); setFormPort(""); setCustomHeaders([]); setShowHeaders(false); }} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none">
                 <option value="http">HTTP(S)</option>
                 <option value="tcp">TCP Port</option>
+                <option value="ping">Ping (ICMP)</option>
+                <option value="heartbeat">Heartbeat (Dead Man's Switch)</option>
               </select>
             </div>
             <div>
               <label className="block text-xs font-medium text-dark-200 mb-1">Name</label>
               <input type="text" value={formName} onChange={(e) => setFormName(e.target.value)} required placeholder="My Website" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
             </div>
-            <div>
-              <label className="block text-xs font-medium text-dark-200 mb-1">{formMonitorType === "tcp" ? "Host" : "URL"}</label>
-              <input type={formMonitorType === "tcp" ? "text" : "url"} value={formUrl} onChange={(e) => handleUrlChange(e.target.value)} required placeholder={formMonitorType === "tcp" ? "db.example.com" : "https://example.com"} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
-              <p className="text-xs text-dark-300 mt-1">{formMonitorType === "tcp" ? "Hostname or IP address" : "The full URL to monitor, including https://"}</p>
-            </div>
+            {formMonitorType !== "heartbeat" && (
+              <div>
+                <label className="block text-xs font-medium text-dark-200 mb-1">{getUrlLabel()}</label>
+                <input type={formMonitorType === "http" ? "url" : "text"} value={formUrl} onChange={(e) => handleUrlChange(e.target.value)} required placeholder={getUrlPlaceholder()} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
+                <p className="text-xs text-dark-300 mt-1">{getUrlHint()}</p>
+              </div>
+            )}
+            {formMonitorType === "heartbeat" && (
+              <div>
+                <label className="block text-xs font-medium text-dark-200 mb-1">{getUrlLabel()}</label>
+                <input type="text" value={formUrl} onChange={(e) => setFormUrl(e.target.value)} placeholder={getUrlPlaceholder()} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
+                <p className="text-xs text-dark-300 mt-1">{getUrlHint()}</p>
+              </div>
+            )}
             {formMonitorType === "tcp" && (
               <div>
                 <label className="block text-xs font-medium text-dark-200 mb-1">Port</label>
@@ -318,16 +378,35 @@ export default function Monitors() {
               </div>
             )}
             <div>
-              <label className="block text-xs font-medium text-dark-200 mb-1">Check Interval</label>
+              <label className="block text-xs font-medium text-dark-200 mb-1">
+                {formMonitorType === "heartbeat" ? "Expected Interval" : "Check Interval"}
+              </label>
               <select value={formInterval} onChange={(e) => setFormInterval(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none">
                 <option value="30">30 seconds</option>
                 <option value="60">1 minute</option>
                 <option value="300">5 minutes</option>
                 <option value="600">10 minutes</option>
+                <option value="1800">30 minutes</option>
+                <option value="3600">1 hour</option>
               </select>
-              <p className="text-xs text-dark-300 mt-1">How often to check, in seconds</p>
+              <p className="text-xs text-dark-300 mt-1">
+                {formMonitorType === "heartbeat"
+                  ? "How often the external service should ping this endpoint"
+                  : "How often to check, in seconds"}
+              </p>
             </div>
           </div>
+
+          {/* Heartbeat info */}
+          {formMonitorType === "heartbeat" && (
+            <div className="mb-4 p-3 bg-dark-700/50 rounded-lg border border-dark-600">
+              <p className="text-xs text-dark-200">
+                After creating this monitor, you'll receive a heartbeat URL. Configure your cron job or service to POST to that URL on each successful run.
+                If no ping is received within 2x the expected interval, an alert will fire.
+              </p>
+            </div>
+          )}
+
           {/* Keyword monitoring (HTTP only) */}
           {formMonitorType === "http" && (
             <div className="mb-4 space-y-2">
@@ -343,6 +422,65 @@ export default function Monitors() {
               )}
             </div>
           )}
+
+          {/* Custom Headers (HTTP only) */}
+          {formMonitorType === "http" && (
+            <div className="mb-4">
+              <button
+                type="button"
+                onClick={() => setShowHeaders(!showHeaders)}
+                className="text-xs text-rust-400 hover:text-rust-300 font-medium"
+              >
+                {showHeaders ? "- Hide Custom Headers" : "+ Custom Headers (optional)"}
+              </button>
+              {showHeaders && (
+                <div className="mt-2 space-y-1">
+                  {customHeaders.map((h, i) => (
+                    <div key={i} className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="Header-Name"
+                        value={h.key}
+                        onChange={(e) => {
+                          const updated = [...customHeaders];
+                          updated[i] = { ...updated[i], key: e.target.value };
+                          setCustomHeaders(updated);
+                        }}
+                        className="w-1/3 px-3 py-1.5 border border-dark-500 rounded-lg text-xs focus:ring-2 focus:ring-accent-500 outline-none font-mono"
+                      />
+                      <input
+                        type="text"
+                        placeholder="value"
+                        value={h.value}
+                        onChange={(e) => {
+                          const updated = [...customHeaders];
+                          updated[i] = { ...updated[i], value: e.target.value };
+                          setCustomHeaders(updated);
+                        }}
+                        className="flex-1 px-3 py-1.5 border border-dark-500 rounded-lg text-xs focus:ring-2 focus:ring-accent-500 outline-none font-mono"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setCustomHeaders(customHeaders.filter((_, idx) => idx !== i))}
+                        className="text-danger-400 hover:text-danger-300 px-1 text-sm font-bold"
+                      >
+                        x
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setCustomHeaders([...customHeaders, { key: "", value: "" }])}
+                    className="text-xs text-rust-400 hover:text-rust-300"
+                  >
+                    + Add header
+                  </button>
+                  <p className="text-[10px] text-dark-300 mt-1">Send custom headers with each HTTP check (e.g. Authorization, X-API-Key)</p>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-4 mb-4">
             <div>
               <label className="block text-xs font-medium text-dark-200 mb-1">Slack Webhook URL</label>
@@ -389,13 +527,20 @@ export default function Monitors() {
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <p className="text-sm font-medium text-dark-50 truncate">{m.name}</p>
-                        {m.monitor_type === "tcp" && <span className="text-[10px] px-1.5 py-0.5 rounded bg-dark-700 text-dark-200 font-mono shrink-0">TCP{m.port ? `:${m.port}` : ''}</span>}
+                        {m.monitor_type !== "http" && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-dark-700 text-dark-200 font-mono shrink-0">
+                            {TYPE_LABELS[m.monitor_type] || m.monitor_type.toUpperCase()}
+                            {m.monitor_type === "tcp" && m.port ? `:${m.port}` : ""}
+                          </span>
+                        )}
                       </div>
-                      <p className="text-xs text-dark-200 font-mono truncate">{m.url}</p>
+                      <p className="text-xs text-dark-200 font-mono truncate">
+                        {m.monitor_type === "heartbeat" ? `Heartbeat: ${m.url}` : m.url}
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 sm:gap-4 shrink-0">
-                    {m.last_response_time != null && (
+                    {m.last_response_time != null && m.monitor_type !== "heartbeat" && (
                       <span className={`text-xs font-medium font-mono ${m.last_response_time > 2000 ? "text-danger-500" : m.last_response_time > 500 ? "text-warn-500" : "text-rust-400"}`}>
                         {m.last_response_time}ms
                       </span>
@@ -441,6 +586,19 @@ export default function Monitors() {
               {/* Expanded details */}
               {expanded === m.id && (
                 <div className="border-t border-dark-600 p-4">
+                  {/* Heartbeat URL */}
+                  {m.monitor_type === "heartbeat" && (
+                    <div className="mb-4 p-3 bg-dark-700/50 rounded-lg border border-dark-600">
+                      <p className="text-xs font-medium text-dark-100 mb-1">Heartbeat URL</p>
+                      <code className="text-xs text-rust-400 font-mono break-all select-all">
+                        {window.location.origin}/api/heartbeat/{m.id}/ping
+                      </code>
+                      <p className="text-[10px] text-dark-300 mt-1">
+                        POST to this URL from your cron/service. If no ping within {m.check_interval * 2}s, an alert fires.
+                      </p>
+                    </div>
+                  )}
+
                   {/* Uptime stats + Check Now */}
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-4">
@@ -467,12 +625,14 @@ export default function Monitors() {
                     </div>
                     <div className="flex items-center gap-2">
                       {checkNowMsg && <span className="text-xs text-rust-400">{checkNowMsg}</span>}
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleForceCheck(m.id); }}
-                        className="px-3 py-1.5 text-xs text-rust-400 hover:text-rust-300 border border-dark-600 rounded-lg hover:border-dark-400 transition-colors"
-                      >
-                        Check Now
-                      </button>
+                      {m.monitor_type !== "heartbeat" && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleForceCheck(m.id); }}
+                          className="px-3 py-1.5 text-xs text-rust-400 hover:text-rust-300 border border-dark-600 rounded-lg hover:border-dark-400 transition-colors"
+                        >
+                          Check Now
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -500,7 +660,7 @@ export default function Monitors() {
                               </div>
                               <div className="flex items-center gap-2">
                                 {c.status_code != null && c.status_code > 0 && <span className="text-dark-200 font-mono">{c.status_code}</span>}
-                                {c.status_code === 0 && <span className="text-dark-200 font-mono">TCP OK</span>}
+                                {c.status_code === 0 && <span className="text-dark-200 font-mono">{m.monitor_type === "ping" ? "Ping OK" : "TCP OK"}</span>}
                                 {c.response_time != null && <span className="text-dark-300 font-mono">{c.response_time}ms</span>}
                                 {c.error && <span className="text-danger-500 truncate max-w-32">{c.error}</span>}
                               </div>

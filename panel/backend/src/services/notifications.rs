@@ -19,6 +19,7 @@ pub struct NotifyChannels {
     pub email: Option<String>,
     pub slack_url: Option<String>,
     pub discord_url: Option<String>,
+    pub pagerduty_key: Option<String>,
 }
 
 /// Send a notification via all configured channels.
@@ -61,6 +62,41 @@ pub async fn send_notification(
                 .await;
         }
     }
+
+    // PagerDuty Events API v2
+    if let Some(ref key) = channels.pagerduty_key {
+        if !key.is_empty() {
+            let severity = if subject.contains("FAIL") || subject.contains("down") || subject.contains("critical") {
+                "critical"
+            } else if subject.contains("warning") {
+                "warning"
+            } else if subject.contains("Resolved") || subject.contains("back up") {
+                "info"
+            } else {
+                "error"
+            };
+            let event_action = if subject.contains("Resolved") || subject.contains("back up") {
+                "resolve"
+            } else {
+                "trigger"
+            };
+            let _ = client
+                .post("https://events.pagerduty.com/v2/enqueue")
+                .json(&serde_json::json!({
+                    "routing_key": key,
+                    "event_action": event_action,
+                    "payload": {
+                        "summary": subject,
+                        "source": "DockPanel",
+                        "severity": severity,
+                        "custom_details": { "message": message },
+                    },
+                }))
+                .timeout(Duration::from_secs(10))
+                .send()
+                .await;
+        }
+    }
 }
 
 /// Get notification channels for a user from their alert_rules.
@@ -71,9 +107,9 @@ pub async fn get_user_channels(
     server_id: Option<Uuid>,
 ) -> Option<NotifyChannels> {
     // Try server-specific rules first, then global
-    let rule: Option<(bool, Option<String>, Option<String>)> = if let Some(sid) = server_id {
-        let specific: Option<(bool, Option<String>, Option<String>)> = sqlx::query_as(
-            "SELECT notify_email, notify_slack_url, notify_discord_url \
+    let rule: Option<(bool, Option<String>, Option<String>, Option<String>)> = if let Some(sid) = server_id {
+        let specific: Option<(bool, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT notify_email, notify_slack_url, notify_discord_url, notify_pagerduty_key \
              FROM alert_rules WHERE user_id = $1 AND server_id = $2",
         )
         .bind(user_id)
@@ -87,7 +123,7 @@ pub async fn get_user_channels(
             specific
         } else {
             sqlx::query_as(
-                "SELECT notify_email, notify_slack_url, notify_discord_url \
+                "SELECT notify_email, notify_slack_url, notify_discord_url, notify_pagerduty_key \
                  FROM alert_rules WHERE user_id = $1 AND server_id IS NULL",
             )
             .bind(user_id)
@@ -98,7 +134,7 @@ pub async fn get_user_channels(
         }
     } else {
         sqlx::query_as(
-            "SELECT notify_email, notify_slack_url, notify_discord_url \
+            "SELECT notify_email, notify_slack_url, notify_discord_url, notify_pagerduty_key \
              FROM alert_rules WHERE user_id = $1 AND server_id IS NULL",
         )
         .bind(user_id)
@@ -108,7 +144,7 @@ pub async fn get_user_channels(
         .flatten()
     };
 
-    let (notify_email, slack_url, discord_url) = rule?;
+    let (notify_email, slack_url, discord_url, pagerduty_key) = rule?;
 
     // Look up user email if email notifications are enabled
     let email = if notify_email {
@@ -126,6 +162,7 @@ pub async fn get_user_channels(
         email,
         slack_url,
         discord_url,
+        pagerduty_key,
     })
 }
 

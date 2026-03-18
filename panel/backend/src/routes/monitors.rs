@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{err, ApiError};
+use crate::error::{err, require_admin, ApiError};
 use crate::AppState;
 
 #[derive(serde::Serialize, sqlx::FromRow)]
@@ -29,6 +29,7 @@ pub struct Monitor {
     pub port: Option<i32>,
     pub keyword: Option<String>,
     pub keyword_must_contain: bool,
+    pub custom_headers: Option<serde_json::Value>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -45,6 +46,7 @@ pub struct CreateMonitor {
     pub port: Option<i32>,
     pub keyword: Option<String>,
     pub keyword_must_contain: Option<bool>,
+    pub custom_headers: Option<serde_json::Value>,
 }
 
 #[derive(serde::Deserialize)]
@@ -60,6 +62,7 @@ pub struct UpdateMonitor {
     pub port: Option<i32>,
     pub keyword: Option<String>,
     pub keyword_must_contain: Option<bool>,
+    pub custom_headers: Option<serde_json::Value>,
 }
 
 /// GET /api/monitors — List user's monitors.
@@ -85,8 +88,8 @@ pub async fn create(
     Json(body): Json<CreateMonitor>,
 ) -> Result<(StatusCode, Json<Monitor>), ApiError> {
     let monitor_type = body.monitor_type.as_deref().unwrap_or("http");
-    if monitor_type != "http" && monitor_type != "tcp" {
-        return Err(err(StatusCode::BAD_REQUEST, "monitor_type must be 'http' or 'tcp'"));
+    if !matches!(monitor_type, "http" | "tcp" | "ping" | "heartbeat") {
+        return Err(err(StatusCode::BAD_REQUEST, "monitor_type must be 'http', 'tcp', 'ping', or 'heartbeat'"));
     }
 
     let url = body.url.trim();
@@ -95,7 +98,7 @@ pub async fn create(
             return Err(err(StatusCode::BAD_REQUEST, "URL must start with http:// or https://"));
         }
     } else if url.is_empty() {
-        return Err(err(StatusCode::BAD_REQUEST, "Host is required for TCP monitors"));
+        return Err(err(StatusCode::BAD_REQUEST, "Host/URL is required"));
     }
 
     let name = body.name.trim();
@@ -143,8 +146,8 @@ pub async fn create(
     }
 
     let monitor: Monitor = sqlx::query_as(
-        "INSERT INTO monitors (user_id, site_id, url, name, check_interval, alert_email, alert_slack_url, alert_discord_url, monitor_type, port, keyword, keyword_must_contain) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *",
+        "INSERT INTO monitors (user_id, site_id, url, name, check_interval, alert_email, alert_slack_url, alert_discord_url, monitor_type, port, keyword, keyword_must_contain, custom_headers) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *",
     )
     .bind(claims.sub)
     .bind(body.site_id)
@@ -158,6 +161,7 @@ pub async fn create(
     .bind(body.port)
     .bind(&body.keyword)
     .bind(body.keyword_must_contain.unwrap_or(true))
+    .bind(&body.custom_headers)
     .fetch_one(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -198,7 +202,8 @@ pub async fn update(
          monitor_type = COALESCE($9, monitor_type), \
          port = COALESCE($10, port), \
          keyword = COALESCE($11, keyword), \
-         keyword_must_contain = COALESCE($12, keyword_must_contain) \
+         keyword_must_contain = COALESCE($12, keyword_must_contain), \
+         custom_headers = COALESCE($13, custom_headers) \
          WHERE id = $1 RETURNING *",
     )
     .bind(id)
@@ -213,6 +218,7 @@ pub async fn update(
     .bind(body.port)
     .bind(&body.keyword)
     .bind(body.keyword_must_contain)
+    .bind(&body.custom_headers)
     .fetch_one(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -470,4 +476,108 @@ pub async fn status_page(
         "monitors": items,
         "updated_at": chrono::Utc::now(),
     })))
+}
+
+/// GET /api/monitors/certificates — List all SSL certificates with expiry status.
+pub async fn certificate_dashboard(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+
+    let certs: Vec<(String, bool, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+        "SELECT domain, ssl_enabled, ssl_expiry FROM sites WHERE user_id = $1 AND ssl_enabled = true ORDER BY ssl_expiry ASC NULLS LAST"
+    ).bind(claims.sub).fetch_all(&state.db).await.unwrap_or_default();
+
+    let now = chrono::Utc::now();
+    let items: Vec<serde_json::Value> = certs.iter().map(|(domain, _, expiry)| {
+        let days_left = expiry.map(|e| (e - now).num_days()).unwrap_or(999);
+        let status = if days_left < 0 { "expired" } else if days_left <= 7 { "critical" } else if days_left <= 30 { "warning" } else { "ok" };
+        serde_json::json!({ "domain": domain, "expiry": expiry, "days_left": days_left, "status": status })
+    }).collect();
+
+    Ok(Json(serde_json::json!({ "certificates": items })))
+}
+
+/// POST /api/monitors/maintenance — Create a maintenance window.
+pub async fn create_maintenance(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("Maintenance");
+    let starts_at = body.get("starts_at").and_then(|v| v.as_str()).unwrap_or("");
+    let ends_at = body.get("ends_at").and_then(|v| v.as_str()).unwrap_or("");
+
+    if starts_at.is_empty() || ends_at.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "starts_at and ends_at required"));
+    }
+
+    let id: (uuid::Uuid,) = sqlx::query_as(
+        "INSERT INTO maintenance_windows (user_id, name, starts_at, ends_at) VALUES ($1, $2, $3::timestamptz, $4::timestamptz) RETURNING id"
+    ).bind(claims.sub).bind(name).bind(starts_at).bind(ends_at)
+    .fetch_one(&state.db).await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    Ok(Json(serde_json::json!({ "ok": true, "id": id.0 })))
+}
+
+/// GET /api/monitors/maintenance — List maintenance windows.
+pub async fn list_maintenance(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let windows: Vec<(uuid::Uuid, String, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT id, name, starts_at, ends_at FROM maintenance_windows WHERE user_id = $1 ORDER BY starts_at DESC LIMIT 20"
+    ).bind(claims.sub).fetch_all(&state.db).await.unwrap_or_default();
+
+    let now = chrono::Utc::now();
+    let items: Vec<serde_json::Value> = windows.iter().map(|(id, name, start, end)| {
+        let active = now >= *start && now <= *end;
+        serde_json::json!({ "id": id, "name": name, "starts_at": start, "ends_at": end, "active": active })
+    }).collect();
+
+    Ok(Json(serde_json::json!({ "windows": items })))
+}
+
+/// DELETE /api/monitors/maintenance/{id}
+pub async fn delete_maintenance(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    sqlx::query("DELETE FROM maintenance_windows WHERE id = $1 AND user_id = $2").bind(id).bind(claims.sub).execute(&state.db).await.ok();
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// POST /api/heartbeat/{monitor_id}/{token} — Receive heartbeat ping (no auth).
+pub async fn heartbeat(
+    State(state): State<AppState>,
+    Path((monitor_id, _token)): Path<(uuid::Uuid, String)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Validate monitor exists and is a heartbeat type
+    let monitor: Option<(uuid::Uuid, String)> = sqlx::query_as(
+        "SELECT id, COALESCE(name, '') FROM monitors WHERE id = $1 AND monitor_type = 'heartbeat'"
+    ).bind(monitor_id).fetch_optional(&state.db).await.ok().flatten();
+
+    if monitor.is_none() {
+        return Err(err(StatusCode::NOT_FOUND, "Monitor not found"));
+    }
+
+    // Record successful check
+    sqlx::query("INSERT INTO monitor_checks (monitor_id, status_code, response_time, checked_at) VALUES ($1, 200, 0, NOW())")
+        .bind(monitor_id).execute(&state.db).await.ok();
+
+    // Update monitor status to up
+    sqlx::query("UPDATE monitors SET status = 'up', last_checked_at = NOW(), last_response_time = 0, last_status_code = 200 WHERE id = $1")
+        .bind(monitor_id).execute(&state.db).await.ok();
+
+    // Resolve any open incidents
+    sqlx::query("UPDATE incidents SET resolved_at = NOW() WHERE monitor_id = $1 AND resolved_at IS NULL")
+        .bind(monitor_id).execute(&state.db).await.ok();
+
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
