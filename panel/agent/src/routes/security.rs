@@ -158,6 +158,14 @@ async fn apply_fix(Json(body): Json<FixRequest>) -> Result<Json<serde_json::Valu
     Ok(Json(serde_json::json!({ "success": true, "message": result })))
 }
 
+/// GET /security/login-audit — Recent SSH login attempts from auth.log.
+async fn login_audit() -> Result<Json<serde_json::Value>, ApiErr> {
+    let entries = security::get_login_audit()
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+    Ok(Json(serde_json::json!({ "entries": entries })))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/security/overview", get(overview))
@@ -174,4 +182,5 @@ pub fn router() -> Router<AppState> {
         .route("/security/fail2ban/ban", post(fail2ban_ban))
         .route("/security/fail2ban/{jail}/banned", get(fail2ban_banned))
         .route("/security/fix", post(apply_fix))
+        .route("/security/login-audit", get(login_audit))
 }
