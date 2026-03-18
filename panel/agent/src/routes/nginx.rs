@@ -360,6 +360,467 @@ async fn get_site(
     }))
 }
 
+// ──────────────────────────────────────────────────────────────
+// Redirect Rules
+// ──────────────────────────────────────────────────────────────
+
+type ApiErr = (StatusCode, Json<serde_json::Value>);
+
+fn api_err(status: StatusCode, msg: &str) -> ApiErr {
+    (status, Json(serde_json::json!({ "error": msg })))
+}
+
+#[derive(Deserialize)]
+struct RedirectRequest {
+    domain: String,
+    source: String,
+    target: String,
+    redirect_type: String,
+}
+
+/// POST /nginx/redirects/add — Add a redirect rule.
+async fn add_redirect(
+    Json(body): Json<RedirectRequest>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    if body.domain.is_empty() || body.source.is_empty() || body.target.is_empty() {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Missing fields"));
+    }
+    if body.redirect_type != "301" && body.redirect_type != "302" {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Type must be 301 or 302"));
+    }
+    if !body.source.starts_with('/') {
+        return Err(api_err(
+            StatusCode::BAD_REQUEST,
+            "Source must start with /",
+        ));
+    }
+
+    let redirects_file = format!("/etc/nginx/redirects/{}.conf", body.domain);
+    std::fs::create_dir_all("/etc/nginx/redirects").ok();
+
+    let rule = format!(
+        "location = {} {{ return {} {}; }}\n",
+        body.source, body.redirect_type, body.target
+    );
+    let existing = std::fs::read_to_string(&redirects_file).unwrap_or_default();
+    std::fs::write(&redirects_file, format!("{existing}{rule}"))
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+
+    // Include in nginx site config if not already
+    let site_conf = format!("/etc/nginx/sites-enabled/{}.conf", body.domain);
+    let site_content = std::fs::read_to_string(&site_conf).unwrap_or_default();
+    if !site_content.contains(&format!("include /etc/nginx/redirects/{}.conf", body.domain)) {
+        let include_line = format!(
+            "    include /etc/nginx/redirects/{}.conf;\n",
+            body.domain
+        );
+        if let Some(pos) = site_content.rfind('}') {
+            let new_content = format!(
+                "{}{}{}",
+                &site_content[..pos],
+                include_line,
+                &site_content[pos..]
+            );
+            std::fs::write(&site_conf, new_content).ok();
+        }
+    }
+
+    // Test and reload
+    match services::nginx::test_config().await {
+        Ok(output) if output.success => {
+            services::nginx::reload().await.ok();
+        }
+        _ => {
+            // Rollback
+            std::fs::write(&redirects_file, &existing).ok();
+            return Err(api_err(
+                StatusCode::BAD_REQUEST,
+                "Nginx config test failed — redirect reverted",
+            ));
+        }
+    }
+
+    tracing::info!(
+        "Redirect added: {} → {} ({})",
+        body.source,
+        body.target,
+        body.redirect_type
+    );
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// GET /nginx/redirects/{domain} — List redirects for a domain.
+async fn list_redirects(Path(domain): Path<String>) -> Json<serde_json::Value> {
+    let redirects_file = format!("/etc/nginx/redirects/{domain}.conf");
+    let content = std::fs::read_to_string(&redirects_file).unwrap_or_default();
+
+    let rules: Vec<serde_json::Value> = content
+        .lines()
+        .filter(|l| l.contains("return "))
+        .filter_map(|l| {
+            let source = l.split("location = ").nth(1)?.split(' ').next()?;
+            let after_return = l.split("return ").nth(1)?;
+            let parts: Vec<&str> = after_return.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let rtype = parts[0];
+                let target = parts[1].trim_end_matches(';');
+                Some(serde_json::json!({
+                    "source": source,
+                    "target": target,
+                    "type": rtype
+                }))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    Json(serde_json::json!({ "redirects": rules }))
+}
+
+/// POST /nginx/redirects/{domain}/remove — Remove a specific redirect.
+async fn remove_redirect(
+    Path(domain): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    let source = body
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if source.is_empty() {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Source required"));
+    }
+
+    let redirects_file = format!("/etc/nginx/redirects/{domain}.conf");
+    let content = std::fs::read_to_string(&redirects_file).unwrap_or_default();
+    let cleaned: String = content
+        .lines()
+        .filter(|l| !l.contains(&format!("location = {source} ")))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&redirects_file, format!("{cleaned}\n")).ok();
+
+    match services::nginx::test_config().await {
+        Ok(output) if output.success => {
+            services::nginx::reload().await.ok();
+        }
+        _ => {}
+    }
+
+    tracing::info!("Redirect removed: {source} from {domain}");
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ──────────────────────────────────────────────────────────────
+// Password Protection (htpasswd)
+// ──────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct PasswordProtectRequest {
+    domain: String,
+    path: String,
+    username: String,
+    password: String,
+}
+
+/// POST /nginx/password-protect — Enable basic auth on a path.
+async fn password_protect(
+    Json(body): Json<PasswordProtectRequest>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    if body.domain.is_empty() || body.username.is_empty() || body.password.is_empty() {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Missing fields"));
+    }
+
+    let htpasswd_dir = "/etc/nginx/htpasswd";
+    std::fs::create_dir_all(htpasswd_dir).ok();
+    let htpasswd_file = format!("{htpasswd_dir}/{}", body.domain);
+
+    // Generate htpasswd entry using openssl
+    let output = tokio::process::Command::new("openssl")
+        .args(["passwd", "-apr1", &body.password])
+        .output()
+        .await
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+
+    let hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if hash.is_empty() {
+        return Err(api_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to generate password hash",
+        ));
+    }
+    let entry = format!("{}:{}", body.username, hash);
+
+    // Append or create htpasswd file, removing existing entry for this username
+    let existing = std::fs::read_to_string(&htpasswd_file).unwrap_or_default();
+    let mut lines: Vec<&str> = existing
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with(&format!("{}:", body.username)))
+        .collect();
+    lines.push(&entry);
+    std::fs::write(&htpasswd_file, lines.join("\n") + "\n")
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+
+    // Add auth_basic to nginx config via include
+    let auth_conf_dir = "/etc/nginx/auth";
+    std::fs::create_dir_all(auth_conf_dir).ok();
+    let auth_file = format!("{auth_conf_dir}/{}.conf", body.domain);
+
+    let path = if body.path.is_empty() { "/" } else { &body.path };
+    let auth_block = format!(
+        "location {} {{\n    auth_basic \"Restricted\";\n    auth_basic_user_file {};\n    try_files $uri $uri/ =404;\n}}\n",
+        path, htpasswd_file
+    );
+
+    // Check if auth block for this path already exists
+    let existing_auth = std::fs::read_to_string(&auth_file).unwrap_or_default();
+    if !existing_auth.contains(&format!("location {} ", path)) {
+        std::fs::write(&auth_file, format!("{existing_auth}{auth_block}")).ok();
+    }
+
+    // Include in site config if not already
+    let site_conf = format!("/etc/nginx/sites-enabled/{}.conf", body.domain);
+    let site_content = std::fs::read_to_string(&site_conf).unwrap_or_default();
+    if !site_content.contains(&format!("include /etc/nginx/auth/{}.conf", body.domain)) {
+        if let Some(pos) = site_content.rfind('}') {
+            let include_line = format!(
+                "    include /etc/nginx/auth/{}.conf;\n",
+                body.domain
+            );
+            let new_content = format!(
+                "{}{}{}",
+                &site_content[..pos],
+                include_line,
+                &site_content[pos..]
+            );
+            std::fs::write(&site_conf, new_content).ok();
+        }
+    }
+
+    match services::nginx::test_config().await {
+        Ok(output) if output.success => {
+            services::nginx::reload().await.ok();
+        }
+        _ => {
+            return Err(api_err(
+                StatusCode::BAD_REQUEST,
+                "Nginx config test failed",
+            ));
+        }
+    }
+
+    tracing::info!(
+        "Password protection enabled on {} path {} for user {}",
+        body.domain,
+        path,
+        body.username
+    );
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// GET /nginx/password-protect/{domain} — List protected paths and users.
+async fn list_protected(Path(domain): Path<String>) -> Json<serde_json::Value> {
+    let auth_file = format!("/etc/nginx/auth/{domain}.conf");
+    let content = std::fs::read_to_string(&auth_file).unwrap_or_default();
+    let htpasswd_file = format!("/etc/nginx/htpasswd/{domain}");
+    let users_content = std::fs::read_to_string(&htpasswd_file).unwrap_or_default();
+
+    let paths: Vec<String> = content
+        .lines()
+        .filter(|l| l.contains("location "))
+        .filter_map(|l| {
+            l.split("location ")
+                .nth(1)?
+                .split(' ')
+                .next()
+                .map(|s| s.to_string())
+        })
+        .collect();
+
+    let users: Vec<String> = users_content
+        .lines()
+        .filter(|l| !l.is_empty())
+        .filter_map(|l| l.split(':').next().map(|s| s.to_string()))
+        .collect();
+
+    Json(serde_json::json!({ "paths": paths, "users": users }))
+}
+
+/// POST /nginx/password-protect/{domain}/remove — Remove password protection from a path.
+async fn remove_protection(
+    Path(domain): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    let path = body
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("/");
+    let auth_file = format!("/etc/nginx/auth/{domain}.conf");
+    let content = std::fs::read_to_string(&auth_file).unwrap_or_default();
+
+    // Remove the location block for this path
+    let mut cleaned = String::new();
+    let mut skip = false;
+    let mut brace_count: i32 = 0;
+    for line in content.lines() {
+        if line.contains(&format!("location {} ", path)) || line.contains(&format!("location {path} ")) {
+            skip = true;
+            brace_count = 0;
+        }
+        if skip {
+            brace_count += line.matches('{').count() as i32;
+            brace_count -= line.matches('}').count() as i32;
+            if brace_count <= 0 && line.contains('}') {
+                skip = false;
+                continue;
+            }
+            continue;
+        }
+        cleaned.push_str(line);
+        cleaned.push('\n');
+    }
+
+    std::fs::write(&auth_file, cleaned).ok();
+    match services::nginx::test_config().await {
+        Ok(output) if output.success => {
+            services::nginx::reload().await.ok();
+        }
+        _ => {}
+    }
+
+    tracing::info!("Password protection removed from {domain} path {path}");
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ──────────────────────────────────────────────────────────────
+// Domain Aliases
+// ──────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct AliasRequest {
+    domain: String,
+    alias: String,
+}
+
+/// POST /nginx/aliases/add — Add a domain alias to a site.
+async fn add_alias(
+    Json(body): Json<AliasRequest>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    if body.domain.is_empty() || body.alias.is_empty() {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Missing fields"));
+    }
+
+    let site_conf = format!("/etc/nginx/sites-enabled/{}.conf", body.domain);
+    let content = std::fs::read_to_string(&site_conf)
+        .map_err(|_| api_err(StatusCode::NOT_FOUND, "Site config not found"))?;
+
+    // Add alias to server_name line
+    let new_content = content.replace(
+        &format!("server_name {};", body.domain),
+        &format!("server_name {} {};", body.domain, body.alias),
+    );
+
+    if new_content == content {
+        return Err(api_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Could not find server_name directive",
+        ));
+    }
+
+    let tmp = format!("{site_conf}.tmp");
+    std::fs::write(&tmp, &new_content)
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+    std::fs::rename(&tmp, &site_conf).map_err(|e| {
+        std::fs::remove_file(&tmp).ok();
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}"))
+    })?;
+
+    match services::nginx::test_config().await {
+        Ok(output) if output.success => {
+            services::nginx::reload().await.ok();
+        }
+        _ => {
+            // Revert
+            std::fs::write(&site_conf, &content).ok();
+            services::nginx::reload().await.ok();
+            return Err(api_err(
+                StatusCode::BAD_REQUEST,
+                "Nginx test failed — alias reverted",
+            ));
+        }
+    }
+
+    tracing::info!("Domain alias added: {} → {}", body.alias, body.domain);
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// GET /nginx/aliases/{domain} — List domain aliases.
+async fn list_aliases(Path(domain): Path<String>) -> Json<serde_json::Value> {
+    let site_conf = format!("/etc/nginx/sites-enabled/{domain}.conf");
+    let content = std::fs::read_to_string(&site_conf).unwrap_or_default();
+
+    let mut aliases: Vec<String> = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("server_name ") {
+            let names_part = trimmed
+                .strip_prefix("server_name ")
+                .unwrap_or("")
+                .trim_end_matches(';')
+                .trim();
+            for name in names_part.split_whitespace() {
+                if name != domain {
+                    aliases.push(name.to_string());
+                }
+            }
+        }
+    }
+
+    // Deduplicate
+    aliases.sort();
+    aliases.dedup();
+
+    Json(serde_json::json!({ "aliases": aliases }))
+}
+
+/// POST /nginx/aliases/{domain}/remove — Remove a domain alias.
+async fn remove_alias(
+    Path(domain): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    let alias = body
+        .get("alias")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if alias.is_empty() {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Alias required"));
+    }
+
+    let site_conf = format!("/etc/nginx/sites-enabled/{domain}.conf");
+    let content = std::fs::read_to_string(&site_conf)
+        .map_err(|_| api_err(StatusCode::NOT_FOUND, "Site config not found"))?;
+
+    // Remove alias from server_name lines
+    let new_content = content
+        .replace(&format!(" {alias}"), "")
+        .replace(&format!("{alias} "), "");
+
+    std::fs::write(&site_conf, &new_content).ok();
+
+    match services::nginx::test_config().await {
+        Ok(output) if output.success => {
+            services::nginx::reload().await.ok();
+        }
+        _ => {
+            std::fs::write(&site_conf, &content).ok();
+            services::nginx::reload().await.ok();
+        }
+    }
+
+    tracing::info!("Domain alias removed: {alias} from {domain}");
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/nginx/sites/{domain}", put(put_site))
@@ -367,4 +828,25 @@ pub fn router() -> Router<AppState> {
         .route("/nginx/sites/{domain}", get(get_site))
         .route("/nginx/test", post(test_nginx))
         .route("/nginx/reload", post(reload_nginx))
+        // Redirects
+        .route("/nginx/redirects/add", post(add_redirect))
+        .route("/nginx/redirects/{domain}", get(list_redirects))
+        .route(
+            "/nginx/redirects/{domain}/remove",
+            post(remove_redirect),
+        )
+        // Password Protection
+        .route("/nginx/password-protect", post(password_protect))
+        .route(
+            "/nginx/password-protect/{domain}",
+            get(list_protected),
+        )
+        .route(
+            "/nginx/password-protect/{domain}/remove",
+            post(remove_protection),
+        )
+        // Domain Aliases
+        .route("/nginx/aliases/add", post(add_alias))
+        .route("/nginx/aliases/{domain}", get(list_aliases))
+        .route("/nginx/aliases/{domain}/remove", post(remove_alias))
 }

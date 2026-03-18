@@ -1072,3 +1072,225 @@ pub async fn remove(
 
     Ok(Json(serde_json::json!({ "ok": true, "domain": site.domain })))
 }
+
+// ──────────────────────────────────────────────────────────────
+// Redirect Rules (proxy to agent)
+// ──────────────────────────────────────────────────────────────
+
+/// Helper: get site domain from site ID + user ID.
+async fn site_domain(state: &AppState, site_id: Uuid, user_id: Uuid) -> Result<String, ApiError> {
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT domain FROM sites WHERE id = $1 AND user_id = $2")
+            .bind(site_id)
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    row.map(|(d,)| d)
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))
+}
+
+/// GET /api/sites/{id}/redirects — List redirects.
+pub async fn list_redirects(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = site_domain(&state, id, claims.sub).await?;
+    let result = state
+        .agent
+        .get(&format!("/nginx/redirects/{domain}"))
+        .await
+        .map_err(|e| agent_error("Redirects", e))?;
+    Ok(Json(result))
+}
+
+#[derive(serde::Deserialize)]
+pub struct AddRedirectBody {
+    pub source: String,
+    pub target: String,
+    #[serde(default = "default_301")]
+    pub redirect_type: String,
+}
+
+fn default_301() -> String {
+    "301".to_string()
+}
+
+/// POST /api/sites/{id}/redirects — Add a redirect.
+pub async fn add_redirect(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<AddRedirectBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = site_domain(&state, id, claims.sub).await?;
+    let result = state
+        .agent
+        .post(
+            "/nginx/redirects/add",
+            Some(serde_json::json!({
+                "domain": domain,
+                "source": body.source,
+                "target": body.target,
+                "redirect_type": body.redirect_type,
+            })),
+        )
+        .await
+        .map_err(|e| agent_error("Redirects", e))?;
+    Ok(Json(result))
+}
+
+/// POST /api/sites/{id}/redirects/remove — Remove a redirect.
+pub async fn remove_redirect(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = site_domain(&state, id, claims.sub).await?;
+    let result = state
+        .agent
+        .post(
+            &format!("/nginx/redirects/{domain}/remove"),
+            Some(body),
+        )
+        .await
+        .map_err(|e| agent_error("Redirects", e))?;
+    Ok(Json(result))
+}
+
+// ──────────────────────────────────────────────────────────────
+// Password Protection (proxy to agent)
+// ──────────────────────────────────────────────────────────────
+
+/// GET /api/sites/{id}/password-protect — List protected paths.
+pub async fn list_protected(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = site_domain(&state, id, claims.sub).await?;
+    let result = state
+        .agent
+        .get(&format!("/nginx/password-protect/{domain}"))
+        .await
+        .map_err(|e| agent_error("Password protection", e))?;
+    Ok(Json(result))
+}
+
+#[derive(serde::Deserialize)]
+pub struct PasswordProtectBody {
+    pub path: String,
+    pub username: String,
+    pub password: String,
+}
+
+/// POST /api/sites/{id}/password-protect — Enable password protection.
+pub async fn add_password_protect(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<PasswordProtectBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = site_domain(&state, id, claims.sub).await?;
+    let result = state
+        .agent
+        .post(
+            "/nginx/password-protect",
+            Some(serde_json::json!({
+                "domain": domain,
+                "path": body.path,
+                "username": body.username,
+                "password": body.password,
+            })),
+        )
+        .await
+        .map_err(|e| agent_error("Password protection", e))?;
+    Ok(Json(result))
+}
+
+/// POST /api/sites/{id}/password-protect/remove — Remove password protection.
+pub async fn remove_password_protect(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = site_domain(&state, id, claims.sub).await?;
+    let result = state
+        .agent
+        .post(
+            &format!("/nginx/password-protect/{domain}/remove"),
+            Some(body),
+        )
+        .await
+        .map_err(|e| agent_error("Password protection", e))?;
+    Ok(Json(result))
+}
+
+// ──────────────────────────────────────────────────────────────
+// Domain Aliases (proxy to agent)
+// ──────────────────────────────────────────────────────────────
+
+/// GET /api/sites/{id}/aliases — List domain aliases.
+pub async fn list_aliases(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = site_domain(&state, id, claims.sub).await?;
+    let result = state
+        .agent
+        .get(&format!("/nginx/aliases/{domain}"))
+        .await
+        .map_err(|e| agent_error("Domain aliases", e))?;
+    Ok(Json(result))
+}
+
+#[derive(serde::Deserialize)]
+pub struct AddAliasBody {
+    pub alias: String,
+}
+
+/// POST /api/sites/{id}/aliases — Add a domain alias.
+pub async fn add_alias(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<AddAliasBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = site_domain(&state, id, claims.sub).await?;
+    let result = state
+        .agent
+        .post(
+            "/nginx/aliases/add",
+            Some(serde_json::json!({
+                "domain": domain,
+                "alias": body.alias,
+            })),
+        )
+        .await
+        .map_err(|e| agent_error("Domain aliases", e))?;
+    Ok(Json(result))
+}
+
+/// POST /api/sites/{id}/aliases/remove — Remove a domain alias.
+pub async fn remove_alias(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = site_domain(&state, id, claims.sub).await?;
+    let result = state
+        .agent
+        .post(
+            &format!("/nginx/aliases/{domain}/remove"),
+            Some(body),
+        )
+        .await
+        .map_err(|e| agent_error("Domain aliases", e))?;
+    Ok(Json(result))
+}

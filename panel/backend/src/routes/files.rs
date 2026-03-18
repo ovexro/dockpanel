@@ -11,6 +11,13 @@ use crate::routes::is_safe_relative_path;
 use crate::AppState;
 
 #[derive(serde::Deserialize)]
+pub struct UploadBody {
+    pub path: String,
+    pub content: String,
+    pub filename: String,
+}
+
+#[derive(serde::Deserialize)]
 pub struct PathQuery {
     pub path: Option<String>,
     #[serde(rename = "type")]
@@ -215,6 +222,86 @@ pub async fn delete_entry(
         .delete(&agent_path)
         .await
         .map_err(|e| agent_error("File manager", e))?;
+
+    Ok(Json(result))
+}
+
+/// GET /api/sites/{id}/files/download?path= — Download a file.
+pub async fn download_file(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    Query(q): Query<PathQuery>,
+) -> Result<impl axum::response::IntoResponse, ApiError> {
+    let domain = get_site_domain(&state, id, claims.sub).await?;
+    let rel_path = q.path.as_deref().unwrap_or("");
+
+    if rel_path.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "path is required"));
+    }
+    if !is_safe_relative_path(rel_path) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid path"));
+    }
+
+    let agent_path = format!(
+        "/files/{}/download?path={}",
+        domain,
+        urlencoding::encode(rel_path)
+    );
+    let (bytes, content_disposition) = state
+        .agent
+        .get_bytes(&agent_path)
+        .await
+        .map_err(|e| agent_error("File download", e))?;
+
+    let disposition = content_disposition.unwrap_or_else(|| {
+        let filename = rel_path.split('/').last().unwrap_or("download");
+        format!("attachment; filename=\"{filename}\"")
+    });
+
+    Ok((
+        [
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                disposition,
+            ),
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/octet-stream".to_string(),
+            ),
+        ],
+        bytes,
+    ))
+}
+
+/// POST /api/sites/{id}/files/upload — Upload a file.
+pub async fn upload_file(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<UploadBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !is_safe_relative_path(&body.filename) && body.filename != "." {
+        // Filename can be anything valid (not a path traversal)
+        if body.filename.contains("..") || body.filename.contains('/') {
+            return Err(err(StatusCode::BAD_REQUEST, "Invalid filename"));
+        }
+    }
+    let domain = get_site_domain(&state, id, claims.sub).await?;
+
+    let agent_path = format!("/files/{}/upload", domain);
+    let result = state
+        .agent
+        .post(
+            &agent_path,
+            Some(serde_json::json!({
+                "path": body.path,
+                "content": body.content,
+                "filename": body.filename,
+            })),
+        )
+        .await
+        .map_err(|e| agent_error("File upload", e))?;
 
     Ok(Json(result))
 }

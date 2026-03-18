@@ -124,7 +124,9 @@ pub fn router() -> Router<AppState> {
         // File Manager
         .route("/api/sites/{id}/files", get(files::list_dir).delete(files::delete_entry))
         .route("/api/sites/{id}/files/read", get(files::read_file))
+        .route("/api/sites/{id}/files/download", get(files::download_file))
         .route("/api/sites/{id}/files/write", put(files::write_file))
+        .route("/api/sites/{id}/files/upload", post(files::upload_file))
         .route("/api/sites/{id}/files/create", post(files::create_entry))
         .route("/api/sites/{id}/files/rename", post(files::rename_entry))
         // Backups
@@ -271,6 +273,15 @@ pub fn router() -> Router<AppState> {
         .route("/api/sites/{id}/staging", get(staging::get_staging).post(staging::create).delete(staging::destroy))
         .route("/api/sites/{id}/staging/sync", post(staging::sync_to_staging))
         .route("/api/sites/{id}/staging/push", post(staging::push_to_prod))
+        // Redirect Rules
+        .route("/api/sites/{id}/redirects", get(sites::list_redirects).post(sites::add_redirect))
+        .route("/api/sites/{id}/redirects/remove", post(sites::remove_redirect))
+        // Password Protection
+        .route("/api/sites/{id}/password-protect", get(sites::list_protected).post(sites::add_password_protect))
+        .route("/api/sites/{id}/password-protect/remove", post(sites::remove_password_protect))
+        // Domain Aliases
+        .route("/api/sites/{id}/aliases", get(sites::list_aliases).post(sites::add_alias))
+        .route("/api/sites/{id}/aliases/remove", post(sites::remove_alias))
         // Agent endpoints (no cookie auth — uses Bearer token from servers table)
         .route("/api/agent/version", get(agent_updates::latest_version))
         .route("/api/agent/checkin", post(agent_checkin::checkin))
