@@ -146,29 +146,61 @@ pub async fn clone_or_pull(
 
 /// Build a Docker image from the git repo directory.
 /// Tags with both `dockpanel-git-{name}:{commit_hash}` and `dockpanel-git-{name}:latest`.
+/// Uses BuildKit for layer caching, supports build args and custom build context.
 pub async fn build_image(
     name: &str,
     dockerfile_path: &str,
     commit_hash: &str,
+    build_args: &HashMap<String, String>,
+    build_context: &str,
 ) -> Result<BuildResult, String> {
-    let repo_dir = format!("{GIT_BASE_DIR}/{name}");
+    let deploy_dir = format!("{GIT_BASE_DIR}/{name}");
     let image_name = format!("dockpanel-git-{name}");
     let image_tag = format!("{image_name}:{commit_hash}");
     let latest_tag = format!("{image_name}:latest");
 
-    tracing::info!("Building image {image_tag} from {repo_dir}");
+    // Validate build context (no path traversal)
+    if build_context.contains("..") {
+        return Err("Build context must not contain '..'".into());
+    }
+    let context_dir = if build_context == "." {
+        deploy_dir.clone()
+    } else {
+        format!("{deploy_dir}/{build_context}")
+    };
+    if !std::path::Path::new(&context_dir).exists() {
+        return Err(format!("Build context directory not found: {build_context}"));
+    }
+
+    tracing::info!("Building image {image_tag} from {deploy_dir} (context: {build_context})");
+
+    let mut cmd_args: Vec<String> = vec![
+        "build".into(),
+        "--cache-from".into(), latest_tag.clone(),
+    ];
+    for (k, v) in build_args {
+        cmd_args.push("--build-arg".into());
+        cmd_args.push(format!("{k}={v}"));
+    }
+    // Dockerfile path: when build_context is a subdirectory, prefix it
+    let full_dockerfile = if build_context == "." {
+        dockerfile_path.to_string()
+    } else {
+        format!("{build_context}/{dockerfile_path}")
+    };
+    cmd_args.extend([
+        "-t".into(), image_tag.clone(),
+        "-t".into(), latest_tag.clone(),
+        "-f".into(), full_dockerfile,
+        context_dir.clone(),
+    ]);
 
     let build = tokio::time::timeout(
         std::time::Duration::from_secs(600),
         Command::new("docker")
-            .args([
-                "build",
-                "-t", &image_tag,
-                "-t", &latest_tag,
-                "-f", dockerfile_path,
-                ".",
-            ])
-            .current_dir(&repo_dir)
+            .args(&cmd_args)
+            .env("DOCKER_BUILDKIT", "1")
+            .current_dir(&deploy_dir)
             .output(),
     )
     .await

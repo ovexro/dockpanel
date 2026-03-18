@@ -30,10 +30,18 @@ struct BuildRequest {
     #[serde(default = "default_dockerfile")]
     dockerfile: String,
     commit_hash: String,
+    #[serde(default)]
+    build_args: HashMap<String, String>,
+    #[serde(default = "default_context")]
+    build_context: String,
 }
 
 fn default_dockerfile() -> String {
     "Dockerfile".to_string()
+}
+
+fn default_context() -> String {
+    ".".to_string()
 }
 
 #[derive(Deserialize)]
@@ -109,9 +117,15 @@ async fn build(
 
     tracing::info!("Git build: {} (commit: {})", body.name, body.commit_hash);
 
-    let result = git_build::build_image(&body.name, &body.dockerfile, &body.commit_hash)
-        .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+    let result = git_build::build_image(
+        &body.name,
+        &body.dockerfile,
+        &body.commit_hash,
+        &body.build_args,
+        &body.build_context,
+    )
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
 
     Ok(Json(serde_json::json!({
         "image_tag": result.image_tag,

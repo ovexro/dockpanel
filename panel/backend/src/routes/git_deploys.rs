@@ -43,6 +43,8 @@ pub struct GitDeploy {
     pub ssl_email: Option<String>,
     pub pre_build_cmd: Option<String>,
     pub post_deploy_cmd: Option<String>,
+    pub build_args: serde_json::Value,
+    pub build_context: String,
     pub last_deploy: Option<chrono::DateTime<chrono::Utc>>,
     pub last_commit: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -78,6 +80,8 @@ pub struct CreateRequest {
     pub ssl_email: Option<String>,
     pub pre_build_cmd: Option<String>,
     pub post_deploy_cmd: Option<String>,
+    pub build_args: Option<HashMap<String, String>>,
+    pub build_context: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -94,6 +98,8 @@ pub struct UpdateRequest {
     pub ssl_email: Option<String>,
     pub pre_build_cmd: Option<String>,
     pub post_deploy_cmd: Option<String>,
+    pub build_args: Option<HashMap<String, String>>,
+    pub build_context: Option<String>,
 }
 
 /// GET /api/git-deploys — List all git deploys for the current user.
@@ -159,10 +165,16 @@ pub async fn create(
         .as_ref()
         .map(|e| serde_json::to_value(e).unwrap_or_default())
         .unwrap_or(serde_json::json!({}));
+    let build_args = body
+        .build_args
+        .as_ref()
+        .map(|e| serde_json::to_value(e).unwrap_or_default())
+        .unwrap_or(serde_json::json!({}));
+    let build_context = body.build_context.as_deref().unwrap_or(".");
 
     let deploy: GitDeploy = sqlx::query_as(
-        "INSERT INTO git_deploys (user_id, name, repo_url, branch, dockerfile, container_port, host_port, domain, env_vars, auto_deploy, webhook_secret, memory_mb, cpu_percent, ssl_email, pre_build_cmd, post_deploy_cmd) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
+        "INSERT INTO git_deploys (user_id, name, repo_url, branch, dockerfile, container_port, host_port, domain, env_vars, auto_deploy, webhook_secret, memory_mb, cpu_percent, ssl_email, pre_build_cmd, post_deploy_cmd, build_args, build_context) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) \
          RETURNING *",
     )
     .bind(claims.sub)
@@ -181,6 +193,8 @@ pub async fn create(
     .bind(&body.ssl_email)
     .bind(&body.pre_build_cmd)
     .bind(&body.post_deploy_cmd)
+    .bind(&build_args)
+    .bind(build_context)
     .fetch_one(&state.db)
     .await
     .map_err(|e| {
@@ -244,6 +258,7 @@ pub async fn update(
     }
 
     let env_vars = body.env_vars.as_ref().map(|e| serde_json::to_value(e).unwrap_or_default());
+    let build_args = body.build_args.as_ref().map(|e| serde_json::to_value(e).unwrap_or_default());
 
     let deploy: GitDeploy = sqlx::query_as(
         "UPDATE git_deploys SET \
@@ -259,8 +274,10 @@ pub async fn update(
          ssl_email = COALESCE($10, ssl_email), \
          pre_build_cmd = COALESCE($11, pre_build_cmd), \
          post_deploy_cmd = COALESCE($12, post_deploy_cmd), \
+         build_args = COALESCE($13, build_args), \
+         build_context = COALESCE($14, build_context), \
          updated_at = NOW() \
-         WHERE id = $13 AND user_id = $14 \
+         WHERE id = $15 AND user_id = $16 \
          RETURNING *",
     )
     .bind(body.repo_url.as_deref())
@@ -275,6 +292,8 @@ pub async fn update(
     .bind(body.ssl_email.as_deref())
     .bind(body.pre_build_cmd.as_deref())
     .bind(body.post_deploy_cmd.as_deref())
+    .bind(build_args)
+    .bind(body.build_context.as_deref())
     .bind(id)
     .bind(claims.sub)
     .fetch_one(&state.db)
@@ -964,6 +983,8 @@ fn spawn_deploy_task(
             "name": config.name,
             "dockerfile": config.dockerfile,
             "commit_hash": commit_hash,
+            "build_args": config.build_args,
+            "build_context": config.build_context,
         });
 
         let image_tag = match agent.post_long("/git/build", Some(build_body), 660).await {
