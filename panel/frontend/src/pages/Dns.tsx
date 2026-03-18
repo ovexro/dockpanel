@@ -51,6 +51,25 @@ export default function Dns() {
   const [recPriority, setRecPriority] = useState("10");
   const [savingRecord, setSavingRecord] = useState(false);
 
+  // Search/filter
+  const [recordSearch, setRecordSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
+
+  // Import/Export
+  const [showImport, setShowImport] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importing, setImporting] = useState(false);
+
+  // Propagation checker
+  const [propagation, setPropagation] = useState<any>(null);
+  const [checkingProp, setCheckingProp] = useState<string | null>(null);
+
+  // Zone templates
+  const [showTemplates, setShowTemplates] = useState(false);
+
+  // Custom TTL
+  const [customTtl, setCustomTtl] = useState("");
+
   const loadZones = async () => {
     try {
       const data = await api.get<DnsZone[]>("/dns/zones");
@@ -155,11 +174,12 @@ export default function Dns() {
     setSavingRecord(true);
     setMessage({ text: "", type: "" });
 
+    const ttlValue = recTtl === "custom" ? (parseInt(customTtl) || 3600) : (parseInt(recTtl) || (selectedZone.provider === "powerdns" ? 3600 : 1));
     const body: Record<string, unknown> = {
       type: recType,
       name: recName,
       content: recContent,
-      ttl: parseInt(recTtl) || (selectedZone.provider === "powerdns" ? 3600 : 1),
+      ttl: ttlValue,
     };
 
     if (selectedZone.provider === "cloudflare" && ["A", "AAAA", "CNAME"].includes(recType)) {
@@ -196,6 +216,120 @@ export default function Dns() {
       setMessage({ text: e instanceof Error ? e.message : "Delete failed", type: "error" });
     }
   };
+
+  // ── Export zone file ──────────────────────────────────────────────────
+  const handleExport = () => {
+    if (!selectedZone || records.length === 0) return;
+    let output = `; Zone file for ${selectedZone.domain}\n; Exported from DockPanel\n\n$ORIGIN ${selectedZone.domain}.\n$TTL 3600\n\n`;
+    records.forEach(r => {
+      const shortName = r.name.replace(new RegExp(`\\.?${selectedZone.domain.replace(/\./g, '\\.')}\\.?$`), '') || '@';
+      const pri = r.priority != null ? `\t${r.priority}` : '';
+      output += `${shortName}\t${r.ttl}\tIN\t${r.type}${pri}\t${r.content}\n`;
+    });
+    const blob = new Blob([output], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `${selectedZone.domain}.zone`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ── Import zone file ──────────────────────────────────────────────────
+  const handleImport = async () => {
+    if (!selectedZone || !importText.trim()) return;
+    setImporting(true);
+    const validTypes = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV', 'CAA'];
+    let created = 0;
+    const errors: string[] = [];
+
+    for (const line of importText.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith(';') || trimmed.startsWith('$')) continue;
+      const parts = trimmed.split(/\s+/);
+      if (parts.length < 3) continue;
+
+      let name = parts[0], ttl = 3600, rtype = '', contentIdx = 0;
+      for (let i = 0; i < parts.length; i++) {
+        if (validTypes.includes(parts[i])) { rtype = parts[i]; contentIdx = i + 1; break; }
+        if (parts[i] === 'IN') continue;
+        if (i > 0 && /^\d+$/.test(parts[i])) ttl = parseInt(parts[i]);
+      }
+      if (!rtype || contentIdx >= parts.length) continue;
+
+      const fullName = name === '@' ? selectedZone.domain : name.endsWith('.') ? name.slice(0, -1) : `${name}.${selectedZone.domain}`;
+      let content = parts.slice(contentIdx).join(' ');
+      let priority: number | undefined;
+
+      if (rtype === 'MX' && contentIdx + 1 < parts.length && /^\d+$/.test(parts[contentIdx])) {
+        priority = parseInt(parts[contentIdx]);
+        content = parts.slice(contentIdx + 1).join(' ');
+      }
+
+      try {
+        const body: Record<string, unknown> = { type: rtype, name: fullName, content, ttl };
+        if (priority !== undefined) body.priority = priority;
+        await api.post(`/dns/zones/${selectedZone.id}/records`, body);
+        created++;
+      } catch (e) { errors.push(`${fullName}: ${e instanceof Error ? e.message : 'failed'}`); }
+    }
+
+    setMessage({ text: `Imported ${created} record${created !== 1 ? 's' : ''}${errors.length ? `. ${errors.length} error${errors.length !== 1 ? 's' : ''}` : ''}`, type: errors.length ? 'error' : 'success' });
+    setImporting(false); setShowImport(false); setImportText('');
+    selectZone(selectedZone);
+  };
+
+  // ── Propagation checker ────────────────────────────────────────────────
+  const checkPropagation = async (name: string, type: string) => {
+    setCheckingProp(name);
+    try {
+      const data = await api.post<any>('/dns/propagation', { name, type });
+      setPropagation(data);
+    } catch {
+      setMessage({ text: 'Propagation check failed', type: 'error' });
+    } finally { setCheckingProp(null); }
+  };
+
+  // ── Zone templates ─────────────────────────────────────────────────────
+  const applyTemplate = async (template: string) => {
+    if (!selectedZone) return;
+    const domain = selectedZone.domain;
+    let serverIp = '';
+    try { const resp = await fetch('https://api.ipify.org'); serverIp = await resp.text(); } catch {}
+
+    const templates: Record<string, Record<string, unknown>[]> = {
+      website: [
+        { type: 'A', name: domain, content: serverIp || '1.2.3.4', ttl: 3600 },
+        { type: 'CNAME', name: `www.${domain}`, content: domain, ttl: 3600 },
+      ],
+      email: [
+        { type: 'MX', name: domain, content: `mail.${domain}`, ttl: 3600, priority: 10 },
+        { type: 'TXT', name: domain, content: 'v=spf1 mx ~all', ttl: 3600 },
+        { type: 'TXT', name: `_dmarc.${domain}`, content: `v=DMARC1; p=quarantine; rua=mailto:dmarc@${domain}`, ttl: 3600 },
+      ],
+      full: [
+        { type: 'A', name: domain, content: serverIp || '1.2.3.4', ttl: 3600 },
+        { type: 'CNAME', name: `www.${domain}`, content: domain, ttl: 3600 },
+        { type: 'MX', name: domain, content: `mail.${domain}`, ttl: 3600, priority: 10 },
+        { type: 'TXT', name: domain, content: 'v=spf1 mx ~all', ttl: 3600 },
+        { type: 'TXT', name: `_dmarc.${domain}`, content: `v=DMARC1; p=quarantine; rua=mailto:dmarc@${domain}`, ttl: 3600 },
+      ],
+    };
+
+    const recs = templates[template] || [];
+    let created = 0;
+    for (const r of recs) {
+      try { await api.post(`/dns/zones/${selectedZone.id}/records`, r); created++; } catch {}
+    }
+    setMessage({ text: `Created ${created} record${created !== 1 ? 's' : ''} from template`, type: 'success' });
+    setShowTemplates(false);
+    selectZone(selectedZone);
+  };
+
+  // ── Filtered records ───────────────────────────────────────────────────
+  const filteredRecords = records.filter(r => {
+    if (recordSearch && !r.name.toLowerCase().includes(recordSearch.toLowerCase()) && !r.content.toLowerCase().includes(recordSearch.toLowerCase())) return false;
+    if (typeFilter && r.type !== typeFilter) return false;
+    return true;
+  });
 
   const ttlLabel = (ttl: number) => {
     if (ttl === 1) return "Auto";
@@ -466,12 +600,24 @@ export default function Dns() {
                     </div>
                     <p className="text-xs text-dark-200">{records.length} record{records.length !== 1 ? "s" : ""}</p>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <button
                       onClick={() => selectZone(selectedZone)}
                       className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600"
                     >
                       Refresh
+                    </button>
+                    <button onClick={handleExport} disabled={records.length === 0}
+                      className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600 disabled:opacity-50">
+                      Export
+                    </button>
+                    <button onClick={() => setShowImport(!showImport)}
+                      className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600">
+                      {showImport ? "Cancel Import" : "Import"}
+                    </button>
+                    <button onClick={() => setShowTemplates(!showTemplates)}
+                      className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600">
+                      Templates
                     </button>
                     <button
                       onClick={() => openRecordForm()}
@@ -518,7 +664,13 @@ export default function Dns() {
                         <option value="300">5 min</option>
                         <option value="3600">1 hour</option>
                         <option value="86400">1 day</option>
+                        <option value="custom">Custom...</option>
                       </select>
+                      {recTtl === "custom" && (
+                        <input type="number" value={customTtl} onChange={e => setCustomTtl(e.target.value)}
+                          placeholder="TTL in seconds" min="60"
+                          className="w-full mt-1 px-2 py-1.5 border border-dark-500 rounded-md text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+                      )}
                     </div>
                     {recType === "MX" && (
                       <div>
@@ -557,6 +709,49 @@ export default function Dns() {
                 </div>
               )}
 
+              {/* Import Zone File */}
+              {showImport && (
+                <div className="px-5 py-4 bg-dark-900 border-b border-dark-500 space-y-3">
+                  <p className="text-xs text-dark-300">Paste BIND zone file content (one record per line):</p>
+                  <textarea value={importText} onChange={e => setImportText(e.target.value)}
+                    rows={8} placeholder={"@ 3600 IN A 1.2.3.4\nwww 3600 IN CNAME example.com.\n@ 3600 IN MX 10 mail.example.com."}
+                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-xs font-mono focus:ring-2 focus:ring-accent-500 outline-none" />
+                  <button disabled={importing || !importText.trim()} onClick={handleImport}
+                    className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50">
+                    {importing ? "Importing..." : "Import Records"}
+                  </button>
+                </div>
+              )}
+
+              {/* Zone Templates */}
+              {showTemplates && (
+                <div className="px-5 py-4 bg-dark-900 border-b border-dark-500">
+                  <p className="text-xs text-dark-300 mb-3">Apply a record template:</p>
+                  <div className="flex gap-2 flex-wrap">
+                    <button onClick={() => applyTemplate('website')} className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded text-xs hover:bg-dark-600">
+                      Website (A + www)
+                    </button>
+                    <button onClick={() => applyTemplate('email')} className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded text-xs hover:bg-dark-600">
+                      Email (MX + SPF + DMARC)
+                    </button>
+                    <button onClick={() => applyTemplate('full')} className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded text-xs hover:bg-dark-600">
+                      Full Setup (All)
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Search & Filter */}
+              <div className="px-4 sm:px-5 py-3 border-b border-dark-600 flex gap-2">
+                <input value={recordSearch} onChange={e => setRecordSearch(e.target.value)}
+                  placeholder="Search records..." className="flex-1 px-3 py-1.5 border border-dark-500 rounded text-sm bg-dark-900 text-dark-100 focus:ring-2 focus:ring-accent-500 outline-none" />
+                <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}
+                  className="px-2 py-1.5 border border-dark-500 rounded text-sm bg-dark-900 text-dark-100 focus:ring-2 focus:ring-accent-500 outline-none">
+                  <option value="">All Types</option>
+                  {RECORD_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+
               {/* Records — Desktop Table */}
               <div className="hidden md:block overflow-x-auto">
                 <table className="w-full text-sm">
@@ -573,7 +768,7 @@ export default function Dns() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-dark-600">
-                    {records.map((r) => (
+                    {filteredRecords.map((r) => (
                       <tr key={r.id} className="hover:bg-dark-700/30 transition-colors">
                         <td className="px-4 py-2.5">
                           <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${typeColor[r.type] || "bg-dark-700 text-dark-200"}`}>
@@ -592,6 +787,12 @@ export default function Dns() {
                         )}
                         <td className="px-4 py-2.5">
                           <div className="flex items-center gap-1">
+                            <button onClick={() => checkPropagation(r.name, r.type)} disabled={checkingProp === r.name}
+                              title="Check propagation" className="p-1 text-dark-300 hover:text-dark-100 disabled:opacity-50">
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418" />
+                              </svg>
+                            </button>
                             <button onClick={() => openRecordForm(r)} className="p-1 text-dark-300 hover:text-indigo-600" title="Edit">
                               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                                 <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125" />
@@ -606,9 +807,11 @@ export default function Dns() {
                         </td>
                       </tr>
                     ))}
-                    {records.length === 0 && (
+                    {filteredRecords.length === 0 && (
                       <tr>
-                        <td colSpan={isCloudflare ? 6 : 5} className="px-4 py-8 text-center text-dark-300 text-sm">No DNS records found</td>
+                        <td colSpan={isCloudflare ? 6 : 5} className="px-4 py-8 text-center text-dark-300 text-sm">
+                          {records.length === 0 ? "No DNS records found" : "No records match your search"}
+                        </td>
                       </tr>
                     )}
                   </tbody>
@@ -617,7 +820,7 @@ export default function Dns() {
 
               {/* Records — Mobile Cards */}
               <div className="md:hidden divide-y divide-dark-600">
-                {records.map((r) => (
+                {filteredRecords.map((r) => (
                   <div key={r.id} className="px-4 py-3 space-y-1.5">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2 min-w-0">
@@ -630,6 +833,12 @@ export default function Dns() {
                         {isCloudflare && r.proxied !== undefined && (
                           <span className={`inline-block w-2.5 h-2.5 rounded-full mr-1 ${r.proxied ? "bg-orange-400" : "bg-dark-500"}`} />
                         )}
+                        <button onClick={() => checkPropagation(r.name, r.type)} disabled={checkingProp === r.name}
+                          className="p-1.5 text-dark-300 hover:text-dark-100 disabled:opacity-50" title="Check propagation">
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418" />
+                          </svg>
+                        </button>
                         <button onClick={() => openRecordForm(r)} className="p-1.5 text-dark-300 hover:text-indigo-600">
                           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                             <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125" />
@@ -648,10 +857,39 @@ export default function Dns() {
                     </div>
                   </div>
                 ))}
-                {records.length === 0 && (
-                  <div className="px-4 py-8 text-center text-dark-300 text-sm">No DNS records found</div>
+                {filteredRecords.length === 0 && (
+                  <div className="px-4 py-8 text-center text-dark-300 text-sm">
+                    {records.length === 0 ? "No DNS records found" : "No records match your search"}
+                  </div>
                 )}
               </div>
+
+              {/* Propagation Results */}
+              {propagation && (
+                <div className="px-4 sm:px-5 py-4 border-t border-dark-600">
+                  <div className="bg-dark-900 rounded-lg border border-dark-500 p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">
+                        Propagation: {propagation.name} ({propagation.type})
+                      </h4>
+                      <button onClick={() => setPropagation(null)} className="text-xs text-dark-300 hover:text-dark-100">Close</button>
+                    </div>
+                    <div className="space-y-2">
+                      {propagation.results.map((r: any, i: number) => (
+                        <div key={i} className="flex items-center gap-3 text-xs">
+                          <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${r.found ? "bg-rust-500" : "bg-danger-400"}`} />
+                          <span className="text-dark-200 w-24">{r.label}</span>
+                          <span className="text-dark-300 font-mono w-32">{r.resolver}</span>
+                          <span className={`font-mono truncate ${r.found ? "text-dark-100" : "text-danger-400"}`}>{r.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <p className={`text-xs mt-3 font-medium ${propagation.fully_propagated ? "text-rust-400" : "text-warn-400"}`}>
+                      {propagation.propagated}/{propagation.total} resolvers responding
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
