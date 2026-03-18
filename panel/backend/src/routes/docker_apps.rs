@@ -523,15 +523,29 @@ pub async fn update_app(
 
         let agent_path = format!("/apps/{}/update", cid);
         match agent.post(&agent_path, None).await {
-            Ok(_) => {
+            Ok(result) => {
+                let blue_green = result
+                    .get("blue_green")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 emit("pull", "Pulling latest image", "done", None);
-                emit("recreate", "Recreating container", "done", None);
-                emit("complete", "App updated", "done", None);
+                if blue_green {
+                    emit("health", "Health check passed", "done", None);
+                    emit("swap", "Traffic swapped (zero-downtime)", "done", None);
+                    emit("cleanup", "Old container removed", "done", None);
+                    emit("complete", "App updated (zero-downtime)", "done", None);
+                } else {
+                    emit("recreate", "Recreating container", "done", None);
+                    emit("complete", "App updated", "done", None);
+                }
                 activity::log_activity(
                     &db, user_id, &email, "app.update",
                     Some("app"), Some(&cid), None, None,
                 ).await;
-                tracing::info!("App updated: {cid}");
+                tracing::info!(
+                    "App updated{}: {cid}",
+                    if blue_green { " (blue-green)" } else { "" }
+                );
             }
             Err(e) => {
                 emit("pull", "Pulling latest image", "error", Some(format!("{e}")));
