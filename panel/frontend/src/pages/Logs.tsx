@@ -16,11 +16,34 @@ const LOG_TYPES = [
   { value: "syslog", label: "System Log" },
   { value: "auth", label: "Auth Log" },
   { value: "php_fpm", label: "PHP-FPM" },
+  { value: "docker", label: "Docker" },
+  { value: "service", label: "Services" },
 ];
 
 const SITE_LOG_TYPES = [
   { value: "access", label: "Access Log" },
   { value: "error", label: "Error Log" },
+];
+
+const SERVICES = [
+  "dockpanel-agent",
+  "dockpanel-api",
+  "nginx",
+  "postfix",
+  "dovecot",
+  "fail2ban",
+  "docker",
+  "opendkim",
+  "rspamd",
+  "redis-server",
+  "php8.3-fpm",
+  "php8.2-fpm",
+];
+
+const TIME_PRESETS = [
+  { label: "1h", lines: 500 },
+  { label: "6h", lines: 3000 },
+  { label: "24h", lines: 10000 },
 ];
 
 function SiteLogsContent() {
@@ -45,6 +68,28 @@ function SiteLogsContent() {
   const userStoppedRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Feature #2: Log Stats
+  const [showStats, setShowStats] = useState(false);
+  const [logStats, setLogStats] = useState<any>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+
+  // Feature #3: Docker logs
+  const [dockerContainers, setDockerContainers] = useState<string[]>([]);
+  const [selectedContainer, setSelectedContainer] = useState("");
+
+  // Feature #4: Service logs
+  const [selectedService, setSelectedService] = useState("dockpanel-api");
+
+  // Feature #6: Error alerting
+  const [errorCheck, setErrorCheck] = useState<any>(null);
+  const [checkingErrors, setCheckingErrors] = useState(false);
+
+  // Feature #7: Log sizes
+  const [showSizes, setShowSizes] = useState(false);
+  const [logSizes, setLogSizes] = useState<any>(null);
+  const [sizesLoading, setSizesLoading] = useState(false);
+  const [truncating, setTruncating] = useState<string | null>(null);
+
   useEffect(() => {
     api.get<Site[]>("/sites").then(setSites).catch(() => setError("Failed to load sites. Please try again."));
   }, []);
@@ -57,7 +102,127 @@ function SiteLogsContent() {
     }, 50);
   };
 
+  // Feature #1: Export/Download
+  const handleExportLogs = () => {
+    const content = lines.join("\n");
+    if (!content) return;
+    const blob = new Blob([content], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `logs-${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Feature #2: Load stats
+  const loadStats = async () => {
+    setStatsLoading(true);
+    try {
+      const site = sites.find((s) => s.id === selectedSite);
+      const domain = site?.domain ? `?domain=${site.domain}` : "";
+      const data = await api.get<any>(`/logs/stats${domain}`);
+      setLogStats(data);
+    } catch {
+      setLogStats(null);
+    } finally {
+      setStatsLoading(false);
+    }
+  };
+
+  // Feature #3: Load docker containers
+  const loadDockerContainers = async () => {
+    try {
+      const data = await api.get<{ containers: string[] }>("/logs/docker");
+      setDockerContainers(data.containers || []);
+      if (data.containers?.length > 0 && !selectedContainer) {
+        setSelectedContainer(data.containers[0]);
+      }
+    } catch {
+      setDockerContainers([]);
+    }
+  };
+
+  // Feature #3: Load docker logs
+  const fetchDockerLogs = async (container?: string) => {
+    const c = container || selectedContainer;
+    if (!c) return;
+    setLoading(true);
+    try {
+      const data = await api.get<{ logs: string; lines: number }>(
+        `/logs/docker/${c}?lines=${lineCount}`
+      );
+      setLines(data.logs ? data.logs.split("\n") : ["No logs found"]);
+      scrollToBottom();
+    } catch (e) {
+      setLines([`Error: ${e instanceof Error ? e.message : "Failed to load Docker logs"}`]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Feature #4: Load service logs
+  const fetchServiceLogs = async (service?: string) => {
+    const s = service || selectedService;
+    if (!s) return;
+    setLoading(true);
+    try {
+      const data = await api.get<{ logs: string; lines: number }>(
+        `/logs/service/${s}?lines=${lineCount}`
+      );
+      setLines(data.logs ? data.logs.split("\n") : ["No logs found"]);
+      scrollToBottom();
+    } catch (e) {
+      setLines([`Error: ${e instanceof Error ? e.message : "Failed to load service logs"}`]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Feature #6: Check errors
+  const handleCheckErrors = async () => {
+    setCheckingErrors(true);
+    try {
+      const data = await api.post<any>("/logs/check-errors");
+      setErrorCheck(data);
+    } catch {
+      setErrorCheck(null);
+    } finally {
+      setCheckingErrors(false);
+    }
+  };
+
+  // Feature #7: Load log sizes
+  const loadLogSizes = async () => {
+    setSizesLoading(true);
+    try {
+      const data = await api.get<any>("/logs/sizes");
+      setLogSizes(data);
+    } catch {
+      setLogSizes(null);
+    } finally {
+      setSizesLoading(false);
+    }
+  };
+
+  // Feature #7: Truncate log
+  const handleTruncate = async (path: string) => {
+    if (!confirm(`Are you sure you want to clear this log file?\n${path}\n\nThis action cannot be undone.`)) return;
+    setTruncating(path);
+    try {
+      await api.post("/logs/truncate", { path });
+      await loadLogSizes();
+    } catch (e) {
+      alert(`Failed to truncate: ${e instanceof Error ? e.message : "Unknown error"}`);
+    } finally {
+      setTruncating(null);
+    }
+  };
+
   const fetchLogs = useCallback(async () => {
+    // Don't fetch regular logs when docker/service type is selected
+    if (logType === "docker" || logType === "service") return;
+
     setLoading(true);
     try {
       let path: string;
@@ -114,19 +279,27 @@ function SiteLogsContent() {
   // Fetch logs on param change (tail mode only)
   useEffect(() => {
     if (mode === "tail" && !streaming) {
-      fetchLogs();
+      if (logType === "docker") {
+        loadDockerContainers();
+        if (selectedContainer) fetchDockerLogs();
+      } else if (logType === "service") {
+        fetchServiceLogs();
+      } else {
+        fetchLogs();
+      }
     }
-  }, [fetchLogs, mode, streaming]);
+  }, [fetchLogs, mode, streaming, logType, selectedContainer, selectedService]);
 
   // Auto-refresh
   useEffect(() => {
     if (autoRefresh && mode === "tail" && !streaming) {
-      intervalRef.current = setInterval(fetchLogs, 5000);
+      const fn = logType === "docker" ? () => fetchDockerLogs() : logType === "service" ? () => fetchServiceLogs() : fetchLogs;
+      intervalRef.current = setInterval(fn, 5000);
     }
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [autoRefresh, fetchLogs, mode, streaming]);
+  }, [autoRefresh, fetchLogs, mode, streaming, logType, selectedContainer, selectedService]);
 
   // WebSocket streaming with auto-reconnect
   const connectStream = async (isReconnect = false) => {
@@ -251,6 +424,8 @@ function SiteLogsContent() {
     return "text-gray-300";
   };
 
+  const isFileLogType = logType !== "docker" && logType !== "service";
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -258,25 +433,27 @@ function SiteLogsContent() {
         <div className="flex items-center justify-between mb-3 gap-3">
           <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap justify-end ml-auto">
             {/* Mode toggle */}
-            <div className="flex bg-dark-700 rounded-lg p-0.5">
-              <button
-                onClick={() => { setMode("tail"); stopStream(); }}
-                className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
-                  mode === "tail" ? "bg-dark-800 text-dark-50 shadow-sm" : "text-dark-200"
-                }`}
-              >
-                Tail
-              </button>
-              <button
-                onClick={() => { setMode("search"); stopStream(); }}
-                className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
-                  mode === "search" ? "bg-dark-800 text-dark-50 shadow-sm" : "text-dark-200"
-                }`}
-              >
-                Search
-              </button>
-            </div>
-            {mode === "tail" && (
+            {isFileLogType && (
+              <div className="flex bg-dark-700 rounded-lg p-0.5">
+                <button
+                  onClick={() => { setMode("tail"); stopStream(); }}
+                  className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                    mode === "tail" ? "bg-dark-800 text-dark-50 shadow-sm" : "text-dark-200"
+                  }`}
+                >
+                  Tail
+                </button>
+                <button
+                  onClick={() => { setMode("search"); stopStream(); }}
+                  className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                    mode === "search" ? "bg-dark-800 text-dark-50 shadow-sm" : "text-dark-200"
+                  }`}
+                >
+                  Search
+                </button>
+              </div>
+            )}
+            {isFileLogType && mode === "tail" && (
               <>
                 <button
                   onClick={streaming ? stopStream : startStream}
@@ -302,12 +479,52 @@ function SiteLogsContent() {
                 )}
               </>
             )}
+            {/* Feature #1: Export button */}
             <button
-              onClick={mode === "search" ? handleSearch : fetchLogs}
+              onClick={handleExportLogs}
+              disabled={lines.length === 0}
+              className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600 transition-colors disabled:opacity-50"
+              title="Download logs as text file"
+            >
+              Export
+            </button>
+            {/* Feature #2: Stats toggle */}
+            {!selectedSite && isFileLogType && (
+              <button
+                onClick={() => {
+                  setShowStats(!showStats);
+                  if (!showStats && !logStats) loadStats();
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  showStats ? "bg-blue-500/15 text-blue-400" : "bg-dark-700 text-dark-200 hover:bg-dark-600"
+                }`}
+              >
+                Stats
+              </button>
+            )}
+            {/* Feature #7: Storage toggle */}
+            <button
+              onClick={() => {
+                setShowSizes(!showSizes);
+                if (!showSizes && !logSizes) loadLogSizes();
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                showSizes ? "bg-blue-500/15 text-blue-400" : "bg-dark-700 text-dark-200 hover:bg-dark-600"
+              }`}
+            >
+              Storage
+            </button>
+            <button
+              onClick={() => {
+                if (logType === "docker") fetchDockerLogs();
+                else if (logType === "service") fetchServiceLogs();
+                else if (mode === "search") handleSearch();
+                else fetchLogs();
+              }}
               disabled={loading || streaming}
               className="px-3 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600 disabled:opacity-50"
             >
-              {loading ? "Loading..." : mode === "search" ? "Search" : "Refresh"}
+              {loading ? "Loading..." : mode === "search" && isFileLogType ? "Search" : "Refresh"}
             </button>
           </div>
         </div>
@@ -327,7 +544,12 @@ function SiteLogsContent() {
           </select>
           <select
             value={logType}
-            onChange={(e) => { setLogType(e.target.value); stopStream(); }}
+            onChange={(e) => {
+              const val = e.target.value;
+              setLogType(val);
+              stopStream();
+              if (val === "docker") loadDockerContainers();
+            }}
             className="text-sm border border-dark-500 rounded-lg px-3 py-1.5 bg-dark-800"
             aria-label="Log type"
           >
@@ -338,7 +560,45 @@ function SiteLogsContent() {
             ))}
           </select>
 
-          {mode === "tail" && !streaming && (
+          {/* Feature #3: Docker container selector */}
+          {logType === "docker" && !selectedSite && (
+            <select
+              value={selectedContainer}
+              onChange={(e) => {
+                setSelectedContainer(e.target.value);
+                fetchDockerLogs(e.target.value);
+              }}
+              className="text-sm border border-dark-500 rounded-lg px-3 py-1.5 bg-dark-800"
+              aria-label="Docker container"
+            >
+              {dockerContainers.length === 0 ? (
+                <option value="">No containers found</option>
+              ) : (
+                dockerContainers.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))
+              )}
+            </select>
+          )}
+
+          {/* Feature #4: Service selector */}
+          {logType === "service" && !selectedSite && (
+            <select
+              value={selectedService}
+              onChange={(e) => {
+                setSelectedService(e.target.value);
+                fetchServiceLogs(e.target.value);
+              }}
+              className="text-sm border border-dark-500 rounded-lg px-3 py-1.5 bg-dark-800"
+              aria-label="Service"
+            >
+              {SERVICES.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          )}
+
+          {(isFileLogType || logType === "docker" || logType === "service") && mode === "tail" && !streaming && (
             <>
               <select
                 value={lineCount}
@@ -352,37 +612,60 @@ function SiteLogsContent() {
                 <option value={500}>500 lines</option>
                 <option value={1000}>1000 lines</option>
               </select>
-              <div className="flex items-center gap-1">
-                <input
-                  type="text"
-                  value={filterInput}
-                  onChange={(e) => setFilterInput(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleFilter()}
-                  placeholder="Filter..."
-                  className="text-sm border border-dark-500 rounded-lg px-3 py-1.5 w-48"
-                  aria-label="Filter logs"
-                />
-                <button
-                  onClick={handleFilter}
-                  className="px-3 py-1.5 bg-dark-700 text-dark-200 rounded-lg text-sm hover:bg-dark-600"
-                >
-                  Filter
-                </button>
-                {filter && (
+
+              {/* Feature #5: Time range quick buttons */}
+              <div className="flex gap-1">
+                {TIME_PRESETS.map((t) => (
                   <button
-                    onClick={() => { setFilter(""); setFilterInput(""); }}
-                    className="px-2 py-1.5 text-dark-300 hover:text-dark-200"
+                    key={t.label}
+                    onClick={() => {
+                      setLineCount(t.lines);
+                      // Trigger reload on next render via lineCount change
+                    }}
+                    className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+                      lineCount === t.lines
+                        ? "bg-rust-500/15 text-rust-400"
+                        : "bg-dark-700 text-dark-200 hover:bg-dark-600"
+                    }`}
                   >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
+                    {t.label}
                   </button>
-                )}
+                ))}
               </div>
+
+              {isFileLogType && (
+                <div className="flex items-center gap-1">
+                  <input
+                    type="text"
+                    value={filterInput}
+                    onChange={(e) => setFilterInput(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleFilter()}
+                    placeholder="Filter..."
+                    className="text-sm border border-dark-500 rounded-lg px-3 py-1.5 w-48"
+                    aria-label="Filter logs"
+                  />
+                  <button
+                    onClick={handleFilter}
+                    className="px-3 py-1.5 bg-dark-700 text-dark-200 rounded-lg text-sm hover:bg-dark-600"
+                  >
+                    Filter
+                  </button>
+                  {filter && (
+                    <button
+                      onClick={() => { setFilter(""); setFilterInput(""); }}
+                      className="px-2 py-1.5 text-dark-300 hover:text-dark-200"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              )}
             </>
           )}
 
-          {mode === "search" && (
+          {isFileLogType && mode === "search" && (
             <>
               <div className="flex items-center gap-1">
                 <input
@@ -430,6 +713,143 @@ function SiteLogsContent() {
         </div>
       )}
 
+      {/* Feature #2: Stats Panel */}
+      {showStats && (
+        <div className="px-4 sm:px-6 py-4 border-b border-dark-500 bg-dark-800/50">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-medium text-dark-100">Log Statistics</h3>
+            <div className="flex items-center gap-2">
+              {/* Feature #6: Check Errors button */}
+              <button
+                onClick={handleCheckErrors}
+                disabled={checkingErrors}
+                className="px-3 py-1 bg-red-500/10 text-red-400 rounded text-xs font-medium hover:bg-red-500/20 disabled:opacity-50"
+              >
+                {checkingErrors ? "Checking..." : "Check Error Rate"}
+              </button>
+              <button
+                onClick={loadStats}
+                disabled={statsLoading}
+                className="px-3 py-1 bg-dark-700 text-dark-200 rounded text-xs hover:bg-dark-600 disabled:opacity-50"
+              >
+                {statsLoading ? "Loading..." : "Reload"}
+              </button>
+            </div>
+          </div>
+          {logStats ? (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-3">
+              <div className="bg-dark-700 rounded-lg p-3">
+                <div className="text-xs text-dark-300">Total Requests</div>
+                <div className="text-lg font-mono text-dark-50">{logStats.requests_total?.toLocaleString() || 0}</div>
+              </div>
+              <div className="bg-dark-700 rounded-lg p-3">
+                <div className="text-xs text-dark-300">5xx Errors</div>
+                <div className={`text-lg font-mono ${logStats.errors_5xx > 0 ? "text-danger-400" : "text-green-400"}`}>
+                  {logStats.errors_5xx?.toLocaleString() || 0}
+                </div>
+              </div>
+              <div className="bg-dark-700 rounded-lg p-3">
+                <div className="text-xs text-dark-300">Status Codes</div>
+                <div className="text-xs font-mono text-dark-100 mt-1 space-y-0.5">
+                  {logStats.status_breakdown && Object.entries(logStats.status_breakdown)
+                    .sort(([, a], [, b]) => (b as number) - (a as number))
+                    .slice(0, 5)
+                    .map(([code, count]) => (
+                      <div key={code} className="flex justify-between">
+                        <span className={code.startsWith("5") ? "text-danger-400" : code.startsWith("4") ? "text-warn-400" : "text-green-400"}>
+                          {code}
+                        </span>
+                        <span>{(count as number).toLocaleString()}</span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+              <div className="bg-dark-700 rounded-lg p-3">
+                <div className="text-xs text-dark-300">Top URLs</div>
+                <div className="text-xs font-mono text-dark-100 mt-1 space-y-0.5 max-h-20 overflow-auto">
+                  {logStats.top_urls?.slice(0, 5).map((u: any, i: number) => (
+                    <div key={i} className="flex justify-between gap-2">
+                      <span className="truncate">{u.url}</span>
+                      <span className="shrink-0">{u.count}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : statsLoading ? (
+            <div className="text-dark-300 text-sm">Loading stats...</div>
+          ) : (
+            <div className="text-dark-300 text-sm">No stats available</div>
+          )}
+          {/* Feature #6: Error check result */}
+          {errorCheck && (
+            <div className={`mt-2 p-3 rounded-lg text-sm ${
+              errorCheck.status === "warning" ? "bg-red-500/10 border border-red-500/20" : "bg-green-500/10 border border-green-500/20"
+            }`}>
+              <span className={errorCheck.status === "warning" ? "text-danger-400" : "text-green-400"}>
+                Error rate: {errorCheck.error_rate_percent}% ({errorCheck.error_5xx} / {errorCheck.total_requests} requests)
+                {errorCheck.status === "warning"
+                  ? " — High error rate detected!"
+                  : " — Within normal range"}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Feature #7: Log Sizes Panel */}
+      {showSizes && (
+        <div className="px-4 sm:px-6 py-4 border-b border-dark-500 bg-dark-800/50">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-medium text-dark-100">
+              Log Storage
+              {logSizes && <span className="text-dark-300 ml-2 font-normal">({logSizes.total_mb} MB total)</span>}
+            </h3>
+            <button
+              onClick={loadLogSizes}
+              disabled={sizesLoading}
+              className="px-3 py-1 bg-dark-700 text-dark-200 rounded text-xs hover:bg-dark-600 disabled:opacity-50"
+            >
+              {sizesLoading ? "Loading..." : "Reload"}
+            </button>
+          </div>
+          {logSizes?.files ? (
+            <div className="space-y-1">
+              {logSizes.files.map((f: any) => (
+                <div key={f.path} className="flex items-center justify-between bg-dark-700 rounded px-3 py-2">
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm text-dark-100 font-mono">{f.label}</span>
+                    <span className="text-xs text-dark-300">{f.path}</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className={`text-sm font-mono ${f.size_mb > 100 ? "text-warn-400" : "text-dark-200"}`}>
+                      {f.size_mb} MB
+                    </span>
+                    <button
+                      onClick={() => handleTruncate(f.path)}
+                      disabled={truncating === f.path}
+                      className="px-2 py-0.5 bg-red-500/10 text-red-400 rounded text-xs hover:bg-red-500/20 disabled:opacity-50"
+                    >
+                      {truncating === f.path ? "..." : "Clear"}
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {logSizes.logrotate && (
+                <div className="text-xs text-green-400 mt-2">Logrotate is configured for nginx</div>
+              )}
+              {!logSizes.logrotate && (
+                <div className="text-xs text-warn-400 mt-2">Logrotate not detected for nginx</div>
+              )}
+            </div>
+          ) : sizesLoading ? (
+            <div className="text-dark-300 text-sm">Loading...</div>
+          ) : (
+            <div className="text-dark-300 text-sm">No data available</div>
+          )}
+        </div>
+      )}
+
       {/* Log content */}
       <div
         ref={containerRef}
@@ -437,7 +857,11 @@ function SiteLogsContent() {
       >
         {lines.length === 0 ? (
           <div className="text-dark-200 text-center py-12">
-            {mode === "search" ? "Enter a regex pattern and click Search" : "No log entries found"}
+            {logType === "docker" && dockerContainers.length === 0
+              ? "No managed Docker containers found"
+              : mode === "search" && isFileLogType
+                ? "Enter a regex pattern and click Search"
+                : "No log entries found"}
           </div>
         ) : (
           lines.map((line, i) => (
