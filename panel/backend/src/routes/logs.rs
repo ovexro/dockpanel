@@ -235,6 +235,144 @@ pub async fn stream_token(
     })))
 }
 
+/// GET /api/logs/stats — Log aggregation stats (admin only).
+pub async fn log_stats(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = params
+        .get("domain")
+        .map(|d| format!("?domain={d}"))
+        .unwrap_or_default();
+    let result = state
+        .agent
+        .get(&format!("/logs/stats{domain}"))
+        .await
+        .map_err(|e| agent_error("Log stats", e))?;
+    Ok(Json(result))
+}
+
+/// GET /api/logs/docker — List managed Docker containers (admin only).
+pub async fn docker_log_containers(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state
+        .agent
+        .get("/logs/docker")
+        .await
+        .map_err(|e| agent_error("Docker logs", e))?;
+    Ok(Json(result))
+}
+
+/// GET /api/logs/docker/{container} — Docker container logs (admin only).
+pub async fn docker_log_view(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+    Path(container): Path<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let lines = params
+        .get("lines")
+        .unwrap_or(&"200".to_string())
+        .clone();
+    let result = state
+        .agent
+        .get(&format!("/logs/docker/{container}?lines={lines}"))
+        .await
+        .map_err(|e| agent_error("Docker logs", e))?;
+    Ok(Json(result))
+}
+
+/// GET /api/logs/service/{service} — Systemd service logs (admin only).
+pub async fn service_logs(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+    Path(service): Path<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let lines = params
+        .get("lines")
+        .unwrap_or(&"100".to_string())
+        .clone();
+    let result = state
+        .agent
+        .get(&format!("/logs/service/{service}?lines={lines}"))
+        .await
+        .map_err(|e| agent_error("Service logs", e))?;
+    Ok(Json(result))
+}
+
+/// GET /api/logs/sizes — Log file sizes (admin only).
+pub async fn log_sizes(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state
+        .agent
+        .get("/logs/sizes")
+        .await
+        .map_err(|e| agent_error("Log sizes", e))?;
+    Ok(Json(result))
+}
+
+/// POST /api/logs/truncate — Truncate a log file (admin only).
+pub async fn truncate_log(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state
+        .agent
+        .post("/logs/truncate", Some(body))
+        .await
+        .map_err(|e| agent_error("Truncate", e))?;
+    crate::services::activity::log_activity(
+        &state.db,
+        claims.sub,
+        &claims.email,
+        "logs.truncate",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// POST /api/logs/check-errors — Scan recent logs for error patterns (admin only).
+pub async fn check_errors(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Get recent nginx error count
+    let stats = state.agent.get("/logs/stats").await.ok();
+    let error_5xx = stats
+        .as_ref()
+        .and_then(|s| s.get("errors_5xx"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    let total = stats
+        .as_ref()
+        .and_then(|s| s.get("requests_total"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1)
+        .max(1);
+
+    let error_rate = (error_5xx as f64 / total as f64 * 100.0 * 10.0).round() / 10.0;
+
+    Ok(Json(serde_json::json!({
+        "error_5xx": error_5xx,
+        "total_requests": total,
+        "error_rate_percent": error_rate,
+        "threshold": "5% error rate with >10 errors",
+        "status": if error_rate > 5.0 && error_5xx > 10 { "warning" } else { "ok" },
+    })))
+}
+
 /// GET /api/system/processes — Top processes (admin only).
 pub async fn processes(
     State(state): State<AppState>,
