@@ -64,6 +64,7 @@ export default function Settings() {
   // Notification channels
   const [notifySlackUrl, setNotifySlackUrl] = useState("");
   const [notifyDiscordUrl, setNotifyDiscordUrl] = useState("");
+  const [notifyPagerdutyKey, setNotifyPagerdutyKey] = useState("");
   const [notifyEmail, setNotifyEmail] = useState(true);
   const [testingWebhook, setTestingWebhook] = useState<string | null>(null);
   const [webhookResult, setWebhookResult] = useState<{ type: string; msg: string }>({ type: "", msg: "" });
@@ -141,12 +142,13 @@ export default function Settings() {
 
   const loadNotifyChannels = async () => {
     try {
-      const rules = await api.get<{ notify_email?: boolean; notify_slack_url?: string; notify_discord_url?: string }[]>("/alert-rules");
+      const rules = await api.get<{ notify_email?: boolean; notify_slack_url?: string; notify_discord_url?: string; notify_pagerduty_key?: string }[]>("/alert-rules");
       if (rules.length > 0) {
         const r = rules[0];
         setNotifyEmail(r.notify_email !== false);
         setNotifySlackUrl(r.notify_slack_url || "");
         setNotifyDiscordUrl(r.notify_discord_url || "");
+        setNotifyPagerdutyKey(r.notify_pagerduty_key || "");
       }
     } catch { /* ignore */ }
   };
@@ -992,6 +994,18 @@ export default function Settings() {
               {webhookResult.type === "discord-ok" && <p className="text-xs text-rust-400 mt-1">{webhookResult.msg}</p>}
               {webhookResult.type === "discord-err" && <p className="text-xs text-danger-400 mt-1">{webhookResult.msg}</p>}
             </div>
+            <div>
+              <label htmlFor="notify-pagerduty" className="block text-sm font-medium text-dark-100 mb-1">PagerDuty Integration Key</label>
+              <input
+                id="notify-pagerduty"
+                type="text"
+                value={notifyPagerdutyKey}
+                onChange={(e) => setNotifyPagerdutyKey(e.target.value)}
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none font-mono"
+                placeholder="Integration key from PagerDuty service"
+              />
+              <p className="text-xs text-dark-300 mt-1">Events API v2 integration key. Get it from PagerDuty &gt; Services &gt; Integrations.</p>
+            </div>
             <div className="flex justify-end">
               <button
                 onClick={async () => {
@@ -1002,6 +1016,7 @@ export default function Settings() {
                       notify_email: notifyEmail,
                       notify_slack_url: notifySlackUrl || null,
                       notify_discord_url: notifyDiscordUrl || null,
+                      notify_pagerduty_key: notifyPagerdutyKey || null,
                     });
                     setMessage({ text: "Notification channels saved", type: "success" });
                   } catch (e) {

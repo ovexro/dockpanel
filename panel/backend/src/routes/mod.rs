@@ -271,6 +271,9 @@ pub fn router() -> Router<AppState> {
         .route("/api/sites/{id}/deploy/logs", get(deploy::logs))
         // Uptime Monitors
         .route("/api/monitors", get(monitors::list).post(monitors::create))
+        .route("/api/monitors/certificates", get(monitors::certificate_dashboard))
+        .route("/api/monitors/maintenance", get(monitors::list_maintenance).post(monitors::create_maintenance))
+        .route("/api/monitors/maintenance/{id}", delete(monitors::delete_maintenance))
         .route("/api/monitors/{id}", put(monitors::update).delete(monitors::remove))
         .route("/api/monitors/{id}/checks", get(monitors::checks))
         .route("/api/monitors/{id}/incidents", get(monitors::incidents))
@@ -283,6 +286,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/billing/portal", post(billing::customer_portal))
         // Public endpoints (no auth)
         .route("/api/status-page", get(monitors::status_page))
+        // Heartbeat endpoint (no auth — monitor validates by ID)
+        .route("/api/heartbeat/{monitor_id}/{token}", post(monitors::heartbeat))
         // Webhooks (no auth — validated by secret/signature)
         .route("/api/webhooks/stripe", post(billing::webhook))
         .route("/api/webhooks/deploy/{site_id}/{secret}", post(deploy::webhook))

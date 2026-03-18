@@ -15,6 +15,9 @@ struct MonitorRow {
     port: Option<i32>,
     keyword: Option<String>,
     keyword_must_contain: bool,
+    check_interval: i32,
+    last_checked_at: Option<chrono::DateTime<chrono::Utc>>,
+    custom_headers: Option<serde_json::Value>,
 }
 
 /// Background task: checks all enabled monitors periodically.
@@ -41,12 +44,12 @@ pub async fn run(pool: PgPool, mut shutdown_rx: tokio::sync::broadcast::Receiver
 
         tick_count += 1;
 
-        // Get monitors due for checking
+        // Get monitors due for checking (HTTP/TCP/ping) + all heartbeat monitors (checked separately)
         let monitors: Vec<MonitorRow> = match sqlx::query_as(
             "SELECT id, user_id, url, name, status, alert_email, alert_slack_url, alert_discord_url, \
-             monitor_type, port, keyword, keyword_must_contain \
+             monitor_type, port, keyword, keyword_must_contain, check_interval, last_checked_at, custom_headers \
              FROM monitors WHERE enabled = TRUE AND \
-             (last_checked_at IS NULL OR last_checked_at < NOW() - (check_interval || ' seconds')::interval)",
+             (monitor_type = 'heartbeat' OR last_checked_at IS NULL OR last_checked_at < NOW() - (check_interval || ' seconds')::interval)",
         )
         .fetch_all(&pool)
         .await
@@ -61,6 +64,15 @@ pub async fn run(pool: PgPool, mut shutdown_rx: tokio::sync::broadcast::Receiver
         // Process monitors concurrently (max 10 at a time)
         let mut set = tokio::task::JoinSet::new();
         for monitor in monitors {
+            // Check if user is in a maintenance window — skip checks during maintenance
+            let in_maintenance: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM maintenance_windows WHERE user_id = $1 AND starts_at <= NOW() AND ends_at >= NOW())"
+            ).bind(monitor.user_id).fetch_one(&pool).await.unwrap_or(false);
+
+            if in_maintenance {
+                continue; // Skip this monitor during maintenance
+            }
+
             let c = client.clone();
             let p = pool.clone();
             set.spawn(async move {
@@ -97,12 +109,18 @@ pub async fn run(pool: PgPool, mut shutdown_rx: tokio::sync::broadcast::Receiver
     }
 }
 
-/// Check a single monitor: HTTP/TCP request, record result, handle status transitions.
+/// Check a single monitor: HTTP/TCP/ping request, record result, handle status transitions.
 async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &PgPool) {
-    let (status_code, error, new_status, response_time) = if monitor.monitor_type == "tcp" {
-        check_tcp(monitor).await
-    } else {
-        check_http(monitor, client).await
+    // Heartbeat monitors are passive — check if we missed a beat
+    if monitor.monitor_type == "heartbeat" {
+        check_heartbeat(monitor, pool).await;
+        return;
+    }
+
+    let (status_code, error, new_status, response_time) = match monitor.monitor_type.as_str() {
+        "tcp" => check_tcp(monitor).await,
+        "ping" => check_ping(monitor).await,
+        _ => check_http(monitor, client).await,
     };
 
     // Insert check record
@@ -193,10 +211,111 @@ async fn check_tcp(monitor: &MonitorRow) -> (Option<i32>, Option<String>, &'stat
     }
 }
 
-/// HTTP check with optional keyword verification.
+/// Ping/ICMP check — uses system ping command.
+async fn check_ping(monitor: &MonitorRow) -> (Option<i32>, Option<String>, &'static str, i32) {
+    let host = monitor.url.trim_start_matches("ping://");
+    let start = Instant::now();
+
+    let output = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::process::Command::new("ping")
+            .args(["-c", "1", "-W", "5", host])
+            .output()
+    ).await;
+
+    let response_time = start.elapsed().as_millis() as i32;
+
+    match output {
+        Ok(Ok(o)) if o.status.success() => {
+            // Parse response time from ping output: "time=X.XX ms"
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let ping_time = stdout.split("time=").nth(1)
+                .and_then(|s| s.split_whitespace().next())
+                .and_then(|s| s.parse::<f64>().ok())
+                .map(|ms| ms as i32)
+                .unwrap_or(response_time);
+            (Some(0), None, "up", ping_time)
+        }
+        _ => (None, Some("Ping failed or timed out".to_string()), "down", response_time),
+    }
+}
+
+/// Heartbeat (dead man's switch) — alerts if no ping received within 2x interval.
+async fn check_heartbeat(monitor: &MonitorRow, pool: &PgPool) {
+    let expected_interval = Duration::from_secs(monitor.check_interval.max(60) as u64);
+    let last_check = monitor.last_checked_at.unwrap_or_else(chrono::Utc::now);
+    let elapsed = chrono::Utc::now() - last_check;
+
+    let max_silence = chrono::Duration::from_std(expected_interval * 2)
+        .unwrap_or(chrono::Duration::minutes(10));
+
+    if elapsed > max_silence {
+        // Missed heartbeat
+        if monitor.status != "down" {
+            if let Err(e) = sqlx::query(
+                "INSERT INTO monitor_checks (monitor_id, status_code, response_time, error) VALUES ($1, NULL, 0, $2)",
+            )
+            .bind(monitor.id)
+            .bind("Heartbeat missed")
+            .execute(pool)
+            .await {
+                tracing::error!("Failed to insert heartbeat miss check for {}: {e}", monitor.name);
+            }
+
+            if let Err(e) = sqlx::query(
+                "UPDATE monitors SET status = 'down', last_checked_at = NOW(), last_response_time = 0, last_status_code = NULL WHERE id = $1",
+            )
+            .bind(monitor.id)
+            .execute(pool)
+            .await {
+                tracing::error!("Failed to update heartbeat monitor status for {}: {e}", monitor.name);
+            }
+
+            if let Err(e) = sqlx::query(
+                "INSERT INTO incidents (monitor_id, cause, alerted) VALUES ($1, $2, TRUE)",
+            )
+            .bind(monitor.id)
+            .bind("Heartbeat missed — no ping received")
+            .execute(pool)
+            .await {
+                tracing::error!("Failed to create heartbeat incident for {}: {e}", monitor.name);
+            }
+
+            tracing::warn!("Monitor {} ({}) heartbeat missed", monitor.name, monitor.url);
+            crate::services::system_log::log_event(
+                pool,
+                "warning",
+                "uptime",
+                &format!("Heartbeat missed: {} ({})", monitor.name, monitor.url),
+                Some("No heartbeat received within expected interval"),
+            ).await;
+            send_alerts(pool, monitor, &format!("{} heartbeat missed — no ping received", monitor.name)).await;
+        }
+    }
+}
+
+/// HTTP check with optional keyword verification and custom headers.
 async fn check_http(monitor: &MonitorRow, client: &reqwest::Client) -> (Option<i32>, Option<String>, &'static str, i32) {
     let start = Instant::now();
-    let result = client.get(&monitor.url).send().await;
+    let mut builder = client.get(&monitor.url);
+
+    // Apply custom headers if present
+    if let Some(ref headers_json) = monitor.custom_headers {
+        if let Some(headers_map) = headers_json.as_object() {
+            for (key, value) in headers_map {
+                if let Some(v) = value.as_str() {
+                    if let (Ok(name), Ok(val)) = (
+                        reqwest::header::HeaderName::from_bytes(key.as_bytes()),
+                        reqwest::header::HeaderValue::from_str(v),
+                    ) {
+                        builder = builder.header(name, val);
+                    }
+                }
+            }
+        }
+    }
+
+    let result = builder.send().await;
     let response_time = start.elapsed().as_millis() as i32;
 
     match result {
@@ -243,10 +362,16 @@ async fn send_alerts(pool: &PgPool, monitor: &MonitorRow, message: &str) {
         None
     };
 
+    // Get PagerDuty key from alert_rules
+    let pagerduty_key: Option<String> = sqlx::query_scalar(
+        "SELECT notify_pagerduty_key FROM alert_rules WHERE user_id = $1 AND server_id IS NULL"
+    ).bind(monitor.user_id).fetch_optional(pool).await.ok().flatten().flatten();
+
     let channels = crate::services::notifications::NotifyChannels {
         email,
         slack_url: monitor.alert_slack_url.clone(),
         discord_url: monitor.alert_discord_url.clone(),
+        pagerduty_key,
     };
 
     let subject = format!("DockPanel Alert: {}", monitor.name);
