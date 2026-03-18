@@ -70,6 +70,7 @@ pub struct DeployedApp {
     pub health: Option<String>,
     pub image: Option<String>,
     pub volumes: Vec<String>,
+    pub stack_id: Option<String>,
 }
 
 static TEMPLATES: &[AppTemplateDef] = &[
@@ -1094,6 +1095,8 @@ pub async fn list_deployed_apps() -> Result<Vec<DeployedApp>, String> {
                 }
             });
 
+            let stack_id = labels.get("dockpanel.stack_id").cloned();
+
             Some(DeployedApp {
                 container_id: id.clone(),
                 name,
@@ -1104,6 +1107,7 @@ pub async fn list_deployed_apps() -> Result<Vec<DeployedApp>, String> {
                 health,
                 image,
                 volumes,
+                stack_id,
             })
         })
         .collect();
