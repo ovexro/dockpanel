@@ -11,6 +11,10 @@ struct MonitorRow {
     alert_email: bool,
     alert_slack_url: Option<String>,
     alert_discord_url: Option<String>,
+    monitor_type: String,
+    port: Option<i32>,
+    keyword: Option<String>,
+    keyword_must_contain: bool,
 }
 
 /// Background task: checks all enabled monitors periodically.
@@ -39,7 +43,8 @@ pub async fn run(pool: PgPool, mut shutdown_rx: tokio::sync::broadcast::Receiver
 
         // Get monitors due for checking
         let monitors: Vec<MonitorRow> = match sqlx::query_as(
-            "SELECT id, user_id, url, name, status, alert_email, alert_slack_url, alert_discord_url \
+            "SELECT id, user_id, url, name, status, alert_email, alert_slack_url, alert_discord_url, \
+             monitor_type, port, keyword, keyword_must_contain \
              FROM monitors WHERE enabled = TRUE AND \
              (last_checked_at IS NULL OR last_checked_at < NOW() - (check_interval || ' seconds')::interval)",
         )
@@ -92,22 +97,12 @@ pub async fn run(pool: PgPool, mut shutdown_rx: tokio::sync::broadcast::Receiver
     }
 }
 
-/// Check a single monitor: HTTP request, record result, handle status transitions.
+/// Check a single monitor: HTTP/TCP request, record result, handle status transitions.
 async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &PgPool) {
-    let start = Instant::now();
-    let result = client.get(&monitor.url).send().await;
-    let response_time = start.elapsed().as_millis() as i32;
-
-    let (status_code, error, new_status) = match result {
-        Ok(resp) => {
-            let code = resp.status().as_u16() as i32;
-            if resp.status().is_success() {
-                (Some(code), None, "up")
-            } else {
-                (Some(code), Some(format!("HTTP {code}")), "down")
-            }
-        }
-        Err(e) => (None, Some(e.to_string()), "down"),
+    let (status_code, error, new_status, response_time) = if monitor.monitor_type == "tcp" {
+        check_tcp(monitor).await
+    } else {
+        check_http(monitor, client).await
     };
 
     // Insert check record
@@ -175,6 +170,63 @@ async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &Pg
 
         tracing::info!("Monitor {} ({}) is back UP", monitor.name, monitor.url);
         send_alerts(pool, monitor, &format!("{} is back up ({}ms)", monitor.name, response_time)).await;
+    }
+}
+
+/// TCP port check — connect to host:port with timeout.
+async fn check_tcp(monitor: &MonitorRow) -> (Option<i32>, Option<String>, &'static str, i32) {
+    let host = monitor.url.trim_start_matches("tcp://");
+    let port = monitor.port.unwrap_or(80) as u16;
+    let addr = format!("{}:{}", host, port);
+
+    let start = Instant::now();
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::net::TcpStream::connect(&addr),
+    ).await;
+    let response_time = start.elapsed().as_millis() as i32;
+
+    match result {
+        Ok(Ok(_)) => (Some(0), None, "up", response_time),
+        Ok(Err(e)) => (None, Some(format!("TCP connection failed: {e}")), "down", response_time),
+        Err(_) => (None, Some("TCP connection timed out".to_string()), "down", response_time),
+    }
+}
+
+/// HTTP check with optional keyword verification.
+async fn check_http(monitor: &MonitorRow, client: &reqwest::Client) -> (Option<i32>, Option<String>, &'static str, i32) {
+    let start = Instant::now();
+    let result = client.get(&monitor.url).send().await;
+    let response_time = start.elapsed().as_millis() as i32;
+
+    match result {
+        Ok(resp) => {
+            let code = resp.status().as_u16() as i32;
+            if !resp.status().is_success() {
+                return (Some(code), Some(format!("HTTP {code}")), "down", response_time);
+            }
+
+            // Keyword check if configured
+            if let Some(ref keyword) = monitor.keyword {
+                if !keyword.is_empty() {
+                    let body = resp.text().await.unwrap_or_default();
+                    let contains = body.contains(keyword.as_str());
+                    let must_contain = monitor.keyword_must_contain;
+
+                    if (must_contain && !contains) || (!must_contain && contains) {
+                        let error = if must_contain {
+                            format!("Keyword '{}' not found in response", keyword)
+                        } else {
+                            format!("Keyword '{}' found in response (should not be present)", keyword)
+                        };
+                        return (Some(code), Some(error), "down", response_time);
+                    }
+                }
+            }
+
+            (Some(code), None, "up", response_time)
+        }
+        Err(e) => (None, Some(e.to_string()), "down", response_time),
     }
 }
 
