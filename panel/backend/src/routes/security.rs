@@ -121,3 +121,110 @@ pub async fn fail2ban_status(
 
     Ok(Json(result))
 }
+
+/// POST /api/security/ssh/disable-password
+pub async fn ssh_disable_password(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.agent.post("/security/ssh/disable-password", None).await
+        .map_err(|e| agent_error("SSH config", e))?;
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "security.ssh_disable_password",
+        None, None, None, None,
+    ).await;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// POST /api/security/ssh/enable-password
+pub async fn ssh_enable_password(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.agent.post("/security/ssh/enable-password", None).await
+        .map_err(|e| agent_error("SSH config", e))?;
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "security.ssh_enable_password",
+        None, None, None, None,
+    ).await;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// POST /api/security/ssh/disable-root
+pub async fn ssh_disable_root(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.agent.post("/security/ssh/disable-root", None).await
+        .map_err(|e| agent_error("SSH config", e))?;
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "security.ssh_disable_root",
+        None, None, None, None,
+    ).await;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// POST /api/security/ssh/change-port
+pub async fn ssh_change_port(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.agent.post("/security/ssh/change-port", Some(body)).await
+        .map_err(|e| agent_error("SSH config", e))?;
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "security.ssh_change_port",
+        None, None, None, None,
+    ).await;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// POST /api/security/fail2ban/unban
+pub async fn fail2ban_unban_ip(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.agent.post("/security/fail2ban/unban", Some(body)).await
+        .map_err(|e| agent_error("Fail2Ban", e))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// POST /api/security/fail2ban/ban
+pub async fn fail2ban_ban_ip(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.agent.post("/security/fail2ban/ban", Some(body)).await
+        .map_err(|e| agent_error("Fail2Ban", e))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// GET /api/security/fail2ban/{jail}/banned
+pub async fn fail2ban_banned(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+    Path(jail): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.get(&format!("/security/fail2ban/{jail}/banned")).await
+        .map_err(|e| agent_error("Fail2Ban", e))?;
+    Ok(Json(result))
+}
+
+/// POST /api/security/fix — Apply a recommended security fix.
+pub async fn apply_security_fix(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.post("/security/fix", Some(body.clone())).await
+        .map_err(|e| agent_error("Security fix", e))?;
+    let fix_type = body.get("fix_type").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let target = body.get("target").and_then(|v| v.as_str()).unwrap_or("unknown");
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, &format!("security.fix.{fix_type}"),
+        Some("security"), Some(target), None, None,
+    ).await;
+    Ok(Json(result))
+}

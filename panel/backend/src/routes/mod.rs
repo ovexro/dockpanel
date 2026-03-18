@@ -194,6 +194,17 @@ pub fn router() -> Router<AppState> {
         .route("/api/security/firewall/rules", post(security::add_firewall_rule))
         .route("/api/security/firewall/rules/{number}", delete(security::delete_firewall_rule))
         .route("/api/security/fail2ban", get(security::fail2ban_status))
+        // SSH Hardening
+        .route("/api/security/ssh/disable-password", post(security::ssh_disable_password))
+        .route("/api/security/ssh/enable-password", post(security::ssh_enable_password))
+        .route("/api/security/ssh/disable-root", post(security::ssh_disable_root))
+        .route("/api/security/ssh/change-port", post(security::ssh_change_port))
+        // Fail2Ban Management
+        .route("/api/security/fail2ban/unban", post(security::fail2ban_unban_ip))
+        .route("/api/security/fail2ban/ban", post(security::fail2ban_ban_ip))
+        .route("/api/security/fail2ban/{jail}/banned", get(security::fail2ban_banned))
+        // Security Fix
+        .route("/api/security/fix", post(security::apply_security_fix))
         // Security Scanning
         .route("/api/security/scan", post(security_scans::trigger_scan))
         .route("/api/security/scans", get(security_scans::list_scans))
