@@ -7,7 +7,24 @@ use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::error::{err, agent_error, paginate, ApiError};
+use crate::services::agent::AgentError;
 use crate::AppState;
+
+/// Convert an agent error to a user-facing error for SQL operations.
+/// Unlike `agent_error()`, this passes through the actual SQL error message.
+fn sql_error(e: AgentError) -> ApiError {
+    match e {
+        AgentError::Status(_code, body) => {
+            // Try to extract "error" field from agent JSON response
+            let msg = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("error").and_then(|e| e.as_str().map(String::from)))
+                .unwrap_or(body);
+            err(StatusCode::BAD_REQUEST, &msg)
+        }
+        other => agent_error("SQL query", other),
+    }
+}
 
 #[derive(serde::Deserialize)]
 pub struct ListQuery {
@@ -258,6 +275,165 @@ pub async fn remove(
     tracing::info!("Database deleted: {name}");
 
     Ok(Json(serde_json::json!({ "ok": true, "name": name })))
+}
+
+/// Helper: fetch database info (name, engine, password) with ownership check.
+async fn get_db_info(
+    state: &AppState,
+    id: Uuid,
+    user_id: Uuid,
+) -> Result<(String, String, String, i32), ApiError> {
+    let row: Option<(String, String, String, Option<i32>)> = sqlx::query_as(
+        "SELECT d.name, d.engine, d.db_password_enc, d.port \
+         FROM databases d JOIN sites s ON d.site_id = s.id \
+         WHERE d.id = $1 AND s.user_id = $2",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let (name, engine, password, port) =
+        row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Database not found"))?;
+    let port = port.unwrap_or(5432);
+    Ok((name, engine, password, port))
+}
+
+/// GET /api/databases/{id}/tables — List tables in the database.
+pub async fn tables(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (name, engine, password, _port) = get_db_info(&state, id, claims.sub).await?;
+
+    let sql = match engine.as_str() {
+        "mysql" | "mariadb" => {
+            "SELECT table_name, table_type, table_rows, \
+             ROUND((data_length + index_length) / 1024, 1) AS size_kb \
+             FROM information_schema.tables WHERE table_schema = DATABASE() \
+             ORDER BY table_name"
+                .to_string()
+        }
+        _ => {
+            "SELECT t.table_name, t.table_type, \
+             pg_catalog.pg_size_pretty(pg_catalog.pg_total_relation_size(quote_ident(t.table_name))) AS size \
+             FROM information_schema.tables t \
+             WHERE t.table_schema = 'public' ORDER BY t.table_name"
+                .to_string()
+        }
+    };
+
+    let container = format!("dockpanel-db-{name}");
+    let agent_body = serde_json::json!({
+        "container": container,
+        "engine": engine,
+        "user": name,
+        "password": password,
+        "database": name,
+        "sql": sql,
+    });
+
+    state
+        .agent
+        .post("/databases/query", Some(agent_body))
+        .await
+        .map(Json)
+        .map_err(sql_error)
+}
+
+/// GET /api/databases/{id}/tables/{table} — Get table schema (columns, types).
+pub async fn table_schema(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path((id, table)): Path<(Uuid, String)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Validate table name to prevent injection
+    if table.is_empty()
+        || table.len() > 128
+        || !table
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid table name"));
+    }
+
+    let (name, engine, password, _port) = get_db_info(&state, id, claims.sub).await?;
+
+    let sql = match engine.as_str() {
+        "mysql" | "mariadb" => format!(
+            "SELECT column_name, column_type, is_nullable, column_default, column_key, extra \
+             FROM information_schema.columns \
+             WHERE table_schema = DATABASE() AND table_name = '{table}' \
+             ORDER BY ordinal_position"
+        ),
+        _ => format!(
+            "SELECT column_name, data_type, character_maximum_length, is_nullable, column_default \
+             FROM information_schema.columns \
+             WHERE table_schema = 'public' AND table_name = '{table}' \
+             ORDER BY ordinal_position"
+        ),
+    };
+
+    let container = format!("dockpanel-db-{name}");
+    let agent_body = serde_json::json!({
+        "container": container,
+        "engine": engine,
+        "user": name,
+        "password": password,
+        "database": name,
+        "sql": sql,
+    });
+
+    state
+        .agent
+        .post("/databases/query", Some(agent_body))
+        .await
+        .map(Json)
+        .map_err(sql_error)
+}
+
+#[derive(serde::Deserialize)]
+pub struct SqlQueryRequest {
+    pub sql: String,
+}
+
+/// POST /api/databases/{id}/query — Execute a SQL query.
+pub async fn query(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SqlQueryRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if body.sql.trim().is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "Query is empty"));
+    }
+    if body.sql.len() > 10_000 {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "Query too long (max 10KB)",
+        ));
+    }
+
+    let (name, engine, password, _port) = get_db_info(&state, id, claims.sub).await?;
+
+    let container = format!("dockpanel-db-{name}");
+    let agent_body = serde_json::json!({
+        "container": container,
+        "engine": engine,
+        "user": name,
+        "password": password,
+        "database": name,
+        "sql": body.sql,
+    });
+
+    state
+        .agent
+        .post("/databases/query", Some(agent_body))
+        .await
+        .map(Json)
+        .map_err(sql_error)
 }
 
 /// Find an available port using a single SQL query to find the first gap.
