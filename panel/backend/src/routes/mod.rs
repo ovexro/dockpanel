@@ -353,6 +353,18 @@ pub fn router() -> Router<AppState> {
         .route("/api/mail/storage", get(mail::mail_storage))
         // Mail: Blacklist/Reputation Check
         .route("/api/mail/blacklist-check", get(mail::blacklist_check))
+        // Mail: Rate Limiting
+        .route("/api/mail/rate-limit/set", post(mail::rate_limit_set))
+        .route("/api/mail/rate-limit/status", get(mail::rate_limit_status))
+        .route("/api/mail/rate-limit/remove", post(mail::rate_limit_remove))
+        // Mail: Backup/Restore
+        .route("/api/mail/backup", post(mail::mailbox_backup))
+        .route("/api/mail/restore", post(mail::mailbox_restore))
+        .route("/api/mail/backups", get(mail::mailbox_backups))
+        .route("/api/mail/backups/delete", post(mail::mailbox_backup_delete))
+        // Mail: TLS Enforcement
+        .route("/api/mail/tls/status", get(mail::tls_status))
+        .route("/api/mail/tls/enforce", post(mail::tls_enforce))
         // Agent Diagnostics proxy
         .route("/api/agent/diagnostics", get(system::diagnostics))
         .route("/api/agent/diagnostics/fix", post(system::diagnostics_fix))

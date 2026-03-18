@@ -66,6 +66,16 @@ pub struct QueueDeleteRequest {
     pub id: String,
 }
 
+#[derive(Deserialize)]
+struct RateLimitRequest {
+    rate: String, // e.g., "100/hour", "500/day"
+}
+
+#[derive(Deserialize)]
+struct MailboxBackupRequest {
+    email: String,
+}
+
 const VMAIL_DIR: &str = "/var/vmail";
 const POSTFIX_VIRTUAL_DOMAINS: &str = "/etc/postfix/virtual_domains";
 const POSTFIX_VIRTUAL_MAILBOX: &str = "/etc/postfix/virtual_mailbox_maps";
@@ -99,6 +109,18 @@ pub fn router() -> Router<AppState> {
         // Logs & Storage
         .route("/mail/logs", get(mail_logs))
         .route("/mail/storage", get(storage_usage))
+        // Rate Limiting
+        .route("/mail/rate-limit/set", post(rate_limit_set))
+        .route("/mail/rate-limit/status", get(rate_limit_status))
+        .route("/mail/rate-limit/remove", post(rate_limit_remove))
+        // Mailbox Backup/Restore
+        .route("/mail/backup", post(mailbox_backup))
+        .route("/mail/restore", post(mailbox_restore))
+        .route("/mail/backups", get(mailbox_backups))
+        .route("/mail/backups/delete", post(mailbox_backup_delete))
+        // TLS Enforcement
+        .route("/mail/tls/status", get(tls_status))
+        .route("/mail/tls/enforce", post(tls_enforce))
 }
 
 // ── Mail server status + installation ────────────────────────────────────
@@ -890,6 +912,229 @@ async fn storage_usage() -> Result<Json<serde_json::Value>, ApiErr> {
     }
 
     Ok(Json(serde_json::json!({ "accounts": usage })))
+}
+
+// ── Rate Limiting ───────────────────────────────────────────────────────
+
+/// POST /mail/rate-limit/set — Set global outbound rate limit.
+async fn rate_limit_set(Json(body): Json<RateLimitRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
+    if body.rate.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Rate required")); }
+
+    // Parse rate: "100/hour" → smtp_destination_rate_delay = 36s (3600/100)
+    // "500/day" → smtp_destination_rate_delay = 172s (86400/500)
+    let parts: Vec<&str> = body.rate.split('/').collect();
+    if parts.len() != 2 { return Err(err(StatusCode::BAD_REQUEST, "Rate format: N/hour or N/day")); }
+    let count: u32 = parts[0].parse().map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid count"))?;
+    if count == 0 { return Err(err(StatusCode::BAD_REQUEST, "Count must be > 0")); }
+    let period_secs: u32 = match parts[1] {
+        "hour" => 3600,
+        "day" => 86400,
+        "minute" => 60,
+        _ => return Err(err(StatusCode::BAD_REQUEST, "Period must be minute, hour, or day")),
+    };
+    let delay = period_secs / count;
+
+    // Update Postfix config
+    let main_cf = tokio::fs::read_to_string("/etc/postfix/main.cf").await.unwrap_or_default();
+    let cleaned: String = main_cf.lines()
+        .filter(|l| !l.starts_with("smtp_destination_rate_delay") && !l.starts_with("smtp_extra_recipient_limit") && !l.contains("# DockPanel rate limit"))
+        .collect::<Vec<_>>().join("\n");
+
+    let rate_config = format!("\n# DockPanel rate limit: {}\nsmtp_destination_rate_delay = {}s\nsmtp_extra_recipient_limit = {}\n", body.rate, delay, count.min(50));
+
+    write_file_atomic("/etc/postfix/main.cf", &format!("{cleaned}{rate_config}")).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Config write failed: {e}")))?;
+
+    let _ = Command::new("systemctl").args(["reload", "postfix"]).output().await;
+
+    tracing::info!("Mail rate limit set: {} (delay: {}s)", body.rate, delay);
+    Ok(ok(&format!("Rate limit set: {}", body.rate)))
+}
+
+/// GET /mail/rate-limit/status — Get current rate limit.
+async fn rate_limit_status() -> Json<serde_json::Value> {
+    let main_cf = tokio::fs::read_to_string("/etc/postfix/main.cf").await.unwrap_or_default();
+    let rate_line = main_cf.lines().find(|l| l.contains("# DockPanel rate limit:"));
+    let configured = rate_line.is_some();
+    let rate = rate_line.and_then(|l| l.split(':').nth(1)).unwrap_or("").trim().to_string();
+    Json(serde_json::json!({ "configured": configured, "rate": rate }))
+}
+
+/// POST /mail/rate-limit/remove — Remove rate limit.
+async fn rate_limit_remove() -> Result<Json<serde_json::Value>, ApiErr> {
+    let main_cf = tokio::fs::read_to_string("/etc/postfix/main.cf").await.unwrap_or_default();
+    let cleaned: String = main_cf.lines()
+        .filter(|l| !l.starts_with("smtp_destination_rate_delay") && !l.starts_with("smtp_extra_recipient_limit") && !l.contains("# DockPanel rate limit"))
+        .collect::<Vec<_>>().join("\n");
+    write_file_atomic("/etc/postfix/main.cf", &cleaned).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Config write failed: {e}")))?;
+    let _ = Command::new("systemctl").args(["reload", "postfix"]).output().await;
+    Ok(ok("Rate limit removed"))
+}
+
+// ── Mailbox Backup/Restore ──────────────────────────────────────────────
+
+/// POST /mail/backup — Create a backup of a mailbox (tar.gz of maildir).
+async fn mailbox_backup(Json(body): Json<MailboxBackupRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
+    let email = body.email.trim();
+    if email.is_empty() || !email.contains('@') { return Err(err(StatusCode::BAD_REQUEST, "Invalid email")); }
+
+    let parts: Vec<&str> = email.splitn(2, '@').collect();
+    let (user, domain) = (parts[0], parts[1]);
+    let maildir = format!("/var/vmail/{domain}/{user}");
+
+    if !Path::new(&maildir).exists() {
+        return Err(err(StatusCode::NOT_FOUND, "Mailbox directory not found"));
+    }
+
+    let backup_dir = "/var/lib/dockpanel/mail-backups";
+    tokio::fs::create_dir_all(backup_dir).await.ok();
+
+    let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let backup_file = format!("{backup_dir}/{user}_{domain}_{timestamp}.tar.gz");
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        Command::new("tar").args(["czf", &backup_file, "-C", &format!("/var/vmail/{domain}"), user]).output()
+    ).await
+        .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Backup timed out"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Backup failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Backup failed: {stderr}")));
+    }
+
+    // Get file size
+    let size = tokio::fs::metadata(&backup_file).await.map(|m| m.len()).unwrap_or(0);
+
+    tracing::info!("Mailbox backed up: {email} -> {backup_file} ({size} bytes)");
+    Ok(Json(serde_json::json!({ "ok": true, "file": backup_file, "size": size })))
+}
+
+/// POST /mail/restore — Restore a mailbox from backup.
+async fn mailbox_restore(Json(body): Json<serde_json::Value>) -> Result<Json<serde_json::Value>, ApiErr> {
+    let email = body.get("email").and_then(|v| v.as_str()).unwrap_or("");
+    let backup_file = body.get("file").and_then(|v| v.as_str()).unwrap_or("");
+
+    if email.is_empty() || !email.contains('@') { return Err(err(StatusCode::BAD_REQUEST, "Invalid email")); }
+    if backup_file.is_empty() || !backup_file.starts_with("/var/lib/dockpanel/mail-backups/") {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid backup file path"));
+    }
+    if backup_file.contains("..") { return Err(err(StatusCode::BAD_REQUEST, "Path traversal not allowed")); }
+    if !Path::new(backup_file).exists() { return Err(err(StatusCode::NOT_FOUND, "Backup file not found")); }
+
+    let parts: Vec<&str> = email.splitn(2, '@').collect();
+    let (user, domain) = (parts[0], parts[1]);
+    let maildir = format!("/var/vmail/{domain}");
+
+    // Restore
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        Command::new("tar").args(["xzf", backup_file, "-C", &maildir]).output()
+    ).await
+        .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Restore timed out"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Restore failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Restore failed: {stderr}")));
+    }
+
+    // Fix permissions
+    let _ = Command::new("chown").args(["-R", "vmail:vmail", &format!("{maildir}/{user}")]).output().await;
+
+    tracing::info!("Mailbox restored: {email} from {backup_file}");
+    Ok(ok(&format!("Mailbox {email} restored")))
+}
+
+/// GET /mail/backups — List available mailbox backups.
+async fn mailbox_backups() -> Result<Json<serde_json::Value>, ApiErr> {
+    let backup_dir = "/var/lib/dockpanel/mail-backups";
+    let mut backups = Vec::new();
+
+    let mut entries = match tokio::fs::read_dir(backup_dir).await {
+        Ok(e) => e,
+        Err(_) => return Ok(Json(serde_json::json!({ "backups": [] }))),
+    };
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.ends_with(".tar.gz") { continue; }
+        let size = entry.metadata().await.map(|m| m.len()).unwrap_or(0);
+        let path = entry.path().to_string_lossy().to_string();
+
+        // Parse email from filename: user_domain_timestamp.tar.gz
+        let parts: Vec<&str> = name.trim_end_matches(".tar.gz").rsplitn(2, '_').collect();
+        let email_hint = if parts.len() >= 2 { parts[1].replacen('_', "@", 1) } else { name.clone() };
+
+        backups.push(serde_json::json!({ "file": path, "name": name, "email": email_hint, "size": size }));
+    }
+
+    // Sort by name (timestamp in filename = chronological)
+    backups.sort_by(|a, b| b["name"].as_str().unwrap_or("").cmp(a["name"].as_str().unwrap_or("")));
+
+    Ok(Json(serde_json::json!({ "backups": backups })))
+}
+
+/// POST /mail/backups/delete — Delete a backup file.
+async fn mailbox_backup_delete(Json(body): Json<serde_json::Value>) -> Result<Json<serde_json::Value>, ApiErr> {
+    let file = body.get("file").and_then(|v| v.as_str()).unwrap_or("");
+    if file.is_empty() || !file.starts_with("/var/lib/dockpanel/mail-backups/") || file.contains("..") {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid backup file"));
+    }
+    tokio::fs::remove_file(file).await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Delete failed: {e}")))?;
+    Ok(ok("Backup deleted"))
+}
+
+// ── TLS Enforcement ─────────────────────────────────────────────────────
+
+/// GET /mail/tls/status — Check TLS configuration in Postfix and Dovecot.
+async fn tls_status() -> Json<serde_json::Value> {
+    let main_cf = tokio::fs::read_to_string("/etc/postfix/main.cf").await.unwrap_or_default();
+
+    let smtpd_tls = main_cf.lines().find(|l| l.starts_with("smtpd_tls_security_level"))
+        .and_then(|l| l.split('=').nth(1)).unwrap_or("").trim().to_string();
+    let smtp_tls = main_cf.lines().find(|l| l.starts_with("smtp_tls_security_level"))
+        .and_then(|l| l.split('=').nth(1)).unwrap_or("").trim().to_string();
+
+    // Check Dovecot SSL
+    let dovecot_conf = tokio::fs::read_to_string("/etc/dovecot/conf.d/99-dockpanel.conf").await.unwrap_or_default();
+    let dovecot_ssl = dovecot_conf.lines().find(|l| l.starts_with("ssl"))
+        .and_then(|l| l.split('=').nth(1)).unwrap_or("").trim().to_string();
+
+    Json(serde_json::json!({
+        "inbound_tls": smtpd_tls,
+        "outbound_tls": smtp_tls,
+        "dovecot_ssl": dovecot_ssl,
+        "inbound_enforced": smtpd_tls == "encrypt",
+        "outbound_enforced": smtp_tls == "encrypt",
+    }))
+}
+
+/// POST /mail/tls/enforce — Set TLS enforcement level.
+async fn tls_enforce(Json(body): Json<serde_json::Value>) -> Result<Json<serde_json::Value>, ApiErr> {
+    let inbound = body.get("inbound").and_then(|v| v.as_str()).unwrap_or("may");
+    let outbound = body.get("outbound").and_then(|v| v.as_str()).unwrap_or("may");
+
+    if !["may", "encrypt", "none"].contains(&inbound) || !["may", "encrypt", "none"].contains(&outbound) {
+        return Err(err(StatusCode::BAD_REQUEST, "Level must be 'may', 'encrypt', or 'none'"));
+    }
+
+    let main_cf = tokio::fs::read_to_string("/etc/postfix/main.cf").await.unwrap_or_default();
+    let cleaned: String = main_cf.lines()
+        .filter(|l| !l.starts_with("smtpd_tls_security_level") && !l.starts_with("smtp_tls_security_level"))
+        .collect::<Vec<_>>().join("\n");
+
+    let tls_config = format!("\nsmtpd_tls_security_level = {inbound}\nsmtp_tls_security_level = {outbound}\n");
+
+    write_file_atomic("/etc/postfix/main.cf", &format!("{cleaned}{tls_config}")).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Config write failed: {e}")))?;
+
+    let _ = Command::new("systemctl").args(["reload", "postfix"]).output().await;
+
+    tracing::info!("TLS enforcement: inbound={inbound}, outbound={outbound}");
+    Ok(ok(&format!("TLS: inbound={inbound}, outbound={outbound}")))
 }
 
 // ── Helper ──────────────────────────────────────────────────────────────
