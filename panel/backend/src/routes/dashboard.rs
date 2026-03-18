@@ -152,6 +152,28 @@ pub async fn intelligence(
     Ok(Json(result))
 }
 
+/// GET /api/dashboard/docker — Docker container summary.
+pub async fn docker_summary(
+    AuthUser(_claims): AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.get("/apps").await.ok();
+
+    let apps = result.and_then(|r| r.as_array().cloned()).unwrap_or_default();
+    let total = apps.len();
+    let running = apps
+        .iter()
+        .filter(|a| a.get("status").and_then(|s| s.as_str()) == Some("running"))
+        .count();
+    let stopped = total - running;
+
+    Ok(Json(serde_json::json!({
+        "total": total,
+        "running": running,
+        "stopped": stopped,
+    })))
+}
+
 /// GET /api/dashboard/metrics-history — Historical CPU/memory/disk data for charts.
 /// Downsampled to ~96 points (one per 15-minute bucket) for efficient chart rendering.
 pub async fn metrics_history(
