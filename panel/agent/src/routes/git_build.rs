@@ -354,6 +354,65 @@ async fn pre_build_hook(Json(body): Json<PreBuildHookRequest>) -> Result<Json<se
     })))
 }
 
+#[derive(Deserialize)]
+struct AutoDetectRequest {
+    name: String,
+    #[serde(default = "default_dockerfile")]
+    dockerfile: String,
+    #[serde(default = "default_context")]
+    build_context: String,
+}
+
+/// POST /git/auto-detect — Auto-detect language and generate Dockerfile if missing.
+async fn auto_detect(Json(body): Json<AutoDetectRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
+    if body.name.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
+
+    // Check if the original Dockerfile exists before calling auto-detect
+    let deploy_dir = format!("/var/lib/dockpanel/git/{}", body.name);
+    let context_dir = if body.build_context == "." { deploy_dir.clone() } else { format!("{deploy_dir}/{}", body.build_context) };
+    let original_exists = std::path::Path::new(&context_dir).join(&body.dockerfile).exists();
+
+    let dockerfile = git_build::auto_generate_dockerfile(&body.name, &body.dockerfile, &body.build_context)
+        .map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &e))?;
+
+    // auto_generated is true only if the original didn't exist (meaning the function created one)
+    let auto_generated = !original_exists;
+
+    Ok(Json(serde_json::json!({
+        "dockerfile": dockerfile,
+        "auto_generated": auto_generated,
+    })))
+}
+
+#[derive(Deserialize)]
+struct ComposeCheckRequest {
+    name: String,
+    #[serde(default = "default_context")]
+    build_context: String,
+}
+
+/// POST /git/compose-check — Check if repo has docker-compose.yml
+async fn compose_check(Json(body): Json<ComposeCheckRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
+    if body.name.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
+    let deploy_dir = format!("/var/lib/dockpanel/git/{}", body.name);
+    let context_dir = if body.build_context == "." { deploy_dir.clone() } else { format!("{deploy_dir}/{}", body.build_context) };
+
+    // Check for docker-compose.yml or compose.yml
+    let compose_file = ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]
+        .iter()
+        .find(|f| std::path::Path::new(&context_dir).join(f).exists())
+        .map(|f| f.to_string());
+
+    match compose_file {
+        Some(f) => {
+            let content = std::fs::read_to_string(std::path::Path::new(&context_dir).join(&f))
+                .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+            Ok(Json(serde_json::json!({ "found": true, "file": f, "content": content })))
+        }
+        None => Ok(Json(serde_json::json!({ "found": false }))),
+    }
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/git/clone", post(clone))
@@ -368,4 +427,6 @@ pub fn router() -> Router<AppState> {
         .route("/git/logs", post(container_logs))
         .route("/git/hook", post(run_hook))
         .route("/git/pre-build-hook", post(pre_build_hook))
+        .route("/git/auto-detect", post(auto_detect))
+        .route("/git/compose-check", post(compose_check))
 }
