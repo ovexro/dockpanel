@@ -65,6 +65,45 @@ pub async fn diagnostics_fix(
     Ok(Json(data))
 }
 
+/// POST /api/system/cleanup — Proxy to agent's disk cleanup (admin only).
+pub async fn disk_cleanup(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let data = state
+        .agent
+        .post("/system/cleanup", None)
+        .await
+        .map_err(|e| agent_error("Disk cleanup", e))?;
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "system.cleanup",
+        None, None, None, None,
+    ).await;
+
+    Ok(Json(data))
+}
+
+/// POST /api/system/hostname — Proxy to agent's hostname change (admin only).
+pub async fn change_hostname(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let data = state
+        .agent
+        .post("/system/hostname", Some(body))
+        .await
+        .map_err(|e| agent_error("Hostname change", e))?;
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "system.hostname_change",
+        None, None, None, None,
+    ).await;
+
+    Ok(Json(data))
+}
+
 /// GET /api/system/updates — List available package updates (admin only).
 pub async fn updates_list(
     State(state): State<AppState>,
