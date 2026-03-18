@@ -70,6 +70,26 @@ export default function Dns() {
   // Custom TTL
   const [customTtl, setCustomTtl] = useState("");
 
+  // Health Check (Feature #6)
+  const [healthCheck, setHealthCheck] = useState<any>(null);
+  const [checkingHealth, setCheckingHealth] = useState(false);
+
+  // DNSSEC Status (Feature #7)
+  const [dnssec, setDnssec] = useState<any>(null);
+
+  // Bulk Record Management (Feature #8)
+  const [selectedRecords, setSelectedRecords] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+
+  // Changelog (Feature #9)
+  const [changelog, setChangelog] = useState<any>(null);
+  const [showChangelog, setShowChangelog] = useState(false);
+  const [loadingChangelog, setLoadingChangelog] = useState(false);
+
+  // DNS Analytics (Feature #11)
+  const [analytics, setAnalytics] = useState<any>(null);
+  const [loadingAnalytics, setLoadingAnalytics] = useState(false);
+
   const loadZones = async () => {
     try {
       const data = await api.get<DnsZone[]>("/dns/zones");
@@ -87,6 +107,11 @@ export default function Dns() {
   const selectZone = async (zone: DnsZone) => {
     setSelectedZone(zone);
     setLoadingRecords(true);
+    setSelectedRecords(new Set());
+    setHealthCheck(null);
+    setShowChangelog(false);
+    setDnssec(null);
+    setAnalytics(null);
     try {
       const data = await api.get<{ records: DnsRecord[] }>(`/dns/zones/${zone.id}/records`);
       const recs = data.records || [];
@@ -97,6 +122,11 @@ export default function Dns() {
       setRecords([]);
     } finally {
       setLoadingRecords(false);
+    }
+    // Load DNSSEC & analytics for Cloudflare zones
+    if (zone.provider === "cloudflare") {
+      loadDnssec(zone.id);
+      loadAnalytics(zone.id);
     }
   };
 
@@ -324,6 +354,59 @@ export default function Dns() {
     selectZone(selectedZone);
   };
 
+  // ── Health Check (Feature #6) ──────────────────────────────────────────
+  const runHealthCheck = async () => {
+    if (!selectedZone) return;
+    setCheckingHealth(true);
+    setHealthCheck(null);
+    try {
+      const data = await api.post<any>("/dns/health-check", { domain: selectedZone.domain });
+      setHealthCheck(data);
+    } catch {
+      setMessage({ text: "Health check failed", type: "error" });
+    } finally {
+      setCheckingHealth(false);
+    }
+  };
+
+  // ── DNSSEC Status (Feature #7) ───────────────────────────────────────
+  const loadDnssec = async (zoneId: string) => {
+    try {
+      const data = await api.get<any>(`/dns/zones/${zoneId}/dnssec`);
+      setDnssec(data);
+    } catch {
+      setDnssec(null);
+    }
+  };
+
+  // ── Changelog (Feature #9) ───────────────────────────────────────────
+  const loadChangelog = async () => {
+    if (!selectedZone) return;
+    setLoadingChangelog(true);
+    try {
+      const data = await api.get<any>(`/dns/zones/${selectedZone.id}/changelog`);
+      setChangelog(data);
+      setShowChangelog(true);
+    } catch {
+      setMessage({ text: "Failed to load changelog", type: "error" });
+    } finally {
+      setLoadingChangelog(false);
+    }
+  };
+
+  // ── DNS Analytics (Feature #11) ──────────────────────────────────────
+  const loadAnalytics = async (zoneId: string) => {
+    setLoadingAnalytics(true);
+    try {
+      const data = await api.get<any>(`/dns/zones/${zoneId}/analytics`);
+      setAnalytics(data);
+    } catch {
+      setAnalytics(null);
+    } finally {
+      setLoadingAnalytics(false);
+    }
+  };
+
   // ── Filtered records ───────────────────────────────────────────────────
   const filteredRecords = records.filter(r => {
     if (recordSearch && !r.name.toLowerCase().includes(recordSearch.toLowerCase()) && !r.content.toLowerCase().includes(recordSearch.toLowerCase())) return false;
@@ -434,6 +517,13 @@ export default function Dns() {
                 <span className="block font-bold">PowerDNS</span>
                 <span className="block text-xs text-dark-300 mt-0.5">Self-hosted authoritative DNS</span>
               </button>
+              <div className="flex-1 px-4 py-3 border cursor-not-allowed opacity-60 border-dark-500 bg-dark-900">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-dark-100">AWS Route53</span>
+                  <span className="px-1.5 py-0.5 bg-dark-700 text-dark-300 rounded text-[10px] font-medium">Coming Soon</span>
+                </div>
+                <p className="text-xs text-dark-300 mt-0.5">Amazon Route53 DNS management</p>
+              </div>
             </div>
           </div>
 
@@ -594,9 +684,18 @@ export default function Dns() {
               <div className="px-4 sm:px-5 py-4 border-b border-dark-600">
                 <div className="flex items-center justify-between gap-3 flex-wrap">
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <h2 className="text-base sm:text-lg font-semibold text-dark-50 font-mono truncate">{selectedZone.domain}</h2>
                       {providerBadge(selectedZone.provider)}
+                      {dnssec && dnssec.supported && (
+                        <span className={`px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded ${
+                          dnssec.active
+                            ? "bg-rust-500/15 text-rust-400 border border-rust-500/20"
+                            : "bg-dark-700 text-dark-300 border border-dark-500"
+                        }`}>
+                          {dnssec.active ? "DNSSEC" : "No DNSSEC"}
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs text-dark-200">{records.length} record{records.length !== 1 ? "s" : ""}</p>
                   </div>
@@ -619,6 +718,31 @@ export default function Dns() {
                       className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600">
                       Templates
                     </button>
+                    <button onClick={runHealthCheck} disabled={checkingHealth}
+                      className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600 disabled:opacity-50">
+                      {checkingHealth ? "Checking..." : "Health Check"}
+                    </button>
+                    <button onClick={loadChangelog} disabled={loadingChangelog}
+                      className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600 disabled:opacity-50">
+                      {loadingChangelog ? "Loading..." : "Changelog"}
+                    </button>
+                    {selectedRecords.size > 0 && (
+                      <button disabled={bulkDeleting} onClick={async () => {
+                        if (!confirm(`Delete ${selectedRecords.size} selected records?`)) return;
+                        setBulkDeleting(true);
+                        let deleted = 0;
+                        for (const recordId of selectedRecords) {
+                          try { await api.delete(`/dns/zones/${selectedZone!.id}/records/${recordId}`); deleted++; }
+                          catch {}
+                        }
+                        setMessage({ text: `Deleted ${deleted} records`, type: "success" });
+                        setSelectedRecords(new Set());
+                        setBulkDeleting(false);
+                        selectZone(selectedZone!);
+                      }} className="px-3 py-1.5 bg-red-500/10 text-danger-400 rounded-lg text-xs font-medium hover:bg-red-500/20 disabled:opacity-50">
+                        {bulkDeleting ? "Deleting..." : `Delete ${selectedRecords.size} Selected`}
+                      </button>
+                    )}
                     <button
                       onClick={() => openRecordForm()}
                       className="px-3 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600 flex items-center gap-1"
@@ -757,6 +881,15 @@ export default function Dns() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-dark-900 text-left">
+                      <th className="w-8 px-2">
+                        <input type="checkbox"
+                          checked={selectedRecords.size === filteredRecords.length && filteredRecords.length > 0}
+                          onChange={() => {
+                            if (selectedRecords.size === filteredRecords.length) setSelectedRecords(new Set());
+                            else setSelectedRecords(new Set(filteredRecords.map(r => r.id)));
+                          }}
+                          className="w-3.5 h-3.5 accent-rust-500" />
+                      </th>
                       <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase font-mono tracking-widest w-20">Type</th>
                       <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase font-mono tracking-widest">Name</th>
                       <th className="px-4 py-2.5 text-xs font-medium text-dark-200 uppercase font-mono tracking-widest">Content</th>
@@ -770,6 +903,16 @@ export default function Dns() {
                   <tbody className="divide-y divide-dark-600">
                     {filteredRecords.map((r) => (
                       <tr key={r.id} className="hover:bg-dark-700/30 transition-colors">
+                        <td className="px-2">
+                          <input type="checkbox"
+                            checked={selectedRecords.has(r.id)}
+                            onChange={() => {
+                              const next = new Set(selectedRecords);
+                              if (next.has(r.id)) next.delete(r.id); else next.add(r.id);
+                              setSelectedRecords(next);
+                            }}
+                            className="w-3.5 h-3.5 accent-rust-500" />
+                        </td>
                         <td className="px-4 py-2.5">
                           <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${typeColor[r.type] || "bg-dark-700 text-dark-200"}`}>
                             {r.type}
@@ -809,7 +952,7 @@ export default function Dns() {
                     ))}
                     {filteredRecords.length === 0 && (
                       <tr>
-                        <td colSpan={isCloudflare ? 6 : 5} className="px-4 py-8 text-center text-dark-300 text-sm">
+                        <td colSpan={isCloudflare ? 7 : 6} className="px-4 py-8 text-center text-dark-300 text-sm">
                           {records.length === 0 ? "No DNS records found" : "No records match your search"}
                         </td>
                       </tr>
@@ -887,6 +1030,124 @@ export default function Dns() {
                     <p className={`text-xs mt-3 font-medium ${propagation.fully_propagated ? "text-rust-400" : "text-warn-400"}`}>
                       {propagation.propagated}/{propagation.total} resolvers responding
                     </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Health Check Results (Feature #6) */}
+              {healthCheck && (
+                <div className="px-4 sm:px-5 py-4 border-t border-dark-600">
+                  <div className="bg-dark-900 rounded-lg border border-dark-500 p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">
+                        Health Check: {healthCheck.domain}
+                      </h4>
+                      <button onClick={() => setHealthCheck(null)} className="text-xs text-dark-300 hover:text-dark-100">Close</button>
+                    </div>
+                    <div className="space-y-2">
+                      {healthCheck.checks?.map((c: any, i: number) => (
+                        <div key={i} className="flex items-center gap-3 text-xs">
+                          <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                            c.status === "pass" ? "bg-rust-500" :
+                            c.status === "fail" ? "bg-danger-400" :
+                            c.status === "warn" ? "bg-warn-400" : "bg-dark-400"
+                          }`} />
+                          <span className="text-dark-100 w-28 font-medium">{c.check}</span>
+                          <span className={`font-mono truncate ${
+                            c.status === "pass" ? "text-dark-200" :
+                            c.status === "fail" ? "text-danger-400" :
+                            c.status === "warn" ? "text-warn-400" : "text-dark-300"
+                          }`}>{c.detail}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <p className={`text-xs mt-3 font-medium ${
+                      healthCheck.fail === 0 ? "text-rust-400" : "text-warn-400"
+                    }`}>
+                      {healthCheck.pass}/{healthCheck.total} checks passed
+                      {healthCheck.fail > 0 && `, ${healthCheck.fail} failed`}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Changelog (Feature #9) */}
+              {showChangelog && changelog && (
+                <div className="px-4 sm:px-5 py-4 border-t border-dark-600">
+                  <div className="bg-dark-900 rounded-lg border border-dark-500 p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">
+                        DNS Changelog
+                      </h4>
+                      <button onClick={() => setShowChangelog(false)} className="text-xs text-dark-300 hover:text-dark-100">Close</button>
+                    </div>
+                    {changelog.entries?.length === 0 ? (
+                      <p className="text-xs text-dark-300">No DNS changes recorded yet.</p>
+                    ) : (
+                      <div className="space-y-2 max-h-64 overflow-y-auto">
+                        {changelog.entries?.map((entry: any, i: number) => (
+                          <div key={i} className="flex items-start gap-3 text-xs py-1.5 border-b border-dark-700 last:border-0">
+                            <span className={`shrink-0 px-1.5 py-0.5 rounded font-medium ${
+                              entry.action.includes("create") ? "bg-rust-500/15 text-rust-400" :
+                              entry.action.includes("delete") ? "bg-red-500/15 text-danger-400" :
+                              "bg-blue-500/15 text-blue-400"
+                            }`}>
+                              {entry.action.split(".").pop()}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              {entry.details && <span className="text-dark-100 font-mono">{entry.details}</span>}
+                              <span className="text-dark-300 ml-2">{entry.user}</span>
+                            </div>
+                            <span className="text-dark-400 shrink-0 font-mono">
+                              {new Date(entry.time).toLocaleString()}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* DNS Analytics (Feature #11) */}
+              {analytics && analytics.supported && analytics.available && (
+                <div className="px-4 sm:px-5 py-4 border-t border-dark-600">
+                  <div className="bg-dark-900 rounded-lg border border-dark-500 p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">
+                        DNS Analytics (24h)
+                      </h4>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4 mb-3">
+                      <div>
+                        <p className="text-xs text-dark-300">Total Queries</p>
+                        <p className="text-lg font-semibold text-dark-50 font-mono">{analytics.total_queries?.toLocaleString()}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-dark-300">Avg Response</p>
+                        <p className="text-lg font-semibold text-dark-50 font-mono">{analytics.avg_response_ms}ms</p>
+                      </div>
+                    </div>
+                    {analytics.by_type?.length > 0 && (
+                      <div>
+                        <p className="text-xs text-dark-300 mb-2">By Query Type</p>
+                        <div className="flex gap-3 flex-wrap">
+                          {analytics.by_type.map((t: any, i: number) => (
+                            <div key={i} className="px-2.5 py-1.5 bg-dark-800 rounded border border-dark-600 text-xs">
+                              <span className={`font-medium ${typeColor[t.type]?.split(" ")[1] || "text-dark-100"}`}>{t.type}</span>
+                              <span className="text-dark-300 ml-2">{t.queries?.toLocaleString()}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+              {analytics && analytics.supported && !analytics.available && (
+                <div className="px-4 sm:px-5 py-4 border-t border-dark-600">
+                  <div className="bg-dark-900 rounded-lg border border-dark-500 p-3">
+                    <p className="text-xs text-dark-300">{analytics.message || "DNS analytics not available for this zone."}</p>
                   </div>
                 </div>
               )}

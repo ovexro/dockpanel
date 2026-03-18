@@ -912,6 +912,11 @@ pub async fn delete_record(
                 return Err(err(StatusCode::UNPROCESSABLE_ENTITY, &format!("Cloudflare error: {errors}")));
             }
 
+            activity::log_activity(
+                &state.db, claims.sub, &claims.email, "dns.record.delete",
+                Some("dns"), Some(&zone.domain), None, None,
+            ).await;
+
             Ok(Json(serde_json::json!({ "ok": true })))
         }
         "powerdns" => {
@@ -974,6 +979,11 @@ pub async fn delete_record(
                 let body_text = resp.text().await.unwrap_or_default();
                 return Err(err(StatusCode::UNPROCESSABLE_ENTITY, &format!("PowerDNS error: {body_text}")));
             }
+
+            activity::log_activity(
+                &state.db, claims.sub, &claims.email, "dns.record.delete",
+                Some("dns"), Some(&zone.domain), None, None,
+            ).await;
 
             Ok(Json(serde_json::json!({ "ok": true })))
         }
@@ -1058,5 +1068,296 @@ pub async fn check_propagation(
         "propagated": propagated,
         "total": resolvers.len(),
         "fully_propagated": propagated == resolvers.len(),
+    })))
+}
+
+// ── DNS Health Check ────────────────────────────────────────────────────
+
+async fn run_dig(domain: &str, rtype: &str) -> String {
+    tokio::process::Command::new("dig")
+        .args(["+short", "+time=3", "+tries=1", rtype, domain])
+        .output()
+        .await
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+/// POST /api/dns/health-check — Run DNS health checks on a domain.
+pub async fn dns_health_check(
+    State(_state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let domain = body
+        .get("domain")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "domain required"))?;
+
+    // Validate domain
+    if domain.is_empty()
+        || domain.len() > 253
+        || !domain
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain"));
+    }
+
+    let mut checks = Vec::new();
+
+    // 1. SOA record
+    let soa = run_dig(domain, "SOA").await;
+    checks.push(serde_json::json!({
+        "check": "SOA Record",
+        "status": if !soa.is_empty() { "pass" } else { "fail" },
+        "detail": if soa.is_empty() { "No SOA record found".to_string() } else { soa },
+    }));
+
+    // 2. NS records
+    let ns = run_dig(domain, "NS").await;
+    let ns_count = ns.lines().filter(|l| !l.is_empty()).count();
+    checks.push(serde_json::json!({
+        "check": "NS Records",
+        "status": if ns_count >= 2 { "pass" } else if ns_count == 1 { "warn" } else { "fail" },
+        "detail": format!("{} nameserver(s) found", ns_count),
+    }));
+
+    // 3. A record exists
+    let a = run_dig(domain, "A").await;
+    checks.push(serde_json::json!({
+        "check": "A Record",
+        "status": if !a.is_empty() { "pass" } else { "info" },
+        "detail": if a.is_empty() { "No A record — domain won't resolve to an IP".to_string() } else { a },
+    }));
+
+    // 4. MX record
+    let mx = run_dig(domain, "MX").await;
+    checks.push(serde_json::json!({
+        "check": "MX Record",
+        "status": if !mx.is_empty() { "pass" } else { "info" },
+        "detail": if mx.is_empty() { "No MX record — domain can't receive email".to_string() } else { mx },
+    }));
+
+    // 5. SPF
+    let txt = run_dig(domain, "TXT").await;
+    let has_spf = txt.contains("v=spf1");
+    checks.push(serde_json::json!({
+        "check": "SPF Record",
+        "status": if has_spf { "pass" } else { "warn" },
+        "detail": if has_spf { "SPF configured" } else { "No SPF record — email authentication missing" },
+    }));
+
+    // 6. DNSSEC
+    let dnssec_output = tokio::process::Command::new("dig")
+        .args(["+dnssec", "+short", "DNSKEY", domain])
+        .output()
+        .await;
+    let has_dnssec = dnssec_output
+        .ok()
+        .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+        .unwrap_or(false);
+    checks.push(serde_json::json!({
+        "check": "DNSSEC",
+        "status": if has_dnssec { "pass" } else { "info" },
+        "detail": if has_dnssec { "DNSSEC is active" } else { "DNSSEC not configured (optional)" },
+    }));
+
+    let pass_count = checks.iter().filter(|c| c["status"] == "pass").count();
+    let fail_count = checks.iter().filter(|c| c["status"] == "fail").count();
+
+    Ok(Json(serde_json::json!({
+        "domain": domain,
+        "checks": checks,
+        "pass": pass_count,
+        "fail": fail_count,
+        "total": checks.len(),
+    })))
+}
+
+// ── DNSSEC Status ───────────────────────────────────────────────────────
+
+/// GET /api/dns/zones/{id}/dnssec — Get DNSSEC status for a zone.
+pub async fn dnssec_status(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let zone = get_zone(&state, id, claims.sub).await?;
+
+    if zone.provider != "cloudflare" {
+        return Ok(Json(serde_json::json!({
+            "supported": false,
+            "message": "DNSSEC management only available for Cloudflare zones",
+        })));
+    }
+
+    let token = zone.cf_api_token.as_deref().unwrap_or("");
+    let (client, headers) = cf_client(token, zone.cf_api_email.as_deref())?;
+
+    let resp = client
+        .get(&format!(
+            "{CF_API}/zones/{}/dnssec",
+            zone.cf_zone_id.as_deref().unwrap_or("")
+        ))
+        .headers(headers)
+        .send()
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
+
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
+    let result = data.get("result").cloned().unwrap_or(serde_json::json!({}));
+    let status = result
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+
+    Ok(Json(serde_json::json!({
+        "supported": true,
+        "status": status,
+        "active": status == "active",
+        "ds_record": result.get("ds").cloned(),
+        "key_tag": result.get("key_tag").cloned(),
+        "algorithm": result.get("algorithm").cloned(),
+    })))
+}
+
+// ── DNS Changelog ───────────────────────────────────────────────────────
+
+/// GET /api/dns/zones/{id}/changelog — Get DNS change history.
+pub async fn dns_changelog(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let zone = get_zone(&state, id, claims.sub).await?;
+
+    let entries: Vec<(String, String, Option<String>, chrono::DateTime<chrono::Utc>)> =
+        sqlx::query_as(
+            "SELECT action, COALESCE(user_email, ''), details, created_at FROM activity_logs \
+             WHERE action LIKE 'dns.%' AND target_name = $1 ORDER BY created_at DESC LIMIT 50",
+        )
+        .bind(&zone.domain)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+
+    let logs: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|(action, email, details, time)| {
+            serde_json::json!({
+                "action": action,
+                "user": email,
+                "details": details,
+                "time": time,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "entries": logs })))
+}
+
+// ── DNS Analytics ───────────────────────────────────────────────────────
+
+/// GET /api/dns/zones/{id}/analytics — Get DNS query analytics (Cloudflare only).
+pub async fn dns_analytics(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let zone = get_zone(&state, id, claims.sub).await?;
+
+    if zone.provider != "cloudflare" {
+        return Ok(Json(serde_json::json!({
+            "supported": false,
+            "message": "Analytics only available for Cloudflare zones",
+        })));
+    }
+
+    let token = zone.cf_api_token.as_deref().unwrap_or("");
+    let (client, headers) = cf_client(token, zone.cf_api_email.as_deref())?;
+
+    // Fetch DNS analytics for last 24 hours
+    let since = (chrono::Utc::now() - chrono::Duration::hours(24))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let until = chrono::Utc::now()
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+
+    let resp = client
+        .get(&format!(
+            "{CF_API}/zones/{}/dns_analytics/report?since={since}&until={until}&metrics=queryCount,responseTimeAvg&dimensions=queryType",
+            zone.cf_zone_id.as_deref().unwrap_or("")
+        ))
+        .headers(headers)
+        .send()
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
+
+    let status = resp.status();
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
+
+    if !status.is_success() {
+        // Analytics API might not be available on free plans
+        return Ok(Json(serde_json::json!({
+            "supported": true,
+            "available": false,
+            "message": "DNS analytics not available (may require paid Cloudflare plan)",
+        })));
+    }
+
+    let result = data
+        .get("result")
+        .cloned()
+        .unwrap_or(serde_json::json!({}));
+    let totals = result
+        .get("totals")
+        .cloned()
+        .unwrap_or(serde_json::json!({}));
+    let rows = result
+        .get("data")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let total_queries = totals
+        .get("queryCount")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let avg_response = totals
+        .get("responseTimeAvg")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+
+    let by_type: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let dims = r.get("dimensions").and_then(|v| v.as_array());
+            let metrics = r.get("metrics").and_then(|v| v.as_array());
+            serde_json::json!({
+                "type": dims.and_then(|d| d.first()).and_then(|v| v.as_str()).unwrap_or(""),
+                "queries": metrics.and_then(|m| m.first()).and_then(|v| v.as_u64()).unwrap_or(0),
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "supported": true,
+        "available": true,
+        "total_queries": total_queries,
+        "avg_response_ms": (avg_response * 1000.0).round() / 1000.0,
+        "by_type": by_type,
+        "period": "24h",
     })))
 }
