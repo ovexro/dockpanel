@@ -287,6 +287,15 @@ pub fn router() -> Router<AppState> {
         .route("/api/sites/{id}/stats", get(sites::site_stats))
         .route("/api/sites/{id}/php-errors", get(sites::php_errors))
         .route("/api/sites/{id}/health", get(sites::health_check))
+        // Site Cloning
+        .route("/api/sites/{id}/clone", post(sites::clone_site))
+        // Custom SSL Upload
+        .route("/api/sites/{id}/ssl/upload", post(sites::upload_ssl))
+        // Environment Variables
+        .route("/api/sites/{id}/env", get(sites::get_env_vars).put(sites::set_env_vars))
+        // PHP Extensions Manager
+        .route("/api/php/extensions/{version}", get(sites::php_extensions))
+        .route("/api/php/extensions/install", post(sites::install_php_extension))
         // Agent endpoints (no cookie auth — uses Bearer token from servers table)
         .route("/api/agent/version", get(agent_updates::latest_version))
         .route("/api/agent/checkin", post(agent_checkin::checkin))

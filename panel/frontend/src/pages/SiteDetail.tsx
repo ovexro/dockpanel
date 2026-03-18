@@ -94,6 +94,27 @@ export default function SiteDetail() {
   const [health, setHealth] = useState<{ healthy: boolean; status: number; response_time_ms: number } | null>(null);
   const [checkingHealth, setCheckingHealth] = useState(false);
 
+  // Site Cloning
+  const [cloning, setCloning] = useState(false);
+  const [cloneMsg, setCloneMsg] = useState("");
+
+  // Custom SSL Upload
+  const [showSslUpload, setShowSslUpload] = useState(false);
+  const [sslCert, setSslCert] = useState("");
+  const [sslKey, setSslKey] = useState("");
+  const [uploadingSsl, setUploadingSsl] = useState(false);
+
+  // PHP Extensions
+  const [phpExts, setPhpExts] = useState<{ installed: string[]; available: string[] } | null>(null);
+  const [showPhpExts, setShowPhpExts] = useState(false);
+  const [installingExt, setInstallingExt] = useState<string | null>(null);
+
+  // Environment Variables
+  const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([]);
+  const [showEnvVars, setShowEnvVars] = useState(false);
+  const [savingEnv, setSavingEnv] = useState(false);
+  const [envMsg, setEnvMsg] = useState("");
+
   const fetchStaging = () => {
     api.get<StagingInfo>(`/sites/${id}/staging`).then(setStaging).catch(() => { /* no staging */ });
   };
@@ -138,6 +159,21 @@ export default function SiteDetail() {
       const data = await api.get<any>(`/sites/${id}/stats`);
       setStats(data);
     } catch {}
+  };
+
+  const loadPhpExtensions = async () => {
+    if (!site?.php_version) return;
+    try {
+      const data = await api.get<any>(`/php/extensions/${site.php_version}`);
+      setPhpExts(data);
+    } catch {}
+  };
+
+  const loadEnvVars = async () => {
+    try {
+      const data = await api.get<{ vars: { key: string; value: string }[] }>(`/sites/${id}/env`);
+      setEnvVars(data.vars);
+    } catch { setEnvVars([]); }
   };
 
   useEffect(() => {
@@ -273,15 +309,35 @@ export default function SiteDetail() {
               </button>
             </div>
           ) : (
-            <button
-              onClick={handleDelete}
-              className="px-4 py-2 bg-red-500/10 text-danger-400 rounded-lg text-sm font-medium hover:bg-red-500/20 transition-colors"
-            >
-              Delete Site
-            </button>
+            <div className="flex items-center gap-2">
+              <button disabled={cloning} onClick={async () => {
+                const newDomain = prompt("Clone site to domain:", `clone-${site?.domain}`);
+                if (!newDomain) return;
+                setCloning(true);
+                setCloneMsg("");
+                try {
+                  await api.post(`/sites/${id}/clone`, { domain: newDomain });
+                  setCloneMsg(`Site cloned to ${newDomain}`);
+                } catch (e) { setCloneMsg(e instanceof Error ? e.message : "Clone failed"); }
+                finally { setCloning(false); }
+              }} className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 disabled:opacity-50 transition-colors">
+                {cloning ? "Cloning..." : "Clone Site"}
+              </button>
+              <button
+                onClick={handleDelete}
+                className="px-4 py-2 bg-red-500/10 text-danger-400 rounded-lg text-sm font-medium hover:bg-red-500/20 transition-colors"
+              >
+                Delete Site
+              </button>
+            </div>
           )}
         </div>
       </div>
+      {cloneMsg && (
+        <div className={`mb-4 px-4 py-3 rounded-lg text-sm ${
+          cloneMsg.includes("cloned") ? "bg-rust-500/10 text-rust-400 border border-rust-500/20" : "bg-red-500/10 text-danger-400 border border-red-500/20"
+        }`}>{cloneMsg}</div>
+      )}
 
       {/* Details */}
       <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
@@ -368,16 +424,50 @@ export default function SiteDetail() {
                   )}
                 </div>
               ) : (
-                <div className="flex items-center gap-3">
-                  <span className="text-dark-300">Not configured</span>
-                  {site.status === "active" && (
-                    <button
-                      onClick={handleProvisionSSL}
-                      disabled={provisioning}
-                      className="px-3 py-1 bg-rust-500 text-white rounded-md text-xs font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
-                    >
-                      {provisioning ? "Provisioning..." : "Enable SSL"}
-                    </button>
+                <div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-dark-300">Not configured</span>
+                    {site.status === "active" && (
+                      <>
+                        <button
+                          onClick={handleProvisionSSL}
+                          disabled={provisioning}
+                          className="px-3 py-1 bg-rust-500 text-white rounded-md text-xs font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
+                        >
+                          {provisioning ? "Provisioning..." : "Let's Encrypt"}
+                        </button>
+                        <button
+                          onClick={() => setShowSslUpload(!showSslUpload)}
+                          className="px-3 py-1 bg-dark-700 text-dark-100 rounded-md text-xs font-medium hover:bg-dark-600 transition-colors"
+                        >
+                          Upload Custom
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  {showSslUpload && (
+                    <div className="mt-3 space-y-3">
+                      <textarea value={sslCert} onChange={e => setSslCert(e.target.value)}
+                        placeholder={"-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"}
+                        rows={4} className="w-full px-3 py-2 bg-dark-900 border border-dark-500 rounded-lg text-xs font-mono text-dark-100 focus:ring-2 focus:ring-accent-500 outline-none" />
+                      <textarea value={sslKey} onChange={e => setSslKey(e.target.value)}
+                        placeholder={"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"}
+                        rows={4} className="w-full px-3 py-2 bg-dark-900 border border-dark-500 rounded-lg text-xs font-mono text-dark-100 focus:ring-2 focus:ring-accent-500 outline-none" />
+                      <button disabled={uploadingSsl || !sslCert || !sslKey} onClick={async () => {
+                        setUploadingSsl(true);
+                        setSslMessage("");
+                        try {
+                          await api.post(`/sites/${id}/ssl/upload`, { certificate: sslCert, private_key: sslKey });
+                          setSslMessage("Custom SSL certificate installed successfully!");
+                          setSslCert(""); setSslKey(""); setShowSslUpload(false);
+                          const updated = await api.get<Site>(`/sites/${id}`);
+                          setSite(updated);
+                        } catch (e) { setSslMessage(e instanceof Error ? e.message : "Upload failed"); }
+                        finally { setUploadingSsl(false); }
+                      }} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50">
+                        {uploadingSsl ? "Installing..." : "Install Certificate"}
+                      </button>
+                    </div>
                   )}
                 </div>
               )}
@@ -1248,6 +1338,90 @@ export default function SiteDetail() {
           )}
         </div>
       )}
+
+      {/* PHP Extensions */}
+      {site?.runtime === "php" && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-6">
+          <button onClick={() => { setShowPhpExts(!showPhpExts); if (!showPhpExts) loadPhpExtensions(); }}
+            className="w-full px-5 py-4 flex items-center justify-between hover:bg-dark-700/30 transition-colors">
+            <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">PHP Extensions</h2>
+            <svg className={`w-4 h-4 text-dark-300 transition-transform ${showPhpExts ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+            </svg>
+          </button>
+          {showPhpExts && phpExts && (
+            <div className="border-t border-dark-600 p-5">
+              <div className="mb-4">
+                <h4 className="text-xs text-dark-300 uppercase font-mono mb-2">Installed ({phpExts.installed.length})</h4>
+                <div className="flex flex-wrap gap-1.5">
+                  {phpExts.installed.map(ext => (
+                    <span key={ext} className="px-2 py-0.5 bg-rust-500/10 text-rust-400 rounded text-xs font-mono">{ext}</span>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <h4 className="text-xs text-dark-300 uppercase font-mono mb-2">Available to install</h4>
+                <div className="flex flex-wrap gap-1.5">
+                  {phpExts.available.filter(e => !phpExts.installed.includes(e)).map(ext => (
+                    <button key={ext} disabled={installingExt === ext} onClick={async () => {
+                      setInstallingExt(ext);
+                      try {
+                        await api.post("/php/extensions/install", { version: site?.php_version, extension: ext });
+                        loadPhpExtensions();
+                      } catch {}
+                      finally { setInstallingExt(null); }
+                    }} className="px-2 py-0.5 bg-dark-700 text-dark-200 rounded text-xs font-mono hover:bg-dark-600 disabled:opacity-50">
+                      {installingExt === ext ? "..." : ext}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Environment Variables */}
+      <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-6">
+        <button onClick={() => { setShowEnvVars(!showEnvVars); if (!showEnvVars) loadEnvVars(); }}
+          className="w-full px-5 py-4 flex items-center justify-between hover:bg-dark-700/30 transition-colors">
+          <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Environment Variables</h2>
+          <svg className={`w-4 h-4 text-dark-300 transition-transform ${showEnvVars ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+          </svg>
+        </button>
+        {showEnvVars && (
+          <div className="border-t border-dark-600 p-5 space-y-2">
+            {envVars.map((v, i) => (
+              <div key={i} className="flex gap-2">
+                <input value={v.key} onChange={e => { const n = [...envVars]; n[i] = { ...n[i], key: e.target.value }; setEnvVars(n); }}
+                  placeholder="KEY" className="w-1/3 px-2 py-1.5 bg-dark-900 border border-dark-500 rounded text-xs font-mono text-dark-100 focus:ring-2 focus:ring-accent-500 outline-none" />
+                <input value={v.value} onChange={e => { const n = [...envVars]; n[i] = { ...n[i], value: e.target.value }; setEnvVars(n); }}
+                  placeholder="value" className="flex-1 px-2 py-1.5 bg-dark-900 border border-dark-500 rounded text-xs font-mono text-dark-100 focus:ring-2 focus:ring-accent-500 outline-none" />
+                <button onClick={() => setEnvVars(envVars.filter((_, j) => j !== i))} className="text-danger-400 hover:text-danger-300 text-sm px-1">x</button>
+              </div>
+            ))}
+            <div className="flex gap-2 items-center">
+              <button onClick={() => setEnvVars([...envVars, { key: "", value: "" }])} className="text-xs text-rust-400 hover:text-rust-300">+ Add variable</button>
+              <button disabled={savingEnv} onClick={async () => {
+                setSavingEnv(true);
+                setEnvMsg("");
+                try {
+                  await api.put(`/sites/${id}/env`, { vars: envVars.filter(v => v.key) });
+                  setEnvMsg("Environment variables saved");
+                } catch (e) { setEnvMsg(e instanceof Error ? e.message : "Save failed"); }
+                finally { setSavingEnv(false); }
+              }} className="px-3 py-1 bg-rust-500 text-white rounded text-xs font-medium hover:bg-rust-600 disabled:opacity-50">
+                {savingEnv ? "Saving..." : "Save"}
+              </button>
+              {envMsg && (
+                <span className={`text-xs ${envMsg.includes("saved") ? "text-rust-400" : "text-danger-400"}`}>{envMsg}</span>
+              )}
+            </div>
+            <p className="text-xs text-dark-300">Saves to .env file in the site root. Node.js/Python apps are auto-restarted.</p>
+          </div>
+        )}
+      </div>
 
       {/* SSL message */}
       {sslMessage && (
