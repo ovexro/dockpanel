@@ -65,6 +65,8 @@ pub struct CreateSiteRequest {
     pub proxy_port: Option<i32>,
     pub php_version: Option<String>,
     pub php_preset: Option<String>,
+    /// Start command for node/python runtimes (e.g., "npm start", "gunicorn app:app")
+    pub app_command: Option<String>,
     // One-click CMS install
     pub cms: Option<String>,
     pub site_title: Option<String>,
@@ -106,10 +108,10 @@ pub async fn create(
     }
 
     let runtime = body.runtime.as_deref().unwrap_or("static");
-    if !["static", "php", "proxy"].contains(&runtime) {
+    if !["static", "php", "proxy", "node", "python"].contains(&runtime) {
         return Err(err(
             StatusCode::BAD_REQUEST,
-            "Runtime must be static, php, or proxy",
+            "Runtime must be static, php, proxy, node, or python",
         ));
     }
 
@@ -117,6 +119,14 @@ pub async fn create(
         return Err(err(
             StatusCode::BAD_REQUEST,
             "proxy_port is required for proxy runtime",
+        ));
+    }
+
+    // Node/Python require app_command
+    if (runtime == "node" || runtime == "python") && body.app_command.as_ref().map_or(true, |c| c.trim().is_empty()) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "app_command is required for node/python runtime",
         ));
     }
 
@@ -145,16 +155,33 @@ pub async fn create(
     let mut tx = state.db.begin().await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Transaction start failed: {e}")))?;
 
+    // Auto-allocate port for node/python runtimes
+    let effective_proxy_port = if (runtime == "node" || runtime == "python") && body.proxy_port.is_none() {
+        // Find first available port in 4000-4999 range
+        let row: Option<(i32,)> = sqlx::query_as(
+            "SELECT s.port FROM generate_series(5000, 5999) AS s(port) \
+             WHERE s.port NOT IN (SELECT proxy_port FROM sites WHERE proxy_port IS NOT NULL) \
+             LIMIT 1"
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        row.map(|(p,)| p)
+    } else {
+        body.proxy_port
+    };
+
     let site: Site = sqlx::query_as(
-        "INSERT INTO sites (user_id, domain, runtime, status, proxy_port, php_version, php_preset) \
-         VALUES ($1, $2, $3, 'creating', $4, $5, $6) RETURNING *",
+        "INSERT INTO sites (user_id, domain, runtime, status, proxy_port, php_version, php_preset, app_command) \
+         VALUES ($1, $2, $3, 'creating', $4, $5, $6, $7) RETURNING *",
     )
     .bind(claims.sub)
     .bind(&body.domain)
     .bind(runtime)
-    .bind(body.proxy_port)
+    .bind(effective_proxy_port)
     .bind(&body.php_version)
     .bind(body.php_preset.as_deref().unwrap_or("generic"))
+    .bind(&body.app_command)
     .fetch_one(&mut *tx)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -175,8 +202,11 @@ pub async fn create(
         "runtime": runtime,
     });
 
-    if let Some(port) = body.proxy_port {
+    if let Some(port) = effective_proxy_port {
         agent_body["proxy_port"] = serde_json::json!(port);
+    }
+    if let Some(ref cmd) = body.app_command {
+        agent_body["app_command"] = serde_json::json!(cmd);
     }
     if let Some(ref php) = body.php_version {
         agent_body["php_socket"] = serde_json::json!(format!("unix:/run/php/php{php}-fpm.sock"));

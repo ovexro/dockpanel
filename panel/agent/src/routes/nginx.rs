@@ -38,6 +38,9 @@ pub struct SiteConfig {
     pub custom_nginx: Option<String>,
     /// PHP framework preset: "laravel", "wordpress", "drupal", "joomla", "symfony", "codeigniter", "magento", "generic"
     pub php_preset: Option<String>,
+    /// App start command (for node/python runtimes)
+    #[serde(default)]
+    pub app_command: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -76,6 +79,23 @@ async fn put_site(
                 message: "Invalid domain format".into(),
             }),
         ));
+    }
+
+    // Create app service for node/python runtimes
+    if config.runtime == "node" || config.runtime == "python" {
+        if let (Some(cmd), Some(port)) = (&config.app_command, config.proxy_port) {
+            if let Err(e) = services::app_process::create_app_service(
+                &domain, cmd, port, &config.runtime,
+            ) {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(NginxResponse {
+                        success: false,
+                        message: format!("Failed to create app service: {e}"),
+                    }),
+                ));
+            }
+        }
     }
 
     // Write PHP-FPM pool config if PHP site with resource limits
@@ -247,6 +267,11 @@ async fn delete_site(
     for suffix in &["access.log", "error.log"] {
         let log_path = format!("/var/log/nginx/{domain}.{suffix}");
         std::fs::remove_file(&log_path).ok();
+    }
+
+    // App process service (Node.js/Python)
+    if let Err(e) = services::app_process::remove_app_service(&domain) {
+        tracing::warn!("Failed to remove app service for {domain}: {e}");
     }
 
     // WordPress auto-update cron
