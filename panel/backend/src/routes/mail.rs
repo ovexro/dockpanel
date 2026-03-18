@@ -1114,6 +1114,162 @@ async fn auto_delete_mail_dns(
     Ok(())
 }
 
+// ── Rspamd spam filter ───────────────────────────────────────────────────
+
+/// POST /api/mail/rspamd/install
+pub async fn rspamd_install(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.agent.post("/mail/rspamd/install", None).await
+        .map_err(|e| agent_error("Rspamd", e))?;
+    activity::log_activity(&state.db, claims.sub, &claims.email, "mail.rspamd_install", None, None, None, None).await;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// GET /api/mail/rspamd/status
+pub async fn rspamd_status(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.get("/mail/rspamd/status").await
+        .map_err(|e| agent_error("Rspamd", e))?;
+    Ok(Json(result))
+}
+
+/// POST /api/mail/rspamd/toggle
+pub async fn rspamd_toggle(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.agent.post("/mail/rspamd/toggle", Some(body)).await
+        .map_err(|e| agent_error("Rspamd", e))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ── Webmail (Roundcube) ─────────────────────────────────────────────────
+
+/// POST /api/mail/webmail/install
+pub async fn webmail_install(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.post("/mail/webmail/install", Some(body)).await
+        .map_err(|e| agent_error("Webmail", e))?;
+    activity::log_activity(&state.db, claims.sub, &claims.email, "mail.webmail_install", None, None, None, None).await;
+    Ok(Json(result))
+}
+
+/// GET /api/mail/webmail/status
+pub async fn webmail_status(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.get("/mail/webmail/status").await
+        .map_err(|e| agent_error("Webmail", e))?;
+    Ok(Json(result))
+}
+
+/// POST /api/mail/webmail/remove
+pub async fn webmail_remove(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.agent.post("/mail/webmail/remove", None).await
+        .map_err(|e| agent_error("Webmail", e))?;
+    activity::log_activity(&state.db, claims.sub, &claims.email, "mail.webmail_remove", None, None, None, None).await;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ── SMTP Relay ──────────────────────────────────────────────────────────
+
+/// POST /api/mail/relay/configure
+pub async fn relay_configure(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.agent.post("/mail/relay/configure", Some(body)).await
+        .map_err(|e| agent_error("SMTP relay", e))?;
+    activity::log_activity(&state.db, claims.sub, &claims.email, "mail.relay_configure", None, None, None, None).await;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// GET /api/mail/relay/status
+pub async fn relay_status(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.get("/mail/relay/status").await
+        .map_err(|e| agent_error("SMTP relay", e))?;
+    Ok(Json(result))
+}
+
+/// POST /api/mail/relay/remove
+pub async fn relay_remove(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.agent.post("/mail/relay/remove", None).await
+        .map_err(|e| agent_error("SMTP relay", e))?;
+    activity::log_activity(&state.db, claims.sub, &claims.email, "mail.relay_remove", None, None, None, None).await;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ── Blacklist / Reputation Check ────────────────────────────────────────
+
+/// GET /api/mail/blacklist-check — Check server IP against email blacklists.
+pub async fn blacklist_check(
+    State(_state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Get server IP
+    let ip = reqwest::Client::new()
+        .get("https://api.ipify.org")
+        .timeout(std::time::Duration::from_secs(5))
+        .send().await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("IP lookup failed: {e}")))?
+        .text().await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?
+        .trim().to_string();
+
+    // Reverse the IP for DNSBL lookup
+    let reversed: String = ip.split('.').rev().collect::<Vec<_>>().join(".");
+
+    let blacklists = vec![
+        ("zen.spamhaus.org", "Spamhaus"),
+        ("bl.spamcop.net", "SpamCop"),
+        ("b.barracudacentral.org", "Barracuda"),
+        ("dnsbl.sorbs.net", "SORBS"),
+        ("spam.dnsbl.sorbs.net", "SORBS Spam"),
+        ("cbl.abuseat.org", "CBL"),
+        ("dnsbl-1.uceprotect.net", "UCEPROTECT L1"),
+        ("psbl.surriel.com", "PSBL"),
+    ];
+
+    let mut results = Vec::new();
+    for (rbl, name) in &blacklists {
+        let query = format!("{reversed}.{rbl}");
+        let listed = tokio::net::lookup_host(format!("{query}:0")).await.is_ok();
+        results.push(serde_json::json!({
+            "rbl": rbl,
+            "name": name,
+            "listed": listed,
+        }));
+    }
+
+    let listed_count = results.iter().filter(|r| r["listed"].as_bool() == Some(true)).count();
+
+    Ok(Json(serde_json::json!({
+        "ip": ip,
+        "results": results,
+        "listed_count": listed_count,
+        "clean": listed_count == 0,
+    })))
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 /// Sync all mail config to agent (rebuild Postfix/Dovecot maps)
