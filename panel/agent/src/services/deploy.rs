@@ -15,7 +15,7 @@ pub struct DeployResult {
 /// Validate and build GIT_SSH_COMMAND for deploy key authentication.
 /// Only allows keys stored under the deploy-keys directory. Uses strict host key checking
 /// with the system known_hosts file instead of blindly accepting all hosts.
-fn ssh_command(key_path: &str) -> Result<String, String> {
+pub(crate) fn ssh_command(key_path: &str) -> Result<String, String> {
     // Reject paths containing ".."
     if key_path.contains("..") {
         return Err("Deploy key path must not contain '..'".into());

@@ -42,6 +42,9 @@ export default function Settings() {
   const [smtpEncryption, setSmtpEncryption] = useState("starttls");
   const [testingEmail, setTestingEmail] = useState(false);
 
+  // Update count for tab badge
+  const [updateCount, setUpdateCount] = useState(0);
+
   // 2FA state
   const [twoFaEnabled, setTwoFaEnabled] = useState(false);
   const [twoFaSetup, setTwoFaSetup] = useState<{ secret: string; qr_svg: string } | null>(null);
@@ -154,6 +157,9 @@ export default function Settings() {
     loadDestinations();
     load2faStatus();
     loadNotifyChannels();
+    api.get<{ count: number }>("/system/updates/count")
+      .then((d) => setUpdateCount(d.count))
+      .catch(() => {});
     healthTimer.current = setInterval(loadHealth, 30000);
     return () => clearInterval(healthTimer.current);
   }, []);
@@ -270,7 +276,7 @@ export default function Settings() {
         <p className="text-sm text-dark-200 font-mono mt-1">Manage panel configuration</p>
       </div>
 
-      <div className="flex gap-1 mb-6 border-b border-dark-600 pb-1 overflow-x-auto">
+      <div className="flex gap-1 mb-6 border-b border-dark-600 pb-1 pt-3 overflow-x-auto">
         {[
           { id: "general", label: "General" },
           { id: "email", label: "Email" },
@@ -282,9 +288,16 @@ export default function Settings() {
           { id: "users", label: "Users" },
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
-            className={`px-3 py-2 text-sm font-medium rounded-t-lg transition-colors whitespace-nowrap shrink-0 ${
+            className={`relative px-3 py-2 text-sm font-medium rounded-t-lg transition-colors whitespace-nowrap shrink-0 ${
               tab === t.id ? "text-rust-400 border-b-2 border-rust-400" : "text-dark-300 hover:text-dark-100"
-            }`}>{t.label}</button>
+            }`}>
+            {t.label}
+            {t.id === "updates" && updateCount > 0 && (
+              <span className="absolute -top-1 -right-1 px-1.5 py-0.5 text-[10px] font-bold bg-red-500 text-white rounded-full min-w-[18px] text-center leading-none">
+                {updateCount}
+              </span>
+            )}
+          </button>
         ))}
       </div>
 

@@ -65,6 +65,7 @@ const Terminal = lazyRetry(() => import("./pages/Terminal"));
 const Backups = lazyRetry(() => import("./pages/Backups"));
 const Crons = lazyRetry(() => import("./pages/Crons"));
 const Deploy = lazyRetry(() => import("./pages/Deploy"));
+const GitDeploys = lazyRetry(() => import("./pages/GitDeploys"));
 const Dns = lazyRetry(() => import("./pages/Dns"));
 const WordPress = lazyRetry(() => import("./pages/WordPress"));
 const Logs = lazyRetry(() => import("./pages/Logs"));
@@ -100,6 +101,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/terminal" element={<Terminal />} />
               <Route path="/logs" element={<Logs />} />
               <Route path="/apps" element={<Apps />} />
+              <Route path="/git-deploys" element={<GitDeploys />} />
               <Route path="/security" element={<Security />} />
               <Route path="/diagnostics" element={<Navigate to="/security" replace />} />
               <Route path="/settings" element={<Settings />} />

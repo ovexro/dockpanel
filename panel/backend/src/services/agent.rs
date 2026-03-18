@@ -235,4 +235,32 @@ impl AgentClient {
     ) -> Result<serde_json::Value, AgentError> {
         self.request("POST", path, body).await
     }
+
+    /// POST with a custom timeout (seconds). Use for long-running operations like docker build.
+    pub async fn post_long(
+        &self,
+        path: &str,
+        body: Option<serde_json::Value>,
+        timeout_secs: u64,
+    ) -> Result<serde_json::Value, AgentError> {
+        self.check_circuit_breaker()?;
+        let _permit = self.semaphore.acquire().await.map_err(|e| {
+            AgentError::Connection(format!("connection semaphore closed: {e}"))
+        })?;
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(timeout_secs),
+            self.request_inner("POST", path, body),
+        )
+        .await
+        .map_err(|_| AgentError::Request(format!("agent request timed out after {timeout_secs}s")))?;
+
+        match &result {
+            Ok(_) => self.record_success(),
+            Err(AgentError::Connection(_)) => self.record_failure(),
+            _ => {}
+        }
+
+        result
+    }
 }
