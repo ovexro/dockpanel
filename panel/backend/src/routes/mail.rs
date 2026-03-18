@@ -1371,6 +1371,113 @@ pub async fn blacklist_check(
     })))
 }
 
+// ── Rate Limiting ───────────────────────────────────────────────────────
+
+/// POST /api/mail/rate-limit/set
+pub async fn rate_limit_set(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.agent.post("/mail/rate-limit/set", Some(body)).await
+        .map_err(|e| agent_error("Rate limit", e))?;
+    activity::log_activity(&state.db, claims.sub, &claims.email, "mail.rate_limit_set", None, None, None, None).await;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// GET /api/mail/rate-limit/status
+pub async fn rate_limit_status(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.get("/mail/rate-limit/status").await
+        .map_err(|e| agent_error("Rate limit", e))?;
+    Ok(Json(result))
+}
+
+/// POST /api/mail/rate-limit/remove
+pub async fn rate_limit_remove(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.agent.post("/mail/rate-limit/remove", None).await
+        .map_err(|e| agent_error("Rate limit", e))?;
+    activity::log_activity(&state.db, claims.sub, &claims.email, "mail.rate_limit_remove", None, None, None, None).await;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ── Mailbox Backup/Restore ──────────────────────────────────────────────
+
+/// POST /api/mail/backup
+pub async fn mailbox_backup(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.post("/mail/backup", Some(body)).await
+        .map_err(|e| agent_error("Mailbox backup", e))?;
+    activity::log_activity(&state.db, claims.sub, &claims.email, "mail.backup", None, None, None, None).await;
+    Ok(Json(result))
+}
+
+/// POST /api/mail/restore
+pub async fn mailbox_restore(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.post("/mail/restore", Some(body)).await
+        .map_err(|e| agent_error("Mailbox restore", e))?;
+    activity::log_activity(&state.db, claims.sub, &claims.email, "mail.restore", None, None, None, None).await;
+    Ok(Json(result))
+}
+
+/// GET /api/mail/backups
+pub async fn mailbox_backups(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.get("/mail/backups").await
+        .map_err(|e| agent_error("Mailbox backups", e))?;
+    Ok(Json(result))
+}
+
+/// POST /api/mail/backups/delete
+pub async fn mailbox_backup_delete(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.agent.post("/mail/backups/delete", Some(body)).await
+        .map_err(|e| agent_error("Delete backup", e))?;
+    activity::log_activity(&state.db, claims.sub, &claims.email, "mail.backup_delete", None, None, None, None).await;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ── TLS Enforcement ─────────────────────────────────────────────────────
+
+/// GET /api/mail/tls/status
+pub async fn tls_status(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.get("/mail/tls/status").await
+        .map_err(|e| agent_error("TLS status", e))?;
+    Ok(Json(result))
+}
+
+/// POST /api/mail/tls/enforce
+pub async fn tls_enforce(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.agent.post("/mail/tls/enforce", Some(body)).await
+        .map_err(|e| agent_error("TLS enforce", e))?;
+    activity::log_activity(&state.db, claims.sub, &claims.email, "mail.tls_enforce", None, None, None, None).await;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 /// Sync all mail config to agent (rebuild Postfix/Dovecot maps)
