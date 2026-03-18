@@ -144,6 +144,15 @@ export default function Terminal() {
   const [searchTerm, setSearchTerm] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  // SSH Info panel
+  const [showSshInfo, setShowSshInfo] = useState(false);
+
+  // Terminal Recording
+  const [recording, setRecording] = useState(false);
+  const recordingRef = useRef(false);
+  const recordingData = useRef<{ time: number; data: string }[]>([]);
+  const recordingStart = useRef<number>(0);
+
   // Persist font size
   useEffect(() => {
     localStorage.setItem("dp-terminal-font", fontSize.toString());
@@ -251,6 +260,10 @@ export default function Terminal() {
 
         ws.onmessage = (event) => {
           term.write(event.data);
+          // Capture output for recording (use ref to avoid stale closure)
+          if (recordingRef.current) {
+            recordingData.current.push({ time: Date.now(), data: event.data });
+          }
         };
 
         ws.onclose = () => {
@@ -367,6 +380,52 @@ export default function Terminal() {
       searchAddonRef.current.findNext(searchTerm);
     } else {
       searchAddonRef.current.findPrevious(searchTerm);
+    }
+  };
+
+  const toggleRecording = () => {
+    if (recording) {
+      // Stop and download
+      const cast = {
+        version: 2,
+        width: xtermRef.current?.cols || 80,
+        height: xtermRef.current?.rows || 24,
+        timestamp: Math.floor(recordingStart.current / 1000),
+        env: { SHELL: "/bin/bash", TERM: "xterm-256color" },
+      };
+      const header = JSON.stringify(cast);
+      const events = recordingData.current
+        .map((e) =>
+          JSON.stringify([
+            (e.time - recordingStart.current) / 1000,
+            "o",
+            e.data,
+          ])
+        )
+        .join("\n");
+      const content = header + "\n" + events;
+
+      const blob = new Blob([content], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `terminal-${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.cast`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      recordingData.current = [];
+      recordingRef.current = false;
+      setRecording(false);
+      setStatus("Recording saved");
+      setTimeout(() => setStatus(""), 2000);
+    } else {
+      // Start recording
+      recordingData.current = [];
+      recordingStart.current = Date.now();
+      recordingRef.current = true;
+      setRecording(true);
+      setStatus("Recording started...");
+      setTimeout(() => setStatus(""), 2000);
     }
   };
 
@@ -489,6 +548,81 @@ export default function Terminal() {
               </label>
             )}
 
+            {/* Copy Output */}
+            <button
+              onClick={() => {
+                if (xtermRef.current) {
+                  const buffer = xtermRef.current.buffer.active;
+                  let text = "";
+                  for (let i = 0; i < buffer.length; i++) {
+                    const line = buffer.getLine(i);
+                    if (line) text += line.translateToString(true) + "\n";
+                  }
+                  navigator.clipboard.writeText(text.trimEnd());
+                  setStatus("Terminal output copied to clipboard");
+                  setTimeout(() => setStatus(""), 2000);
+                }
+              }}
+              className="px-2 py-1 bg-dark-700 text-dark-200 rounded text-xs hover:bg-dark-600 transition-colors"
+              title="Copy all terminal output"
+            >
+              Copy Output
+            </button>
+
+            {/* Share */}
+            <button
+              onClick={async () => {
+                if (!xtermRef.current) return;
+                const buffer = xtermRef.current.buffer.active;
+                let text = "";
+                for (let i = 0; i < buffer.length; i++) {
+                  const line = buffer.getLine(i);
+                  if (line) text += line.translateToString(true) + "\n";
+                }
+                try {
+                  const result = await api.post<{
+                    share_id: string;
+                    url: string;
+                  }>("/terminal/share", { content: text.trimEnd() });
+                  const url = `${window.location.origin}${result.url}`;
+                  navigator.clipboard.writeText(url);
+                  setStatus("Share link copied! Expires in 1 hour");
+                  setTimeout(() => setStatus(""), 3000);
+                } catch {
+                  setError("Failed to create share link");
+                }
+              }}
+              className="px-2 py-1 bg-dark-700 text-dark-200 rounded text-xs hover:bg-dark-600 transition-colors"
+              title="Share terminal output (1hr link)"
+            >
+              Share
+            </button>
+
+            {/* SSH Info */}
+            <button
+              onClick={() => setShowSshInfo(!showSshInfo)}
+              className={`px-2 py-1 rounded text-xs transition-colors ${
+                showSshInfo
+                  ? "bg-rust-500/20 text-rust-400 border border-rust-500/30"
+                  : "bg-dark-700 text-dark-200 hover:bg-dark-600"
+              }`}
+            >
+              SSH Info
+            </button>
+
+            {/* Record */}
+            <button
+              onClick={toggleRecording}
+              className={`px-2 py-1 rounded text-xs transition-colors ${
+                recording
+                  ? "bg-danger-400/20 text-danger-400 animate-pulse"
+                  : "bg-dark-700 text-dark-200 hover:bg-dark-600"
+              }`}
+              title={recording ? "Stop recording and download .cast file" : "Record terminal session (asciinema format)"}
+            >
+              {recording ? "Stop Rec" : "Record"}
+            </button>
+
             {/* Reconnect */}
             <button
               onClick={() => connect(selectedSite || undefined)}
@@ -559,6 +693,66 @@ export default function Terminal() {
                 {s.label}
               </button>
             ))}
+          </div>
+        )}
+
+        {/* SSH Info panel */}
+        {showSshInfo && (
+          <div className="px-3 py-2 bg-dark-900 border-b border-dark-600 space-y-1.5 shrink-0">
+            <p className="text-xs text-dark-300 uppercase font-mono tracking-widest mb-1">
+              SSH Connection
+            </p>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-dark-300 w-16">Host:</span>
+              <code className="text-dark-100 font-mono bg-dark-700 px-2 py-0.5 rounded">
+                {window.location.hostname}
+              </code>
+              <button
+                onClick={() =>
+                  navigator.clipboard.writeText(window.location.hostname)
+                }
+                className="text-dark-400 hover:text-dark-100"
+              >
+                Copy
+              </button>
+            </div>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-dark-300 w-16">Port:</span>
+              <code className="text-dark-100 font-mono bg-dark-700 px-2 py-0.5 rounded">
+                22
+              </code>
+            </div>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-dark-300 w-16">User:</span>
+              <code className="text-dark-100 font-mono bg-dark-700 px-2 py-0.5 rounded">
+                root
+              </code>
+            </div>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-dark-300 w-16">Command:</span>
+              <code className="text-dark-100 font-mono bg-dark-700 px-2 py-0.5 rounded">
+                ssh root@{window.location.hostname}
+              </code>
+              <button
+                onClick={() =>
+                  navigator.clipboard.writeText(
+                    `ssh root@${window.location.hostname}`
+                  )
+                }
+                className="text-dark-400 hover:text-dark-100"
+              >
+                Copy
+              </button>
+            </div>
+            {selectedSite && (
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-dark-300 w-16">Site dir:</span>
+                <code className="text-dark-100 font-mono bg-dark-700 px-2 py-0.5 rounded">
+                  /var/www/
+                  {sites.find((s) => s.id === selectedSite)?.domain || ""}
+                </code>
+              </div>
+            )}
           </div>
         )}
 

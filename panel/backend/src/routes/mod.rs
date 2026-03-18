@@ -148,6 +148,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/sites/{id}/logs/search", get(logs::search_site_logs))
         // Terminal
         .route("/api/terminal/token", get(terminal::ws_token))
+        .route("/api/terminal/share", post(terminal::share_output))
         // Databases
         .route("/api/databases", get(databases::list).post(databases::create))
         .route("/api/databases/{id}", delete(databases::remove))
@@ -286,6 +287,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/billing/portal", post(billing::customer_portal))
         // Public endpoints (no auth)
         .route("/api/status-page", get(monitors::status_page))
+        .route("/api/terminal/shared/{id}", get(terminal::view_shared))
         // Heartbeat endpoint (no auth — monitor validates by ID)
         .route("/api/heartbeat/{monitor_id}/{token}", post(monitors::heartbeat))
         // Webhooks (no auth — validated by secret/signature)
