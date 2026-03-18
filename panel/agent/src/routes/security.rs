@@ -166,6 +166,19 @@ async fn login_audit() -> Result<Json<serde_json::Value>, ApiErr> {
     Ok(Json(serde_json::json!({ "entries": entries })))
 }
 
+/// POST /security/panel-jail/setup — Create DockPanel Fail2Ban jail.
+async fn setup_panel_jail() -> Result<Json<serde_json::Value>, ApiErr> {
+    security::setup_panel_jail().await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+/// GET /security/panel-jail/status — Check if panel jail exists.
+async fn panel_jail_status() -> Json<serde_json::Value> {
+    let active = security::panel_jail_status().await;
+    Json(serde_json::json!({ "active": active }))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/security/overview", get(overview))
@@ -183,4 +196,6 @@ pub fn router() -> Router<AppState> {
         .route("/security/fail2ban/{jail}/banned", get(fail2ban_banned))
         .route("/security/fix", post(apply_fix))
         .route("/security/login-audit", get(login_audit))
+        .route("/security/panel-jail/setup", post(setup_panel_jail))
+        .route("/security/panel-jail/status", get(panel_jail_status))
 }

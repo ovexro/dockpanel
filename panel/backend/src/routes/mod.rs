@@ -207,6 +207,11 @@ pub fn router() -> Router<AppState> {
         .route("/api/security/fix", post(security::apply_security_fix))
         // Login Audit
         .route("/api/security/login-audit", get(security::login_audit))
+        // Panel Fail2Ban Jail
+        .route("/api/security/panel-jail/setup", post(security::setup_panel_jail))
+        .route("/api/security/panel-jail/status", get(security::panel_jail_status))
+        // Security Compliance Report
+        .route("/api/security/report", get(security::compliance_report))
         // Security Scanning
         .route("/api/security/scan", post(security_scans::trigger_scan))
         .route("/api/security/scans", get(security_scans::list_scans))
