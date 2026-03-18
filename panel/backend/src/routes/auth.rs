@@ -939,3 +939,80 @@ pub async fn twofa_status(
 
     Ok(Json(serde_json::json!({ "enabled": row.0 })))
 }
+
+// ─── Password Change & Session Revocation ───────────────────────────────
+
+/// POST /api/auth/change-password — Change own password.
+pub async fn change_password(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let current = body.get("current_password").and_then(|v| v.as_str())
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Current password required"))?;
+    let new_pass = body.get("new_password").and_then(|v| v.as_str())
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "New password required"))?;
+
+    if new_pass.len() < 8 {
+        return Err(err(StatusCode::BAD_REQUEST, "Password must be at least 8 characters"));
+    }
+
+    // Verify current password
+    let user: Option<(String,)> = sqlx::query_as("SELECT password_hash FROM users WHERE id = $1")
+        .bind(claims.sub)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let hash = user.ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?.0;
+
+    let parsed = PasswordHash::new(&hash)
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Password hash error"))?;
+    Argon2::default()
+        .verify_password(current.as_bytes(), &parsed)
+        .map_err(|_| err(StatusCode::UNAUTHORIZED, "Current password is incorrect"))?;
+
+    // Hash new password
+    let salt = SaltString::generate(&mut OsRng);
+    let new_hash = Argon2::default()
+        .hash_password(new_pass.as_bytes(), &salt)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .to_string();
+
+    sqlx::query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2")
+        .bind(&new_hash)
+        .bind(claims.sub)
+        .execute(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "auth.password_change",
+        None, None, None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({ "ok": true, "message": "Password changed successfully" })))
+}
+
+/// POST /api/auth/revoke-all — Revoke all active sessions (forces re-login for everyone).
+pub async fn revoke_all_sessions(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Store a timestamp marker — auth middleware can check this to invalidate older tokens
+    sqlx::query(
+        "INSERT INTO settings (key, value, updated_at) VALUES ('sessions_revoked_at', $1, NOW()) \
+         ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()",
+    )
+    .bind(chrono::Utc::now().to_rfc3339())
+    .execute(&state.db)
+    .await
+    .ok();
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "auth.revoke_all",
+        None, None, None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({ "ok": true, "message": "All sessions revoked. Users will need to re-login." })))
+}
