@@ -243,6 +243,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/dns/zones/{id}", delete(dns::delete_zone))
         .route("/api/dns/zones/{id}/records", get(dns::list_records).post(dns::create_record))
         .route("/api/dns/zones/{id}/records/{record_id}", put(dns::update_record).delete(dns::delete_record))
+        .route("/api/dns/propagation", post(dns::check_propagation))
         // WordPress Management
         .route("/api/sites/{id}/wordpress", get(wordpress::info))
         .route("/api/sites/{id}/wordpress/install", post(wordpress::install))

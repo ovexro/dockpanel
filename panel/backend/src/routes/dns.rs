@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{err, agent_error, ApiError};
+use crate::error::{err, agent_error, require_admin, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -979,4 +979,84 @@ pub async fn delete_record(
         }
         _ => Err(err(StatusCode::BAD_REQUEST, "Unknown DNS provider")),
     }
+}
+
+/// POST /api/dns/propagation — Check DNS propagation across multiple public resolvers.
+pub async fn check_propagation(
+    State(_state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+
+    let name = body
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "name required"))?;
+    let rtype = body
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("A");
+
+    // Validate inputs to prevent command injection
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
+    {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid DNS name"));
+    }
+    let valid_types = ["A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV", "CAA"];
+    if !valid_types.contains(&rtype) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid record type"));
+    }
+
+    let resolvers: &[(&str, &str)] = &[
+        ("8.8.8.8", "Google"),
+        ("1.1.1.1", "Cloudflare"),
+        ("9.9.9.9", "Quad9"),
+        ("208.67.222.222", "OpenDNS"),
+        ("8.26.56.26", "Comodo"),
+    ];
+
+    let mut results = Vec::new();
+
+    for (ip, label) in resolvers {
+        let output = tokio::process::Command::new("dig")
+            .args([
+                &format!("@{ip}"),
+                "+short",
+                "+time=3",
+                "+tries=1",
+                rtype,
+                name,
+            ])
+            .output()
+            .await;
+
+        let value = output
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+
+        results.push(serde_json::json!({
+            "resolver": ip,
+            "label": label,
+            "value": if value.is_empty() { "No response".to_string() } else { value.clone() },
+            "found": !value.is_empty(),
+        }));
+    }
+
+    let propagated = results
+        .iter()
+        .filter(|r| r["found"].as_bool() == Some(true))
+        .count();
+
+    Ok(Json(serde_json::json!({
+        "name": name,
+        "type": rtype,
+        "results": results,
+        "propagated": propagated,
+        "total": resolvers.len(),
+        "fully_propagated": propagated == resolvers.len(),
+    })))
 }
