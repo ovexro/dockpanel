@@ -36,6 +36,7 @@ pub struct SecurityOverview {
     pub fail2ban_banned_total: u32,
     pub ssh_port: u16,
     pub ssh_password_auth: bool,
+    pub ssh_root_login: bool,
     pub ssl_certs_count: usize,
 }
 
@@ -304,15 +305,16 @@ pub async fn get_fail2ban_status() -> Result<Fail2banStatus, String> {
 }
 
 /// Read SSH configuration values from /etc/ssh/sshd_config.
-/// Returns (port, password_auth_enabled).
-async fn parse_ssh_config() -> (u16, bool) {
+/// Returns (port, password_auth_enabled, root_login_enabled).
+pub async fn parse_ssh_config() -> (u16, bool, bool) {
     let content = match tokio::fs::read_to_string("/etc/ssh/sshd_config").await {
         Ok(c) => c,
-        Err(_) => return (22, true), // defaults
+        Err(_) => return (22, true, true), // defaults
     };
 
     let mut port: u16 = 22;
     let mut password_auth = true;
+    let mut root_login = true;
 
     for line in content.lines() {
         let trimmed = line.trim();
@@ -335,11 +337,14 @@ async fn parse_ssh_config() -> (u16, bool) {
             "PasswordAuthentication" => {
                 password_auth = parts[1].eq_ignore_ascii_case("yes");
             }
+            "PermitRootLogin" => {
+                root_login = !parts[1].eq_ignore_ascii_case("no");
+            }
             _ => {}
         }
     }
 
-    (port, password_auth)
+    (port, password_auth, root_login)
 }
 
 /// Count SSL certificate directories in /etc/dockpanel/ssl/.
@@ -390,6 +395,202 @@ pub async fn get_security_overview() -> Result<SecurityOverview, String> {
         fail2ban_banned_total: banned_total,
         ssh_port: ssh.0,
         ssh_password_auth: ssh.1,
+        ssh_root_login: ssh.2,
         ssl_certs_count: ssl,
     })
+}
+
+/// Disable SSH password authentication (set PasswordAuthentication no in sshd_config).
+pub async fn disable_ssh_password_auth() -> Result<(), String> {
+    modify_sshd_config("PasswordAuthentication", "no").await?;
+    restart_sshd().await
+}
+
+/// Enable SSH password authentication.
+pub async fn enable_ssh_password_auth() -> Result<(), String> {
+    modify_sshd_config("PasswordAuthentication", "yes").await?;
+    restart_sshd().await
+}
+
+/// Disable root SSH login (set PermitRootLogin no in sshd_config).
+pub async fn disable_ssh_root_login() -> Result<(), String> {
+    modify_sshd_config("PermitRootLogin", "no").await?;
+    restart_sshd().await
+}
+
+/// Change SSH port.
+pub async fn change_ssh_port(port: u16) -> Result<(), String> {
+    if port == 0 || port > 65535 {
+        return Err("Invalid port".into());
+    }
+    modify_sshd_config("Port", &port.to_string()).await?;
+    // Add firewall rule for new port before restarting
+    let _ = Command::new("ufw").args(["allow", &format!("{port}/tcp")]).output().await;
+    restart_sshd().await
+}
+
+/// Modify a single directive in /etc/ssh/sshd_config.
+/// If the directive exists (commented or not), replace it. Otherwise append.
+async fn modify_sshd_config(key: &str, value: &str) -> Result<(), String> {
+    let config_path = "/etc/ssh/sshd_config";
+    let content = tokio::fs::read_to_string(config_path).await
+        .map_err(|e| format!("Failed to read sshd_config: {e}"))?;
+
+    let mut found = false;
+    let mut new_lines: Vec<String> = Vec::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        // Match both active and commented-out directives
+        if trimmed.starts_with(key) || trimmed.starts_with(&format!("#{key}")) || trimmed.starts_with(&format!("# {key}")) {
+            new_lines.push(format!("{key} {value}"));
+            found = true;
+        } else {
+            new_lines.push(line.to_string());
+        }
+    }
+
+    if !found {
+        new_lines.push(format!("{key} {value}"));
+    }
+
+    let new_content = new_lines.join("\n") + "\n";
+
+    // Atomic write
+    let tmp_path = format!("{config_path}.tmp");
+    tokio::fs::write(&tmp_path, &new_content).await
+        .map_err(|e| format!("Failed to write sshd_config: {e}"))?;
+    tokio::fs::rename(&tmp_path, config_path).await
+        .map_err(|e| format!("Failed to rename sshd_config: {e}"))?;
+
+    tracing::info!("SSH config updated: {key} {value}");
+    Ok(())
+}
+
+/// Restart sshd service.
+async fn restart_sshd() -> Result<(), String> {
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        Command::new("systemctl").args(["restart", "sshd"]).output(),
+    ).await
+        .map_err(|_| "sshd restart timed out".to_string())?
+        .map_err(|e| format!("Failed to restart sshd: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("sshd restart failed: {stderr}"));
+    }
+    tracing::info!("sshd restarted");
+    Ok(())
+}
+
+/// Unban an IP from a specific fail2ban jail.
+pub async fn fail2ban_unban(jail: &str, ip: &str) -> Result<(), String> {
+    // Validate jail name (alphanumeric + hyphens only)
+    if !jail.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err("Invalid jail name".into());
+    }
+    // Validate IP (basic check)
+    if ip.is_empty() || !ip.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ':') {
+        return Err("Invalid IP address".into());
+    }
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        Command::new("fail2ban-client").args(["set", jail, "unbanip", ip]).output(),
+    ).await
+        .map_err(|_| "fail2ban-client timed out".to_string())?
+        .map_err(|e| format!("fail2ban-client failed: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Unban failed: {stderr}"));
+    }
+    tracing::info!("Unbanned {ip} from jail {jail}");
+    Ok(())
+}
+
+/// Ban an IP in a specific fail2ban jail.
+pub async fn fail2ban_ban(jail: &str, ip: &str) -> Result<(), String> {
+    if !jail.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err("Invalid jail name".into());
+    }
+    if ip.is_empty() || !ip.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ':') {
+        return Err("Invalid IP address".into());
+    }
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        Command::new("fail2ban-client").args(["set", jail, "banip", ip]).output(),
+    ).await
+        .map_err(|_| "fail2ban-client timed out".to_string())?
+        .map_err(|e| format!("fail2ban-client failed: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Ban failed: {stderr}"));
+    }
+    tracing::info!("Banned {ip} in jail {jail}");
+    Ok(())
+}
+
+/// Get list of banned IPs for a specific jail.
+pub async fn fail2ban_banned_ips(jail: &str) -> Result<Vec<String>, String> {
+    if !jail.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err("Invalid jail name".into());
+    }
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        Command::new("fail2ban-client").args(["status", jail]).output(),
+    ).await
+        .map_err(|_| "fail2ban-client timed out".to_string())?
+        .map_err(|e| format!("fail2ban-client failed: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Parse "Banned IP list:" line
+    let ips = stdout.lines()
+        .find(|l| l.contains("Banned IP list:"))
+        .map(|l| {
+            l.split("Banned IP list:")
+                .nth(1).unwrap_or("").trim()
+                .split_whitespace()
+                .map(|s| s.to_string())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    Ok(ips)
+}
+
+/// Apply a recommended fix for a security finding.
+pub async fn apply_fix(fix_type: &str, target: &str) -> Result<String, String> {
+    match fix_type {
+        "block_port" => {
+            // Block an unexpected open port
+            let port: u16 = target.parse().map_err(|_| "Invalid port".to_string())?;
+            add_firewall_rule(port, "tcp", "deny", None).await?;
+            Ok(format!("Port {port}/tcp blocked"))
+        }
+        "disable_password_auth" => {
+            disable_ssh_password_auth().await?;
+            Ok("SSH password authentication disabled".into())
+        }
+        "disable_root_login" => {
+            disable_ssh_root_login().await?;
+            Ok("SSH root login disabled".into())
+        }
+        "remove_file" => {
+            // Remove a suspicious file (malware)
+            if target.contains("..") || !target.starts_with("/var/www") {
+                return Err("Can only remove files under /var/www".into());
+            }
+            tokio::fs::remove_file(target).await
+                .map_err(|e| format!("Failed to remove {target}: {e}"))?;
+            Ok(format!("File removed: {target}"))
+        }
+        _ => Err(format!("Unknown fix type: {fix_type}")),
+    }
 }
