@@ -24,6 +24,8 @@ interface GitDeploy {
   ssl_email: string | null;
   pre_build_cmd: string | null;
   post_deploy_cmd: string | null;
+  build_args: Record<string, string>;
+  build_context: string;
   last_deploy: string | null;
   last_commit: string | null;
   created_at: string;
@@ -84,6 +86,8 @@ export default function GitDeploys() {
   const [formSslEmail, setFormSslEmail] = useState("");
   const [formPreBuild, setFormPreBuild] = useState("");
   const [formPostDeploy, setFormPostDeploy] = useState("");
+  const [formBuildArgs, setFormBuildArgs] = useState<{ key: string; value: string }[]>([]);
+  const [formBuildContext, setFormBuildContext] = useState(".");
 
   const loadDeploys = async () => {
     try {
@@ -134,6 +138,8 @@ export default function GitDeploys() {
     setFormSslEmail("");
     setFormPreBuild("");
     setFormPostDeploy("");
+    setFormBuildArgs([]);
+    setFormBuildContext(".");
   };
 
   const openCreate = () => {
@@ -157,6 +163,10 @@ export default function GitDeploys() {
     setFormSslEmail(selected.ssl_email || "");
     setFormPreBuild(selected.pre_build_cmd || "");
     setFormPostDeploy(selected.post_deploy_cmd || "");
+    setFormBuildArgs(
+      Object.entries(selected.build_args || {}).map(([key, value]) => ({ key, value }))
+    );
+    setFormBuildContext(selected.build_context || ".");
     setEditing(true);
     setShowModal(true);
   };
@@ -167,6 +177,10 @@ export default function GitDeploys() {
     const envVars: Record<string, string> = {};
     formEnvVars.forEach((ev) => {
       if (ev.key.trim()) envVars[ev.key.trim()] = ev.value;
+    });
+    const buildArgs: Record<string, string> = {};
+    formBuildArgs.forEach((arg) => {
+      if (arg.key.trim()) buildArgs[arg.key.trim()] = arg.value;
     });
     const payload = {
       name: formName,
@@ -180,6 +194,8 @@ export default function GitDeploys() {
       ssl_email: formSslEmail.trim() || null,
       pre_build_cmd: formPreBuild.trim() || null,
       post_deploy_cmd: formPostDeploy.trim() || null,
+      build_args: buildArgs,
+      build_context: formBuildContext.trim() || ".",
     };
     try {
       if (editing && selected) {
@@ -424,6 +440,7 @@ export default function GitDeploys() {
                   { label: "SSL Email", value: selected.ssl_email || "\u2014" },
                   { label: "Pre-build Cmd", value: selected.pre_build_cmd || "\u2014" },
                   { label: "Post-deploy Cmd", value: selected.post_deploy_cmd || "\u2014" },
+                  { label: "Build Context", value: selected.build_context || "." },
                 ].map((field) => (
                   <div key={field.label}>
                     <span className="block text-xs font-medium text-dark-300 mb-0.5">{field.label}</span>
@@ -440,6 +457,20 @@ export default function GitDeploys() {
                         <span className="text-dark-100">{k}</span>
                         <span className="text-dark-300">=</span>
                         <span className="text-dark-200">{"*".repeat(Math.min(v.length, 12))}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {Object.keys(selected.build_args || {}).length > 0 && (
+                <div className="mt-4">
+                  <span className="block text-xs font-medium text-dark-300 mb-1">Build Arguments</span>
+                  <div className="bg-dark-900 border border-dark-500 rounded-lg p-3 space-y-1">
+                    {Object.entries(selected.build_args).map(([k, v]) => (
+                      <div key={k} className="flex items-center gap-2 text-xs font-mono">
+                        <span className="text-dark-100">{k}</span>
+                        <span className="text-dark-300">=</span>
+                        <span className="text-dark-200">{v}</span>
                       </div>
                     ))}
                   </div>
@@ -872,6 +903,76 @@ export default function GitDeploys() {
                 <input type="text" value={formPostDeploy} onChange={(e) => setFormPostDeploy(e.target.value)}
                   placeholder="php artisan migrate, npx prisma migrate deploy, etc." className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none" />
                 <p className="text-xs text-dark-300 mt-1">Runs inside the container after deploy (docker exec)</p>
+              </div>
+
+              {/* Build Arguments */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-sm font-medium text-dark-100">Build Arguments</label>
+                  <button
+                    type="button"
+                    onClick={() => setFormBuildArgs([...formBuildArgs, { key: "", value: "" }])}
+                    className="px-2 py-0.5 text-xs text-rust-400 hover:text-rust-300 font-medium transition-colors"
+                  >
+                    + Add build arg
+                  </button>
+                </div>
+                <p className="text-xs text-dark-300 mb-2">Passed as --build-arg to Docker build</p>
+                {formBuildArgs.length === 0 && (
+                  <p className="text-xs text-dark-300">No build arguments defined</p>
+                )}
+                <div className="space-y-2">
+                  {formBuildArgs.map((arg, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={arg.key}
+                        onChange={(e) => {
+                          const next = [...formBuildArgs];
+                          next[i] = { ...next[i], key: e.target.value };
+                          setFormBuildArgs(next);
+                        }}
+                        placeholder="KEY"
+                        className="w-1/3 px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none"
+                      />
+                      <span className="text-dark-300">=</span>
+                      <input
+                        type="text"
+                        value={arg.value}
+                        onChange={(e) => {
+                          const next = [...formBuildArgs];
+                          next[i] = { ...next[i], value: e.target.value };
+                          setFormBuildArgs(next);
+                        }}
+                        placeholder="value"
+                        className="flex-1 px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setFormBuildArgs(formBuildArgs.filter((_, j) => j !== i))}
+                        className="p-1.5 text-danger-400 hover:text-danger-300 transition-colors"
+                        title="Remove build arg"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Build Context */}
+              <div>
+                <label className="block text-sm font-medium text-dark-100 mb-1">Build Context</label>
+                <input
+                  type="text"
+                  value={formBuildContext}
+                  onChange={(e) => setFormBuildContext(e.target.value)}
+                  placeholder="."
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none"
+                />
+                <p className="text-xs text-dark-300 mt-1">Subdirectory for Docker build context (default: repo root)</p>
               </div>
             </div>
 
