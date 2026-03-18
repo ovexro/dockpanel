@@ -65,6 +65,8 @@ export default function Layout() {
   const [firingCount, setFiringCount] = useState(0);
   const [apiHealthy, setApiHealthy] = useState<boolean | null>(null);
   const [theme, setTheme] = useState(() => localStorage.getItem("dp-theme") || "dark");
+  const [twoFaEnforced, setTwoFaEnforced] = useState(false);
+  const [twoFaEnabled, setTwoFaEnabled] = useState(true); // assume true until checked
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -93,6 +95,14 @@ export default function Layout() {
     checkHealth();
     healthTimer.current = setInterval(checkHealth, 30000);
     return () => { if (healthTimer.current) clearInterval(healthTimer.current); };
+  }, []);
+
+  // Check 2FA enforcement
+  useEffect(() => {
+    api.get<Record<string, string>>("/settings").then(s => {
+        if (s.enforce_2fa === "true") setTwoFaEnforced(true);
+    }).catch(() => {});
+    api.get<{ enabled: boolean }>("/auth/2fa/status").then(d => setTwoFaEnabled(d.enabled)).catch(() => {});
   }, []);
 
   if (loading) {
@@ -265,6 +275,19 @@ export default function Layout() {
           </button>
           <span className="text-base font-bold tracking-widest uppercase font-mono logo-glow"><span className="text-rust-500">Dock</span><span className="text-dark-100">Panel</span></span>
         </div>
+        {twoFaEnforced && !twoFaEnabled && (
+          <div className="bg-warn-500/10 border-b border-warn-500/20 px-4 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <svg className="w-5 h-5 text-warn-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+              </svg>
+              <span className="text-sm text-warn-400 font-medium">Two-factor authentication is required. Please enable 2FA in Settings &rarr; Security.</span>
+            </div>
+            <a href="/settings" className="px-3 py-1.5 bg-warn-500 text-dark-900 rounded text-xs font-bold hover:bg-warn-400 transition-colors">
+              Set Up 2FA
+            </a>
+          </div>
+        )}
         <Outlet />
       </main>
     </div>
