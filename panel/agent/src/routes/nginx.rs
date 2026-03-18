@@ -979,6 +979,119 @@ async fn php_errors(
     Ok(Json(serde_json::json!({ "logs": content, "file": found_file, "lines": content.lines().count() })))
 }
 
+// ──────────────────────────────────────────────────────────────
+// Site Cloning
+// ──────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct CloneRequest {
+    source_domain: String,
+    target_domain: String,
+}
+
+/// POST /nginx/clone-site — Clone site files from one domain to another.
+async fn clone_site(Json(body): Json<CloneRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
+    if body.source_domain.is_empty() || body.target_domain.is_empty() {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Source and target domains required"));
+    }
+
+    let source_dir = format!("/var/www/{}", body.source_domain);
+    let target_dir = format!("/var/www/{}", body.target_domain);
+
+    if !std::path::Path::new(&source_dir).exists() {
+        return Err(api_err(StatusCode::NOT_FOUND, "Source site directory not found"));
+    }
+
+    // Create target directory
+    tokio::fs::create_dir_all(&target_dir).await
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to create directory: {e}")))?;
+
+    // Copy files using rsync (preserves permissions, faster than cp -r)
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        tokio::process::Command::new("rsync")
+            .args(["-a", "--delete", &format!("{source_dir}/"), &format!("{target_dir}/")])
+            .output()
+    ).await
+        .map_err(|_| api_err(StatusCode::GATEWAY_TIMEOUT, "Clone timed out (300s)"))?
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("rsync failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Clone failed: {stderr}")));
+    }
+
+    // Fix ownership
+    let _ = tokio::process::Command::new("chown").args(["-R", "www-data:www-data", &target_dir]).output().await;
+
+    // Get size
+    let du_output = tokio::process::Command::new("du").args(["-sb", &target_dir]).output().await;
+    let size: u64 = du_output.ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().next().unwrap_or("0").parse().unwrap_or(0))
+        .unwrap_or(0);
+
+    tracing::info!("Site cloned: {} → {} ({} bytes)", body.source_domain, body.target_domain, size);
+    Ok(Json(serde_json::json!({ "ok": true, "size": size })))
+}
+
+// ──────────────────────────────────────────────────────────────
+// Environment Variables
+// ──────────────────────────────────────────────────────────────
+
+/// GET /nginx/env/{domain} — Read .env file for a site.
+async fn get_env(Path(domain): Path<String>) -> Json<serde_json::Value> {
+    let env_path = format!("/var/www/{domain}/.env");
+    let content = std::fs::read_to_string(&env_path).unwrap_or_default();
+
+    let vars: Vec<serde_json::Value> = content.lines()
+        .filter(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))
+        .filter_map(|l| {
+            let eq = l.find('=')?;
+            let key = l[..eq].trim().to_string();
+            let value = l[eq+1..].trim().trim_matches('"').trim_matches('\'').to_string();
+            Some(serde_json::json!({ "key": key, "value": value }))
+        })
+        .collect();
+
+    Json(serde_json::json!({ "vars": vars, "raw": content }))
+}
+
+/// PUT /nginx/env/{domain} — Write .env file for a site.
+async fn set_env(Path(domain): Path<String>, Json(body): Json<serde_json::Value>) -> Result<Json<serde_json::Value>, ApiErr> {
+    let vars = body.get("vars").and_then(|v| v.as_array());
+
+    let content = match vars {
+        Some(vars) => {
+            vars.iter().filter_map(|v| {
+                let key = v.get("key")?.as_str()?;
+                let value = v.get("value")?.as_str()?;
+                if key.is_empty() { return None; }
+                // Quote values with spaces
+                if value.contains(' ') || value.contains('"') {
+                    Some(format!("{key}=\"{value}\""))
+                } else {
+                    Some(format!("{key}={value}"))
+                }
+            }).collect::<Vec<_>>().join("\n") + "\n"
+        }
+        None => body.get("raw").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+    };
+
+    let env_path = format!("/var/www/{domain}/.env");
+    std::fs::write(&env_path, &content)
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+
+    // Fix ownership
+    let _ = tokio::process::Command::new("chown").args(["www-data:www-data", &env_path]).output().await;
+
+    // Restart the app service if it's a Node/Python site
+    let service_name = format!("dockpanel-app-{}", domain.replace('.', "-"));
+    let _ = tokio::process::Command::new("systemctl").args(["restart", &service_name]).output().await;
+
+    tracing::info!("Environment variables updated for {domain}");
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/nginx/sites/{domain}", put(put_site))
@@ -1011,4 +1124,8 @@ pub fn router() -> Router<AppState> {
         .route("/nginx/site-logs/{domain}", get(site_logs))
         .route("/nginx/site-stats/{domain}", get(site_stats))
         .route("/nginx/php-errors/{domain}", get(php_errors))
+        // Site Cloning
+        .route("/nginx/clone-site", post(clone_site))
+        // Environment Variables
+        .route("/nginx/env/{domain}", get(get_env).put(set_env))
 }

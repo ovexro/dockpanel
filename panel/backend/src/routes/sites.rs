@@ -1405,3 +1405,166 @@ pub async fn health_check(
         }
     }
 }
+
+// ──────────────────────────────────────────────────────────────
+// Site Cloning
+// ──────────────────────────────────────────────────────────────
+
+/// POST /api/sites/{id}/clone — Clone site to a new domain.
+pub async fn clone_site(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let target_domain = body.get("domain").and_then(|v| v.as_str())
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Target domain required"))?;
+
+    if !is_valid_domain(target_domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid target domain format"));
+    }
+
+    // Get source site
+    let source: Option<Site> = sqlx::query_as("SELECT * FROM sites WHERE id = $1 AND user_id = $2")
+        .bind(id).bind(claims.sub).fetch_optional(&state.db).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    let source = source.ok_or_else(|| err(StatusCode::NOT_FOUND, "Source site not found"))?;
+
+    // Create new site record
+    let new_site: Site = sqlx::query_as(
+        "INSERT INTO sites (user_id, domain, runtime, status, php_version, root_path, rate_limit, max_upload_mb, php_memory_mb, php_max_workers, php_preset, app_command) \
+         VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *"
+    )
+    .bind(claims.sub)
+    .bind(target_domain)
+    .bind(&source.runtime)
+    .bind(&source.php_version)
+    .bind(&source.root_path)
+    .bind(source.rate_limit)
+    .bind(source.max_upload_mb)
+    .bind(source.php_memory_mb)
+    .bind(source.php_max_workers)
+    .bind(&source.php_preset)
+    .bind(&source.app_command)
+    .fetch_one(&state.db).await
+    .map_err(|e| {
+        if e.to_string().contains("duplicate") || e.to_string().contains("unique") {
+            err(StatusCode::CONFLICT, "A site with this domain already exists")
+        } else {
+            err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+        }
+    })?;
+
+    // Clone files via agent
+    state.agent.post("/nginx/clone-site", Some(serde_json::json!({
+        "source_domain": source.domain,
+        "target_domain": target_domain,
+    }))).await.map_err(|e| agent_error("Clone", e))?;
+
+    // Set up nginx for new site
+    let mut nginx_body = serde_json::json!({
+        "runtime": source.runtime,
+        "root": "/var/www",
+    });
+    if let Some(port) = source.proxy_port {
+        nginx_body["proxy_port"] = serde_json::json!(port);
+    }
+    if let Some(ref php) = source.php_version {
+        nginx_body["php_socket"] = serde_json::json!(format!("unix:/run/php/php{php}-fpm.sock"));
+    }
+    if let Some(ref preset) = source.php_preset {
+        nginx_body["php_preset"] = serde_json::json!(preset);
+    }
+
+    state.agent.put(&format!("/nginx/sites/{target_domain}"), nginx_body).await
+        .map_err(|e| agent_error("Nginx config", e))?;
+
+    activity::log_activity(&state.db, claims.sub, &claims.email, "site.clone",
+        Some("site"), Some(target_domain), Some(&source.domain), None).await;
+
+    Ok((StatusCode::CREATED, Json(serde_json::json!({ "ok": true, "site_id": new_site.id, "domain": target_domain }))))
+}
+
+// ──────────────────────────────────────────────────────────────
+// Custom SSL Upload
+// ──────────────────────────────────────────────────────────────
+
+/// POST /api/sites/{id}/ssl/upload — Upload custom SSL certificate.
+pub async fn upload_ssl(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = site_domain(&state, id, claims.sub).await?;
+
+    let mut agent_body = body.clone();
+    agent_body["domain"] = serde_json::json!(domain);
+
+    state.agent.post("/ssl/upload", Some(agent_body)).await
+        .map_err(|e| agent_error("SSL upload", e))?;
+
+    // Update DB
+    sqlx::query("UPDATE sites SET ssl_enabled = true, updated_at = NOW() WHERE id = $1")
+        .bind(id).execute(&state.db).await.ok();
+
+    activity::log_activity(&state.db, claims.sub, &claims.email, "ssl.upload",
+        Some("site"), Some(&domain), None, None).await;
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ──────────────────────────────────────────────────────────────
+// PHP Extensions Manager
+// ──────────────────────────────────────────────────────────────
+
+/// GET /api/php/extensions/{version} — List PHP extensions.
+pub async fn php_extensions(
+    State(state): State<AppState>,
+    AuthUser(_claims): AuthUser,
+    Path(version): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state.agent.get(&format!("/php/extensions/{version}")).await
+        .map_err(|e| agent_error("PHP extensions", e))?;
+    Ok(Json(result))
+}
+
+/// POST /api/php/extensions/install — Install a PHP extension.
+pub async fn install_php_extension(
+    State(state): State<AppState>,
+    AuthUser(_claims): AuthUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.agent.post("/php/extensions/install", Some(body)).await
+        .map_err(|e| agent_error("PHP extension", e))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ──────────────────────────────────────────────────────────────
+// Environment Variables
+// ──────────────────────────────────────────────────────────────
+
+/// GET /api/sites/{id}/env — Read environment variables.
+pub async fn get_env_vars(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = site_domain(&state, id, claims.sub).await?;
+    let result = state.agent.get(&format!("/nginx/env/{domain}")).await
+        .map_err(|e| agent_error("Env vars", e))?;
+    Ok(Json(result))
+}
+
+/// PUT /api/sites/{id}/env — Write environment variables.
+pub async fn set_env_vars(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = site_domain(&state, id, claims.sub).await?;
+    state.agent.put(&format!("/nginx/env/{domain}"), body).await
+        .map_err(|e| agent_error("Env vars", e))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
