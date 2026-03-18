@@ -25,6 +25,7 @@ pub mod security_scans;
 pub mod server_actions;
 pub mod servers;
 pub mod settings;
+pub mod stacks;
 pub mod staging;
 pub mod sites;
 pub mod system_logs;
@@ -151,6 +152,12 @@ pub fn router() -> Router<AppState> {
         .route("/api/databases/{id}/tables", get(databases::tables))
         .route("/api/databases/{id}/tables/{table}", get(databases::table_schema))
         .route("/api/databases/{id}/query", post(databases::query))
+        // Compose Stacks
+        .route("/api/stacks", get(stacks::list).post(stacks::create))
+        .route("/api/stacks/{id}", get(stacks::get_one).put(stacks::update).delete(stacks::remove))
+        .route("/api/stacks/{id}/start", post(stacks::start))
+        .route("/api/stacks/{id}/stop", post(stacks::stop))
+        .route("/api/stacks/{id}/restart", post(stacks::restart))
         // Docker Apps (admin)
         .route("/api/apps/templates", get(docker_apps::list_templates))
         .route("/api/apps/deploy", post(docker_apps::deploy))

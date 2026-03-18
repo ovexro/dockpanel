@@ -454,6 +454,7 @@ async fn remove(
 #[derive(Deserialize)]
 struct ComposeParseRequest {
     yaml: String,
+    stack_id: Option<String>,
 }
 
 /// POST /apps/compose/parse — Parse docker-compose.yml and return services preview.
@@ -481,8 +482,73 @@ async fn compose_deploy(
         )
     })?;
 
-    let result = compose::deploy_compose(&services).await;
+    let result = compose::deploy_compose(&services, body.stack_id.as_deref()).await;
     Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+struct StackActionRequest {
+    stack_id: String,
+    action: String,
+}
+
+/// POST /apps/stack/action — Perform a lifecycle action on all containers in a stack.
+async fn stack_action(
+    Json(body): Json<StackActionRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !["start", "stop", "restart", "remove"].contains(&body.action.as_str()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Action must be start, stop, restart, or remove" })),
+        ));
+    }
+
+    // Find all containers with this stack_id
+    let apps = docker_apps::list_deployed_apps().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+    })?;
+
+    let stack_containers: Vec<&docker_apps::DeployedApp> = apps
+        .iter()
+        .filter(|a| a.stack_id.as_deref() == Some(&body.stack_id))
+        .collect();
+
+    if stack_containers.is_empty() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "No containers found for this stack" })),
+        ));
+    }
+
+    let mut results = Vec::new();
+    for app in &stack_containers {
+        let cid = &app.container_id;
+        let result = match body.action.as_str() {
+            "start" => docker_apps::start_app(cid).await.map(|_| "started"),
+            "stop" => docker_apps::stop_app(cid).await.map(|_| "stopped"),
+            "restart" => docker_apps::restart_app(cid).await.map(|_| "restarted"),
+            "remove" => docker_apps::remove_app(cid).await.map(|_| "removed"),
+            _ => unreachable!(),
+        };
+        results.push(serde_json::json!({
+            "container_id": cid,
+            "name": app.name,
+            "status": match &result {
+                Ok(s) => *s,
+                Err(_) => "failed",
+            },
+            "error": result.err(),
+        }));
+    }
+
+    Ok(Json(serde_json::json!({
+        "stack_id": body.stack_id,
+        "action": body.action,
+        "results": results,
+    })))
 }
 
 pub fn router() -> Router<AppState> {
@@ -491,6 +557,7 @@ pub fn router() -> Router<AppState> {
         .route("/apps/deploy", post(deploy))
         .route("/apps/compose/parse", post(compose_parse))
         .route("/apps/compose/deploy", post(compose_deploy))
+        .route("/apps/stack/action", post(stack_action))
         .route("/apps", get(list))
         .route("/apps/{container_id}", delete(remove))
         .route("/apps/{container_id}/stop", post(stop))
