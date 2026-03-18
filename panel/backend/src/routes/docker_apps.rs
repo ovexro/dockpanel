@@ -743,6 +743,80 @@ pub async fn registry_logout(
     Ok(Json(result))
 }
 
+/// GET /api/apps/images — List Docker images.
+pub async fn list_images(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let result = state
+        .agent
+        .get("/apps/images")
+        .await
+        .map_err(|e| agent_error("Docker images", e))?;
+    Ok(Json(result))
+}
+
+/// POST /api/apps/images/prune — Remove unused Docker images.
+pub async fn prune_images(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let result = state
+        .agent
+        .post("/apps/images/prune", None)
+        .await
+        .map_err(|e| agent_error("Prune images", e))?;
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "app.prune_images",
+        Some("docker"), None, None, None,
+    ).await;
+    Ok(Json(result))
+}
+
+/// DELETE /api/apps/images/{id} — Remove a specific Docker image.
+pub async fn remove_image(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let result = state
+        .agent
+        .delete(&format!("/apps/images/{id}"))
+        .await
+        .map_err(|e| agent_error("Remove image", e))?;
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "app.remove_image",
+        Some("docker"), Some(&id), None, None,
+    ).await;
+    Ok(Json(result))
+}
+
+/// POST /api/apps/{container_id}/snapshot — Commit container to image.
+pub async fn snapshot_container(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(container_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    if !is_valid_container_id(&container_id) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
+    }
+    let result = state
+        .agent
+        .post(&format!("/apps/{container_id}/snapshot"), Some(body))
+        .await
+        .map_err(|e| agent_error("Container snapshot", e))?;
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "app.snapshot",
+        Some("app"), Some(&container_id), None, None,
+    ).await;
+    Ok(Json(result))
+}
+
 /// POST /api/apps/compose/parse — Parse docker-compose.yml and preview services.
 pub async fn compose_parse(
     State(state): State<AppState>,

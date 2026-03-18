@@ -335,6 +335,31 @@ export default function Apps() {
   const [composeError, setComposeError] = useState("");
   const [composeName, setComposeName] = useState("");
 
+  // Image management state (Feature #6)
+  const [showImages, setShowImages] = useState(false);
+  const [images, setImages] = useState<{ repository: string; tag: string; id: string; size: string; created: string }[]>([]);
+  const [imagesLoading, setImagesLoading] = useState(false);
+  const [imagePruning, setImagePruning] = useState(false);
+
+  // App tags state (Feature #7)
+  const [appTags, setAppTags] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem('dp-app-tags') || '{}'); } catch { return {}; }
+  });
+  const [tagFilter, setTagFilter] = useState("");
+
+  // Container metrics history state (Feature #8)
+  const [statsHistory, setStatsHistory] = useState<Record<string, { cpu: number; mem: number }[]>>({});
+
+  // Health check config state (Feature #9)
+  const [enableHealthCheck, setEnableHealthCheck] = useState(false);
+  const [healthCmd, setHealthCmd] = useState("");
+  const [healthInterval, setHealthInterval] = useState("");
+  const [healthTimeout, setHealthTimeout] = useState("");
+  const [healthRetries, setHealthRetries] = useState("");
+
+  // Compose view state (Feature #11 — packages tab)
+  const [composeView, setComposeView] = useState<"compose" | "packages">("compose");
+
   // Stacks state
   const [stacks, setStacks] = useState<StackInfo[]>([]);
   const [expandedStack, setExpandedStack] = useState<string | null>(null);
@@ -376,7 +401,7 @@ export default function Apps() {
     setDeploying(true);
     setMessage({ text: "", type: "" });
     try {
-      const result = await api.post<{ deploy_id?: string }>("/apps/deploy", {
+      const deployBody: Record<string, unknown> = {
         template_id: selected.id,
         name: appName,
         port: appPort,
@@ -385,7 +410,16 @@ export default function Apps() {
         ...(appDomain && sslEmail ? { ssl_email: sslEmail } : {}),
         ...(memoryMb ? { memory_mb: parseInt(memoryMb) } : {}),
         ...(cpuPercent ? { cpu_percent: parseInt(cpuPercent) } : {}),
-      });
+      };
+      if (enableHealthCheck && healthCmd) {
+        deployBody.health_check = {
+          cmd: healthCmd,
+          ...(healthInterval ? { interval_s: parseInt(healthInterval) } : {}),
+          ...(healthTimeout ? { timeout_s: parseInt(healthTimeout) } : {}),
+          ...(healthRetries ? { retries: parseInt(healthRetries) } : {}),
+        };
+      }
+      const result = await api.post<{ deploy_id?: string }>("/apps/deploy", deployBody);
       setSelected(null);
       if (result.deploy_id) {
         setDeployId(result.deploy_id);
@@ -689,6 +723,190 @@ export default function Apps() {
     }
   };
 
+  // Image management handlers (Feature #6)
+  const loadImages = async () => {
+    setImagesLoading(true);
+    try {
+      const data = await api.get<{ images: typeof images }>("/apps/images");
+      setImages(data.images || []);
+    } catch {
+      setImages([]);
+    } finally {
+      setImagesLoading(false);
+    }
+  };
+
+  const handlePruneImages = async () => {
+    setImagePruning(true);
+    try {
+      await api.post("/apps/images/prune");
+      setMessage({ text: "Unused images pruned", type: "success" });
+      loadImages();
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : "Prune failed", type: "error" });
+    } finally {
+      setImagePruning(false);
+    }
+  };
+
+  const handleRemoveImage = async (imageId: string) => {
+    try {
+      await api.delete(`/apps/images/${encodeURIComponent(imageId)}`);
+      setMessage({ text: "Image removed", type: "success" });
+      loadImages();
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : "Remove failed", type: "error" });
+    }
+  };
+
+  // Container snapshot handler (Feature #12)
+  const handleSnapshot = async (containerId: string, appName: string) => {
+    const tag = prompt("Image tag:", `snapshot-${appName}-${Date.now()}`);
+    if (!tag) return;
+    try {
+      await api.post(`/apps/${containerId}/snapshot`, { tag });
+      setMessage({ text: `Snapshot saved as ${tag}`, type: "success" });
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : "Snapshot failed", type: "error" });
+    }
+  };
+
+  // Container metrics history polling (Feature #8)
+  const fetchAndRecordStats = async (containerId: string) => {
+    try {
+      const data = await api.get<{ cpu_percent?: string; memory_percent?: string }>(`/apps/${containerId}/stats`);
+      const cpu = parseFloat(data.cpu_percent || '0');
+      const mem = parseFloat(data.memory_percent || '0');
+      setStatsHistory(prev => {
+        const history = [...(prev[containerId] || []), { cpu, mem }].slice(-30);
+        return { ...prev, [containerId]: history };
+      });
+    } catch { /* ignore */ }
+  };
+
+  // Poll stats history when stats panel is open
+  useEffect(() => {
+    if (!statsTarget) return;
+    fetchAndRecordStats(statsTarget);
+    const interval = setInterval(() => fetchAndRecordStats(statsTarget), 10000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statsTarget]);
+
+  // Stack templates (Feature #11)
+  const stackTemplates = [
+    {
+      id: "wordpress-mysql",
+      name: "WordPress + MySQL",
+      description: "Full WordPress stack with dedicated MySQL database",
+      services: 2,
+      yaml: `services:
+  wordpress:
+    image: wordpress:latest
+    ports: ["8080:80"]
+    environment:
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wp_password
+      WORDPRESS_DB_NAME: wordpress
+    depends_on: [db]
+    labels:
+      dockpanel.managed: "true"
+      dockpanel.app.template: wordpress-package
+      dockpanel.app.name: wordpress
+  db:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: wp_password
+    volumes: [mysql_data:/var/lib/mysql]
+    labels:
+      dockpanel.managed: "true"
+      dockpanel.app.template: wordpress-package
+      dockpanel.app.name: wordpress-db
+volumes:
+  mysql_data:`,
+    },
+    {
+      id: "ghost-mysql",
+      name: "Ghost + MySQL",
+      description: "Ghost CMS with dedicated MySQL database",
+      services: 2,
+      yaml: `services:
+  ghost:
+    image: ghost:latest
+    ports: ["2368:2368"]
+    environment:
+      database__client: mysql
+      database__connection__host: db
+      database__connection__user: ghost
+      database__connection__password: ghost_password
+      database__connection__database: ghost
+      url: http://localhost:2368
+    depends_on: [db]
+    labels:
+      dockpanel.managed: "true"
+  db:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: ghost
+      MYSQL_USER: ghost
+      MYSQL_PASSWORD: ghost_password
+    volumes: [ghost_mysql:/var/lib/mysql]
+    labels:
+      dockpanel.managed: "true"
+volumes:
+  ghost_mysql:`,
+    },
+    {
+      id: "nextcloud-mariadb-redis",
+      name: "Nextcloud + MariaDB + Redis",
+      description: "Full Nextcloud stack with database and cache",
+      services: 3,
+      yaml: `services:
+  nextcloud:
+    image: nextcloud:latest
+    ports: ["8081:80"]
+    environment:
+      MYSQL_HOST: db
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: nc_password
+      REDIS_HOST: redis
+    depends_on: [db, redis]
+    volumes: [nextcloud_data:/var/www/html]
+    labels:
+      dockpanel.managed: "true"
+  db:
+    image: mariadb:11
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: nc_password
+    volumes: [nc_mariadb:/var/lib/mysql]
+    labels:
+      dockpanel.managed: "true"
+  redis:
+    image: redis:7-alpine
+    labels:
+      dockpanel.managed: "true"
+volumes:
+  nextcloud_data:
+  nc_mariadb:`,
+    },
+  ];
+
+  // Filter apps by tag (Feature #7)
+  const standaloneApps = apps.filter(a => !a.stack_id);
+  const filteredApps = standaloneApps.filter(a => !tagFilter || appTags[a.container_id] === tagFilter);
+
+  // Crashed apps detection (Feature #10)
+  const crashedApps = apps.filter(a => a.status === 'exited' || a.status === 'dead');
+
   return (
     <div className="p-6 lg:p-8">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
@@ -699,6 +917,15 @@ export default function Apps() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => { setShowImages(true); loadImages(); }}
+            className="px-4 py-2 bg-dark-700 text-dark-200 rounded-lg text-sm font-medium hover:bg-dark-600 flex items-center gap-2 border border-dark-500"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" />
+            </svg>
+            Images
+          </button>
           <button
             onClick={() => { setShowRegistries(true); loadRegistries(); }}
             className="px-4 py-2 bg-dark-700 text-dark-200 rounded-lg text-sm font-medium hover:bg-dark-600 flex items-center gap-2 border border-dark-500"
@@ -752,6 +979,26 @@ export default function Apps() {
           }`}
         >
           {message.text}
+        </div>
+      )}
+
+      {/* Crashed apps banner (Feature #10) */}
+      {crashedApps.length > 0 && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-4 mb-4">
+          <div className="flex items-center gap-2">
+            <svg className="w-5 h-5 text-danger-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+            </svg>
+            <span className="text-sm text-danger-400 font-medium">{crashedApps.length} container(s) crashed</span>
+          </div>
+          <div className="mt-2 space-y-1">
+            {crashedApps.map(a => (
+              <div key={a.container_id} className="flex items-center justify-between text-xs">
+                <span className="text-dark-100 font-mono">{a.name} <span className="text-dark-300">({a.status})</span></span>
+                <button onClick={() => handleAction(a.container_id, "start")} className="text-rust-400 hover:text-rust-300 font-medium">Restart</button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -860,11 +1107,20 @@ export default function Apps() {
       )}
 
       {/* Deployed Apps (standalone, not in stacks) */}
-      {apps.filter(a => !a.stack_id).length > 0 && (
+      {standaloneApps.length > 0 && (
         <div className="mb-8">
-          <h2 className="text-sm font-medium text-dark-200 uppercase font-mono tracking-widest mb-3">
-            Running Apps
-          </h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-medium text-dark-200 uppercase font-mono tracking-widest">
+              Running Apps
+            </h2>
+            <select value={tagFilter} onChange={e => setTagFilter(e.target.value)} className="px-2 py-1.5 bg-dark-700 text-dark-200 rounded text-xs border border-dark-500">
+              <option value="">All Apps</option>
+              <option value="production">Production</option>
+              <option value="staging">Staging</option>
+              <option value="development">Development</option>
+              <option value="internal">Internal</option>
+            </select>
+          </div>
           <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -879,9 +1135,29 @@ export default function Apps() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-dark-600">
-                {apps.filter(a => !a.stack_id).map((app) => (
+                {filteredApps.map((app) => (
                   <tr key={app.container_id} className="hover:bg-dark-700/30 transition-colors">
-                    <td className="px-5 py-4 text-sm text-dark-50 font-medium font-mono">{app.name}</td>
+                    <td className="px-5 py-4 text-sm text-dark-50 font-medium font-mono">
+                      <div className="flex items-center gap-2">
+                        {app.name}
+                        <select
+                          value={appTags[app.container_id] || ''}
+                          onChange={e => {
+                            const next = { ...appTags, [app.container_id]: e.target.value };
+                            setAppTags(next);
+                            localStorage.setItem('dp-app-tags', JSON.stringify(next));
+                          }}
+                          onClick={e => e.stopPropagation()}
+                          className="px-1 py-0.5 bg-dark-700 text-dark-200 rounded text-[10px] border-0 cursor-pointer"
+                        >
+                          <option value="">No tag</option>
+                          <option value="production">Production</option>
+                          <option value="staging">Staging</option>
+                          <option value="development">Development</option>
+                          <option value="internal">Internal</option>
+                        </select>
+                      </div>
+                    </td>
                     <td className="px-5 py-4 text-sm text-dark-200 hidden sm:table-cell">{app.template}</td>
                     <td className="px-5 py-4 text-sm hidden md:table-cell">
                       {app.domain ? (
@@ -981,6 +1257,12 @@ export default function Apps() {
                           Volumes
                         </button>
                         <button
+                          onClick={() => handleSnapshot(app.container_id, app.name)}
+                          className="px-2 py-1 rounded text-xs font-medium bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
+                        >
+                          Snapshot
+                        </button>
+                        <button
                           onClick={() => handleUpdate(app.container_id)}
                           disabled={!!actionLoading}
                           className="px-2 py-1 bg-cyan-50 text-cyan-600 rounded text-xs font-medium hover:bg-cyan-100 disabled:opacity-50"
@@ -1048,6 +1330,33 @@ export default function Apps() {
                 </div>
               ) : (
                 <p className="text-sm text-dark-300">Container not running or stats unavailable</p>
+              )}
+              {/* Stats history sparkline (Feature #8) */}
+              {statsTarget && (statsHistory[statsTarget] || []).length > 1 && (
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="bg-dark-900 rounded-lg p-3 border border-dark-600">
+                    <div className="text-[10px] text-dark-300 uppercase mb-1">CPU History ({(statsHistory[statsTarget] || []).length} samples)</div>
+                    <svg viewBox={`0 0 ${(statsHistory[statsTarget] || []).length * 10} 40`} className="w-full h-10" preserveAspectRatio="none">
+                      <polyline
+                        fill="none"
+                        stroke="#e8956a"
+                        strokeWidth="1.5"
+                        points={(statsHistory[statsTarget] || []).map((p, i) => `${i * 10},${40 - (p.cpu / 100) * 40}`).join(' ')}
+                      />
+                    </svg>
+                  </div>
+                  <div className="bg-dark-900 rounded-lg p-3 border border-dark-600">
+                    <div className="text-[10px] text-dark-300 uppercase mb-1">Memory History ({(statsHistory[statsTarget] || []).length} samples)</div>
+                    <svg viewBox={`0 0 ${(statsHistory[statsTarget] || []).length * 10} 40`} className="w-full h-10" preserveAspectRatio="none">
+                      <polyline
+                        fill="none"
+                        stroke="#7c3aed"
+                        strokeWidth="1.5"
+                        points={(statsHistory[statsTarget] || []).map((p, i) => `${i * 10},${40 - (p.mem / 100) * 40}`).join(' ')}
+                      />
+                    </svg>
+                  </div>
+                </div>
               )}
             </div>
           )}
@@ -1315,6 +1624,52 @@ export default function Apps() {
                     />
                   </div>
                 </div>
+              </div>
+
+              {/* Health Check Configuration (Feature #9) */}
+              <div>
+                <label className="flex items-center gap-2 text-sm font-medium text-dark-100">
+                  <input type="checkbox" checked={enableHealthCheck} onChange={e => setEnableHealthCheck(e.target.checked)} className="rounded border-dark-500" />
+                  Configure health check <span className="text-dark-300 font-normal text-xs">(optional)</span>
+                </label>
+                {enableHealthCheck && (
+                  <div className="mt-2 space-y-2">
+                    <input
+                      type="text"
+                      value={healthCmd}
+                      onChange={e => setHealthCmd(e.target.value)}
+                      placeholder="CMD curl -f http://localhost/ || exit 1"
+                      className="w-full px-3 py-1.5 border border-dark-500 rounded-lg text-xs font-mono focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
+                    />
+                    <div className="flex gap-2">
+                      <input
+                        type="number"
+                        value={healthInterval}
+                        onChange={e => setHealthInterval(e.target.value)}
+                        placeholder="Interval (s)"
+                        min="1"
+                        className="w-1/3 px-2 py-1.5 border border-dark-500 rounded-lg text-xs focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
+                      />
+                      <input
+                        type="number"
+                        value={healthTimeout}
+                        onChange={e => setHealthTimeout(e.target.value)}
+                        placeholder="Timeout (s)"
+                        min="1"
+                        className="w-1/3 px-2 py-1.5 border border-dark-500 rounded-lg text-xs focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
+                      />
+                      <input
+                        type="number"
+                        value={healthRetries}
+                        onChange={e => setHealthRetries(e.target.value)}
+                        placeholder="Retries"
+                        min="0"
+                        className="w-1/3 px-2 py-1.5 border border-dark-500 rounded-lg text-xs focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
+                      />
+                    </div>
+                    <p className="text-[10px] text-dark-300">Docker health check command, interval/timeout in seconds, and retry count.</p>
+                  </div>
+                )}
               </div>
 
               {selected.env_vars.length > 0 && (
@@ -1653,6 +2008,81 @@ export default function Apps() {
         </div>
       )}
 
+      {/* Docker Images Modal (Feature #6) */}
+      {showImages && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          onKeyDown={(e) => { if (e.key === "Escape") setShowImages(false); }}
+        >
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-3xl max-h-[80vh] overflow-y-auto border border-dark-500">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">
+                Docker Images
+              </h3>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handlePruneImages}
+                  disabled={imagePruning}
+                  className="px-3 py-1.5 text-xs font-medium bg-warn-500/10 text-warn-400 rounded hover:bg-warn-500/20 disabled:opacity-50"
+                >
+                  {imagePruning ? "Pruning..." : "Prune Unused"}
+                </button>
+                <button
+                  onClick={loadImages}
+                  className="px-3 py-1.5 text-xs font-medium bg-dark-700 text-dark-200 rounded hover:bg-dark-600"
+                >
+                  Refresh
+                </button>
+                <button onClick={() => setShowImages(false)} className="text-dark-300 hover:text-dark-50">
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+              </div>
+            </div>
+            {imagesLoading ? (
+              <div className="flex items-center justify-center py-8 text-dark-300">
+                <svg className="w-5 h-5 animate-spin mr-2" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                Loading images...
+              </div>
+            ) : images.length === 0 ? (
+              <div className="text-center py-8 text-dark-300 text-sm">No Docker images found</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-dark-600">
+                      <th className="text-left text-xs font-medium text-dark-300 uppercase font-mono tracking-widest pb-2">Repository</th>
+                      <th className="text-left text-xs font-medium text-dark-300 uppercase font-mono tracking-widest pb-2">Tag</th>
+                      <th className="text-left text-xs font-medium text-dark-300 uppercase font-mono tracking-widest pb-2">Size</th>
+                      <th className="text-left text-xs font-medium text-dark-300 uppercase font-mono tracking-widest pb-2">Created</th>
+                      <th className="text-right text-xs font-medium text-dark-300 uppercase font-mono tracking-widest pb-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-dark-700">
+                    {images.map((img, i) => (
+                      <tr key={i} className="hover:bg-dark-700/30">
+                        <td className="py-2 text-xs font-mono text-dark-100">{img.repository}</td>
+                        <td className="py-2 text-xs font-mono text-dark-200">{img.tag}</td>
+                        <td className="py-2 text-xs text-dark-200">{img.size}</td>
+                        <td className="py-2 text-xs text-dark-300">{img.created}</td>
+                        <td className="py-2 text-right">
+                          <button
+                            onClick={() => handleRemoveImage(img.id)}
+                            className="text-xs text-danger-400 hover:text-danger-300"
+                          >
+                            Remove
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="text-[10px] text-dark-300 mt-3">{images.length} image(s) total</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Compose Import Dialog */}
       {showCompose && (
         <div
@@ -1662,9 +2092,50 @@ export default function Apps() {
           onKeyDown={(e) => { if (e.key === "Escape") { setShowCompose(false); setComposeParsed(null); setComposeError(""); }}}
         >
           <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-2xl max-h-[85vh] overflow-y-auto">
-            <h3 id="compose-dialog-title" className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-1">
-              Import Docker Compose
-            </h3>
+            <div className="flex items-center justify-between mb-4">
+              <h3 id="compose-dialog-title" className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">
+                Deploy Multi-Container
+              </h3>
+              <div className="flex items-center gap-1 bg-dark-900 rounded-lg p-0.5">
+                <button
+                  onClick={() => setComposeView('compose')}
+                  className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${composeView === 'compose' ? 'bg-rust-500/15 text-rust-400' : 'text-dark-300 hover:text-dark-200'}`}
+                >
+                  Compose
+                </button>
+                <button
+                  onClick={() => setComposeView('packages')}
+                  className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${composeView === 'packages' ? 'bg-rust-500/15 text-rust-400' : 'text-dark-300 hover:text-dark-200'}`}
+                >
+                  Packages
+                </button>
+              </div>
+            </div>
+
+            {/* Packages view (Feature #11) */}
+            {composeView === 'packages' && (
+              <div>
+                <p className="text-sm text-dark-200 mb-4">
+                  Pre-configured multi-container stacks. Click to customize and deploy.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {stackTemplates.map(pkg => (
+                    <div
+                      key={pkg.id}
+                      className="bg-dark-900 rounded-lg border border-dark-500 p-4 hover:border-dark-400 cursor-pointer transition-colors"
+                      onClick={() => { setComposeYaml(pkg.yaml); setComposeView('compose'); setComposeParsed(null); }}
+                    >
+                      <h4 className="text-sm font-medium text-dark-50">{pkg.name}</h4>
+                      <p className="text-xs text-dark-300 mt-1">{pkg.description}</p>
+                      <span className="text-[10px] text-dark-400 mt-2 inline-block">{pkg.services} services</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Compose view (original) */}
+            {composeView === 'compose' && (<>
             <p className="text-sm text-dark-200 mb-4">
               Paste your docker-compose.yml to parse and deploy services. Only services with an <code className="text-xs bg-dark-700 px-1 rounded">image:</code> field are supported (no build context).
             </p>
@@ -1796,6 +2267,7 @@ export default function Apps() {
                 </div>
               </>
             )}
+            </>)}
           </div>
         </div>
       )}
