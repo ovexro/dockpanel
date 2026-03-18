@@ -642,6 +642,76 @@ pub async fn keygen(
     })))
 }
 
+/// POST /api/git-deploys/{id}/stop
+pub async fn stop(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let config: GitDeploy = sqlx::query_as("SELECT * FROM git_deploys WHERE id = $1 AND user_id = $2")
+        .bind(id).bind(claims.sub).fetch_optional(&state.db).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
+    state.agent.post("/git/stop", Some(serde_json::json!({ "name": config.name }))).await
+        .map_err(|e| agent_error("Stop container", e))?;
+    sqlx::query("UPDATE git_deploys SET status = 'stopped', updated_at = NOW() WHERE id = $1")
+        .bind(id).execute(&state.db).await.ok();
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// POST /api/git-deploys/{id}/start
+pub async fn start(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let config: GitDeploy = sqlx::query_as("SELECT * FROM git_deploys WHERE id = $1 AND user_id = $2")
+        .bind(id).bind(claims.sub).fetch_optional(&state.db).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
+    state.agent.post("/git/start", Some(serde_json::json!({ "name": config.name }))).await
+        .map_err(|e| agent_error("Start container", e))?;
+    sqlx::query("UPDATE git_deploys SET status = 'running', updated_at = NOW() WHERE id = $1")
+        .bind(id).execute(&state.db).await.ok();
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// POST /api/git-deploys/{id}/restart
+pub async fn restart(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let config: GitDeploy = sqlx::query_as("SELECT * FROM git_deploys WHERE id = $1 AND user_id = $2")
+        .bind(id).bind(claims.sub).fetch_optional(&state.db).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
+    state.agent.post("/git/restart", Some(serde_json::json!({ "name": config.name }))).await
+        .map_err(|e| agent_error("Restart container", e))?;
+    sqlx::query("UPDATE git_deploys SET status = 'running', updated_at = NOW() WHERE id = $1")
+        .bind(id).execute(&state.db).await.ok();
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// GET /api/git-deploys/{id}/logs
+pub async fn container_logs(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let config: GitDeploy = sqlx::query_as("SELECT * FROM git_deploys WHERE id = $1 AND user_id = $2")
+        .bind(id).bind(claims.sub).fetch_optional(&state.db).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
+    let result = state.agent.post("/git/logs", Some(serde_json::json!({ "name": config.name }))).await
+        .map_err(|e| agent_error("Container logs", e))?;
+    Ok(Json(result))
+}
+
 /// POST /api/webhooks/git/{id}/{secret} — Webhook endpoint (no auth).
 pub async fn webhook(
     State(state): State<AppState>,

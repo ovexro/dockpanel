@@ -45,6 +45,8 @@ struct DeployRequest {
     #[serde(default)]
     env: HashMap<String, String>,
     domain: Option<String>,
+    memory_mb: Option<u64>,
+    cpu_percent: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -141,6 +143,8 @@ async fn deploy_container(
         body.env,
         body.domain.as_deref(),
         &state.templates,
+        body.memory_mb,
+        body.cpu_percent,
     )
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
@@ -198,6 +202,71 @@ async fn prune(
     Ok(Json(serde_json::json!({ "pruned": pruned })))
 }
 
+#[derive(Deserialize)]
+struct LifecycleRequest {
+    name: String,
+}
+
+/// POST /git/stop
+async fn stop_container(Json(body): Json<LifecycleRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
+    if body.name.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
+    let container_name = format!("dockpanel-git-{}", body.name);
+    let docker = bollard::Docker::connect_with_local_defaults()
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+    docker.stop_container(&container_name, Some(bollard::container::StopContainerOptions { t: 10 }))
+        .await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+/// POST /git/start
+async fn start_container(Json(body): Json<LifecycleRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
+    if body.name.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
+    let container_name = format!("dockpanel-git-{}", body.name);
+    let docker = bollard::Docker::connect_with_local_defaults()
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+    docker.start_container(&container_name, None::<bollard::container::StartContainerOptions<String>>)
+        .await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+/// POST /git/restart
+async fn restart_container(Json(body): Json<LifecycleRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
+    if body.name.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
+    let container_name = format!("dockpanel-git-{}", body.name);
+    let docker = bollard::Docker::connect_with_local_defaults()
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+    docker.restart_container(&container_name, Some(bollard::container::RestartContainerOptions { t: 10 }))
+        .await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+#[derive(Deserialize)]
+struct LogsRequest {
+    name: String,
+    #[serde(default = "default_log_lines")]
+    lines: usize,
+}
+fn default_log_lines() -> usize { 200 }
+
+/// POST /git/logs
+async fn container_logs(Json(body): Json<LogsRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
+    if body.name.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
+    let container_name = format!("dockpanel-git-{}", body.name);
+    let docker = bollard::Docker::connect_with_local_defaults()
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+
+    use bollard::container::LogsOptions;
+    use tokio_stream::StreamExt;
+    let mut logs = docker.logs(&container_name, Some(LogsOptions::<String> {
+        stdout: true, stderr: true, tail: body.lines.to_string(), ..Default::default()
+    }));
+    let mut output = String::new();
+    while let Some(Ok(log)) = logs.next().await {
+        output.push_str(&log.to_string());
+    }
+    Ok(Json(serde_json::json!({ "logs": output })))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/git/clone", post(clone))
@@ -206,4 +275,8 @@ pub fn router() -> Router<AppState> {
         .route("/git/keygen", post(keygen))
         .route("/git/cleanup", post(cleanup))
         .route("/git/prune", post(prune))
+        .route("/git/stop", post(stop_container))
+        .route("/git/start", post(start_container))
+        .route("/git/restart", post(restart_container))
+        .route("/git/logs", post(container_logs))
 }
