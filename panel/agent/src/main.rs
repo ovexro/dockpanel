@@ -98,6 +98,7 @@ async fn main() {
         .merge(routes::php::router())
         .merge(routes::remote_backup::router())
         .merge(routes::deploy::router())
+        .merge(routes::git_build::router())
         .merge(routes::smtp::router())
         .merge(routes::wordpress::router())
         .merge(routes::cms::router())

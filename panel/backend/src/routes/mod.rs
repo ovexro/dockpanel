@@ -16,6 +16,7 @@ pub mod deploy;
 pub mod dns;
 pub mod docker_apps;
 pub mod files;
+pub mod git_deploys;
 pub mod logs;
 pub mod mail;
 pub mod metrics;
@@ -172,6 +173,15 @@ pub fn router() -> Router<AppState> {
         .route("/api/apps/{container_id}/logs", get(docker_apps::app_logs))
         .route("/api/apps/{container_id}/env", get(docker_apps::app_env))
         .route("/api/apps/{container_id}/update", post(docker_apps::update_app))
+        // Git Deploy
+        .route("/api/git-deploys", get(git_deploys::list).post(git_deploys::create))
+        .route("/api/git-deploys/{id}", get(git_deploys::get_one).put(git_deploys::update).delete(git_deploys::remove))
+        .route("/api/git-deploys/{id}/deploy", post(git_deploys::deploy))
+        .route("/api/git-deploys/{id}/rollback/{history_id}", post(git_deploys::rollback))
+        .route("/api/git-deploys/{id}/history", get(git_deploys::history))
+        .route("/api/git-deploys/{id}/keygen", post(git_deploys::keygen))
+        .route("/api/git-deploys/deploy/{deploy_id}/log", get(git_deploys::deploy_log))
+        .route("/api/webhooks/git/{id}/{secret}", post(git_deploys::webhook))
         // Security (admin)
         .route("/api/security/overview", get(security::overview))
         .route("/api/security/firewall", get(security::firewall_status))

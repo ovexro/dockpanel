@@ -1192,7 +1192,7 @@ pub async fn get_app_logs(container_id: &str, tail: usize) -> Result<String, Str
 }
 
 /// Find a free port for the blue-green container by asking the OS.
-fn find_free_port() -> Result<u16, String> {
+pub(crate) fn find_free_port() -> Result<u16, String> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0")
         .map_err(|e| format!("Failed to find free port: {e}"))?;
     let port = listener
@@ -1204,7 +1204,7 @@ fn find_free_port() -> Result<u16, String> {
 }
 
 /// Health check: wait for a container to accept TCP connections on a port.
-async fn health_check_port(port: u16, timeout_secs: u64) -> Result<(), String> {
+pub(crate) async fn health_check_port(port: u16, timeout_secs: u64) -> Result<(), String> {
     let deadline =
         tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     loop {
@@ -1224,7 +1224,7 @@ async fn health_check_port(port: u16, timeout_secs: u64) -> Result<(), String> {
 
 /// Swap the proxy_pass port in an existing nginx config file.
 /// Returns Ok(()) on success, Err on failure.
-fn swap_nginx_proxy_port(domain: &str, old_port: u16, new_port: u16) -> Result<(), String> {
+pub(crate) fn swap_nginx_proxy_port(domain: &str, old_port: u16, new_port: u16) -> Result<(), String> {
     let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
     let content = std::fs::read_to_string(&config_path)
         .map_err(|e| format!("Failed to read nginx config: {e}"))?;
@@ -1253,7 +1253,7 @@ fn swap_nginx_proxy_port(domain: &str, old_port: u16, new_port: u16) -> Result<(
 }
 
 /// Extract the host port from a container's HostConfig port bindings.
-fn extract_host_port(
+pub(crate) fn extract_host_port(
     host_config: &bollard::service::HostConfig,
 ) -> Option<u16> {
     host_config
