@@ -171,6 +171,9 @@ pub fn router() -> Router<AppState> {
         .route("/api/apps/registries", get(docker_apps::list_registries))
         .route("/api/apps/registry-login", post(docker_apps::registry_login))
         .route("/api/apps/registry-logout", post(docker_apps::registry_logout))
+        .route("/api/apps/images", get(docker_apps::list_images))
+        .route("/api/apps/images/prune", post(docker_apps::prune_images))
+        .route("/api/apps/images/{id}", delete(docker_apps::remove_image))
         .route("/api/apps", get(docker_apps::list_apps))
         .route("/api/apps/{container_id}", delete(docker_apps::remove_app))
         .route("/api/apps/{container_id}/stop", post(docker_apps::stop_app))
@@ -183,6 +186,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/apps/{container_id}/shell-info", get(docker_apps::shell_info))
         .route("/api/apps/{container_id}/exec", post(docker_apps::exec_command))
         .route("/api/apps/{container_id}/volumes", get(docker_apps::container_volumes))
+        .route("/api/apps/{container_id}/snapshot", post(docker_apps::snapshot_container))
         // Git Deploy
         .route("/api/git-deploys", get(git_deploys::list).post(git_deploys::create))
         .route("/api/git-deploys/{id}", get(git_deploys::get_one).put(git_deploys::update).delete(git_deploys::remove))
