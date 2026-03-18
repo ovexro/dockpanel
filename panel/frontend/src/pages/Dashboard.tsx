@@ -188,6 +188,27 @@ export default function Dashboard() {
   const [mailQueue, setMailQueue] = useState<number | null>(null);
   // Feature #4: Quick server action messages
   const [actionMessage, setActionMessage] = useState<{ text: string; type: string } | null>(null);
+  // Feature #3: Disk I/O metrics
+  const [diskIo, setDiskIo] = useState<{ read_bytes_sec: number; write_bytes_sec: number } | null>(null);
+  // Feature #6: Customizable dashboard layout
+  const [widgetConfig, setWidgetConfig] = useState<Record<string, boolean>>(() => {
+    try { return JSON.parse(localStorage.getItem('dp-dashboard-widgets') || '{}'); } catch { return {}; }
+  });
+  const [showWidgetConfig, setShowWidgetConfig] = useState(false);
+  // Feature #12: Custom dashboard widgets (Quick Links / Bookmarks)
+  const [bookmarks, setBookmarks] = useState<{ label: string; url: string }[]>(() => {
+    try { return JSON.parse(localStorage.getItem('dp-dashboard-bookmarks') || '[]'); } catch { return []; }
+  });
+  const [showAddBookmark, setShowAddBookmark] = useState(false);
+  const [bmLabel, setBmLabel] = useState("");
+  const [bmUrl, setBmUrl] = useState("");
+
+  const isVisible = (widget: string) => widgetConfig[widget] !== false; // default visible
+  const toggleWidget = (widget: string) => {
+    const next = { ...widgetConfig, [widget]: !isVisible(widget) };
+    setWidgetConfig(next);
+    localStorage.setItem('dp-dashboard-widgets', JSON.stringify(next));
+  };
 
   const dismissOnboarding = useCallback(() => {
     setDismissed(true);
@@ -259,6 +280,11 @@ export default function Dashboard() {
         }, 0);
         setDockerDiskUsage(totalMb > 1024 ? `${(totalMb / 1024).toFixed(1)} GB` : `${totalMb.toFixed(0)} MB`);
       })
+      .catch(() => {});
+    // Feature #3: Disk I/O metrics (endpoint takes ~1s due to sampling)
+    api
+      .get<any>("/system/disk-io")
+      .then(setDiskIo)
       .catch(() => {});
     // Feature #9: Mail queue count
     api
@@ -405,7 +431,7 @@ export default function Dashboard() {
   }, [network]);
 
   return (
-    <div className="p-6 lg:p-8 animate-fade-up">
+    <div className="p-4 sm:p-6 lg:p-8 animate-fade-up">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
         <div className="flex items-center gap-3">
           <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Dashboard</h1>
@@ -415,6 +441,11 @@ export default function Dashboard() {
           </span>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={() => setShowWidgetConfig(!showWidgetConfig)}
+            className="px-2 py-1 bg-dark-700 text-dark-200 rounded text-xs hover:bg-dark-600 transition-colors">
+            {showWidgetConfig ? "Done" : "Customize"}
+          </button>
+          <div className="h-4 w-px bg-dark-600 hidden sm:block" />
           <Link to="/apps" className="px-3 py-1.5 bg-dark-800 border border-dark-500 rounded-lg text-xs font-medium text-dark-100 hover:bg-dark-700 hover:text-dark-50 flex items-center gap-1.5">
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
             Deploy App
@@ -427,34 +458,67 @@ export default function Dashboard() {
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z" /></svg>
             Diagnostics
           </Link>
-          {/* Feature #4: Quick Server Actions */}
+          {/* Feature #4: Quick Server Actions — hidden on mobile */}
           <div className="h-4 w-px bg-dark-600 hidden sm:block" />
           <button onClick={async () => {
             if (!confirm("Restart Nginx? This will briefly interrupt all web traffic.")) return;
             try { await api.post("/agent/diagnostics/fix", { fix: "restart_nginx" }); setActionMessage({ text: "Nginx restarted", type: "success" }); setTimeout(() => setActionMessage(null), 3000); }
             catch { setActionMessage({ text: "Failed to restart Nginx", type: "error" }); setTimeout(() => setActionMessage(null), 3000); }
-          }} className="px-2.5 py-1.5 bg-dark-800 border border-dark-500 rounded-lg text-xs text-dark-200 hover:bg-dark-700 hover:text-dark-50">
+          }} className="hidden sm:inline-block px-2.5 py-1.5 bg-dark-800 border border-dark-500 rounded-lg text-xs text-dark-200 hover:bg-dark-700 hover:text-dark-50">
             Restart Nginx
           </button>
           <button onClick={async () => {
             if (!confirm("Restart PHP-FPM? Active requests may be interrupted.")) return;
             try { await api.post("/agent/diagnostics/fix", { fix: "restart_php" }); setActionMessage({ text: "PHP-FPM restarted", type: "success" }); setTimeout(() => setActionMessage(null), 3000); }
             catch { setActionMessage({ text: "Failed to restart PHP-FPM", type: "error" }); setTimeout(() => setActionMessage(null), 3000); }
-          }} className="px-2.5 py-1.5 bg-dark-800 border border-dark-500 rounded-lg text-xs text-dark-200 hover:bg-dark-700 hover:text-dark-50">
+          }} className="hidden sm:inline-block px-2.5 py-1.5 bg-dark-800 border border-dark-500 rounded-lg text-xs text-dark-200 hover:bg-dark-700 hover:text-dark-50">
             Restart PHP
           </button>
           <button onClick={async () => {
             if (!confirm("REBOOT SERVER?\n\nAll services will be temporarily unavailable. Are you sure?")) return;
             try { await api.post("/system/reboot"); setActionMessage({ text: "Server rebooting...", type: "success" }); setTimeout(() => setActionMessage(null), 5000); }
             catch { setActionMessage({ text: "Failed to reboot server", type: "error" }); setTimeout(() => setActionMessage(null), 3000); }
-          }} className="px-2.5 py-1.5 bg-red-500/10 border border-red-500/20 rounded-lg text-xs text-danger-400 hover:bg-red-500/20">
+          }} className="hidden sm:inline-block px-2.5 py-1.5 bg-red-500/10 border border-red-500/20 rounded-lg text-xs text-danger-400 hover:bg-red-500/20">
             Reboot
           </button>
         </div>
       </div>
 
+      {/* Feature #6: Widget customization panel */}
+      {showWidgetConfig && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 p-4 mb-4">
+          <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-3">Dashboard Widgets</h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            {[
+              { id: "metrics", label: "CPU / Memory / Disk" },
+              { id: "disk_io", label: "Disk I/O" },
+              { id: "charts", label: "Historical Charts" },
+              { id: "status_bar", label: "Status Bar" },
+              { id: "health_banner", label: "Health Indicator" },
+              { id: "sites_grid", label: "Sites Grid" },
+              { id: "activity", label: "Recent Activity" },
+              { id: "issues", label: "Active Issues" },
+              { id: "ssl_countdown", label: "SSL Countdown" },
+              { id: "network", label: "Network I/O" },
+              { id: "processes", label: "Top Processes" },
+              { id: "system_info", label: "System Info" },
+              { id: "onboarding", label: "Getting Started" },
+              { id: "bookmarks", label: "Quick Links" },
+            ].map(w => (
+              <label key={w.id} className="flex items-center gap-2 text-xs text-dark-200 cursor-pointer hover:text-dark-100">
+                <input type="checkbox" checked={isVisible(w.id)} onChange={() => toggleWidget(w.id)}
+                  className="w-3.5 h-3.5 accent-rust-500" />
+                {w.label}
+              </label>
+            ))}
+          </div>
+          <button onClick={() => { setWidgetConfig({}); localStorage.removeItem('dp-dashboard-widgets'); }}
+            className="mt-3 text-[10px] text-dark-400 hover:text-dark-200">Reset to defaults</button>
+        </div>
+      )}
+
       {/* Feature #10: Visual health indicator */}
-      {intel && (
+      {isVisible("health_banner") && intel && (
         <div className={`rounded-lg border px-4 py-2.5 flex items-center gap-2.5 mb-6 ${overallStatus.color}`}>
           <div className={`w-2.5 h-2.5 rounded-full ${overallStatus.dot} ${overallStatus.dot === "bg-rust-500" ? "animate-pulse" : ""}`} />
           <span className="text-sm font-medium">{overallStatus.label}</span>
@@ -492,7 +556,7 @@ export default function Dashboard() {
       )}
 
       {/* Getting Started */}
-      {!dismissed && system && (() => {
+      {isVisible("onboarding") && !dismissed && system && (() => {
         const steps: OnboardingStep[] = [
           { id: "site", label: "Create your first site", description: "Set up a website with Nginx, PHP, or reverse proxy", link: "/sites", check: () => sites.total > 0 },
           { id: "app", label: "Deploy a Docker app", description: "One-click deploy from 34 templates", link: "/apps", check: () => appCount > 0 },
@@ -555,7 +619,7 @@ export default function Dashboard() {
       ) : (
         <>
           {/* Resource Metrics — 3 column */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 stagger-children">
+          {isVisible("metrics") && <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6 stagger-children">
             {[
               { label: "CPU Usage", pct: system.cpu_usage, detail: `${system.cpu_count} cores${system.load_avg_1 !== undefined ? ` · Load ${system.load_avg_1?.toFixed(2)}` : ""}`,
                 icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><rect x="6" y="6" width="12" height="12" rx="1" /><path d="M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4M19 9h4m-4 6h4" strokeLinecap="round" /></svg> },
@@ -587,11 +651,25 @@ export default function Dashboard() {
                 </div>
               </div>
             ))}
-          </div>
+          </div>}
+
+          {/* Feature #3: Disk I/O widget */}
+          {isVisible("disk_io") && diskIo && (
+            <div className="grid grid-cols-2 gap-4 mb-6 max-w-md">
+              <div className="border border-dark-600 rounded-lg p-3 text-center">
+                <p className="text-xs text-dark-300 uppercase font-mono tracking-wider">Disk Read</p>
+                <p className="text-sm font-bold text-dark-50 mt-1">{formatRate(diskIo.read_bytes_sec)}</p>
+              </div>
+              <div className="border border-dark-600 rounded-lg p-3 text-center">
+                <p className="text-xs text-dark-300 uppercase font-mono tracking-wider">Disk Write</p>
+                <p className="text-sm font-bold text-dark-50 mt-1">{formatRate(diskIo.write_bytes_sec)}</p>
+              </div>
+            </div>
+          )}
 
           {/* Historical Charts */}
-          {metricsHistory.length >= 2 && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          {isVisible("charts") && metricsHistory.length >= 2 && (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
               {[
                 { label: "CPU", data: metricsHistory.map(p => p.cpu), color: "#22c55e" },
                 { label: "Memory", data: metricsHistory.map(p => p.mem), color: "#6366f1" },
@@ -609,7 +687,7 @@ export default function Dashboard() {
           )}
 
           {/* Status Bar — grid of stat cells */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-px bg-dark-600 border border-dark-500 mb-6">
+          {isVisible("status_bar") && <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-px bg-dark-600 border border-dark-500 mb-6">
             <div className="bg-dark-800 px-4 py-3 flex flex-col">
               <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Uptime</span>
               <span className="text-sm text-dark-50 font-medium">{formatUptime(system.uptime_secs)}</span>
@@ -677,7 +755,7 @@ export default function Dashboard() {
                 {mailQueue ?? 0} <span className="text-[10px] text-dark-400">messages</span>
               </span>
             </div>
-          </div>
+          </div>}
 
           {/* Reboot Required Warning */}
           {rebootRequired && (
@@ -694,7 +772,7 @@ export default function Dashboard() {
           )}
 
           {/* Feature #5: Site Status Mini-Grid */}
-          {sitesList.length > 0 && (
+          {isVisible("sites_grid") && sitesList.length > 0 && (
             <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mb-6">
               <div className="px-4 py-2.5 border-b border-dark-600 flex justify-between items-center">
                 <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Sites</h3>
@@ -712,7 +790,7 @@ export default function Dashboard() {
           )}
 
           {/* Feature #2: Recent Activity Feed */}
-          {recentActivity.length > 0 && (
+          {isVisible("activity") && recentActivity.length > 0 && (
             <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mb-6">
               <div className="px-4 py-2.5 border-b border-dark-600 flex justify-between items-center">
                 <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Recent Activity</h3>
@@ -737,7 +815,7 @@ export default function Dashboard() {
           )}
 
           {/* Active Issues + SSL — side by side */}
-          {intel && (intel.top_issues.length > 0 || intel.ssl_countdowns.length > 0) && (
+          {isVisible("issues") && intel && (intel.top_issues.length > 0 || intel.ssl_countdowns.length > 0) && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
               {intel.top_issues.length > 0 && (
                 <div className="border border-dark-500 bg-dark-800 p-4">
@@ -779,7 +857,7 @@ export default function Dashboard() {
           )}
 
           {/* System Information */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-px bg-dark-600 border border-dark-500 mb-6">
+          {isVisible("system_info") && <div className="hidden sm:grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-px bg-dark-600 border border-dark-500 mb-6">
             {[
               ["Hostname", system.hostname],
               ["OS", system.os],
@@ -793,12 +871,52 @@ export default function Dashboard() {
                 <span title={String(value)} className={`text-sm text-dark-50 font-medium truncate ${label === "Temperature" && system.cpu_temp != null ? tempColor(system.cpu_temp) : ""}`}>{value}</span>
               </div>
             ))}
-          </div>
+          </div>}
+
+          {/* Feature #12: Quick Links / Bookmarks */}
+          {(bookmarks.length > 0 || showAddBookmark) && isVisible("bookmarks") && (
+            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mb-6">
+              <div className="px-4 py-2.5 border-b border-dark-600 flex justify-between items-center">
+                <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Quick Links</h3>
+                <button onClick={() => setShowAddBookmark(!showAddBookmark)} className="text-[10px] text-rust-400 hover:text-rust-300">
+                  {showAddBookmark ? "Cancel" : "+ Add"}
+                </button>
+              </div>
+              {showAddBookmark && (
+                <div className="px-4 py-3 border-b border-dark-600 flex flex-col sm:flex-row gap-2">
+                  <input value={bmLabel} onChange={e => setBmLabel(e.target.value)} placeholder="Label"
+                    className="flex-1 px-2 py-1.5 bg-dark-900 border border-dark-500 rounded text-xs text-dark-100 placeholder-dark-400 min-h-[44px] sm:min-h-0" />
+                  <input value={bmUrl} onChange={e => setBmUrl(e.target.value)} placeholder="/sites or https://..."
+                    className="flex-1 px-2 py-1.5 bg-dark-900 border border-dark-500 rounded text-xs text-dark-100 placeholder-dark-400 min-h-[44px] sm:min-h-0" />
+                  <button onClick={() => {
+                    if (bmLabel && bmUrl) {
+                      const next = [...bookmarks, { label: bmLabel, url: bmUrl }];
+                      setBookmarks(next);
+                      localStorage.setItem('dp-dashboard-bookmarks', JSON.stringify(next));
+                      setBmLabel(""); setBmUrl(""); setShowAddBookmark(false);
+                    }
+                  }} className="px-3 py-1.5 bg-rust-500 text-white rounded text-xs min-h-[44px] sm:min-h-0">Add</button>
+                </div>
+              )}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-dark-600">
+                {bookmarks.map((bm, i) => (
+                  <div key={i} className="bg-dark-800 px-3 py-2.5 flex items-center justify-between group">
+                    <a href={bm.url} className="text-xs text-dark-100 hover:text-rust-400 truncate">{bm.label}</a>
+                    <button onClick={() => {
+                      const next = bookmarks.filter((_, j) => j !== i);
+                      setBookmarks(next);
+                      localStorage.setItem('dp-dashboard-bookmarks', JSON.stringify(next));
+                    }} className="text-dark-500 hover:text-danger-400 text-xs opacity-0 group-hover:opacity-100 ml-2">&times;</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Network & Processes */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Network I/O */}
-            {network.length > 0 && (
+            {isVisible("network") && network.length > 0 && (
               <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-x-auto">
                 <div className="px-5 py-3 border-b border-dark-600">
                   <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Network I/O</h3>
@@ -841,7 +959,7 @@ export default function Dashboard() {
             )}
 
             {/* Top Processes */}
-            {processes.length > 0 && (
+            {isVisible("processes") && processes.length > 0 && (
               <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-x-auto">
                 <div className="px-5 py-3 border-b border-dark-600">
                   <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Top Processes</h3>

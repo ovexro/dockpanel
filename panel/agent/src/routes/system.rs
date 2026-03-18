@@ -207,9 +207,51 @@ async fn network(State(state): State<AppState>) -> Json<Vec<NetworkInfo>> {
     Json(interfaces)
 }
 
+/// GET /system/disk-io — Get disk I/O stats from /proc/diskstats.
+async fn disk_io() -> Json<serde_json::Value> {
+    // Take two snapshots 1 second apart to calculate rate
+    let read1 = read_diskstats().await;
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    let read2 = read_diskstats().await;
+
+    let read_rate = if read2.0 >= read1.0 { (read2.0 - read1.0) * 512 } else { 0 }; // sectors * 512 = bytes
+    let write_rate = if read2.1 >= read1.1 { (read2.1 - read1.1) * 512 } else { 0 };
+
+    Json(serde_json::json!({
+        "read_bytes_sec": read_rate,
+        "write_bytes_sec": write_rate,
+        "read_total_mb": (read2.0 * 512) / (1024 * 1024),
+        "write_total_mb": (read2.1 * 512) / (1024 * 1024),
+    }))
+}
+
+async fn read_diskstats() -> (u64, u64) {
+    let content = tokio::fs::read_to_string("/proc/diskstats").await.unwrap_or_default();
+    let mut reads: u64 = 0;
+    let mut writes: u64 = 0;
+
+    for line in content.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 14 {
+            let dev = parts[2];
+            // Only count main block devices, not partitions
+            let is_main = (dev.starts_with("sd") && dev.len() == 3)
+                || (dev.starts_with("vd") && dev.len() == 3)
+                || (dev.starts_with("xvd") && dev.len() == 4)
+                || (dev.starts_with("nvme") && dev.contains("n") && !dev.contains("p"));
+            if is_main {
+                reads += parts[5].parse::<u64>().unwrap_or(0);   // sectors read
+                writes += parts[9].parse::<u64>().unwrap_or(0);  // sectors written
+            }
+        }
+    }
+    (reads, writes)
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/system/info", get(system_info))
         .route("/system/processes", get(processes))
         .route("/system/network", get(network))
+        .route("/system/disk-io", get(disk_io))
 }
