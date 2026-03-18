@@ -224,6 +224,210 @@ pub async fn list_databases() -> Result<Vec<DbContainer>, String> {
     Ok(dbs)
 }
 
+/// Result of a SQL query execution.
+#[derive(serde::Serialize)]
+pub struct QueryResult {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    pub row_count: usize,
+    pub execution_time_ms: u64,
+    pub truncated: bool,
+}
+
+const MAX_ROWS: usize = 1000;
+const QUERY_TIMEOUT_SECS: u64 = 15;
+const MAX_OUTPUT_BYTES: usize = 5 * 1024 * 1024;
+
+/// Execute a SQL query inside a database container via docker exec.
+pub async fn execute_query(
+    container: &str,
+    engine: &str,
+    user: &str,
+    password: &str,
+    database: &str,
+    sql: &str,
+) -> Result<QueryResult, String> {
+    let start = std::time::Instant::now();
+
+    let output = match engine {
+        "mysql" | "mariadb" => {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(QUERY_TIMEOUT_SECS),
+                tokio::process::Command::new("docker")
+                    .arg("exec")
+                    .arg("-e")
+                    .arg(format!("MYSQL_PWD={password}"))
+                    .arg(container)
+                    .arg("mariadb")
+                    .arg("-u")
+                    .arg(user)
+                    .arg(database)
+                    .arg("-e")
+                    .arg(sql)
+                    .arg("--batch")
+                    .arg("--column-names")
+                    .output(),
+            )
+            .await
+        }
+        _ => {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(QUERY_TIMEOUT_SECS),
+                tokio::process::Command::new("docker")
+                    .arg("exec")
+                    .arg("-e")
+                    .arg(format!("PGPASSWORD={password}"))
+                    .arg(container)
+                    .arg("psql")
+                    .arg("-U")
+                    .arg(user)
+                    .arg("-d")
+                    .arg(database)
+                    .arg("-c")
+                    .arg(sql)
+                    .arg("--csv")
+                    .output(),
+            )
+            .await
+        }
+    };
+
+    let elapsed = start.elapsed().as_millis() as u64;
+
+    let output = match output {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => return Err(format!("Failed to execute docker exec: {e}")),
+        Err(_) => return Err(format!("Query timed out ({QUERY_TIMEOUT_SECS}s limit)")),
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let msg = if stderr.trim().is_empty() {
+            stdout.trim().to_string()
+        } else {
+            stderr.trim().to_string()
+        };
+        return Err(msg);
+    }
+
+    if output.stdout.len() > MAX_OUTPUT_BYTES {
+        return Err(format!(
+            "Query output too large ({} MB, max {} MB)",
+            output.stdout.len() / (1024 * 1024),
+            MAX_OUTPUT_BYTES / (1024 * 1024)
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let (columns, mut rows) = match engine {
+        "mysql" | "mariadb" => parse_tsv(&stdout),
+        _ => parse_csv(&stdout),
+    };
+
+    let truncated = rows.len() > MAX_ROWS;
+    if truncated {
+        rows.truncate(MAX_ROWS);
+    }
+    let row_count = rows.len();
+
+    Ok(QueryResult {
+        columns,
+        rows,
+        row_count,
+        execution_time_ms: elapsed,
+        truncated,
+    })
+}
+
+/// Parse tab-separated output (MariaDB --batch mode).
+fn parse_tsv(output: &str) -> (Vec<String>, Vec<Vec<String>>) {
+    let mut lines = output.lines();
+    let columns: Vec<String> = match lines.next() {
+        Some(header) if !header.is_empty() => header.split('\t').map(|s| s.to_string()).collect(),
+        _ => return (vec![], vec![]),
+    };
+    let rows: Vec<Vec<String>> = lines
+        .filter(|line| !line.is_empty())
+        .map(|line| line.split('\t').map(|s| s.to_string()).collect())
+        .collect();
+    (columns, rows)
+}
+
+/// Parse CSV output (PostgreSQL --csv mode). Handles quoted fields with embedded
+/// commas, newlines, and escaped double-quotes per RFC 4180.
+fn parse_csv(output: &str) -> (Vec<String>, Vec<Vec<String>>) {
+    let mut records: Vec<Vec<String>> = Vec::new();
+    let mut field = String::new();
+    let mut record: Vec<String> = Vec::new();
+    let mut in_quotes = false;
+    let mut chars = output.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if in_quotes {
+            if c == '"' {
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                    field.push('"');
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                field.push(c);
+            }
+        } else {
+            match c {
+                '"' => in_quotes = true,
+                ',' => {
+                    record.push(std::mem::take(&mut field));
+                }
+                '\n' => {
+                    record.push(std::mem::take(&mut field));
+                    if !record.is_empty() {
+                        records.push(std::mem::take(&mut record));
+                    }
+                }
+                '\r' => {} // skip CR
+                _ => field.push(c),
+            }
+        }
+    }
+
+    // Last field/record
+    if !field.is_empty() || !record.is_empty() {
+        record.push(field);
+        if !record.iter().all(String::is_empty) || record.len() > 1 {
+            records.push(record);
+        }
+    }
+
+    if records.is_empty() {
+        return (vec![], vec![]);
+    }
+
+    // Check if the output is a PostgreSQL command tag (INSERT/UPDATE/DELETE/etc.)
+    // rather than actual CSV data — these have no commas and a single "column"
+    if records.len() == 1 && records[0].len() == 1 {
+        let tag = &records[0][0];
+        if tag.starts_with("INSERT")
+            || tag.starts_with("UPDATE")
+            || tag.starts_with("DELETE")
+            || tag.starts_with("CREATE")
+            || tag.starts_with("ALTER")
+            || tag.starts_with("DROP")
+            || tag.starts_with("TRUNCATE")
+            || tag.starts_with("GRANT")
+            || tag.starts_with("REVOKE")
+        {
+            return (vec![], vec![]);
+        }
+    }
+
+    let columns = records.remove(0);
+    (columns, records)
+}
+
 /// Ensure the dockpanel-db Docker network exists.
 async fn ensure_network(docker: &Docker) -> Result<(), String> {
     use bollard::network::CreateNetworkOptions;
