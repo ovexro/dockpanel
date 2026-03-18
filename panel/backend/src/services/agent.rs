@@ -236,6 +236,86 @@ impl AgentClient {
         self.request("POST", path, body).await
     }
 
+    /// GET that returns raw bytes instead of JSON. Used for file downloads.
+    pub async fn get_bytes(&self, path: &str) -> Result<(Vec<u8>, Option<String>), AgentError> {
+        self.check_circuit_breaker()?;
+        let _permit = self.semaphore.acquire().await.map_err(|e| {
+            AgentError::Connection(format!("connection semaphore closed: {e}"))
+        })?;
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(120),
+            self.request_bytes_inner(path),
+        )
+        .await
+        .map_err(|_| AgentError::Request("agent request timed out after 120s".into()))?;
+
+        match &result {
+            Ok(_) => self.record_success(),
+            Err(AgentError::Connection(_)) => self.record_failure(),
+            _ => {}
+        }
+
+        result
+    }
+
+    async fn request_bytes_inner(
+        &self,
+        path: &str,
+    ) -> Result<(Vec<u8>, Option<String>), AgentError> {
+        let stream = UnixStream::connect(&self.socket_path)
+            .await
+            .map_err(|e| AgentError::Connection(e.to_string()))?;
+
+        let io = TokioIo::new(stream);
+
+        let (mut sender, conn) = http1::handshake(io)
+            .await
+            .map_err(|e| AgentError::Connection(e.to_string()))?;
+
+        tokio::spawn(async move {
+            if let Err(e) = conn.await {
+                tracing::warn!("agent connection error: {e}");
+            }
+        });
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("http://localhost{path}"))
+            .header("authorization", format!("Bearer {}", self.token))
+            .body(Full::new(Bytes::new()))
+            .map_err(|e| AgentError::Request(e.to_string()))?;
+
+        let resp = sender
+            .send_request(req)
+            .await
+            .map_err(|e| AgentError::Request(e.to_string()))?;
+
+        let status = resp.status();
+
+        // Extract content-disposition header before consuming body
+        let content_disposition = resp
+            .headers()
+            .get("content-disposition")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        let collected = resp
+            .into_body()
+            .collect()
+            .await
+            .map_err(|e| AgentError::Response(e.to_string()))?;
+
+        let bytes = collected.to_bytes();
+
+        if !status.is_success() {
+            let msg = String::from_utf8_lossy(&bytes).to_string();
+            return Err(AgentError::Status(status.as_u16(), msg));
+        }
+
+        Ok((bytes.to_vec(), content_disposition))
+    }
+
     /// POST with a custom timeout (seconds). Use for long-running operations like docker build.
     pub async fn post_long(
         &self,
