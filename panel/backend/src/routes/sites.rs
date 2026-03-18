@@ -1294,3 +1294,114 @@ pub async fn remove_alias(
         .map_err(|e| agent_error("Domain aliases", e))?;
     Ok(Json(result))
 }
+
+// ──────────────────────────────────────────────────────────────
+// Access Logs, Traffic Stats, PHP Errors, Health Check
+// ──────────────────────────────────────────────────────────────
+
+/// GET /api/sites/{id}/access-logs — View nginx access/error logs for a site.
+pub async fn access_logs(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = site_domain(&state, id, claims.sub).await?;
+    let lines = params.get("lines").unwrap_or(&"200".to_string()).clone();
+    let log_type = params.get("type").unwrap_or(&"access".to_string()).clone();
+    let path = format!(
+        "/nginx/site-logs/{}?lines={}&log_type={}",
+        domain, lines, log_type
+    );
+    let result = state
+        .agent
+        .get(&path)
+        .await
+        .map_err(|e| agent_error("Site logs", e))?;
+    Ok(Json(result))
+}
+
+/// GET /api/sites/{id}/stats — Basic traffic stats from access log.
+pub async fn site_stats(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = site_domain(&state, id, claims.sub).await?;
+    let result = state
+        .agent
+        .get(&format!("/nginx/site-stats/{domain}"))
+        .await
+        .map_err(|e| agent_error("Site stats", e))?;
+    Ok(Json(result))
+}
+
+/// GET /api/sites/{id}/php-errors — View PHP-FPM error log for a site.
+pub async fn php_errors(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = site_domain(&state, id, claims.sub).await?;
+    let result = state
+        .agent
+        .get(&format!("/nginx/php-errors/{domain}"))
+        .await
+        .map_err(|e| agent_error("PHP errors", e))?;
+    Ok(Json(result))
+}
+
+/// GET /api/sites/{id}/health — Check if site is responding.
+pub async fn health_check(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = site_domain(&state, id, claims.sub).await?;
+
+    // Check if site has SSL
+    let ssl: Option<(bool,)> = sqlx::query_as("SELECT ssl_enabled FROM sites WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+    let ssl_enabled = ssl.map(|(s,)| s).unwrap_or(false);
+
+    let url = if ssl_enabled {
+        format!("https://{domain}")
+    } else {
+        format!("http://{domain}")
+    };
+
+    let start = std::time::Instant::now();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .danger_accept_invalid_certs(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap_or_default();
+
+    match client.get(&url).send().await {
+        Ok(resp) => {
+            let elapsed = start.elapsed().as_millis() as u32;
+            let status = resp.status().as_u16();
+            Ok(Json(serde_json::json!({
+                "healthy": status < 500,
+                "status": status,
+                "response_time_ms": elapsed,
+                "url": url,
+            })))
+        }
+        Err(e) => {
+            let elapsed = start.elapsed().as_millis() as u32;
+            Ok(Json(serde_json::json!({
+                "healthy": false,
+                "status": 0,
+                "response_time_ms": elapsed,
+                "error": format!("{e}"),
+                "url": url,
+            })))
+        }
+    }
+}
