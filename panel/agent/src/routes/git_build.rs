@@ -47,6 +47,7 @@ struct DeployRequest {
     domain: Option<String>,
     memory_mb: Option<u64>,
     cpu_percent: Option<u64>,
+    ssl_email: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -145,6 +146,7 @@ async fn deploy_container(
         &state.templates,
         body.memory_mb,
         body.cpu_percent,
+        body.ssl_email.as_deref(),
     )
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
@@ -267,6 +269,77 @@ async fn container_logs(Json(body): Json<LogsRequest>) -> Result<Json<serde_json
     Ok(Json(serde_json::json!({ "logs": output })))
 }
 
+#[derive(Deserialize)]
+struct HookRequest {
+    name: String,
+    command: String,
+}
+
+/// POST /git/hook — Run a command inside a git-deployed container (docker exec).
+async fn run_hook(Json(body): Json<HookRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
+    if body.name.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
+    if body.command.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Empty command")); }
+    let container_name = format!("dockpanel-git-{}", body.name);
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        tokio::process::Command::new("docker")
+            .args(["exec", &container_name, "sh", "-c", &body.command])
+            .output()
+    ).await
+        .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Hook timed out (300s)"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}{stderr}");
+    // Truncate to 50KB
+    let truncated = if combined.len() > 50_000 { format!("{}...\n[truncated]", &combined[..50_000]) } else { combined };
+
+    Ok(Json(serde_json::json!({
+        "success": output.status.success(),
+        "output": truncated,
+    })))
+}
+
+#[derive(Deserialize)]
+struct PreBuildHookRequest {
+    name: String,
+    command: String,
+}
+
+/// POST /git/pre-build-hook — Run a command on the host in the git repo directory.
+async fn pre_build_hook(Json(body): Json<PreBuildHookRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
+    if body.name.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
+    if body.command.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Empty command")); }
+    let git_dir = format!("/var/lib/dockpanel/git/{}", body.name);
+    if !std::path::Path::new(&git_dir).exists() {
+        return Err(err(StatusCode::NOT_FOUND, "Git repo not found"));
+    }
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        tokio::process::Command::new("sh")
+            .args(["-c", &body.command])
+            .current_dir(&git_dir)
+            .env("HOME", &git_dir)
+            .env("NODE_ENV", "production")
+            .output()
+    ).await
+        .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Hook timed out (300s)"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}{stderr}");
+    let truncated = if combined.len() > 50_000 { format!("{}...\n[truncated]", &combined[..50_000]) } else { combined };
+
+    Ok(Json(serde_json::json!({
+        "success": output.status.success(),
+        "output": truncated,
+    })))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/git/clone", post(clone))
@@ -279,4 +352,6 @@ pub fn router() -> Router<AppState> {
         .route("/git/start", post(start_container))
         .route("/git/restart", post(restart_container))
         .route("/git/logs", post(container_logs))
+        .route("/git/hook", post(run_hook))
+        .route("/git/pre-build-hook", post(pre_build_hook))
 }

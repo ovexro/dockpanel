@@ -212,6 +212,7 @@ pub async fn deploy_or_update(
     templates: &Tera,
     memory_mb: Option<u64>,
     cpu_percent: Option<u64>,
+    ssl_email: Option<&str>,
 ) -> Result<GitDeployResult, String> {
     let docker =
         Docker::connect_with_local_defaults().map_err(|e| format!("Docker connect failed: {e}"))?;
@@ -360,6 +361,40 @@ pub async fn deploy_or_update(
             // Set up nginx reverse proxy if domain is provided
             if let Some(d) = domain {
                 setup_nginx_proxy(templates, d, host_port).await?;
+
+                // After successful nginx setup for initial deploy with domain
+                if let Some(email) = ssl_email {
+                    // DNS propagation wait
+                    for i in 0..6u32 {
+                        if i > 0 { tokio::time::sleep(std::time::Duration::from_secs(5)).await; }
+                        match tokio::net::TcpStream::connect(format!("{}:80", d)).await {
+                            Ok(_) => break,
+                            Err(_) if i < 5 => continue,
+                            Err(_) => break,
+                        }
+                    }
+                    match crate::services::ssl::load_or_create_account(email).await {
+                        Ok(account) => {
+                            match crate::services::ssl::provision_cert(&account, d).await {
+                                Ok(_) => {
+                                    let ssl_config = crate::routes::nginx::SiteConfig {
+                                        runtime: "proxy".to_string(), root: None,
+                                        proxy_port: Some(host_port), php_socket: None,
+                                        ssl: None, ssl_cert: None, ssl_key: None,
+                                        rate_limit: None, max_upload_mb: None,
+                                        php_memory_mb: None, php_max_workers: None,
+                                        custom_nginx: None, php_preset: None, app_command: None,
+                                    };
+                                    if let Ok(()) = crate::services::ssl::enable_ssl_for_site(templates, d, &ssl_config).await {
+                                        tracing::info!("Auto-SSL: certificate provisioned for {d}");
+                                    }
+                                }
+                                Err(e) => tracing::warn!("Auto-SSL: cert provisioning failed for {d}: {e}"),
+                            }
+                        }
+                        Err(e) => tracing::warn!("Auto-SSL: ACME account failed for {d}: {e}"),
+                    }
+                }
             }
 
             Ok(GitDeployResult {
