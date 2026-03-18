@@ -244,6 +244,10 @@ pub fn router() -> Router<AppState> {
         .route("/api/dns/zones/{id}/records", get(dns::list_records).post(dns::create_record))
         .route("/api/dns/zones/{id}/records/{record_id}", put(dns::update_record).delete(dns::delete_record))
         .route("/api/dns/propagation", post(dns::check_propagation))
+        .route("/api/dns/health-check", post(dns::dns_health_check))
+        .route("/api/dns/zones/{id}/dnssec", get(dns::dnssec_status))
+        .route("/api/dns/zones/{id}/changelog", get(dns::dns_changelog))
+        .route("/api/dns/zones/{id}/analytics", get(dns::dns_analytics))
         // WordPress Management
         .route("/api/sites/{id}/wordpress", get(wordpress::info))
         .route("/api/sites/{id}/wordpress/install", post(wordpress::install))
