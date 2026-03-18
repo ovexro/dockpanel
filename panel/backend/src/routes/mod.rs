@@ -184,6 +184,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/git-deploys/{id}/start", post(git_deploys::start))
         .route("/api/git-deploys/{id}/restart", post(git_deploys::restart))
         .route("/api/git-deploys/{id}/logs", get(git_deploys::container_logs))
+        .route("/api/git-deploys/{id}/previews", get(git_deploys::list_previews))
+        .route("/api/git-deploys/{id}/previews/{preview_id}", delete(git_deploys::delete_preview))
         .route("/api/git-deploys/deploy/{deploy_id}/log", get(git_deploys::deploy_log))
         .route("/api/webhooks/git/{id}/{secret}", post(git_deploys::webhook))
         // Security (admin)

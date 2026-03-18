@@ -49,6 +49,22 @@ pub struct GitDeploy {
     pub last_commit: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub github_token: Option<String>,
+    pub deploy_cron: Option<String>,
+}
+
+#[derive(serde::Serialize, sqlx::FromRow)]
+pub struct GitPreview {
+    pub id: Uuid,
+    pub git_deploy_id: Uuid,
+    pub branch: String,
+    pub container_name: String,
+    pub container_id: Option<String>,
+    pub host_port: i32,
+    pub domain: Option<String>,
+    pub status: String,
+    pub commit_hash: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(serde::Serialize, sqlx::FromRow)]
@@ -82,6 +98,8 @@ pub struct CreateRequest {
     pub post_deploy_cmd: Option<String>,
     pub build_args: Option<HashMap<String, String>>,
     pub build_context: Option<String>,
+    pub github_token: Option<String>,
+    pub deploy_cron: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -100,6 +118,8 @@ pub struct UpdateRequest {
     pub post_deploy_cmd: Option<String>,
     pub build_args: Option<HashMap<String, String>>,
     pub build_context: Option<String>,
+    pub github_token: Option<String>,
+    pub deploy_cron: Option<String>,
 }
 
 /// GET /api/git-deploys — List all git deploys for the current user.
@@ -109,13 +129,18 @@ pub async fn list(
 ) -> Result<Json<Vec<GitDeploy>>, ApiError> {
     require_admin(&claims.role)?;
 
-    let deploys: Vec<GitDeploy> = sqlx::query_as(
+    let mut deploys: Vec<GitDeploy> = sqlx::query_as(
         "SELECT * FROM git_deploys WHERE user_id = $1 ORDER BY created_at DESC",
     )
     .bind(claims.sub)
     .fetch_all(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    // Mask github_token in responses
+    for d in &mut deploys {
+        mask_github_token(d);
+    }
 
     Ok(Json(deploys))
 }
@@ -173,8 +198,8 @@ pub async fn create(
     let build_context = body.build_context.as_deref().unwrap_or(".");
 
     let deploy: GitDeploy = sqlx::query_as(
-        "INSERT INTO git_deploys (user_id, name, repo_url, branch, dockerfile, container_port, host_port, domain, env_vars, auto_deploy, webhook_secret, memory_mb, cpu_percent, ssl_email, pre_build_cmd, post_deploy_cmd, build_args, build_context) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) \
+        "INSERT INTO git_deploys (user_id, name, repo_url, branch, dockerfile, container_port, host_port, domain, env_vars, auto_deploy, webhook_secret, memory_mb, cpu_percent, ssl_email, pre_build_cmd, post_deploy_cmd, build_args, build_context, github_token, deploy_cron) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) \
          RETURNING *",
     )
     .bind(claims.sub)
@@ -195,6 +220,8 @@ pub async fn create(
     .bind(&body.post_deploy_cmd)
     .bind(&build_args)
     .bind(build_context)
+    .bind(&body.github_token)
+    .bind(&body.deploy_cron)
     .fetch_one(&state.db)
     .await
     .map_err(|e| {
@@ -221,7 +248,7 @@ pub async fn get_one(
 ) -> Result<Json<GitDeploy>, ApiError> {
     require_admin(&claims.role)?;
 
-    let deploy: GitDeploy = sqlx::query_as(
+    let mut deploy: GitDeploy = sqlx::query_as(
         "SELECT * FROM git_deploys WHERE id = $1 AND user_id = $2",
     )
     .bind(id)
@@ -231,6 +258,7 @@ pub async fn get_one(
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
 
+    mask_github_token(&mut deploy);
     Ok(Json(deploy))
 }
 
@@ -276,8 +304,10 @@ pub async fn update(
          post_deploy_cmd = COALESCE($12, post_deploy_cmd), \
          build_args = COALESCE($13, build_args), \
          build_context = COALESCE($14, build_context), \
+         github_token = COALESCE($15, github_token), \
+         deploy_cron = COALESCE($16, deploy_cron), \
          updated_at = NOW() \
-         WHERE id = $15 AND user_id = $16 \
+         WHERE id = $17 AND user_id = $18 \
          RETURNING *",
     )
     .bind(body.repo_url.as_deref())
@@ -294,6 +324,8 @@ pub async fn update(
     .bind(body.post_deploy_cmd.as_deref())
     .bind(build_args)
     .bind(body.build_context.as_deref())
+    .bind(body.github_token.as_deref())
+    .bind(body.deploy_cron.as_deref())
     .bind(id)
     .bind(claims.sub)
     .fetch_one(&state.db)
@@ -819,16 +851,19 @@ pub async fn webhook(
     }
 
     // Parse body to check branch (GitHub/GitLab push payload)
-    if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&body) {
-        if let Some(ref_field) = payload.get("ref").and_then(|v| v.as_str()) {
-            let push_branch = ref_field.strip_prefix("refs/heads/").unwrap_or(ref_field);
-            if push_branch != config.branch {
-                return Ok(Json(serde_json::json!({
-                    "ok": true,
-                    "message": format!("Skipped: push to '{push_branch}', configured branch is '{}'", config.branch),
-                })));
-            }
-        }
+    let payload = serde_json::from_slice::<serde_json::Value>(&body).unwrap_or_default();
+    let push_branch = payload.get("ref")
+        .and_then(|r| r.as_str())
+        .and_then(|r| r.strip_prefix("refs/heads/"))
+        .unwrap_or("");
+
+    if !push_branch.is_empty() && push_branch != config.branch {
+        // Preview deployment for non-configured branches
+        handle_preview_deploy(&state, &config, push_branch, &payload).await;
+        return Ok(Json(serde_json::json!({
+            "ok": true,
+            "message": format!("Preview deploy triggered for branch '{push_branch}'"),
+        })));
     }
 
     // Update status to building
@@ -904,6 +939,18 @@ fn spawn_deploy_task(
                 }
             }
         };
+
+        // Set GitHub pending status
+        if let Some(ref gh_token) = config.github_token {
+            if !gh_token.is_empty() {
+                let token = gh_token.clone();
+                let repo = config.repo_url.clone();
+                let domain = config.domain.clone();
+                tokio::spawn(async move {
+                    set_github_status(&token, &repo, "HEAD", "pending", domain.as_deref()).await;
+                });
+            }
+        }
 
         // Build clone body
         let mut clone_body = serde_json::json!({
@@ -1138,6 +1185,19 @@ fn spawn_deploy_task(
                     });
                 }
 
+                // GitHub commit status — success
+                if let Some(ref gh_token) = config.github_token {
+                    if !gh_token.is_empty() && commit_hash != "unknown" {
+                        let token = gh_token.clone();
+                        let repo_url = config.repo_url.clone();
+                        let sha = commit_hash.clone();
+                        let domain = config.domain.clone();
+                        tokio::spawn(async move {
+                            set_github_status(&token, &repo_url, &sha, "success", domain.as_deref()).await;
+                        });
+                    }
+                }
+
                 // Auto-rollback monitor: watch container for 2 minutes after deploy
                 {
                     let monitor_db = db.clone();
@@ -1275,6 +1335,19 @@ fn spawn_deploy_task(
                     Some("git_deploy"), Some(&deploy_name), Some(&commit_hash), Some("failed"),
                 ).await;
 
+                // GitHub commit status — failure
+                if let Some(ref gh_token) = config.github_token {
+                    if !gh_token.is_empty() && commit_hash != "unknown" {
+                        let token = gh_token.clone();
+                        let repo_url = config.repo_url.clone();
+                        let sha = commit_hash.clone();
+                        let domain = config.domain.clone();
+                        tokio::spawn(async move {
+                            set_github_status(&token, &repo_url, &sha, "failure", domain.as_deref()).await;
+                        });
+                    }
+                }
+
                 // Deploy failure notification
                 {
                     let notify_db = db.clone();
@@ -1304,4 +1377,364 @@ fn spawn_deploy_task(
         tokio::time::sleep(Duration::from_secs(60)).await;
         logs.lock().unwrap().remove(&deploy_id);
     });
+}
+
+/// Mask github_token in API responses — show "●●●●●●●●" if set.
+fn mask_github_token(deploy: &mut GitDeploy) {
+    if let Some(ref t) = deploy.github_token {
+        if !t.is_empty() {
+            deploy.github_token = Some("\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}".to_string());
+        }
+    }
+}
+
+/// Set GitHub commit status via the GitHub API.
+async fn set_github_status(token: &str, repo_url: &str, sha: &str, state: &str, domain: Option<&str>) {
+    let (owner, repo) = match parse_github_repo(repo_url) {
+        Some(r) => r,
+        None => return, // Not a GitHub URL
+    };
+
+    let target_url = domain.map(|d| format!("https://{d}")).unwrap_or_default();
+    let description = match state {
+        "success" => "Deployed successfully via DockPanel",
+        "failure" => "Deploy failed",
+        "pending" => "Deploying...",
+        _ => "Deploy status update",
+    };
+
+    let client = reqwest::Client::new();
+    let _ = client
+        .post(&format!("https://api.github.com/repos/{owner}/{repo}/statuses/{sha}"))
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "DockPanel")
+        .json(&serde_json::json!({
+            "state": state,
+            "target_url": target_url,
+            "description": description,
+            "context": "dockpanel/deploy",
+        }))
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await;
+}
+
+fn parse_github_repo(url: &str) -> Option<(String, String)> {
+    // https://github.com/owner/repo.git
+    if let Some(rest) = url.strip_prefix("https://github.com/") {
+        let clean = rest.trim_end_matches(".git");
+        let parts: Vec<&str> = clean.splitn(2, '/').collect();
+        if parts.len() == 2 {
+            return Some((parts[0].to_string(), parts[1].to_string()));
+        }
+    }
+    // git@github.com:owner/repo.git
+    if let Some(rest) = url.strip_prefix("git@github.com:") {
+        let clean = rest.trim_end_matches(".git");
+        let parts: Vec<&str> = clean.splitn(2, '/').collect();
+        if parts.len() == 2 {
+            return Some((parts[0].to_string(), parts[1].to_string()));
+        }
+    }
+    None
+}
+
+/// Trigger a deploy task from the scheduler (no SSE, no provision logs).
+pub async fn trigger_deploy_task(
+    db: sqlx::PgPool,
+    agent: crate::services::agent::AgentClient,
+    git_deploy_id: Uuid,
+    user_id: Uuid,
+    triggered_by: String,
+) {
+    // Fetch config
+    let config: GitDeploy = match sqlx::query_as("SELECT * FROM git_deploys WHERE id = $1")
+        .bind(git_deploy_id).fetch_optional(&db).await {
+        Ok(Some(c)) => c,
+        _ => return,
+    };
+
+    let email: String = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
+        .bind(user_id).fetch_optional(&db).await.ok().flatten().unwrap_or_default();
+
+    // Update status
+    sqlx::query("UPDATE git_deploys SET status = 'building', updated_at = NOW() WHERE id = $1")
+        .bind(git_deploy_id).execute(&db).await.ok();
+
+    let started = std::time::Instant::now();
+
+    // GitHub pending status
+    if let Some(ref gh_token) = config.github_token {
+        if !gh_token.is_empty() {
+            set_github_status(gh_token, &config.repo_url, "HEAD", "pending", config.domain.as_deref()).await;
+        }
+    }
+
+    // Clone
+    let mut clone_body = serde_json::json!({
+        "name": config.name, "repo_url": config.repo_url, "branch": config.branch,
+    });
+    if let Some(ref key_path) = config.deploy_key_path {
+        clone_body["key_path"] = serde_json::json!(key_path);
+    }
+
+    let clone_result = agent.post_long("/git/clone", Some(clone_body), 300).await;
+
+    let (commit_hash, commit_message) = match clone_result {
+        Ok(r) => (
+            r.get("commit_hash").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
+            r.get("commit_message").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        ),
+        Err(e) => {
+            tracing::error!("Scheduled deploy clone failed: {}: {e}", config.name);
+            record_failed_history(&db, git_deploy_id, "unknown", "", &format!("Clone failed: {e}"), &triggered_by).await;
+            sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                .bind(git_deploy_id).execute(&db).await.ok();
+            return;
+        }
+    };
+
+    // Pre-build hook
+    if let Some(ref cmd) = config.pre_build_cmd {
+        if !cmd.trim().is_empty() {
+            let _ = agent.post_long("/git/pre-build-hook", Some(serde_json::json!({
+                "name": config.name, "command": cmd,
+            })), 330).await;
+        }
+    }
+
+    // Build
+    let image_tag = match agent.post_long("/git/build", Some(serde_json::json!({
+        "name": config.name, "dockerfile": config.dockerfile, "commit_hash": commit_hash,
+        "build_args": config.build_args, "build_context": config.build_context,
+    })), 660).await {
+        Ok(r) => r.get("image_tag").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
+        Err(e) => {
+            tracing::error!("Scheduled deploy build failed: {}: {e}", config.name);
+            record_failed_history(&db, git_deploy_id, &commit_hash, &commit_message, &format!("Build failed: {e}"), &triggered_by).await;
+            sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                .bind(git_deploy_id).execute(&db).await.ok();
+            if let Some(ref gh_token) = config.github_token {
+                if !gh_token.is_empty() && commit_hash != "unknown" {
+                    set_github_status(gh_token, &config.repo_url, &commit_hash, "failure", config.domain.as_deref()).await;
+                }
+            }
+            return;
+        }
+    };
+
+    // Deploy
+    let mut deploy_body = serde_json::json!({
+        "name": config.name, "image_tag": image_tag,
+        "container_port": config.container_port, "host_port": config.host_port,
+        "env_vars": config.env_vars,
+    });
+    if let Some(ref domain) = config.domain { deploy_body["domain"] = serde_json::json!(domain); }
+    if let Some(ref ssl) = config.ssl_email { deploy_body["ssl_email"] = serde_json::json!(ssl); }
+    if let Some(mem) = config.memory_mb { deploy_body["memory_mb"] = serde_json::json!(mem); }
+    if let Some(cpu) = config.cpu_percent { deploy_body["cpu_percent"] = serde_json::json!(cpu); }
+
+    match agent.post_long("/git/deploy", Some(deploy_body), 120).await {
+        Ok(result) => {
+            let container_id = result.get("container_id").and_then(|v| v.as_str()).unwrap_or("");
+            let duration_ms = started.elapsed().as_millis() as i32;
+
+            sqlx::query(
+                "INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, triggered_by, duration_ms) VALUES ($1, $2, $3, $4, 'success', $5, $6)"
+            ).bind(git_deploy_id).bind(&commit_hash).bind(&commit_message).bind(&image_tag).bind(&triggered_by).bind(duration_ms)
+            .execute(&db).await.ok();
+
+            sqlx::query("UPDATE git_deploys SET status = 'running', container_id = $1, image_tag = $2, last_deploy = NOW(), last_commit = $3, updated_at = NOW() WHERE id = $4")
+                .bind(container_id).bind(&image_tag).bind(&commit_hash).bind(git_deploy_id).execute(&db).await.ok();
+
+            // Post-deploy hook
+            if let Some(ref cmd) = config.post_deploy_cmd {
+                if !cmd.trim().is_empty() {
+                    let _ = agent.post_long("/git/hook", Some(serde_json::json!({ "name": config.name, "command": cmd })), 330).await;
+                }
+            }
+
+            // GitHub status
+            if let Some(ref gh_token) = config.github_token {
+                if !gh_token.is_empty() && commit_hash != "unknown" {
+                    set_github_status(gh_token, &config.repo_url, &commit_hash, "success", config.domain.as_deref()).await;
+                }
+            }
+
+            // Notification
+            if let Some(channels) = crate::services::notifications::get_user_channels(&db, user_id, None).await {
+                let subject = format!("Deploy successful: {} ({})", config.name, triggered_by);
+                let msg = format!("Git deploy '{}' deployed successfully (commit: {commit_hash})", config.name);
+                crate::services::notifications::send_notification(&db, &channels, &subject, &msg, &msg).await;
+            }
+
+            tracing::info!("Deploy success ({}): {} ({commit_hash})", triggered_by, config.name);
+            crate::services::activity::log_activity(&db, user_id, &email, "git_deploy.deploy", Some("git_deploy"), Some(&config.name), Some(&commit_hash), Some(&triggered_by)).await;
+        }
+        Err(e) => {
+            let _duration_ms = started.elapsed().as_millis() as i32;
+            record_failed_history(&db, git_deploy_id, &commit_hash, &commit_message, &format!("Deploy failed: {e}"), &triggered_by).await;
+            sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1").bind(git_deploy_id).execute(&db).await.ok();
+
+            if let Some(ref gh_token) = config.github_token {
+                if !gh_token.is_empty() && commit_hash != "unknown" {
+                    set_github_status(gh_token, &config.repo_url, &commit_hash, "failure", config.domain.as_deref()).await;
+                }
+            }
+
+            tracing::error!("Deploy failed ({}): {}: {e}", triggered_by, config.name);
+        }
+    }
+}
+
+async fn record_failed_history(db: &sqlx::PgPool, git_deploy_id: Uuid, commit_hash: &str, commit_message: &str, output: &str, triggered_by: &str) {
+    sqlx::query(
+        "INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by) VALUES ($1, $2, $3, '', 'failed', $4, $5)"
+    ).bind(git_deploy_id).bind(commit_hash).bind(commit_message).bind(output).bind(triggered_by).execute(db).await.ok();
+}
+
+/// Handle preview deployment for non-configured branches.
+async fn handle_preview_deploy(state: &AppState, config: &GitDeploy, branch: &str, _payload: &serde_json::Value) {
+    let branch_slug = branch.replace('/', "-").replace('.', "-").to_lowercase();
+    if branch_slug.len() > 50 { return; } // Safety limit
+
+    // Allocate preview port
+    let used_ports: Vec<(i32,)> = sqlx::query_as("SELECT host_port FROM git_previews")
+        .fetch_all(&state.db).await.unwrap_or_default();
+    let used: std::collections::HashSet<i32> = used_ports.into_iter().map(|(p,)| p).collect();
+    let port = match (8000..=8999).find(|p| !used.contains(p)) {
+        Some(p) => p,
+        None => { tracing::warn!("No preview ports available"); return; }
+    };
+
+    let container_name = format!("dockpanel-git-{}-pr-{}", config.name, branch_slug);
+    let preview_domain = config.domain.as_ref().map(|d| format!("{branch_slug}.{d}"));
+
+    // Upsert preview record
+    sqlx::query(
+        "INSERT INTO git_previews (git_deploy_id, branch, container_name, host_port, domain, status) \
+         VALUES ($1, $2, $3, $4, $5, 'deploying') \
+         ON CONFLICT (git_deploy_id, branch) DO UPDATE SET status = 'deploying', container_name = $3, host_port = $4"
+    )
+    .bind(config.id).bind(branch).bind(&container_name).bind(port).bind(&preview_domain)
+    .execute(&state.db).await.ok();
+
+    // Spawn deploy task
+    let db = state.db.clone();
+    let agent = state.agent.clone();
+    let name = config.name.clone();
+    let repo_url = config.repo_url.clone();
+    let dockerfile = config.dockerfile.clone();
+    let build_args = config.build_args.clone();
+    let build_context = config.build_context.clone();
+    let container_port = config.container_port;
+    let env_vars = config.env_vars.clone();
+    let deploy_id = config.id;
+    let key_path = config.deploy_key_path.clone();
+    let branch = branch.to_string();
+
+    tokio::spawn(async move {
+        let branch_slug = branch.replace('/', "-").replace('.', "-").to_lowercase();
+
+        // Clone at preview branch
+        let mut clone_body = serde_json::json!({
+            "name": format!("{name}-pr-{branch_slug}"),
+            "repo_url": repo_url,
+            "branch": branch,
+        });
+        if let Some(ref kp) = key_path {
+            clone_body["key_path"] = serde_json::json!(kp);
+        }
+
+        let clone_result = agent.post_long("/git/clone", Some(clone_body), 300).await;
+
+        let commit_hash = match clone_result {
+            Ok(r) => r.get("commit_hash").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
+            Err(e) => {
+                tracing::error!("Preview clone failed: {name}/{branch}: {e}");
+                sqlx::query("UPDATE git_previews SET status = 'failed' WHERE git_deploy_id = $1 AND branch = $2")
+                    .bind(deploy_id).bind(&branch).execute(&db).await.ok();
+                return;
+            }
+        };
+
+        // Build
+        let image_tag = match agent.post_long("/git/build", Some(serde_json::json!({
+            "name": format!("{name}-pr-{branch_slug}"),
+            "dockerfile": dockerfile,
+            "commit_hash": commit_hash,
+            "build_args": build_args,
+            "build_context": build_context,
+        })), 660).await {
+            Ok(r) => r.get("image_tag").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
+            Err(e) => {
+                tracing::error!("Preview build failed: {name}/{branch}: {e}");
+                sqlx::query("UPDATE git_previews SET status = 'failed' WHERE git_deploy_id = $1 AND branch = $2")
+                    .bind(deploy_id).bind(&branch).execute(&db).await.ok();
+                return;
+            }
+        };
+
+        // Deploy
+        let mut deploy_body = serde_json::json!({
+            "name": format!("{name}-pr-{branch_slug}"),
+            "image_tag": image_tag,
+            "container_port": container_port,
+            "host_port": port,
+            "env_vars": env_vars,
+        });
+        if let Some(ref pd) = preview_domain {
+            deploy_body["domain"] = serde_json::json!(pd);
+        }
+
+        match agent.post_long("/git/deploy", Some(deploy_body), 120).await {
+            Ok(result) => {
+                let cid = result.get("container_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                sqlx::query("UPDATE git_previews SET status = 'running', container_id = $1, commit_hash = $2 WHERE git_deploy_id = $3 AND branch = $4")
+                    .bind(&cid).bind(&commit_hash).bind(deploy_id).bind(&branch).execute(&db).await.ok();
+                tracing::info!("Preview deployed: {name}/{branch} -> port {port}");
+            }
+            Err(e) => {
+                tracing::error!("Preview deploy failed: {name}/{branch}: {e}");
+                sqlx::query("UPDATE git_previews SET status = 'failed' WHERE git_deploy_id = $1 AND branch = $2")
+                    .bind(deploy_id).bind(&branch).execute(&db).await.ok();
+            }
+        }
+    });
+}
+
+/// GET /api/git-deploys/{id}/previews — List preview deployments.
+pub async fn list_previews(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<GitPreview>>, ApiError> {
+    require_admin(&claims.role)?;
+    let previews: Vec<GitPreview> = sqlx::query_as(
+        "SELECT p.* FROM git_previews p JOIN git_deploys g ON p.git_deploy_id = g.id WHERE g.id = $1 AND g.user_id = $2 ORDER BY p.created_at DESC"
+    ).bind(id).bind(claims.sub).fetch_all(&state.db).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    Ok(Json(previews))
+}
+
+/// DELETE /api/git-deploys/{id}/previews/{preview_id} — Delete a preview.
+pub async fn delete_preview(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path((id, preview_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let preview: GitPreview = sqlx::query_as(
+        "SELECT p.* FROM git_previews p JOIN git_deploys g ON p.git_deploy_id = g.id WHERE p.id = $1 AND g.id = $2 AND g.user_id = $3"
+    ).bind(preview_id).bind(id).bind(claims.sub).fetch_optional(&state.db).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Preview not found"))?;
+
+    // Clean up container — strip "dockpanel-git-" prefix since the agent adds it
+    let cleanup_name = preview.container_name.strip_prefix("dockpanel-git-").unwrap_or(&preview.container_name);
+    state.agent.post("/git/cleanup", Some(serde_json::json!({ "name": cleanup_name }))).await.ok();
+
+    sqlx::query("DELETE FROM git_previews WHERE id = $1").bind(preview_id).execute(&state.db).await.ok();
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
