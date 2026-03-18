@@ -25,6 +25,10 @@ pub struct Monitor {
     pub alert_email: bool,
     pub alert_slack_url: Option<String>,
     pub alert_discord_url: Option<String>,
+    pub monitor_type: String,
+    pub port: Option<i32>,
+    pub keyword: Option<String>,
+    pub keyword_must_contain: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -37,6 +41,10 @@ pub struct CreateMonitor {
     pub alert_email: Option<bool>,
     pub alert_slack_url: Option<String>,
     pub alert_discord_url: Option<String>,
+    pub monitor_type: Option<String>,
+    pub port: Option<i32>,
+    pub keyword: Option<String>,
+    pub keyword_must_contain: Option<bool>,
 }
 
 #[derive(serde::Deserialize)]
@@ -48,6 +56,10 @@ pub struct UpdateMonitor {
     pub alert_email: Option<bool>,
     pub alert_slack_url: Option<String>,
     pub alert_discord_url: Option<String>,
+    pub monitor_type: Option<String>,
+    pub port: Option<i32>,
+    pub keyword: Option<String>,
+    pub keyword_must_contain: Option<bool>,
 }
 
 /// GET /api/monitors — List user's monitors.
@@ -72,9 +84,18 @@ pub async fn create(
     AuthUser(claims): AuthUser,
     Json(body): Json<CreateMonitor>,
 ) -> Result<(StatusCode, Json<Monitor>), ApiError> {
+    let monitor_type = body.monitor_type.as_deref().unwrap_or("http");
+    if monitor_type != "http" && monitor_type != "tcp" {
+        return Err(err(StatusCode::BAD_REQUEST, "monitor_type must be 'http' or 'tcp'"));
+    }
+
     let url = body.url.trim();
-    if url.is_empty() || (!url.starts_with("http://") && !url.starts_with("https://")) {
-        return Err(err(StatusCode::BAD_REQUEST, "URL must start with http:// or https://"));
+    if monitor_type == "http" {
+        if url.is_empty() || (!url.starts_with("http://") && !url.starts_with("https://")) {
+            return Err(err(StatusCode::BAD_REQUEST, "URL must start with http:// or https://"));
+        }
+    } else if url.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "Host is required for TCP monitors"));
     }
 
     let name = body.name.trim();
@@ -122,8 +143,8 @@ pub async fn create(
     }
 
     let monitor: Monitor = sqlx::query_as(
-        "INSERT INTO monitors (user_id, site_id, url, name, check_interval, alert_email, alert_slack_url, alert_discord_url) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *",
+        "INSERT INTO monitors (user_id, site_id, url, name, check_interval, alert_email, alert_slack_url, alert_discord_url, monitor_type, port, keyword, keyword_must_contain) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *",
     )
     .bind(claims.sub)
     .bind(body.site_id)
@@ -133,6 +154,10 @@ pub async fn create(
     .bind(body.alert_email.unwrap_or(true))
     .bind(&slack_url)
     .bind(&discord_url)
+    .bind(monitor_type)
+    .bind(body.port)
+    .bind(&body.keyword)
+    .bind(body.keyword_must_contain.unwrap_or(true))
     .fetch_one(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -169,7 +194,11 @@ pub async fn update(
          enabled = COALESCE($5, enabled), \
          alert_email = COALESCE($6, alert_email), \
          alert_slack_url = COALESCE($7, alert_slack_url), \
-         alert_discord_url = COALESCE($8, alert_discord_url) \
+         alert_discord_url = COALESCE($8, alert_discord_url), \
+         monitor_type = COALESCE($9, monitor_type), \
+         port = COALESCE($10, port), \
+         keyword = COALESCE($11, keyword), \
+         keyword_must_contain = COALESCE($12, keyword_must_contain) \
          WHERE id = $1 RETURNING *",
     )
     .bind(id)
@@ -180,6 +209,10 @@ pub async fn update(
     .bind(body.alert_email)
     .bind(&body.alert_slack_url)
     .bind(&body.alert_discord_url)
+    .bind(&body.monitor_type)
+    .bind(body.port)
+    .bind(&body.keyword)
+    .bind(body.keyword_must_contain)
     .fetch_one(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -286,4 +319,155 @@ pub async fn incidents(
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     Ok(Json(records))
+}
+
+/// GET /api/monitors/{id}/uptime — Calculate uptime percentage.
+pub async fn uptime_stats(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Verify ownership
+    let exists: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM monitors WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    if exists.is_none() {
+        return Err(err(StatusCode::NOT_FOUND, "Monitor not found"));
+    }
+
+    // Successful check: HTTP 200-499 or TCP status_code=0 (no error means success)
+    // 24h uptime
+    let day: Option<(i64, i64)> = sqlx::query_as(
+        "SELECT COUNT(*) FILTER (WHERE status_code IS NOT NULL AND error IS NULL), COUNT(*) \
+         FROM monitor_checks WHERE monitor_id = $1 AND checked_at > NOW() - INTERVAL '24 hours'"
+    ).bind(id).fetch_optional(&state.db).await.ok().flatten();
+
+    // 7d uptime
+    let week: Option<(i64, i64)> = sqlx::query_as(
+        "SELECT COUNT(*) FILTER (WHERE status_code IS NOT NULL AND error IS NULL), COUNT(*) \
+         FROM monitor_checks WHERE monitor_id = $1 AND checked_at > NOW() - INTERVAL '7 days'"
+    ).bind(id).fetch_optional(&state.db).await.ok().flatten();
+
+    // 30d uptime
+    let month: Option<(i64, i64)> = sqlx::query_as(
+        "SELECT COUNT(*) FILTER (WHERE status_code IS NOT NULL AND error IS NULL), COUNT(*) \
+         FROM monitor_checks WHERE monitor_id = $1 AND checked_at > NOW() - INTERVAL '30 days'"
+    ).bind(id).fetch_optional(&state.db).await.ok().flatten();
+
+    let calc = |data: Option<(i64, i64)>| -> f64 {
+        match data {
+            Some((up, total)) if total > 0 => (up as f64 / total as f64 * 10000.0).round() / 100.0,
+            _ => 100.0,
+        }
+    };
+
+    // Average response time (24h)
+    let avg_rt: Option<(Option<f64>,)> = sqlx::query_as(
+        "SELECT AVG(response_time)::float8 FROM monitor_checks WHERE monitor_id = $1 AND checked_at > NOW() - INTERVAL '24 hours' AND status_code IS NOT NULL"
+    ).bind(id).fetch_optional(&state.db).await.ok().flatten();
+
+    Ok(Json(serde_json::json!({
+        "uptime_24h": calc(day),
+        "uptime_7d": calc(week),
+        "uptime_30d": calc(month),
+        "avg_response_ms": avg_rt.and_then(|r| r.0).unwrap_or(0.0).round() as i32,
+    })))
+}
+
+/// GET /api/monitors/{id}/chart — Get response time history for charting.
+pub async fn response_chart(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Verify ownership
+    let exists: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM monitors WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    if exists.is_none() {
+        return Err(err(StatusCode::NOT_FOUND, "Monitor not found"));
+    }
+
+    let points: Vec<(i32, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT response_time, checked_at FROM monitor_checks \
+         WHERE monitor_id = $1 AND checked_at > NOW() - INTERVAL '24 hours' AND status_code IS NOT NULL \
+         ORDER BY checked_at ASC"
+    ).bind(id).fetch_all(&state.db).await.unwrap_or_default();
+
+    let data: Vec<serde_json::Value> = points.iter().map(|(rt, time)| {
+        serde_json::json!({ "time": time.timestamp(), "ms": rt })
+    }).collect();
+
+    Ok(Json(serde_json::json!({ "points": data })))
+}
+
+/// POST /api/monitors/{id}/check — Force an immediate check.
+pub async fn force_check(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Verify ownership
+    let result = sqlx::query(
+        "UPDATE monitors SET last_checked_at = NOW() - INTERVAL '1 hour' WHERE id = $1 AND user_id = $2"
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .execute(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    if result.rows_affected() == 0 {
+        return Err(err(StatusCode::NOT_FOUND, "Monitor not found"));
+    }
+
+    Ok(Json(serde_json::json!({ "ok": true, "message": "Check will run within 60 seconds" })))
+}
+
+/// GET /api/status-page — Public status page data (no auth required).
+pub async fn status_page(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Check if status page is enabled
+    let enabled: Option<(String,)> = sqlx::query_as(
+        "SELECT value FROM settings WHERE key = 'status_page_enabled'"
+    ).fetch_optional(&state.db).await.ok().flatten();
+
+    if enabled.map(|(v,)| v).unwrap_or_else(|| "false".to_string()) != "true" {
+        return Err(err(StatusCode::NOT_FOUND, "Status page not enabled"));
+    }
+
+    // Get all enabled monitors (no user filter — this is public)
+    let monitors: Vec<(String, String, String, Option<i32>, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+        "SELECT name, url, status, last_response_time, last_checked_at FROM monitors WHERE enabled = true ORDER BY name"
+    ).fetch_all(&state.db).await.unwrap_or_default();
+
+    let items: Vec<serde_json::Value> = monitors.iter().map(|(name, _url, status, rt, checked)| {
+        serde_json::json!({
+            "name": name,
+            "status": status,
+            "response_time": rt,
+            "last_checked": checked,
+        })
+    }).collect();
+
+    let all_up = items.iter().all(|i| i["status"] == "up");
+
+    Ok(Json(serde_json::json!({
+        "status": if all_up { "operational" } else { "degraded" },
+        "monitors": items,
+        "updated_at": chrono::Utc::now(),
+    })))
 }

@@ -15,8 +15,36 @@ interface Monitor {
   alert_email: boolean;
   alert_slack_url: string | null;
   alert_discord_url: string | null;
+  monitor_type: string;
+  port: number | null;
+  keyword: string | null;
+  keyword_must_contain: boolean;
   created_at: string;
 }
+
+interface UptimeData {
+  uptime_24h: number;
+  uptime_7d: number;
+  uptime_30d: number;
+  avg_response_ms: number;
+}
+
+interface ChartPoint {
+  time: number;
+  ms: number;
+}
+
+const Sparkline = ({ data }: { data: ChartPoint[] }) => {
+  if (data.length < 2) return null;
+  const max = Math.max(...data.map(d => d.ms), 1);
+  const w = 300, h = 40;
+  const points = data.map((d, i) => `${(i / (data.length - 1)) * w},${h - (d.ms / max) * (h - 4)}`).join(' ');
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-10">
+      <polyline fill="none" stroke="currentColor" strokeWidth="1.5" className="text-rust-400" points={points} />
+    </svg>
+  );
+};
 
 interface CheckRecord {
   id: string;
@@ -63,9 +91,18 @@ export default function Monitors() {
   const [formInterval, setFormInterval] = useState("60");
   const [formSlackUrl, setFormSlackUrl] = useState("");
   const [formDiscordUrl, setFormDiscordUrl] = useState("");
+  const [formMonitorType, setFormMonitorType] = useState("http");
+  const [formPort, setFormPort] = useState("");
+  const [formKeyword, setFormKeyword] = useState("");
+  const [formKeywordMustContain, setFormKeywordMustContain] = useState(true);
   const [prevAutoName, setPrevAutoName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [displayCount, setDisplayCount] = useState(25);
+
+  // Uptime + chart data (per expanded monitor)
+  const [uptimeData, setUptimeData] = useState<UptimeData | null>(null);
+  const [chartData, setChartData] = useState<ChartPoint[]>([]);
+  const [checkNowMsg, setCheckNowMsg] = useState("");
 
   // Global notification defaults (pre-fill from Settings)
   const [globalSlackUrl, setGlobalSlackUrl] = useState("");
@@ -97,13 +134,21 @@ export default function Monitors() {
 
   const handleUrlChange = (url: string) => {
     setFormUrl(url);
-    try {
-      const hostname = new URL(url).hostname;
+    if (formMonitorType === "tcp") {
+      // For TCP, the URL is just a hostname — use it as auto-name
       if (!formName || formName === prevAutoName) {
-        setFormName(hostname);
-        setPrevAutoName(hostname);
+        setFormName(url.trim());
+        setPrevAutoName(url.trim());
       }
-    } catch {}
+    } else {
+      try {
+        const hostname = new URL(url).hostname;
+        if (!formName || formName === prevAutoName) {
+          setFormName(hostname);
+          setPrevAutoName(hostname);
+        }
+      } catch {}
+    }
   };
 
   const handleCreate = async (e: FormEvent) => {
@@ -117,6 +162,10 @@ export default function Monitors() {
         check_interval: parseInt(formInterval),
         alert_slack_url: formSlackUrl || null,
         alert_discord_url: formDiscordUrl || null,
+        monitor_type: formMonitorType,
+        port: formMonitorType === "tcp" && formPort ? parseInt(formPort) : null,
+        keyword: formKeyword || null,
+        keyword_must_contain: formKeywordMustContain,
       });
       setShowForm(false);
       setFormName("");
@@ -124,6 +173,10 @@ export default function Monitors() {
       setFormInterval("60");
       setFormSlackUrl("");
       setFormDiscordUrl("");
+      setFormMonitorType("http");
+      setFormPort("");
+      setFormKeyword("");
+      setFormKeywordMustContain(true);
       setPrevAutoName("");
       fetchMonitors();
     } catch (err) {
@@ -160,15 +213,32 @@ export default function Monitors() {
       return;
     }
     setExpanded(id);
+    setUptimeData(null);
+    setChartData([]);
+    setCheckNowMsg("");
     try {
-      const [c, i] = await Promise.all([
+      const [c, i, u, ch] = await Promise.all([
         api.get<CheckRecord[]>(`/monitors/${id}/checks`),
         api.get<Incident[]>(`/monitors/${id}/incidents`),
+        api.get<UptimeData>(`/monitors/${id}/uptime`),
+        api.get<{ points: ChartPoint[] }>(`/monitors/${id}/chart`),
       ]);
       setChecks(c);
       setIncidents(i);
+      setUptimeData(u);
+      setChartData(ch.points || []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load details");
+    }
+  };
+
+  const handleForceCheck = async (id: string) => {
+    try {
+      const res = await api.post<{ message: string }>(`/monitors/${id}/check`, {});
+      setCheckNowMsg(res.message || "Check queued");
+      setTimeout(() => setCheckNowMsg(""), 5000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Force check failed");
     }
   };
 
@@ -225,14 +295,28 @@ export default function Monitors() {
           <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-3">New Monitor</h3>
           <div className="grid grid-cols-2 gap-4 mb-4">
             <div>
+              <label className="block text-xs font-medium text-dark-200 mb-1">Monitor Type</label>
+              <select value={formMonitorType} onChange={(e) => { setFormMonitorType(e.target.value); setFormUrl(""); setFormPort(""); }} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none">
+                <option value="http">HTTP(S)</option>
+                <option value="tcp">TCP Port</option>
+              </select>
+            </div>
+            <div>
               <label className="block text-xs font-medium text-dark-200 mb-1">Name</label>
               <input type="text" value={formName} onChange={(e) => setFormName(e.target.value)} required placeholder="My Website" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-dark-200 mb-1">URL</label>
-              <input type="url" value={formUrl} onChange={(e) => handleUrlChange(e.target.value)} required placeholder="https://example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
-              <p className="text-xs text-dark-300 mt-1">The full URL to monitor, including https://</p>
+              <label className="block text-xs font-medium text-dark-200 mb-1">{formMonitorType === "tcp" ? "Host" : "URL"}</label>
+              <input type={formMonitorType === "tcp" ? "text" : "url"} value={formUrl} onChange={(e) => handleUrlChange(e.target.value)} required placeholder={formMonitorType === "tcp" ? "db.example.com" : "https://example.com"} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
+              <p className="text-xs text-dark-300 mt-1">{formMonitorType === "tcp" ? "Hostname or IP address" : "The full URL to monitor, including https://"}</p>
             </div>
+            {formMonitorType === "tcp" && (
+              <div>
+                <label className="block text-xs font-medium text-dark-200 mb-1">Port</label>
+                <input type="number" value={formPort} onChange={(e) => setFormPort(e.target.value)} placeholder="3306" min="1" max="65535" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
+                <p className="text-xs text-dark-300 mt-1">TCP port to check (e.g. 3306 for MySQL, 5432 for PostgreSQL)</p>
+              </div>
+            )}
             <div>
               <label className="block text-xs font-medium text-dark-200 mb-1">Check Interval</label>
               <select value={formInterval} onChange={(e) => setFormInterval(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none">
@@ -244,6 +328,21 @@ export default function Monitors() {
               <p className="text-xs text-dark-300 mt-1">How often to check, in seconds</p>
             </div>
           </div>
+          {/* Keyword monitoring (HTTP only) */}
+          {formMonitorType === "http" && (
+            <div className="mb-4 space-y-2">
+              <div>
+                <label className="block text-xs font-medium text-dark-200 mb-1">Keyword Check (optional)</label>
+                <input type="text" value={formKeyword} onChange={(e) => setFormKeyword(e.target.value)} placeholder="Keyword to check in response body" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
+              </div>
+              {formKeyword && (
+                <label className="flex items-center gap-2 text-xs text-dark-200">
+                  <input type="checkbox" checked={formKeywordMustContain} onChange={(e) => setFormKeywordMustContain(e.target.checked)} className="rounded border-dark-500" />
+                  Response must contain this keyword (uncheck = must NOT contain)
+                </label>
+              )}
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-4 mb-4">
             <div>
               <label className="block text-xs font-medium text-dark-200 mb-1">Slack Webhook URL</label>
@@ -288,7 +387,10 @@ export default function Monitors() {
                   <div className="flex items-center gap-3 min-w-0">
                     <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${statusDot[m.status] || "bg-gray-400"} ${m.status === "up" ? "animate-pulse" : ""}`} />
                     <div className="min-w-0">
-                      <p className="text-sm font-medium text-dark-50 truncate">{m.name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-medium text-dark-50 truncate">{m.name}</p>
+                        {m.monitor_type === "tcp" && <span className="text-[10px] px-1.5 py-0.5 rounded bg-dark-700 text-dark-200 font-mono shrink-0">TCP{m.port ? `:${m.port}` : ''}</span>}
+                      </div>
                       <p className="text-xs text-dark-200 font-mono truncate">{m.url}</p>
                     </div>
                   </div>
@@ -339,6 +441,49 @@ export default function Monitors() {
               {/* Expanded details */}
               {expanded === m.id && (
                 <div className="border-t border-dark-600 p-4">
+                  {/* Uptime stats + Check Now */}
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-4">
+                      {uptimeData && (
+                        <>
+                          <div className="text-center">
+                            <p className="text-lg font-mono font-bold text-rust-400">{uptimeData.uptime_24h}%</p>
+                            <p className="text-[10px] text-dark-300">24h</p>
+                          </div>
+                          <div className="text-center">
+                            <p className="text-lg font-mono font-bold text-dark-100">{uptimeData.uptime_7d}%</p>
+                            <p className="text-[10px] text-dark-300">7d</p>
+                          </div>
+                          <div className="text-center">
+                            <p className="text-lg font-mono font-bold text-dark-100">{uptimeData.uptime_30d}%</p>
+                            <p className="text-[10px] text-dark-300">30d</p>
+                          </div>
+                          <div className="text-center">
+                            <p className="text-lg font-mono font-bold text-dark-200">{uptimeData.avg_response_ms}ms</p>
+                            <p className="text-[10px] text-dark-300">avg</p>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {checkNowMsg && <span className="text-xs text-rust-400">{checkNowMsg}</span>}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleForceCheck(m.id); }}
+                        className="px-3 py-1.5 text-xs text-rust-400 hover:text-rust-300 border border-dark-600 rounded-lg hover:border-dark-400 transition-colors"
+                      >
+                        Check Now
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Response time sparkline */}
+                  {chartData.length >= 2 && (
+                    <div className="mb-4">
+                      <h4 className="text-xs font-semibold text-dark-100 mb-1">Response Time (24h)</h4>
+                      <Sparkline data={chartData} />
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {/* Recent checks */}
                     <div>
@@ -350,11 +495,12 @@ export default function Monitors() {
                           {checks.slice(0, 20).map((c) => (
                             <div key={c.id} className="flex items-center justify-between text-xs">
                               <div className="flex items-center gap-2">
-                                <div className={`w-1.5 h-1.5 rounded-full ${c.status_code && c.status_code < 400 ? "bg-rust-500" : "bg-red-500"}`} />
+                                <div className={`w-1.5 h-1.5 rounded-full ${c.status_code !== null && c.status_code >= 0 && c.status_code < 400 ? "bg-rust-500" : "bg-red-500"}`} />
                                 <span className="text-dark-200">{formatDate(c.checked_at)}</span>
                               </div>
                               <div className="flex items-center gap-2">
-                                {c.status_code && <span className="text-dark-200 font-mono">{c.status_code}</span>}
+                                {c.status_code != null && c.status_code > 0 && <span className="text-dark-200 font-mono">{c.status_code}</span>}
+                                {c.status_code === 0 && <span className="text-dark-200 font-mono">TCP OK</span>}
                                 {c.response_time != null && <span className="text-dark-300 font-mono">{c.response_time}ms</span>}
                                 {c.error && <span className="text-danger-500 truncate max-w-32">{c.error}</span>}
                               </div>
