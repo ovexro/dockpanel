@@ -585,6 +585,164 @@ pub async fn app_env(
     Ok(Json(result))
 }
 
+/// PUT /api/apps/{container_id}/env — Update container environment variables.
+pub async fn update_env(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(container_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    if !is_valid_container_id(&container_id) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
+    }
+    let result = state
+        .agent
+        .put(&format!("/apps/{container_id}/env"), body)
+        .await
+        .map_err(|e| agent_error("Update env", e))?;
+    activity::log_activity(
+        &state.db,
+        claims.sub,
+        &claims.email,
+        "app.update_env",
+        Some("app"),
+        Some(&container_id),
+        None,
+        None,
+    )
+    .await;
+    Ok(Json(result))
+}
+
+/// GET /api/apps/{container_id}/stats — Get container resource stats.
+pub async fn container_stats(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(container_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    if !is_valid_container_id(&container_id) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
+    }
+    let result = state
+        .agent
+        .get(&format!("/apps/{container_id}/stats"))
+        .await
+        .map_err(|e| agent_error("Container stats", e))?;
+    Ok(Json(result))
+}
+
+/// GET /api/apps/{container_id}/shell-info — Get shell availability.
+pub async fn shell_info(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(container_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    if !is_valid_container_id(&container_id) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
+    }
+    let result = state
+        .agent
+        .get(&format!("/apps/{container_id}/shell-info"))
+        .await
+        .map_err(|e| agent_error("Shell info", e))?;
+    Ok(Json(result))
+}
+
+/// POST /api/apps/{container_id}/exec — Execute a command inside a container.
+pub async fn exec_command(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(container_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    if !is_valid_container_id(&container_id) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
+    }
+    let result = state
+        .agent
+        .post(&format!("/apps/{container_id}/exec"), Some(body))
+        .await
+        .map_err(|e| agent_error("Container exec", e))?;
+    Ok(Json(result))
+}
+
+/// GET /api/apps/{container_id}/volumes — Get volume info and sizes.
+pub async fn container_volumes(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(container_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    if !is_valid_container_id(&container_id) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
+    }
+    let result = state
+        .agent
+        .get(&format!("/apps/{container_id}/volumes"))
+        .await
+        .map_err(|e| agent_error("Container volumes", e))?;
+    Ok(Json(result))
+}
+
+/// POST /api/apps/registry-login — Login to a private Docker registry.
+pub async fn registry_login(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let result = state
+        .agent
+        .post("/apps/registry-login", Some(body))
+        .await
+        .map_err(|e| agent_error("Registry login", e))?;
+    activity::log_activity(
+        &state.db,
+        claims.sub,
+        &claims.email,
+        "app.registry_login",
+        Some("registry"),
+        None,
+        None,
+        None,
+    )
+    .await;
+    Ok(Json(result))
+}
+
+/// GET /api/apps/registries — List configured registries.
+pub async fn list_registries(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let result = state
+        .agent
+        .get("/apps/registries")
+        .await
+        .map_err(|e| agent_error("List registries", e))?;
+    Ok(Json(result))
+}
+
+/// POST /api/apps/registry-logout — Logout from a registry.
+pub async fn registry_logout(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let result = state
+        .agent
+        .post("/apps/registry-logout", Some(body))
+        .await
+        .map_err(|e| agent_error("Registry logout", e))?;
+    Ok(Json(result))
+}
+
 /// POST /api/apps/compose/parse — Parse docker-compose.yml and preview services.
 pub async fn compose_parse(
     State(state): State<AppState>,
