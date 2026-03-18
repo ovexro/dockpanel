@@ -334,6 +334,20 @@ pub fn router() -> Router<AppState> {
         .route("/api/mail/queue", get(mail::get_queue))
         .route("/api/mail/queue/flush", post(mail::flush_queue))
         .route("/api/mail/queue/{queue_id}", delete(mail::delete_queued))
+        // Mail: Rspamd spam filter
+        .route("/api/mail/rspamd/install", post(mail::rspamd_install))
+        .route("/api/mail/rspamd/status", get(mail::rspamd_status))
+        .route("/api/mail/rspamd/toggle", post(mail::rspamd_toggle))
+        // Mail: Webmail (Roundcube)
+        .route("/api/mail/webmail/install", post(mail::webmail_install))
+        .route("/api/mail/webmail/status", get(mail::webmail_status))
+        .route("/api/mail/webmail/remove", post(mail::webmail_remove))
+        // Mail: SMTP Relay
+        .route("/api/mail/relay/configure", post(mail::relay_configure))
+        .route("/api/mail/relay/status", get(mail::relay_status))
+        .route("/api/mail/relay/remove", post(mail::relay_remove))
+        // Mail: Blacklist/Reputation Check
+        .route("/api/mail/blacklist-check", get(mail::blacklist_check))
         // Agent Diagnostics proxy
         .route("/api/agent/diagnostics", get(system::diagnostics))
         .route("/api/agent/diagnostics/fix", post(system::diagnostics_fix))

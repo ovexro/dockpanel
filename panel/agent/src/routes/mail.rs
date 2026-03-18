@@ -84,6 +84,18 @@ pub fn router() -> Router<AppState> {
         .route("/mail/queue", get(queue_list))
         .route("/mail/queue/flush", post(queue_flush))
         .route("/mail/queue/delete", post(queue_delete))
+        // Rspamd spam filter
+        .route("/mail/rspamd/install", post(rspamd_install))
+        .route("/mail/rspamd/status", get(rspamd_status))
+        .route("/mail/rspamd/toggle", post(rspamd_toggle))
+        // Webmail (Roundcube)
+        .route("/mail/webmail/install", post(webmail_install))
+        .route("/mail/webmail/status", get(webmail_status))
+        .route("/mail/webmail/remove", post(webmail_remove))
+        // SMTP Relay
+        .route("/mail/relay/configure", post(relay_configure))
+        .route("/mail/relay/status", get(relay_status))
+        .route("/mail/relay/remove", post(relay_remove))
 }
 
 // ── Mail server status + installation ────────────────────────────────────
@@ -585,6 +597,209 @@ async fn queue_delete(
 
     tracing::info!("Queued message {} deleted", body.id);
     Ok(ok("Message deleted from queue"))
+}
+
+// ── Rspamd spam filter ───────────────────────────────────────────────────
+
+/// POST /mail/rspamd/install — Install and configure Rspamd.
+async fn rspamd_install() -> Result<Json<serde_json::Value>, ApiErr> {
+    tracing::info!("Installing Rspamd spam filter...");
+
+    // Install rspamd
+    let output = Command::new("apt-get")
+        .args(["-o", "Dpkg::Options::=--force-confnew", "install", "-y", "rspamd", "redis-server"])
+        .env("DEBIAN_FRONTEND", "noninteractive")
+        .output().await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Install failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Rspamd install failed: {}", &stderr[..200.min(stderr.len())])));
+    }
+
+    // Configure Rspamd milter for Postfix
+    let main_cf = tokio::fs::read_to_string("/etc/postfix/main.cf").await.unwrap_or_default();
+    if !main_cf.contains("rspamd") {
+        // Add Rspamd milter (alongside OpenDKIM)
+        let new_cf = main_cf.replace(
+            "smtpd_milters = unix:opendkim/opendkim.sock",
+            "smtpd_milters = unix:opendkim/opendkim.sock, inet:localhost:11332"
+        ).replace(
+            "non_smtpd_milters = unix:opendkim/opendkim.sock",
+            "non_smtpd_milters = unix:opendkim/opendkim.sock, inet:localhost:11332"
+        );
+        write_file_atomic("/etc/postfix/main.cf", &new_cf).await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Config write failed: {e}")))?;
+    }
+
+    // Enable and start
+    let _ = Command::new("systemctl").args(["enable", "rspamd", "redis-server"]).output().await;
+    let _ = Command::new("systemctl").args(["restart", "redis-server"]).output().await;
+    let _ = Command::new("systemctl").args(["restart", "rspamd"]).output().await;
+    let _ = Command::new("systemctl").args(["reload", "postfix"]).output().await;
+
+    tracing::info!("Rspamd installed and configured");
+    Ok(ok("Rspamd spam filter installed"))
+}
+
+/// GET /mail/rspamd/status — Check Rspamd status.
+async fn rspamd_status() -> Json<serde_json::Value> {
+    let installed = is_installed("rspamd").await;
+    let running = is_service_active("rspamd").await;
+    let redis = is_service_active("redis-server").await;
+    Json(serde_json::json!({ "installed": installed, "running": running, "redis": redis }))
+}
+
+/// POST /mail/rspamd/toggle — Enable/disable Rspamd.
+async fn rspamd_toggle(Json(body): Json<serde_json::Value>) -> Result<Json<serde_json::Value>, ApiErr> {
+    let enable = body.get("enable").and_then(|v| v.as_bool()).unwrap_or(true);
+    if enable {
+        let _ = Command::new("systemctl").args(["start", "rspamd"]).output().await;
+        let _ = Command::new("systemctl").args(["enable", "rspamd"]).output().await;
+    } else {
+        let _ = Command::new("systemctl").args(["stop", "rspamd"]).output().await;
+        let _ = Command::new("systemctl").args(["disable", "rspamd"]).output().await;
+    }
+    Ok(ok(if enable { "Rspamd enabled" } else { "Rspamd disabled" }))
+}
+
+// ── Webmail (Roundcube) ─────────────────────────────────────────────────
+
+/// POST /mail/webmail/install — Deploy Roundcube webmail via Docker.
+async fn webmail_install(Json(body): Json<serde_json::Value>) -> Result<Json<serde_json::Value>, ApiErr> {
+    let domain = body.get("domain").and_then(|v| v.as_str()).unwrap_or("localhost");
+    let port = body.get("port").and_then(|v| v.as_u64()).unwrap_or(8888) as u16;
+
+    tracing::info!("Installing Roundcube webmail on port {port}...");
+
+    // Run Roundcube as Docker container
+    let output = Command::new("docker")
+        .args([
+            "run", "-d",
+            "--name", "dockpanel-roundcube",
+            "--restart", "unless-stopped",
+            "-p", &format!("127.0.0.1:{port}:80"),
+            "-e", &format!("ROUNDCUBEMAIL_DEFAULT_HOST=ssl://{domain}"),
+            "-e", "ROUNDCUBEMAIL_DEFAULT_PORT=993",
+            "-e", &format!("ROUNDCUBEMAIL_SMTP_SERVER=tls://{domain}"),
+            "-e", "ROUNDCUBEMAIL_SMTP_PORT=587",
+            "-e", "ROUNDCUBEMAIL_UPLOAD_MAX_FILESIZE=25M",
+            "-l", "dockpanel.managed=true",
+            "-l", "dockpanel.app.template=roundcube",
+            "-l", "dockpanel.app.name=roundcube",
+            "roundcube/roundcubemail:latest",
+        ])
+        .output().await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Docker failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("already in use") {
+            let _ = Command::new("docker").args(["rm", "-f", "dockpanel-roundcube"]).output().await;
+            return Err(err(StatusCode::CONFLICT, "Roundcube container already exists. Remove it first or restart."));
+        }
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Roundcube deploy failed: {}", &stderr[..200.min(stderr.len())])));
+    }
+
+    tracing::info!("Roundcube webmail deployed on port {port}");
+    Ok(Json(serde_json::json!({ "ok": true, "port": port })))
+}
+
+/// GET /mail/webmail/status — Check if Roundcube is running.
+async fn webmail_status() -> Json<serde_json::Value> {
+    let output = Command::new("docker")
+        .args(["inspect", "--format", "{{.State.Running}}", "dockpanel-roundcube"])
+        .output().await;
+    let running = output.map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true").unwrap_or(false);
+
+    // Get port
+    let port_output = Command::new("docker")
+        .args(["inspect", "--format", "{{range .NetworkSettings.Ports}}{{range .}}{{.HostPort}}{{end}}{{end}}", "dockpanel-roundcube"])
+        .output().await;
+    let port = port_output.ok().and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u16>().ok()).unwrap_or(0);
+
+    Json(serde_json::json!({ "installed": running || port > 0, "running": running, "port": port }))
+}
+
+/// POST /mail/webmail/remove — Remove Roundcube container.
+async fn webmail_remove() -> Result<Json<serde_json::Value>, ApiErr> {
+    let _ = Command::new("docker").args(["rm", "-f", "dockpanel-roundcube"]).output().await;
+    Ok(ok("Roundcube removed"))
+}
+
+// ── SMTP Relay ──────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct RelayConfig {
+    host: String,
+    port: u16,
+    username: String,
+    password: String,
+}
+
+/// POST /mail/relay/configure — Set up SMTP relay (smarthost).
+async fn relay_configure(Json(body): Json<RelayConfig>) -> Result<Json<serde_json::Value>, ApiErr> {
+    if body.host.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Relay host required")); }
+
+    // Write SASL password file
+    let sasl_content = format!("[{}]:{} {}:{}\n", body.host, body.port, body.username, body.password);
+    write_file_atomic("/etc/postfix/sasl_passwd", &sasl_content).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write sasl_passwd: {e}")))?;
+
+    // Set permissions
+    let _ = Command::new("chmod").args(["600", "/etc/postfix/sasl_passwd"]).output().await;
+    let _ = Command::new("postmap").arg("/etc/postfix/sasl_passwd").output().await;
+
+    // Update Postfix main.cf
+    let main_cf = tokio::fs::read_to_string("/etc/postfix/main.cf").await.unwrap_or_default();
+
+    // Remove existing relay config lines
+    let cleaned: String = main_cf.lines()
+        .filter(|l| !l.starts_with("relayhost") && !l.starts_with("smtp_sasl_") && !l.starts_with("smtp_tls_") && !l.contains("# DockPanel relay"))
+        .collect::<Vec<_>>().join("\n");
+
+    let relay_config = format!(
+        "\n# DockPanel relay configuration\nrelayhost = [{}]:{}\nsmtp_sasl_auth_enable = yes\nsmtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd\nsmtp_sasl_security_options = noanonymous\nsmtp_tls_security_level = encrypt\nsmtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt\n",
+        body.host, body.port
+    );
+
+    write_file_atomic("/etc/postfix/main.cf", &format!("{cleaned}{relay_config}")).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Config write failed: {e}")))?;
+
+    let _ = Command::new("systemctl").args(["reload", "postfix"]).output().await;
+
+    tracing::info!("SMTP relay configured: [{}]:{}", body.host, body.port);
+    Ok(ok("SMTP relay configured"))
+}
+
+/// GET /mail/relay/status — Check current relay configuration.
+async fn relay_status() -> Json<serde_json::Value> {
+    let main_cf = tokio::fs::read_to_string("/etc/postfix/main.cf").await.unwrap_or_default();
+    let relayhost = main_cf.lines()
+        .find(|l| l.starts_with("relayhost"))
+        .map(|l| l.split('=').nth(1).unwrap_or("").trim().to_string());
+
+    Json(serde_json::json!({
+        "configured": relayhost.is_some() && !relayhost.as_ref().unwrap().is_empty(),
+        "relayhost": relayhost.unwrap_or_default(),
+    }))
+}
+
+/// POST /mail/relay/remove — Remove SMTP relay configuration.
+async fn relay_remove() -> Result<Json<serde_json::Value>, ApiErr> {
+    let main_cf = tokio::fs::read_to_string("/etc/postfix/main.cf").await.unwrap_or_default();
+    let cleaned: String = main_cf.lines()
+        .filter(|l| !l.starts_with("relayhost") && !l.starts_with("smtp_sasl_") && !l.starts_with("smtp_tls_") && !l.contains("# DockPanel relay"))
+        .collect::<Vec<_>>().join("\n");
+
+    write_file_atomic("/etc/postfix/main.cf", &cleaned).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Config write failed: {e}")))?;
+
+    let _ = tokio::fs::remove_file("/etc/postfix/sasl_passwd").await;
+    let _ = tokio::fs::remove_file("/etc/postfix/sasl_passwd.db").await;
+    let _ = Command::new("systemctl").args(["reload", "postfix"]).output().await;
+
+    Ok(ok("SMTP relay removed"))
 }
 
 // ── Helper ──────────────────────────────────────────────────────────────
