@@ -6,7 +6,7 @@ use axum::{
 use jsonwebtoken::{encode, EncodingKey, Header};
 
 use crate::auth::AuthUser;
-use crate::error::{err, ApiError};
+use crate::error::{err, require_admin, ApiError};
 use crate::AppState;
 
 #[derive(serde::Deserialize)]
@@ -73,4 +73,94 @@ pub async fn ws_token(
         "token": token,
         "domain": domain,
     })))
+}
+
+/// POST /api/terminal/share — Save terminal output for sharing (temporary, 1 hour expiry).
+pub async fn share_output(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+
+    let content = body
+        .get("content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if content.is_empty() || content.len() > 500_000 {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "Content required (max 500KB)",
+        ));
+    }
+
+    // Generate share token (12 hex chars from UUID)
+    let share_id = uuid::Uuid::new_v4()
+        .to_string()
+        .replace('-', "")
+        .chars()
+        .take(12)
+        .collect::<String>();
+
+    // Store in settings table (simple approach — no new table needed)
+    sqlx::query(
+        "INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2",
+    )
+    .bind(format!("terminal_share_{share_id}"))
+    .bind(content)
+    .execute(&state.db)
+    .await
+    .ok();
+
+    // Auto-cleanup after 1 hour (best effort)
+    let db = state.db.clone();
+    let sid = share_id.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        sqlx::query("DELETE FROM settings WHERE key = $1")
+            .bind(format!("terminal_share_{sid}"))
+            .execute(&db)
+            .await
+            .ok();
+    });
+
+    Ok(Json(serde_json::json!({
+        "share_id": share_id,
+        "url": format!("/api/terminal/shared/{share_id}")
+    })))
+}
+
+/// GET /api/terminal/shared/{id} — View shared terminal output (public, no auth).
+pub async fn view_shared(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<axum::response::Html<String>, ApiError> {
+    let content: Option<(String,)> =
+        sqlx::query_as("SELECT value FROM settings WHERE key = $1")
+            .bind(format!("terminal_share_{id}"))
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+
+    let content = content
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Share expired or not found"))?
+        .0;
+
+    let escaped = content.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>DockPanel Terminal Share</title>
+<style>body {{ background: #1e1e2e; color: #cdd6f4; font-family: 'JetBrains Mono', monospace; padding: 20px; margin: 0; }}
+pre {{ white-space: pre-wrap; word-wrap: break-word; font-size: 13px; line-height: 1.5; }}
+.header {{ color: #a6adc8; font-size: 12px; margin-bottom: 10px; border-bottom: 1px solid #45475a; padding-bottom: 8px; }}
+</style></head><body>
+<div class="header">DockPanel Terminal Share — expires after 1 hour</div>
+<pre>{}</pre>
+</body></html>"#,
+        escaped
+    );
+
+    Ok(axum::response::Html(html))
 }
