@@ -24,7 +24,6 @@ struct TermQuery {
 
 #[derive(Deserialize)]
 struct TerminalTicket {
-    #[allow(dead_code)]
     sub: String,
     purpose: String,
 }
@@ -37,10 +36,10 @@ async fn ws_handler(
     ws: WebSocketUpgrade,
 ) -> Response {
     // Validate JWT ticket (short-lived token signed by the API using agent token as secret)
-    let valid = q
+    let user_email = q
         .token
         .as_deref()
-        .map(|t| {
+        .and_then(|t| {
             let mut validation =
                 jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
             validation.set_required_spec_claims(&["exp", "sub"]);
@@ -50,16 +49,17 @@ async fn ws_handler(
                 &jsonwebtoken::DecodingKey::from_secret(state.token.as_bytes()),
                 &validation,
             )
-            .map(|data| data.claims.purpose == "terminal")
-            .unwrap_or(false)
-        })
-        .unwrap_or(false);
-    if !valid {
+            .ok()
+            .filter(|data| data.claims.purpose == "terminal")
+            .map(|data| data.claims.sub)
+        });
+    if user_email.is_none() {
         return Response::builder()
             .status(401)
             .body("Unauthorized".into())
             .unwrap();
     }
+    let user_email = user_email.unwrap();
 
     let domain = q.domain.clone().unwrap_or_default();
 
@@ -76,7 +76,7 @@ async fn ws_handler(
     let cols = q.cols.unwrap_or(80);
     let rows = q.rows.unwrap_or(24);
 
-    ws.on_upgrade(move |socket| handle_terminal(socket, domain, cols, rows))
+    ws.on_upgrade(move |socket| handle_terminal(socket, domain, user_email, cols, rows))
 }
 
 /// Open a PTY pair and spawn a shell in the child side.
@@ -171,7 +171,7 @@ fn open_pty_shell(cwd: &str, cols: u16, rows: u16) -> Result<(OwnedFd, u32), Str
     Ok((master_fd, pid as u32))
 }
 
-async fn handle_terminal(mut socket: WebSocket, domain: String, cols: u16, rows: u16) {
+async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: String, cols: u16, rows: u16) {
     // Determine working directory
     let cwd = if !domain.is_empty() {
         let path = format!("/var/www/{domain}");
@@ -238,6 +238,12 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, cols: u16, rows:
         }
     });
 
+    // Command buffer for audit logging (logs when Enter is pressed)
+    let mut cmd_buffer = String::new();
+    let domain_str = if domain.is_empty() { "server" } else { &domain };
+
+    tracing::info!(target: "terminal_audit", user = %user_email, domain = %domain_str, "Terminal session started");
+
     // Main loop: multiplex PTY output and WebSocket input
     loop {
         tokio::select! {
@@ -259,6 +265,25 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, cols: u16, rows:
                                     if let Some(data) = cmd.get("data").and_then(|d| d.as_str()) {
                                         if writer.write_all(data.as_bytes()).await.is_err() {
                                             break;
+                                        }
+                                        // Audit logging: buffer input and log when Enter is pressed
+                                        for ch in data.chars() {
+                                            if ch == '\r' || ch == '\n' {
+                                                if !cmd_buffer.trim().is_empty() {
+                                                    tracing::info!(
+                                                        target: "terminal_audit",
+                                                        user = %user_email,
+                                                        domain = %domain_str,
+                                                        command = %cmd_buffer.trim(),
+                                                        "Terminal command"
+                                                    );
+                                                }
+                                                cmd_buffer.clear();
+                                            } else if ch == '\x7f' || ch == '\x08' {
+                                                cmd_buffer.pop();
+                                            } else if !ch.is_control() {
+                                                cmd_buffer.push(ch);
+                                            }
                                         }
                                     }
                                 }
