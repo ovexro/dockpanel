@@ -11,6 +11,7 @@ interface SecurityOverview {
   fail2ban_banned_total: number;
   ssh_port: number;
   ssh_password_auth: boolean;
+  ssh_root_login: boolean;
   ssl_certs_count: number;
 }
 
@@ -84,6 +85,10 @@ export default function Security() {
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
   const [message, setMessage] = useState({ text: "", type: "" });
   const [tab, setTab] = useState<"overview" | "scans" | "diagnostics">("overview");
+  const [selectedJail, setSelectedJail] = useState<string | null>(null);
+  const [bannedIps, setBannedIps] = useState<string[]>([]);
+  const [banIp, setBanIp] = useState("");
+  const [banJail, setBanJail] = useState("");
 
   const loadData = async () => {
     try {
@@ -102,6 +107,25 @@ export default function Security() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const loadBannedIps = async (jail: string) => {
+    try {
+      const data = await api.get<{ ips: string[] }>(`/security/fail2ban/${jail}/banned`);
+      setBannedIps(data.ips);
+      setSelectedJail(jail);
+    } catch { setBannedIps([]); }
+  };
+
+  const getFixAction = (finding: ScanFinding): { type: string; target: string; label: string } | null => {
+    if (finding.check_type === "open_port" && finding.title.includes("Unexpected open port")) {
+      const port = finding.title.match(/port:\s*(\d+)/)?.[1];
+      if (port) return { type: "block_port", target: port, label: "Block Port" };
+    }
+    if (finding.check_type === "malware" && finding.file_path) {
+      return { type: "remove_file", target: finding.file_path, label: "Remove File" };
+    }
+    return null;
   };
 
   useEffect(() => {
@@ -374,6 +398,58 @@ export default function Security() {
                       Password auth: {overview.ssh_password_auth ? "On" : "Off"}
                     </span>
                   </p>
+                  <p className="text-xs mt-0.5">
+                    <span className={overview.ssh_root_login ? "text-warn-400" : "text-rust-400"}>
+                      Root login: {overview.ssh_root_login ? "On" : "Off"}
+                    </span>
+                  </p>
+                  <div className="flex flex-wrap gap-1.5 mt-3">
+                    <button
+                      onClick={async () => {
+                        if (!confirm(overview.ssh_password_auth ? "Disable SSH password authentication? Make sure you have SSH key access first!" : "Enable SSH password authentication?")) return;
+                        try {
+                          await api.post(overview.ssh_password_auth ? "/security/ssh/disable-password" : "/security/ssh/enable-password", {});
+                          setMessage({ text: `SSH password auth ${overview.ssh_password_auth ? "disabled" : "enabled"}`, type: "success" });
+                          loadData();
+                        } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                      }}
+                      className={`px-2 py-1 rounded text-xs font-medium transition-colors ${overview.ssh_password_auth ? "bg-warn-500/15 text-warn-400 hover:bg-warn-500/25" : "bg-dark-700 text-dark-200 hover:bg-dark-600"}`}
+                    >
+                      {overview.ssh_password_auth ? "Disable Password" : "Enable Password"}
+                    </button>
+                    {overview.ssh_root_login && (
+                      <button
+                        onClick={async () => {
+                          if (!confirm("Disable root SSH login? Make sure you have a non-root user with sudo access!")) return;
+                          try {
+                            await api.post("/security/ssh/disable-root", {});
+                            setMessage({ text: "SSH root login disabled", type: "success" });
+                            loadData();
+                          } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                        }}
+                        className="px-2 py-1 rounded text-xs font-medium transition-colors bg-warn-500/15 text-warn-400 hover:bg-warn-500/25"
+                      >
+                        Disable Root
+                      </button>
+                    )}
+                    <button
+                      onClick={async () => {
+                        const newPort = prompt("Enter new SSH port (1-65535):", String(overview.ssh_port));
+                        if (!newPort) return;
+                        const port = parseInt(newPort);
+                        if (isNaN(port) || port < 1 || port > 65535) { setMessage({ text: "Invalid port number", type: "error" }); return; }
+                        if (!confirm(`Change SSH port to ${port}? A firewall rule will be added automatically.`)) return;
+                        try {
+                          await api.post("/security/ssh/change-port", { port });
+                          setMessage({ text: `SSH port changed to ${port}`, type: "success" });
+                          loadData();
+                        } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                      }}
+                      className="px-2 py-1 rounded text-xs font-medium transition-colors bg-dark-700 text-dark-200 hover:bg-dark-600"
+                    >
+                      Change Port
+                    </button>
+                  </div>
                 </div>
 
                 <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
@@ -488,26 +564,113 @@ export default function Security() {
                 <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Fail2Ban Jails</h3>
               </div>
               {fail2ban && fail2ban.jails.length > 0 ? (
-                <table className="w-full">
-                  <thead>
-                    <tr className="bg-dark-900">
-                      <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Jail</th>
-                      <th scope="col" className="text-right text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Banned</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-dark-600">
-                    {fail2ban.jails.map((jail) => (
-                      <tr key={jail.name} className="hover:bg-dark-700/30 transition-colors">
-                        <td className="px-5 py-2.5 text-sm text-dark-50 font-mono">{jail.name}</td>
-                        <td className="px-5 py-2.5 text-sm text-right">
-                          <span className={`font-medium ${jail.banned_count > 0 ? "text-danger-400" : "text-dark-300"}`}>
-                            {jail.banned_count}
-                          </span>
-                        </td>
+                <>
+                  <table className="w-full">
+                    <thead>
+                      <tr className="bg-dark-900">
+                        <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Jail</th>
+                        <th scope="col" className="text-right text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Banned</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-dark-600">
+                      {fail2ban.jails.map((jail) => (
+                        <tr
+                          key={jail.name}
+                          className="hover:bg-dark-700/30 transition-colors cursor-pointer"
+                          onClick={() => { if (selectedJail === jail.name) { setSelectedJail(null); } else { loadBannedIps(jail.name); if (!banJail) setBanJail(jail.name); } }}
+                        >
+                          <td className="px-5 py-2.5 text-sm text-dark-50 font-mono flex items-center gap-2">
+                            <svg className={`w-3 h-3 text-dark-300 transition-transform ${selectedJail === jail.name ? "rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                            </svg>
+                            {jail.name}
+                          </td>
+                          <td className="px-5 py-2.5 text-sm text-right">
+                            <span className={`font-medium ${jail.banned_count > 0 ? "text-danger-400" : "text-dark-300"}`}>
+                              {jail.banned_count}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {/* Banned IPs for selected jail */}
+                  {selectedJail && (
+                    <div className="border-t border-dark-600 px-5 py-3">
+                      <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-2">
+                        Banned IPs in <span className="text-dark-100">{selectedJail}</span>
+                      </p>
+                      {bannedIps.length > 0 ? (
+                        <div className="space-y-1">
+                          {bannedIps.map((ip) => (
+                            <div key={ip} className="flex items-center justify-between bg-dark-900 rounded px-3 py-1.5">
+                              <span className="text-sm text-dark-50 font-mono">{ip}</span>
+                              <button
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  if (!confirm(`Unban ${ip} from ${selectedJail}?`)) return;
+                                  try {
+                                    await api.post("/security/fail2ban/unban", { jail: selectedJail, ip });
+                                    setMessage({ text: `${ip} unbanned from ${selectedJail}`, type: "success" });
+                                    loadBannedIps(selectedJail);
+                                    loadData();
+                                  } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Unban failed", type: "error" }); }
+                                }}
+                                className="px-2 py-0.5 bg-rust-500/15 text-rust-400 rounded text-xs font-medium hover:bg-rust-500/25 transition-colors"
+                              >
+                                Unban
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-dark-300">No banned IPs</p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Ban IP form */}
+                  <div className="border-t border-dark-600 px-5 py-3">
+                    <p className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-2">Ban IP</p>
+                    <div className="flex gap-2">
+                      <select
+                        value={banJail}
+                        onChange={(e) => setBanJail(e.target.value)}
+                        className="px-2 py-1.5 border border-dark-500 rounded text-xs bg-dark-900 text-dark-100"
+                      >
+                        <option value="">Select jail</option>
+                        {fail2ban.jails.map((j) => (
+                          <option key={j.name} value={j.name}>{j.name}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        value={banIp}
+                        onChange={(e) => setBanIp(e.target.value)}
+                        className="flex-1 px-2 py-1.5 border border-dark-500 rounded text-xs bg-dark-900 text-dark-100 font-mono"
+                        placeholder="IP address"
+                      />
+                      <button
+                        onClick={async () => {
+                          if (!banJail || !banIp) return;
+                          if (!confirm(`Ban ${banIp} in jail ${banJail}?`)) return;
+                          try {
+                            await api.post("/security/fail2ban/ban", { jail: banJail, ip: banIp });
+                            setMessage({ text: `${banIp} banned in ${banJail}`, type: "success" });
+                            setBanIp("");
+                            if (selectedJail === banJail) loadBannedIps(banJail);
+                            loadData();
+                          } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Ban failed", type: "error" }); }
+                        }}
+                        disabled={!banJail || !banIp}
+                        className="px-3 py-1.5 bg-red-500/15 text-danger-400 rounded text-xs font-medium hover:bg-red-500/25 transition-colors disabled:opacity-50"
+                      >
+                        Ban
+                      </button>
+                    </div>
+                  </div>
+                </>
               ) : (
                 <div className="p-6 text-center text-sm text-dark-300">
                   {fail2ban ? "No jails configured" : "Fail2Ban not available"}
@@ -596,7 +759,28 @@ export default function Security() {
                                   )}
                                 </div>
                                 {f.remediation && (
-                                  <p className="text-xs text-rust-500 mt-1">{f.remediation}</p>
+                                  <p className="text-xs text-rust-500 mt-1 inline-flex items-center gap-1">
+                                    {f.remediation}
+                                    {(() => {
+                                      const fix = getFixAction(f);
+                                      if (!fix) return null;
+                                      return (
+                                        <button
+                                          onClick={async () => {
+                                            if (!confirm(`Apply fix: ${fix.label}?\n\nThis will ${fix.type === "block_port" ? `block port ${fix.target}/tcp` : fix.type === "remove_file" ? `delete ${fix.target}` : fix.label.toLowerCase()}`)) return;
+                                            try {
+                                              await api.post("/security/fix", { fix_type: fix.type, target: fix.target });
+                                              setMessage({ text: `Fix applied: ${fix.label}`, type: "success" });
+                                              handleScan();
+                                            } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Fix failed", type: "error" }); }
+                                          }}
+                                          className="ml-2 px-2 py-0.5 bg-rust-500/15 text-rust-400 rounded text-xs font-medium hover:bg-rust-500/25 transition-colors"
+                                        >
+                                          Fix
+                                        </button>
+                                      );
+                                    })()}
+                                  </p>
                                 )}
                               </div>
                             </div>
