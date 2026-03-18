@@ -40,6 +40,9 @@ pub struct GitDeploy {
     pub status: String,
     pub memory_mb: Option<i32>,
     pub cpu_percent: Option<i32>,
+    pub ssl_email: Option<String>,
+    pub pre_build_cmd: Option<String>,
+    pub post_deploy_cmd: Option<String>,
     pub last_deploy: Option<chrono::DateTime<chrono::Utc>>,
     pub last_commit: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -72,6 +75,9 @@ pub struct CreateRequest {
     pub auto_deploy: Option<bool>,
     pub memory_mb: Option<i32>,
     pub cpu_percent: Option<i32>,
+    pub ssl_email: Option<String>,
+    pub pre_build_cmd: Option<String>,
+    pub post_deploy_cmd: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -85,6 +91,9 @@ pub struct UpdateRequest {
     pub auto_deploy: Option<bool>,
     pub memory_mb: Option<i32>,
     pub cpu_percent: Option<i32>,
+    pub ssl_email: Option<String>,
+    pub pre_build_cmd: Option<String>,
+    pub post_deploy_cmd: Option<String>,
 }
 
 /// GET /api/git-deploys — List all git deploys for the current user.
@@ -152,8 +161,8 @@ pub async fn create(
         .unwrap_or(serde_json::json!({}));
 
     let deploy: GitDeploy = sqlx::query_as(
-        "INSERT INTO git_deploys (user_id, name, repo_url, branch, dockerfile, container_port, host_port, domain, env_vars, auto_deploy, webhook_secret, memory_mb, cpu_percent) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
+        "INSERT INTO git_deploys (user_id, name, repo_url, branch, dockerfile, container_port, host_port, domain, env_vars, auto_deploy, webhook_secret, memory_mb, cpu_percent, ssl_email, pre_build_cmd, post_deploy_cmd) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
          RETURNING *",
     )
     .bind(claims.sub)
@@ -169,6 +178,9 @@ pub async fn create(
     .bind(&webhook_secret)
     .bind(body.memory_mb)
     .bind(body.cpu_percent)
+    .bind(&body.ssl_email)
+    .bind(&body.pre_build_cmd)
+    .bind(&body.post_deploy_cmd)
     .fetch_one(&state.db)
     .await
     .map_err(|e| {
@@ -244,8 +256,11 @@ pub async fn update(
          auto_deploy = COALESCE($7, auto_deploy), \
          memory_mb = $8, \
          cpu_percent = $9, \
+         ssl_email = COALESCE($10, ssl_email), \
+         pre_build_cmd = COALESCE($11, pre_build_cmd), \
+         post_deploy_cmd = COALESCE($12, post_deploy_cmd), \
          updated_at = NOW() \
-         WHERE id = $10 AND user_id = $11 \
+         WHERE id = $13 AND user_id = $14 \
          RETURNING *",
     )
     .bind(body.repo_url.as_deref())
@@ -257,6 +272,9 @@ pub async fn update(
     .bind(body.auto_deploy)
     .bind(body.memory_mb)
     .bind(body.cpu_percent)
+    .bind(body.ssl_email.as_deref())
+    .bind(body.pre_build_cmd.as_deref())
+    .bind(body.post_deploy_cmd.as_deref())
     .bind(id)
     .bind(claims.sub)
     .fetch_one(&state.db)
@@ -918,6 +936,27 @@ fn spawn_deploy_task(
             }
         };
 
+        // Pre-build hook (runs in git dir on host, before docker build)
+        if let Some(ref cmd) = config.pre_build_cmd {
+            if !cmd.trim().is_empty() {
+                emit("pre_build", "Running pre-build hook", "in_progress", None);
+                match agent.post_long("/git/pre-build-hook", Some(serde_json::json!({ "name": config.name, "command": cmd })), 330).await {
+                    Ok(result) => {
+                        let success = result.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                        if success {
+                            emit("pre_build", "Running pre-build hook", "done", None);
+                        } else {
+                            let output = result.get("output").and_then(|v| v.as_str()).unwrap_or("");
+                            emit("pre_build", "Pre-build hook failed", "error", Some(output.to_string()));
+                        }
+                    }
+                    Err(e) => {
+                        emit("pre_build", "Pre-build hook failed", "error", Some(format!("{e}")));
+                    }
+                }
+            }
+        }
+
         // Step 2: Build
         emit("build", "Building Docker image", "in_progress", None);
 
@@ -984,6 +1023,9 @@ fn spawn_deploy_task(
         if let Some(cpu) = config.cpu_percent {
             deploy_body["cpu_percent"] = serde_json::json!(cpu);
         }
+        if let Some(ref ssl_email) = config.ssl_email {
+            deploy_body["ssl_email"] = serde_json::json!(ssl_email);
+        }
 
         match agent.post_long("/git/deploy", Some(deploy_body), 120).await {
             Ok(result) => {
@@ -1031,6 +1073,153 @@ fn spawn_deploy_task(
                     &db, user_id, &email, "git_deploy.deploy",
                     Some("git_deploy"), Some(&deploy_name), Some(&commit_hash), Some("success"),
                 ).await;
+
+                // Post-deploy hook
+                if let Some(ref cmd) = config.post_deploy_cmd {
+                    if !cmd.trim().is_empty() {
+                        emit("post_deploy", "Running post-deploy hook", "in_progress", None);
+                        match agent.post_long("/git/hook", Some(serde_json::json!({ "name": config.name, "command": cmd })), 330).await {
+                            Ok(result) => {
+                                let success = result.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                                let output = result.get("output").and_then(|v| v.as_str()).unwrap_or("");
+                                if success {
+                                    emit("post_deploy", "Post-deploy hook complete", "done", None);
+                                } else {
+                                    emit("post_deploy", "Post-deploy hook failed", "error", Some(output.to_string()));
+                                }
+                            }
+                            Err(e) => {
+                                emit("post_deploy", "Post-deploy hook failed", "error", Some(format!("{e}")));
+                            }
+                        }
+                    }
+                }
+
+                // Deploy notification
+                {
+                    let notify_db = db.clone();
+                    let notify_name = deploy_name.clone();
+                    let notify_commit = commit_hash.clone();
+                    let notify_user = user_id;
+                    tokio::spawn(async move {
+                        if let Some(channels) = crate::services::notifications::get_user_channels(&notify_db, notify_user, None).await {
+                            let subject = format!("Deploy successful: {notify_name}");
+                            let message = format!("Git deploy '{notify_name}' deployed successfully (commit: {notify_commit})");
+                            let html = format!(
+                                "<div style=\"font-family:sans-serif\"><h2 style=\"color:#22c55e\">Deploy Successful</h2>\
+                                 <p><strong>{notify_name}</strong> deployed successfully.</p>\
+                                 <p>Commit: <code>{notify_commit}</code></p>\
+                                 <p style=\"color:#6b7280;font-size:14px\">Time: {}</p></div>",
+                                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+                            );
+                            crate::services::notifications::send_notification(&notify_db, &channels, &subject, &message, &html).await;
+                        }
+                    });
+                }
+
+                // Auto-rollback monitor: watch container for 2 minutes after deploy
+                {
+                    let monitor_db = db.clone();
+                    let monitor_agent = agent.clone();
+                    let monitor_name = deploy_name.clone();
+                    let monitor_gd_id = git_deploy_id;
+                    let monitor_user = user_id;
+                    let monitor_email_str = email.clone();
+                    let monitor_image = image_tag.clone();
+                    let monitor_config_name = config.name.clone();
+                    let monitor_config_port = config.container_port;
+                    let monitor_config_host_port = config.host_port;
+                    let monitor_config_domain = config.domain.clone();
+
+                    tokio::spawn(async move {
+                        // Check container health every 15s for 2 minutes
+                        for _ in 0..8 {
+                            tokio::time::sleep(Duration::from_secs(15)).await;
+
+                            // Check if container is still running
+                            match monitor_agent.post("/git/logs", Some(serde_json::json!({ "name": monitor_config_name, "lines": 1 }))).await {
+                                Ok(_) => {} // Container is responding — alive
+                                Err(_) => {
+                                    // Container might be down — check status
+                                    let container_name = format!("dockpanel-git-{monitor_config_name}");
+                                    tracing::warn!("Auto-rollback: container {container_name} may have crashed, checking...");
+
+                                    // Get last successful deploy before this one
+                                    let prev: Option<(String, String)> = sqlx::query_as(
+                                        "SELECT image_tag, commit_hash FROM git_deploy_history \
+                                         WHERE git_deploy_id = $1 AND status = 'success' AND image_tag != $2 \
+                                         ORDER BY created_at DESC LIMIT 1"
+                                    )
+                                    .bind(monitor_gd_id)
+                                    .bind(&monitor_image)
+                                    .fetch_optional(&monitor_db)
+                                    .await
+                                    .ok()
+                                    .flatten();
+
+                                    if let Some((prev_image, prev_commit)) = prev {
+                                        tracing::warn!("Auto-rollback: rolling back {monitor_name} to {prev_image}");
+
+                                        // Deploy the previous image
+                                        let mut rollback_body = serde_json::json!({
+                                            "name": monitor_config_name,
+                                            "image_tag": prev_image,
+                                            "container_port": monitor_config_port,
+                                            "host_port": monitor_config_host_port,
+                                        });
+                                        if let Some(ref domain) = monitor_config_domain {
+                                            rollback_body["domain"] = serde_json::json!(domain);
+                                        }
+
+                                        if monitor_agent.post_long("/git/deploy", Some(rollback_body), 120).await.is_ok() {
+                                            // Record rollback in history
+                                            sqlx::query(
+                                                "INSERT INTO git_deploy_history (git_deploy_id, commit_hash, image_tag, status, output, triggered_by) \
+                                                 VALUES ($1, $2, $3, 'success', 'Auto-rollback after container crash', 'auto-rollback')"
+                                            )
+                                            .bind(monitor_gd_id)
+                                            .bind(&prev_commit)
+                                            .bind(&prev_image)
+                                            .execute(&monitor_db)
+                                            .await
+                                            .ok();
+
+                                            // Update git_deploys
+                                            sqlx::query("UPDATE git_deploys SET image_tag = $1, last_commit = $2, updated_at = NOW() WHERE id = $3")
+                                                .bind(&prev_image)
+                                                .bind(&prev_commit)
+                                                .bind(monitor_gd_id)
+                                                .execute(&monitor_db)
+                                                .await
+                                                .ok();
+
+                                            // Notify
+                                            if let Some(channels) = crate::services::notifications::get_user_channels(&monitor_db, monitor_user, None).await {
+                                                let subject = format!("Auto-rollback: {monitor_name}");
+                                                let message = format!("Container '{monitor_name}' crashed after deploy. Auto-rolled back to {prev_commit}.");
+                                                let html = format!(
+                                                    "<div style=\"font-family:sans-serif\"><h2 style=\"color:#f59e0b\">Auto-Rollback</h2>\
+                                                     <p>Container <strong>{monitor_name}</strong> crashed after deployment.</p>\
+                                                     <p>Automatically rolled back to commit <code>{prev_commit}</code>.</p></div>"
+                                                );
+                                                crate::services::notifications::send_notification(&monitor_db, &channels, &subject, &message, &html).await;
+                                            }
+
+                                            activity::log_activity(
+                                                &monitor_db, monitor_user, &monitor_email_str, "git_deploy.auto_rollback",
+                                                Some("git_deploy"), Some(&monitor_name), Some(&prev_commit), None,
+                                            ).await;
+
+                                            tracing::info!("Auto-rollback complete: {monitor_name} → {prev_image}");
+                                        }
+                                    }
+                                    return; // Stop monitoring after rollback
+                                }
+                            }
+                        }
+                        tracing::info!("Auto-rollback monitor: {monitor_name} healthy for 2 minutes, monitoring stopped");
+                    });
+                }
             }
             Err(e) => {
                 emit("deploy", "Deploying container", "error", Some(format!("{e}")));
@@ -1064,6 +1253,30 @@ fn spawn_deploy_task(
                     &db, user_id, &email, "git_deploy.deploy",
                     Some("git_deploy"), Some(&deploy_name), Some(&commit_hash), Some("failed"),
                 ).await;
+
+                // Deploy failure notification
+                {
+                    let notify_db = db.clone();
+                    let notify_name = deploy_name.clone();
+                    let notify_commit = commit_hash.clone();
+                    let notify_user = user_id;
+                    let notify_err = format!("{e}");
+                    tokio::spawn(async move {
+                        if let Some(channels) = crate::services::notifications::get_user_channels(&notify_db, notify_user, None).await {
+                            let subject = format!("Deploy FAILED: {notify_name}");
+                            let message = format!("Git deploy '{notify_name}' failed (commit: {notify_commit}): {notify_err}");
+                            let html = format!(
+                                "<div style=\"font-family:sans-serif\"><h2 style=\"color:#ef4444\">Deploy Failed</h2>\
+                                 <p><strong>{notify_name}</strong> deployment failed.</p>\
+                                 <p>Commit: <code>{notify_commit}</code></p>\
+                                 <p>Error: {notify_err}</p>\
+                                 <p style=\"color:#6b7280;font-size:14px\">Time: {}</p></div>",
+                                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+                            );
+                            crate::services::notifications::send_notification(&notify_db, &channels, &subject, &message, &html).await;
+                        }
+                    });
+                }
             }
         }
 
