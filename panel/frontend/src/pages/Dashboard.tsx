@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
-import { formatSize, formatRate, formatUptime } from "../utils/format";
+import { formatSize, formatRate, formatUptime, timeAgo } from "../utils/format";
 
 interface SiteDetail {
   id: string;
@@ -176,6 +176,19 @@ export default function Dashboard() {
   const wsConnectedRef = useRef(false);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Feature #1: Docker container overview
+  const [dockerInfo, setDockerInfo] = useState<{ total: number; running: number; stopped: number } | null>(null);
+  // Feature #2: Recent activity feed
+  const [recentActivity, setRecentActivity] = useState<any[]>([]);
+  // Feature #6: Bandwidth usage summary
+  const [bandwidthTotal, setBandwidthTotal] = useState({ rx: 0, tx: 0 });
+  // Feature #8: Docker image disk usage
+  const [dockerDiskUsage, setDockerDiskUsage] = useState<string | null>(null);
+  // Feature #9: Mail queue widget
+  const [mailQueue, setMailQueue] = useState<number | null>(null);
+  // Feature #4: Quick server action messages
+  const [actionMessage, setActionMessage] = useState<{ text: string; type: string } | null>(null);
+
   const dismissOnboarding = useCallback(() => {
     setDismissed(true);
     localStorage.setItem("dp-onboarding-dismissed", "1");
@@ -217,6 +230,44 @@ export default function Dashboard() {
       .get<{ enabled: boolean }>("/auth/2fa/status")
       .then((d) => setTwoFaEnabled(d.enabled))
       .catch(() => console.warn("Optional: failed to load 2FA status"));
+    // Feature #1: Docker container overview
+    api
+      .get<{ total: number; running: number; stopped: number }>("/dashboard/docker")
+      .then(setDockerInfo)
+      .catch(() => console.warn("Optional: failed to load docker summary"));
+    // Feature #2: Recent activity feed
+    api
+      .get<any[]>("/activity?limit=5")
+      .then(setRecentActivity)
+      .catch(() => {});
+    // Feature #8: Docker image disk usage
+    api
+      .get<any>("/apps/images")
+      .then((d) => {
+        const images = Array.isArray(d) ? d : (d.images || []);
+        const totalMb = images.reduce((sum: number, img: any) => {
+          const size = img.size || img.Size || "0";
+          if (typeof size === "number") return sum + size / (1024 * 1024);
+          const match = String(size).match(/([\d.]+)\s*(GB|MB|KB)/i);
+          if (match) {
+            const val = parseFloat(match[1]);
+            if (match[2].toUpperCase() === "GB") return sum + val * 1024;
+            if (match[2].toUpperCase() === "MB") return sum + val;
+            return sum + val / 1024;
+          }
+          return sum;
+        }, 0);
+        setDockerDiskUsage(totalMb > 1024 ? `${(totalMb / 1024).toFixed(1)} GB` : `${totalMb.toFixed(0)} MB`);
+      })
+      .catch(() => {});
+    // Feature #9: Mail queue count
+    api
+      .get<any>("/mail/queue")
+      .then((d) => {
+        const count = d.count ?? (Array.isArray(d.queue) ? d.queue.length : (Array.isArray(d) ? d.length : 0));
+        setMailQueue(count);
+      })
+      .catch(() => {});
   }, []);
 
   // Fetch real-time system endpoints (only needed when WS is disconnected)
@@ -269,7 +320,13 @@ export default function Dashboard() {
           if (data.type === "metrics") {
             if (data.system) setSystem(data.system);
             if (data.processes) setProcesses(data.processes);
-            if (data.network) setNetwork(data.network);
+            if (data.network) {
+              setNetwork(data.network);
+              // Feature #6: Track cumulative bandwidth
+              const rx = (data.network as NetworkIface[]).reduce((sum, iface) => sum + (iface.rx_bytes || 0), 0);
+              const tx = (data.network as NetworkIface[]).reduce((sum, iface) => sum + (iface.tx_bytes || 0), 0);
+              setBandwidthTotal({ rx, tx });
+            }
           }
         } catch {
           console.warn("Failed to parse WebSocket message");
@@ -308,6 +365,45 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [wsConnected, fetchSlowData, fetchRealtimeData]);
 
+  // Feature #7: Disk full prediction based on historical usage trend
+  const diskForecast = useMemo(() => {
+    if (!metricsHistory || metricsHistory.length < 10) return null;
+    const points = metricsHistory;
+    const first = points[0];
+    const last = points[points.length - 1];
+    // Estimate hours between first and last point (each point ~15min apart)
+    const hours = (points.length - 1) * 0.25;
+    if (hours < 1) return null;
+    const firstDisk = first.disk;
+    const lastDisk = last.disk;
+    const ratePerHour = (lastDisk - firstDisk) / hours;
+    if (ratePerHour <= 0) return null; // Disk not growing
+    const remaining = 100 - lastDisk;
+    const hoursLeft = remaining / ratePerHour;
+    const daysLeft = Math.floor(hoursLeft / 24);
+    return daysLeft > 365 ? null : daysLeft; // Only show if meaningful
+  }, [metricsHistory]);
+
+  // Feature #10: Visual health indicator
+  const overallStatus = useMemo(() => {
+    const alertCount = intel?.firing_alerts ?? 0;
+    const healthScore = intel?.health_score ?? 100;
+    if (alertCount > 0 || healthScore < 50)
+      return { label: "System Issues Detected", color: "bg-red-500/10 border-red-500/20 text-danger-400", dot: "bg-danger-400" };
+    if (healthScore < 80)
+      return { label: "Degraded Performance", color: "bg-warn-500/10 border-warn-500/20 text-warn-400", dot: "bg-warn-500" };
+    return { label: "All Systems Operational", color: "bg-rust-500/10 border-rust-500/20 text-rust-400", dot: "bg-rust-500" };
+  }, [intel]);
+
+  // Feature #6: Also update bandwidth when network changes via polling
+  useEffect(() => {
+    if (network.length > 0) {
+      const rx = network.reduce((sum, iface) => sum + (iface.rx_bytes || 0), 0);
+      const tx = network.reduce((sum, iface) => sum + (iface.tx_bytes || 0), 0);
+      setBandwidthTotal({ rx, tx });
+    }
+  }, [network]);
+
   return (
     <div className="p-6 lg:p-8 animate-fade-up">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
@@ -331,8 +427,51 @@ export default function Dashboard() {
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z" /></svg>
             Diagnostics
           </Link>
+          {/* Feature #4: Quick Server Actions */}
+          <div className="h-4 w-px bg-dark-600 hidden sm:block" />
+          <button onClick={async () => {
+            if (!confirm("Restart Nginx? This will briefly interrupt all web traffic.")) return;
+            try { await api.post("/agent/diagnostics/fix", { fix: "restart_nginx" }); setActionMessage({ text: "Nginx restarted", type: "success" }); setTimeout(() => setActionMessage(null), 3000); }
+            catch { setActionMessage({ text: "Failed to restart Nginx", type: "error" }); setTimeout(() => setActionMessage(null), 3000); }
+          }} className="px-2.5 py-1.5 bg-dark-800 border border-dark-500 rounded-lg text-xs text-dark-200 hover:bg-dark-700 hover:text-dark-50">
+            Restart Nginx
+          </button>
+          <button onClick={async () => {
+            if (!confirm("Restart PHP-FPM? Active requests may be interrupted.")) return;
+            try { await api.post("/agent/diagnostics/fix", { fix: "restart_php" }); setActionMessage({ text: "PHP-FPM restarted", type: "success" }); setTimeout(() => setActionMessage(null), 3000); }
+            catch { setActionMessage({ text: "Failed to restart PHP-FPM", type: "error" }); setTimeout(() => setActionMessage(null), 3000); }
+          }} className="px-2.5 py-1.5 bg-dark-800 border border-dark-500 rounded-lg text-xs text-dark-200 hover:bg-dark-700 hover:text-dark-50">
+            Restart PHP
+          </button>
+          <button onClick={async () => {
+            if (!confirm("REBOOT SERVER?\n\nAll services will be temporarily unavailable. Are you sure?")) return;
+            try { await api.post("/system/reboot"); setActionMessage({ text: "Server rebooting...", type: "success" }); setTimeout(() => setActionMessage(null), 5000); }
+            catch { setActionMessage({ text: "Failed to reboot server", type: "error" }); setTimeout(() => setActionMessage(null), 3000); }
+          }} className="px-2.5 py-1.5 bg-red-500/10 border border-red-500/20 rounded-lg text-xs text-danger-400 hover:bg-red-500/20">
+            Reboot
+          </button>
         </div>
       </div>
+
+      {/* Feature #10: Visual health indicator */}
+      {intel && (
+        <div className={`rounded-lg border px-4 py-2.5 flex items-center gap-2.5 mb-6 ${overallStatus.color}`}>
+          <div className={`w-2.5 h-2.5 rounded-full ${overallStatus.dot} ${overallStatus.dot === "bg-rust-500" ? "animate-pulse" : ""}`} />
+          <span className="text-sm font-medium">{overallStatus.label}</span>
+          {intel.firing_alerts > 0 && (
+            <Link to="/monitors" className="ml-auto text-[10px] underline opacity-70 hover:opacity-100">View alerts</Link>
+          )}
+        </div>
+      )}
+
+      {/* Feature #4: Action message toast */}
+      {actionMessage && (
+        <div className={`rounded-lg border px-4 py-2.5 mb-6 text-sm font-medium ${
+          actionMessage.type === "success" ? "bg-rust-500/10 border-rust-500/20 text-rust-400" : "bg-red-500/10 border-red-500/20 text-danger-400"
+        }`}>
+          {actionMessage.text}
+        </div>
+      )}
 
       {error && (
         <div className="bg-red-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-6">
@@ -422,7 +561,7 @@ export default function Dashboard() {
                 icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><rect x="6" y="6" width="12" height="12" rx="1" /><path d="M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4M19 9h4m-4 6h4" strokeLinecap="round" /></svg> },
               { label: "Memory", pct: system.mem_usage_pct, detail: `${(system.mem_used_mb / 1024).toFixed(1)} / ${(system.mem_total_mb / 1024).toFixed(1)} GB${system.swap_total_mb > 0 ? ` · Swap ${(system.swap_used_mb / 1024).toFixed(1)}G` : ""}`,
                 icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><rect x="3" y="4" width="18" height="16" rx="1" /><path d="M7 4v3m4-3v3m4-3v3M3 10h18" strokeLinecap="round" /></svg> },
-              { label: "Disk", pct: system.disk_usage_pct, detail: `${system.disk_used_gb.toFixed(0)} / ${system.disk_total_gb.toFixed(0)} GB · ${(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB free`,
+              { label: "Disk", pct: system.disk_usage_pct, detail: `${system.disk_used_gb.toFixed(0)} / ${system.disk_total_gb.toFixed(0)} GB · ${(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB free${dockerDiskUsage ? ` · Images: ${dockerDiskUsage}` : ""}`,
                 icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 17.25v-.228a4.5 4.5 0 0 0-.12-1.03l-2.268-9.64a3.375 3.375 0 0 0-3.285-2.602H7.923a3.375 3.375 0 0 0-3.285 2.602l-2.268 9.64a4.5 4.5 0 0 0-.12 1.03v.228m19.5 0a3 3 0 0 1-3 3H5.25a3 3 0 0 1-3-3m19.5 0a3 3 0 0 0-3-3H5.25a3 3 0 0 0-3 3m16.5 0h.008v.008h-.008v-.008Zm-3 0h.008v.008h-.008v-.008Z" /></svg> },
             ].map(({ label, pct, detail, icon }) => (
               <div key={label} className="border border-dark-500 bg-dark-800 p-5 relative overflow-hidden">
@@ -439,6 +578,12 @@ export default function Dashboard() {
                     <div className={`h-full rounded-full transition-all duration-700 ${barColor(pct)}`} style={{ width: `${Math.min(pct, 100)}%` }} />
                   </div>
                   <p className="text-xs text-dark-300 mt-3">{detail}</p>
+                  {/* Feature #7: Disk full forecast */}
+                  {label === "Disk" && diskForecast !== null && diskForecast < 30 && (
+                    <p className={`text-[10px] mt-1 font-medium ${diskForecast < 7 ? "text-danger-400" : "text-warn-400"}`}>
+                      Disk full in ~{diskForecast}d at current rate
+                    </p>
+                  )}
                 </div>
               </div>
             ))}
@@ -464,7 +609,7 @@ export default function Dashboard() {
           )}
 
           {/* Status Bar — grid of stat cells */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-px bg-dark-600 border border-dark-500 mb-6">
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-px bg-dark-600 border border-dark-500 mb-6">
             <div className="bg-dark-800 px-4 py-3 flex flex-col">
               <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Uptime</span>
               <span className="text-sm text-dark-50 font-medium">{formatUptime(system.uptime_secs)}</span>
@@ -476,6 +621,14 @@ export default function Dashboard() {
             <div className="bg-dark-800 px-4 py-3 flex flex-col">
               <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Databases</span>
               <span className="text-sm text-dark-50 font-medium">{dbCount}</span>
+            </div>
+            {/* Feature #1: Docker container overview */}
+            <div className="bg-dark-800 px-4 py-3 flex flex-col">
+              <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Docker</span>
+              <span className="text-sm text-dark-50 font-medium">
+                {dockerInfo?.running ?? 0}<span className="text-xs text-dark-300 font-normal">/{dockerInfo?.total ?? 0}</span>
+                <span className="text-[10px] text-dark-400 ml-1">running</span>
+              </span>
             </div>
             {intel && <>
               <div className={`px-4 py-3 flex flex-col ${
@@ -509,6 +662,21 @@ export default function Dashboard() {
                 : <span className="text-sm text-rust-400 font-medium">up to date</span>
               }
             </div>
+            {/* Feature #6: Bandwidth usage summary */}
+            <div className="bg-dark-800 px-4 py-3 flex flex-col">
+              <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Bandwidth</span>
+              <span className="text-sm text-dark-50 font-medium">
+                <span className="text-dark-400">{"\u2193"}</span>{formatSize(bandwidthTotal.rx)}
+                <span className="text-dark-400 ml-1">{"\u2191"}</span>{formatSize(bandwidthTotal.tx)}
+              </span>
+            </div>
+            {/* Feature #9: Mail queue widget */}
+            <div className="bg-dark-800 px-4 py-3 flex flex-col">
+              <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Mail Queue</span>
+              <span className={`text-sm font-medium ${(mailQueue ?? 0) > 0 ? "text-warn-400" : "text-dark-50"}`}>
+                {mailQueue ?? 0} <span className="text-[10px] text-dark-400">messages</span>
+              </span>
+            </div>
           </div>
 
           {/* Reboot Required Warning */}
@@ -522,6 +690,49 @@ export default function Dashboard() {
               <Link to="/updates" className="px-4 py-2 bg-warn-500 text-dark-900 text-xs font-bold uppercase tracking-wider hover:bg-warn-400 transition-colors shrink-0">
                 View Updates
               </Link>
+            </div>
+          )}
+
+          {/* Feature #5: Site Status Mini-Grid */}
+          {sitesList.length > 0 && (
+            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mb-6">
+              <div className="px-4 py-2.5 border-b border-dark-600 flex justify-between items-center">
+                <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Sites</h3>
+                <Link to="/sites" className="text-[10px] text-rust-400 hover:text-rust-300">Manage</Link>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-px bg-dark-600">
+                {sitesList.slice(0, 12).map((s) => (
+                  <Link key={s.id} to={`/sites/${s.id}`} className="bg-dark-800 px-3 py-2 flex items-center gap-2 hover:bg-dark-700/50 transition-colors">
+                    <div className={`w-2 h-2 rounded-full shrink-0 ${s.status === "active" ? "bg-rust-500" : "bg-dark-500"}`} />
+                    <span className="text-xs text-dark-100 truncate font-mono">{(s as any).domain || s.id}</span>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Feature #2: Recent Activity Feed */}
+          {recentActivity.length > 0 && (
+            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mb-6">
+              <div className="px-4 py-2.5 border-b border-dark-600 flex justify-between items-center">
+                <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Recent Activity</h3>
+                <Link to="/logs" className="text-[10px] text-rust-400 hover:text-rust-300">View all</Link>
+              </div>
+              <div className="divide-y divide-dark-600">
+                {recentActivity.map((a: any, i: number) => (
+                  <div key={i} className="px-4 py-2 flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${
+                        a.action?.includes("create") || a.action?.includes("deploy") ? "bg-rust-500/15 text-rust-400" :
+                        a.action?.includes("delete") || a.action?.includes("remove") ? "bg-red-500/15 text-danger-400" :
+                        "bg-dark-700 text-dark-200"
+                      }`}>{a.action}</span>
+                      {a.target_name && <span className="text-dark-100 font-mono truncate">{a.target_name}</span>}
+                    </div>
+                    <span className="text-dark-400 text-[10px] shrink-0 ml-2">{timeAgo(a.created_at)}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
