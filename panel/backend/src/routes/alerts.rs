@@ -192,6 +192,7 @@ pub struct AlertRuleRow {
     notify_slack_url: Option<String>,
     notify_discord_url: Option<String>,
     cooldown_minutes: i32,
+    notify_pagerduty_key: Option<String>,
 }
 
 /// GET /api/alert-rules — Get user's alert rules.
@@ -203,7 +204,8 @@ pub async fn get_rules(
         "SELECT id, server_id, cpu_threshold, cpu_duration, memory_threshold, memory_duration, \
          disk_threshold, alert_cpu, alert_memory, alert_disk, alert_offline, \
          alert_backup_failure, alert_ssl_expiry, alert_service_health, \
-         ssl_warning_days, notify_email, notify_slack_url, notify_discord_url, cooldown_minutes \
+         ssl_warning_days, notify_email, notify_slack_url, notify_discord_url, cooldown_minutes, \
+         notify_pagerduty_key \
          FROM alert_rules WHERE user_id = $1 ORDER BY server_id NULLS FIRST",
     )
     .bind(claims.sub)
@@ -233,6 +235,7 @@ pub struct UpdateRules {
     pub notify_slack_url: Option<String>,
     pub notify_discord_url: Option<String>,
     pub cooldown_minutes: Option<i32>,
+    pub notify_pagerduty_key: Option<String>,
 }
 
 /// PUT /api/alert-rules — Create or update global alert rules.
@@ -296,6 +299,7 @@ async fn upsert_rules(
              notify_slack_url = COALESCE($17, notify_slack_url), \
              notify_discord_url = COALESCE($18, notify_discord_url), \
              cooldown_minutes = COALESCE($19, cooldown_minutes), \
+             notify_pagerduty_key = COALESCE($20, notify_pagerduty_key), \
              updated_at = NOW() \
              {where_clause}"
         )
@@ -304,12 +308,13 @@ async fn upsert_rules(
          cpu_threshold, cpu_duration, memory_threshold, memory_duration, disk_threshold, \
          alert_cpu, alert_memory, alert_disk, alert_offline, alert_backup_failure, \
          alert_ssl_expiry, alert_service_health, ssl_warning_days, \
-         notify_email, notify_slack_url, notify_discord_url, cooldown_minutes) \
+         notify_email, notify_slack_url, notify_discord_url, cooldown_minutes, \
+         notify_pagerduty_key) \
          VALUES ($1, $2, \
          COALESCE($3, 90), COALESCE($4, 5), COALESCE($5, 90), COALESCE($6, 5), COALESCE($7, 85), \
          COALESCE($8, TRUE), COALESCE($9, TRUE), COALESCE($10, TRUE), COALESCE($11, TRUE), \
          COALESCE($12, TRUE), COALESCE($13, TRUE), COALESCE($14, TRUE), COALESCE($15, '30,14,7,3,1'), \
-         COALESCE($16, TRUE), $17, $18, COALESCE($19, 60))".to_string()
+         COALESCE($16, TRUE), $17, $18, COALESCE($19, 60), $20)".to_string()
     };
 
     sqlx::query(&query)
@@ -332,6 +337,7 @@ async fn upsert_rules(
     .bind(&body.notify_slack_url)
     .bind(&body.notify_discord_url)
     .bind(body.cooldown_minutes)
+    .bind(&body.notify_pagerduty_key)
     .execute(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
