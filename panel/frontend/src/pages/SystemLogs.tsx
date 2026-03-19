@@ -47,11 +47,11 @@ const LIMIT = 50;
 function levelBadge(level: string): { bg: string; text: string } {
   switch (level) {
     case "error":
-      return { bg: "bg-red-500/15", text: "text-red-400" };
+      return { bg: "bg-danger-500/15", text: "text-danger-400" };
     case "warning":
-      return { bg: "bg-amber-500/15", text: "text-amber-400" };
+      return { bg: "bg-warn-500/15", text: "text-warn-400" };
     case "info":
-      return { bg: "bg-blue-500/15", text: "text-blue-400" };
+      return { bg: "bg-accent-500/15", text: "text-accent-400" };
     default:
       return { bg: "bg-dark-700", text: "text-dark-100" };
   }
@@ -133,15 +133,15 @@ export default function SystemLogsContent() {
       <div className="grid grid-cols-3 gap-4 mb-6">
         <div className="bg-dark-800 rounded-lg border border-dark-500 px-4 py-3">
           <div className="text-xs text-dark-300 uppercase font-mono tracking-wider">Errors (24h)</div>
-          <div className="text-2xl font-bold font-mono text-red-400 mt-1">{counts.error}</div>
+          <div className="text-2xl font-bold font-mono text-danger-400 mt-1">{counts.error}</div>
         </div>
         <div className="bg-dark-800 rounded-lg border border-dark-500 px-4 py-3">
           <div className="text-xs text-dark-300 uppercase font-mono tracking-wider">Warnings (24h)</div>
-          <div className="text-2xl font-bold font-mono text-amber-400 mt-1">{counts.warning}</div>
+          <div className="text-2xl font-bold font-mono text-warn-400 mt-1">{counts.warning}</div>
         </div>
         <div className="bg-dark-800 rounded-lg border border-dark-500 px-4 py-3">
           <div className="text-xs text-dark-300 uppercase font-mono tracking-wider">Info (24h)</div>
-          <div className="text-2xl font-bold font-mono text-blue-400 mt-1">{counts.info}</div>
+          <div className="text-2xl font-bold font-mono text-accent-400 mt-1">{counts.info}</div>
         </div>
       </div>
 
@@ -198,7 +198,7 @@ export default function SystemLogsContent() {
       </div>
 
       {error && (
-        <div className="mb-4 px-4 py-3 rounded-lg text-sm border bg-red-500/10 text-danger-400 border-red-500/20">
+        <div className="mb-4 px-4 py-3 rounded-lg text-sm border bg-danger-500/10 text-danger-400 border-danger-500/20">
           {error}
         </div>
       )}

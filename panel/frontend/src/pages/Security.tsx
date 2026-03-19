@@ -247,7 +247,7 @@ export default function Security() {
       case "open_port":
         return "bg-warn-500/10 text-warn-400";
       case "ssl_expiry":
-        return "bg-orange-500/10 text-orange-400";
+        return "bg-warn-500/10 text-warn-400";
       case "container_vuln":
         return "bg-danger-500/10 text-danger-400";
       case "security_headers":
@@ -379,8 +379,8 @@ export default function Security() {
               <>
                 <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
                   <div className="flex items-center gap-2.5">
-                    <div className="w-9 h-9 rounded-lg bg-orange-500/10 flex items-center justify-center">
-                      <svg className="w-5 h-5 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <div className="w-9 h-9 rounded-lg bg-warn-500/10 flex items-center justify-center">
+                      <svg className="w-5 h-5 text-warn-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M15.362 5.214A8.252 8.252 0 0 1 12 21 8.25 8.25 0 0 1 6.038 7.047 8.287 8.287 0 0 0 9 9.601a8.983 8.983 0 0 1 3.361-6.867 8.21 8.21 0 0 0 3 2.48Z" />
                         <path strokeLinecap="round" strokeLinejoin="round" d="M12 18a3.75 3.75 0 0 0 .495-7.468 5.99 5.99 0 0 0-1.925 3.547 5.975 5.975 0 0 1-2.133-1.001A3.75 3.75 0 0 0 12 18Z" />
                       </svg>

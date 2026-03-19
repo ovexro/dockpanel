@@ -22,9 +22,9 @@ interface DiagnosticReport {
 }
 
 const severityColors: Record<string, { bg: string; text: string; dot: string }> = {
-  critical: { bg: "bg-red-500/10", text: "text-danger-400", dot: "bg-red-500" },
+  critical: { bg: "bg-danger-500/10", text: "text-danger-400", dot: "bg-danger-500" },
   warning: { bg: "bg-warn-500/10", text: "text-warn-400", dot: "bg-warn-500" },
-  info: { bg: "bg-blue-500/10", text: "text-blue-400", dot: "bg-blue-500" },
+  info: { bg: "bg-accent-500/10", text: "text-accent-400", dot: "bg-accent-500" },
 };
 
 const categoryLabels: Record<string, string> = {
@@ -118,7 +118,7 @@ export default function Diagnostics() {
           </button>
           <button
             onClick={() => setFilter("critical")}
-            className={`p-4 rounded-lg border transition-colors ${filter === "critical" ? "border-red-500 bg-dark-800" : "border-dark-500 bg-dark-900 hover:bg-dark-800"}`}
+            className={`p-4 rounded-lg border transition-colors ${filter === "critical" ? "border-danger-500 bg-dark-800" : "border-dark-500 bg-dark-900 hover:bg-dark-800"}`}
           >
             <div className="text-2xl font-bold text-danger-400">{report.summary.critical}</div>
             <div className="text-sm text-dark-300">Critical</div>
@@ -132,9 +132,9 @@ export default function Diagnostics() {
           </button>
           <button
             onClick={() => setFilter("info")}
-            className={`p-4 rounded-lg border transition-colors ${filter === "info" ? "border-blue-500 bg-dark-800" : "border-dark-500 bg-dark-900 hover:bg-dark-800"}`}
+            className={`p-4 rounded-lg border transition-colors ${filter === "info" ? "border-accent-500 bg-dark-800" : "border-dark-500 bg-dark-900 hover:bg-dark-800"}`}
           >
-            <div className="text-2xl font-bold text-blue-400">{report.summary.info}</div>
+            <div className="text-2xl font-bold text-accent-400">{report.summary.info}</div>
             <div className="text-sm text-dark-300">Info</div>
           </button>
         </div>

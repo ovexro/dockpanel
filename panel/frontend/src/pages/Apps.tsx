@@ -64,14 +64,14 @@ const categoryColors: Record<string, string> = {
   Database: "bg-rust-500/15",
   Monitoring: "bg-accent-600/15",
   DevOps: "bg-warn-500/15",
-  Automation: "bg-pink-500/15",
-  Tools: "bg-slate-500/15",
-  Development: "bg-cyan-500/15",
-  Analytics: "bg-indigo-500/15",
+  Automation: "bg-accent-500/15",
+  Tools: "bg-dark-500/15",
+  Development: "bg-accent-400/15",
+  Analytics: "bg-accent-600/15",
   Storage: "bg-sky-500/15",
-  Security: "bg-rose-500/15",
-  Media: "bg-violet-500/15",
-  Networking: "bg-teal-500/15",
+  Security: "bg-danger-500/15",
+  Media: "bg-accent-600/15",
+  Networking: "bg-rust-500/15",
   Mail: "bg-rust-500/15",
 };
 
@@ -1220,8 +1220,8 @@ volumes:
                           onClick={() => handleLogs(app.container_id)}
                           className={`px-2 py-1 rounded text-xs font-medium ${
                             logsTarget === app.container_id
-                              ? "bg-slate-200 text-slate-700"
-                              : "bg-slate-50 text-slate-600 hover:bg-slate-100"
+                              ? "bg-dark-500/20 text-dark-100"
+                              : "bg-dark-700 text-dark-300 hover:bg-dark-600"
                           }`}
                         >
                           Logs
@@ -1236,8 +1236,8 @@ volumes:
                           onClick={() => handleStats(app.container_id)}
                           className={`px-2 py-1 rounded text-xs font-medium ${
                             statsTarget === app.container_id
-                              ? "bg-teal-200 text-teal-700"
-                              : "bg-teal-50 text-teal-600 hover:bg-teal-100"
+                              ? "bg-rust-500/20 text-rust-400"
+                              : "bg-dark-700 text-dark-300 hover:bg-dark-600"
                           }`}
                         >
                           Stats
@@ -1252,20 +1252,20 @@ volumes:
                         )}
                         <button
                           onClick={() => handleVolumes(app.container_id)}
-                          className="px-2 py-1 rounded text-xs font-medium bg-amber-50 text-amber-600 hover:bg-amber-100"
+                          className="px-2 py-1 rounded text-xs font-medium bg-dark-700 text-dark-300 hover:bg-dark-600"
                         >
                           Volumes
                         </button>
                         <button
                           onClick={() => handleSnapshot(app.container_id, app.name)}
-                          className="px-2 py-1 rounded text-xs font-medium bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
+                          className="px-2 py-1 rounded text-xs font-medium bg-dark-700 text-dark-300 hover:bg-dark-600"
                         >
                           Snapshot
                         </button>
                         <button
                           onClick={() => handleUpdate(app.container_id)}
                           disabled={!!actionLoading}
-                          className="px-2 py-1 bg-cyan-50 text-cyan-600 rounded text-xs font-medium hover:bg-cyan-100 disabled:opacity-50"
+                          className="px-2 py-1 bg-dark-700 text-dark-300 rounded text-xs font-medium hover:bg-dark-600 disabled:opacity-50"
                         >
                           {actionLoading === `${app.container_id}-update` ? "Updating..." : "Update"}
                         </button>
@@ -1518,7 +1518,7 @@ volumes:
                   {appIcons[tmpl.id] || <span className="text-sm font-bold text-dark-200">{tmpl.name[0]}</span>}
                 </div>
                 <div>
-                  <h3 className="text-sm font-semibold text-dark-50 group-hover:text-indigo-600">
+                  <h3 className="text-sm font-semibold text-dark-50 group-hover:text-accent-400">
                     {tmpl.name}
                   </h3>
                   <span className="text-[10px] text-dark-300 uppercase">{tmpl.category}</span>
@@ -1907,7 +1907,7 @@ volumes:
                   <div key={i} className="bg-dark-900 rounded-lg border border-dark-600 p-4">
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
-                        <svg className="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg>
+                        <svg className="w-4 h-4 text-warn-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg>
                         <span className="text-xs font-mono text-dark-100">{vol.destination}</span>
                       </div>
                       <div className="flex items-center gap-2">

@@ -35,9 +35,9 @@ const TYPE_LABELS: Record<string, string> = {
 };
 
 const SEVERITY_STYLES: Record<string, { bg: string; text: string; dot: string }> = {
-  critical: { bg: "bg-red-500/10", text: "text-danger-400", dot: "bg-red-500" },
+  critical: { bg: "bg-danger-500/10", text: "text-danger-400", dot: "bg-danger-500" },
   warning: { bg: "bg-warn-500/10", text: "text-warn-400", dot: "bg-warn-500" },
-  info: { bg: "bg-blue-500/10", text: "text-blue-400", dot: "bg-blue-500" },
+  info: { bg: "bg-accent-500/10", text: "text-accent-400", dot: "bg-accent-500" },
 };
 
 export default function Alerts() {
@@ -127,7 +127,7 @@ export default function Alerts() {
         <div className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
           message.type === "success"
             ? "bg-rust-500/10 text-rust-400 border-rust-500/20"
-            : "bg-red-500/10 text-danger-400 border-red-500/20"
+            : "bg-danger-500/10 text-danger-400 border-danger-500/20"
         }`}>
           {message.text}
         </div>
@@ -138,7 +138,7 @@ export default function Alerts() {
         <div
           className={`p-4 rounded-lg border cursor-pointer transition-colors ${
             statusFilter === "firing"
-              ? "bg-red-500/10 border-red-500/30"
+              ? "bg-danger-500/10 border-danger-500/30"
               : "bg-dark-800 border-dark-500 hover:border-dark-400"
           }`}
           onClick={() => setStatusFilter(statusFilter === "firing" ? "" : "firing")}

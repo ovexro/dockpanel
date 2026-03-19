@@ -64,14 +64,14 @@ interface Incident {
 
 const statusColors: Record<string, string> = {
   up: "bg-rust-500/15 text-rust-400",
-  down: "bg-red-500/15 text-danger-400",
+  down: "bg-danger-500/15 text-danger-400",
   pending: "bg-dark-700 text-dark-200",
 };
 
 const statusDot: Record<string, string> = {
   up: "bg-rust-500",
-  down: "bg-red-500",
-  pending: "bg-gray-400",
+  down: "bg-danger-500",
+  pending: "bg-dark-400",
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -332,7 +332,7 @@ export default function Monitors() {
       </div>
 
       {error && (
-        <div className="bg-red-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-4">
+        <div className="bg-danger-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-danger-500/20 mb-4">
           {error}
           <button onClick={() => setError("")} className="ml-2 font-medium hover:underline">Dismiss</button>
         </div>
@@ -523,7 +523,7 @@ export default function Monitors() {
               <div className="p-4 cursor-pointer" onClick={() => toggleExpand(m.id)}>
                 <div className="flex items-start sm:items-center justify-between gap-2">
                   <div className="flex items-center gap-3 min-w-0">
-                    <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${statusDot[m.status] || "bg-gray-400"} ${m.status === "up" ? "animate-pulse" : ""}`} />
+                    <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${statusDot[m.status] || "bg-dark-400"} ${m.status === "up" ? "animate-pulse" : ""}`} />
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <p className="text-sm font-medium text-dark-50 truncate">{m.name}</p>
@@ -559,7 +559,7 @@ export default function Monitors() {
                     </button>
                     {deleteTarget === m.id ? (
                       <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                        <button onClick={() => handleDelete(m.id)} className="px-2 py-1 bg-red-600 text-white rounded-md text-xs">Confirm</button>
+                        <button onClick={() => handleDelete(m.id)} className="px-2 py-1 bg-danger-600 text-white rounded-md text-xs">Confirm</button>
                         <button onClick={() => setDeleteTarget(null)} className="px-2 py-1 bg-dark-600 text-dark-200 rounded-md text-xs">Cancel</button>
                       </div>
                     ) : (
@@ -655,7 +655,7 @@ export default function Monitors() {
                           {checks.slice(0, 20).map((c) => (
                             <div key={c.id} className="flex items-center justify-between text-xs">
                               <div className="flex items-center gap-2">
-                                <div className={`w-1.5 h-1.5 rounded-full ${c.status_code !== null && c.status_code >= 0 && c.status_code < 400 ? "bg-rust-500" : "bg-red-500"}`} />
+                                <div className={`w-1.5 h-1.5 rounded-full ${c.status_code !== null && c.status_code >= 0 && c.status_code < 400 ? "bg-rust-500" : "bg-danger-500"}`} />
                                 <span className="text-dark-200">{formatDate(c.checked_at)}</span>
                               </div>
                               <div className="flex items-center gap-2">
