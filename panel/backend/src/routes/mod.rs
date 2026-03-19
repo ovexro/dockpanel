@@ -35,6 +35,8 @@ pub mod ssl;
 pub mod system;
 pub mod terminal;
 pub mod users;
+pub mod reseller_dashboard;
+pub mod resellers;
 pub mod wordpress;
 pub mod ws_metrics;
 
@@ -440,6 +442,16 @@ pub fn router() -> Router<AppState> {
         // System Logs (admin)
         .route("/api/system-logs", get(system_logs::list))
         .route("/api/system-logs/count", get(system_logs::count))
+        // Reseller Management (admin)
+        .route("/api/resellers", get(resellers::list).post(resellers::create))
+        .route("/api/resellers/{id}", get(resellers::get).put(resellers::update).delete(resellers::remove))
+        .route("/api/resellers/{id}/servers", get(resellers::list_servers).post(resellers::allocate_server))
+        .route("/api/resellers/{id}/servers/{server_id}", delete(resellers::deallocate_server))
+        // Reseller Dashboard
+        .route("/api/reseller/dashboard", get(reseller_dashboard::dashboard))
+        .route("/api/reseller/users", get(reseller_dashboard::list_users).post(reseller_dashboard::create_user))
+        .route("/api/reseller/users/{id}", put(reseller_dashboard::update_user).delete(reseller_dashboard::delete_user))
+        .route("/api/reseller/servers", get(reseller_dashboard::list_servers))
         // Activity (admin)
         .route("/api/activity", get(activity::list))
 }

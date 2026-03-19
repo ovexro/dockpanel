@@ -99,6 +99,29 @@ impl FromRequestParts<AppState> for AdminUser {
     }
 }
 
+/// Reseller-or-admin JWT extractor — allows role == "admin" OR role == "reseller".
+/// Used for endpoints accessible to both admins and resellers.
+pub struct ResellerUser(pub Claims);
+
+impl FromRequestParts<AppState> for ResellerUser {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let AuthUser(claims) = AuthUser::from_request_parts(parts, state)
+            .await
+            .map_err(|_| err(StatusCode::UNAUTHORIZED, "Authentication required"))?;
+
+        if claims.role != "admin" && claims.role != "reseller" {
+            return Err(err(StatusCode::FORBIDDEN, "Admin or reseller access required"));
+        }
+
+        Ok(ResellerUser(claims))
+    }
+}
+
 /// Server scope extractor — reads `X-Server-Id` header to determine which server
 /// the request targets. Falls back to the local server if the header is absent.
 ///
