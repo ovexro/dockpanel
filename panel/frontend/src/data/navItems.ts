@@ -3,6 +3,8 @@ export interface NavItem {
   label: string;
   iconName: string;
   adminOnly?: boolean;
+  /** Visible to reseller role (and admin, which sees everything) */
+  resellerVisible?: boolean;
 }
 
 export interface NavGroup {
@@ -21,6 +23,14 @@ export const navGroups: NavGroup[] = [
       { to: "/databases", label: "Databases", iconName: "databases" },
       { to: "/apps", label: "Docker Apps", iconName: "apps", adminOnly: true },
       { to: "/git-deploys", label: "Git Deploy", iconName: "gitDeploys", adminOnly: true },
+    ],
+  },
+  {
+    key: "reseller",
+    label: "Reseller",
+    items: [
+      { to: "/reseller", label: "Reseller Panel", iconName: "dashboard", resellerVisible: true },
+      { to: "/reseller/users", label: "My Users", iconName: "settings", resellerVisible: true },
     ],
   },
   {

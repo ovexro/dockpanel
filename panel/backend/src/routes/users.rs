@@ -34,6 +34,7 @@ pub struct UserResponse {
     pub id: Uuid,
     pub email: String,
     pub role: String,
+    pub reseller_id: Option<Uuid>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub site_count: i64,
 }
@@ -45,7 +46,7 @@ pub async fn list(
 ) -> Result<Json<Vec<UserResponse>>, ApiError> {
 
     let users: Vec<UserResponse> = sqlx::query_as(
-        "SELECT u.id, u.email, u.role, u.created_at, \
+        "SELECT u.id, u.email, u.role, u.reseller_id, u.created_at, \
          COALESCE((SELECT COUNT(*) FROM sites WHERE user_id = u.id), 0) as site_count \
          FROM users u ORDER BY u.created_at ASC",
     )
@@ -74,8 +75,8 @@ pub async fn create(
     }
 
     let role = body.role.as_deref().unwrap_or("user");
-    if !["admin", "user"].contains(&role) {
-        return Err(err(StatusCode::BAD_REQUEST, "Role must be admin or user"));
+    if !["admin", "reseller", "user"].contains(&role) {
+        return Err(err(StatusCode::BAD_REQUEST, "Role must be admin, reseller, or user"));
     }
 
     // Check email uniqueness
