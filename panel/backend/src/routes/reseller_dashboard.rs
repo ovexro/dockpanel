@@ -382,29 +382,19 @@ pub async fn list_servers(
     State(state): State<AppState>,
     ResellerUser(claims): ResellerUser,
 ) -> Result<Json<Vec<ResellerServerItem>>, ApiError> {
-    let servers: Vec<ResellerServerItem> = if claims.role == "admin" {
-        sqlx::query_as(
-            "SELECT s.id, s.name, s.status, s.ip_address \
-             FROM servers s \
-             JOIN reseller_servers rs ON rs.server_id = s.id \
-             ORDER BY s.name ASC",
-        )
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
-    } else {
-        sqlx::query_as(
-            "SELECT s.id, s.name, s.status, s.ip_address \
-             FROM servers s \
-             JOIN reseller_servers rs ON rs.server_id = s.id \
-             WHERE rs.reseller_id = $1 \
-             ORDER BY s.name ASC",
-        )
-        .bind(claims.sub)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
-    };
+    // Always scope to the calling user's reseller allocations
+    // (admin uses /api/resellers/{id}/servers to see a specific reseller's servers)
+    let servers: Vec<ResellerServerItem> = sqlx::query_as(
+        "SELECT s.id, s.name, s.status, s.ip_address \
+         FROM servers s \
+         JOIN reseller_servers rs ON rs.server_id = s.id \
+         WHERE rs.reseller_id = $1 \
+         ORDER BY s.name ASC",
+    )
+    .bind(claims.sub)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     Ok(Json(servers))
 }
