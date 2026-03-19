@@ -19,6 +19,7 @@ use crate::models::Site;
 use crate::routes::is_valid_domain;
 use crate::routes::reseller_dashboard::check_reseller_quota;
 use crate::services::activity;
+use crate::services::extensions::fire_event;
 use crate::AppState;
 
 /// A single provisioning step event.
@@ -269,6 +270,10 @@ pub async fn create(
                 &state.db, claims.sub, &claims.email, "site.create",
                 Some("site"), Some(&body.domain), Some(runtime), None,
             ).await;
+
+            fire_event(&state.db, "site.created", serde_json::json!({
+                "site_id": site.id, "domain": site.domain, "runtime": site.runtime,
+            }));
 
             // Increment reseller site counter
             let _ = sqlx::query(
@@ -1024,6 +1029,10 @@ pub async fn remove(
         &state.db, claims.sub, &claims.email, "site.delete",
         Some("site"), Some(&site.domain), None, None,
     ).await;
+
+    fire_event(&state.db, "site.deleted", serde_json::json!({
+        "domain": &site.domain,
+    }));
 
     // Auto-cleanup DNS record (best-effort, don't fail the delete)
     {

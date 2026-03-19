@@ -50,13 +50,20 @@ pub async fn emit_event(pool: &PgPool, event_type: &str, data: serde_json::Value
             use hmac::{Hmac, Mac};
             use sha2::Sha256;
             type HmacSha256 = Hmac<Sha256>;
-            let signature =
-                if let Ok(mut mac) = HmacSha256::new_from_slice(webhook_secret.as_bytes()) {
+            let signature = match HmacSha256::new_from_slice(webhook_secret.as_bytes()) {
+                Ok(mut mac) => {
                     mac.update(payload_str.as_bytes());
                     hex::encode(mac.finalize().into_bytes())
-                } else {
-                    String::new()
-                };
+                }
+                Err(_) => {
+                    tracing::error!("HMAC key invalid for extension {ext_id}, skipping delivery");
+                    let _ = sqlx::query(
+                        "INSERT INTO extension_events (extension_id, event_type, payload, response_body, duration_ms) \
+                         VALUES ($1, $2, $3, 'HMAC key error — delivery skipped', 0)"
+                    ).bind(ext_id).bind(&event_type).bind(&payload_str).execute(&pool).await;
+                    return; // Exit this spawned task, don't deliver unsigned webhook
+                }
+            };
 
             let result = http_client()
                 .post(&webhook_url)

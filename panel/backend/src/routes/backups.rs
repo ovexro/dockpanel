@@ -11,6 +11,7 @@ use crate::auth::{AuthUser, ServerScope};
 use crate::error::{err, agent_error, paginate, ApiError};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
+use crate::services::extensions::fire_event;
 use crate::AppState;
 
 #[derive(serde::Deserialize)]
@@ -102,6 +103,10 @@ pub async fn create(
                     &db, user_id, &email, "backup.create",
                     Some("backup"), Some(&domain_clone), Some(&filename), None,
                 ).await;
+
+                fire_event(&db, "backup.created", serde_json::json!({
+                    "site_id": id, "filename": &filename,
+                }));
             }
             Err(e) => {
                 emit("backup", "Creating backup", "error", Some(format!("{e}")));

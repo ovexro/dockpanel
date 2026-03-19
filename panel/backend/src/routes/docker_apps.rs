@@ -17,6 +17,7 @@ use crate::error::{err, agent_error, require_admin, ApiError};
 use crate::routes::{is_valid_container_id, is_valid_name};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
+use crate::services::extensions::fire_event;
 use crate::AppState;
 
 #[derive(serde::Deserialize)]
@@ -326,6 +327,10 @@ pub async fn deploy(
                     &db, user_id, &email, "app.deploy",
                     Some("app"), Some(&app_name), Some(&template), None,
                 ).await;
+
+                crate::services::extensions::fire_event(&db, "app.deployed", serde_json::json!({
+                    "name": app_name, "domain": deploy_domain,
+                }));
             }
             Err(e) => {
                 emit("pull", "Pulling Docker image", "error", Some(format!("Deploy failed: {e}")));
@@ -988,6 +993,10 @@ pub async fn remove_app(
         &state.db, claims.sub, &claims.email, "app.remove",
         Some("app"), Some(&container_id), None, None,
     ).await;
+
+    fire_event(&state.db, "app.removed", serde_json::json!({
+        "container_id": container_id,
+    }));
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
