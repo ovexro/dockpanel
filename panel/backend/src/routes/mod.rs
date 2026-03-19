@@ -6,6 +6,7 @@ pub mod agent_updates;
 pub mod api_keys;
 pub mod auth;
 pub mod backup_destinations;
+pub mod oauth;
 pub mod dashboard;
 pub mod backup_schedules;
 pub mod backups;
@@ -313,6 +314,9 @@ pub fn router() -> Router<AppState> {
         .route("/api/billing/checkout", post(billing::create_checkout))
         .route("/api/billing/portal", post(billing::customer_portal))
         // Public endpoints (no auth)
+        .route("/api/branding", get(settings::branding))
+        .route("/api/auth/oauth/{provider}", get(oauth::authorize))
+        .route("/api/auth/oauth/{provider}/callback", get(oauth::callback))
         .route("/api/status-page", get(monitors::status_page))
         .route("/api/terminal/shared/{id}", get(terminal::view_shared))
         // Heartbeat endpoint (no auth — monitor validates by ID)

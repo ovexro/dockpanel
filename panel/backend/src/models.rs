@@ -28,6 +28,9 @@ pub struct User {
     pub totp_enabled: bool,
     #[serde(skip_serializing)]
     pub recovery_codes: Option<String>,
+    pub oauth_provider: Option<String>,
+    #[serde(skip_serializing)]
+    pub oauth_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

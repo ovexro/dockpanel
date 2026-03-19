@@ -30,7 +30,10 @@ pub async fn list(
     let map: HashMap<String, String> = rows
         .into_iter()
         .map(|r| {
-            if (r.key == "smtp_password" || r.key == "pdns_api_key") && !r.value.is_empty() {
+            if (r.key == "smtp_password" || r.key == "pdns_api_key"
+                || r.key == "oauth_google_client_secret"
+                || r.key == "oauth_github_client_secret"
+                || r.key == "oauth_gitlab_client_secret") && !r.value.is_empty() {
                 (r.key, "********".to_string())
             } else {
                 (r.key, r.value)
@@ -59,6 +62,10 @@ pub async fn update(
         "auto_heal_enabled", "status_page_enabled", "enforce_2fa",
         "timezone", "logo_url", "accent_color",
         "email_footer", "events_webhook_url",
+        "oauth_google_client_id", "oauth_google_client_secret",
+        "oauth_github_client_id", "oauth_github_client_secret",
+        "oauth_gitlab_client_id", "oauth_gitlab_client_secret",
+        "oauth_auto_create", "hide_branding",
     ];
     for key in body.keys() {
         if !allowed_keys.contains(&key.as_str()) {
@@ -200,6 +207,48 @@ pub async fn test_webhook(
     Ok(Json(serde_json::json!({ "ok": true, "message": format!("{} test sent", service) })))
 }
 
+/// GET /api/branding — Public branding configuration (for login page + authenticated users).
+/// Returns reseller branding if user belongs to one, otherwise global settings.
+pub async fn branding(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // For now, always return global settings (reseller-specific branding can be added later
+    // when the user is authenticated and has a reseller_id)
+
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT key, value FROM settings WHERE key IN ('panel_name', 'logo_url', 'accent_color', 'hide_branding')"
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let map: HashMap<String, String> = rows.into_iter().collect();
+
+    // Check which OAuth providers are configured
+    let oauth_rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT key, value FROM settings WHERE key LIKE 'oauth_%_client_id' AND value != ''"
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let oauth_providers: Vec<String> = oauth_rows.iter()
+        .filter_map(|(k, _)| {
+            k.strip_prefix("oauth_")
+                .and_then(|s| s.strip_suffix("_client_id"))
+                .map(|s| s.to_string())
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "panel_name": map.get("panel_name").cloned().unwrap_or_else(|| "DockPanel".into()),
+        "logo_url": map.get("logo_url").cloned().unwrap_or_default(),
+        "accent_color": map.get("accent_color").cloned().unwrap_or_default(),
+        "hide_branding": map.get("hide_branding").map(|v| v == "true").unwrap_or(false),
+        "oauth_providers": oauth_providers,
+    })))
+}
+
 /// GET /api/settings/export — Export all panel settings as JSON.
 pub async fn export_config(
     State(state): State<AppState>,
@@ -212,7 +261,8 @@ pub async fn export_config(
 
     let map: HashMap<String, String> = rows
         .into_iter()
-        .filter(|r| r.key != "smtp_password" && r.key != "pdns_api_key")
+        .filter(|r| r.key != "smtp_password" && r.key != "pdns_api_key"
+            && !r.key.ends_with("_client_secret"))
         .map(|r| (r.key, r.value))
         .collect();
 
