@@ -277,6 +277,12 @@ pub fn router() -> Router<AppState> {
         .route("/api/dns/zones/{id}/dnssec", get(dns::dnssec_status))
         .route("/api/dns/zones/{id}/changelog", get(dns::dns_changelog))
         .route("/api/dns/zones/{id}/analytics", get(dns::dns_analytics))
+        // WordPress Toolkit
+        .route("/api/wordpress/sites", get(wordpress::all_wp_sites))
+        .route("/api/wordpress/bulk-update", post(wordpress::bulk_update))
+        .route("/api/sites/{id}/wordpress/vuln-scan", post(wordpress::vuln_scan))
+        .route("/api/sites/{id}/wordpress/security-check", get(wordpress::security_check))
+        .route("/api/sites/{id}/wordpress/harden", post(wordpress::wp_harden))
         // WordPress Management
         .route("/api/sites/{id}/wordpress", get(wordpress::info))
         .route("/api/sites/{id}/wordpress/install", post(wordpress::install))
