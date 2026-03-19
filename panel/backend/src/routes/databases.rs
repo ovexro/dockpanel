@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
 use crate::error::{err, agent_error, paginate, ApiError};
+use crate::routes::reseller_dashboard::check_reseller_quota;
 use crate::services::agent::AgentError;
 use crate::AppState;
 
@@ -132,6 +133,9 @@ pub async fn create(
         ));
     }
 
+    // Check reseller quota before creating database
+    check_reseller_quota(&state.db, claims.sub, "databases").await?;
+
     // Generate password and find available port
     let password = uuid::Uuid::new_v4().to_string().replace('-', "");
     let port = find_available_port(&state, engine).await?;
@@ -192,6 +196,12 @@ pub async fn create(
         .execute(&state.db)
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    // Increment reseller database counter
+    let _ = sqlx::query(
+        "UPDATE reseller_profiles SET used_databases = used_databases + 1, updated_at = NOW() \
+         WHERE user_id = (SELECT reseller_id FROM users WHERE id = $1 AND reseller_id IS NOT NULL)"
+    ).bind(claims.sub).execute(&state.db).await;
 
     tracing::info!("Database created: {} ({}, port {})", body.name, engine, port);
 
@@ -275,6 +285,12 @@ pub async fn remove(
         .execute(&state.db)
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    // Decrement reseller database counter
+    let _ = sqlx::query(
+        "UPDATE reseller_profiles SET used_databases = GREATEST(used_databases - 1, 0), updated_at = NOW() \
+         WHERE user_id = (SELECT reseller_id FROM users WHERE id = $1 AND reseller_id IS NOT NULL)"
+    ).bind(claims.sub).execute(&state.db).await;
 
     tracing::info!("Database deleted: {name}");
 
