@@ -5,7 +5,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::auth::{AdminUser, AuthUser};
 use crate::error::{err, ApiError};
 use crate::services::activity;
 use crate::AppState;
@@ -13,6 +13,7 @@ use crate::AppState;
 #[derive(serde::Deserialize)]
 pub struct CreateServerRequest {
     pub name: String,
+    pub ip_address: Option<String>,
 }
 
 #[derive(serde::Serialize, sqlx::FromRow)]
@@ -23,7 +24,9 @@ pub struct Server {
     pub ip_address: Option<String>,
     #[serde(skip_serializing)]
     pub agent_token: String,
+    pub agent_url: Option<String>,
     pub status: String,
+    pub is_local: bool,
     pub last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
     pub os_info: Option<String>,
     pub cpu_cores: Option<i32>,
@@ -42,7 +45,7 @@ pub async fn list(
     AuthUser(claims): AuthUser,
 ) -> Result<Json<Vec<Server>>, ApiError> {
     let servers: Vec<Server> =
-        sqlx::query_as("SELECT * FROM servers WHERE user_id = $1 ORDER BY created_at DESC")
+        sqlx::query_as("SELECT * FROM servers WHERE user_id = $1 ORDER BY is_local DESC, created_at DESC")
             .bind(claims.sub)
             .fetch_all(&state.db)
             .await
@@ -51,10 +54,10 @@ pub async fn list(
     Ok(Json(servers))
 }
 
-/// POST /api/servers — Register a new server. Returns agent token and install script.
+/// POST /api/servers — Register a new remote server. Returns agent token and install script.
 pub async fn create(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    AdminUser(claims): AdminUser,
     Json(body): Json<CreateServerRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let name = body.name.trim();
@@ -62,27 +65,39 @@ pub async fn create(
         return Err(err(StatusCode::BAD_REQUEST, "Name must be 1-100 characters"));
     }
 
+    let ip = body.ip_address.as_deref().unwrap_or("").trim().to_string();
+
     let agent_token = format!(
         "{}{}",
         Uuid::new_v4().to_string().replace('-', ""),
         Uuid::new_v4().to_string().replace('-', ""),
     );
 
+    // Default agent URL from IP (port 9443 for HTTPS agent)
+    let agent_url = if !ip.is_empty() {
+        format!("https://{}:9443", ip)
+    } else {
+        String::new()
+    };
+
     let server: Server = sqlx::query_as(
-        "INSERT INTO servers (user_id, name, agent_token, status) \
-         VALUES ($1, $2, $3, 'pending') RETURNING *",
+        "INSERT INTO servers (user_id, name, ip_address, agent_token, agent_url, status, is_local) \
+         VALUES ($1, $2, $3, $4, $5, 'pending', false) RETURNING *",
     )
     .bind(claims.sub)
     .bind(name)
+    .bind(if ip.is_empty() { None } else { Some(&ip) })
     .bind(&agent_token)
+    .bind(if agent_url.is_empty() { None } else { Some(&agent_url) })
     .fetch_one(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    // Generate install script
+    // Generate install script with panel URL and token
+    let panel_url = &state.config.base_url;
     let install_script = format!(
-        "curl -sSL https://dockpanel.dev/install.sh | sudo bash -s -- --token {} --server-id {}",
-        agent_token, server.id
+        "curl -sSL {panel_url}/install-agent.sh | sudo bash -s -- \\\n  --panel-url {panel_url} \\\n  --token {agent_token} \\\n  --server-id {}",
+        server.id
     );
 
     activity::log_activity(
@@ -127,10 +142,10 @@ pub async fn get_one(
     Ok(Json(server))
 }
 
-/// DELETE /api/servers/{id} — Remove a server.
+/// DELETE /api/servers/{id} — Remove a server (cannot delete local server).
 pub async fn remove(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    AdminUser(claims): AdminUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let server: Server =
@@ -142,11 +157,19 @@ pub async fn remove(
             .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
             .ok_or_else(|| err(StatusCode::NOT_FOUND, "Server not found"))?;
 
+    if server.is_local {
+        return Err(err(StatusCode::BAD_REQUEST, "Cannot delete the local server"));
+    }
+
+    // Cascade delete removes sites, DBs, stacks, etc.
     sqlx::query("DELETE FROM servers WHERE id = $1")
         .bind(id)
         .execute(&state.db)
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    // Invalidate remote agent cache
+    state.agents.invalidate(id).await;
 
     activity::log_activity(
         &state.db,
@@ -161,4 +184,120 @@ pub async fn remove(
     .await;
 
     Ok(Json(serde_json::json!({ "ok": true, "name": server.name })))
+}
+
+/// POST /api/servers/{id}/test — Test connection to a remote server's agent.
+pub async fn test_connection(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let server: Server =
+        sqlx::query_as("SELECT * FROM servers WHERE id = $1 AND user_id = $2")
+            .bind(id)
+            .bind(claims.sub)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, "Server not found"))?;
+
+    // Try to reach the agent
+    let agent = state
+        .agents
+        .for_server(id)
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
+
+    match agent.get("/health").await {
+        Ok(resp) => {
+            // Update server status to online
+            let version = resp.get("version").and_then(|v| v.as_str()).unwrap_or("unknown");
+            sqlx::query(
+                "UPDATE servers SET status = 'online', last_seen_at = NOW(), agent_version = $1 WHERE id = $2",
+            )
+            .bind(version)
+            .bind(id)
+            .execute(&state.db)
+            .await
+            .ok();
+
+            Ok(Json(serde_json::json!({
+                "ok": true,
+                "status": "online",
+                "version": version,
+                "name": server.name,
+            })))
+        }
+        Err(e) => {
+            // Update status to offline
+            sqlx::query("UPDATE servers SET status = 'offline' WHERE id = $1")
+                .bind(id)
+                .execute(&state.db)
+                .await
+                .ok();
+
+            Err(err(
+                StatusCode::BAD_GATEWAY,
+                &format!("Agent unreachable: {e}"),
+            ))
+        }
+    }
+}
+
+/// PUT /api/servers/{id} — Update server name/IP/URL.
+pub async fn update(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<Server>, ApiError> {
+    let server: Server =
+        sqlx::query_as("SELECT * FROM servers WHERE id = $1 AND user_id = $2")
+            .bind(id)
+            .bind(claims.sub)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, "Server not found"))?;
+
+    let name = body
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&server.name);
+    let ip = body
+        .get("ip_address")
+        .and_then(|v| v.as_str())
+        .or(server.ip_address.as_deref());
+    let url = body
+        .get("agent_url")
+        .and_then(|v| v.as_str())
+        .or(server.agent_url.as_deref());
+
+    let updated: Server = sqlx::query_as(
+        "UPDATE servers SET name = $1, ip_address = $2, agent_url = $3 WHERE id = $4 RETURNING *",
+    )
+    .bind(name)
+    .bind(ip)
+    .bind(url)
+    .bind(id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    // Invalidate remote agent cache so it picks up new URL/token
+    state.agents.invalidate(id).await;
+
+    activity::log_activity(
+        &state.db,
+        claims.sub,
+        &claims.email,
+        "server.update",
+        Some("server"),
+        Some(name),
+        None,
+        None,
+    )
+    .await;
+
+    Ok(Json(updated))
 }

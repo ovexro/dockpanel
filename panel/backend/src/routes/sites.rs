@@ -13,6 +13,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
+use crate::auth::ServerScope;
 use crate::error::{err, agent_error, paginate, ApiError};
 use crate::models::Site;
 use crate::routes::is_valid_domain;
@@ -79,14 +80,16 @@ pub struct CreateSiteRequest {
 pub async fn list(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(server_id, _agent): ServerScope,
     Query(params): Query<ListQuery>,
 ) -> Result<Json<Vec<Site>>, ApiError> {
     let (limit, offset) = paginate(params.limit, params.offset);
 
     let sites: Vec<Site> = sqlx::query_as(
-        "SELECT * FROM sites WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+        "SELECT * FROM sites WHERE user_id = $1 AND server_id = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4",
     )
     .bind(claims.sub)
+    .bind(server_id)
     .bind(limit)
     .bind(offset)
     .fetch_all(&state.db)
@@ -100,6 +103,7 @@ pub async fn list(
 pub async fn create(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(server_id, agent): ServerScope,
     Json(body): Json<CreateSiteRequest>,
 ) -> Result<(StatusCode, Json<Site>), ApiError> {
     // Validate domain format
@@ -172,10 +176,11 @@ pub async fn create(
     };
 
     let site: Site = sqlx::query_as(
-        "INSERT INTO sites (user_id, domain, runtime, status, proxy_port, php_version, php_preset, app_command) \
-         VALUES ($1, $2, $3, 'creating', $4, $5, $6, $7) RETURNING *",
+        "INSERT INTO sites (user_id, server_id, domain, runtime, status, proxy_port, php_version, php_preset, app_command) \
+         VALUES ($1, $2, $3, $4, 'creating', $5, $6, $7, $8) RETURNING *",
     )
     .bind(claims.sub)
+    .bind(server_id)
     .bind(&body.domain)
     .bind(runtime)
     .bind(effective_proxy_port)
@@ -217,7 +222,7 @@ pub async fn create(
 
     // Call agent to create nginx config
     let agent_path = format!("/nginx/sites/{}", body.domain);
-    match state.agent.put(&agent_path, agent_body).await {
+    match agent.put(&agent_path, agent_body).await {
         Ok(_) => {
             emit_step(&logs, site_id, "nginx", "Configuring web server", "done", None);
 
@@ -365,7 +370,7 @@ pub async fn create(
             }
 
             // Auto-SSL: try to provision Let's Encrypt cert in background
-            let ssl_agent = state.agent.clone();
+            let ssl_agent = agent.clone();
             let ssl_domain = body.domain.clone();
             let ssl_email = claims.email.clone();
             let ssl_runtime = runtime.to_string();
@@ -413,7 +418,7 @@ pub async fn create(
             let needs_install = matches!(cms_type, "wordpress" | "laravel" | "drupal" | "joomla" | "symfony" | "codeigniter");
 
             if needs_install {
-                let cms_agent = state.agent.clone();
+                let cms_agent = agent.clone();
                 let cms_domain = body.domain.clone();
                 let cms_db = state.db.clone();
                 let cms_name = cms_type.to_string();
@@ -702,6 +707,7 @@ pub struct SwitchPhpRequest {
 pub async fn switch_php(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<SwitchPhpRequest>,
 ) -> Result<Json<Site>, ApiError> {
@@ -753,8 +759,7 @@ pub async fn switch_php(
     }
 
     let agent_path = format!("/nginx/sites/{}", site.domain);
-    state
-        .agent
+    agent
         .put(&agent_path, agent_body)
         .await
         .map_err(|e| agent_error("Nginx update", e))?;
@@ -779,11 +784,11 @@ pub async fn switch_php(
 
 /// GET /api/php/versions — List available PHP versions (proxy to agent).
 pub async fn php_versions(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AuthUser(_claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state
-        .agent
+    let result = agent
         .get("/php/versions")
         .await
         .map_err(|e| agent_error("Site agent operation", e))?;
@@ -798,16 +803,16 @@ pub struct InstallPhpRequest {
 }
 
 pub async fn php_install(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<InstallPhpRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if claims.role != "admin" {
         return Err(err(StatusCode::FORBIDDEN, "Admin only"));
     }
 
-    let result = state
-        .agent
+    let result = agent
         .post(
             "/php/install",
             Some(serde_json::json!({ "version": body.version })),
@@ -831,6 +836,7 @@ pub struct UpdateLimitsRequest {
 pub async fn update_limits(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateLimitsRequest>,
 ) -> Result<Json<Site>, ApiError> {
@@ -919,8 +925,7 @@ pub async fn update_limits(
     }
 
     let agent_path = format!("/nginx/sites/{}", site.domain);
-    state
-        .agent
+    agent
         .put(&agent_path, agent_body)
         .await
         .map_err(|e| agent_error("Resource limits", e))?;
@@ -938,6 +943,7 @@ pub async fn update_limits(
 pub async fn remove(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: Site = sqlx::query_as(
@@ -960,14 +966,14 @@ pub async fn remove(
     .unwrap_or_default();
 
     for (container_id,) in &databases {
-        if let Err(e) = state.agent.delete(&format!("/databases/{container_id}")).await {
+        if let Err(e) = agent.delete(&format!("/databases/{container_id}")).await {
             tracing::warn!("Failed to remove database container {container_id}: {e}");
         }
     }
 
     // Remove nginx config + SSL + PHP pool + site files + logs
     let agent_path = format!("/nginx/sites/{}", site.domain);
-    state.agent.delete(&agent_path).await
+    agent.delete(&agent_path).await
         .map_err(|e| agent_error("Site removal", e))?;
 
     // Delete monitors linked to this site (FK is SET NULL, not CASCADE)
@@ -1095,11 +1101,11 @@ async fn site_domain(state: &AppState, site_id: Uuid, user_id: Uuid) -> Result<S
 pub async fn list_redirects(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = site_domain(&state, id, claims.sub).await?;
-    let result = state
-        .agent
+    let result = agent
         .get(&format!("/nginx/redirects/{domain}"))
         .await
         .map_err(|e| agent_error("Redirects", e))?;
@@ -1122,12 +1128,12 @@ fn default_301() -> String {
 pub async fn add_redirect(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<AddRedirectBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = site_domain(&state, id, claims.sub).await?;
-    let result = state
-        .agent
+    let result = agent
         .post(
             "/nginx/redirects/add",
             Some(serde_json::json!({
@@ -1146,12 +1152,12 @@ pub async fn add_redirect(
 pub async fn remove_redirect(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = site_domain(&state, id, claims.sub).await?;
-    let result = state
-        .agent
+    let result = agent
         .post(
             &format!("/nginx/redirects/{domain}/remove"),
             Some(body),
@@ -1169,11 +1175,11 @@ pub async fn remove_redirect(
 pub async fn list_protected(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = site_domain(&state, id, claims.sub).await?;
-    let result = state
-        .agent
+    let result = agent
         .get(&format!("/nginx/password-protect/{domain}"))
         .await
         .map_err(|e| agent_error("Password protection", e))?;
@@ -1191,12 +1197,12 @@ pub struct PasswordProtectBody {
 pub async fn add_password_protect(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<PasswordProtectBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = site_domain(&state, id, claims.sub).await?;
-    let result = state
-        .agent
+    let result = agent
         .post(
             "/nginx/password-protect",
             Some(serde_json::json!({
@@ -1215,12 +1221,12 @@ pub async fn add_password_protect(
 pub async fn remove_password_protect(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = site_domain(&state, id, claims.sub).await?;
-    let result = state
-        .agent
+    let result = agent
         .post(
             &format!("/nginx/password-protect/{domain}/remove"),
             Some(body),
@@ -1238,11 +1244,11 @@ pub async fn remove_password_protect(
 pub async fn list_aliases(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = site_domain(&state, id, claims.sub).await?;
-    let result = state
-        .agent
+    let result = agent
         .get(&format!("/nginx/aliases/{domain}"))
         .await
         .map_err(|e| agent_error("Domain aliases", e))?;
@@ -1258,12 +1264,12 @@ pub struct AddAliasBody {
 pub async fn add_alias(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<AddAliasBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = site_domain(&state, id, claims.sub).await?;
-    let result = state
-        .agent
+    let result = agent
         .post(
             "/nginx/aliases/add",
             Some(serde_json::json!({
@@ -1280,12 +1286,12 @@ pub async fn add_alias(
 pub async fn remove_alias(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = site_domain(&state, id, claims.sub).await?;
-    let result = state
-        .agent
+    let result = agent
         .post(
             &format!("/nginx/aliases/{domain}/remove"),
             Some(body),
@@ -1303,6 +1309,7 @@ pub async fn remove_alias(
 pub async fn access_logs(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -1313,8 +1320,7 @@ pub async fn access_logs(
         "/nginx/site-logs/{}?lines={}&log_type={}",
         domain, lines, log_type
     );
-    let result = state
-        .agent
+    let result = agent
         .get(&path)
         .await
         .map_err(|e| agent_error("Site logs", e))?;
@@ -1325,11 +1331,11 @@ pub async fn access_logs(
 pub async fn site_stats(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = site_domain(&state, id, claims.sub).await?;
-    let result = state
-        .agent
+    let result = agent
         .get(&format!("/nginx/site-stats/{domain}"))
         .await
         .map_err(|e| agent_error("Site stats", e))?;
@@ -1340,11 +1346,11 @@ pub async fn site_stats(
 pub async fn php_errors(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = site_domain(&state, id, claims.sub).await?;
-    let result = state
-        .agent
+    let result = agent
         .get(&format!("/nginx/php-errors/{domain}"))
         .await
         .map_err(|e| agent_error("PHP errors", e))?;
@@ -1414,6 +1420,7 @@ pub async fn health_check(
 pub async fn clone_site(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
@@ -1432,10 +1439,11 @@ pub async fn clone_site(
 
     // Create new site record
     let new_site: Site = sqlx::query_as(
-        "INSERT INTO sites (user_id, domain, runtime, status, php_version, root_path, rate_limit, max_upload_mb, php_memory_mb, php_max_workers, php_preset, app_command) \
-         VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *"
+        "INSERT INTO sites (user_id, server_id, domain, runtime, status, php_version, root_path, rate_limit, max_upload_mb, php_memory_mb, php_max_workers, php_preset, app_command) \
+         VALUES ($1, $2, $3, $4, 'active', $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *"
     )
     .bind(claims.sub)
+    .bind(server_id)
     .bind(target_domain)
     .bind(&source.runtime)
     .bind(&source.php_version)
@@ -1456,7 +1464,7 @@ pub async fn clone_site(
     })?;
 
     // Clone files via agent
-    state.agent.post("/nginx/clone-site", Some(serde_json::json!({
+    agent.post("/nginx/clone-site", Some(serde_json::json!({
         "source_domain": source.domain,
         "target_domain": target_domain,
     }))).await.map_err(|e| agent_error("Clone", e))?;
@@ -1476,7 +1484,7 @@ pub async fn clone_site(
         nginx_body["php_preset"] = serde_json::json!(preset);
     }
 
-    state.agent.put(&format!("/nginx/sites/{target_domain}"), nginx_body).await
+    agent.put(&format!("/nginx/sites/{target_domain}"), nginx_body).await
         .map_err(|e| agent_error("Nginx config", e))?;
 
     activity::log_activity(&state.db, claims.sub, &claims.email, "site.clone",
@@ -1493,6 +1501,7 @@ pub async fn clone_site(
 pub async fn upload_ssl(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -1501,7 +1510,7 @@ pub async fn upload_ssl(
     let mut agent_body = body.clone();
     agent_body["domain"] = serde_json::json!(domain);
 
-    state.agent.post("/ssl/upload", Some(agent_body)).await
+    agent.post("/ssl/upload", Some(agent_body)).await
         .map_err(|e| agent_error("SSL upload", e))?;
 
     // Update DB
@@ -1520,22 +1529,24 @@ pub async fn upload_ssl(
 
 /// GET /api/php/extensions/{version} — List PHP extensions.
 pub async fn php_extensions(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AuthUser(_claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(version): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.get(&format!("/php/extensions/{version}")).await
+    let result = agent.get(&format!("/php/extensions/{version}")).await
         .map_err(|e| agent_error("PHP extensions", e))?;
     Ok(Json(result))
 }
 
 /// POST /api/php/extensions/install — Install a PHP extension.
 pub async fn install_php_extension(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AuthUser(_claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    state.agent.post("/php/extensions/install", Some(body)).await
+    agent.post("/php/extensions/install", Some(body)).await
         .map_err(|e| agent_error("PHP extension", e))?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -1548,10 +1559,11 @@ pub async fn install_php_extension(
 pub async fn get_env_vars(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = site_domain(&state, id, claims.sub).await?;
-    let result = state.agent.get(&format!("/nginx/env/{domain}")).await
+    let result = agent.get(&format!("/nginx/env/{domain}")).await
         .map_err(|e| agent_error("Env vars", e))?;
     Ok(Json(result))
 }
@@ -1560,11 +1572,12 @@ pub async fn get_env_vars(
 pub async fn set_env_vars(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = site_domain(&state, id, claims.sub).await?;
-    state.agent.put(&format!("/nginx/env/{domain}"), body).await
+    agent.put(&format!("/nginx/env/{domain}"), body).await
         .map_err(|e| agent_error("Env vars", e))?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }

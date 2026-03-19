@@ -5,7 +5,7 @@ use axum::{
 };
 use jsonwebtoken::{encode, EncodingKey, Header};
 
-use crate::auth::{AuthUser, AdminUser};
+use crate::auth::{AuthUser, AdminUser, ServerScope};
 use crate::error::{err, agent_error, ApiError};
 use crate::AppState;
 
@@ -43,6 +43,7 @@ struct StreamTicket {
 pub async fn system_logs(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Query(q): Query<LogQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let log_type = q.log_type.as_deref().unwrap_or("nginx_access");
@@ -55,8 +56,7 @@ pub async fn system_logs(
         agent_path.push_str(&format!("&filter={}", urlencoding::encode(filter)));
     }
 
-    let result = state
-        .agent
+    let result = agent
         .get(&agent_path)
         .await
         .map_err(|e| agent_error("System logs", e))?;
@@ -69,6 +69,7 @@ pub async fn site_logs(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<uuid::Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
     Query(q): Query<LogQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let row: Option<(String,)> =
@@ -91,8 +92,7 @@ pub async fn site_logs(
         agent_path.push_str(&format!("&filter={}", urlencoding::encode(filter)));
     }
 
-    let result = state
-        .agent
+    let result = agent
         .get(&agent_path)
         .await
         .map_err(|e| agent_error("Site logs", e))?;
@@ -104,6 +104,7 @@ pub async fn site_logs(
 pub async fn search_system_logs(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Query(q): Query<SearchQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let log_type = q.log_type.as_deref().unwrap_or("nginx_access");
@@ -124,8 +125,7 @@ pub async fn search_system_logs(
         max
     );
 
-    let result = state
-        .agent
+    let result = agent
         .get(&agent_path)
         .await
         .map_err(|e| agent_error("System log search", e))?;
@@ -138,6 +138,7 @@ pub async fn search_site_logs(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<uuid::Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
     Query(q): Query<SearchQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let row: Option<(String,)> =
@@ -170,8 +171,7 @@ pub async fn search_site_logs(
         max
     );
 
-    let result = state
-        .agent
+    let result = agent
         .get(&agent_path)
         .await
         .map_err(|e| agent_error("Site log search", e))?;
@@ -183,6 +183,7 @@ pub async fn search_site_logs(
 pub async fn stream_token(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Query(q): Query<StreamTokenQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // System-level streaming requires admin
@@ -224,7 +225,7 @@ pub async fn stream_token(
     let token = encode(
         &Header::default(),
         &ticket,
-        &EncodingKey::from_secret(state.agent.token().as_bytes()),
+        &EncodingKey::from_secret(agent.token().as_bytes()),
     )
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
@@ -239,14 +240,14 @@ pub async fn stream_token(
 pub async fn log_stats(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = params
         .get("domain")
         .map(|d| format!("?domain={d}"))
         .unwrap_or_default();
-    let result = state
-        .agent
+    let result = agent
         .get(&format!("/logs/stats{domain}"))
         .await
         .map_err(|e| agent_error("Log stats", e))?;
@@ -257,9 +258,9 @@ pub async fn log_stats(
 pub async fn docker_log_containers(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state
-        .agent
+    let result = agent
         .get("/logs/docker")
         .await
         .map_err(|e| agent_error("Docker logs", e))?;
@@ -271,14 +272,14 @@ pub async fn docker_log_view(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
     Path(container): Path<String>,
+    ServerScope(_server_id, agent): ServerScope,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let lines = params
         .get("lines")
         .unwrap_or(&"200".to_string())
         .clone();
-    let result = state
-        .agent
+    let result = agent
         .get(&format!("/logs/docker/{container}?lines={lines}"))
         .await
         .map_err(|e| agent_error("Docker logs", e))?;
@@ -290,14 +291,14 @@ pub async fn service_logs(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
     Path(service): Path<String>,
+    ServerScope(_server_id, agent): ServerScope,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let lines = params
         .get("lines")
         .unwrap_or(&"100".to_string())
         .clone();
-    let result = state
-        .agent
+    let result = agent
         .get(&format!("/logs/service/{service}?lines={lines}"))
         .await
         .map_err(|e| agent_error("Service logs", e))?;
@@ -308,9 +309,9 @@ pub async fn service_logs(
 pub async fn log_sizes(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state
-        .agent
+    let result = agent
         .get("/logs/sizes")
         .await
         .map_err(|e| agent_error("Log sizes", e))?;
@@ -321,10 +322,10 @@ pub async fn log_sizes(
 pub async fn truncate_log(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    state
-        .agent
+    agent
         .post("/logs/truncate", Some(body))
         .await
         .map_err(|e| agent_error("Truncate", e))?;
@@ -346,9 +347,10 @@ pub async fn truncate_log(
 pub async fn check_errors(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Get recent nginx error count
-    let stats = state.agent.get("/logs/stats").await.ok();
+    let stats = agent.get("/logs/stats").await.ok();
     let error_5xx = stats
         .as_ref()
         .and_then(|s| s.get("errors_5xx"))
@@ -377,9 +379,9 @@ pub async fn check_errors(
 pub async fn processes(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state
-        .agent
+    let result = agent
         .get("/system/processes")
         .await
         .map_err(|e| agent_error("System processes", e))?;
@@ -391,9 +393,9 @@ pub async fn processes(
 pub async fn network(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state
-        .agent
+    let result = agent
         .get("/system/network")
         .await
         .map_err(|e| agent_error("Network stats", e))?;

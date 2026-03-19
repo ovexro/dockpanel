@@ -7,10 +7,11 @@ use std::time::Instant;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::auth::AdminUser;
+use crate::auth::{AdminUser, ServerScope};
 use crate::error::{err, agent_error, ApiError};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
+use crate::services::agent::AgentHandle;
 use crate::AppState;
 
 // ── Data types ──────────────────────────────────────────────────────────
@@ -91,10 +92,11 @@ pub struct CreateAliasRequest {
 
 /// GET /api/mail/status
 pub async fn mail_status(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.get("/mail/status").await
+    let result = agent.get("/mail/status").await
         .map_err(|e| agent_error("Mail status", e))?;
     Ok(Json(result))
 }
@@ -103,6 +105,7 @@ pub async fn mail_status(
 pub async fn mail_install(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let install_id = Uuid::new_v4();
 
@@ -113,7 +116,6 @@ pub async fn mail_install(
     }
 
     let logs = state.provision_logs.clone();
-    let agent = state.agent.clone();
     let db = state.db.clone();
     let user_id = claims.sub;
     let email = claims.email.clone();
@@ -182,6 +184,7 @@ pub async fn list_domains(
 pub async fn create_domain(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<CreateDomainRequest>,
 ) -> Result<(StatusCode, Json<MailDomain>), ApiError> {
     let domain = body.domain.trim().to_lowercase();
@@ -190,7 +193,7 @@ pub async fn create_domain(
     }
 
     // Generate DKIM keys via agent
-    let dkim_result = state.agent
+    let dkim_result = agent
         .post("/mail/dkim/generate", Some(serde_json::json!({ "domain": domain, "selector": "dockpanel" })))
         .await;
 
@@ -223,7 +226,7 @@ pub async fn create_domain(
     })?;
 
     // Configure Postfix/Dovecot via agent
-    let _ = state.agent
+    let _ = agent
         .post("/mail/domains/configure", Some(serde_json::json!({ "domain": domain })))
         .await;
 
@@ -231,7 +234,7 @@ pub async fn create_domain(
     let dns_domain = domain.clone();
     let dns_dkim_pub = public_key.clone();
     let dns_db = state.db.clone();
-    let dns_agent = state.agent.clone();
+    let dns_agent = agent.clone();
     let dns_user = claims.sub;
     let dns_email = claims.email.clone();
     tokio::spawn(async move {
@@ -296,6 +299,7 @@ pub async fn update_domain(
 pub async fn delete_domain(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain: Option<(String,)> = sqlx::query_as("SELECT domain FROM mail_domains WHERE id = $1")
@@ -318,7 +322,7 @@ pub async fn delete_domain(
     let dkim_selector = dkim_info.map(|d| d.0).unwrap_or_else(|| "dockpanel".to_string());
 
     // Remove from Postfix/Dovecot via agent
-    let _ = state.agent
+    let _ = agent
         .post("/mail/domains/remove", Some(serde_json::json!({ "domain": domain.0 })))
         .await;
 
@@ -352,6 +356,7 @@ pub async fn delete_domain(
 pub async fn domain_dns(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain: Option<(String, String, Option<String>)> = sqlx::query_as(
@@ -365,7 +370,7 @@ pub async fn domain_dns(
     let (domain, selector, dkim_pub) = domain.ok_or_else(|| err(StatusCode::NOT_FOUND, "Domain not found"))?;
 
     // Get server's public IP for MX record
-    let server_ip = state.agent.get("/system/info").await
+    let server_ip = agent.get("/system/info").await
         .ok()
         .and_then(|info| info.get("hostname").and_then(|v| v.as_str()).map(String::from))
         .unwrap_or_else(|| "your-server-ip".to_string());
@@ -444,6 +449,7 @@ pub async fn list_accounts(
 pub async fn create_account(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(domain_id): Path<Uuid>,
     Json(body): Json<CreateAccountRequest>,
 ) -> Result<(StatusCode, Json<MailAccount>), ApiError> {
@@ -491,7 +497,7 @@ pub async fn create_account(
     })?;
 
     // Sync with Postfix/Dovecot via agent
-    let _ = sync_mail_config(&state).await;
+    let _ = sync_mail_config(&state, &agent).await;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "mail.account.create",
@@ -505,6 +511,7 @@ pub async fn create_account(
 pub async fn update_account(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path((domain_id, account_id)): Path<(Uuid, Uuid)>,
     Json(body): Json<UpdateAccountRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -595,7 +602,7 @@ pub async fn update_account(
             .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
     }
 
-    let _ = sync_mail_config(&state).await;
+    let _ = sync_mail_config(&state, &agent).await;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "mail.account.update",
@@ -609,6 +616,7 @@ pub async fn update_account(
 pub async fn delete_account(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path((domain_id, account_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let account: Option<(String,)> = sqlx::query_as(
@@ -628,7 +636,7 @@ pub async fn delete_account(
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let _ = sync_mail_config(&state).await;
+    let _ = sync_mail_config(&state, &agent).await;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "mail.account.delete",
@@ -662,6 +670,7 @@ pub async fn list_aliases(
 pub async fn create_alias(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(domain_id): Path<Uuid>,
     Json(body): Json<CreateAliasRequest>,
 ) -> Result<(StatusCode, Json<MailAlias>), ApiError> {
@@ -682,7 +691,7 @@ pub async fn create_alias(
         }
     })?;
 
-    let _ = sync_mail_config(&state).await;
+    let _ = sync_mail_config(&state, &agent).await;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "mail.alias.create",
@@ -696,6 +705,7 @@ pub async fn create_alias(
 pub async fn delete_alias(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path((_domain_id, alias_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let alias: Option<(String,)> = sqlx::query_as("SELECT source_email FROM mail_aliases WHERE id = $1")
@@ -710,7 +720,7 @@ pub async fn delete_alias(
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let _ = sync_mail_config(&state).await;
+    let _ = sync_mail_config(&state, &agent).await;
 
     if let Some(alias) = alias {
         activity::log_activity(
@@ -726,10 +736,11 @@ pub async fn delete_alias(
 
 /// GET /api/mail/queue
 pub async fn get_queue(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent
+    let result = agent
         .get("/mail/queue")
         .await
         .map_err(|e| agent_error("Mail queue", e))?;
@@ -741,8 +752,9 @@ pub async fn get_queue(
 pub async fn flush_queue(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent
+    let result = agent
         .post("/mail/queue/flush", None)
         .await
         .map_err(|e| agent_error("Flush mail queue", e))?;
@@ -759,9 +771,10 @@ pub async fn flush_queue(
 pub async fn delete_queued(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(queue_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent
+    let result = agent
         .post("/mail/queue/delete", Some(serde_json::json!({ "id": queue_id })))
         .await
         .map_err(|e| agent_error("Delete queued message", e))?;
@@ -827,7 +840,7 @@ fn cf_headers(token: &str, email: Option<&str>) -> reqwest::header::HeaderMap {
 /// Runs in a background task — errors are logged, not returned to the user.
 async fn auto_create_mail_dns(
     db: &sqlx::PgPool,
-    agent: &crate::services::agent::AgentClient,
+    agent: &AgentHandle,
     user_id: uuid::Uuid,
     user_email: &str,
     domain: &str,
@@ -1120,8 +1133,9 @@ async fn auto_delete_mail_dns(
 pub async fn rspamd_install(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    state.agent.post("/mail/rspamd/install", None).await
+    agent.post("/mail/rspamd/install", None).await
         .map_err(|e| agent_error("Rspamd", e))?;
     activity::log_activity(&state.db, claims.sub, &claims.email, "mail.rspamd_install", None, None, None, None).await;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -1129,21 +1143,23 @@ pub async fn rspamd_install(
 
 /// GET /api/mail/rspamd/status
 pub async fn rspamd_status(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.get("/mail/rspamd/status").await
+    let result = agent.get("/mail/rspamd/status").await
         .map_err(|e| agent_error("Rspamd", e))?;
     Ok(Json(result))
 }
 
 /// POST /api/mail/rspamd/toggle
 pub async fn rspamd_toggle(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    state.agent.post("/mail/rspamd/toggle", Some(body)).await
+    agent.post("/mail/rspamd/toggle", Some(body)).await
         .map_err(|e| agent_error("Rspamd", e))?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -1154,9 +1170,10 @@ pub async fn rspamd_toggle(
 pub async fn webmail_install(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.post("/mail/webmail/install", Some(body)).await
+    let result = agent.post("/mail/webmail/install", Some(body)).await
         .map_err(|e| agent_error("Webmail", e))?;
     activity::log_activity(&state.db, claims.sub, &claims.email, "mail.webmail_install", None, None, None, None).await;
     Ok(Json(result))
@@ -1164,10 +1181,11 @@ pub async fn webmail_install(
 
 /// GET /api/mail/webmail/status
 pub async fn webmail_status(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.get("/mail/webmail/status").await
+    let result = agent.get("/mail/webmail/status").await
         .map_err(|e| agent_error("Webmail", e))?;
     Ok(Json(result))
 }
@@ -1176,8 +1194,9 @@ pub async fn webmail_status(
 pub async fn webmail_remove(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    state.agent.post("/mail/webmail/remove", None).await
+    agent.post("/mail/webmail/remove", None).await
         .map_err(|e| agent_error("Webmail", e))?;
     activity::log_activity(&state.db, claims.sub, &claims.email, "mail.webmail_remove", None, None, None, None).await;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -1189,9 +1208,10 @@ pub async fn webmail_remove(
 pub async fn relay_configure(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    state.agent.post("/mail/relay/configure", Some(body)).await
+    agent.post("/mail/relay/configure", Some(body)).await
         .map_err(|e| agent_error("SMTP relay", e))?;
     activity::log_activity(&state.db, claims.sub, &claims.email, "mail.relay_configure", None, None, None, None).await;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -1199,10 +1219,11 @@ pub async fn relay_configure(
 
 /// GET /api/mail/relay/status
 pub async fn relay_status(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.get("/mail/relay/status").await
+    let result = agent.get("/mail/relay/status").await
         .map_err(|e| agent_error("SMTP relay", e))?;
     Ok(Json(result))
 }
@@ -1211,8 +1232,9 @@ pub async fn relay_status(
 pub async fn relay_remove(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    state.agent.post("/mail/relay/remove", None).await
+    agent.post("/mail/relay/remove", None).await
         .map_err(|e| agent_error("SMTP relay", e))?;
     activity::log_activity(&state.db, claims.sub, &claims.email, "mail.relay_remove", None, None, None, None).await;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -1301,20 +1323,22 @@ pub async fn dns_check(
 
 /// GET /api/mail/logs — Parse mail.log for recent activity and stats.
 pub async fn mail_logs(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.get("/mail/logs").await
+    let result = agent.get("/mail/logs").await
         .map_err(|e| agent_error("Mail logs", e))?;
     Ok(Json(result))
 }
 
 /// GET /api/mail/storage — Get storage usage for all mailboxes.
 pub async fn mail_storage(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.get("/mail/storage").await
+    let result = agent.get("/mail/storage").await
         .map_err(|e| agent_error("Mail storage", e))?;
     Ok(Json(result))
 }
@@ -1377,9 +1401,10 @@ pub async fn blacklist_check(
 pub async fn rate_limit_set(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    state.agent.post("/mail/rate-limit/set", Some(body)).await
+    agent.post("/mail/rate-limit/set", Some(body)).await
         .map_err(|e| agent_error("Rate limit", e))?;
     activity::log_activity(&state.db, claims.sub, &claims.email, "mail.rate_limit_set", None, None, None, None).await;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -1387,10 +1412,11 @@ pub async fn rate_limit_set(
 
 /// GET /api/mail/rate-limit/status
 pub async fn rate_limit_status(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.get("/mail/rate-limit/status").await
+    let result = agent.get("/mail/rate-limit/status").await
         .map_err(|e| agent_error("Rate limit", e))?;
     Ok(Json(result))
 }
@@ -1399,8 +1425,9 @@ pub async fn rate_limit_status(
 pub async fn rate_limit_remove(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    state.agent.post("/mail/rate-limit/remove", None).await
+    agent.post("/mail/rate-limit/remove", None).await
         .map_err(|e| agent_error("Rate limit", e))?;
     activity::log_activity(&state.db, claims.sub, &claims.email, "mail.rate_limit_remove", None, None, None, None).await;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -1412,9 +1439,10 @@ pub async fn rate_limit_remove(
 pub async fn mailbox_backup(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.post("/mail/backup", Some(body)).await
+    let result = agent.post("/mail/backup", Some(body)).await
         .map_err(|e| agent_error("Mailbox backup", e))?;
     activity::log_activity(&state.db, claims.sub, &claims.email, "mail.backup", None, None, None, None).await;
     Ok(Json(result))
@@ -1424,9 +1452,10 @@ pub async fn mailbox_backup(
 pub async fn mailbox_restore(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.post("/mail/restore", Some(body)).await
+    let result = agent.post("/mail/restore", Some(body)).await
         .map_err(|e| agent_error("Mailbox restore", e))?;
     activity::log_activity(&state.db, claims.sub, &claims.email, "mail.restore", None, None, None, None).await;
     Ok(Json(result))
@@ -1434,10 +1463,11 @@ pub async fn mailbox_restore(
 
 /// GET /api/mail/backups
 pub async fn mailbox_backups(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.get("/mail/backups").await
+    let result = agent.get("/mail/backups").await
         .map_err(|e| agent_error("Mailbox backups", e))?;
     Ok(Json(result))
 }
@@ -1446,9 +1476,10 @@ pub async fn mailbox_backups(
 pub async fn mailbox_backup_delete(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    state.agent.post("/mail/backups/delete", Some(body)).await
+    agent.post("/mail/backups/delete", Some(body)).await
         .map_err(|e| agent_error("Delete backup", e))?;
     activity::log_activity(&state.db, claims.sub, &claims.email, "mail.backup_delete", None, None, None, None).await;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -1458,10 +1489,11 @@ pub async fn mailbox_backup_delete(
 
 /// GET /api/mail/tls/status
 pub async fn tls_status(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.get("/mail/tls/status").await
+    let result = agent.get("/mail/tls/status").await
         .map_err(|e| agent_error("TLS status", e))?;
     Ok(Json(result))
 }
@@ -1470,9 +1502,10 @@ pub async fn tls_status(
 pub async fn tls_enforce(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    state.agent.post("/mail/tls/enforce", Some(body)).await
+    agent.post("/mail/tls/enforce", Some(body)).await
         .map_err(|e| agent_error("TLS enforce", e))?;
     activity::log_activity(&state.db, claims.sub, &claims.email, "mail.tls_enforce", None, None, None, None).await;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -1481,7 +1514,7 @@ pub async fn tls_enforce(
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 /// Sync all mail config to agent (rebuild Postfix/Dovecot maps)
-async fn sync_mail_config(state: &AppState) -> Result<(), String> {
+async fn sync_mail_config(state: &AppState, agent: &AgentHandle) -> Result<(), String> {
     // Gather all domains, accounts, and aliases
     let domains: Vec<(String, bool, Option<String>)> = sqlx::query_as(
         "SELECT domain, enabled, catch_all FROM mail_domains ORDER BY domain",
@@ -1516,7 +1549,7 @@ async fn sync_mail_config(state: &AppState) -> Result<(), String> {
         })).collect::<Vec<_>>(),
     });
 
-    state.agent
+    agent
         .post("/mail/sync", Some(payload))
         .await
         .map_err(|e| e.to_string())?;

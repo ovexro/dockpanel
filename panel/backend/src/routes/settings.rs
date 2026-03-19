@@ -5,7 +5,7 @@ use axum::{
 };
 use std::collections::HashMap;
 
-use crate::auth::AdminUser;
+use crate::auth::{AdminUser, ServerScope};
 use crate::error::{err, agent_error, ApiError};
 use crate::services::activity;
 use crate::AppState;
@@ -45,6 +45,7 @@ pub async fn list(
 pub async fn update(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
 
@@ -112,7 +113,7 @@ pub async fn update(
                 "encryption": map.get("smtp_encryption").cloned().unwrap_or_else(|| "starttls".to_string()),
             });
 
-            if let Err(e) = state.agent.post("/smtp/configure", Some(agent_body)).await {
+            if let Err(e) = agent.post("/smtp/configure", Some(agent_body)).await {
                 tracing::warn!("Failed to configure SMTP on agent: {e}");
             }
         }
@@ -125,6 +126,7 @@ pub async fn update(
 pub async fn test_email(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
 
@@ -153,7 +155,7 @@ pub async fn test_email(
         "from_name": from_name,
     });
 
-    let result = state.agent
+    let result = agent
         .post("/smtp/test", Some(agent_body))
         .await
         .map_err(|e| agent_error("SMTP test email", e))?;
@@ -254,6 +256,7 @@ pub async fn import_config(
 pub async fn health(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
 
     // Check DB
@@ -263,7 +266,7 @@ pub async fn health(
     };
 
     // Check agent connectivity
-    let agent_status = match state.agent.get("/health").await {
+    let agent_status = match agent.get("/health").await {
         Ok(_) => "ok",
         Err(_) => "error",
     };

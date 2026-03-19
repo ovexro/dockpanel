@@ -12,11 +12,12 @@ use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, ServerScope};
 use crate::error::{err, agent_error, require_admin, ApiError};
 use crate::routes::is_valid_name;
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
+use crate::services::agent::AgentHandle;
 use crate::AppState;
 
 #[derive(serde::Serialize, sqlx::FromRow)]
@@ -347,6 +348,7 @@ pub async fn update(
 pub async fn remove(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -363,8 +365,7 @@ pub async fn remove(
     let (name, _domain) = deploy.ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
 
     // Tell agent to stop and remove container + cleanup
-    state
-        .agent
+    agent
         .post("/git/cleanup", Some(serde_json::json!({ "name": name })))
         .await
         .ok();
@@ -388,6 +389,7 @@ pub async fn remove(
 pub async fn deploy(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     require_admin(&claims.role)?;
@@ -419,6 +421,7 @@ pub async fn deploy(
 
     spawn_deploy_task(
         state,
+        agent,
         deploy_id,
         config,
         claims.sub,
@@ -508,6 +511,7 @@ pub async fn history(
 pub async fn rollback(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path((id, history_id)): Path<(Uuid, Uuid)>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     require_admin(&claims.role)?;
@@ -548,7 +552,6 @@ pub async fn rollback(
     }
 
     let logs = state.provision_logs.clone();
-    let agent = state.agent.clone();
     let db = state.db.clone();
     let user_id = claims.sub;
     let email = claims.email.clone();
@@ -680,6 +683,7 @@ pub async fn rollback(
 pub async fn keygen(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -695,8 +699,7 @@ pub async fn keygen(
 
     let (name,) = deploy.ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
 
-    let result = state
-        .agent
+    let result = agent
         .post("/git/keygen", Some(serde_json::json!({ "name": name })))
         .await
         .map_err(|e| agent_error("Deploy key generation", e))?;
@@ -723,6 +726,7 @@ pub async fn keygen(
 pub async fn stop(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -730,7 +734,7 @@ pub async fn stop(
         .bind(id).bind(claims.sub).fetch_optional(&state.db).await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
-    state.agent.post("/git/stop", Some(serde_json::json!({ "name": config.name }))).await
+    agent.post("/git/stop", Some(serde_json::json!({ "name": config.name }))).await
         .map_err(|e| agent_error("Stop container", e))?;
     sqlx::query("UPDATE git_deploys SET status = 'stopped', updated_at = NOW() WHERE id = $1")
         .bind(id).execute(&state.db).await.ok();
@@ -741,6 +745,7 @@ pub async fn stop(
 pub async fn start(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -748,7 +753,7 @@ pub async fn start(
         .bind(id).bind(claims.sub).fetch_optional(&state.db).await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
-    state.agent.post("/git/start", Some(serde_json::json!({ "name": config.name }))).await
+    agent.post("/git/start", Some(serde_json::json!({ "name": config.name }))).await
         .map_err(|e| agent_error("Start container", e))?;
     sqlx::query("UPDATE git_deploys SET status = 'running', updated_at = NOW() WHERE id = $1")
         .bind(id).execute(&state.db).await.ok();
@@ -759,6 +764,7 @@ pub async fn start(
 pub async fn restart(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -766,7 +772,7 @@ pub async fn restart(
         .bind(id).bind(claims.sub).fetch_optional(&state.db).await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
-    state.agent.post("/git/restart", Some(serde_json::json!({ "name": config.name }))).await
+    agent.post("/git/restart", Some(serde_json::json!({ "name": config.name }))).await
         .map_err(|e| agent_error("Restart container", e))?;
     sqlx::query("UPDATE git_deploys SET status = 'running', updated_at = NOW() WHERE id = $1")
         .bind(id).execute(&state.db).await.ok();
@@ -777,6 +783,7 @@ pub async fn restart(
 pub async fn container_logs(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -784,7 +791,7 @@ pub async fn container_logs(
         .bind(id).bind(claims.sub).fetch_optional(&state.db).await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
-    let result = state.agent.post("/git/logs", Some(serde_json::json!({ "name": config.name }))).await
+    let result = agent.post("/git/logs", Some(serde_json::json!({ "name": config.name }))).await
         .map_err(|e| agent_error("Container logs", e))?;
     Ok(Json(result))
 }
@@ -865,9 +872,12 @@ pub async fn webhook(
         .and_then(|r| r.strip_prefix("refs/heads/"))
         .unwrap_or("");
 
+    // Resolve agent for webhook (use local agent)
+    let agent = AgentHandle::Local(state.agents.local().clone());
+
     if !push_branch.is_empty() && push_branch != config.branch {
         // Preview deployment for non-configured branches
-        handle_preview_deploy(&state, &config, push_branch, &payload).await;
+        handle_preview_deploy(&state, &agent, &config, push_branch, &payload).await;
         return Ok(Json(serde_json::json!({
             "ok": true,
             "message": format!("Preview deploy triggered for branch '{push_branch}'"),
@@ -904,6 +914,7 @@ pub async fn webhook(
 
     spawn_deploy_task(
         state,
+        agent,
         deploy_id,
         config,
         owner_id,
@@ -920,6 +931,7 @@ pub async fn webhook(
 /// Spawn the background clone → build → deploy task.
 fn spawn_deploy_task(
     state: AppState,
+    agent: AgentHandle,
     deploy_id: Uuid,
     config: GitDeploy,
     user_id: Uuid,
@@ -927,7 +939,6 @@ fn spawn_deploy_task(
     triggered_by: &str,
 ) {
     let logs = state.provision_logs.clone();
-    let agent = state.agent.clone();
     let db = state.db.clone();
     let deploy_name = config.name.clone();
     let git_deploy_id = config.id;
@@ -1536,6 +1547,9 @@ pub async fn trigger_deploy_task(
     user_id: Uuid,
     triggered_by: String,
 ) {
+    // Wrap the AgentClient in an AgentHandle for uniform API
+    let agent = AgentHandle::Local(agent);
+
     // Fetch config
     let config: GitDeploy = match sqlx::query_as("SELECT * FROM git_deploys WHERE id = $1")
         .bind(git_deploy_id).fetch_optional(&db).await {
@@ -1725,7 +1739,7 @@ async fn record_failed_history(db: &sqlx::PgPool, git_deploy_id: Uuid, commit_ha
 }
 
 /// Handle preview deployment for non-configured branches.
-async fn handle_preview_deploy(state: &AppState, config: &GitDeploy, branch: &str, _payload: &serde_json::Value) {
+async fn handle_preview_deploy(state: &AppState, agent: &AgentHandle, config: &GitDeploy, branch: &str, _payload: &serde_json::Value) {
     let branch_slug = branch.replace('/', "-").replace('.', "-").to_lowercase();
     if branch_slug.len() > 50 { return; } // Safety limit
 
@@ -1752,7 +1766,7 @@ async fn handle_preview_deploy(state: &AppState, config: &GitDeploy, branch: &st
 
     // Spawn deploy task
     let db = state.db.clone();
-    let agent = state.agent.clone();
+    let agent = agent.clone();
     let name = config.name.clone();
     let repo_url = config.repo_url.clone();
     let dockerfile = config.dockerfile.clone();
@@ -1852,6 +1866,7 @@ pub async fn list_previews(
 pub async fn delete_preview(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path((id, preview_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -1863,7 +1878,7 @@ pub async fn delete_preview(
 
     // Clean up container — strip "dockpanel-git-" prefix since the agent adds it
     let cleanup_name = preview.container_name.strip_prefix("dockpanel-git-").unwrap_or(&preview.container_name);
-    state.agent.post("/git/cleanup", Some(serde_json::json!({ "name": cleanup_name }))).await.ok();
+    agent.post("/git/cleanup", Some(serde_json::json!({ "name": cleanup_name }))).await.ok();
 
     sqlx::query("DELETE FROM git_previews WHERE id = $1").bind(preview_id).execute(&state.db).await.ok();
     Ok(Json(serde_json::json!({ "ok": true })))

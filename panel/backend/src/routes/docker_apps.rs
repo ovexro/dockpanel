@@ -12,6 +12,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
+use crate::auth::ServerScope;
 use crate::error::{err, agent_error, require_admin, ApiError};
 use crate::routes::{is_valid_container_id, is_valid_name};
 use crate::routes::sites::ProvisionStep;
@@ -34,11 +35,11 @@ pub struct DeployRequest {
 pub async fn list_templates(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
 
-    let result = state
-        .agent
+    let result = agent
         .get("/apps/templates")
         .await
         .map_err(|e| agent_error("Docker apps", e))?;
@@ -50,6 +51,7 @@ pub async fn list_templates(
 pub async fn deploy(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<DeployRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     require_admin(&claims.role)?;
@@ -87,7 +89,7 @@ pub async fn deploy(
     }
 
     let logs = state.provision_logs.clone();
-    let agent = state.agent.clone();
+    let agent = agent.clone();
     let db = state.db.clone();
     let user_id = claims.sub;
     let email = claims.email.clone();
@@ -384,11 +386,11 @@ pub async fn deploy_log(
 pub async fn list_apps(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
 
-    let result = state
-        .agent
+    let result = agent
         .get("/apps")
         .await
         .map_err(|e| agent_error("Docker apps", e))?;
@@ -400,6 +402,7 @@ pub async fn list_apps(
 pub async fn stop_app(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -408,8 +411,7 @@ pub async fn stop_app(
     }
 
     let agent_path = format!("/apps/{}/stop", container_id);
-    state
-        .agent
+    agent
         .post(&agent_path, None)
         .await
         .map_err(|e| agent_error("Container stop", e))?;
@@ -421,6 +423,7 @@ pub async fn stop_app(
 pub async fn start_app(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -429,8 +432,7 @@ pub async fn start_app(
     }
 
     let agent_path = format!("/apps/{}/start", container_id);
-    state
-        .agent
+    agent
         .post(&agent_path, None)
         .await
         .map_err(|e| agent_error("Container start", e))?;
@@ -442,6 +444,7 @@ pub async fn start_app(
 pub async fn restart_app(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -450,8 +453,7 @@ pub async fn restart_app(
     }
 
     let agent_path = format!("/apps/{}/restart", container_id);
-    state
-        .agent
+    agent
         .post(&agent_path, None)
         .await
         .map_err(|e| agent_error("Container restart", e))?;
@@ -463,6 +465,7 @@ pub async fn restart_app(
 pub async fn app_logs(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -471,8 +474,7 @@ pub async fn app_logs(
     }
 
     let agent_path = format!("/apps/{}/logs", container_id);
-    let result = state
-        .agent
+    let result = agent
         .get(&agent_path)
         .await
         .map_err(|e| agent_error("Container logs", e))?;
@@ -484,6 +486,7 @@ pub async fn app_logs(
 pub async fn update_app(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     require_admin(&claims.role)?;
@@ -500,7 +503,7 @@ pub async fn update_app(
     }
 
     let logs = state.provision_logs.clone();
-    let agent = state.agent.clone();
+    let agent = agent.clone();
     let db = state.db.clone();
     let user_id = claims.sub;
     let email = claims.email.clone();
@@ -568,6 +571,7 @@ pub async fn update_app(
 pub async fn app_env(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -576,8 +580,7 @@ pub async fn app_env(
     }
 
     let agent_path = format!("/apps/{}/env", container_id);
-    let result = state
-        .agent
+    let result = agent
         .get(&agent_path)
         .await
         .map_err(|e| agent_error("Container env", e))?;
@@ -589,6 +592,7 @@ pub async fn app_env(
 pub async fn update_env(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -596,8 +600,7 @@ pub async fn update_env(
     if !is_valid_container_id(&container_id) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
     }
-    let result = state
-        .agent
+    let result = agent
         .put(&format!("/apps/{container_id}/env"), body)
         .await
         .map_err(|e| agent_error("Update env", e))?;
@@ -619,14 +622,14 @@ pub async fn update_env(
 pub async fn container_stats(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
     if !is_valid_container_id(&container_id) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
     }
-    let result = state
-        .agent
+    let result = agent
         .get(&format!("/apps/{container_id}/stats"))
         .await
         .map_err(|e| agent_error("Container stats", e))?;
@@ -637,14 +640,14 @@ pub async fn container_stats(
 pub async fn shell_info(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
     if !is_valid_container_id(&container_id) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
     }
-    let result = state
-        .agent
+    let result = agent
         .get(&format!("/apps/{container_id}/shell-info"))
         .await
         .map_err(|e| agent_error("Shell info", e))?;
@@ -655,6 +658,7 @@ pub async fn shell_info(
 pub async fn exec_command(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -662,8 +666,7 @@ pub async fn exec_command(
     if !is_valid_container_id(&container_id) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
     }
-    let result = state
-        .agent
+    let result = agent
         .post(&format!("/apps/{container_id}/exec"), Some(body))
         .await
         .map_err(|e| agent_error("Container exec", e))?;
@@ -674,14 +677,14 @@ pub async fn exec_command(
 pub async fn container_volumes(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
     if !is_valid_container_id(&container_id) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
     }
-    let result = state
-        .agent
+    let result = agent
         .get(&format!("/apps/{container_id}/volumes"))
         .await
         .map_err(|e| agent_error("Container volumes", e))?;
@@ -692,11 +695,11 @@ pub async fn container_volumes(
 pub async fn registry_login(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let result = state
-        .agent
+    let result = agent
         .post("/apps/registry-login", Some(body))
         .await
         .map_err(|e| agent_error("Registry login", e))?;
@@ -718,10 +721,10 @@ pub async fn registry_login(
 pub async fn list_registries(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let result = state
-        .agent
+    let result = agent
         .get("/apps/registries")
         .await
         .map_err(|e| agent_error("List registries", e))?;
@@ -732,11 +735,11 @@ pub async fn list_registries(
 pub async fn registry_logout(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let result = state
-        .agent
+    let result = agent
         .post("/apps/registry-logout", Some(body))
         .await
         .map_err(|e| agent_error("Registry logout", e))?;
@@ -747,10 +750,10 @@ pub async fn registry_logout(
 pub async fn list_images(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let result = state
-        .agent
+    let result = agent
         .get("/apps/images")
         .await
         .map_err(|e| agent_error("Docker images", e))?;
@@ -761,10 +764,10 @@ pub async fn list_images(
 pub async fn prune_images(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let result = state
-        .agent
+    let result = agent
         .post("/apps/images/prune", None)
         .await
         .map_err(|e| agent_error("Prune images", e))?;
@@ -779,11 +782,11 @@ pub async fn prune_images(
 pub async fn remove_image(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let result = state
-        .agent
+    let result = agent
         .delete(&format!("/apps/images/{id}"))
         .await
         .map_err(|e| agent_error("Remove image", e))?;
@@ -798,6 +801,7 @@ pub async fn remove_image(
 pub async fn snapshot_container(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -805,8 +809,7 @@ pub async fn snapshot_container(
     if !is_valid_container_id(&container_id) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
     }
-    let result = state
-        .agent
+    let result = agent
         .post(&format!("/apps/{container_id}/snapshot"), Some(body))
         .await
         .map_err(|e| agent_error("Container snapshot", e))?;
@@ -821,6 +824,7 @@ pub async fn snapshot_container(
 pub async fn compose_parse(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -833,8 +837,7 @@ pub async fn compose_parse(
         return Err(err(StatusCode::BAD_REQUEST, "YAML too large (max 64KB)"));
     }
 
-    let result = state
-        .agent
+    let result = agent
         .post("/apps/compose/parse", Some(serde_json::json!({ "yaml": yaml })))
         .await
         .map_err(|e| agent_error("Compose parse", e))?;
@@ -846,6 +849,7 @@ pub async fn compose_parse(
 pub async fn compose_deploy(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     require_admin(&claims.role)?;
@@ -858,8 +862,7 @@ pub async fn compose_deploy(
         return Err(err(StatusCode::BAD_REQUEST, "YAML too large (max 64KB)"));
     }
 
-    let result = state
-        .agent
+    let result = agent
         .post("/apps/compose/deploy", Some(serde_json::json!({ "yaml": yaml })))
         .await
         .map_err(|e| agent_error("Docker deploy", e))?;
@@ -876,6 +879,7 @@ pub async fn compose_deploy(
 pub async fn remove_app(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -885,8 +889,7 @@ pub async fn remove_app(
     }
 
     let agent_path = format!("/apps/{}", container_id);
-    let result = state
-        .agent
+    let result = agent
         .delete(&agent_path)
         .await
         .map_err(|e| agent_error("Container removal", e))?;

@@ -5,11 +5,12 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, ServerScope};
 use crate::error::{err, agent_error, ApiError};
 use crate::models::Site;
 use crate::routes::is_valid_domain;
 use crate::services::activity;
+use crate::services::agent::AgentHandle;
 use crate::AppState;
 
 #[derive(serde::Deserialize)]
@@ -39,6 +40,7 @@ async fn get_site(state: &AppState, id: Uuid, user_id: Uuid) -> Result<Site, Api
 pub async fn create(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<CreateStagingRequest>,
 ) -> Result<(StatusCode, Json<Site>), ApiError> {
@@ -119,7 +121,7 @@ pub async fn create(
     }
 
     let agent_path = format!("/nginx/sites/{}", staging_domain);
-    if let Err(e) = state.agent.put(&agent_path, agent_body).await {
+    if let Err(e) = agent.put(&agent_path, agent_body).await {
         tracing::error!("Agent error creating staging site {staging_domain}: {e}");
         sqlx::query("UPDATE sites SET status = 'error', updated_at = NOW() WHERE id = $1")
             .bind(staging.id)
@@ -130,8 +132,7 @@ pub async fn create(
     }
 
     // Clone files from production to staging
-    let clone_result = state
-        .agent
+    let clone_result = agent
         .post(
             "/staging/clone",
             Some(serde_json::json!({
@@ -186,6 +187,7 @@ pub async fn create(
 pub async fn get_staging(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Verify parent site ownership
@@ -201,8 +203,7 @@ pub async fn get_staging(
     match staging {
         Some(s) => {
             // Get disk usage
-            let usage = state
-                .agent
+            let usage = agent
                 .post(
                     "/staging/disk-usage",
                     Some(serde_json::json!({ "domain": s.domain })),
@@ -226,6 +227,7 @@ pub async fn get_staging(
 pub async fn sync_to_staging(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let parent = get_site(&state, id, claims.sub).await?;
@@ -238,8 +240,7 @@ pub async fn sync_to_staging(
             .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
             .ok_or_else(|| err(StatusCode::NOT_FOUND, "No staging environment found"))?;
 
-    state
-        .agent
+    agent
         .post(
             "/staging/sync",
             Some(serde_json::json!({
@@ -277,6 +278,7 @@ pub async fn sync_to_staging(
 pub async fn push_to_prod(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let parent = get_site(&state, id, claims.sub).await?;
@@ -289,8 +291,7 @@ pub async fn push_to_prod(
             .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
             .ok_or_else(|| err(StatusCode::NOT_FOUND, "No staging environment found"))?;
 
-    state
-        .agent
+    agent
         .post(
             "/staging/sync",
             Some(serde_json::json!({
@@ -321,6 +322,7 @@ pub async fn push_to_prod(
 pub async fn destroy(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let _parent = get_site(&state, id, claims.sub).await?;
@@ -335,15 +337,13 @@ pub async fn destroy(
 
     // Remove nginx config
     let agent_path = format!("/nginx/sites/{}", staging.domain);
-    state
-        .agent
+    agent
         .delete(&agent_path)
         .await
         .map_err(|e| agent_error("Staging removal", e))?;
 
     // Delete site files
-    state
-        .agent
+    agent
         .post(
             "/staging/delete-files",
             Some(serde_json::json!({ "domain": staging.domain })),

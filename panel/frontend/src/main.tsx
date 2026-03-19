@@ -2,6 +2,7 @@ import { StrictMode, Suspense, lazy, Component, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
+import { ServerProvider } from "./context/ServerContext";
 import LayoutShell from "./components/LayoutShell";
 import Login from "./pages/Login";
 import Setup from "./pages/Setup";
@@ -86,10 +87,12 @@ const Apps = lazyRetry(() => import("./pages/Apps"));
 const Security = lazyRetry(() => import("./pages/Security"));
 const Settings = lazyRetry(() => import("./pages/Settings"));
 const Mail = lazyRetry(() => import("./pages/Mail"));
+const Servers = lazyRetry(() => import("./pages/Servers"));
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <AuthProvider>
+      <ServerProvider>
       <BrowserRouter>
         <ChunkErrorBoundary>
         <Suspense fallback={<div className="flex items-center justify-center h-screen bg-dark-900"><div className="w-6 h-6 border-2 border-dark-600 border-t-rust-500 rounded-full animate-spin" /></div>}>
@@ -122,6 +125,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/activity" element={<Navigate to="/logs" replace />} />
               <Route path="/system-logs" element={<Navigate to="/logs" replace />} />
               <Route path="/mail" element={<Mail />} />
+              <Route path="/servers" element={<Servers />} />
               <Route path="/users" element={<Navigate to="/settings" replace />} />
               <Route path="/monitoring" element={<Monitoring />} />
               <Route path="/monitors" element={<Navigate to="/monitoring" replace />} />
@@ -132,6 +136,7 @@ createRoot(document.getElementById("root")!).render(
         </Suspense>
         </ChunkErrorBoundary>
       </BrowserRouter>
+      </ServerProvider>
     </AuthProvider>
   </StrictMode>
 );

@@ -5,9 +5,10 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::{AuthUser, Claims};
+use crate::auth::{AuthUser, Claims, ServerScope};
 use crate::error::{err, agent_error, require_admin, ApiError};
 use crate::services::activity;
+use crate::services::agent::AgentHandle;
 use crate::AppState;
 
 #[derive(serde::Serialize, sqlx::FromRow)]
@@ -36,6 +37,7 @@ pub struct UpdateStackRequest {
 pub async fn list(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
 
@@ -49,8 +51,7 @@ pub async fn list(
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     // Get live container status from agent
-    let apps = state
-        .agent
+    let apps = agent
         .get("/apps")
         .await
         .unwrap_or(serde_json::json!([]));
@@ -94,6 +95,7 @@ pub async fn list(
 pub async fn get_one(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -109,8 +111,7 @@ pub async fn get_one(
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Stack not found"))?;
 
-    let apps = state
-        .agent
+    let apps = agent
         .get("/apps")
         .await
         .unwrap_or(serde_json::json!([]));
@@ -147,6 +148,7 @@ pub async fn get_one(
 pub async fn create(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<CreateStackRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     require_admin(&claims.role)?;
@@ -159,8 +161,7 @@ pub async fn create(
     }
 
     // Parse to get service count
-    let parsed = state
-        .agent
+    let parsed = agent
         .post(
             "/apps/compose/parse",
             Some(serde_json::json!({ "yaml": body.yaml })),
@@ -188,8 +189,7 @@ pub async fn create(
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     // Deploy with stack_id label
-    let deploy_result = state
-        .agent
+    let deploy_result = agent
         .post(
             "/apps/compose/deploy",
             Some(serde_json::json!({
@@ -238,33 +238,37 @@ pub async fn create(
 pub async fn start(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    stack_action(&state, &claims, id, "start").await
+    stack_action(&state, &claims, &agent, id, "start").await
 }
 
 /// POST /api/stacks/{id}/stop — Stop all services in a stack.
 pub async fn stop(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    stack_action(&state, &claims, id, "stop").await
+    stack_action(&state, &claims, &agent, id, "stop").await
 }
 
 /// POST /api/stacks/{id}/restart — Restart all services in a stack.
 pub async fn restart(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    stack_action(&state, &claims, id, "restart").await
+    stack_action(&state, &claims, &agent, id, "restart").await
 }
 
 /// DELETE /api/stacks/{id} — Remove all services and delete the stack.
 pub async fn remove(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -280,8 +284,7 @@ pub async fn remove(
     let (_, name) = stack.ok_or_else(|| err(StatusCode::NOT_FOUND, "Stack not found"))?;
 
     // Remove all containers
-    let result = state
-        .agent
+    let result = agent
         .post(
             "/apps/stack/action",
             Some(serde_json::json!({
@@ -321,6 +324,7 @@ pub async fn remove(
 pub async fn update(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateStackRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -344,8 +348,7 @@ pub async fn update(
     }
 
     // Parse new YAML
-    let parsed = state
-        .agent
+    let parsed = agent
         .post(
             "/apps/compose/parse",
             Some(serde_json::json!({ "yaml": body.yaml })),
@@ -356,8 +359,7 @@ pub async fn update(
     let service_count = parsed.as_array().map(|a| a.len() as i32).unwrap_or(0);
 
     // Remove old containers
-    let _ = state
-        .agent
+    let _ = agent
         .post(
             "/apps/stack/action",
             Some(serde_json::json!({
@@ -368,8 +370,7 @@ pub async fn update(
         .await;
 
     // Deploy new containers with same stack_id
-    let deploy_result = state
-        .agent
+    let deploy_result = agent
         .post(
             "/apps/compose/deploy",
             Some(serde_json::json!({
@@ -402,6 +403,7 @@ pub async fn update(
 async fn stack_action(
     state: &AppState,
     claims: &Claims,
+    agent: &AgentHandle,
     id: Uuid,
     action: &str,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -420,8 +422,7 @@ async fn stack_action(
         return Err(err(StatusCode::NOT_FOUND, "Stack not found"));
     }
 
-    let result = state
-        .agent
+    let result = agent
         .post(
             "/apps/stack/action",
             Some(serde_json::json!({
