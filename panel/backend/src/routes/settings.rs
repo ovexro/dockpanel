@@ -66,6 +66,7 @@ pub async fn update(
         "oauth_github_client_id", "oauth_github_client_secret",
         "oauth_gitlab_client_id", "oauth_gitlab_client_secret",
         "oauth_auto_create", "hide_branding",
+        "reverse_proxy",
     ];
     for key in body.keys() {
         if !allowed_keys.contains(&key.as_str()) {

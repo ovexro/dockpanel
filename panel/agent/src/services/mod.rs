@@ -18,5 +18,6 @@ pub mod security_scanner;
 pub mod smtp;
 pub mod ssl;
 pub mod staging;
+pub mod traefik;
 pub mod wordpress;
 pub mod wp_vulnerability;

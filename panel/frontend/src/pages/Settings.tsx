@@ -55,6 +55,8 @@ export default function Settings() {
 
   // Auto-healing
   const [autoHealEnabled, setAutoHealEnabled] = useState(false);
+  const [reverseProxy, setReverseProxy] = useState("nginx");
+  const [traefikInstalling, setTraefikInstalling] = useState(false);
 
   // PowerDNS
   const [pdnsApiUrl, setPdnsApiUrl] = useState("");
@@ -118,6 +120,7 @@ export default function Settings() {
       setSmtpFromName(data.smtp_from_name || "");
       setSmtpEncryption(data.smtp_encryption || "starttls");
       setAutoHealEnabled(data.auto_heal_enabled === "true");
+      setReverseProxy(data.reverse_proxy || "nginx");
       setPdnsApiUrl(data.pdns_api_url || "");
       setPdnsApiKey(data.pdns_api_key || "");
     } catch (e) {
@@ -406,6 +409,70 @@ export default function Settings() {
                 <p>Logs are cleaned when disk exceeds 90% (max once per hour)</p>
                 <p>SSL certs are renewed when expiring within 3 days (max once per 6 hours)</p>
                 <p>All actions are logged in the Audit Log page</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Reverse Proxy — Traefik option */}
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Reverse Proxy</h3>
+            <p className="text-xs text-dark-200 mt-0.5">Choose nginx or Traefik for Docker app routing</p>
+          </div>
+          <div className="p-5 space-y-4">
+            <div className="flex items-center gap-4">
+              <button
+                onClick={async () => {
+                  if (reverseProxy === "traefik") {
+                    if (!confirm("Switch back to nginx? Existing Docker apps with domains will need redeployment.")) return;
+                    try {
+                      setTraefikInstalling(true);
+                      await api.post("/traefik/uninstall");
+                      setReverseProxy("nginx");
+                      setMessage({ text: "Switched to nginx", type: "success" });
+                    } catch (e) {
+                      setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
+                    } finally {
+                      setTraefikInstalling(false);
+                    }
+                  }
+                }}
+                className={`flex-1 px-4 py-3 rounded-lg border text-sm font-mono text-center transition-colors ${reverseProxy === "nginx" ? "border-rust-500 bg-rust-500/10 text-rust-400" : "border-dark-600 bg-dark-900 text-dark-300 hover:border-dark-400 cursor-pointer"}`}
+              >
+                <div className="font-bold">nginx</div>
+                <div className="text-xs text-dark-400 mt-1">Default, serves PHP/static + proxy</div>
+              </button>
+              <button
+                onClick={async () => {
+                  if (reverseProxy === "nginx") {
+                    const email = prompt("ACME email for Traefik SSL (Let's Encrypt):", "admin@example.com");
+                    if (!email) return;
+                    try {
+                      setTraefikInstalling(true);
+                      await api.post("/traefik/install", { acme_email: email });
+                      setReverseProxy("traefik");
+                      setMessage({ text: "Traefik installed and active", type: "success" });
+                    } catch (e) {
+                      setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
+                    } finally {
+                      setTraefikInstalling(false);
+                    }
+                  }
+                }}
+                disabled={traefikInstalling}
+                className={`flex-1 px-4 py-3 rounded-lg border text-sm font-mono text-center transition-colors ${reverseProxy === "traefik" ? "border-rust-500 bg-rust-500/10 text-rust-400" : "border-dark-600 bg-dark-900 text-dark-300 hover:border-dark-400 cursor-pointer"} disabled:opacity-50`}
+              >
+                <div className="font-bold">{traefikInstalling ? "Installing..." : "Traefik"}</div>
+                <div className="text-xs text-dark-400 mt-1">Docker-native, auto-SSL, dashboard</div>
+              </button>
+            </div>
+            {reverseProxy === "traefik" && (
+              <div className="text-xs text-dark-300 space-y-1 pl-4 border-l-2 border-rust-500/30">
+                <p>Traefik handles Docker app routing via container labels</p>
+                <p>Auto-SSL via Let's Encrypt (no manual cert provisioning)</p>
+                <p>Dashboard: <a href="http://127.0.0.1:8080" target="_blank" rel="noreferrer" className="text-rust-400 hover:text-rust-300">http://127.0.0.1:8080</a></p>
+                <p>Sites (PHP/static) still use nginx</p>
               </div>
             )}
           </div>
