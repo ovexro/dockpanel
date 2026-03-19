@@ -447,7 +447,10 @@ export default function Settings() {
                 onClick={async () => {
                   if (reverseProxy === "nginx") {
                     const email = prompt("ACME email for Traefik SSL (Let's Encrypt):", "admin@example.com");
-                    if (!email) return;
+                    if (!email || !email.includes("@") || !email.includes(".")) {
+                      if (email) setMessage({ text: "Invalid email address", type: "error" });
+                      return;
+                    }
                     try {
                       setTraefikInstalling(true);
                       await api.post("/traefik/install", { acme_email: email });
