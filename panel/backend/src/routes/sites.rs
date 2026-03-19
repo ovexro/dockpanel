@@ -17,6 +17,7 @@ use crate::auth::ServerScope;
 use crate::error::{err, agent_error, paginate, ApiError};
 use crate::models::Site;
 use crate::routes::is_valid_domain;
+use crate::routes::reseller_dashboard::check_reseller_quota;
 use crate::services::activity;
 use crate::AppState;
 
@@ -155,6 +156,22 @@ pub async fn create(
         return Err(err(StatusCode::CONFLICT, "Domain already exists"));
     }
 
+    // Check reseller quota before creating site
+    check_reseller_quota(&state.db, claims.sub, "sites").await?;
+
+    // Check reseller server isolation: user under a reseller can only use allocated servers
+    let user_reseller: Option<(Option<uuid::Uuid>,)> = sqlx::query_as(
+        "SELECT reseller_id FROM users WHERE id = $1"
+    ).bind(claims.sub).fetch_optional(&state.db).await.ok().flatten();
+    if let Some((Some(rid),)) = user_reseller {
+        let allowed: Option<(uuid::Uuid,)> = sqlx::query_as(
+            "SELECT id FROM reseller_servers WHERE reseller_id = $1 AND server_id = $2"
+        ).bind(rid).bind(server_id).fetch_optional(&state.db).await.ok().flatten();
+        if allowed.is_none() {
+            return Err(err(StatusCode::FORBIDDEN, "This server is not allocated to your reseller account"));
+        }
+    }
+
     // Insert site with status "creating" inside a transaction
     let mut tx = state.db.begin().await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Transaction start failed: {e}")))?;
@@ -252,6 +269,12 @@ pub async fn create(
                 &state.db, claims.sub, &claims.email, "site.create",
                 Some("site"), Some(&body.domain), Some(runtime), None,
             ).await;
+
+            // Increment reseller site counter
+            let _ = sqlx::query(
+                "UPDATE reseller_profiles SET used_sites = used_sites + 1, updated_at = NOW() \
+                 WHERE user_id = (SELECT reseller_id FROM users WHERE id = $1 AND reseller_id IS NOT NULL)"
+            ).bind(claims.sub).execute(&state.db).await;
 
             // Auto-create uptime monitor (linked to site for cascade cleanup)
             {
@@ -989,6 +1012,12 @@ pub async fn remove(
         .execute(&state.db)
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    // Decrement reseller site counter
+    let _ = sqlx::query(
+        "UPDATE reseller_profiles SET used_sites = GREATEST(used_sites - 1, 0), updated_at = NOW() \
+         WHERE user_id = (SELECT reseller_id FROM users WHERE id = $1 AND reseller_id IS NOT NULL)"
+    ).bind(claims.sub).execute(&state.db).await;
 
     tracing::info!("Site deleted: {}", site.domain);
     activity::log_activity(

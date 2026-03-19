@@ -140,8 +140,8 @@ pub async fn update(
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
 
     if let Some(ref role) = body.role {
-        if !["admin", "user"].contains(&role.as_str()) {
-            return Err(err(StatusCode::BAD_REQUEST, "Role must be admin or user"));
+        if !["admin", "reseller", "user"].contains(&role.as_str()) {
+            return Err(err(StatusCode::BAD_REQUEST, "Role must be admin, reseller, or user"));
         }
         sqlx::query("UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2")
             .bind(role)
