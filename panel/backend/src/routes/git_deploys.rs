@@ -128,6 +128,7 @@ pub struct UpdateRequest {
     pub github_token: Option<String>,
     pub deploy_cron: Option<String>,
     pub deploy_protected: Option<bool>,
+    pub preview_ttl_hours: Option<i32>,
 }
 
 /// GET /api/git-deploys — List all git deploys for the current user.
@@ -325,8 +326,9 @@ pub async fn update(
          github_token = COALESCE($15, github_token), \
          deploy_cron = COALESCE($16, deploy_cron), \
          deploy_protected = COALESCE($17, deploy_protected), \
+         preview_ttl_hours = COALESCE($18, preview_ttl_hours), \
          updated_at = NOW() \
-         WHERE id = $18 AND user_id = $19 \
+         WHERE id = $19 AND user_id = $20 \
          RETURNING *",
     )
     .bind(body.repo_url.as_deref())
@@ -346,6 +348,7 @@ pub async fn update(
     .bind(body.github_token.as_deref())
     .bind(body.deploy_cron.as_deref())
     .bind(body.deploy_protected)
+    .bind(body.preview_ttl_hours)
     .bind(id)
     .bind(claims.sub)
     .fetch_one(&state.db)
@@ -1088,7 +1091,7 @@ fn spawn_deploy_task(
                         .bind(git_deploy_id).bind(&commit_hash).bind(&commit_message).bind(&triggered).bind(duration_ms)
                         .execute(&db).await.ok();
 
-                    sqlx::query("UPDATE git_deploys SET status = 'running', last_deploy = NOW(), last_commit = $1, updated_at = NOW() WHERE id = $2")
+                    sqlx::query("UPDATE git_deploys SET status = 'running', build_method = 'compose', last_deploy = NOW(), last_commit = $1, updated_at = NOW() WHERE id = $2")
                         .bind(&commit_hash).bind(git_deploy_id).execute(&db).await.ok();
 
                     tracing::info!("Git deploy (compose) success: {deploy_name} ({commit_hash})");
@@ -1677,7 +1680,7 @@ pub async fn trigger_deploy_task(
                     sqlx::query("INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by, duration_ms) VALUES ($1, $2, $3, 'compose', 'success', 'Deployed via Docker Compose', $4, $5)")
                         .bind(git_deploy_id).bind(&commit_hash).bind(&commit_message).bind(&triggered_by).bind(duration_ms)
                         .execute(&db).await.ok();
-                    sqlx::query("UPDATE git_deploys SET status = 'running', last_deploy = NOW(), last_commit = $1, updated_at = NOW() WHERE id = $2")
+                    sqlx::query("UPDATE git_deploys SET status = 'running', build_method = 'compose', last_deploy = NOW(), last_commit = $1, updated_at = NOW() WHERE id = $2")
                         .bind(&commit_hash).bind(git_deploy_id).execute(&db).await.ok();
                     tracing::info!("Deploy success (compose/{}): {} ({commit_hash})", triggered_by, config.name);
                     crate::services::activity::log_activity(&db, user_id, &email, "git_deploy.compose", Some("git_deploy"), Some(&config.name), Some(&commit_hash), Some(&triggered_by)).await;
@@ -1842,7 +1845,7 @@ async fn handle_preview_deploy(state: &AppState, agent: &AgentHandle, config: &G
     sqlx::query(
         "INSERT INTO git_previews (git_deploy_id, branch, container_name, host_port, domain, status) \
          VALUES ($1, $2, $3, $4, $5, 'deploying') \
-         ON CONFLICT (git_deploy_id, branch) DO UPDATE SET status = 'deploying', container_name = $3, host_port = $4"
+         ON CONFLICT (git_deploy_id, branch) DO UPDATE SET status = 'deploying', container_name = $3, host_port = $4, updated_at = NOW()"
     )
     .bind(config.id).bind(branch).bind(&container_name).bind(port).bind(&preview_domain)
     .execute(&state.db).await.ok();
