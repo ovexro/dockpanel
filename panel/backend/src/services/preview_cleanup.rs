@@ -33,7 +33,7 @@ async fn cleanup_expired_previews(db: &PgPool, agent: &AgentClient) -> Result<()
          JOIN git_deploys d ON d.id = p.git_deploy_id \
          WHERE p.status = 'running' \
          AND d.preview_ttl_hours > 0 \
-         AND p.updated_at < NOW() - (d.preview_ttl_hours || ' hours')::INTERVAL"
+         AND p.updated_at < NOW() - MAKE_INTERVAL(hours => d.preview_ttl_hours)"
     )
     .fetch_all(db)
     .await
@@ -43,15 +43,20 @@ async fn cleanup_expired_previews(db: &PgPool, agent: &AgentClient) -> Result<()
         tracing::info!("Cleaning up expired preview: {container_name} (branch: {branch})");
 
         // Try to stop and remove the container
-        let _ = agent.post("/git/cleanup", Some(serde_json::json!({
+        if let Err(e) = agent.post("/git/cleanup", Some(serde_json::json!({
             "name": container_name,
-        }))).await;
+        }))).await {
+            tracing::warn!("Failed to cleanup preview container {container_name}: {e}");
+        }
 
         // Delete the preview record
-        let _ = sqlx::query("DELETE FROM git_previews WHERE id = $1")
+        if let Err(e) = sqlx::query("DELETE FROM git_previews WHERE id = $1")
             .bind(id)
             .execute(db)
-            .await;
+            .await
+        {
+            tracing::warn!("Failed to delete preview record {id}: {e}");
+        }
     }
 
     if !expired.is_empty() {
@@ -69,13 +74,18 @@ async fn cleanup_expired_previews(db: &PgPool, agent: &AgentClient) -> Result<()
     .map_err(|e| e.to_string())?;
 
     for (id, container_name) in &stuck {
-        let _ = agent.post("/git/cleanup", Some(serde_json::json!({
+        if let Err(e) = agent.post("/git/cleanup", Some(serde_json::json!({
             "name": container_name,
-        }))).await;
-        let _ = sqlx::query("DELETE FROM git_previews WHERE id = $1")
+        }))).await {
+            tracing::warn!("Failed to cleanup stuck preview container {container_name}: {e}");
+        }
+        if let Err(e) = sqlx::query("DELETE FROM git_previews WHERE id = $1")
             .bind(id)
             .execute(db)
-            .await;
+            .await
+        {
+            tracing::warn!("Failed to delete stuck preview record {id}: {e}");
+        }
     }
 
     Ok(())

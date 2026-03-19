@@ -1051,9 +1051,25 @@ pub async fn ensure_nixpacks() -> Option<String> {
     // Try to download nixpacks
     tracing::info!("Nixpacks not found, downloading...");
     let arch = if cfg!(target_arch = "aarch64") { "aarch64" } else { "x86_64" };
+
+    // Get latest release tag from GitHub API (no hardcoded version)
+    let tag_cmd = tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg("curl -sI https://github.com/railwayapp/nixpacks/releases/latest | grep -i '^location:' | sed 's|.*/tag/||' | tr -d '\\r\\n'")
+        .output()
+        .await;
+
+    let version = if let Ok(ref out) = tag_cmd {
+        let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if v.starts_with('v') { v } else { "v1.30.0".to_string() }
+    } else {
+        "v1.30.0".to_string()
+    };
+
     let url = format!(
-        "https://github.com/railwayapp/nixpacks/releases/latest/download/nixpacks-v1.30.0-{arch}-unknown-linux-musl.tar.gz"
+        "https://github.com/railwayapp/nixpacks/releases/download/{version}/nixpacks-{version}-{arch}-unknown-linux-musl.tar.gz"
     );
+    tracing::info!("Downloading nixpacks {version} from {url}");
 
     let download = tokio::process::Command::new("sh")
         .arg("-c")
@@ -1092,6 +1108,10 @@ pub async fn nixpacks_build(
 ) -> Result<(String, String), String> {
     let nixpacks_bin = ensure_nixpacks().await
         .ok_or_else(|| "Nixpacks not available".to_string())?;
+
+    if build_context.contains("..") {
+        return Err("Build context must not contain path traversal (..)".into());
+    }
 
     let image_tag = format!("dockpanel-git-{name}:{commit_hash}");
     let context_dir = format!("/var/lib/dockpanel/git/{name}/{build_context}");
