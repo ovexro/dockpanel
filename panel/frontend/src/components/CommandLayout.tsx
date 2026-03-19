@@ -1,6 +1,7 @@
 import { Navigate, Outlet, NavLink, Link, useNavigate } from "react-router-dom";
 import { useLayoutState } from "../hooks/useLayoutState";
 import { useServer } from "../context/ServerContext";
+import { useBranding } from "../context/BrandingContext";
 import { Icon } from "../data/icons";
 import CommandPalette from "./CommandPalette";
 import { useState, useRef, useEffect } from "react";
@@ -54,6 +55,7 @@ function ServerSelector() {
 
 export default function CommandLayout() {
   const state = useLayoutState();
+  const branding = useBranding();
 
   if (state.loading) {
     return (
@@ -92,16 +94,30 @@ export default function CommandLayout() {
         {/* Logo */}
         <div className="px-6 py-5 border-b border-dark-600 flex items-center justify-between">
           <Link to="/" className="flex items-center gap-3 hover:opacity-90 transition-opacity">
-            <div className="w-10 h-10 bg-rust-500 flex items-center justify-center logo-icon-glow">
-              <svg className="w-6 h-6 text-dark-950" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
-                <path d="M5 16h4" strokeLinecap="square" />
-                <path d="M5 12h8" strokeLinecap="square" />
-                <path d="M5 8h6" strokeLinecap="square" />
-                <rect x="16" y="7" width="4" height="4" fill="currentColor" stroke="none" />
-                <rect x="16" y="13" width="4" height="4" fill="currentColor" stroke="none" />
-              </svg>
-            </div>
-            <span className="text-lg font-bold tracking-widest uppercase font-mono logo-glow"><span className="text-rust-500">Dock</span><span className="text-dark-50">Panel</span></span>
+            {branding.logoUrl ? (
+              <img src={branding.logoUrl} alt={branding.panelName} className="h-10 w-auto max-w-[160px] object-contain" />
+            ) : (
+              <>
+                <div className="w-10 h-10 bg-rust-500 flex items-center justify-center logo-icon-glow">
+                  <svg className="w-6 h-6 text-dark-950" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+                    <path d="M5 16h4" strokeLinecap="square" />
+                    <path d="M5 12h8" strokeLinecap="square" />
+                    <path d="M5 8h6" strokeLinecap="square" />
+                    <rect x="16" y="7" width="4" height="4" fill="currentColor" stroke="none" />
+                    <rect x="16" y="13" width="4" height="4" fill="currentColor" stroke="none" />
+                  </svg>
+                </div>
+                {!branding.hideBranding && (
+                  <span className="text-lg font-bold tracking-widest uppercase font-mono logo-glow">
+                    {branding.panelName === "DockPanel" ? (
+                      <><span className="text-rust-500">Dock</span><span className="text-dark-50">Panel</span></>
+                    ) : (
+                      <span className="text-dark-50">{branding.panelName}</span>
+                    )}
+                  </span>
+                )}
+              </>
+            )}
           </Link>
           {/* Close button (mobile) */}
           <button
@@ -217,7 +233,9 @@ export default function CommandLayout() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
             </svg>
           </button>
-          <span className="text-base font-bold tracking-widest uppercase font-mono logo-glow"><span className="text-rust-500">Dock</span><span className="text-dark-100">Panel</span></span>
+          <span className="text-base font-bold tracking-widest uppercase font-mono logo-glow">
+            {branding.hideBranding ? "" : branding.panelName === "DockPanel" ? <><span className="text-rust-500">Dock</span><span className="text-dark-100">Panel</span></> : <span className="text-dark-100">{branding.panelName}</span>}
+          </span>
         </div>
         {state.twoFaEnforced && !state.twoFaEnabled && (
           <div className="bg-warn-500/10 border-b border-warn-500/20 px-4 py-3 flex items-center justify-between">

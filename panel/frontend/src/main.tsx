@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
 import { ServerProvider } from "./context/ServerContext";
+import { BrandingProvider } from "./context/BrandingContext";
 import LayoutShell from "./components/LayoutShell";
 import Login from "./pages/Login";
 import Setup from "./pages/Setup";
@@ -95,6 +96,7 @@ const ResellerUsers = lazyRetry(() => import("./pages/ResellerUsers"));
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
+    <BrandingProvider>
     <AuthProvider>
       <ServerProvider>
       <BrowserRouter>
@@ -146,5 +148,6 @@ createRoot(document.getElementById("root")!).render(
       </BrowserRouter>
       </ServerProvider>
     </AuthProvider>
+    </BrandingProvider>
   </StrictMode>
 );
