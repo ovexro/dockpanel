@@ -51,6 +51,7 @@ export const navGroups: NavGroup[] = [
     label: "Admin",
     items: [
       { to: "/servers", label: "Servers", iconName: "servers", adminOnly: true },
+      { to: "/extensions", label: "Extensions", iconName: "apps", adminOnly: true },
       { to: "/security", label: "Security", iconName: "security", adminOnly: true },
       { to: "/settings", label: "Settings", iconName: "settings", adminOnly: true },
     ],

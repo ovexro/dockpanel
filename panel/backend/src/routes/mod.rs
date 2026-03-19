@@ -16,6 +16,7 @@ pub mod databases;
 pub mod deploy;
 pub mod dns;
 pub mod docker_apps;
+pub mod extensions;
 pub mod files;
 pub mod git_deploys;
 pub mod logs;
@@ -360,6 +361,11 @@ pub fn router() -> Router<AppState> {
         .route("/api/api-keys", get(api_keys::list).post(api_keys::create))
         .route("/api/api-keys/{id}", delete(api_keys::revoke))
         .route("/api/api-keys/{id}/rotate", post(api_keys::rotate))
+        // Extensions
+        .route("/api/extensions", get(extensions::list).post(extensions::create))
+        .route("/api/extensions/{id}", put(extensions::update).delete(extensions::remove))
+        .route("/api/extensions/{id}/test", post(extensions::test_webhook))
+        .route("/api/extensions/{id}/events", get(extensions::events))
         // Servers
         .route("/api/servers", get(servers::list).post(servers::create))
         .route("/api/servers/{id}", get(servers::get_one).put(servers::update).delete(servers::remove))
