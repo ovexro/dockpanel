@@ -423,19 +423,19 @@ export default function Dns() {
   };
 
   const typeColor: Record<string, string> = {
-    A: "bg-blue-500/15 text-blue-400",
+    A: "bg-accent-500/15 text-accent-400",
     AAAA: "bg-rust-500/15 text-rust-400",
     CNAME: "bg-rust-500/15 text-rust-400",
     MX: "bg-warn-500/15 text-warn-400",
     TXT: "bg-dark-700 text-dark-100",
-    NS: "bg-purple-500/15 text-purple-400",
+    NS: "bg-accent-600/15 text-accent-400",
     SRV: "bg-pink-500/10 text-pink-400",
-    CAA: "bg-red-500/15 text-danger-400",
+    CAA: "bg-danger-500/15 text-danger-400",
   };
 
   const providerBadge = (provider: string) => {
     if (provider === "powerdns") {
-      return <span className="ml-2 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider bg-blue-500/15 text-blue-400 border border-blue-500/20">PDNS</span>;
+      return <span className="ml-2 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider bg-accent-500/15 text-accent-400 border border-accent-500/20">PDNS</span>;
     }
     return <span className="ml-2 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider bg-orange-500/15 text-orange-400 border border-orange-500/20">CF</span>;
   };
@@ -482,7 +482,7 @@ export default function Dns() {
         <div className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
           message.type === "success"
             ? "bg-rust-500/10 text-rust-400 border-rust-500/20"
-            : "bg-red-500/10 text-danger-400 border-red-500/20"
+            : "bg-danger-500/10 text-danger-400 border-danger-500/20"
         }`}>
           {message.text}
         </div>
@@ -510,7 +510,7 @@ export default function Dns() {
                 onClick={() => setZoneProvider("powerdns")}
                 className={`flex-1 px-4 py-3 border text-sm font-medium transition-colors text-left ${
                   zoneProvider === "powerdns"
-                    ? "border-blue-500/50 bg-blue-500/5 text-blue-400"
+                    ? "border-accent-500/50 bg-accent-500/5 text-accent-400"
                     : "border-dark-500 bg-dark-900 text-dark-200 hover:border-dark-400"
                 }`}
               >
@@ -595,13 +595,13 @@ export default function Dns() {
                 <input type="text" value={zoneDomain} onChange={(e) => setZoneDomain(e.target.value)} placeholder="example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
                 <p className="text-[11px] text-dark-300 mt-1">Your domain name, e.g., example.com</p>
               </div>
-              <div className="flex items-start gap-2 bg-blue-500/5 border border-blue-500/20 px-3 py-2.5">
-                <svg className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <div className="flex items-start gap-2 bg-accent-500/5 border border-accent-500/20 px-3 py-2.5">
+                <svg className="w-4 h-4 text-accent-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
                 </svg>
                 <p className="text-xs text-dark-200">
                   PowerDNS must be installed and its API URL + key configured in{" "}
-                  <a href="/settings" className="text-blue-400 hover:text-blue-300 underline underline-offset-2">Settings</a>{" "}
+                  <a href="/settings" className="text-accent-400 hover:text-accent-300 underline underline-offset-2">Settings</a>{" "}
                   before creating zones. See the setup guide there for installation steps.
                 </p>
               </div>
@@ -739,7 +739,7 @@ export default function Dns() {
                         setSelectedRecords(new Set());
                         setBulkDeleting(false);
                         selectZone(selectedZone!);
-                      }} className="px-3 py-1.5 bg-red-500/10 text-danger-400 rounded-lg text-xs font-medium hover:bg-red-500/20 disabled:opacity-50">
+                      }} className="px-3 py-1.5 bg-danger-500/10 text-danger-400 rounded-lg text-xs font-medium hover:bg-danger-500/20 disabled:opacity-50">
                         {bulkDeleting ? "Deleting..." : `Delete ${selectedRecords.size} Selected`}
                       </button>
                     )}
@@ -1089,8 +1089,8 @@ export default function Dns() {
                           <div key={i} className="flex items-start gap-3 text-xs py-1.5 border-b border-dark-700 last:border-0">
                             <span className={`shrink-0 px-1.5 py-0.5 rounded font-medium ${
                               entry.action.includes("create") ? "bg-rust-500/15 text-rust-400" :
-                              entry.action.includes("delete") ? "bg-red-500/15 text-danger-400" :
-                              "bg-blue-500/15 text-blue-400"
+                              entry.action.includes("delete") ? "bg-danger-500/15 text-danger-400" :
+                              "bg-accent-500/15 text-accent-400"
                             }`}>
                               {entry.action.split(".").pop()}
                             </span>

@@ -96,7 +96,7 @@ export default function Users() {
   if (error) {
     return (
       <div>
-        <div className="bg-red-500/10 text-danger-400 px-4 py-3 rounded-lg border border-red-500/20">
+        <div className="bg-danger-500/10 text-danger-400 px-4 py-3 rounded-lg border border-danger-500/20">
           {error}
         </div>
       </div>
@@ -136,7 +136,7 @@ export default function Users() {
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
               ? "bg-rust-500/10 text-rust-400 border-rust-500/20"
-              : "bg-red-500/10 text-danger-400 border-red-500/20"
+              : "bg-danger-500/10 text-danger-400 border-danger-500/20"
           }`}
         >
           {message.text}
@@ -183,7 +183,7 @@ export default function Users() {
                         <option value="user">user</option>
                       </select>
                     ) : (
-                      <button onClick={() => { setEditTarget(user.id); setEditRole(user.role); }} className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium cursor-pointer ${user.role === "admin" ? "bg-purple-500/15 text-purple-400" : "bg-blue-500/15 text-blue-400"}`}>{user.role}</button>
+                      <button onClick={() => { setEditTarget(user.id); setEditRole(user.role); }} className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium cursor-pointer ${user.role === "admin" ? "bg-accent-600/15 text-accent-400" : "bg-accent-500/15 text-accent-400"}`}>{user.role}</button>
                     )}
                   </td>
                   <td className="px-5 py-4 text-sm text-dark-200">{user.site_count}</td>
@@ -191,7 +191,7 @@ export default function Users() {
                   <td className="px-5 py-4 text-right">
                     {deleteTarget === user.id ? (
                       <div className="flex items-center justify-end gap-1">
-                        <button onClick={() => handleDelete(user.id)} className="px-2 py-1 bg-red-600 text-white rounded text-xs">Confirm</button>
+                        <button onClick={() => handleDelete(user.id)} className="px-2 py-1 bg-danger-500 text-white rounded text-xs">Confirm</button>
                         <button onClick={() => setDeleteTarget(null)} className="px-2 py-1 bg-dark-600 text-dark-200 rounded text-xs">Cancel</button>
                       </div>
                     ) : (
@@ -218,10 +218,10 @@ export default function Users() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0 ml-2">
-                    <button onClick={() => { setEditTarget(user.id); setEditRole(user.role); }} className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${user.role === "admin" ? "bg-purple-500/15 text-purple-400" : "bg-blue-500/15 text-blue-400"}`}>{user.role}</button>
+                    <button onClick={() => { setEditTarget(user.id); setEditRole(user.role); }} className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${user.role === "admin" ? "bg-accent-600/15 text-accent-400" : "bg-accent-500/15 text-accent-400"}`}>{user.role}</button>
                     {deleteTarget === user.id ? (
                       <div className="flex items-center gap-1">
-                        <button onClick={() => handleDelete(user.id)} className="px-2 py-1 bg-red-600 text-white rounded text-xs">Del</button>
+                        <button onClick={() => handleDelete(user.id)} className="px-2 py-1 bg-danger-500 text-white rounded text-xs">Del</button>
                         <button onClick={() => setDeleteTarget(null)} className="px-2 py-1 bg-dark-600 text-dark-200 rounded text-xs">No</button>
                       </div>
                     ) : (

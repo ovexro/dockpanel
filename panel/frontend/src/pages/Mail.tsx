@@ -362,7 +362,7 @@ export default function Mail() {
       </div>
 
       {message.text && (
-        <div className={`mb-4 px-4 py-3 rounded-lg text-sm border ${message.type === "success" ? "bg-rust-500/10 text-rust-400 border-rust-500/20" : "bg-red-500/10 text-danger-400 border-red-500/20"}`}>
+        <div className={`mb-4 px-4 py-3 rounded-lg text-sm border ${message.type === "success" ? "bg-rust-500/10 text-rust-400 border-rust-500/20" : "bg-danger-500/10 text-danger-400 border-danger-500/20"}`}>
           {message.text}
         </div>
       )}
@@ -809,8 +809,8 @@ export default function Mail() {
                               <div className="flex items-center gap-2">
                                 <span className="text-sm text-dark-50 font-mono truncate">{acc.email}</span>
                                 {!acc.enabled && <span className="px-1.5 py-0.5 text-[9px] bg-dark-600 text-dark-300 uppercase">Disabled</span>}
-                                {acc.forward_to && <span className="px-1.5 py-0.5 text-[9px] bg-blue-500/15 text-blue-400 uppercase">Fwd</span>}
-                                {acc.autoresponder_enabled && <span className="px-1.5 py-0.5 text-[9px] bg-purple-500/15 text-purple-400 uppercase">Auto</span>}
+                                {acc.forward_to && <span className="px-1.5 py-0.5 text-[9px] bg-accent-500/15 text-accent-400 uppercase">Fwd</span>}
+                                {acc.autoresponder_enabled && <span className="px-1.5 py-0.5 text-[9px] bg-accent-600/15 text-accent-400 uppercase">Auto</span>}
                               </div>
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span className="text-xs text-dark-300">{acc.display_name || ""} · {acc.quota_mb} MB quota</span>
@@ -837,7 +837,7 @@ export default function Mail() {
                                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5m8.25 3v6.75m0 0l-3-3m3 3l3-3M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" /></svg>
                                 )}
                               </button>
-                              <button onClick={() => openEditAccount(acc)} className="p-1.5 text-dark-300 hover:text-blue-400" title="Edit">
+                              <button onClick={() => openEditAccount(acc)} className="p-1.5 text-dark-300 hover:text-accent-400" title="Edit">
                                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125" /></svg>
                               </button>
                               <button onClick={() => handleDeleteAccount(acc)} className="p-1.5 text-dark-300 hover:text-danger-400" title="Delete">
@@ -1034,7 +1034,7 @@ export default function Mail() {
                         {dnsRecords.map((rec, i) => (
                           <div key={i} className="bg-dark-900 border border-dark-500 p-4">
                             <div className="flex items-center gap-2 mb-2">
-                              <span className="px-2 py-0.5 text-xs font-medium bg-blue-500/15 text-blue-400">{rec.type}</span>
+                              <span className="px-2 py-0.5 text-xs font-medium bg-accent-500/15 text-accent-400">{rec.type}</span>
                               <span className="text-xs text-dark-200">{rec.description}</span>
                             </div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-mono">
@@ -1098,7 +1098,7 @@ export default function Mail() {
                         <div className="grid grid-cols-4 gap-3">
                           {[
                             { label: "Sent", value: mailLogs.stats.sent, color: "text-rust-400" },
-                            { label: "Received", value: mailLogs.stats.received, color: "text-blue-400" },
+                            { label: "Received", value: mailLogs.stats.received, color: "text-accent-400" },
                             { label: "Bounced", value: mailLogs.stats.bounced, color: "text-warn-400" },
                             { label: "Rejected", value: mailLogs.stats.rejected, color: "text-danger-400" },
                           ].map(s => (

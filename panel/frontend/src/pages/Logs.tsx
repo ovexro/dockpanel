@@ -420,8 +420,8 @@ function SiteLogsContent() {
   const lineClass = (line: string) => {
     if (/\berror\b|ERROR|\b5\d{2}\b/i.test(line)) return "text-danger-400";
     if (/\bwarn\b|WARN|\b4\d{2}\b/i.test(line)) return "text-warn-400";
-    if (/\binfo\b|INFO/i.test(line)) return "text-blue-400";
-    return "text-gray-300";
+    if (/\binfo\b|INFO/i.test(line)) return "text-accent-400";
+    return "text-dark-200";
   };
 
   const isFileLogType = logType !== "docker" && logType !== "service";
@@ -459,7 +459,7 @@ function SiteLogsContent() {
                   onClick={streaming ? stopStream : startStream}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                     streaming
-                      ? "bg-red-500/15 text-danger-400 hover:bg-red-500/20"
+                      ? "bg-danger-500/15 text-danger-400 hover:bg-danger-500/20"
                       : "bg-rust-500/15 text-rust-400 hover:bg-rust-500/20"
                   }`}
                 >
@@ -496,7 +496,7 @@ function SiteLogsContent() {
                   if (!showStats && !logStats) loadStats();
                 }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                  showStats ? "bg-blue-500/15 text-blue-400" : "bg-dark-700 text-dark-200 hover:bg-dark-600"
+                  showStats ? "bg-accent-500/15 text-accent-400" : "bg-dark-700 text-dark-200 hover:bg-dark-600"
                 }`}
               >
                 Stats
@@ -509,7 +509,7 @@ function SiteLogsContent() {
                 if (!showSizes && !logSizes) loadLogSizes();
               }}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                showSizes ? "bg-blue-500/15 text-blue-400" : "bg-dark-700 text-dark-200 hover:bg-dark-600"
+                showSizes ? "bg-accent-500/15 text-accent-400" : "bg-dark-700 text-dark-200 hover:bg-dark-600"
               }`}
             >
               Storage
@@ -708,7 +708,7 @@ function SiteLogsContent() {
       </div>
 
       {error && (
-        <div className="px-6 py-3 bg-red-500/10 border-b border-red-500/20 text-danger-400 text-sm">
+        <div className="px-6 py-3 bg-danger-500/10 border-b border-danger-500/20 text-danger-400 text-sm">
           {error}
         </div>
       )}
@@ -723,7 +723,7 @@ function SiteLogsContent() {
               <button
                 onClick={handleCheckErrors}
                 disabled={checkingErrors}
-                className="px-3 py-1 bg-red-500/10 text-red-400 rounded text-xs font-medium hover:bg-red-500/20 disabled:opacity-50"
+                className="px-3 py-1 bg-danger-500/10 text-danger-400 rounded text-xs font-medium hover:bg-danger-500/20 disabled:opacity-50"
               >
                 {checkingErrors ? "Checking..." : "Check Error Rate"}
               </button>
@@ -744,7 +744,7 @@ function SiteLogsContent() {
               </div>
               <div className="bg-dark-700 rounded-lg p-3">
                 <div className="text-xs text-dark-300">5xx Errors</div>
-                <div className={`text-lg font-mono ${logStats.errors_5xx > 0 ? "text-danger-400" : "text-green-400"}`}>
+                <div className={`text-lg font-mono ${logStats.errors_5xx > 0 ? "text-danger-400" : "text-rust-400"}`}>
                   {logStats.errors_5xx?.toLocaleString() || 0}
                 </div>
               </div>
@@ -756,7 +756,7 @@ function SiteLogsContent() {
                     .slice(0, 5)
                     .map(([code, count]) => (
                       <div key={code} className="flex justify-between">
-                        <span className={code.startsWith("5") ? "text-danger-400" : code.startsWith("4") ? "text-warn-400" : "text-green-400"}>
+                        <span className={code.startsWith("5") ? "text-danger-400" : code.startsWith("4") ? "text-warn-400" : "text-rust-400"}>
                           {code}
                         </span>
                         <span>{(count as number).toLocaleString()}</span>
@@ -784,9 +784,9 @@ function SiteLogsContent() {
           {/* Feature #6: Error check result */}
           {errorCheck && (
             <div className={`mt-2 p-3 rounded-lg text-sm ${
-              errorCheck.status === "warning" ? "bg-red-500/10 border border-red-500/20" : "bg-green-500/10 border border-green-500/20"
+              errorCheck.status === "warning" ? "bg-danger-500/10 border border-danger-500/20" : "bg-rust-500/10 border border-rust-500/20"
             }`}>
-              <span className={errorCheck.status === "warning" ? "text-danger-400" : "text-green-400"}>
+              <span className={errorCheck.status === "warning" ? "text-danger-400" : "text-rust-400"}>
                 Error rate: {errorCheck.error_rate_percent}% ({errorCheck.error_5xx} / {errorCheck.total_requests} requests)
                 {errorCheck.status === "warning"
                   ? " — High error rate detected!"
@@ -828,7 +828,7 @@ function SiteLogsContent() {
                     <button
                       onClick={() => handleTruncate(f.path)}
                       disabled={truncating === f.path}
-                      className="px-2 py-0.5 bg-red-500/10 text-red-400 rounded text-xs hover:bg-red-500/20 disabled:opacity-50"
+                      className="px-2 py-0.5 bg-danger-500/10 text-danger-400 rounded text-xs hover:bg-danger-500/20 disabled:opacity-50"
                     >
                       {truncating === f.path ? "..." : "Clear"}
                     </button>
@@ -836,7 +836,7 @@ function SiteLogsContent() {
                 </div>
               ))}
               {logSizes.logrotate && (
-                <div className="text-xs text-green-400 mt-2">Logrotate is configured for nginx</div>
+                <div className="text-xs text-rust-400 mt-2">Logrotate is configured for nginx</div>
               )}
               {!logSizes.logrotate && (
                 <div className="text-xs text-warn-400 mt-2">Logrotate not detected for nginx</div>
@@ -853,7 +853,7 @@ function SiteLogsContent() {
       {/* Log content */}
       <div
         ref={containerRef}
-        className="flex-1 bg-[#1e1e2e] overflow-auto font-mono text-sm p-4"
+        className="flex-1 bg-dark-950 overflow-auto font-mono text-sm p-4"
       >
         {lines.length === 0 ? (
           <div className="text-dark-200 text-center py-12">

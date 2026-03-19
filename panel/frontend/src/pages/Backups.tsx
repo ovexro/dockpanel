@@ -160,7 +160,7 @@ export default function Backups() {
       <div className="mb-6">
         <Link
           to={`/sites/${id}`}
-          className="text-sm text-dark-200 hover:text-gray-700"
+          className="text-sm text-dark-200 hover:text-dark-50"
         >
           {site?.domain || "Site"}
         </Link>
@@ -200,7 +200,7 @@ export default function Backups() {
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
               ? "bg-rust-50 text-rust-400 border-rust-200"
-              : "bg-red-500/10 text-danger-400 border-red-500/20"
+              : "bg-danger-500/10 text-danger-400 border-danger-500/20"
           }`}
           role="alert"
         >
@@ -276,7 +276,7 @@ export default function Backups() {
                 <input type="number" value={schedRetention} onChange={(e) => setSchedRetention(e.target.value)} min="1" max="365" className="w-32 px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
               </div>
               <div className="flex justify-end gap-2">
-                <button onClick={() => setShowScheduleForm(false)} className="px-3 py-1.5 text-sm text-dark-100 bg-dark-700 rounded-lg hover:bg-gray-200">Cancel</button>
+                <button onClick={() => setShowScheduleForm(false)} className="px-3 py-1.5 text-sm text-dark-100 bg-dark-700 rounded-lg hover:bg-dark-600">Cancel</button>
                 {schedule && (
                   <button
                     onClick={async () => {
@@ -289,7 +289,7 @@ export default function Backups() {
                         setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
                       }
                     }}
-                    className="px-3 py-1.5 text-sm text-danger-400 bg-red-500/10 rounded-lg hover:bg-red-100"
+                    className="px-3 py-1.5 text-sm text-danger-400 bg-danger-500/10 rounded-lg hover:bg-danger-500/20"
                   >
                     Remove
                   </button>
@@ -356,7 +356,7 @@ export default function Backups() {
           <div className="p-8 text-center text-dark-300">Loading...</div>
         ) : backups.length === 0 ? (
           <div className="p-12 text-center">
-            <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+            <svg className="w-16 h-16 mx-auto text-dark-300 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 0 1-2.247 2.118H6.622a2.25 2.25 0 0 1-2.247-2.118L3.75 7.5m8.25 3v6.75m0 0-3-3m3 3 3-3M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125Z" />
             </svg>
             <p className="text-dark-200 text-sm">No backups yet</p>
@@ -414,7 +414,7 @@ export default function Backups() {
                         <div className="flex items-center gap-1">
                           <button
                             onClick={() => handleDelete(backup.id)}
-                            className="px-2 py-1 bg-red-600 text-white rounded-md text-xs"
+                            className="px-2 py-1 bg-danger-600 text-white rounded-md text-xs"
                           >
                             Confirm
                           </button>
@@ -428,7 +428,7 @@ export default function Backups() {
                       ) : (
                         <button
                           onClick={() => setDeleteTarget(backup.id)}
-                          className="px-3 py-1 bg-red-500/10 text-danger-400 rounded-md text-xs font-medium hover:bg-red-100 transition-colors"
+                          className="px-3 py-1 bg-danger-500/10 text-danger-400 rounded-md text-xs font-medium hover:bg-danger-500/20 transition-colors"
                         >
                           Delete
                         </button>

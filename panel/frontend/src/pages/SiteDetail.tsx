@@ -243,7 +243,7 @@ export default function SiteDetail() {
   if (error || !site) {
     return (
       <div className="p-6 lg:p-8">
-        <div className="bg-red-500/10 text-danger-400 px-4 py-3 rounded-lg border border-red-500/20">
+        <div className="bg-danger-500/10 text-danger-400 px-4 py-3 rounded-lg border border-danger-500/20">
           {error || "Site not found"}
         </div>
         <Link to="/sites" className="text-sm text-rust-400 hover:text-rust-300 mt-4 inline-block">
@@ -297,7 +297,7 @@ export default function SiteDetail() {
               <button
                 onClick={handleDelete}
                 disabled={deleting}
-                className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700 disabled:opacity-50"
+                className="px-3 py-1.5 bg-danger-500 text-white rounded-lg text-sm hover:bg-danger-600 disabled:opacity-50"
               >
                 {deleting ? "Deleting..." : "Yes, delete"}
               </button>
@@ -325,7 +325,7 @@ export default function SiteDetail() {
               </button>
               <button
                 onClick={handleDelete}
-                className="px-4 py-2 bg-red-500/10 text-danger-400 rounded-lg text-sm font-medium hover:bg-red-500/20 transition-colors"
+                className="px-4 py-2 bg-danger-500/10 text-danger-400 rounded-lg text-sm font-medium hover:bg-danger-500/20 transition-colors"
               >
                 Delete Site
               </button>
@@ -335,7 +335,7 @@ export default function SiteDetail() {
       </div>
       {cloneMsg && (
         <div className={`mb-4 px-4 py-3 rounded-lg text-sm ${
-          cloneMsg.includes("cloned") ? "bg-rust-500/10 text-rust-400 border border-rust-500/20" : "bg-red-500/10 text-danger-400 border border-red-500/20"
+          cloneMsg.includes("cloned") ? "bg-rust-500/10 text-rust-400 border border-rust-500/20" : "bg-danger-500/10 text-danger-400 border border-danger-500/20"
         }`}>{cloneMsg}</div>
       )}
 
@@ -584,7 +584,7 @@ export default function SiteDetail() {
             className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
           >
             <div className="flex items-center gap-3">
-              <div className="p-2 bg-blue-500/10 rounded-lg text-blue-400 group-hover:bg-blue-500/20 transition-colors">
+              <div className="p-2 bg-accent-500/10 rounded-lg text-accent-400 group-hover:bg-accent-500/20 transition-colors">
                 <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M12 2C6.486 2 2 6.486 2 12s4.486 10 10 10 10-4.486 10-10S17.514 2 12 2zm0 2c1.67 0 3.214.52 4.488 1.401L5.401 16.488A7.957 7.957 0 0 1 4 12c0-4.411 3.589-8 8-8zm0 16c-1.67 0-3.214-.52-4.488-1.401L18.599 7.512A7.957 7.957 0 0 1 20 12c0 4.411-3.589 8-8 8z" />
                 </svg>
@@ -834,7 +834,7 @@ export default function SiteDetail() {
                         setStagingLoading(false);
                       }
                     }}
-                    className="px-3 py-1.5 bg-red-500/10 text-danger-400 rounded-lg text-xs font-medium hover:bg-red-500/20 transition-colors"
+                    className="px-3 py-1.5 bg-danger-500/10 text-danger-400 rounded-lg text-xs font-medium hover:bg-danger-500/20 transition-colors"
                   >
                     Delete Staging
                   </button>
@@ -1275,7 +1275,7 @@ export default function SiteDetail() {
                 </div>
                 <button onClick={() => logType === "php" ? loadPhpErrors() : loadLogs(logType as "access" | "error")} className="text-xs text-rust-400 hover:text-rust-300">Refresh</button>
               </div>
-              <pre className="p-4 text-[11px] font-mono text-dark-200 bg-[#020202] max-h-80 overflow-y-auto overflow-x-auto whitespace-pre-wrap">
+              <pre className="p-4 text-[11px] font-mono text-dark-200 bg-dark-950 max-h-80 overflow-y-auto overflow-x-auto whitespace-pre-wrap">
                 {(logType === "access" ? accessLogs : logType === "error" ? errorLogs : phpErrors) || "No logs available"}
               </pre>
             </div>
@@ -1327,7 +1327,7 @@ export default function SiteDetail() {
                   <h4 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-2">Status Codes</h4>
                   <div className="flex gap-3 flex-wrap">
                     {Object.entries(stats.status_codes).sort().map(([code, count]: [string, any]) => (
-                      <div key={code} className={`px-2 py-1 rounded text-xs font-mono ${code.startsWith("2") ? "bg-rust-500/15 text-rust-400" : code.startsWith("3") ? "bg-blue-500/15 text-blue-400" : code.startsWith("4") ? "bg-warn-500/15 text-warn-400" : "bg-red-500/15 text-danger-400"}`}>
+                      <div key={code} className={`px-2 py-1 rounded text-xs font-mono ${code.startsWith("2") ? "bg-rust-500/15 text-rust-400" : code.startsWith("3") ? "bg-accent-500/15 text-accent-400" : code.startsWith("4") ? "bg-warn-500/15 text-warn-400" : "bg-danger-500/15 text-danger-400"}`}>
                         {code}: {count}
                       </div>
                     ))}
@@ -1428,7 +1428,7 @@ export default function SiteDetail() {
         <div className={`mt-4 px-4 py-3 rounded-lg text-sm ${
           sslMessage.includes("success")
             ? "bg-rust-500/10 text-rust-400 border border-rust-500/20"
-            : "bg-red-500/10 text-danger-400 border border-red-500/20"
+            : "bg-danger-500/10 text-danger-400 border border-danger-500/20"
         }`}>
           {sslMessage}
         </div>
