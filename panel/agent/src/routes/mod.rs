@@ -12,6 +12,7 @@ pub mod health;
 pub mod iac;
 pub mod logs;
 pub mod mail;
+pub mod migration;
 pub mod nginx;
 pub mod remote_backup;
 pub mod security;
