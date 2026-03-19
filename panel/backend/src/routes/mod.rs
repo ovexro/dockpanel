@@ -365,6 +365,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/extensions", get(extensions::list).post(extensions::create))
         .route("/api/extensions/{id}", put(extensions::update).delete(extensions::remove))
         .route("/api/extensions/{id}/test", post(extensions::test_webhook))
+        .route("/api/extensions/{id}/rotate-secret", post(extensions::rotate_secret))
         .route("/api/extensions/{id}/events", get(extensions::events))
         // Servers
         .route("/api/servers", get(servers::list).post(servers::create))

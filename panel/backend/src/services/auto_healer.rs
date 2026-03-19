@@ -468,4 +468,11 @@ async fn run_retention_cleanup(pool: &PgPool) {
         }
         Err(e) => tracing::warn!("Retention cleanup (system_logs) failed: {e}"),
     }
+
+    // Extension events: 90 days
+    let ext_events_deleted = sqlx::query("DELETE FROM extension_events WHERE delivered_at < NOW() - INTERVAL '90 days'")
+        .execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
+    if ext_events_deleted > 0 {
+        tracing::info!("Retention: deleted {ext_events_deleted} extension events (>90 days)");
+    }
 }
