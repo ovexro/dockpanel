@@ -1,6 +1,5 @@
 use serde::Serialize;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::process::Command;
 
 const MIGRATION_DIR: &str = "/tmp/dockpanel-migration";
@@ -49,7 +48,7 @@ pub async fn analyze(backup_path: &str, source: &str) -> Result<MigrationInvento
     // Extract the backup
     tracing::info!("Extracting backup {backup_path} to {extract_dir}");
     let output = Command::new("tar")
-        .args(["xzf", backup_path, "-C", &extract_dir])
+        .args(["xzf", backup_path, "-C", &extract_dir, "--no-same-owner"])
         .output()
         .await
         .map_err(|e| format!("Failed to extract: {e}"))?;
@@ -58,11 +57,12 @@ pub async fn analyze(backup_path: &str, source: &str) -> Result<MigrationInvento
         let stderr = String::from_utf8_lossy(&output.stderr);
         // Try without gzip (plain tar)
         let output2 = Command::new("tar")
-            .args(["xf", backup_path, "-C", &extract_dir])
+            .args(["xf", backup_path, "-C", &extract_dir, "--no-same-owner"])
             .output()
             .await
             .map_err(|e| format!("Extraction failed: {e}"))?;
         if !output2.status.success() {
+            let _ = std::fs::remove_dir_all(&extract_dir);
             return Err(format!("Failed to extract backup: {stderr}"));
         }
     }
@@ -71,13 +71,19 @@ pub async fn analyze(backup_path: &str, source: &str) -> Result<MigrationInvento
     let root = find_backup_root(&extract_dir).await;
 
     let inventory = match source {
-        "cpanel" => parse_cpanel(&id, &root).await?,
-        "plesk" => parse_plesk(&id, &root).await?,
-        "hestiacp" => parse_hestiacp(&id, &root).await?,
-        _ => return Err(format!("Unknown source: {source}")),
+        "cpanel" => parse_cpanel(&id, &root).await,
+        "plesk" => parse_plesk(&id, &root).await,
+        "hestiacp" => parse_hestiacp(&id, &root).await,
+        _ => Err(format!("Unknown source: {source}")),
     };
 
-    Ok(inventory)
+    match inventory {
+        Ok(inv) => Ok(inv),
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&extract_dir);
+            Err(e)
+        }
+    }
 }
 
 /// Find the actual root of the extracted backup (skip single top-level dir)
@@ -367,6 +373,16 @@ async fn dir_stats(dir: &Path) -> (u64, u64) {
 
 /// Import site files from extracted backup to /var/www/{domain}/
 pub async fn import_site_files(migration_id: &str, domain: &str, source_dir: &str) -> Result<String, String> {
+    // Validate no path traversal in source_dir
+    if source_dir.contains("..") || source_dir.starts_with('/') {
+        return Err("Invalid source directory path".into());
+    }
+
+    // Validate domain
+    if domain.contains("..") || domain.contains('/') || domain.is_empty() {
+        return Err("Invalid domain name".into());
+    }
+
     let extract_root = format!("{MIGRATION_DIR}-{migration_id}");
     let source = format!("{extract_root}/{source_dir}");
     let dest = format!("/var/www/{domain}");
@@ -409,6 +425,11 @@ pub async fn import_site_files(migration_id: &str, domain: &str, source_dir: &st
 
 /// Import a SQL dump into a database container
 pub async fn import_database(migration_id: &str, sql_file: &str, container_name: &str, db_name: &str, engine: &str, user: &str, password: &str) -> Result<String, String> {
+    // Validate no path traversal in sql_file
+    if sql_file.contains("..") || sql_file.starts_with('/') {
+        return Err("Invalid SQL file path".into());
+    }
+
     let extract_root = format!("{MIGRATION_DIR}-{migration_id}");
     let sql_path = format!("{extract_root}/{sql_file}");
 
@@ -432,16 +453,23 @@ pub async fn import_database(migration_id: &str, sql_file: &str, container_name:
         sql_path.clone()
     };
 
-    // Import into container
-    let cmd = if engine == "mysql" || engine == "mariadb" {
-        format!("docker exec -i {container_name} mariadb -u {user} -p{password} {db_name} < {actual_path}")
+    // Import into container — use safe argument passing (no shell interpolation)
+    let file = std::fs::File::open(&actual_path)
+        .map_err(|e| format!("Failed to open SQL file: {e}"))?;
+
+    let password_arg = format!("-p{}", password);
+    let mut cmd = Command::new("docker");
+    cmd.arg("exec").arg("-i").arg(container_name);
+
+    if engine == "mysql" || engine == "mariadb" {
+        cmd.args(["mariadb", "-u", user, &password_arg, db_name]);
     } else {
-        format!("docker exec -i {container_name} psql -U {user} -d {db_name} < {actual_path}")
-    };
+        cmd.args(["psql", "-U", user, "-d", db_name]);
+    }
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(600),
-        Command::new("sh").arg("-c").arg(&cmd).output(),
+        cmd.stdin(std::process::Stdio::from(file)).output(),
     )
     .await
     .map_err(|_| "Database import timed out (600s)".to_string())?

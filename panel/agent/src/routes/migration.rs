@@ -1,7 +1,7 @@
 use axum::{
     extract::State,
     http::StatusCode,
-    routing::{delete, post},
+    routing::post,
     Json, Router,
 };
 
@@ -61,7 +61,7 @@ async fn import_database(
     let db_name = body["db_name"].as_str().ok_or((StatusCode::BAD_REQUEST, "db_name required".into()))?;
     let engine = body["engine"].as_str().unwrap_or("mysql");
     let user = body["user"].as_str().unwrap_or("root");
-    let password = body["password"].as_str().unwrap_or("");
+    let password = body["password"].as_str().ok_or((StatusCode::BAD_REQUEST, "password required".into()))?;
 
     match migration::import_database(migration_id, sql_file, container_name, db_name, engine, user, password).await {
         Ok(msg) => Ok(Json(serde_json::json!({ "ok": true, "message": msg }))),
