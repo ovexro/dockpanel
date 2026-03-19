@@ -413,6 +413,29 @@ async fn compose_check(Json(body): Json<ComposeCheckRequest>) -> Result<Json<ser
     }
 }
 
+/// POST /git/nixpacks-build — Build image using nixpacks
+async fn nixpacks_build_handler(
+    State(_state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let name = body["name"].as_str().ok_or((StatusCode::BAD_REQUEST, "name required".into()))?;
+    let commit_hash = body["commit_hash"].as_str().unwrap_or("latest");
+    let build_context = body["build_context"].as_str().unwrap_or(".");
+    let env_vars: std::collections::HashMap<String, String> = body["env_vars"]
+        .as_object()
+        .map(|m| m.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect())
+        .unwrap_or_default();
+
+    match crate::services::git_build::nixpacks_build(name, commit_hash, build_context, &env_vars).await {
+        Ok((image_tag, output)) => Ok(Json(serde_json::json!({
+            "image_tag": image_tag,
+            "output": output,
+            "build_method": "nixpacks",
+        }))),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/git/clone", post(clone))
@@ -429,4 +452,5 @@ pub fn router() -> Router<AppState> {
         .route("/git/pre-build-hook", post(pre_build_hook))
         .route("/git/auto-detect", post(auto_detect))
         .route("/git/compose-check", post(compose_check))
+        .route("/git/nixpacks-build", post(nixpacks_build_handler))
 }

@@ -5,6 +5,7 @@ use bollard::container::{
 use bollard::Docker;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use tera::Tera;
 use tokio::process::Command;
 
@@ -1019,4 +1020,118 @@ async fn cleanup_blue(docker: &Docker, container_id: &str) {
         )
         .await
         .ok();
+}
+
+// ---------------------------------------------------------------------------
+// Nixpacks support
+// ---------------------------------------------------------------------------
+
+static NIXPACKS_PATH: OnceLock<Option<String>> = OnceLock::new();
+
+/// Ensure nixpacks binary is available. Downloads on first use if not found.
+pub async fn ensure_nixpacks() -> Option<String> {
+    // Check cache
+    if let Some(cached) = NIXPACKS_PATH.get() {
+        return cached.clone();
+    }
+
+    // Check if already installed
+    let check = tokio::process::Command::new("which")
+        .arg("nixpacks")
+        .output()
+        .await;
+    if let Ok(out) = check {
+        if out.status.success() {
+            let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let _ = NIXPACKS_PATH.set(Some(path.clone()));
+            return Some(path);
+        }
+    }
+
+    // Try to download nixpacks
+    tracing::info!("Nixpacks not found, downloading...");
+    let arch = if cfg!(target_arch = "aarch64") { "aarch64" } else { "x86_64" };
+    let url = format!(
+        "https://github.com/railwayapp/nixpacks/releases/latest/download/nixpacks-v1.30.0-{arch}-unknown-linux-musl.tar.gz"
+    );
+
+    let download = tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "curl -fsSL '{url}' | tar xz -C /tmp && mv /tmp/nixpacks /usr/local/bin/nixpacks && chmod +x /usr/local/bin/nixpacks"
+        ))
+        .output()
+        .await;
+
+    match download {
+        Ok(out) if out.status.success() => {
+            tracing::info!("Nixpacks installed to /usr/local/bin/nixpacks");
+            let _ = NIXPACKS_PATH.set(Some("/usr/local/bin/nixpacks".into()));
+            Some("/usr/local/bin/nixpacks".into())
+        }
+        Ok(out) => {
+            tracing::warn!("Failed to download nixpacks: {}", String::from_utf8_lossy(&out.stderr));
+            let _ = NIXPACKS_PATH.set(None);
+            None
+        }
+        Err(e) => {
+            tracing::warn!("Failed to download nixpacks: {e}");
+            let _ = NIXPACKS_PATH.set(None);
+            None
+        }
+    }
+}
+
+/// Build a Docker image using nixpacks (auto-detects language, no Dockerfile needed).
+/// Returns (image_tag, build_output) on success.
+pub async fn nixpacks_build(
+    name: &str,
+    commit_hash: &str,
+    build_context: &str,
+    env_vars: &std::collections::HashMap<String, String>,
+) -> Result<(String, String), String> {
+    let nixpacks_bin = ensure_nixpacks().await
+        .ok_or_else(|| "Nixpacks not available".to_string())?;
+
+    let image_tag = format!("dockpanel-git-{name}:{commit_hash}");
+    let context_dir = format!("/var/lib/dockpanel/git/{name}/{build_context}");
+
+    // Build nixpacks command
+    let mut cmd = tokio::process::Command::new(&nixpacks_bin);
+    cmd.arg("build")
+        .arg(&context_dir)
+        .arg("--name")
+        .arg(&image_tag);
+
+    // Pass environment variables
+    for (key, value) in env_vars {
+        cmd.arg("--env").arg(format!("{key}={value}"));
+    }
+
+    tracing::info!("Nixpacks build: {image_tag} from {context_dir}");
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(600),
+        cmd.output(),
+    )
+    .await
+    .map_err(|_| "Nixpacks build timed out (600s)".to_string())?
+    .map_err(|e| format!("Nixpacks build failed to start: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let full_output = format!("{stdout}\n{stderr}");
+
+    if !output.status.success() {
+        return Err(format!("Nixpacks build failed:\n{full_output}"));
+    }
+
+    // Also tag as :latest
+    let _ = tokio::process::Command::new("docker")
+        .args(["tag", &image_tag, &format!("dockpanel-git-{name}:latest")])
+        .output()
+        .await;
+
+    tracing::info!("Nixpacks build succeeded: {image_tag}");
+    Ok((image_tag, full_output))
 }
