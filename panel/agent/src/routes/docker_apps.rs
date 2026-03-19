@@ -11,7 +11,7 @@ use super::{is_valid_container_id, is_valid_domain, is_valid_name, AppState};
 use crate::routes::nginx::SiteConfig;
 use crate::services::compose;
 use crate::services::docker_apps;
-use crate::services::{nginx, ssl};
+use crate::services::{nginx, ssl, traefik};
 
 #[derive(Deserialize)]
 struct DeployRequest {
@@ -28,6 +28,9 @@ struct DeployRequest {
     memory_mb: Option<u64>,
     /// CPU limit as percentage (e.g., 50 = 50% of one core)
     cpu_percent: Option<u64>,
+    /// When true, use Traefik file-based routing instead of nginx
+    #[serde(default)]
+    use_traefik: bool,
 }
 
 /// GET /apps/templates — List all available app templates.
@@ -73,130 +76,150 @@ async fn deploy(
         "port": result.port,
     });
 
-    // Auto reverse proxy: create nginx config pointing to the app's port
+    // Auto reverse proxy: Traefik (file-based dynamic config) or nginx
     if let Some(ref domain) = body.domain {
-        let site_config = SiteConfig {
-            runtime: "proxy".to_string(),
-            root: None,
-            proxy_port: Some(body.port),
-            php_socket: None,
-            ssl: None,
-            ssl_cert: None,
-            ssl_key: None,
-            rate_limit: None,
-            max_upload_mb: None,
-            php_memory_mb: None,
-            php_max_workers: None,
-            custom_nginx: None,
-            php_preset: None,
-            app_command: None,
-        };
-
-        match nginx::render_site_config(&state.templates, domain, &site_config) {
-            Ok(rendered) => {
-                let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
-                let tmp_path = format!("{config_path}.tmp");
-                let write_result = std::fs::write(&tmp_path, &rendered)
-                    .and_then(|_| std::fs::rename(&tmp_path, &config_path));
-                if let Err(e) = write_result {
-                    // Clean up tmp file on failure
-                    std::fs::remove_file(&tmp_path).ok();
-                    tracing::warn!("Auto-proxy: failed to write nginx config for {domain}: {e}");
-                    response["proxy_warning"] = serde_json::json!(format!("Failed to write nginx config: {e}"));
-                } else {
-                    match nginx::test_config().await {
-                        Ok(output) if output.success => {
-                            nginx::reload().await.ok();
-                            response["domain"] = serde_json::json!(domain);
-                            response["proxy"] = serde_json::json!(true);
-                            tracing::info!("Auto-proxy: {domain} → 127.0.0.1:{}", body.port);
-                        }
-                        Ok(output) => {
-                            std::fs::remove_file(&config_path).ok();
-                            tracing::warn!("Auto-proxy: nginx config test failed for {domain}: {}", output.stderr);
-                            response["proxy_warning"] = serde_json::json!(format!("Nginx config test failed: {}", output.stderr));
-                        }
-                        Err(e) => {
-                            std::fs::remove_file(&config_path).ok();
-                            tracing::warn!("Auto-proxy: nginx test error for {domain}: {e}");
-                            response["proxy_warning"] = serde_json::json!(format!("Nginx test error: {e}"));
-                        }
+        if body.use_traefik {
+            // --- Traefik mode: write a dynamic route config file ---
+            let ssl = body.ssl_email.is_some();
+            match traefik::write_route_config(domain, body.port, ssl) {
+                Ok(()) => {
+                    response["domain"] = serde_json::json!(domain);
+                    response["proxy"] = serde_json::json!("traefik");
+                    if ssl {
+                        response["ssl"] = serde_json::json!(true);
                     }
+                    tracing::info!("Auto-proxy (Traefik): {domain} → 127.0.0.1:{} (ssl={ssl})", body.port);
+                }
+                Err(e) => {
+                    tracing::warn!("Auto-proxy (Traefik): failed to write route config for {domain}: {e}");
+                    response["proxy_warning"] = serde_json::json!(format!("Traefik config failed: {e}"));
                 }
             }
-            Err(e) => {
-                tracing::warn!("Auto-proxy: failed to render config for {domain}: {e}");
-                response["proxy_warning"] = serde_json::json!(format!("Failed to render nginx config: {e}"));
-            }
-        }
+        } else {
+            // --- nginx mode: create nginx config pointing to the app's port ---
+            let site_config = SiteConfig {
+                runtime: "proxy".to_string(),
+                root: None,
+                proxy_port: Some(body.port),
+                php_socket: None,
+                ssl: None,
+                ssl_cert: None,
+                ssl_key: None,
+                rate_limit: None,
+                max_upload_mb: None,
+                php_memory_mb: None,
+                php_max_workers: None,
+                custom_nginx: None,
+                php_preset: None,
+                app_command: None,
+            };
 
-        // SSL provisioning (only if proxy was set up successfully)
-        if response.get("proxy").is_some() {
-            if let Some(ref email) = body.ssl_email {
-                // Wait for DNS propagation before attempting SSL (up to 30 seconds)
-                for i in 0..6u32 {
-                    if i > 0 {
-                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                    }
-                    match tokio::net::lookup_host(format!("{}:80", domain)).await {
-                        Ok(_) => {
-                            tracing::info!("DNS resolved for {domain} (attempt {}/6)", i + 1);
-                            break;
-                        }
-                        Err(_) if i < 5 => {
-                            tracing::info!("Waiting for DNS propagation for {}... ({}/6)", domain, i + 1);
-                            continue;
-                        }
-                        Err(e) => {
-                            tracing::warn!("DNS not propagated for {}: {} — trying SSL anyway", domain, e);
-                            break;
-                        }
-                    }
-                }
-
-                match ssl::load_or_create_account(email).await {
-                    Ok(account) => {
-                        match ssl::provision_cert(&account, domain).await {
-                            Ok(_cert_info) => {
-                                let ssl_site_config = SiteConfig {
-                                    runtime: "proxy".to_string(),
-                                    root: None,
-                                    proxy_port: Some(body.port),
-                                    php_socket: None,
-                                    ssl: None,
-                                    ssl_cert: None,
-                                    ssl_key: None,
-                                    rate_limit: None,
-                                    max_upload_mb: None,
-                                    php_memory_mb: None,
-                                    php_max_workers: None,
-                                    custom_nginx: None,
-                                    php_preset: None,
-                                    app_command: None,
-                                };
-                                match ssl::enable_ssl_for_site(&state.templates, domain, &ssl_site_config).await {
-                                    Ok(()) => {
-                                        response["ssl"] = serde_json::json!(true);
-                                        tracing::info!("Auto-SSL: certificate provisioned for {domain}");
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!("Auto-SSL: enable_ssl_for_site failed for {domain}: {e}");
-                                        response["ssl_warning"] = serde_json::json!(format!("SSL enable failed: {e} — retry from panel"));
-                                        response["ssl_pending"] = serde_json::json!(true);
-                                    }
-                                }
+            match nginx::render_site_config(&state.templates, domain, &site_config) {
+                Ok(rendered) => {
+                    let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+                    let tmp_path = format!("{config_path}.tmp");
+                    let write_result = std::fs::write(&tmp_path, &rendered)
+                        .and_then(|_| std::fs::rename(&tmp_path, &config_path));
+                    if let Err(e) = write_result {
+                        // Clean up tmp file on failure
+                        std::fs::remove_file(&tmp_path).ok();
+                        tracing::warn!("Auto-proxy: failed to write nginx config for {domain}: {e}");
+                        response["proxy_warning"] = serde_json::json!(format!("Failed to write nginx config: {e}"));
+                    } else {
+                        match nginx::test_config().await {
+                            Ok(output) if output.success => {
+                                nginx::reload().await.ok();
+                                response["domain"] = serde_json::json!(domain);
+                                response["proxy"] = serde_json::json!(true);
+                                tracing::info!("Auto-proxy: {domain} → 127.0.0.1:{}", body.port);
+                            }
+                            Ok(output) => {
+                                std::fs::remove_file(&config_path).ok();
+                                tracing::warn!("Auto-proxy: nginx config test failed for {domain}: {}", output.stderr);
+                                response["proxy_warning"] = serde_json::json!(format!("Nginx config test failed: {}", output.stderr));
                             }
                             Err(e) => {
-                                tracing::warn!("Auto-SSL: cert provisioning failed for {domain}: {e}");
-                                response["ssl_warning"] = serde_json::json!(format!("SSL provisioning failed: {e} — retry from panel"));
-                                response["ssl_pending"] = serde_json::json!(true);
+                                std::fs::remove_file(&config_path).ok();
+                                tracing::warn!("Auto-proxy: nginx test error for {domain}: {e}");
+                                response["proxy_warning"] = serde_json::json!(format!("Nginx test error: {e}"));
                             }
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!("Auto-SSL: ACME account failed: {e}");
-                        response["ssl_warning"] = serde_json::json!(format!("ACME account failed: {e} — retry from panel"));
-                        response["ssl_pending"] = serde_json::json!(true);
+                }
+                Err(e) => {
+                    tracing::warn!("Auto-proxy: failed to render config for {domain}: {e}");
+                    response["proxy_warning"] = serde_json::json!(format!("Failed to render nginx config: {e}"));
+                }
+            }
+
+            // SSL provisioning (only if proxy was set up successfully, nginx mode only)
+            if response.get("proxy").is_some() {
+                if let Some(ref email) = body.ssl_email {
+                    // Wait for DNS propagation before attempting SSL (up to 30 seconds)
+                    for i in 0..6u32 {
+                        if i > 0 {
+                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        }
+                        match tokio::net::lookup_host(format!("{}:80", domain)).await {
+                            Ok(_) => {
+                                tracing::info!("DNS resolved for {domain} (attempt {}/6)", i + 1);
+                                break;
+                            }
+                            Err(_) if i < 5 => {
+                                tracing::info!("Waiting for DNS propagation for {}... ({}/6)", domain, i + 1);
+                                continue;
+                            }
+                            Err(e) => {
+                                tracing::warn!("DNS not propagated for {}: {} — trying SSL anyway", domain, e);
+                                break;
+                            }
+                        }
+                    }
+
+                    match ssl::load_or_create_account(email).await {
+                        Ok(account) => {
+                            match ssl::provision_cert(&account, domain).await {
+                                Ok(_cert_info) => {
+                                    let ssl_site_config = SiteConfig {
+                                        runtime: "proxy".to_string(),
+                                        root: None,
+                                        proxy_port: Some(body.port),
+                                        php_socket: None,
+                                        ssl: None,
+                                        ssl_cert: None,
+                                        ssl_key: None,
+                                        rate_limit: None,
+                                        max_upload_mb: None,
+                                        php_memory_mb: None,
+                                        php_max_workers: None,
+                                        custom_nginx: None,
+                                        php_preset: None,
+                                        app_command: None,
+                                    };
+                                    match ssl::enable_ssl_for_site(&state.templates, domain, &ssl_site_config).await {
+                                        Ok(()) => {
+                                            response["ssl"] = serde_json::json!(true);
+                                            tracing::info!("Auto-SSL: certificate provisioned for {domain}");
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("Auto-SSL: enable_ssl_for_site failed for {domain}: {e}");
+                                            response["ssl_warning"] = serde_json::json!(format!("SSL enable failed: {e} — retry from panel"));
+                                            response["ssl_pending"] = serde_json::json!(true);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Auto-SSL: cert provisioning failed for {domain}: {e}");
+                                    response["ssl_warning"] = serde_json::json!(format!("SSL provisioning failed: {e} — retry from panel"));
+                                    response["ssl_pending"] = serde_json::json!(true);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("Auto-SSL: ACME account failed: {e}");
+                            response["ssl_warning"] = serde_json::json!(format!("ACME account failed: {e} — retry from panel"));
+                            response["ssl_pending"] = serde_json::json!(true);
+                        }
                     }
                 }
             }
@@ -738,9 +761,12 @@ async fn remove(
 
     let mut response = serde_json::json!({ "success": true });
 
-    // Clean up nginx config + SSL certs if domain was set
+    // Clean up proxy config (nginx + Traefik) + SSL certs if domain was set
     if let Some(ref domain) = domain {
         response["domain_removed"] = serde_json::json!(domain);
+
+        // Remove Traefik dynamic route config (if it exists)
+        traefik::remove_route_config(domain);
 
         // Remove nginx config
         let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
