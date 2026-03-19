@@ -50,7 +50,7 @@ const features = [
       </svg>
     ),
     title: 'Docker Apps & Compose',
-    description: '34 one-click app templates across 10 categories — databases, CMS, monitoring, analytics, mail, and more. Real-time deploy progress, auto reverse proxy with SSL, container health checks, and CPU/memory resource limits.',
+    description: '50+ one-click app templates across 10 categories — databases, CMS, monitoring, analytics, mail, and more. Real-time deploy progress, auto reverse proxy with SSL, container health checks, and CPU/memory resource limits.',
     iconBg: 'bg-brand-500/10',
     iconColor: 'text-brand-400',
   },
@@ -127,7 +127,7 @@ const features = [
       </svg>
     ),
     title: 'ARM & Homelab Ready',
-    description: 'Runs on Raspberry Pi, Oracle Cloud free-tier ARM instances, and any ARM64 server. Same ~10MB binary, same features, same performance.',
+    description: 'Runs on Raspberry Pi, Oracle Cloud free-tier ARM instances, and any ARM64 server. Same ~20MB binary, same features, same performance.',
     iconBg: 'bg-brand-500/10',
     iconColor: 'text-brand-400',
   },

@@ -116,7 +116,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 - **Core Panel**: Site management (static, PHP, proxy), database management (PostgreSQL, MariaDB), SSL (Let's Encrypt), file manager, web terminal, backups
-- **Docker Apps**: 34 one-click templates across 10 categories + Docker Compose import
+- **Docker Apps**: 50+ one-click templates across 10 categories + Docker Compose import
 - **CLI**: Full command-line interface — status, sites, db, apps, ssl, backup, logs, security, diagnose, export, apply
 - **Infrastructure as Code**: YAML export/import of server configuration
 - **Smart Diagnostics**: Pattern-based issue detection across 6 categories with one-click fixes
