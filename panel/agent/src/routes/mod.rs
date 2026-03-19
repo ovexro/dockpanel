@@ -22,6 +22,7 @@ pub mod services;
 pub mod smtp;
 pub mod staging;
 pub mod ssl;
+pub mod traefik;
 pub mod system;
 pub mod terminal;
 pub mod updates;

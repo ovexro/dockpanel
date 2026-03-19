@@ -545,3 +545,60 @@ pub async fn install_fail2ban(
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     install_service_with_log(&state, agent, claims.sub, &claims.email, "Fail2Ban", "/services/install/fail2ban").await
 }
+
+/// POST /api/traefik/install — Install Traefik reverse proxy.
+pub async fn traefik_install(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let acme_email = body.get("acme_email").and_then(|v| v.as_str()).unwrap_or("admin@localhost");
+
+    let result = agent
+        .post("/traefik/install", Some(serde_json::json!({ "acme_email": acme_email })))
+        .await
+        .map_err(|e| agent_error("Traefik install", e))?;
+
+    // Save reverse_proxy setting
+    sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES ('reverse_proxy', 'traefik', NOW()) ON CONFLICT (key) DO UPDATE SET value = 'traefik', updated_at = NOW()")
+        .execute(&state.db).await.ok();
+
+    activity::log_activity(&state.db, claims.sub, &claims.email, "traefik.install", Some("system"), None, None, None).await;
+
+    Ok(Json(result))
+}
+
+/// POST /api/traefik/uninstall — Remove Traefik.
+pub async fn traefik_uninstall(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = agent
+        .post("/traefik/uninstall", None)
+        .await
+        .map_err(|e| agent_error("Traefik uninstall", e))?;
+
+    // Revert to nginx
+    sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES ('reverse_proxy', 'nginx', NOW()) ON CONFLICT (key) DO UPDATE SET value = 'nginx', updated_at = NOW()")
+        .execute(&state.db).await.ok();
+
+    activity::log_activity(&state.db, claims.sub, &claims.email, "traefik.uninstall", Some("system"), None, None, None).await;
+
+    Ok(Json(result))
+}
+
+/// GET /api/traefik/status — Get Traefik status.
+pub async fn traefik_status(
+    State(_state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = agent
+        .get("/traefik/status")
+        .await
+        .map_err(|e| agent_error("Traefik status", e))?;
+
+    Ok(Json(result))
+}
