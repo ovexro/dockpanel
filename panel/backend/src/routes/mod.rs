@@ -447,6 +447,10 @@ pub fn router() -> Router<AppState> {
         // Mail: TLS Enforcement
         .route("/api/mail/tls/status", get(mail::tls_status))
         .route("/api/mail/tls/enforce", post(mail::tls_enforce))
+        // Traefik Reverse Proxy
+        .route("/api/traefik/install", post(system::traefik_install))
+        .route("/api/traefik/uninstall", post(system::traefik_uninstall))
+        .route("/api/traefik/status", get(system::traefik_status))
         // Agent Diagnostics proxy
         .route("/api/agent/diagnostics", get(system::diagnostics))
         .route("/api/agent/diagnostics/fix", post(system::diagnostics_fix))
