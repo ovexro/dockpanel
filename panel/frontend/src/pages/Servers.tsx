@@ -15,6 +15,8 @@ export default function Servers() {
   const [error, setError] = useState("");
   const [testing, setTesting] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<Record<string, string>>({});
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ name: "", ip_address: "", agent_url: "" });
 
   const handleCreate = useCallback(async () => {
     if (!form.name.trim()) return;
@@ -55,6 +57,26 @@ export default function Servers() {
       setTesting(null);
     }
   }, [refreshServers]);
+
+  const startEdit = (s: Server) => {
+    setEditing(s.id);
+    setEditForm({ name: s.name, ip_address: s.ip_address || "", agent_url: s.agent_url || "" });
+  };
+
+  const handleEdit = useCallback(async (id: string) => {
+    setError("");
+    try {
+      await api.put(`/servers/${id}`, {
+        name: editForm.name.trim() || undefined,
+        ip_address: editForm.ip_address.trim() || undefined,
+        agent_url: editForm.agent_url.trim() || undefined,
+      });
+      setEditing(null);
+      await refreshServers();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Failed to update server");
+    }
+  }, [editForm, refreshServers]);
 
   const formatUptime = (secs: number | null) => {
     if (!secs) return "-";
@@ -154,6 +176,12 @@ export default function Servers() {
                 {!s.is_local && (
                   <>
                     <button
+                      onClick={() => startEdit(s)}
+                      className="px-3 py-1.5 bg-dark-700 text-dark-200 rounded text-xs font-medium hover:bg-dark-600 transition-colors"
+                    >
+                      Edit
+                    </button>
+                    <button
                       onClick={() => handleTest(s.id)}
                       disabled={testing === s.id}
                       className="px-3 py-1.5 bg-dark-700 text-dark-200 rounded text-xs font-medium hover:bg-dark-600 transition-colors disabled:opacity-50"
@@ -174,6 +202,29 @@ export default function Servers() {
             {testResult[s.id] && (
               <div className={`mt-3 px-3 py-2 rounded text-sm ${testResult[s.id].startsWith("Online") ? "bg-rust-500/10 text-rust-400" : testResult[s.id] === "testing" ? "bg-dark-700 text-dark-300" : "bg-danger-500/10 text-danger-400"}`}>
                 {testResult[s.id]}
+              </div>
+            )}
+
+            {editing === s.id && (
+              <div className="mt-3 p-3 bg-dark-900/50 rounded-lg space-y-3">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs text-dark-300 mb-1">Name</label>
+                    <input value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} className="w-full px-2 py-1.5 bg-dark-900 border border-dark-600 rounded text-dark-50 text-sm focus:border-rust-500 focus:outline-none" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-dark-300 mb-1">IP Address</label>
+                    <input value={editForm.ip_address} onChange={(e) => setEditForm((f) => ({ ...f, ip_address: e.target.value }))} className="w-full px-2 py-1.5 bg-dark-900 border border-dark-600 rounded text-dark-50 text-sm focus:border-rust-500 focus:outline-none" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-dark-300 mb-1">Agent URL</label>
+                    <input value={editForm.agent_url} onChange={(e) => setEditForm((f) => ({ ...f, agent_url: e.target.value }))} placeholder="https://ip:9443" className="w-full px-2 py-1.5 bg-dark-900 border border-dark-600 rounded text-dark-50 text-sm focus:border-rust-500 focus:outline-none" />
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => handleEdit(s.id)} className="px-3 py-1.5 bg-rust-500 text-dark-950 rounded text-xs font-bold hover:bg-rust-400 transition-colors">Save</button>
+                  <button onClick={() => setEditing(null)} className="px-3 py-1.5 bg-dark-700 text-dark-200 rounded text-xs hover:bg-dark-600 transition-colors">Cancel</button>
+                </div>
               </div>
             )}
 

@@ -55,6 +55,7 @@ pub struct Database {
 pub async fn list(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(server_id, _agent): ServerScope,
     Query(params): Query<ListQuery>,
 ) -> Result<Json<Vec<Database>>, ApiError> {
     let (limit, offset) = paginate(params.limit, params.offset);
@@ -62,9 +63,10 @@ pub async fn list(
     let dbs: Vec<Database> = sqlx::query_as(
         "SELECT d.id, d.site_id, d.name, d.engine, d.db_user, d.container_id, d.port, d.created_at \
          FROM databases d JOIN sites s ON d.site_id = s.id \
-         WHERE s.user_id = $1 ORDER BY d.created_at DESC LIMIT $2 OFFSET $3",
+         WHERE s.user_id = $1 AND s.server_id = $2 ORDER BY d.created_at DESC LIMIT $3 OFFSET $4",
     )
     .bind(claims.sub)
+    .bind(server_id)
     .bind(limit)
     .bind(offset)
     .fetch_all(&state.db)

@@ -142,6 +142,36 @@ impl FromRequestParts<AppState> for ServerScope {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
+        // Extract JWT claims to verify server ownership
+        let token = parts
+            .headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .map(|t| t.to_string())
+            .or_else(|| {
+                parts.headers.get(header::COOKIE)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|cookies| {
+                        cookies.split(';').find_map(|s| s.trim().strip_prefix("token=").map(|v| v.to_string()))
+                    })
+            });
+
+        let user_id = if let Some(ref tok) = token {
+            let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+            validation.validate_exp = true;
+            validation.leeway = 0;
+            jsonwebtoken::decode::<Claims>(
+                tok,
+                &jsonwebtoken::DecodingKey::from_secret(state.config.jwt_secret.as_bytes()),
+                &validation,
+            )
+            .ok()
+            .map(|data| data.claims.sub)
+        } else {
+            None
+        };
+
         // Read X-Server-Id header
         let server_id = parts
             .headers
@@ -151,6 +181,22 @@ impl FromRequestParts<AppState> for ServerScope {
 
         match server_id {
             Some(sid) => {
+                // Verify server belongs to the authenticated user
+                if let Some(uid) = user_id {
+                    let owns: Option<(Uuid,)> = sqlx::query_as(
+                        "SELECT id FROM servers WHERE id = $1 AND user_id = $2",
+                    )
+                    .bind(sid)
+                    .bind(uid)
+                    .fetch_optional(&state.db)
+                    .await
+                    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Server lookup failed"))?;
+
+                    if owns.is_none() {
+                        return Err(err(StatusCode::FORBIDDEN, "Server not found or access denied"));
+                    }
+                }
+
                 // Resolve agent for this server
                 let agent = state
                     .agents
