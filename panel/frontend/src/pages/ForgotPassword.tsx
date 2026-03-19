@@ -58,7 +58,7 @@ export default function ForgotPassword() {
         ) : (
           <form onSubmit={handleSubmit} className="bg-dark-800 rounded-lg border border-dark-600 p-6 space-y-4">
             {error && (
-              <div className="bg-red-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-red-500/20">
+              <div className="bg-danger-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-danger-500/20">
                 {error}
               </div>
             )}

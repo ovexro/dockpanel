@@ -180,7 +180,7 @@ export default function WordPress() {
       <div className="flex items-center gap-3 mb-6 pb-4 border-b border-dark-600">
         <Link
           to={`/sites/${id}`}
-          className="p-1.5 text-dark-300 hover:text-gray-700 rounded-lg hover:bg-dark-700"
+          className="p-1.5 text-dark-300 hover:text-dark-100 rounded-lg hover:bg-dark-700"
         >
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
@@ -197,7 +197,7 @@ export default function WordPress() {
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
               ? "bg-rust-50 text-rust-400 border-rust-200"
-              : "bg-red-500/10 text-danger-400 border-red-500/20"
+              : "bg-danger-500/10 text-danger-400 border-danger-500/20"
           }`}
         >
           {message.text}
@@ -208,8 +208,8 @@ export default function WordPress() {
         /* WordPress Not Installed */
         <div className="bg-dark-800 rounded-lg border border-dark-500 p-8">
           <div className="text-center max-w-md mx-auto">
-            <div className="w-16 h-16 bg-blue-500/15 rounded-2xl flex items-center justify-center mx-auto mb-4">
-              <svg className="w-8 h-8 text-blue-600" viewBox="0 0 24 24" fill="currentColor">
+            <div className="w-16 h-16 bg-accent-500/15 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <svg className="w-8 h-8 text-accent-400" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12 2C6.486 2 2 6.486 2 12s4.486 10 10 10 10-4.486 10-10S17.514 2 12 2zm0 2c1.67 0 3.214.52 4.488 1.401L5.401 16.488A7.957 7.957 0 0 1 4 12c0-4.411 3.589-8 8-8zm0 16c-1.67 0-3.214-.52-4.488-1.401L18.599 7.512A7.957 7.957 0 0 1 20 12c0 4.411-3.589 8-8 8z" />
               </svg>
             </div>
@@ -221,7 +221,7 @@ export default function WordPress() {
             </p>
             <button
               onClick={() => setShowInstall(true)}
-              className="px-5 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
+              className="px-5 py-2.5 bg-accent-600 text-white rounded-lg text-sm font-medium hover:bg-accent-700"
             >
               Install WordPress
             </button>
@@ -238,7 +238,7 @@ export default function WordPress() {
                     value={installData.url}
                     onChange={(e) => setInstallData({ ...installData, url: e.target.value })}
                     placeholder="https://example.com"
-                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
                   />
                 </div>
                 <div>
@@ -247,7 +247,7 @@ export default function WordPress() {
                     type="text"
                     value={installData.title}
                     onChange={(e) => setInstallData({ ...installData, title: e.target.value })}
-                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
                   />
                 </div>
               </div>
@@ -259,7 +259,7 @@ export default function WordPress() {
                     type="text"
                     value={installData.admin_user}
                     onChange={(e) => setInstallData({ ...installData, admin_user: e.target.value })}
-                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
                   />
                 </div>
                 <div>
@@ -269,7 +269,7 @@ export default function WordPress() {
                     value={installData.admin_pass}
                     onChange={(e) => setInstallData({ ...installData, admin_pass: e.target.value })}
                     placeholder="Strong password"
-                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
                   />
                 </div>
                 <div>
@@ -279,7 +279,7 @@ export default function WordPress() {
                     value={installData.admin_email}
                     onChange={(e) => setInstallData({ ...installData, admin_email: e.target.value })}
                     placeholder="admin@example.com"
-                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
                   />
                 </div>
               </div>
@@ -291,7 +291,7 @@ export default function WordPress() {
                     type="text"
                     value={installData.db_name}
                     onChange={(e) => setInstallData({ ...installData, db_name: e.target.value })}
-                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
                   />
                 </div>
                 <div>
@@ -300,7 +300,7 @@ export default function WordPress() {
                     type="text"
                     value={installData.db_host}
                     onChange={(e) => setInstallData({ ...installData, db_host: e.target.value })}
-                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
                   />
                 </div>
                 <div>
@@ -309,7 +309,7 @@ export default function WordPress() {
                     type="text"
                     value={installData.db_user}
                     onChange={(e) => setInstallData({ ...installData, db_user: e.target.value })}
-                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
                   />
                 </div>
                 <div>
@@ -318,7 +318,7 @@ export default function WordPress() {
                     type="password"
                     value={installData.db_pass}
                     onChange={(e) => setInstallData({ ...installData, db_pass: e.target.value })}
-                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-rust-500 focus:border-rust-500 outline-none"
                   />
                 </div>
               </div>
@@ -336,13 +336,13 @@ export default function WordPress() {
                     !installData.db_name ||
                     !installData.db_user
                   }
-                  className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+                  className="px-5 py-2 bg-accent-600 text-white rounded-lg text-sm font-medium hover:bg-accent-700 disabled:opacity-50"
                 >
                   {busy === "install" ? "Installing..." : "Install WordPress"}
                 </button>
                 <button
                   onClick={() => setShowInstall(false)}
-                  className="px-4 py-2 bg-dark-600 text-dark-100 rounded-lg text-sm font-medium hover:bg-gray-300"
+                  className="px-4 py-2 bg-dark-600 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-500"
                 >
                   Cancel
                 </button>
@@ -357,8 +357,8 @@ export default function WordPress() {
           <div className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6">
             <div className="flex items-center justify-between flex-wrap gap-4">
               <div className="flex items-center gap-4">
-                <div className="w-12 h-12 bg-blue-500/15 rounded-lg flex items-center justify-center">
-                  <svg className="w-7 h-7 text-blue-600" viewBox="0 0 24 24" fill="currentColor">
+                <div className="w-12 h-12 bg-accent-500/15 rounded-lg flex items-center justify-center">
+                  <svg className="w-7 h-7 text-accent-400" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M12 2C6.486 2 2 6.486 2 12s4.486 10 10 10 10-4.486 10-10S17.514 2 12 2zm0 2c1.67 0 3.214.52 4.488 1.401L5.401 16.488A7.957 7.957 0 0 1 4 12c0-4.411 3.589-8 8-8zm0 16c-1.67 0-3.214-.52-4.488-1.401L18.599 7.512A7.957 7.957 0 0 1 20 12c0 4.411-3.589 8-8 8z" />
                   </svg>
                 </div>
@@ -418,7 +418,7 @@ export default function WordPress() {
                     onClick={() => handleAutoUpdate(!info.auto_update)}
                     disabled={busy === "auto-update"}
                     className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-                      info.auto_update ? "bg-rust-500" : "bg-gray-300"
+                      info.auto_update ? "bg-rust-500" : "bg-dark-400"
                     }`}
                   >
                     <span
@@ -439,7 +439,7 @@ export default function WordPress() {
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                 tab === "plugins"
                   ? "bg-rust-500 text-white"
-                  : "bg-dark-700 text-dark-200 hover:bg-gray-200"
+                  : "bg-dark-700 text-dark-200 hover:bg-dark-600"
               }`}
             >
               Plugins ({plugins.length})
@@ -449,7 +449,7 @@ export default function WordPress() {
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                 tab === "themes"
                   ? "bg-rust-500 text-white"
-                  : "bg-dark-700 text-dark-200 hover:bg-gray-200"
+                  : "bg-dark-700 text-dark-200 hover:bg-dark-600"
               }`}
             >
               Themes ({themes.length})
@@ -490,7 +490,7 @@ export default function WordPress() {
                             p.status === "active"
                               ? "bg-rust-500/15 text-rust-400"
                               : p.status === "must-use"
-                              ? "bg-purple-500/15 text-purple-400"
+                              ? "bg-accent-600/15 text-accent-400"
                               : "bg-dark-700 text-dark-200"
                           }`}
                         >
@@ -512,7 +512,7 @@ export default function WordPress() {
                             <button
                               onClick={() => handlePluginAction(p.name, "deactivate")}
                               disabled={busy.startsWith("plugin-")}
-                              className="px-2 py-1 text-xs bg-dark-700 text-dark-100 rounded hover:bg-gray-200 disabled:opacity-50"
+                              className="px-2 py-1 text-xs bg-dark-700 text-dark-100 rounded hover:bg-dark-600 disabled:opacity-50"
                             >
                               Deactivate
                             </button>
@@ -541,7 +541,7 @@ export default function WordPress() {
                               <div className="flex items-center gap-1">
                                 <button
                                   onClick={() => { handlePluginAction(p.name, "delete"); setDeleteTarget(null); }}
-                                  className="px-2 py-1 bg-red-600 text-white rounded-md text-xs"
+                                  className="px-2 py-1 bg-danger-600 text-white rounded-md text-xs"
                                 >Confirm</button>
                                 <button
                                   onClick={() => setDeleteTarget(null)}
@@ -620,7 +620,7 @@ export default function WordPress() {
                             t.status === "active"
                               ? "bg-rust-500/15 text-rust-400"
                               : t.status === "parent"
-                              ? "bg-blue-500/15 text-blue-400"
+                              ? "bg-accent-500/15 text-accent-400"
                               : "bg-dark-700 text-dark-200"
                           }`}
                         >
@@ -661,7 +661,7 @@ export default function WordPress() {
                               <div className="flex items-center gap-1">
                                 <button
                                   onClick={() => { handleThemeAction(t.name, "delete"); setDeleteTarget(null); }}
-                                  className="px-2 py-1 bg-red-600 text-white rounded-md text-xs"
+                                  className="px-2 py-1 bg-danger-600 text-white rounded-md text-xs"
                                 >Confirm</button>
                                 <button
                                   onClick={() => setDeleteTarget(null)}

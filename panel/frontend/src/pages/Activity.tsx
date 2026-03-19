@@ -19,10 +19,10 @@ function actionBadge(action: string): { bg: string; text: string } {
     return { bg: "bg-rust-500/15", text: "text-rust-400" };
   }
   if (lower.includes("delete") || lower.includes("remove")) {
-    return { bg: "bg-red-500/15", text: "text-danger-400" };
+    return { bg: "bg-danger-500/15", text: "text-danger-400" };
   }
   if (lower.includes("update") || lower.includes("edit") || lower.includes("change")) {
-    return { bg: "bg-blue-500/15", text: "text-blue-400" };
+    return { bg: "bg-accent-500/15", text: "text-accent-400" };
   }
   return { bg: "bg-dark-700", text: "text-dark-100" };
 }
@@ -108,7 +108,7 @@ export default function AuditLogContent() {
       </div>
 
       {error && (
-        <div className="mb-4 px-4 py-3 rounded-lg text-sm border bg-red-500/10 text-danger-400 border-red-500/20">
+        <div className="mb-4 px-4 py-3 rounded-lg text-sm border bg-danger-500/10 text-danger-400 border-danger-500/20">
           {error}
         </div>
       )}

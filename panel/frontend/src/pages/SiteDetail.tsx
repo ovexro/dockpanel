@@ -500,7 +500,7 @@ export default function SiteDetail() {
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mt-6">
         <Link
           to={`/sites/${id}/files`}
-          className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
+          className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-accent-400 hover:shadow-sm transition-all group"
         >
           <div className="flex items-center gap-3">
             <div className="p-2 bg-warn-500/10 rounded-lg text-warn-400 group-hover:bg-warn-500/20 transition-colors">
@@ -516,10 +516,10 @@ export default function SiteDetail() {
         </Link>
         <Link
           to={`/terminal?site=${id}`}
-          className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
+          className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-accent-400 hover:shadow-sm transition-all group"
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-slate-500/10 rounded-lg text-slate-400 group-hover:bg-slate-500/20 transition-colors">
+            <div className="p-2 bg-dark-500/10 rounded-lg text-dark-400 group-hover:bg-dark-500/20 transition-colors">
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="m6.75 7.5 3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0 0 21 18V6a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 6v12a2.25 2.25 0 0 0 2.25 2.25Z" />
               </svg>
@@ -532,10 +532,10 @@ export default function SiteDetail() {
         </Link>
         <Link
           to={`/sites/${id}/backups`}
-          className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
+          className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-accent-400 hover:shadow-sm transition-all group"
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-rust-500/10 rounded-lg text-rust-500 group-hover:bg-indigo-100 transition-colors">
+            <div className="p-2 bg-rust-500/10 rounded-lg text-rust-500 group-hover:bg-accent-500/20 transition-colors">
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 0 1-2.247 2.118H6.622a2.25 2.25 0 0 1-2.247-2.118L3.75 7.5m8.25 3v6.75m0 0-3-3m3 3 3-3M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125Z" />
               </svg>
@@ -548,10 +548,10 @@ export default function SiteDetail() {
         </Link>
         <Link
           to={`/sites/${id}/crons`}
-          className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
+          className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-accent-400 hover:shadow-sm transition-all group"
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-violet-500/10 rounded-lg text-violet-400 group-hover:bg-violet-500/20 transition-colors">
+            <div className="p-2 bg-accent-600/10 rounded-lg text-accent-400 group-hover:bg-accent-600/20 transition-colors">
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
               </svg>
@@ -564,7 +564,7 @@ export default function SiteDetail() {
         </Link>
         <Link
           to={`/sites/${id}/deploy`}
-          className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
+          className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-accent-400 hover:shadow-sm transition-all group"
         >
           <div className="flex items-center gap-3">
             <div className="p-2 bg-rust-500/10 rounded-lg text-rust-400 group-hover:bg-rust-500/20 transition-colors">
@@ -581,7 +581,7 @@ export default function SiteDetail() {
         {site.php_preset === "wordpress" && (
           <Link
             to={`/sites/${id}/wordpress`}
-            className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
+            className="bg-dark-800 rounded-lg border border-dark-500 p-5 hover:border-accent-400 hover:shadow-sm transition-all group"
           >
             <div className="flex items-center gap-3">
               <div className="p-2 bg-accent-500/10 rounded-lg text-accent-400 group-hover:bg-accent-500/20 transition-colors">

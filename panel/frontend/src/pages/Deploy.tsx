@@ -160,9 +160,9 @@ export default function Deploy() {
     <div className="p-6 lg:p-8 space-y-6">
       {/* Breadcrumb */}
       <div>
-        <Link to="/sites" className="text-sm text-dark-200 hover:text-gray-700">Sites</Link>
+        <Link to="/sites" className="text-sm text-dark-200 hover:text-dark-100">Sites</Link>
         <span className="text-sm text-dark-300 mx-2">/</span>
-        <Link to={`/sites/${id}`} className="text-sm text-dark-200 hover:text-gray-700">Site</Link>
+        <Link to={`/sites/${id}`} className="text-sm text-dark-200 hover:text-dark-100">Site</Link>
         <span className="text-sm text-dark-300 mx-2">/</span>
         <span className="text-sm text-dark-50 font-medium">Git Deploy</span>
       </div>
@@ -180,7 +180,7 @@ export default function Deploy() {
             </button>
             <button
               onClick={handleRemove}
-              className="px-4 py-2 bg-red-500/10 text-danger-400 rounded-lg text-sm font-medium hover:bg-red-100 transition-colors"
+              className="px-4 py-2 bg-danger-500/10 text-danger-400 rounded-lg text-sm font-medium hover:bg-danger-500/20 transition-colors"
             >
               Remove
             </button>
@@ -193,7 +193,7 @@ export default function Deploy() {
         <div className={`px-4 py-3 rounded-lg text-sm border ${
           message.type === "success"
             ? "bg-rust-500/10 text-rust-400 border-rust-500/20"
-            : "bg-red-500/10 text-danger-400 border-red-500/20"
+            : "bg-danger-500/10 text-danger-400 border-danger-500/20"
         }`}>
           {message.text}
         </div>
@@ -296,7 +296,7 @@ export default function Deploy() {
                 <button
                   onClick={handleKeygen}
                   disabled={generatingKey}
-                  className="text-sm text-dark-200 hover:text-gray-800"
+                  className="text-sm text-dark-200 hover:text-dark-50"
                 >
                   {generatingKey ? "Regenerating..." : "Regenerate key"}
                 </button>
@@ -305,7 +305,7 @@ export default function Deploy() {
               <button
                 onClick={handleKeygen}
                 disabled={generatingKey}
-                className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-gray-200 disabled:opacity-50 transition-colors"
+                className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 disabled:opacity-50 transition-colors"
               >
                 {generatingKey ? "Generating..." : "Generate Deploy Key"}
               </button>
@@ -368,7 +368,7 @@ export default function Deploy() {
             <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${
               config.last_status === "success"
                 ? "bg-rust-500/15 text-rust-400"
-                : "bg-red-500/15 text-danger-400"
+                : "bg-danger-500/15 text-danger-400"
             }`}>
               {config.last_status}
             </span>
@@ -393,7 +393,7 @@ export default function Deploy() {
                     <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
                       log.status === "success"
                         ? "bg-rust-500/15 text-rust-400"
-                        : "bg-red-500/15 text-danger-400"
+                        : "bg-danger-500/15 text-danger-400"
                     }`}>
                       {log.status}
                     </span>
@@ -416,7 +416,7 @@ export default function Deploy() {
                 </button>
                 {expandedLog === log.id && log.output && (
                   <div className="px-5 pb-4">
-                    <pre className="bg-gray-900 text-gray-100 rounded-lg p-4 text-xs font-mono overflow-x-auto max-h-64 overflow-y-auto whitespace-pre-wrap">
+                    <pre className="bg-dark-900 text-dark-100 rounded-lg p-4 text-xs font-mono overflow-x-auto max-h-64 overflow-y-auto whitespace-pre-wrap">
                       {log.output}
                     </pre>
                   </div>
