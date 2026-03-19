@@ -52,7 +52,7 @@ export default function VerifyEmail() {
             </div>
           )}
           {status === "error" && (
-            <div className="bg-red-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-red-500/20">
+            <div className="bg-danger-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-danger-500/20">
               {message}
             </div>
           )}

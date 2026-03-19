@@ -130,7 +130,7 @@ export default function Maintenance() {
       </div>
 
       {error && (
-        <div className="bg-red-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-4">
+        <div className="bg-danger-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-danger-500/20 mb-4">
           {error}
           <button onClick={() => setError("")} className="ml-2 font-medium hover:underline">Dismiss</button>
         </div>
@@ -140,7 +140,7 @@ export default function Maintenance() {
         <div className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
           message.type === "success"
             ? "bg-rust-500/10 text-rust-400 border-rust-500/20"
-            : "bg-red-500/10 text-danger-400 border-red-500/20"
+            : "bg-danger-500/10 text-danger-400 border-danger-500/20"
         }`}>
           {message.text}
         </div>
@@ -203,7 +203,7 @@ export default function Maintenance() {
                       <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-dark-700 text-dark-300">Ended</span>
                     )}
                     {!w.active && new Date(w.starts_at) > new Date() && (
-                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-500/15 text-blue-400">Scheduled</span>
+                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-accent-500/15 text-accent-400">Scheduled</span>
                     )}
                   </div>
                   <p className="text-xs text-dark-300 font-mono mt-1">

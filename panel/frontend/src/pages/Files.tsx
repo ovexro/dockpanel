@@ -184,7 +184,7 @@ export default function Files() {
       <div className="mb-6">
         <Link
           to={`/sites/${id}`}
-          className="text-sm text-dark-200 hover:text-gray-700"
+          className="text-sm text-dark-200 hover:text-dark-100"
         >
           {site?.domain || "Site"}
         </Link>
@@ -361,7 +361,7 @@ export default function Files() {
                               ? navigateTo(entry.name)
                               : openFile(entry.name)
                           }
-                          className="flex items-center gap-2 text-sm text-dark-50 hover:text-indigo-600 font-mono"
+                          className="flex items-center gap-2 text-sm text-dark-50 hover:text-accent-400 font-mono"
                         >
                           {entry.is_dir ? (
                             <svg className="w-4 h-4 text-warn-500" fill="currentColor" viewBox="0 0 20 20">
@@ -402,7 +402,7 @@ export default function Files() {
                               setRenaming(entry.name);
                               setRenameTo(entry.name);
                             }}
-                            className="p-1 text-dark-300 hover:text-gray-600"
+                            className="p-1 text-dark-300 hover:text-dark-200"
                             title="Rename"
                             aria-label="Rename"
                           >
@@ -446,7 +446,7 @@ export default function Files() {
                 </button>
                 <button
                   onClick={() => setEditing(null)}
-                  className="p-1 text-dark-300 hover:text-gray-600"
+                  className="p-1 text-dark-300 hover:text-dark-200"
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -477,7 +477,7 @@ export default function Files() {
                 className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
                   createType === "file"
                     ? "bg-rust-500 text-white"
-                    : "bg-dark-700 text-dark-200 hover:bg-gray-200"
+                    : "bg-dark-700 text-dark-200 hover:bg-dark-600"
                 }`}
               >
                 File
@@ -487,7 +487,7 @@ export default function Files() {
                 className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
                   createType === "dir"
                     ? "bg-rust-500 text-white"
-                    : "bg-dark-700 text-dark-200 hover:bg-gray-200"
+                    : "bg-dark-700 text-dark-200 hover:bg-dark-600"
                 }`}
               >
                 Folder
@@ -508,7 +508,7 @@ export default function Files() {
                   setShowCreate(false);
                   setCreateName("");
                 }}
-                className="px-4 py-2 text-sm text-dark-200 hover:text-gray-800"
+                className="px-4 py-2 text-sm text-dark-200 hover:text-dark-50"
               >
                 Cancel
               </button>
@@ -541,7 +541,7 @@ export default function Files() {
             <div className="flex justify-end gap-2 mt-4">
               <button
                 onClick={() => setRenaming(null)}
-                className="px-4 py-2 text-sm text-dark-200 hover:text-gray-800"
+                className="px-4 py-2 text-sm text-dark-200 hover:text-dark-50"
               >
                 Cancel
               </button>
@@ -569,7 +569,7 @@ export default function Files() {
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setDeleteTarget(null)}
-                className="px-4 py-2 text-sm text-dark-200 hover:text-gray-800"
+                className="px-4 py-2 text-sm text-dark-200 hover:text-dark-50"
               >
                 Cancel
               </button>

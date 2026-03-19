@@ -9,8 +9,8 @@ interface Certificate {
 }
 
 const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }> = {
-  expired: { bg: "bg-red-500/15", text: "text-danger-400", label: "Expired" },
-  critical: { bg: "bg-red-500/15", text: "text-danger-400", label: "Critical" },
+  expired: { bg: "bg-danger-500/15", text: "text-danger-400", label: "Expired" },
+  critical: { bg: "bg-danger-500/15", text: "text-danger-400", label: "Critical" },
   warning: { bg: "bg-warn-500/15", text: "text-warn-400", label: "Warning" },
   ok: { bg: "bg-rust-500/15", text: "text-rust-400", label: "OK" },
 };
@@ -47,7 +47,7 @@ export default function Certificates() {
       </p>
 
       {error && (
-        <div className="bg-red-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-4">
+        <div className="bg-danger-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-danger-500/20 mb-4">
           {error}
           <button onClick={() => setError("")} className="ml-2 font-medium hover:underline">Dismiss</button>
         </div>

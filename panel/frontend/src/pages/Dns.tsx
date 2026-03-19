@@ -429,7 +429,7 @@ export default function Dns() {
     MX: "bg-warn-500/15 text-warn-400",
     TXT: "bg-dark-700 text-dark-100",
     NS: "bg-accent-600/15 text-accent-400",
-    SRV: "bg-pink-500/10 text-pink-400",
+    SRV: "bg-accent-500/10 text-accent-400",
     CAA: "bg-danger-500/15 text-danger-400",
   };
 
@@ -437,7 +437,7 @@ export default function Dns() {
     if (provider === "powerdns") {
       return <span className="ml-2 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider bg-accent-500/15 text-accent-400 border border-accent-500/20">PDNS</span>;
     }
-    return <span className="ml-2 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider bg-orange-500/15 text-orange-400 border border-orange-500/20">CF</span>;
+    return <span className="ml-2 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider bg-warn-500/15 text-warn-400 border border-warn-500/20">CF</span>;
   };
 
   const isCloudflare = selectedZone?.provider !== "powerdns";
@@ -499,7 +499,7 @@ export default function Dns() {
                 onClick={() => setZoneProvider("cloudflare")}
                 className={`flex-1 px-4 py-3 border text-sm font-medium transition-colors text-left ${
                   zoneProvider === "cloudflare"
-                    ? "border-orange-500/50 bg-orange-500/5 text-orange-400"
+                    ? "border-warn-500/50 bg-warn-500/5 text-warn-400"
                     : "border-dark-500 bg-dark-900 text-dark-200 hover:border-dark-400"
                 }`}
               >
@@ -805,7 +805,7 @@ export default function Dns() {
                   </div>
                   {isCloudflare && ["A", "AAAA", "CNAME"].includes(recType) && (
                     <label className="flex items-center gap-2 cursor-pointer">
-                      <input type="checkbox" checked={recProxied} onChange={(e) => setRecProxied(e.target.checked)} className="w-4 h-4 text-orange-500 border-dark-500 rounded focus:ring-orange-500" />
+                      <input type="checkbox" checked={recProxied} onChange={(e) => setRecProxied(e.target.checked)} className="w-4 h-4 text-warn-500 border-dark-500 rounded focus:ring-warn-500" />
                       <span className="text-sm text-dark-100">Proxied through Cloudflare (orange cloud)</span>
                     </label>
                   )}
@@ -924,7 +924,7 @@ export default function Dns() {
                         {isCloudflare && (
                           <td className="px-4 py-2.5">
                             {r.proxied !== undefined && (
-                              <span className={`inline-block w-3 h-3 rounded-full ${r.proxied ? "bg-orange-400" : "bg-dark-500"}`} title={r.proxied ? "Proxied" : "DNS only"} />
+                              <span className={`inline-block w-3 h-3 rounded-full ${r.proxied ? "bg-warn-400" : "bg-dark-500"}`} title={r.proxied ? "Proxied" : "DNS only"} />
                             )}
                           </td>
                         )}
@@ -936,7 +936,7 @@ export default function Dns() {
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418" />
                               </svg>
                             </button>
-                            <button onClick={() => openRecordForm(r)} className="p-1 text-dark-300 hover:text-indigo-600" title="Edit">
+                            <button onClick={() => openRecordForm(r)} className="p-1 text-dark-300 hover:text-accent-400" title="Edit">
                               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                                 <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125" />
                               </svg>
@@ -974,7 +974,7 @@ export default function Dns() {
                       </div>
                       <div className="flex items-center gap-0.5 shrink-0 ml-2">
                         {isCloudflare && r.proxied !== undefined && (
-                          <span className={`inline-block w-2.5 h-2.5 rounded-full mr-1 ${r.proxied ? "bg-orange-400" : "bg-dark-500"}`} />
+                          <span className={`inline-block w-2.5 h-2.5 rounded-full mr-1 ${r.proxied ? "bg-warn-400" : "bg-dark-500"}`} />
                         )}
                         <button onClick={() => checkPropagation(r.name, r.type)} disabled={checkingProp === r.name}
                           className="p-1.5 text-dark-300 hover:text-dark-100 disabled:opacity-50" title="Check propagation">
@@ -982,7 +982,7 @@ export default function Dns() {
                             <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418" />
                           </svg>
                         </button>
-                        <button onClick={() => openRecordForm(r)} className="p-1.5 text-dark-300 hover:text-indigo-600">
+                        <button onClick={() => openRecordForm(r)} className="p-1.5 text-dark-300 hover:text-accent-400">
                           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                             <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125" />
                           </svg>
