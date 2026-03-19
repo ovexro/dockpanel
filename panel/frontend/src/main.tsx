@@ -2,7 +2,7 @@ import { StrictMode, Suspense, lazy, Component, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
-import Layout from "./components/Layout";
+import LayoutShell from "./components/LayoutShell";
 import Login from "./pages/Login";
 import Setup from "./pages/Setup";
 import Dashboard from "./pages/Dashboard";
@@ -16,6 +16,9 @@ import "./index.css";
   if (theme === "light") theme = "arctic";
   localStorage.setItem("dp-theme", theme);
   document.documentElement.setAttribute("data-theme", theme);
+  // Layout initialization
+  const layout = localStorage.getItem("dp-layout") || "command";
+  document.documentElement.setAttribute("data-layout", layout);
 })();
 
 // Retry lazy import — handles stale chunks after deploy
@@ -97,7 +100,7 @@ createRoot(document.getElementById("root")!).render(
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/verify-email" element={<VerifyEmail />} />
-            <Route element={<Layout />}>
+            <Route element={<LayoutShell />}>
               <Route path="/" element={<Dashboard />} />
               <Route path="/sites" element={<Sites />} />
               <Route path="/sites/:id" element={<SiteDetail />} />

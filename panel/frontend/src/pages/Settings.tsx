@@ -579,9 +579,90 @@ export default function Settings() {
           <div className="px-5 py-3 border-b border-dark-600">
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Appearance</h3>
           </div>
-          <div className="p-5 space-y-5">
+          <div className="p-5 space-y-6">
+            {/* Layout selector */}
             <div>
-              <p className="text-sm text-dark-100 mb-3">Theme</p>
+              <p className="text-sm text-dark-100 mb-3">Layout</p>
+              <div className="grid grid-cols-3 gap-3">
+                {([
+                  { id: "command", name: "Command", desc: "Full sidebar, terminal feel",
+                    preview: (c: { bg: string; bar: string; accent: string; text: string }) => (
+                      <div className="flex gap-1" style={{ height: "44px" }}>
+                        <div style={{ background: c.bar, width: "22%", borderRadius: "2px" }} className="flex flex-col gap-0.5 p-1">
+                          <div style={{ background: c.accent, height: "2px", width: "80%" }} />
+                          <div style={{ background: c.text, height: "1.5px", opacity: 0.4 }} />
+                          <div style={{ background: c.text, height: "1.5px", width: "70%", opacity: 0.4 }} />
+                          <div style={{ background: c.text, height: "1.5px", width: "85%", opacity: 0.4 }} />
+                        </div>
+                        <div style={{ width: "78%" }} className="flex flex-col gap-0.5 p-0.5">
+                          <div style={{ background: c.bar, height: "14px", borderRadius: "1px" }} />
+                          <div style={{ background: c.bar, flex: 1, borderRadius: "1px" }} />
+                        </div>
+                      </div>
+                    )},
+                  { id: "glass", name: "Glass", desc: "Minimal icon sidebar, modern",
+                    preview: (c: { bg: string; bar: string; accent: string; text: string }) => (
+                      <div className="flex gap-1" style={{ height: "44px" }}>
+                        <div style={{ background: c.bar, width: "10%", borderRadius: "2px", opacity: 0.6 }} className="flex flex-col items-center gap-1.5 pt-1.5">
+                          <div style={{ background: c.accent, width: "5px", height: "5px", borderRadius: "1px" }} />
+                          <div style={{ background: c.text, width: "4px", height: "4px", borderRadius: "1px", opacity: 0.4 }} />
+                          <div style={{ background: c.text, width: "4px", height: "4px", borderRadius: "1px", opacity: 0.4 }} />
+                        </div>
+                        <div style={{ width: "90%" }} className="flex flex-col gap-0.5 p-0.5">
+                          <div style={{ background: c.bar, height: "14px", borderRadius: "1px" }} />
+                          <div style={{ background: c.bar, flex: 1, borderRadius: "1px" }} />
+                        </div>
+                      </div>
+                    )},
+                  { id: "atlas", name: "Atlas", desc: "Top navbar, enterprise",
+                    preview: (c: { bg: string; bar: string; accent: string; text: string }) => (
+                      <div className="flex flex-col gap-0.5" style={{ height: "44px" }}>
+                        <div style={{ background: c.bar, height: "10px", borderRadius: "1px" }} className="flex items-center gap-1 px-1">
+                          <div style={{ background: c.accent, width: "8px", height: "3px", borderRadius: "1px" }} />
+                          <div style={{ background: c.text, width: "6px", height: "2px", opacity: 0.4 }} />
+                          <div style={{ background: c.text, width: "6px", height: "2px", opacity: 0.4 }} />
+                          <div style={{ background: c.text, width: "6px", height: "2px", opacity: 0.4 }} />
+                        </div>
+                        <div style={{ background: c.bar, height: "5px", borderRadius: "1px", opacity: 0.5 }} />
+                        <div style={{ background: c.bar, flex: 1, borderRadius: "1px" }} />
+                      </div>
+                    )},
+                ] as const).map(l => {
+                  const currentLayout = localStorage.getItem("dp-layout") || "command";
+                  const isActive = currentLayout === l.id;
+                  const accent = currentTheme === "midnight" ? "#3b82f6" : currentTheme === "arctic" ? "#0d9488" : currentTheme === "ember" ? "#f97316" : "#22c55e";
+                  const bg = currentTheme === "arctic" ? "#f7f9fc" : currentTheme === "midnight" ? "#0a1628" : currentTheme === "ember" ? "#1a1614" : "#111113";
+                  const bar = currentTheme === "arctic" ? "#dce3ed" : currentTheme === "midnight" ? "#182d50" : currentTheme === "ember" ? "#332b26" : "#27272a";
+                  const text = currentTheme === "arctic" ? "#8d9bb0" : currentTheme === "midnight" ? "#6280a8" : currentTheme === "ember" ? "#8a7968" : "#71717a";
+                  return (
+                    <button key={l.id} onClick={() => {
+                      localStorage.setItem("dp-layout", l.id);
+                      document.documentElement.setAttribute("data-layout", l.id);
+                      window.location.reload();
+                    }}
+                      className="text-left transition-all duration-150"
+                      style={{
+                        borderRadius: "8px",
+                        border: isActive ? `2px solid ${accent}` : "2px solid transparent",
+                        boxShadow: isActive ? `0 0 12px ${accent}33` : "none",
+                      }}
+                    >
+                      <div style={{ background: bg, borderRadius: "6px 6px 0 0", overflow: "hidden", padding: "6px" }}>
+                        {l.preview({ bg, bar, accent, text })}
+                      </div>
+                      <div style={{ background: bar, borderRadius: "0 0 6px 6px", padding: "6px 10px" }}>
+                        <div style={{ color: isActive ? accent : text, fontSize: "12px", fontWeight: 600, fontFamily: "'Inter', sans-serif" }}>{l.name}</div>
+                        <div style={{ color: text, fontSize: "10px", fontFamily: "'Inter', sans-serif", opacity: 0.7 }}>{l.desc}</div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Color flavor selector */}
+            <div>
+              <p className="text-sm text-dark-100 mb-3">Color</p>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {([
                   { id: "terminal", name: "Terminal", desc: "Hacker aesthetic", bg: "#111113", sidebar: "#09090b", accent: "#22c55e", card: "#18181b", text: "#71717a", bar: "#27272a" },
