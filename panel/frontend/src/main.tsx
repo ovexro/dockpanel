@@ -88,6 +88,8 @@ const Security = lazyRetry(() => import("./pages/Security"));
 const Settings = lazyRetry(() => import("./pages/Settings"));
 const Mail = lazyRetry(() => import("./pages/Mail"));
 const Servers = lazyRetry(() => import("./pages/Servers"));
+const ResellerDashboard = lazyRetry(() => import("./pages/ResellerDashboard"));
+const ResellerUsers = lazyRetry(() => import("./pages/ResellerUsers"));
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -126,6 +128,8 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/system-logs" element={<Navigate to="/logs" replace />} />
               <Route path="/mail" element={<Mail />} />
               <Route path="/servers" element={<Servers />} />
+              <Route path="/reseller" element={<ResellerDashboard />} />
+              <Route path="/reseller/users" element={<ResellerUsers />} />
               <Route path="/users" element={<Navigate to="/settings" replace />} />
               <Route path="/monitoring" element={<Monitoring />} />
               <Route path="/monitors" element={<Navigate to="/monitoring" replace />} />

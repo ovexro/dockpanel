@@ -96,7 +96,14 @@ export function useLayoutState(): LayoutState {
     if (!user) return [];
     return navGroups.map(g => ({
       ...g,
-      items: g.items.filter(item => !item.adminOnly || user.role === "admin"),
+      items: g.items.filter(item => {
+        // Admin sees everything
+        if (user.role === "admin") return true;
+        // Reseller sees resellerVisible items + non-restricted items
+        if (user.role === "reseller") return item.resellerVisible || (!item.adminOnly && !item.resellerVisible);
+        // Regular user: hide adminOnly and resellerVisible items
+        return !item.adminOnly && !item.resellerVisible;
+      }),
     })).filter(g => g.items.length > 0);
   }, [user]);
 
