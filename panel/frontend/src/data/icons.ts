@@ -436,9 +436,7 @@ export function Icon({
   name: string;
   className?: string;
 }): ReactNode {
-  const layout = localStorage.getItem("dp-layout") || "command";
-  const setName = layout as IconSet;
-  const set = iconSets[setName] || iconSets.command;
+  const set = iconSets.command;
   const icon = set[name];
   if (!icon) return null;
 
