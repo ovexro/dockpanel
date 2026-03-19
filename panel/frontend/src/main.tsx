@@ -8,6 +8,16 @@ import Setup from "./pages/Setup";
 import Dashboard from "./pages/Dashboard";
 import "./index.css";
 
+// Theme initialization — runs before first paint, migrates old values
+(() => {
+  const stored = localStorage.getItem("dp-theme");
+  let theme = stored || "terminal";
+  if (theme === "dark") theme = "terminal";
+  if (theme === "light") theme = "arctic";
+  localStorage.setItem("dp-theme", theme);
+  document.documentElement.setAttribute("data-theme", theme);
+})();
+
 // Retry lazy import — handles stale chunks after deploy
 function lazyRetry(importFn: () => Promise<{ default: React.ComponentType }>) {
   return lazy(() =>
