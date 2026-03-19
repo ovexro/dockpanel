@@ -74,6 +74,24 @@ pub async fn update(
         }
     }
 
+    // Validate logo_url
+    if let Some(url) = body.get("logo_url") {
+        if !url.is_empty() && !url.starts_with("https://") && !url.starts_with("http://") && !url.starts_with("/") {
+            return Err(err(StatusCode::BAD_REQUEST, "logo_url must be an HTTP(S) URL or relative path"));
+        }
+    }
+
+    // Validate accent_color
+    if let Some(color) = body.get("accent_color") {
+        if !color.is_empty() {
+            let valid = color.starts_with('#') && color.len() <= 9 && color[1..].chars().all(|c| c.is_ascii_hexdigit());
+            let valid = valid || color.starts_with("rgb") || color.starts_with("hsl");
+            if !valid {
+                return Err(err(StatusCode::BAD_REQUEST, "accent_color must be a valid hex color (#rrggbb), rgb(), or hsl()"));
+            }
+        }
+    }
+
     // Update all settings atomically in a transaction
     let mut tx = state.db.begin().await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;

@@ -23,6 +23,9 @@ pub struct ResellerProfile {
     pub used_users: i32,
     pub used_sites: i32,
     pub used_databases: i32,
+    pub logo_url: Option<String>,
+    pub accent_color: Option<String>,
+    pub hide_branding: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -49,6 +52,9 @@ pub struct CreateResellerRequest {
     pub max_users: Option<i32>,
     pub max_sites: Option<i32>,
     pub max_databases: Option<i32>,
+    pub logo_url: Option<String>,
+    pub accent_color: Option<String>,
+    pub hide_branding: Option<bool>,
 }
 
 #[derive(serde::Deserialize)]
@@ -59,6 +65,9 @@ pub struct UpdateResellerRequest {
     pub max_databases: Option<i32>,
     pub max_disk_mb: Option<i64>,
     pub max_email_accounts: Option<i32>,
+    pub logo_url: Option<String>,
+    pub accent_color: Option<String>,
+    pub hide_branding: Option<bool>,
 }
 
 #[derive(serde::Deserialize)]
@@ -140,14 +149,17 @@ pub async fn create(
 
     // Insert reseller profile
     let profile: ResellerProfile = sqlx::query_as(
-        "INSERT INTO reseller_profiles (user_id, panel_name, max_users, max_sites, max_databases) \
-         VALUES ($1, $2, $3, $4, $5) RETURNING *",
+        "INSERT INTO reseller_profiles (user_id, panel_name, max_users, max_sites, max_databases, logo_url, accent_color, hide_branding) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, false)) RETURNING *",
     )
     .bind(user_id)
     .bind(&body.panel_name)
     .bind(body.max_users)
     .bind(body.max_sites)
     .bind(body.max_databases)
+    .bind(&body.logo_url)
+    .bind(&body.accent_color)
+    .bind(body.hide_branding)
     .fetch_one(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -211,8 +223,11 @@ pub async fn update(
          max_databases = COALESCE($4, max_databases), \
          max_disk_mb = COALESCE($5, max_disk_mb), \
          max_email_accounts = COALESCE($6, max_email_accounts), \
+         logo_url = COALESCE($7, logo_url), \
+         accent_color = COALESCE($8, accent_color), \
+         hide_branding = COALESCE($9, hide_branding), \
          updated_at = NOW() \
-         WHERE id = $7",
+         WHERE id = $10",
     )
     .bind(&body.panel_name)
     .bind(body.max_users)
@@ -220,6 +235,9 @@ pub async fn update(
     .bind(body.max_databases)
     .bind(body.max_disk_mb)
     .bind(body.max_email_accounts)
+    .bind(&body.logo_url)
+    .bind(&body.accent_color)
+    .bind(body.hide_branding)
     .bind(id)
     .execute(&state.db)
     .await
