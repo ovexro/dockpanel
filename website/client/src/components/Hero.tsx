@@ -84,8 +84,8 @@ export default function Hero() {
         {/* Social proof */}
         <div className="mt-16 flex flex-col items-center gap-6 md:flex-row md:justify-center md:gap-12">
           {[
-            { value: '~10MB', label: 'Binary size' },
-            { value: '12MB', label: 'RAM usage' },
+            { value: '~20MB', label: 'Binary size' },
+            { value: '~60MB', label: 'RAM usage' },
             { value: '<60s', label: 'Install time' },
             { value: 'ARM64', label: 'Homelab ready' },
           ].map(({ value, label }) => (
@@ -157,7 +157,7 @@ export default function Hero() {
                     { label: 'Databases', value: '8', sub: '2.1 GB used' },
                     { label: 'Docker Apps', value: '5', sub: 'All running' },
                     { label: 'Backups', value: '47', sub: 'Last: 2h ago' },
-                    { label: 'CPU / RAM', value: '3%', sub: '12 MB used' },
+                    { label: 'CPU / RAM', value: '3%', sub: '60 MB used' },
                   ].map(({ label, value, sub }) => (
                     <div
                       key={label}
