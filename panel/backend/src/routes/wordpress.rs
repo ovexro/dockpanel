@@ -224,7 +224,7 @@ pub async fn all_wp_sites(
     AuthUser(claims): AuthUser,
     ServerScope(server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&claims.role)?;
+    // No admin check — query already filters by user_id so owners only see their own sites
 
     // Get all sites for this server
     let sites: Vec<(Uuid, String)> = sqlx::query_as(
@@ -392,7 +392,13 @@ pub async fn vuln_scan(
     .bind(&result)
     .execute(&state.db)
     .await
+    .map_err(|e| { tracing::warn!("Failed to store scan result: {e}"); })
     .ok();
+
+    crate::services::activity::log_activity(
+        &state.db, claims.sub, &claims.email, "wordpress.vuln_scan",
+        Some("site"), Some(&site.domain), None, None,
+    ).await;
 
     Ok(Json(result))
 }
