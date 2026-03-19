@@ -14,7 +14,7 @@ const CACHE_TTL: Duration = Duration::from_secs(30);
 pub async fn intelligence(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Check cache first
     if let Ok(guard) = INTELLIGENCE_CACHE.lock() {
@@ -27,24 +27,27 @@ pub async fn intelligence(
 
     // 1. Get firing alerts count
     let (firing_count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM alerts WHERE status = 'firing'",
+        "SELECT COUNT(*) FROM alerts WHERE status = 'firing' AND server_id = $1",
     )
+    .bind(server_id)
     .fetch_one(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     // 2. Get acknowledged alerts count
     let (ack_count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM alerts WHERE status = 'acknowledged'",
+        "SELECT COUNT(*) FROM alerts WHERE status = 'acknowledged' AND server_id = $1",
     )
+    .bind(server_id)
     .fetch_one(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     // 3. Get SSL expiry data
     let ssl_sites: Vec<(String, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
-        "SELECT domain, ssl_expiry FROM sites WHERE ssl_enabled = TRUE AND ssl_expiry IS NOT NULL ORDER BY ssl_expiry ASC LIMIT 5",
+        "SELECT domain, ssl_expiry FROM sites WHERE ssl_enabled = TRUE AND ssl_expiry IS NOT NULL AND server_id = $1 ORDER BY ssl_expiry ASC LIMIT 5",
     )
+    .bind(server_id)
     .fetch_all(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -76,8 +79,9 @@ pub async fn intelligence(
 
     // 4. Get recent alert titles (top issues)
     let top_issues: Vec<(String, String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT title, severity, alert_type, created_at FROM alerts WHERE status IN ('firing', 'acknowledged') ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, created_at DESC LIMIT 5",
+        "SELECT title, severity, alert_type, created_at FROM alerts WHERE status IN ('firing', 'acknowledged') AND server_id = $1 ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, created_at DESC LIMIT 5",
     )
+    .bind(server_id)
     .fetch_all(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;

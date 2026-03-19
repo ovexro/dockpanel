@@ -134,13 +134,15 @@ pub struct UpdateRequest {
 pub async fn list(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(server_id, _agent): ServerScope,
 ) -> Result<Json<Vec<GitDeploy>>, ApiError> {
     require_admin(&claims.role)?;
 
     let mut deploys: Vec<GitDeploy> = sqlx::query_as(
-        "SELECT * FROM git_deploys WHERE user_id = $1 ORDER BY created_at DESC",
+        "SELECT * FROM git_deploys WHERE user_id = $1 AND server_id = $2 ORDER BY created_at DESC",
     )
     .bind(claims.sub)
+    .bind(server_id)
     .fetch_all(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;

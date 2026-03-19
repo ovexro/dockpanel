@@ -5,7 +5,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, ServerScope};
 use crate::error::{err, ApiError};
 use crate::AppState;
 
@@ -13,7 +13,6 @@ use crate::AppState;
 pub struct AlertQuery {
     pub status: Option<String>,
     pub alert_type: Option<String>,
-    pub server_id: Option<String>,
     pub limit: Option<i64>,
 }
 
@@ -37,17 +36,18 @@ pub struct AlertRow {
 pub async fn list(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(server_id, _agent): ServerScope,
     Query(q): Query<AlertQuery>,
 ) -> Result<Json<Vec<AlertRow>>, ApiError> {
     let limit = q.limit.unwrap_or(100).min(500);
 
-    // Build dynamic query
+    // Build dynamic query — server_id always filtered via ServerScope
     let mut sql = String::from(
         "SELECT id, server_id, site_id, alert_type, severity, title, message, \
          status, notified_at, resolved_at, acknowledged_at, created_at \
-         FROM alerts WHERE user_id = $1",
+         FROM alerts WHERE user_id = $1 AND server_id = $2",
     );
-    let mut param_idx = 2;
+    let mut param_idx = 3;
 
     if q.status.is_some() {
         sql.push_str(&format!(" AND status = ${param_idx}"));
@@ -55,28 +55,21 @@ pub async fn list(
     }
     if q.alert_type.is_some() {
         sql.push_str(&format!(" AND alert_type = ${param_idx}"));
-        param_idx += 1;
-    }
-    if q.server_id.is_some() {
-        sql.push_str(&format!(" AND server_id = ${param_idx}"));
-        // param_idx += 1;
+        #[allow(unused_assignments)]
+        { param_idx += 1; }
     }
 
     sql.push_str(&format!(" ORDER BY created_at DESC LIMIT {limit}"));
 
-    let mut query = sqlx::query_as::<_, AlertRow>(&sql).bind(claims.sub);
+    let mut query = sqlx::query_as::<_, AlertRow>(&sql)
+        .bind(claims.sub)
+        .bind(server_id);
 
     if let Some(ref status) = q.status {
         query = query.bind(status);
     }
     if let Some(ref alert_type) = q.alert_type {
         query = query.bind(alert_type);
-    }
-    if let Some(ref server_id) = q.server_id {
-        let sid: Uuid = server_id
-            .parse()
-            .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid server_id"))?;
-        query = query.bind(sid);
     }
 
     let alerts = query
@@ -91,13 +84,15 @@ pub async fn list(
 pub async fn summary(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(server_id, _agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let counts: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT status, COUNT(*) FROM alerts WHERE user_id = $1 \
+        "SELECT status, COUNT(*) FROM alerts WHERE user_id = $1 AND server_id = $2 \
          AND created_at > NOW() - INTERVAL '30 days' \
          GROUP BY status",
     )
     .bind(claims.sub)
+    .bind(server_id)
     .fetch_all(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
