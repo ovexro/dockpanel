@@ -12,6 +12,53 @@ use crate::services::activity;
 use crate::AppState;
 
 // ---------------------------------------------------------------------------
+// SSRF protection: validate webhook URLs
+// ---------------------------------------------------------------------------
+
+fn validate_webhook_url(url: &str) -> Result<(), &'static str> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err("webhook_url is required");
+    }
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err("webhook_url must use http or https");
+    }
+
+    // Extract host from URL (strip scheme, take up to next / or :)
+    let after_scheme = if url.starts_with("https://") { &url[8..] } else { &url[7..] };
+    let host = after_scheme
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("");
+
+    // Block private/internal addresses
+    let blocked = [
+        "localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]",
+        "169.254.169.254", "metadata.google.internal",
+    ];
+    if blocked.contains(&host) {
+        return Err("webhook_url cannot point to internal addresses");
+    }
+
+    // Block private IP ranges
+    if host.starts_with("10.")
+        || host.starts_with("172.16.") || host.starts_with("172.17.")
+        || host.starts_with("172.18.") || host.starts_with("172.19.")
+        || host.starts_with("172.2")
+        || host.starts_with("172.30.") || host.starts_with("172.31.")
+        || host.starts_with("192.168.")
+        || host.starts_with("169.254.")
+    {
+        return Err("webhook_url cannot point to private network addresses");
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Models
 // ---------------------------------------------------------------------------
 
@@ -123,8 +170,8 @@ pub async fn create(
         ));
     }
 
-    if body.webhook_url.trim().is_empty() {
-        return Err(err(StatusCode::BAD_REQUEST, "webhook_url is required"));
+    if let Err(msg) = validate_webhook_url(&body.webhook_url) {
+        return Err(err(StatusCode::BAD_REQUEST, msg));
     }
 
     // Generate dpx_ API key (same pattern as dp_ keys)
@@ -236,6 +283,9 @@ pub async fn update(
         ));
     }
     if let Some(ref url) = body.webhook_url {
+        if let Err(msg) = validate_webhook_url(url) {
+            return Err(err(StatusCode::BAD_REQUEST, msg));
+        }
         sets.push((
             "webhook_url",
             serde_json::Value::String(url.trim().to_string()),
@@ -396,11 +446,14 @@ pub async fn test_webhook(
     // Compute HMAC-SHA256 signature
     use hmac::{Hmac, Mac};
     type HmacSha256 = Hmac<sha2::Sha256>;
-    let signature = if let Ok(mut mac) = HmacSha256::new_from_slice(webhook_secret.as_bytes()) {
-        mac.update(payload_str.as_bytes());
-        hex::encode(mac.finalize().into_bytes())
-    } else {
-        String::new()
+    let signature = match HmacSha256::new_from_slice(webhook_secret.as_bytes()) {
+        Ok(mut mac) => {
+            mac.update(payload_str.as_bytes());
+            hex::encode(mac.finalize().into_bytes())
+        }
+        Err(_) => {
+            return Err(err(StatusCode::INTERNAL_SERVER_ERROR, "HMAC key is invalid — rotate the webhook secret"));
+        }
     };
 
     let started = std::time::Instant::now();
@@ -464,6 +517,51 @@ pub async fn test_webhook(
         "duration_ms": duration,
         "response_body": body,
     })))
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/extensions/{id}/rotate-secret — Rotate webhook secret.
+// ---------------------------------------------------------------------------
+
+pub async fn rotate_secret(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Verify extension exists
+    let ext: Option<(String,)> =
+        sqlx::query_as("SELECT name FROM extensions WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let ext_name = ext
+        .map(|(n,)| n)
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Extension not found"))?;
+
+    let new_secret = format!("whsec_{}", Uuid::new_v4().to_string().replace('-', ""));
+
+    sqlx::query("UPDATE extensions SET webhook_secret = $1, updated_at = NOW() WHERE id = $2")
+        .bind(&new_secret)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    activity::log_activity(
+        &state.db,
+        claims.sub,
+        &claims.email,
+        "extension.rotate_secret",
+        Some("extension"),
+        Some(&ext_name),
+        None,
+        None,
+    )
+    .await;
+
+    Ok(Json(serde_json::json!({ "webhook_secret": new_secret })))
 }
 
 // ---------------------------------------------------------------------------
