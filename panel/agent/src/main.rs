@@ -150,6 +150,19 @@ async fn main() {
         });
     }
 
+    // Multi-server: start TCP listener for remote panel connections
+    // Set AGENT_LISTEN_TCP=0.0.0.0:9443 to enable (used by remote agent install)
+    if let Ok(tcp_addr) = std::env::var("AGENT_LISTEN_TCP") {
+        let tcp_app = app.clone();
+        tokio::spawn(async move {
+            let tcp_listener = tokio::net::TcpListener::bind(&tcp_addr)
+                .await
+                .unwrap_or_else(|e| panic!("Failed to bind TCP listener on {tcp_addr}: {e}"));
+            tracing::info!("Agent TCP listener on {tcp_addr} (multi-server remote access)");
+            axum::serve(tcp_listener, tcp_app).await.unwrap();
+        });
+    }
+
     tracing::info!(
         "DockPanel Agent v{} listening on {SOCKET_PATH}",
         env!("CARGO_PKG_VERSION")

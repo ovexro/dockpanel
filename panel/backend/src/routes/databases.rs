@@ -5,7 +5,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, ServerScope};
 use crate::error::{err, agent_error, paginate, ApiError};
 use crate::services::agent::AgentError;
 use crate::AppState;
@@ -78,6 +78,7 @@ pub async fn list(
 pub async fn create(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<CreateDbRequest>,
 ) -> Result<(StatusCode, Json<Database>), ApiError> {
     // Verify site ownership
@@ -164,7 +165,7 @@ pub async fn create(
         "port": port,
     });
 
-    let result = match state.agent.post("/databases", Some(agent_body)).await {
+    let result = match agent.post("/databases", Some(agent_body)).await {
         Ok(r) => r,
         Err(e) => {
             // Clean up the DB record if agent fails
@@ -243,6 +244,7 @@ pub async fn remove(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Verify ownership through site
     let db: Option<(Uuid, String, Option<String>)> = sqlx::query_as(
@@ -261,7 +263,7 @@ pub async fn remove(
     // Remove container via agent (must succeed before DB deletion)
     if let Some(cid) = &container_id {
         let agent_path = format!("/databases/{cid}");
-        state.agent.delete(&agent_path).await
+        agent.delete(&agent_path).await
             .map_err(|e| agent_error("Database removal", e))?;
     }
 
@@ -305,6 +307,7 @@ pub async fn tables(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let (name, engine, password, _port) = get_db_info(&state, id, claims.sub).await?;
 
@@ -335,8 +338,7 @@ pub async fn tables(
         "sql": sql,
     });
 
-    state
-        .agent
+    agent
         .post("/databases/query", Some(agent_body))
         .await
         .map(Json)
@@ -348,6 +350,7 @@ pub async fn table_schema(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path((id, table)): Path<(Uuid, String)>,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Validate table name to prevent injection
     if table.is_empty()
@@ -386,8 +389,7 @@ pub async fn table_schema(
         "sql": sql,
     });
 
-    state
-        .agent
+    agent
         .post("/databases/query", Some(agent_body))
         .await
         .map(Json)
@@ -404,6 +406,7 @@ pub async fn query(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<SqlQueryRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if body.sql.trim().is_empty() {
@@ -428,8 +431,7 @@ pub async fn query(
         "sql": body.sql,
     });
 
-    state
-        .agent
+    agent
         .post("/databases/query", Some(agent_body))
         .await
         .map(Json)

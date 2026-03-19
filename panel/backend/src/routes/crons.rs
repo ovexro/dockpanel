@@ -5,9 +5,10 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, ServerScope};
 use crate::error::{err, agent_error, paginate, ApiError};
 use crate::services::activity;
+use crate::services::agent::AgentHandle;
 use crate::AppState;
 
 #[derive(serde::Deserialize)]
@@ -61,7 +62,7 @@ async fn get_site_domain(state: &AppState, site_id: Uuid, user_id: Uuid) -> Resu
 }
 
 /// Sync all enabled crons for a site to the agent's system crontab.
-async fn sync_crons_to_agent(state: &AppState, site_id: Uuid) -> Result<(), ApiError> {
+async fn sync_crons_to_agent(state: &AppState, agent: &AgentHandle, site_id: Uuid) -> Result<(), ApiError> {
     let crons: Vec<Cron> = sqlx::query_as(
         "SELECT * FROM crons WHERE site_id = $1 AND enabled = true",
     )
@@ -82,8 +83,7 @@ async fn sync_crons_to_agent(state: &AppState, site_id: Uuid) -> Result<(), ApiE
         })
         .collect();
 
-    state
-        .agent
+    agent
         .post("/crons/sync", Some(serde_json::Value::Array(agent_crons)))
         .await
         .map_err(|e| agent_error("Cron sync", e))?;
@@ -119,6 +119,7 @@ pub async fn list(
 pub async fn create(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<CreateCronRequest>,
 ) -> Result<(StatusCode, Json<Cron>), ApiError> {
@@ -150,7 +151,7 @@ pub async fn create(
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     // Sync to agent
-    sync_crons_to_agent(&state, id).await?;
+    sync_crons_to_agent(&state, &agent, id).await?;
 
     tracing::info!("Cron created: {} for {domain}", cron.schedule);
     activity::log_activity(
@@ -165,6 +166,7 @@ pub async fn create(
 pub async fn update(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path((id, cron_id)): Path<(Uuid, Uuid)>,
     Json(body): Json<UpdateCronRequest>,
 ) -> Result<Json<Cron>, ApiError> {
@@ -210,7 +212,7 @@ pub async fn update(
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     // Sync to agent (re-syncs all enabled crons)
-    sync_crons_to_agent(&state, id).await?;
+    sync_crons_to_agent(&state, &agent, id).await?;
 
     tracing::info!("Cron updated: {cron_id} for {domain}");
     activity::log_activity(
@@ -225,6 +227,7 @@ pub async fn update(
 pub async fn remove(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path((id, cron_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = get_site_domain(&state, id, claims.sub).await?;
@@ -241,10 +244,10 @@ pub async fn remove(
     }
 
     // Remove from agent crontab
-    let _ = state.agent.delete(&format!("/crons/remove/{cron_id}")).await;
+    let _ = agent.delete(&format!("/crons/remove/{cron_id}")).await;
 
     // Re-sync remaining crons
-    sync_crons_to_agent(&state, id).await?;
+    sync_crons_to_agent(&state, &agent, id).await?;
 
     tracing::info!("Cron deleted: {cron_id} for {domain}");
     activity::log_activity(
@@ -259,6 +262,7 @@ pub async fn remove(
 pub async fn run_now(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path((id, cron_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = get_site_domain(&state, id, claims.sub).await?;
@@ -274,8 +278,7 @@ pub async fn run_now(
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Cron job not found"))?;
 
     // Execute via agent
-    let result = state
-        .agent
+    let result = agent
         .post(
             "/crons/run",
             Some(serde_json::json!({

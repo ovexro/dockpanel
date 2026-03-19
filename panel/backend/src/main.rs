@@ -17,13 +17,16 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 use config::Config;
-use services::agent::AgentClient;
+use services::agent::{AgentClient, AgentRegistry};
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: sqlx::PgPool,
     pub config: Arc<Config>,
+    /// Legacy single-agent accessor (routes being migrated will use `agents` instead).
     pub agent: AgentClient,
+    /// Multi-server agent registry: dispatches to local or remote agents by server_id.
+    pub agents: AgentRegistry,
     pub login_attempts: Arc<Mutex<HashMap<String, Vec<Instant>>>>,
     /// Blacklisted JWT JTIs (for logout). Entries expire naturally after 2h.
     pub token_blacklist: Arc<RwLock<HashSet<String>>>,
@@ -105,8 +108,16 @@ async fn main() {
 
     tracing::info!("Database connected and migrations applied");
 
-    // Create agent client
+    // Create agent client (local) and agent registry (multi-server)
     let agent = AgentClient::new(config.agent_socket.clone(), config.agent_token.clone());
+    let agents = AgentRegistry::new(agent.clone(), db.clone());
+
+    // Ensure local server exists in DB and register its ID in the registry
+    let local_server_id = services::agent::ensure_local_server(&db, &config.agent_token).await;
+    if !local_server_id.is_nil() {
+        agents.set_local_server_id(local_server_id).await;
+        tracing::info!("Local server ID: {local_server_id}");
+    }
 
     // Build CORS with configurable origin whitelist (CORS_ORIGINS env var or defaults)
     let allowed_origins: Vec<axum::http::HeaderValue> = config
@@ -122,6 +133,7 @@ async fn main() {
             axum::http::header::CONTENT_TYPE,
             axum::http::header::AUTHORIZATION,
             axum::http::header::ACCEPT,
+            axum::http::HeaderName::from_static("x-server-id"),
         ])
         .allow_credentials(true);
 
@@ -132,6 +144,7 @@ async fn main() {
         db,
         config,
         agent,
+        agents,
         login_attempts: Arc::new(Mutex::new(HashMap::new())),
         token_blacklist: Arc::new(RwLock::new(HashSet::new())),
         twofa_attempts: Arc::new(Mutex::new(HashMap::new())),

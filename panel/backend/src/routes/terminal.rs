@@ -5,7 +5,7 @@ use axum::{
 };
 use jsonwebtoken::{encode, EncodingKey, Header};
 
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, ServerScope};
 use crate::error::{err, require_admin, ApiError};
 use crate::AppState;
 
@@ -26,6 +26,7 @@ struct TerminalTicket {
 pub async fn ws_token(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Query(q): Query<TerminalQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Server-level terminal requires admin role
@@ -65,7 +66,7 @@ pub async fn ws_token(
     let token = encode(
         &Header::default(),
         &ticket,
-        &EncodingKey::from_secret(state.agent.token().as_bytes()),
+        &EncodingKey::from_secret(agent.token().as_bytes()),
     )
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 

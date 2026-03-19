@@ -15,6 +15,10 @@ async function request<T = unknown>(
   const headers: Record<string, string> = {};
   if (options?.body) headers["Content-Type"] = "application/json";
 
+  // Multi-server: attach X-Server-Id header if a server is selected
+  const serverId = localStorage.getItem("dp-active-server");
+  if (serverId) headers["X-Server-Id"] = serverId;
+
   const res = await fetch(`${BASE}${path}`, {
     ...options,
     credentials: "same-origin",

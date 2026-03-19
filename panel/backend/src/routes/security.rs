@@ -5,7 +5,7 @@ use axum::{
     Json,
 };
 
-use crate::auth::AdminUser;
+use crate::auth::{AdminUser, ServerScope};
 use crate::error::{err, agent_error, ApiError};
 use crate::services::activity;
 use crate::AppState;
@@ -14,9 +14,9 @@ use crate::AppState;
 pub async fn overview(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state
-        .agent
+    let result = agent
         .get("/security/overview")
         .await
         .map_err(|e| agent_error("Security overview", e))?;
@@ -28,9 +28,9 @@ pub async fn overview(
 pub async fn firewall_status(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state
-        .agent
+    let result = agent
         .get("/security/firewall")
         .await
         .map_err(|e| agent_error("Firewall status", e))?;
@@ -50,6 +50,7 @@ pub struct FirewallRuleRequest {
 pub async fn add_firewall_rule(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<FirewallRuleRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if body.port == 0 {
@@ -73,8 +74,7 @@ pub async fn add_firewall_rule(
         "from": body.from,
     });
 
-    let result = state
-        .agent
+    let result = agent
         .post("/security/firewall/rules", Some(agent_body))
         .await
         .map_err(|e| agent_error("Add firewall rule", e))?;
@@ -93,10 +93,10 @@ pub async fn delete_firewall_rule(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
     Path(number): Path<usize>,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let agent_path = format!("/security/firewall/rules/{}", number);
-    state
-        .agent
+    agent
         .delete(&agent_path)
         .await
         .map_err(|e| agent_error("Delete firewall rule", e))?;
@@ -113,9 +113,9 @@ pub async fn delete_firewall_rule(
 pub async fn fail2ban_status(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state
-        .agent
+    let result = agent
         .get("/security/fail2ban")
         .await
         .map_err(|e| agent_error("Fail2ban status", e))?;
@@ -127,8 +127,9 @@ pub async fn fail2ban_status(
 pub async fn ssh_disable_password(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    state.agent.post("/security/ssh/disable-password", None).await
+    agent.post("/security/ssh/disable-password", None).await
         .map_err(|e| agent_error("SSH config", e))?;
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "security.ssh_disable_password",
@@ -141,8 +142,9 @@ pub async fn ssh_disable_password(
 pub async fn ssh_enable_password(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    state.agent.post("/security/ssh/enable-password", None).await
+    agent.post("/security/ssh/enable-password", None).await
         .map_err(|e| agent_error("SSH config", e))?;
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "security.ssh_enable_password",
@@ -155,8 +157,9 @@ pub async fn ssh_enable_password(
 pub async fn ssh_disable_root(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    state.agent.post("/security/ssh/disable-root", None).await
+    agent.post("/security/ssh/disable-root", None).await
         .map_err(|e| agent_error("SSH config", e))?;
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "security.ssh_disable_root",
@@ -169,9 +172,10 @@ pub async fn ssh_disable_root(
 pub async fn ssh_change_port(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    state.agent.post("/security/ssh/change-port", Some(body)).await
+    agent.post("/security/ssh/change-port", Some(body)).await
         .map_err(|e| agent_error("SSH config", e))?;
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "security.ssh_change_port",
@@ -184,9 +188,10 @@ pub async fn ssh_change_port(
 pub async fn fail2ban_unban_ip(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    state.agent.post("/security/fail2ban/unban", Some(body)).await
+    agent.post("/security/fail2ban/unban", Some(body)).await
         .map_err(|e| agent_error("Fail2Ban", e))?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -195,9 +200,10 @@ pub async fn fail2ban_unban_ip(
 pub async fn fail2ban_ban_ip(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    state.agent.post("/security/fail2ban/ban", Some(body)).await
+    agent.post("/security/fail2ban/ban", Some(body)).await
         .map_err(|e| agent_error("Fail2Ban", e))?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -207,8 +213,9 @@ pub async fn fail2ban_banned(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
     Path(jail): Path<String>,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.get(&format!("/security/fail2ban/{jail}/banned")).await
+    let result = agent.get(&format!("/security/fail2ban/{jail}/banned")).await
         .map_err(|e| agent_error("Fail2Ban", e))?;
     Ok(Json(result))
 }
@@ -217,6 +224,7 @@ pub async fn fail2ban_banned(
 pub async fn login_audit(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Panel logins from activity_logs
     let panel_logins: Vec<(String, String, Option<String>, chrono::DateTime<chrono::Utc>)> =
@@ -244,7 +252,7 @@ pub async fn login_audit(
         .collect();
 
     // SSH logins from agent (parse auth.log)
-    let ssh = match state.agent.get("/security/login-audit").await {
+    let ssh = match agent.get("/security/login-audit").await {
         Ok(result) => result
             .get("entries")
             .cloned()
@@ -262,8 +270,9 @@ pub async fn login_audit(
 pub async fn setup_panel_jail(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    state.agent.post("/security/panel-jail/setup", None).await
+    agent.post("/security/panel-jail/setup", None).await
         .map_err(|e| agent_error("Panel jail", e))?;
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "security.panel_jail_setup",
@@ -276,8 +285,9 @@ pub async fn setup_panel_jail(
 pub async fn panel_jail_status(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.get("/security/panel-jail/status").await
+    let result = agent.get("/security/panel-jail/status").await
         .map_err(|e| agent_error("Panel jail", e))?;
     Ok(Json(result))
 }
@@ -286,9 +296,10 @@ pub async fn panel_jail_status(
 pub async fn apply_security_fix(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.post("/security/fix", Some(body.clone())).await
+    let result = agent.post("/security/fix", Some(body.clone())).await
         .map_err(|e| agent_error("Security fix", e))?;
     let fix_type = body.get("fix_type").and_then(|v| v.as_str()).unwrap_or("unknown");
     let target = body.get("target").and_then(|v| v.as_str()).unwrap_or("unknown");
@@ -303,6 +314,7 @@ pub async fn apply_security_fix(
 pub async fn compliance_report(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Html<String>, ApiError> {
     // Fetch latest scan
     let scan: Option<(uuid::Uuid, String, i32, i32, i32, i32, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
@@ -311,7 +323,7 @@ pub async fn compliance_report(
     ).fetch_optional(&state.db).await.ok().flatten();
 
     // Fetch overview from agent
-    let overview = state.agent.get("/security/overview").await.ok();
+    let overview = agent.get("/security/overview").await.ok();
 
     // Fetch findings if scan exists
     let findings: Vec<(String, String, String, Option<String>, Option<String>)> = if let Some((scan_id, ..)) = &scan {

@@ -8,7 +8,8 @@ use jsonwebtoken::{decode, DecodingKey, Validation};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use crate::auth::Claims;
+use crate::auth::{Claims, ServerScope};
+use crate::services::agent::AgentHandle;
 use crate::AppState;
 
 static WS_CONNECTIONS: AtomicU32 = AtomicU32::new(0);
@@ -47,6 +48,7 @@ fn extract_token(q: &WsQuery, headers: &HeaderMap) -> Option<String> {
 /// Authenticates via ?token=<jwt> query param OR cookie.
 pub async fn handler(
     State(state): State<AppState>,
+    ServerScope(_server_id, agent): ServerScope,
     Query(q): Query<WsQuery>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
@@ -103,18 +105,18 @@ pub async fn handler(
         return (StatusCode::TOO_MANY_REQUESTS, "Too many WebSocket connections").into_response();
     }
 
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+    ws.on_upgrade(move |socket| handle_socket(socket, agent))
 }
 
-async fn handle_socket(mut socket: WebSocket, state: AppState) {
+async fn handle_socket(mut socket: WebSocket, agent: AgentHandle) {
     tracing::debug!("WebSocket metrics client connected");
 
     loop {
         // Fetch all three endpoints concurrently
         let (system_res, processes_res, network_res) = tokio::join!(
-            state.agent.get("/system/info"),
-            state.agent.get("/system/processes"),
-            state.agent.get("/system/network"),
+            agent.get("/system/info"),
+            agent.get("/system/processes"),
+            agent.get("/system/network"),
         );
 
         let system = system_res.unwrap_or_else(|_| serde_json::json!(null));

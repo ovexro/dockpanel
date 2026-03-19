@@ -5,7 +5,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, ServerScope};
 use crate::error::{err, agent_error, ApiError};
 use crate::routes::is_safe_relative_path;
 use crate::AppState;
@@ -55,6 +55,7 @@ pub async fn list_dir(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
     Query(q): Query<PathQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = get_site_domain(&state, id, claims.sub).await?;
@@ -69,8 +70,7 @@ pub async fn list_dir(
         domain,
         urlencoding::encode(rel_path)
     );
-    let result = state
-        .agent
+    let result = agent
         .get(&agent_path)
         .await
         .map_err(|e| agent_error("File manager", e))?;
@@ -83,6 +83,7 @@ pub async fn read_file(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
     Query(q): Query<PathQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = get_site_domain(&state, id, claims.sub).await?;
@@ -100,8 +101,7 @@ pub async fn read_file(
         domain,
         urlencoding::encode(rel_path)
     );
-    let result = state
-        .agent
+    let result = agent
         .get(&agent_path)
         .await
         .map_err(|e| agent_error("File manager", e))?;
@@ -114,6 +114,7 @@ pub async fn write_file(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<WriteBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if !is_safe_relative_path(&body.path) {
@@ -122,8 +123,7 @@ pub async fn write_file(
     let domain = get_site_domain(&state, id, claims.sub).await?;
 
     let agent_path = format!("/files/{}/write", domain);
-    let result = state
-        .agent
+    let result = agent
         .put(
             &agent_path,
             serde_json::json!({ "path": body.path, "content": body.content }),
@@ -139,6 +139,7 @@ pub async fn create_entry(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
     Query(q): Query<PathQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = get_site_domain(&state, id, claims.sub).await?;
@@ -161,8 +162,7 @@ pub async fn create_entry(
         urlencoding::encode(rel_path),
         entry_type
     );
-    let result = state
-        .agent
+    let result = agent
         .post(&agent_path, None)
         .await
         .map_err(|e| agent_error("File manager", e))?;
@@ -175,6 +175,7 @@ pub async fn rename_entry(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<RenameBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if !is_safe_relative_path(&body.from) || !is_safe_relative_path(&body.to) {
@@ -183,8 +184,7 @@ pub async fn rename_entry(
     let domain = get_site_domain(&state, id, claims.sub).await?;
 
     let agent_path = format!("/files/{}/rename", domain);
-    let result = state
-        .agent
+    let result = agent
         .post(
             &agent_path,
             Some(serde_json::json!({ "from": body.from, "to": body.to })),
@@ -200,6 +200,7 @@ pub async fn delete_entry(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
     Query(q): Query<PathQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = get_site_domain(&state, id, claims.sub).await?;
@@ -217,8 +218,7 @@ pub async fn delete_entry(
         domain,
         urlencoding::encode(rel_path)
     );
-    let result = state
-        .agent
+    let result = agent
         .delete(&agent_path)
         .await
         .map_err(|e| agent_error("File manager", e))?;
@@ -231,6 +231,7 @@ pub async fn download_file(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
     Query(q): Query<PathQuery>,
 ) -> Result<impl axum::response::IntoResponse, ApiError> {
     let domain = get_site_domain(&state, id, claims.sub).await?;
@@ -248,8 +249,7 @@ pub async fn download_file(
         domain,
         urlencoding::encode(rel_path)
     );
-    let (bytes, content_disposition) = state
-        .agent
+    let (bytes, content_disposition) = agent
         .get_bytes(&agent_path)
         .await
         .map_err(|e| agent_error("File download", e))?;
@@ -279,6 +279,7 @@ pub async fn upload_file(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<UploadBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if !is_safe_relative_path(&body.filename) && body.filename != "." {
@@ -290,8 +291,7 @@ pub async fn upload_file(
     let domain = get_site_domain(&state, id, claims.sub).await?;
 
     let agent_path = format!("/files/{}/upload", domain);
-    let result = state
-        .agent
+    let result = agent
         .post(
             &agent_path,
             Some(serde_json::json!({
