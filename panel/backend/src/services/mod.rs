@@ -5,6 +5,7 @@ pub mod auto_healer;
 pub mod backup_scheduler;
 pub mod deploy_scheduler;
 pub mod email;
+pub mod extensions;
 pub mod preview_cleanup;
 pub mod metrics_collector;
 pub mod notifications;
