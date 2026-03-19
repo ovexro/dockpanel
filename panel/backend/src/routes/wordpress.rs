@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
-use crate::error::{agent_error, err, ApiError};
+use crate::error::{agent_error, err, require_admin, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -212,4 +212,246 @@ pub async fn set_auto_update(
         .map_err(|e| agent_error("WordPress", e))?;
 
     Ok(Json(resp))
+}
+
+// ---------------------------------------------------------------------------
+// WordPress Toolkit endpoints
+// ---------------------------------------------------------------------------
+
+/// GET /api/wordpress/sites — List all WordPress sites with overview info.
+pub async fn all_wp_sites(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(server_id, agent): ServerScope,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+
+    // Get all sites for this server
+    let sites: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, domain FROM sites WHERE user_id = $1 AND server_id = $2 ORDER BY domain",
+    )
+    .bind(claims.sub)
+    .bind(server_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let mut wp_sites = Vec::new();
+
+    for (site_id, domain) in &sites {
+        // Check if WordPress is installed (quick detect)
+        if let Ok(info) = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            agent.get(&format!("/wordpress/{domain}/info")),
+        )
+        .await
+        .unwrap_or(Err(crate::services::agent::AgentError::Request(
+            "timeout".into(),
+        ))) {
+            // It's a WP site
+            let version = info
+                .get("version")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let update_available = info
+                .get("update_available")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            // Get last scan data if exists
+            let scan: Option<(i32, i32)> = sqlx::query_as(
+                "SELECT total_vulns, critical_count FROM wp_vuln_scans WHERE site_id = $1 ORDER BY scanned_at DESC LIMIT 1",
+            )
+            .bind(site_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+
+            wp_sites.push(serde_json::json!({
+                "site_id": site_id,
+                "domain": domain,
+                "wp_version": version,
+                "update_available": update_available,
+                "vulns": scan.as_ref().map(|s| s.0).unwrap_or(0),
+                "critical_vulns": scan.as_ref().map(|s| s.1).unwrap_or(0),
+            }));
+        }
+    }
+
+    Ok(Json(serde_json::json!(wp_sites)))
+}
+
+#[derive(serde::Deserialize)]
+pub struct BulkUpdateRequest {
+    pub site_ids: Vec<Uuid>,
+    pub target: String,
+}
+
+/// POST /api/wordpress/bulk-update — Bulk update plugins/themes across sites.
+pub async fn bulk_update(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(server_id, agent): ServerScope,
+    Json(body): Json<BulkUpdateRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+
+    if !["plugins", "themes", "core", "all"].contains(&body.target.as_str()) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "Target must be plugins, themes, core, or all",
+        ));
+    }
+
+    let mut results = Vec::new();
+
+    for site_id in &body.site_ids {
+        let domain: Option<(String,)> = sqlx::query_as(
+            "SELECT domain FROM sites WHERE id = $1 AND user_id = $2 AND server_id = $3",
+        )
+        .bind(site_id)
+        .bind(claims.sub)
+        .bind(server_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+
+        let domain = match domain {
+            Some((d,)) => d,
+            None => {
+                results.push(serde_json::json!({"site_id": site_id, "ok": false, "message": "Site not found"}));
+                continue;
+            }
+        };
+
+        match agent
+            .post(
+                &format!("/wordpress/{domain}/update/{}", body.target),
+                None,
+            )
+            .await
+        {
+            Ok(r) => {
+                let updated = r.get("updated").and_then(|v| v.as_i64()).unwrap_or(0);
+                results.push(serde_json::json!({"site_id": site_id, "domain": domain, "ok": true, "updated": updated}));
+            }
+            Err(e) => {
+                results.push(serde_json::json!({"site_id": site_id, "domain": domain, "ok": false, "message": format!("{e}")}));
+            }
+        }
+    }
+
+    Ok(Json(serde_json::json!({ "results": results })))
+}
+
+/// POST /api/sites/{id}/wordpress/vuln-scan — Scan a site for vulnerabilities.
+pub async fn vuln_scan(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let site: crate::models::Site = sqlx::query_as("SELECT * FROM sites WHERE id = $1 AND user_id = $2")
+        .bind(id)
+        .bind(claims.sub)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    let result = agent
+        .post(&format!("/wordpress/{}/vuln-scan", site.domain), None)
+        .await
+        .map_err(|e| agent_error("Vulnerability scan", e))?;
+
+    let total = result
+        .get("total_vulns")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as i32;
+    let critical = result
+        .get("critical_count")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as i32;
+    let high = result
+        .get("high_count")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as i32;
+
+    // Store scan result
+    sqlx::query(
+        "INSERT INTO wp_vuln_scans (site_id, domain, total_vulns, critical_count, high_count, scan_data) VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(id)
+    .bind(&site.domain)
+    .bind(total)
+    .bind(critical)
+    .bind(high)
+    .bind(&result)
+    .execute(&state.db)
+    .await
+    .ok();
+
+    Ok(Json(result))
+}
+
+/// GET /api/sites/{id}/wordpress/security-check — Check security hardening.
+pub async fn security_check(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let site: crate::models::Site = sqlx::query_as("SELECT * FROM sites WHERE id = $1 AND user_id = $2")
+        .bind(id)
+        .bind(claims.sub)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    let result = agent
+        .get(&format!("/wordpress/{}/security-check", site.domain))
+        .await
+        .map_err(|e| agent_error("Security check", e))?;
+
+    Ok(Json(result))
+}
+
+/// POST /api/sites/{id}/wordpress/harden — Apply security fixes.
+pub async fn wp_harden(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let site: crate::models::Site = sqlx::query_as("SELECT * FROM sites WHERE id = $1 AND user_id = $2")
+        .bind(id)
+        .bind(claims.sub)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    let result = agent
+        .post(&format!("/wordpress/{}/harden", site.domain), Some(body))
+        .await
+        .map_err(|e| agent_error("Security hardening", e))?;
+
+    activity::log_activity(
+        &state.db,
+        claims.sub,
+        &claims.email,
+        "wordpress.harden",
+        Some("site"),
+        Some(&site.domain),
+        None,
+        None,
+    )
+    .await;
+
+    Ok(Json(result))
 }

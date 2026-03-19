@@ -82,6 +82,7 @@ const Deploy = lazyRetry(() => import("./pages/Deploy"));
 const GitDeploys = lazyRetry(() => import("./pages/GitDeploys"));
 const Dns = lazyRetry(() => import("./pages/Dns"));
 const WordPress = lazyRetry(() => import("./pages/WordPress"));
+const WordPressToolkit = lazyRetry(() => import("./pages/WordPressToolkit"));
 const Logs = lazyRetry(() => import("./pages/Logs"));
 const Apps = lazyRetry(() => import("./pages/Apps"));
 const Security = lazyRetry(() => import("./pages/Security"));
@@ -115,6 +116,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/sites/:id/crons" element={<Crons />} />
               <Route path="/sites/:id/deploy" element={<Deploy />} />
               <Route path="/sites/:id/wordpress" element={<WordPress />} />
+              <Route path="/wordpress-toolkit" element={<WordPressToolkit />} />
               <Route path="/dns" element={<Dns />} />
               <Route path="/databases" element={<Databases />} />
               <Route path="/terminal" element={<Terminal />} />

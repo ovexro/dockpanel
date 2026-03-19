@@ -64,6 +64,9 @@ pub fn router() -> Router<AppState> {
             "/wordpress/{domain}/auto-update",
             get(get_auto_update).post(set_auto_update),
         )
+        .route("/wordpress/{domain}/vuln-scan", post(vuln_scan))
+        .route("/wordpress/{domain}/security-check", get(security_check))
+        .route("/wordpress/{domain}/harden", post(harden))
 }
 
 async fn detect(
@@ -215,6 +218,65 @@ async fn set_auto_update(
     wordpress::set_auto_update(&domain, body.enabled)
         .await
         .map(|_| Json(serde_json::json!({ "ok": true })))
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e})),
+            )
+        })
+}
+
+/// POST /wordpress/{domain}/vuln-scan — Scan for plugin vulnerabilities
+async fn vuln_scan(
+    Path(domain): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    validate_domain(&domain)?;
+    crate::services::wp_vulnerability::scan_site(&domain)
+        .await
+        .map(|result| Json(serde_json::to_value(result).unwrap_or_default()))
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e})),
+            )
+        })
+}
+
+/// GET /wordpress/{domain}/security-check — Check security hardening status
+async fn security_check(
+    Path(domain): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    validate_domain(&domain)?;
+    crate::services::wp_vulnerability::check_security(&domain)
+        .await
+        .map(|checks| Json(serde_json::to_value(checks).unwrap_or_default()))
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e})),
+            )
+        })
+}
+
+/// POST /wordpress/{domain}/harden — Apply security hardening fixes
+async fn harden(
+    Path(domain): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    validate_domain(&domain)?;
+    let fixes: Vec<String> = body["fixes"]
+        .as_array()
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_default();
+    if fixes.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "No fixes specified"})),
+        ));
+    }
+    crate::services::wp_vulnerability::apply_hardening(&domain, &fixes)
+        .await
+        .map(|results| Json(serde_json::to_value(results).unwrap_or_default()))
         .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
