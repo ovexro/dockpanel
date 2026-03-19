@@ -38,6 +38,8 @@ pub struct AppState {
     pub agent_rate_limits: Arc<Mutex<HashMap<uuid::Uuid, (u32, Instant)>>>,
     /// Provisioning log channels: site_id -> (step history, broadcast sender)
     pub provision_logs: Arc<Mutex<HashMap<uuid::Uuid, (Vec<routes::sites::ProvisionStep>, tokio::sync::broadcast::Sender<routes::sites::ProvisionStep>, Instant)>>>,
+    /// OAuth CSRF state tokens: state_string -> (provider_name, created_at)
+    pub oauth_states: Arc<Mutex<HashMap<String, (String, Instant)>>>,
 }
 
 #[tokio::main]
@@ -151,6 +153,7 @@ async fn main() {
         webhook_attempts: Arc::new(Mutex::new(HashMap::new())),
         agent_rate_limits: Arc::new(Mutex::new(HashMap::new())),
         provision_logs: Arc::new(Mutex::new(HashMap::new())),
+        oauth_states: Arc::new(Mutex::new(HashMap::new())),
     };
 
     // Shutdown broadcast channel — all background services listen for this signal
@@ -247,6 +250,7 @@ async fn main() {
     let cleanup_webhook = state.webhook_attempts.clone();
     let cleanup_agent_rl = state.agent_rate_limits.clone();
     let cleanup_provision = state.provision_logs.clone();
+    let cleanup_oauth = state.oauth_states.clone();
     let mut cleanup_shutdown_rx = shutdown_tx.subscribe();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(900));
@@ -294,6 +298,10 @@ async fn main() {
             // Clean stale provisioning logs (older than 5 minutes)
             if let Ok(mut map) = cleanup_provision.lock() {
                 map.retain(|_, (_, _, created)| now.duration_since(*created) < Duration::from_secs(300));
+            }
+            // Clean expired OAuth CSRF states (older than 10 minutes)
+            if let Ok(mut map) = cleanup_oauth.lock() {
+                map.retain(|_, (_, created)| now.duration_since(*created) < Duration::from_secs(600));
             }
         }
     });
