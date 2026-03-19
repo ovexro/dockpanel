@@ -2,7 +2,7 @@ use axum::{extract::State, http::StatusCode, Json};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, ServerScope};
 use crate::error::{err, ApiError};
 use crate::AppState;
 
@@ -14,6 +14,7 @@ const CACHE_TTL: Duration = Duration::from_secs(30);
 pub async fn intelligence(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Check cache first
     if let Ok(guard) = INTELLIGENCE_CACHE.lock() {
@@ -95,7 +96,7 @@ pub async fn intelligence(
 
     // 5. Get diagnostics from agent
     let mut diagnostics_summary = serde_json::json!(null);
-    if let Ok(diag) = state.agent.get("/diagnostics").await {
+    if let Ok(diag) = agent.get("/diagnostics").await {
         diagnostics_summary = diag;
     }
 
@@ -156,8 +157,9 @@ pub async fn intelligence(
 pub async fn docker_summary(
     AuthUser(_claims): AuthUser,
     State(state): State<AppState>,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.get("/apps").await.ok();
+    let result = agent.get("/apps").await.ok();
 
     let apps = result.and_then(|r| r.as_array().cloned()).unwrap_or_default();
     let total = apps.len();

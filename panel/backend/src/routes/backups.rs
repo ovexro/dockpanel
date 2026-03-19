@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, ServerScope};
 use crate::error::{err, agent_error, paginate, ApiError};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
@@ -47,6 +47,7 @@ pub async fn create(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let domain = get_site_domain(&state, id, claims.sub).await?;
 
@@ -59,7 +60,6 @@ pub async fn create(
     }
 
     let logs = state.provision_logs.clone();
-    let agent = state.agent.clone();
     let db = state.db.clone();
     let user_id = claims.sub;
     let email = claims.email.clone();
@@ -150,6 +150,7 @@ pub async fn restore(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path((id, backup_id)): Path<(Uuid, Uuid)>,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let domain = get_site_domain(&state, id, claims.sub).await?;
 
@@ -172,7 +173,6 @@ pub async fn restore(
     }
 
     let logs = state.provision_logs.clone();
-    let agent = state.agent.clone();
     let db = state.db.clone();
     let user_id = claims.sub;
     let email = claims.email.clone();
@@ -227,6 +227,7 @@ pub async fn remove(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path((id, backup_id)): Path<(Uuid, Uuid)>,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = get_site_domain(&state, id, claims.sub).await?;
 
@@ -242,7 +243,7 @@ pub async fn remove(
 
     // Delete from agent (must succeed before DB deletion)
     let agent_path = format!("/backups/{}/{}", domain, backup.filename);
-    state.agent.delete(&agent_path).await
+    agent.delete(&agent_path).await
         .map_err(|e| agent_error("Backup deletion", e))?;
 
     // Delete from DB

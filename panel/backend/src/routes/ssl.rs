@@ -5,7 +5,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, ServerScope};
 use crate::error::{err, agent_error, ApiError};
 use crate::models::Site;
 use crate::AppState;
@@ -15,6 +15,7 @@ pub async fn provision(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: Site = sqlx::query_as("SELECT * FROM sites WHERE id = $1 AND user_id = $2")
         .bind(id)
@@ -61,8 +62,7 @@ pub async fn provision(
 
     // Call agent to provision SSL
     let agent_path = format!("/ssl/provision/{}", site.domain);
-    let result = state
-        .agent
+    let result = agent
         .post(&agent_path, Some(agent_body))
         .await
         .map_err(|e| agent_error("SSL provisioning", e))?;
@@ -121,6 +121,7 @@ pub async fn status(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: Site = sqlx::query_as("SELECT * FROM sites WHERE id = $1 AND user_id = $2")
         .bind(id)
@@ -132,7 +133,7 @@ pub async fn status(
 
     // Also fetch live status from agent
     let agent_path = format!("/ssl/status/{}", site.domain);
-    let agent_status = state.agent.get(&agent_path).await.ok();
+    let agent_status = agent.get(&agent_path).await.ok();
 
     Ok(Json(serde_json::json!({
         "ssl_enabled": site.ssl_enabled,

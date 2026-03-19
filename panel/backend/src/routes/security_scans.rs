@@ -4,7 +4,7 @@ use axum::{
     Json,
 };
 
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, ServerScope};
 use crate::error::{err, agent_error, require_admin, ApiError};
 use crate::services::activity;
 use crate::services::notifications;
@@ -39,6 +39,7 @@ pub struct FindingRow {
 pub async fn trigger_scan(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
 
@@ -51,8 +52,7 @@ pub async fn trigger_scan(
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     // Call agent directly
-    let result = state
-        .agent
+    let result = agent
         .post("/security/scan", None::<serde_json::Value>)
         .await
         .map_err(|e| agent_error("Security scan", e))?;

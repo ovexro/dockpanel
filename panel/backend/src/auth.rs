@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::{err, ApiError};
+use crate::services::agent::AgentHandle;
 use crate::AppState;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -95,5 +96,61 @@ impl FromRequestParts<AppState> for AdminUser {
         }
 
         Ok(AdminUser(claims))
+    }
+}
+
+/// Server scope extractor — reads `X-Server-Id` header to determine which server
+/// the request targets. Falls back to the local server if the header is absent.
+///
+/// Usage in handlers:
+/// ```
+/// async fn my_handler(
+///     State(state): State<AppState>,
+///     AuthUser(claims): AuthUser,
+///     ServerScope(server_id, agent): ServerScope,
+/// ) -> Result<..., ApiError> { ... }
+/// ```
+pub struct ServerScope(pub Uuid, pub AgentHandle);
+
+impl FromRequestParts<AppState> for ServerScope {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        // Read X-Server-Id header
+        let server_id = parts
+            .headers
+            .get("x-server-id")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| Uuid::parse_str(v).ok());
+
+        match server_id {
+            Some(sid) => {
+                // Resolve agent for this server
+                let agent = state
+                    .agents
+                    .for_server(sid)
+                    .await
+                    .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
+                Ok(ServerScope(sid, agent))
+            }
+            None => {
+                // Default to local server
+                let local_id = state
+                    .agents
+                    .local_server_id()
+                    .await
+                    .ok_or_else(|| {
+                        err(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "Local server not yet registered",
+                        )
+                    })?;
+                let agent = AgentHandle::Local(state.agents.local().clone());
+                Ok(ServerScope(local_id, agent))
+            }
+        }
     }
 }

@@ -8,10 +8,11 @@ use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, ServerScope};
 use crate::error::{err, agent_error, paginate, ApiError};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
+use crate::services::agent::AgentHandle;
 use crate::AppState;
 
 #[derive(serde::Serialize, sqlx::FromRow)]
@@ -154,6 +155,7 @@ pub async fn remove_config(
 pub async fn trigger(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let domain = get_site(&state, id, claims.sub).await?;
@@ -176,7 +178,7 @@ pub async fn trigger(
     }
 
     let logs = state.provision_logs.clone();
-    let state_clone = state.clone();
+    let db = state.db.clone();
     let user_id = claims.sub;
     let email = claims.email.clone();
     let domain_clone = domain.clone();
@@ -196,7 +198,7 @@ pub async fn trigger(
 
         emit("deploy", "Running deployment", "in_progress", None);
 
-        match execute_deploy(&state_clone, id, &domain_clone, &config, "manual").await {
+        match execute_deploy(&db, &agent, id, &domain_clone, &config, "manual").await {
             Ok(log) => {
                 let ok = log.status == "success";
                 emit("deploy", "Running deployment", if ok { "done" } else { "error" },
@@ -206,7 +208,7 @@ pub async fn trigger(
                     if ok { "done" } else { "error" }, None);
 
                 activity::log_activity(
-                    &state_clone.db, user_id, &email, "deploy.trigger",
+                    &db, user_id, &email, "deploy.trigger",
                     Some("deploy"), Some(&domain_clone), log.commit_hash.as_deref(), Some(&log.status),
                 ).await;
             }
@@ -232,12 +234,12 @@ pub async fn trigger(
 pub async fn keygen(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = get_site(&state, id, claims.sub).await?;
 
-    let result = state
-        .agent
+    let result = agent
         .post("/deploy/keygen", Some(serde_json::json!({ "domain": domain })))
         .await
         .map_err(|e| agent_error("Deploy key generation", e))?;
@@ -359,11 +361,14 @@ pub async fn webhook(
 
     let domain = domain.map(|(d,)| d).unwrap_or_default();
 
+    // Resolve the agent for this webhook (use local agent for webhook-triggered deploys)
+    let agent = crate::services::agent::AgentHandle::Local(state.agents.local().clone());
+
     // Execute deploy in background (webhook should return quickly)
-    let state_clone = state.clone();
+    let db = state.db.clone();
     let domain_clone = domain.clone();
     tokio::spawn(async move {
-        let _ = execute_deploy(&state_clone, site_id, &domain_clone, &config, "webhook").await;
+        let _ = execute_deploy(&db, &agent, site_id, &domain_clone, &config, "webhook").await;
     });
 
     Ok(Json(serde_json::json!({ "ok": true, "message": "Deployment triggered" })))
@@ -371,7 +376,8 @@ pub async fn webhook(
 
 /// Execute a deployment: git clone/pull + run script.
 async fn execute_deploy(
-    state: &AppState,
+    db: &sqlx::PgPool,
+    agent: &AgentHandle,
     site_id: Uuid,
     domain: &str,
     config: &DeployConfig,
@@ -385,8 +391,7 @@ async fn execute_deploy(
         "key_path": config.deploy_key_path,
     });
 
-    let result = state
-        .agent
+    let result = agent
         .post("/deploy/run", Some(agent_body))
         .await
         .map_err(|e| agent_error("Deploy execution", e))?;
@@ -408,7 +413,7 @@ async fn execute_deploy(
     .bind(output)
     .bind(triggered_by)
     .bind(duration_ms)
-    .fetch_one(&state.db)
+    .fetch_one(db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
@@ -418,7 +423,7 @@ async fn execute_deploy(
     )
     .bind(status)
     .bind(site_id)
-    .execute(&state.db)
+    .execute(db)
     .await
     .ok();
 

@@ -36,6 +36,7 @@ pub struct User {
 pub struct Site {
     pub id: Uuid,
     pub user_id: Uuid,
+    pub server_id: Option<Uuid>,
     pub domain: String,
     pub runtime: String,
     pub status: String,

@@ -5,7 +5,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, ServerScope};
 use crate::error::{agent_error, err, ApiError};
 use crate::services::activity;
 use crate::AppState;
@@ -29,19 +29,18 @@ async fn site_domain(state: &AppState, id: Uuid, user_id: Uuid) -> Result<String
 pub async fn info(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = site_domain(&state, id, claims.sub).await?;
 
-    let resp: serde_json::Value = state
-        .agent
+    let resp: serde_json::Value = agent
         .get(&format!("/wordpress/{domain}/info"))
         .await
         .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
 
     // Also get auto-update status
-    let auto: serde_json::Value = state
-        .agent
+    let auto: serde_json::Value = agent
         .get(&format!("/wordpress/{domain}/auto-update"))
         .await
         .unwrap_or(serde_json::json!({ "enabled": false }));
@@ -59,13 +58,13 @@ pub async fn info(
 pub async fn install(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let domain = site_domain(&state, id, claims.sub).await?;
 
-    let resp: serde_json::Value = state
-        .agent
+    let resp: serde_json::Value = agent
         .post(&format!("/wordpress/{domain}/install"), Some(body))
         .await
         .map_err(|e| agent_error("WordPress", e))?;
@@ -89,12 +88,12 @@ pub async fn install(
 pub async fn plugins(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = site_domain(&state, id, claims.sub).await?;
 
-    let resp: serde_json::Value = state
-        .agent
+    let resp: serde_json::Value = agent
         .get(&format!("/wordpress/{domain}/plugins"))
         .await
         .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
@@ -106,12 +105,12 @@ pub async fn plugins(
 pub async fn themes(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = site_domain(&state, id, claims.sub).await?;
 
-    let resp: serde_json::Value = state
-        .agent
+    let resp: serde_json::Value = agent
         .get(&format!("/wordpress/{domain}/themes"))
         .await
         .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
@@ -123,6 +122,7 @@ pub async fn themes(
 pub async fn update(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path((id, target)): Path<(Uuid, String)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = site_domain(&state, id, claims.sub).await?;
@@ -131,8 +131,7 @@ pub async fn update(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid target"));
     }
 
-    let resp: serde_json::Value = state
-        .agent
+    let resp: serde_json::Value = agent
         .post(
             &format!("/wordpress/{domain}/update/{target}"),
             None::<serde_json::Value>,
@@ -159,13 +158,13 @@ pub async fn update(
 pub async fn plugin_action(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path((id, action)): Path<(Uuid, String)>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = site_domain(&state, id, claims.sub).await?;
 
-    let resp: serde_json::Value = state
-        .agent
+    let resp: serde_json::Value = agent
         .post(
             &format!("/wordpress/{domain}/plugin/{action}"),
             Some(body),
@@ -180,13 +179,13 @@ pub async fn plugin_action(
 pub async fn theme_action(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path((id, action)): Path<(Uuid, String)>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = site_domain(&state, id, claims.sub).await?;
 
-    let resp: serde_json::Value = state
-        .agent
+    let resp: serde_json::Value = agent
         .post(
             &format!("/wordpress/{domain}/theme/{action}"),
             Some(body),
@@ -201,13 +200,13 @@ pub async fn theme_action(
 pub async fn set_auto_update(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let domain = site_domain(&state, id, claims.sub).await?;
 
-    let resp: serde_json::Value = state
-        .agent
+    let resp: serde_json::Value = agent
         .post(&format!("/wordpress/{domain}/auto-update"), Some(body))
         .await
         .map_err(|e| agent_error("WordPress", e))?;

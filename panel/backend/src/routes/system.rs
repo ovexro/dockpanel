@@ -10,10 +10,11 @@ use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
-use crate::auth::{AdminUser, AuthUser};
+use crate::auth::{AdminUser, AuthUser, ServerScope};
 use crate::error::{err, agent_error, ApiError};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
+use crate::services::agent::AgentHandle;
 use crate::AppState;
 
 /// GET /api/health — Public health check.
@@ -29,9 +30,9 @@ pub async fn health() -> Json<serde_json::Value> {
 pub async fn info(
     State(state): State<AppState>,
     AuthUser(_claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let data = state
-        .agent
+    let data = agent
         .get("/system/info")
         .await
         .map_err(|e| agent_error("System info", e))?;
@@ -42,9 +43,9 @@ pub async fn info(
 pub async fn diagnostics(
     State(state): State<AppState>,
     AuthUser(_claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let data = state
-        .agent
+    let data = agent
         .get("/diagnostics")
         .await
         .map_err(|e| agent_error("Diagnostics", e))?;
@@ -55,10 +56,10 @@ pub async fn diagnostics(
 pub async fn diagnostics_fix(
     State(state): State<AppState>,
     crate::auth::AdminUser(_claims): crate::auth::AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let data = state
-        .agent
+    let data = agent
         .post("/diagnostics/fix", Some(body))
         .await
         .map_err(|e| agent_error("Diagnostics fix", e))?;
@@ -69,9 +70,9 @@ pub async fn diagnostics_fix(
 pub async fn disk_cleanup(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let data = state
-        .agent
+    let data = agent
         .post("/system/cleanup", None)
         .await
         .map_err(|e| agent_error("Disk cleanup", e))?;
@@ -88,10 +89,10 @@ pub async fn disk_cleanup(
 pub async fn change_hostname(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let data = state
-        .agent
+    let data = agent
         .post("/system/hostname", Some(body))
         .await
         .map_err(|e| agent_error("Hostname change", e))?;
@@ -108,9 +109,9 @@ pub async fn change_hostname(
 pub async fn updates_list(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let data = state
-        .agent
+    let data = agent
         .get("/system/updates")
         .await
         .map_err(|e| agent_error("System updates", e))?;
@@ -122,6 +123,7 @@ pub async fn updates_list(
 pub async fn updates_apply(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let install_id = uuid::Uuid::new_v4();
@@ -133,7 +135,6 @@ pub async fn updates_apply(
     }
 
     let logs = state.provision_logs.clone();
-    let agent = state.agent.clone();
     let db = state.db.clone();
     let email = claims.email.clone();
     let user_id = claims.sub;
@@ -189,9 +190,9 @@ pub async fn updates_apply(
 pub async fn updates_count(
     State(state): State<AppState>,
     AuthUser(_claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let data = state
-        .agent
+    let data = agent
         .get("/system/updates/count")
         .await
         .map_err(|e| agent_error("Update count", e))?;
@@ -202,9 +203,9 @@ pub async fn updates_count(
 pub async fn system_reboot(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let data = state
-        .agent
+    let data = agent
         .post("/system/reboot", None::<serde_json::Value>)
         .await
         .map_err(|e| agent_error("System reboot", e))?;
@@ -222,8 +223,9 @@ pub async fn system_reboot(
 pub async fn install_status(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.get("/services/install-status").await
+    let result = agent.get("/services/install-status").await
         .map_err(|e| agent_error("Install status", e))?;
     Ok(Json(result))
 }
@@ -231,6 +233,7 @@ pub async fn install_status(
 /// Generic service install with provisioning log (async SSE).
 async fn install_service_with_log(
     state: &AppState,
+    agent: AgentHandle,
     claims_sub: Uuid,
     claims_email: &str,
     service_name: &str,
@@ -245,7 +248,6 @@ async fn install_service_with_log(
     }
 
     let logs = state.provision_logs.clone();
-    let agent = state.agent.clone();
     let db = state.db.clone();
     let svc = service_name.to_string();
     let path = agent_path.to_string();
@@ -299,22 +301,25 @@ async fn install_service_with_log(
 pub async fn install_php(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, claims.sub, &claims.email, "PHP", "/services/install/php").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "PHP", "/services/install/php").await
 }
 
 pub async fn install_certbot(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, claims.sub, &claims.email, "Certbot", "/services/install/certbot").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "Certbot", "/services/install/certbot").await
 }
 
 pub async fn install_ufw(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, claims.sub, &claims.email, "UFW Firewall", "/services/install/ufw").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "UFW Firewall", "/services/install/ufw").await
 }
 
 /// GET /api/services/install/{install_id}/log — SSE stream of install progress.
@@ -361,17 +366,19 @@ pub async fn install_log(
 pub async fn list_ssh_keys(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.get("/ssh-keys").await.map_err(|e| agent_error("SSH keys", e))?;
+    let result = agent.get("/ssh-keys").await.map_err(|e| agent_error("SSH keys", e))?;
     Ok(Json(result))
 }
 
 pub async fn add_ssh_key(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.post("/ssh-keys", Some(body)).await.map_err(|e| agent_error("Add SSH key", e))?;
+    let result = agent.post("/ssh-keys", Some(body)).await.map_err(|e| agent_error("Add SSH key", e))?;
     activity::log_activity(&state.db, claims.sub, &claims.email, "ssh.key.add", Some("system"), None, None, None).await;
     Ok(Json(result))
 }
@@ -380,8 +387,9 @@ pub async fn remove_ssh_key(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
     axum::extract::Path(fingerprint): axum::extract::Path<String>,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.delete(&format!("/ssh-keys/{fingerprint}")).await.map_err(|e| agent_error("Remove SSH key", e))?;
+    let result = agent.delete(&format!("/ssh-keys/{fingerprint}")).await.map_err(|e| agent_error("Remove SSH key", e))?;
     activity::log_activity(&state.db, claims.sub, &claims.email, "ssh.key.remove", Some("system"), None, None, None).await;
     Ok(Json(result))
 }
@@ -391,16 +399,18 @@ pub async fn remove_ssh_key(
 pub async fn auto_updates_status(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.get("/auto-updates/status").await.map_err(|e| agent_error("Auto-updates", e))?;
+    let result = agent.get("/auto-updates/status").await.map_err(|e| agent_error("Auto-updates", e))?;
     Ok(Json(result))
 }
 
 pub async fn enable_auto_updates(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.post("/auto-updates/enable", None).await.map_err(|e| agent_error("Enable auto-updates", e))?;
+    let result = agent.post("/auto-updates/enable", None).await.map_err(|e| agent_error("Enable auto-updates", e))?;
     activity::log_activity(&state.db, claims.sub, &claims.email, "auto-updates.enable", Some("system"), None, None, None).await;
     Ok(Json(result))
 }
@@ -408,8 +418,9 @@ pub async fn enable_auto_updates(
 pub async fn disable_auto_updates(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.post("/auto-updates/disable", None).await.map_err(|e| agent_error("Disable auto-updates", e))?;
+    let result = agent.post("/auto-updates/disable", None).await.map_err(|e| agent_error("Disable auto-updates", e))?;
     activity::log_activity(&state.db, claims.sub, &claims.email, "auto-updates.disable", Some("system"), None, None, None).await;
     Ok(Json(result))
 }
@@ -419,17 +430,19 @@ pub async fn disable_auto_updates(
 pub async fn get_panel_whitelist(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.get("/panel-whitelist").await.map_err(|e| agent_error("Whitelist", e))?;
+    let result = agent.get("/panel-whitelist").await.map_err(|e| agent_error("Whitelist", e))?;
     Ok(Json(result))
 }
 
 pub async fn set_panel_whitelist(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = state.agent.post("/panel-whitelist", Some(body)).await.map_err(|e| agent_error("Set whitelist", e))?;
+    let result = agent.post("/panel-whitelist", Some(body)).await.map_err(|e| agent_error("Set whitelist", e))?;
     activity::log_activity(&state.db, claims.sub, &claims.email, "panel.whitelist.update", Some("system"), None, None, None).await;
     Ok(Json(result))
 }
@@ -437,6 +450,7 @@ pub async fn set_panel_whitelist(
 pub async fn install_powerdns(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let install_id = Uuid::new_v4();
 
@@ -447,7 +461,6 @@ pub async fn install_powerdns(
     }
 
     let logs = state.provision_logs.clone();
-    let agent = state.agent.clone();
     let db = state.db.clone();
     let user_id = claims.sub;
     let email = claims.email.clone();
@@ -516,9 +529,9 @@ pub async fn install_powerdns(
 pub async fn disk_io(
     State(state): State<AppState>,
     AuthUser(_claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let data = state
-        .agent
+    let data = agent
         .get("/system/disk-io")
         .await
         .map_err(|e| agent_error("Disk I/O", e))?;
@@ -528,6 +541,7 @@ pub async fn disk_io(
 pub async fn install_fail2ban(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, claims.sub, &claims.email, "Fail2Ban", "/services/install/fail2ban").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "Fail2Ban", "/services/install/fail2ban").await
 }
