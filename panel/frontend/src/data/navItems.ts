@@ -43,15 +43,3 @@ export const navGroups: NavGroup[] = [
     ],
   },
 ];
-
-// Sub-navigation for Atlas context sidebar
-export const subNavMap: Record<string, { label: string; to: string; iconName: string }[]> = {
-  "/sites/:id": [
-    { label: "Overview", to: "", iconName: "sites" },
-    { label: "Files", to: "/files", iconName: "files" },
-    { label: "Backups", to: "/backups", iconName: "backups" },
-    { label: "Crons", to: "/crons", iconName: "crons" },
-    { label: "Deploy", to: "/deploy", iconName: "deploy" },
-    { label: "WordPress", to: "/wordpress", iconName: "wordpress" },
-  ],
-};

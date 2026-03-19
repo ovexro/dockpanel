@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { useState, useEffect, lazy, Suspense } from "react";
 import CommandLayout from "./CommandLayout";
 
 const GlassLayout = lazy(() => import("./GlassLayout"));
@@ -11,7 +11,13 @@ const fallback = (
 );
 
 export default function LayoutShell() {
-  const layout = localStorage.getItem("dp-layout") || "command";
+  const [layout, setLayout] = useState(() => localStorage.getItem("dp-layout") || "command");
+
+  useEffect(() => {
+    const handler = () => setLayout(localStorage.getItem("dp-layout") || "command");
+    window.addEventListener("dp-layout-change", handler);
+    return () => window.removeEventListener("dp-layout-change", handler);
+  }, []);
 
   if (layout === "glass") return <Suspense fallback={fallback}><GlassLayout /></Suspense>;
   if (layout === "atlas") return <Suspense fallback={fallback}><AtlasLayout /></Suspense>;
