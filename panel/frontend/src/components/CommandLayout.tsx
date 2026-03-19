@@ -1,4 +1,4 @@
-import { Navigate, Outlet, NavLink, Link } from "react-router-dom";
+import { Navigate, Outlet, NavLink, Link, useNavigate } from "react-router-dom";
 import { useLayoutState } from "../hooks/useLayoutState";
 import { useServer } from "../context/ServerContext";
 import { Icon } from "../data/icons";
@@ -9,6 +9,7 @@ function ServerSelector() {
   const { servers, activeServer, setActiveServerId } = useServer();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -37,7 +38,7 @@ function ServerSelector() {
           {servers.map((s) => (
             <button
               key={s.id}
-              onClick={() => { setActiveServerId(s.id); setOpen(false); window.location.reload(); }}
+              onClick={() => { setActiveServerId(s.id); setOpen(false); window.location.href = "/"; }}
               className={`w-full flex items-center gap-2 px-3 py-2 text-sm font-mono text-left hover:bg-dark-700/50 transition-colors ${s.id === activeServer?.id ? "bg-dark-800 text-dark-50" : "text-dark-300"}`}
             >
               <div className={`w-2 h-2 rounded-full shrink-0 ${s.status === "online" ? "bg-rust-500" : s.status === "offline" ? "bg-danger-500" : "bg-dark-400"}`} />

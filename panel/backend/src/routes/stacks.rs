@@ -37,15 +37,16 @@ pub struct UpdateStackRequest {
 pub async fn list(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
 
     let stacks: Vec<Stack> = sqlx::query_as(
         "SELECT id, user_id, name, yaml, service_count, created_at, updated_at \
-         FROM docker_stacks WHERE user_id = $1 ORDER BY created_at DESC",
+         FROM docker_stacks WHERE user_id = $1 AND server_id = $2 ORDER BY created_at DESC",
     )
     .bind(claims.sub)
+    .bind(server_id)
     .fetch_all(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
