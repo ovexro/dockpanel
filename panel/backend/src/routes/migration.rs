@@ -280,12 +280,21 @@ pub async fn import(
         logs.insert(id, (Vec::new(), tx, Instant::now()));
     }
 
+    // Extract the agent-side migration_id from the inventory (needed for agent import calls)
+    let agent_migration_id = migration
+        .inventory
+        .as_ref()
+        .and_then(|inv| inv.get("id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "Migration inventory missing agent ID"))?;
+
     // Clone everything needed for the spawned task
     let logs = state.provision_logs.clone();
     let db = state.db.clone();
     let user_id = claims.sub;
     let email = claims.email.clone();
-    let backup_path = migration.backup_path.clone();
+    let agent_migration_id = agent_migration_id.clone();
     let migration_source = migration.source.clone();
 
     tokio::spawn(async move {
@@ -381,9 +390,9 @@ pub async fn import(
 
             // 3. Copy files via agent
             let import_body = serde_json::json!({
-                "backup_path": backup_path,
+                "migration_id": agent_migration_id,
                 "domain": domain,
-                "doc_root": site_item.doc_root,
+                "source_dir": site_item.doc_root,
             });
 
             if let Err(e) = agent
@@ -478,12 +487,12 @@ pub async fn import(
                 "port": port,
             });
 
-            let container_id = match agent.post("/databases", Some(create_body)).await {
-                Ok(resp) => resp
-                    .get("container_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
+            let (container_id, container_name) = match agent.post("/databases", Some(create_body)).await {
+                Ok(resp) => {
+                    let cid = resp.get("container_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let cname = resp.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    (cid, cname)
+                }
                 Err(e) => {
                     let msg = format!("Database container creation failed for {db_name}: {e}");
                     tracing::error!("{msg}");
@@ -522,12 +531,13 @@ pub async fn import(
 
             // Import SQL dump via agent
             let import_body = serde_json::json!({
-                "backup_path": backup_path,
-                "name": db_name,
-                "file": db_item.file,
+                "migration_id": agent_migration_id,
+                "sql_file": db_item.file,
+                "container_name": container_name,
+                "db_name": db_name,
                 "engine": engine,
+                "user": db_name,
                 "password": password,
-                "port": port,
             });
 
             match agent
@@ -687,8 +697,14 @@ pub async fn remove(
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Migration not found"))?;
 
     // Ask agent to clean up extracted temp files (best-effort)
+    let agent_migration_id = migration
+        .inventory
+        .as_ref()
+        .and_then(|inv| inv.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let cleanup_body = serde_json::json!({
-        "backup_path": migration.backup_path,
+        "migration_id": agent_migration_id,
     });
     if let Err(e) = agent
         .post("/migration/cleanup", Some(cleanup_body))
