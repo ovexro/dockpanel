@@ -19,3 +19,4 @@ pub mod smtp;
 pub mod ssl;
 pub mod staging;
 pub mod wordpress;
+pub mod wp_vulnerability;
