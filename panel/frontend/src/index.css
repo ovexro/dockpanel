@@ -80,6 +80,12 @@ body {
   background-size: 100% 3px;
 }
 
+/* Remove scanlines for Glass and Atlas layouts */
+[data-layout="glass"] body,
+[data-layout="atlas"] body {
+  background-image: none;
+}
+
 
 /* ═══════════════════════════════════════════════════════
    THEME: MIDNIGHT — Deep navy, electric blue, modern SaaS

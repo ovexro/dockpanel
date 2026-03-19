@@ -638,7 +638,7 @@ export default function Settings() {
                     <button key={l.id} onClick={() => {
                       localStorage.setItem("dp-layout", l.id);
                       document.documentElement.setAttribute("data-layout", l.id);
-                      window.location.reload();
+                      window.dispatchEvent(new Event("dp-layout-change"));
                     }}
                       className="text-left transition-all duration-150"
                       style={{
