@@ -26,52 +26,69 @@ After installation, open `http://YOUR_SERVER_IP:8443` and create your admin acco
 
 ## Features
 
-- **Site Management** — Static, PHP (multiple versions), Node.js, and reverse proxy sites with automatic Nginx configuration
+### Hosting & Sites
+- **Site Management** — Static, PHP (multiple versions), Node.js, Python, and reverse proxy sites with automatic Nginx configuration
 - **Free SSL** — Automatic Let's Encrypt provisioning and renewal
-- **Database Management** — MySQL and PostgreSQL in Docker containers with credential management
-- **Docker Apps** — 34 one-click templates across 10 categories (databases, CMS, monitoring, analytics, tools, dev, storage, media, networking, security) + Docker Compose import
-- **Web Terminal** — Full SSH terminal in your browser via WebSocket
-- **File Manager** — Browse, edit, upload, and download files from the browser
-- **Backups** — Scheduled backups with S3-compatible remote destinations and one-click restore
-- **Monitoring** — Real-time CPU, RAM, disk, and network dashboards with uptime monitoring
-- **Alerts** — Configurable alert rules with email, Slack, and Discord notifications
-- **Security** — Firewall management, Fail2Ban, SSH hardening, security scanning with scoring
-- **DNS Management** — Built-in DNS zone management with full record CRUD
-- **Git Deploy** — Connect Git repos for automated deployments via webhooks
+- **Database Management** — MySQL and PostgreSQL in Docker containers with built-in SQL browser
+- **Docker Apps** — 34 one-click templates across 10 categories + Docker Compose stack management
+- **Git Deploy** — Push-to-deploy with blue-green zero-downtime updates, Nixpacks auto-detection (30+ languages), preview environments with TTL cleanup
+- **WordPress Toolkit** — Multi-site dashboard, vulnerability scanning (14+ known exploits), security hardening (7 checks, 6 auto-fixable), bulk updates
+- **One-Click CMS** — WordPress, Laravel, Drupal, Joomla, Symfony, CodeIgniter with database + SSL provisioning
 - **Staging** — Create staging environments, sync from production, push to live
-- **Cron Jobs** — Create, edit, and manage cron jobs with execution tracking
-- **Teams** — Multi-user access with admin/user roles and team-based permissions
-- **Activity Log** — Full audit trail of all panel actions
-- **CLI** — Full command-line interface (`dockpanel status`, `dockpanel sites`, `dockpanel diagnose`, etc.)
+
+### Infrastructure
+- **Multi-Server** — Manage unlimited remote servers from a single panel with per-server resource scoping
+- **Traefik Option** — Choose nginx or Traefik as reverse proxy for Docker apps (auto-SSL, service discovery)
+- **DNS Management** — Cloudflare + PowerDNS with zone templates, propagation checker, DNSSEC
+- **Email Management** — Full mail server (Postfix + Dovecot + OpenDKIM), webmail, spam filtering, SMTP relay
+- **Backups** — Scheduled backups with S3-compatible remote destinations and one-click restore
+
+### Monitoring & Security
+- **Real-Time Dashboards** — CPU, RAM, disk, network, Docker containers, historical sparkline charts
+- **Uptime Monitoring** — HTTP/TCP/ping checks with SLA tracking, public status pages, PagerDuty
+- **Alerts** — CPU/memory/disk thresholds, server offline, SSL expiry, service health — email, Slack, Discord
+- **Security** — Firewall, Fail2Ban, SSH hardening, vulnerability scanning, compliance reports, auto-healing
+- **2FA** — TOTP two-factor authentication with recovery codes
+
+### Developer Experience
+- **Web Terminal** — Full SSH terminal with tabs, themes, sharing, session recording
+- **File Manager** — Browse, edit, upload, and download files from the browser
+- **CLI** — Full command-line interface (`dockpanel status`, `dockpanel sites`, `dockpanel diagnose`)
 - **Infrastructure as Code** — Export/import server config as YAML (`dockpanel export`, `dockpanel apply`)
 - **Smart Diagnostics** — Pattern-based issue detection with one-click fixes
-- **Auto-Healing** — Automatic restart of crashed services, log cleanup, SSL renewal
-- **2FA** — TOTP two-factor authentication with recovery codes
-- **Multi-Server** — Manage unlimited servers from a single dashboard
+
+### Business Features
+- **Reseller Accounts** — Admin → Reseller → User hierarchy with quotas, server allocation, and branding
+- **White-Label** — Custom logo, panel name, accent color, and hide DockPanel branding per reseller
+- **OAuth / SSO** — Login via Google, GitHub, or GitLab (OAuth 2.0)
+- **Extension API** — Webhook-based integrations with HMAC-signed event delivery and scoped API keys
+- **Migration Wizard** — Import sites, databases, and email from cPanel, Plesk, or HestiaCP
+- **Teams** — Multi-user access with admin/reseller/user roles and team-based permissions
+- **Activity Log** — Full audit trail of all panel actions
 - **ARM64** — Runs on Raspberry Pi, Oracle Cloud free-tier ARM, and any ARM64 server
 
 ## Architecture
 
 ```
 Browser
-  │
-  ├── React SPA (Vite + Tailwind)
-  │
-  └── Nginx (reverse proxy + static files)
-        │
-        ├── /api/* ──→ API (Rust/Axum, port 3080)
-        │                 │
-        │                 ├── PostgreSQL 16 (Docker, port 5450)
-        │                 │
-        │                 └── Agent (Unix socket)
-        │                       │
-        │                       └── Docker, Nginx, SSL, Files, Backups, Terminal
-        │
-        └── /* ────→ Frontend dist/ (static files)
+  |
+  +-- React SPA (Vite + Tailwind)
+  |
+  +-- Nginx (reverse proxy + static files)
+        |
+        +-- /api/* --> API (Rust/Axum, port 3080)
+        |                 |
+        |                 +-- PostgreSQL 16 (Docker, port 5450)
+        |                 |
+        |                 +-- Agent (Unix socket or HTTPS for remote)
+        |                       |
+        |                       +-- Docker, Nginx, SSL, Files, Backups, Terminal
+        |
+        +-- /* -----> Frontend dist/ (static files)
 ```
 
-- **Agent** — Rust binary, runs as root via systemd. Manages host resources (Docker, Nginx configs, SSL certs, file system, backups, terminal). Listens on Unix socket.
-- **API** — Rust binary, runs via systemd. Handles auth, database operations, alert engine, and proxies commands to the agent.
+- **Agent** — Rust binary, runs as root via systemd. Manages host resources (Docker, Nginx, SSL, file system, backups, terminal). Unix socket locally, HTTPS for remote servers.
+- **API** — Rust binary, runs via systemd. Handles auth, database operations, alert engine, multi-server dispatch, and proxies commands to agents.
 - **Frontend** — React 19 SPA with lazy-loaded pages. Served directly by Nginx from `dist/`.
 
 ## Requirements
@@ -86,25 +103,25 @@ Browser
 
 ```
 dockpanel/
-├── panel/
-│   ├── agent/          # Rust agent (host-level operations)
-│   ├── backend/        # Rust API server
-│   ├── cli/            # Rust CLI binary
-│   └── frontend/       # React frontend
-├── scripts/
-│   ├── install.sh      # Quick installer (curl | bash)
-│   ├── setup.sh        # Full setup script
-│   ├── update.sh       # Update to latest version
-│   └── uninstall.sh    # Complete removal
-├── website/            # Marketing site (dockpanel.dev)
-└── docs/               # Documentation
++-- panel/
+|   +-- agent/          # Rust agent (host-level operations)
+|   +-- backend/        # Rust API server
+|   +-- cli/            # Rust CLI binary
+|   +-- frontend/       # React frontend
++-- scripts/
+|   +-- install.sh      # Quick installer (curl | bash)
+|   +-- install-agent.sh # Remote agent installer (multi-server)
+|   +-- setup.sh        # Full setup script
+|   +-- update.sh       # Update to latest version
+|   +-- uninstall.sh    # Complete removal
++-- website/            # Marketing site (dockpanel.dev)
 ```
 
 ## Development
 
 ### Prerequisites
 
-- Rust 1.75+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
+- Rust 1.94+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
 - Node.js 20+ and npm
 
 ### Build
