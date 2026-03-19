@@ -50,7 +50,7 @@ const features = [
       </svg>
     ),
     title: 'Docker Apps & Compose',
-    description: '53 one-click app templates across 11 categories — databases, CMS, monitoring, analytics, mail, and more. Real-time deploy progress, auto reverse proxy with SSL, container health checks, and CPU/memory resource limits.',
+    description: '34 one-click app templates across 10 categories — databases, CMS, monitoring, analytics, mail, and more. Real-time deploy progress, auto reverse proxy with SSL, container health checks, and CPU/memory resource limits.',
     iconBg: 'bg-brand-500/10',
     iconColor: 'text-brand-400',
   },
@@ -183,6 +183,94 @@ const features = [
     ),
     title: 'Zero-Friction Setup',
     description: 'One install script sets up everything — Docker, Nginx, PHP, Certbot, UFW, Fail2Ban. Every additional service (mail, DNS) is one click away from the panel. SSH keys, auto-updates, and IP whitelisting built in.',
+    iconBg: 'bg-orange-500/10',
+    iconColor: 'text-orange-400',
+  },
+  {
+    icon: (
+      <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5.25 14.25h13.5m-13.5 0a3 3 0 01-3-3m3 3a3 3 0 100 6h13.5a3 3 0 100-6m-16.5-3a3 3 0 013-3h13.5a3 3 0 013 3m-19.5 0a4.5 4.5 0 01.9-2.7L5.737 5.1a3.375 3.375 0 012.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 01.9 2.7" />
+      </svg>
+    ),
+    title: 'Multi-Server Management',
+    description: 'Manage unlimited remote servers from a single dashboard. Install a lightweight agent, connect via HTTPS, and control sites, apps, and databases across all your servers.',
+    iconBg: 'bg-brand-500/10',
+    iconColor: 'text-brand-400',
+  },
+  {
+    icon: (
+      <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
+      </svg>
+    ),
+    title: 'Reseller & White-Label',
+    description: 'Admin → Reseller → User hierarchy with quotas and server allocation. Per-reseller branding: custom logo, panel name, accent color, and option to hide DockPanel branding entirely.',
+    iconBg: 'bg-violet-500/10',
+    iconColor: 'text-violet-400',
+  },
+  {
+    icon: (
+      <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
+      </svg>
+    ),
+    title: 'OAuth / SSO Login',
+    description: 'Login via Google, GitHub, or GitLab with OAuth 2.0. Auto-create users on first login, CSRF protection, and secure token handling. No more password fatigue.',
+    iconBg: 'bg-rose-500/10',
+    iconColor: 'text-rose-400',
+  },
+  {
+    icon: (
+      <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
+      </svg>
+    ),
+    title: 'Nixpacks Auto-Build',
+    description: 'Deploy any app without a Dockerfile. Nixpacks auto-detects 30+ languages (Node, Python, Go, Rust, Ruby, Java, and more) and builds optimized Docker images automatically.',
+    iconBg: 'bg-orange-500/10',
+    iconColor: 'text-orange-400',
+  },
+  {
+    icon: (
+      <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
+      </svg>
+    ),
+    title: 'Migration Wizard',
+    description: 'Import sites, databases, and email from cPanel, Plesk, or HestiaCP. Upload your backup, review what was found, and import selected items with real-time progress.',
+    iconBg: 'bg-brand-500/10',
+    iconColor: 'text-brand-400',
+  },
+  {
+    icon: (
+      <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 003 12c0-1.605.42-3.113 1.157-4.418" />
+      </svg>
+    ),
+    title: 'WordPress Toolkit',
+    description: 'Multi-site WP dashboard with vulnerability scanning against known exploits. Security hardening with one-click fixes. Bulk update plugins, themes, and core across all your WordPress sites.',
+    iconBg: 'bg-violet-500/10',
+    iconColor: 'text-violet-400',
+  },
+  {
+    icon: (
+      <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M14.25 9.75L16.5 12l-2.25 2.25m-4.5 0L7.5 12l2.25-2.25M6 20.25h12A2.25 2.25 0 0020.25 18V6A2.25 2.25 0 0018 3.75H6A2.25 2.25 0 003.75 6v12A2.25 2.25 0 006 20.25z" />
+      </svg>
+    ),
+    title: 'Extension / Plugin API',
+    description: 'Webhook-based integrations with HMAC-signed event delivery. Register extensions that receive site, deploy, backup, and security events. Scoped API keys for programmatic access.',
+    iconBg: 'bg-rose-500/10',
+    iconColor: 'text-rose-400',
+  },
+  {
+    icon: (
+      <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
+      </svg>
+    ),
+    title: 'Traefik Reverse Proxy',
+    description: 'Choose nginx or Traefik for Docker app routing. Traefik provides native Docker service discovery, automatic Let\'s Encrypt SSL, and a built-in routing dashboard.',
     iconBg: 'bg-orange-500/10',
     iconColor: 'text-orange-400',
   },
