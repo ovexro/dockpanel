@@ -11,8 +11,12 @@ use crate::AppState;
 
 #[derive(serde::Deserialize)]
 pub struct CallbackQuery {
-    pub code: String,
+    pub code: Option<String>,
     pub state: String,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub error_description: Option<String>,
 }
 
 /// OAuth provider configuration
@@ -97,6 +101,14 @@ pub async fn callback(
     Path(provider_name): Path<String>,
     Query(query): Query<CallbackQuery>,
 ) -> Result<Response, ApiError> {
+    // Check for OAuth error response from provider
+    if let Some(ref error) = query.error {
+        let desc = query.error_description.as_deref().unwrap_or("Unknown error");
+        return Err(err(StatusCode::BAD_REQUEST, &format!("OAuth error: {error} — {desc}")));
+    }
+    let code = query.code.as_ref()
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Missing authorization code"))?;
+
     let provider = get_provider(&provider_name)
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Unknown OAuth provider"))?;
 
@@ -140,7 +152,7 @@ pub async fn callback(
         .form(&[
             ("client_id", client_id.as_str()),
             ("client_secret", client_secret.as_str()),
-            ("code", query.code.as_str()),
+            ("code", code.as_str()),
             ("redirect_uri", redirect_uri.as_str()),
             ("grant_type", "authorization_code"),
         ])
@@ -197,6 +209,10 @@ pub async fn callback(
     let email = email.ok_or_else(|| err(StatusCode::BAD_GATEWAY, "Could not retrieve email from OAuth provider"))?;
     let oauth_id = userinfo.get("id").map(|v| v.to_string()).unwrap_or_else(|| userinfo.get("sub").map(|v| v.to_string()).unwrap_or_default());
 
+    if oauth_id.is_empty() {
+        return Err(err(StatusCode::BAD_GATEWAY, "OAuth provider did not return a user ID"));
+    }
+
     // Find or create user
     let user: Option<crate::models::User> = sqlx::query_as(
         "SELECT * FROM users WHERE email = $1"
@@ -208,8 +224,8 @@ pub async fn callback(
 
     let user = match user {
         Some(mut u) => {
-            // Link OAuth if not already linked
-            if u.oauth_provider.is_none() {
+            // Only auto-link if user has no password (OAuth-only) or already same provider
+            if u.oauth_provider.is_none() && u.password_hash.is_empty() {
                 sqlx::query("UPDATE users SET oauth_provider = $1, oauth_id = $2 WHERE id = $3")
                     .bind(&provider_name)
                     .bind(&oauth_id)
@@ -218,6 +234,10 @@ pub async fn callback(
                     .await
                     .ok();
                 u.oauth_provider = Some(provider_name.clone());
+            } else if u.oauth_provider.is_none() {
+                // User has a password — don't auto-link, require manual linking
+                return Err(err(StatusCode::CONFLICT,
+                    "An account with this email exists. Log in with your password and link OAuth in Settings."));
             }
             u
         }
@@ -274,9 +294,14 @@ pub async fn callback(
     )
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("JWT encode failed: {e}")))?;
 
+    crate::services::activity::log_activity(
+        &state.db, user.id, &user.email, "auth.oauth_login",
+        Some("user"), Some(&provider_name), None, None,
+    ).await;
+
     // Set cookie and redirect to dashboard
     let cookie = format!(
-        "token={token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=7200"
+        "token={token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=7200"
     );
 
     Ok(Response::builder()
