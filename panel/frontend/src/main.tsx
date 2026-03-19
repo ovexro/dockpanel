@@ -86,6 +86,7 @@ const WordPress = lazyRetry(() => import("./pages/WordPress"));
 const WordPressToolkit = lazyRetry(() => import("./pages/WordPressToolkit"));
 const Logs = lazyRetry(() => import("./pages/Logs"));
 const Apps = lazyRetry(() => import("./pages/Apps"));
+const Extensions = lazyRetry(() => import("./pages/Extensions"));
 const Security = lazyRetry(() => import("./pages/Security"));
 const Settings = lazyRetry(() => import("./pages/Settings"));
 const Mail = lazyRetry(() => import("./pages/Mail"));
@@ -125,6 +126,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/logs" element={<Logs />} />
               <Route path="/apps" element={<Apps />} />
               <Route path="/git-deploys" element={<GitDeploys />} />
+              <Route path="/extensions" element={<Extensions />} />
               <Route path="/security" element={<Security />} />
               <Route path="/diagnostics" element={<Navigate to="/security" replace />} />
               <Route path="/settings" element={<Settings />} />
