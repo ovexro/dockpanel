@@ -101,6 +101,12 @@ pub async fn deploy(
     let deploy_memory = body.memory_mb;
     let deploy_cpu = body.cpu_percent;
 
+    // Read reverse proxy preference (nginx or traefik)
+    let reverse_proxy: Option<(String,)> = sqlx::query_as(
+        "SELECT value FROM settings WHERE key = 'reverse_proxy'"
+    ).fetch_optional(&state.db).await.ok().flatten();
+    let use_traefik = reverse_proxy.map(|(v,)| v == "traefik").unwrap_or(false);
+
     let mut agent_body = serde_json::json!({
         "template_id": body.template_id,
         "name": body.name,
@@ -120,6 +126,9 @@ pub async fn deploy(
     }
     if let Some(cpu) = deploy_cpu {
         agent_body["cpu_percent"] = serde_json::json!(cpu);
+    }
+    if use_traefik {
+        agent_body["use_traefik"] = serde_json::json!(true);
     }
 
     // Spawn background deploy task

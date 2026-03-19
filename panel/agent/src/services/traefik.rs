@@ -43,8 +43,19 @@ pub async fn install(docker: &Docker, acme_email: &str) -> Result<TraefikStatus,
     // Ensure network exists
     ensure_network(docker).await?;
 
-    // Create config directory
+    // Create config and dynamic config directories
     std::fs::create_dir_all(TRAEFIK_CONFIG_DIR).ok();
+    std::fs::create_dir_all(format!("{TRAEFIK_CONFIG_DIR}/dynamic")).ok();
+
+    // Set restrictive permissions for ACME storage directory
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(
+            TRAEFIK_CONFIG_DIR,
+            std::fs::Permissions::from_mode(0o700),
+        );
+    }
 
     // Check if already exists
     if let Ok(info) = docker.inspect_container(TRAEFIK_CONTAINER, None).await {
@@ -82,10 +93,15 @@ pub async fn install(docker: &Docker, acme_email: &str) -> Result<TraefikStatus,
     }
 
     // Build container config
+    // NOTE: --api.insecure=true exposes the dashboard on port 8080 without auth.
+    // This is safe because it's bound to 127.0.0.1 only (not externally accessible).
     let cmd: Vec<String> = vec![
         "--providers.docker=true".into(),
         "--providers.docker.exposedByDefault=false".into(),
         format!("--providers.docker.network={PROXY_NETWORK}"),
+        // File provider for dynamic route configs (used when deploying apps with Traefik)
+        "--providers.file.directory=/etc/traefik/dynamic".into(),
+        "--providers.file.watch=true".into(),
         "--entrypoints.web.address=:80".into(),
         "--entrypoints.websecure.address=:443".into(),
         format!("--certificatesresolvers.letsencrypt.acme.email={acme_email}"),
@@ -165,6 +181,16 @@ pub async fn install(docker: &Docker, acme_email: &str) -> Result<TraefikStatus,
 pub async fn uninstall(docker: &Docker) -> Result<(), String> {
     let _ = docker.stop_container(TRAEFIK_CONTAINER, None).await;
     let _ = docker.remove_container(TRAEFIK_CONTAINER, None).await;
+
+    // Remove proxy network (ignore errors if containers are still connected)
+    let _ = docker.remove_network(PROXY_NETWORK).await;
+
+    // Clean up dynamic route configs
+    let dynamic_dir = format!("{TRAEFIK_CONFIG_DIR}/dynamic");
+    if std::path::Path::new(&dynamic_dir).exists() {
+        std::fs::remove_dir_all(&dynamic_dir).ok();
+    }
+
     tracing::info!("Traefik uninstalled");
     Ok(())
 }
@@ -221,4 +247,75 @@ pub async fn connect_to_network(docker: &Docker, container_id: &str) -> Result<(
     .await
     .map_err(|e| format!("Failed to connect to proxy network: {e}"))?;
     Ok(())
+}
+
+/// Write a Traefik dynamic route config file for an app.
+/// Traefik auto-reloads file configs via the file provider (--providers.file.watch=true).
+pub fn write_route_config(domain: &str, backend_port: u16, ssl: bool) -> Result<(), String> {
+    let safe = domain.replace('.', "-").replace(':', "-");
+    let dir = format!("{TRAEFIK_CONFIG_DIR}/dynamic");
+    std::fs::create_dir_all(&dir).ok();
+
+    let config = if ssl {
+        format!(
+            r#"http:
+  routers:
+    {safe}:
+      rule: "Host(`{domain}`)"
+      entryPoints:
+        - web
+      middlewares:
+        - "{safe}-redirect"
+      service: "{safe}"
+    {safe}-secure:
+      rule: "Host(`{domain}`)"
+      entryPoints:
+        - websecure
+      service: "{safe}"
+      tls:
+        certResolver: "letsencrypt"
+  middlewares:
+    {safe}-redirect:
+      redirectScheme:
+        scheme: "https"
+  services:
+    {safe}:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:{backend_port}"
+"#
+        )
+    } else {
+        format!(
+            r#"http:
+  routers:
+    {safe}:
+      rule: "Host(`{domain}`)"
+      entryPoints:
+        - web
+      service: "{safe}"
+  services:
+    {safe}:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:{backend_port}"
+"#
+        )
+    };
+
+    std::fs::write(format!("{dir}/{safe}.yml"), config)
+        .map_err(|e| format!("Failed to write Traefik route config: {e}"))?;
+
+    tracing::info!("Traefik route config written: {domain} → 127.0.0.1:{backend_port} (ssl={ssl})");
+    Ok(())
+}
+
+/// Remove a Traefik dynamic route config file for an app.
+pub fn remove_route_config(domain: &str) {
+    let safe = domain.replace('.', "-").replace(':', "-");
+    let path = format!("{TRAEFIK_CONFIG_DIR}/dynamic/{safe}.yml");
+    if std::path::Path::new(&path).exists() {
+        let _ = std::fs::remove_file(&path);
+        tracing::info!("Traefik route config removed: {domain}");
+    }
 }
