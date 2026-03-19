@@ -83,6 +83,9 @@ export default function Settings() {
   // Hostname
   const [hostname, setHostname] = useState("");
 
+  // Theme
+  const [currentTheme, setCurrentTheme] = useState(() => localStorage.getItem("dp-theme") || "terminal");
+
   // Backup destinations
   const [destinations, setDestinations] = useState<BackupDestination[]>([]);
   const [showDestForm, setShowDestForm] = useState(false);
@@ -571,23 +574,71 @@ export default function Settings() {
           </div>
         </div>
 
-        {/* Feature #11: Theme Toggle */}
+        {/* Feature #11: Theme Picker */}
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600">
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Appearance</h3>
           </div>
-          <div className="p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-dark-100">Theme</p>
+          <div className="p-5 space-y-5">
+            <div>
+              <p className="text-sm text-dark-100 mb-3">Theme</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {([
+                  { id: "terminal", name: "Terminal", desc: "Hacker aesthetic", bg: "#111113", sidebar: "#09090b", accent: "#22c55e", card: "#18181b", text: "#71717a", bar: "#27272a" },
+                  { id: "midnight", name: "Midnight", desc: "Deep navy, modern", bg: "#0a1628", sidebar: "#050a18", accent: "#3b82f6", card: "#0f1f3a", text: "#6280a8", bar: "#182d50" },
+                  { id: "arctic", name: "Arctic", desc: "Clean & light", bg: "#f7f9fc", sidebar: "#ffffff", accent: "#0d9488", card: "#edf1f7", text: "#8d9bb0", bar: "#dce3ed" },
+                  { id: "ember", name: "Ember", desc: "Warm & premium", bg: "#1a1614", sidebar: "#0c0a09", accent: "#f97316", card: "#241f1c", text: "#8a7968", bar: "#332b26" },
+                ] as const).map(t => {
+                  const active = currentTheme === t.id;
+                  return (
+                    <button key={t.id} onClick={() => {
+                      localStorage.setItem("dp-theme", t.id);
+                      document.documentElement.setAttribute("data-theme", t.id);
+                      setCurrentTheme(t.id);
+                    }}
+                      className="group text-left transition-all duration-150"
+                      style={{
+                        borderRadius: "8px",
+                        border: active ? `2px solid ${t.accent}` : "2px solid transparent",
+                        boxShadow: active ? `0 0 12px ${t.accent}33` : "none",
+                      }}
+                    >
+                      {/* Mini preview */}
+                      <div style={{ background: t.bg, borderRadius: "6px 6px 0 0", overflow: "hidden" }} className="p-1.5">
+                        <div className="flex gap-1" style={{ height: "52px" }}>
+                          {/* Mini sidebar */}
+                          <div style={{ background: t.sidebar, width: "20%", borderRadius: "3px" }} className="flex flex-col gap-1 p-1">
+                            <div style={{ background: t.accent, height: "3px", borderRadius: "1px", width: "80%" }} />
+                            <div style={{ background: t.bar, height: "2px", borderRadius: "1px" }} />
+                            <div style={{ background: t.bar, height: "2px", borderRadius: "1px", width: "70%" }} />
+                            <div style={{ background: t.bar, height: "2px", borderRadius: "1px", width: "85%" }} />
+                          </div>
+                          {/* Mini content */}
+                          <div style={{ width: "80%" }} className="flex flex-col gap-1 p-1">
+                            <div className="flex gap-1">
+                              <div style={{ background: t.card, height: "16px", borderRadius: "2px", flex: 1 }}>
+                                <div style={{ background: t.accent, height: "2px", borderRadius: "1px", width: "40%", margin: "4px" }} />
+                              </div>
+                              <div style={{ background: t.card, height: "16px", borderRadius: "2px", flex: 1 }}>
+                                <div style={{ background: t.text, height: "2px", borderRadius: "1px", width: "60%", margin: "4px" }} />
+                              </div>
+                            </div>
+                            <div style={{ background: t.card, flex: 1, borderRadius: "2px" }}>
+                              <div style={{ background: t.text, height: "2px", borderRadius: "1px", width: "70%", margin: "4px" }} />
+                              <div style={{ background: t.text, height: "2px", borderRadius: "1px", width: "50%", margin: "2px 4px" }} />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      {/* Label */}
+                      <div style={{ background: t.sidebar, borderRadius: "0 0 6px 6px", padding: "6px 10px" }}>
+                        <div style={{ color: active ? t.accent : t.text, fontSize: "12px", fontWeight: 600, fontFamily: "'Inter', sans-serif" }}>{t.name}</div>
+                        <div style={{ color: t.text, fontSize: "10px", fontFamily: "'Inter', sans-serif", opacity: 0.7 }}>{t.desc}</div>
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
-              <select defaultValue={localStorage.getItem("dp-theme") || "dark"} onChange={e => {
-                localStorage.setItem("dp-theme", e.target.value);
-                document.documentElement.setAttribute("data-theme", e.target.value);
-              }} className="px-2 py-1.5 border border-dark-500 rounded text-sm">
-                <option value="dark">Dark</option>
-                <option value="light">Light</option>
-              </select>
             </div>
             {/* Feature #12: Locale Selector */}
             <div className="flex items-center justify-between">

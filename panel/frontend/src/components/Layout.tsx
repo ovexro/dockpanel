@@ -64,7 +64,13 @@ export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [firingCount, setFiringCount] = useState(0);
   const [apiHealthy, setApiHealthy] = useState<boolean | null>(null);
-  const [theme, setTheme] = useState(() => localStorage.getItem("dp-theme") || "dark");
+  const themeOrder = ["terminal", "midnight", "ember", "arctic"] as const;
+  const [theme, setTheme] = useState(() => {
+    const stored = localStorage.getItem("dp-theme");
+    if (!stored || stored === "dark") return "terminal";
+    if (stored === "light") return "arctic";
+    return stored;
+  });
   const [twoFaEnforced, setTwoFaEnforced] = useState(false);
   const [twoFaEnabled, setTwoFaEnabled] = useState(true); // assume true until checked
 
@@ -245,16 +251,18 @@ export default function Layout() {
               <span className="text-[10px] font-semibold uppercase tracking-widest text-dark-300 font-mono">{apiHealthy === null ? "Checking..." : apiHealthy ? "All Systems OK" : "Health Issue"}</span>
             </div>
             <button
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-              className="p-1.5 text-dark-300 hover:text-dark-50 bg-dark-800 border border-dark-600/40 transition-colors"
-              title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-              aria-label="Toggle theme"
+              onClick={() => {
+                const idx = themeOrder.indexOf(theme as typeof themeOrder[number]);
+                const next = themeOrder[(idx + 1) % themeOrder.length];
+                setTheme(next);
+              }}
+              className="p-1.5 text-dark-300 hover:text-dark-50 bg-dark-800 border border-dark-600/40 transition-colors rounded"
+              title={`Theme: ${theme}`}
+              aria-label="Cycle theme"
             >
-              {theme === "dark" ? (
-                <svg className="w-[19px] h-[19px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z" /></svg>
-              ) : (
-                <svg className="w-[19px] h-[19px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z" /></svg>
-              )}
+              <svg className="w-[19px] h-[19px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4.098 19.902a3.75 3.75 0 0 0 5.304 0l6.401-6.402M6.75 21A3.75 3.75 0 0 1 3 17.25V4.125C3 3.504 3.504 3 4.125 3h5.25c.621 0 1.125.504 1.125 1.125v4.072M6.75 21a3.75 3.75 0 0 0 3.75-3.75V8.197M6.75 21h13.125c.621 0 1.125-.504 1.125-1.125v-5.25c0-.621-.504-1.125-1.125-1.125h-4.072M10.5 8.197l2.88-2.88c.438-.439 1.15-.439 1.59 0l3.712 3.713c.44.44.44 1.152 0 1.59l-2.88 2.88M6.75 17.25h.008v.008H6.75v-.008Z" />
+              </svg>
             </button>
           </div>
         </div>

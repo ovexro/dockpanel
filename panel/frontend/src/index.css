@@ -1,6 +1,10 @@
 @import "tailwindcss";
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
+/* ═══════════════════════════════════════════════════════
+   BASE THEME (Terminal) — @theme defines Tailwind utilities
+   ═══════════════════════════════════════════════════════ */
+
 @theme {
   /* Harmonized green — anchored at #22c55e (S:71 L:45) */
   --color-rust-50:  #f0fdf6;
@@ -64,56 +68,248 @@
   --radius-3xl: 0px;
 }
 
-/* Base terminal theme (dark) */
+/* Base styles — use CSS variables so themes take over */
 body {
   background-color: var(--color-dark-900);
   color: var(--color-dark-50);
-  font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  /* CRT scanline effect */
+  /* CRT scanline effect — Terminal only (overridden by other themes) */
   background-image: linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px);
   background-size: 100% 3px;
 }
 
-/* ── Light Theme Overrides ── */
-[data-theme="light"] {
-  --color-dark-950: #ffffff;
-  --color-dark-900: #f8fafc;
-  --color-dark-800: #f1f5f9;
-  --color-dark-700: #e2e8f0;
-  --color-dark-600: #cbd5e1;
-  --color-dark-500: #94a3b8;
-  --color-dark-400: #64748b;
-  --color-dark-300: #475569;
-  --color-dark-200: #334155;
-  --color-dark-100: #1e293b;
-  --color-dark-50:  #0f172a;
 
-  --color-rust-500: #16a34a;
-  --color-rust-400: #22c55e;
-  --color-rust-600: #15803d;
+/* ═══════════════════════════════════════════════════════
+   THEME: MIDNIGHT — Deep navy, electric blue, modern SaaS
+   ═══════════════════════════════════════════════════════ */
 
-  --color-accent-500: #4f46e5;
-  --color-accent-600: #4338ca;
+[data-theme="midnight"] {
+  /* Navy surfaces */
+  --color-dark-950: #050a18;
+  --color-dark-900: #0a1628;
+  --color-dark-800: #0f1f3a;
+  --color-dark-700: #182d50;
+  --color-dark-600: #243d66;
+  --color-dark-500: #3a5785;
+  --color-dark-400: #6280a8;
+  --color-dark-300: #8ba6c8;
+  --color-dark-200: #b6cde4;
+  --color-dark-100: #dae6f4;
+  --color-dark-50:  #f0f5fb;
+
+  /* Electric blue accent */
+  --color-rust-50:  #eff6ff;
+  --color-rust-100: #dbeafe;
+  --color-rust-200: #bfdbfe;
+  --color-rust-300: #93c5fd;
+  --color-rust-400: #60a5fa;
+  --color-rust-500: #3b82f6;
+  --color-rust-600: #2563eb;
+  --color-rust-700: #1d4ed8;
+  --color-rust-800: #1e40af;
+  --color-rust-900: #1e3a8a;
+
+  /* Violet accent */
+  --color-accent-50:  #f5f3ff;
+  --color-accent-100: #ede9fe;
+  --color-accent-200: #ddd6fe;
+  --color-accent-300: #c4b5fd;
+  --color-accent-400: #a78bfa;
+  --color-accent-500: #8b5cf6;
+  --color-accent-600: #7c3aed;
+  --color-accent-700: #6d28d9;
+  --color-accent-800: #5b21b6;
+  --color-accent-900: #4c1d95;
+
+  /* Sans-serif typography */
+  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  /* Soft rounded corners */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-3xl: 24px;
 }
 
-[data-theme="light"] body {
+[data-theme="midnight"] body {
   background-image: none;
 }
 
-[data-theme="light"] ::-webkit-scrollbar-track {
+[data-theme="midnight"] .logo-glow {
+  text-shadow: 0 0 14px rgba(59, 130, 246, 0.4);
+}
+
+[data-theme="midnight"] .logo-icon-glow {
+  box-shadow: 0 0 18px rgba(59, 130, 246, 0.3), 0 0 5px rgba(59, 130, 246, 0.15);
+}
+
+
+/* ═══════════════════════════════════════════════════════
+   THEME: ARCTIC — Clean white, teal accent, minimal
+   ═══════════════════════════════════════════════════════ */
+
+[data-theme="arctic"] {
+  /* Cool white surfaces (inverted: 950=lightest, 50=darkest) */
+  --color-dark-950: #ffffff;
+  --color-dark-900: #f7f9fc;
+  --color-dark-800: #edf1f7;
+  --color-dark-700: #dce3ed;
+  --color-dark-600: #c3cdd9;
+  --color-dark-500: #8d9bb0;
+  --color-dark-400: #5f7089;
+  --color-dark-300: #3e5068;
+  --color-dark-200: #2a3a50;
+  --color-dark-100: #172030;
+  --color-dark-50:  #0b1220;
+
+  /* Teal accent */
+  --color-rust-50:  #f0fdfa;
+  --color-rust-100: #ccfbf1;
+  --color-rust-200: #99f6e4;
+  --color-rust-300: #5eead4;
+  --color-rust-400: #2dd4bf;
+  --color-rust-500: #0d9488;
+  --color-rust-600: #0f766e;
+  --color-rust-700: #115e59;
+  --color-rust-800: #134e4a;
+  --color-rust-900: #042f2e;
+
+  /* Sky accent */
+  --color-accent-50:  #f0f9ff;
+  --color-accent-100: #e0f2fe;
+  --color-accent-200: #bae6fd;
+  --color-accent-300: #7dd3fc;
+  --color-accent-400: #38bdf8;
+  --color-accent-500: #0ea5e9;
+  --color-accent-600: #0284c7;
+  --color-accent-700: #0369a1;
+  --color-accent-800: #075985;
+  --color-accent-900: #0c4a6e;
+
+  /* Adjusted status colors for light bg */
+  --color-warn-400: #d97706;
+  --color-warn-500: #b45309;
+  --color-warn-600: #92400e;
+
+  --color-danger-400: #dc2626;
+  --color-danger-500: #b91c1c;
+  --color-danger-600: #991b1b;
+
+  /* Sans-serif typography */
+  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  /* Rounded corners */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-3xl: 24px;
+}
+
+[data-theme="arctic"] body {
+  background-image: none;
+}
+
+[data-theme="arctic"] .logo-glow {
+  text-shadow: none;
+}
+
+[data-theme="arctic"] .logo-icon-glow {
+  box-shadow: 0 2px 8px rgba(13, 148, 136, 0.15), 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="arctic"] ::-webkit-scrollbar-track {
   background: var(--color-dark-900);
   border-left: 1px solid var(--color-dark-600);
 }
 
-[data-theme="light"] .logo-glow {
-  text-shadow: none;
+
+/* ═══════════════════════════════════════════════════════
+   THEME: EMBER — Warm stone, orange accent, premium
+   ═══════════════════════════════════════════════════════ */
+
+[data-theme="ember"] {
+  /* Warm stone surfaces */
+  --color-dark-950: #0c0a09;
+  --color-dark-900: #1a1614;
+  --color-dark-800: #241f1c;
+  --color-dark-700: #332b26;
+  --color-dark-600: #473c33;
+  --color-dark-500: #625548;
+  --color-dark-400: #8a7968;
+  --color-dark-300: #b3a08c;
+  --color-dark-200: #d6c7b7;
+  --color-dark-100: #ebe2d9;
+  --color-dark-50:  #faf7f5;
+
+  /* Orange accent */
+  --color-rust-50:  #fff7ed;
+  --color-rust-100: #ffedd5;
+  --color-rust-200: #fed7aa;
+  --color-rust-300: #fdba74;
+  --color-rust-400: #fb923c;
+  --color-rust-500: #f97316;
+  --color-rust-600: #ea580c;
+  --color-rust-700: #c2410c;
+  --color-rust-800: #9a3412;
+  --color-rust-900: #7c2d12;
+
+  /* Rose accent */
+  --color-accent-50:  #fff1f2;
+  --color-accent-100: #ffe4e6;
+  --color-accent-200: #fecdd3;
+  --color-accent-300: #fda4af;
+  --color-accent-400: #fb7185;
+  --color-accent-500: #f43f5e;
+  --color-accent-600: #e11d48;
+  --color-accent-700: #be123c;
+  --color-accent-800: #9f1239;
+  --color-accent-900: #881337;
+
+  /* Warmer status colors */
+  --color-warn-400: #fbbf24;
+  --color-warn-500: #d4a017;
+  --color-warn-600: #b08a12;
+
+  /* Sans-serif typography */
+  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  /* Rounded corners */
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-2xl: 18px;
+  --radius-3xl: 24px;
 }
 
-[data-theme="light"] .logo-icon-glow {
-  box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+[data-theme="ember"] body {
+  background-image: none;
 }
+
+[data-theme="ember"] .logo-glow {
+  text-shadow: 0 0 14px rgba(249, 115, 22, 0.4);
+}
+
+[data-theme="ember"] .logo-icon-glow {
+  box-shadow: 0 0 18px rgba(249, 115, 22, 0.3), 0 0 5px rgba(249, 115, 22, 0.15);
+}
+
+
+/* ═══════════════════════════════════════════════════════
+   SHARED RULES — form elements, scrollbar, focus, etc.
+   ═══════════════════════════════════════════════════════ */
 
 /* Form elements */
 input, select, textarea {
@@ -122,12 +318,12 @@ input, select, textarea {
   border-color: var(--color-dark-500);
 }
 
-/* Native select dark theme */
+/* Native select */
 select {
   appearance: none;
   background-color: var(--color-dark-800);
   border: 1px solid var(--color-dark-600);
-  border-radius: 0.5rem;
+  border-radius: var(--radius-md);
   padding: 0.625rem 2.5rem 0.625rem 0.75rem;
   color: var(--color-dark-100);
   font-size: 0.875rem;
@@ -147,7 +343,7 @@ textarea::placeholder {
   color: var(--color-dark-300);
 }
 
-/* Terminal scrollbar */
+/* Scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -166,7 +362,7 @@ textarea::placeholder {
   background: var(--color-dark-300);
 }
 
-/* Selection — green */
+/* Selection */
 ::selection {
   background: var(--color-rust-500);
   color: var(--color-dark-900);
@@ -184,7 +380,7 @@ select:focus-visible {
   outline-offset: 0px;
 }
 
-/* Logo terminal glow */
+/* Logo glow (default = Terminal green) */
 .logo-glow {
   text-shadow: 0 0 12px rgba(34, 197, 94, 0.4);
 }
