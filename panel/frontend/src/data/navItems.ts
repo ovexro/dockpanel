@@ -23,6 +23,7 @@ export const navGroups: NavGroup[] = [
       { to: "/databases", label: "Databases", iconName: "databases" },
       { to: "/apps", label: "Docker Apps", iconName: "apps", adminOnly: true },
       { to: "/git-deploys", label: "Git Deploy", iconName: "gitDeploys", adminOnly: true },
+      { to: "/migration", label: "Migration", iconName: "servers", adminOnly: true },
     ],
   },
   {

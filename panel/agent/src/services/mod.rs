@@ -10,6 +10,7 @@ pub mod database;
 pub mod docker_apps;
 pub mod files;
 pub mod logs;
+pub mod migration;
 pub mod nginx;
 pub mod phone_home;
 pub mod security;

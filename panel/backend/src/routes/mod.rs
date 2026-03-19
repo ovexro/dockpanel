@@ -36,6 +36,7 @@ pub mod system;
 pub mod terminal;
 pub mod users;
 pub mod reseller_dashboard;
+pub mod migration;
 pub mod resellers;
 pub mod wordpress;
 pub mod ws_metrics;
@@ -454,4 +455,10 @@ pub fn router() -> Router<AppState> {
         .route("/api/reseller/servers", get(reseller_dashboard::list_servers))
         // Activity (admin)
         .route("/api/activity", get(activity::list))
+        // Migration Wizard
+        .route("/api/migration/analyze", post(migration::analyze))
+        .route("/api/migration", get(migration::list))
+        .route("/api/migration/{id}", get(migration::get_one).delete(migration::remove))
+        .route("/api/migration/{id}/import", post(migration::import))
+        .route("/api/migration/{id}/progress", get(migration::progress))
 }

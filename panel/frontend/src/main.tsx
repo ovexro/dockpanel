@@ -89,6 +89,7 @@ const Settings = lazyRetry(() => import("./pages/Settings"));
 const Mail = lazyRetry(() => import("./pages/Mail"));
 const Servers = lazyRetry(() => import("./pages/Servers"));
 const ResellerDashboard = lazyRetry(() => import("./pages/ResellerDashboard"));
+const MigrationWizard = lazyRetry(() => import("./pages/Migration"));
 const ResellerUsers = lazyRetry(() => import("./pages/ResellerUsers"));
 
 createRoot(document.getElementById("root")!).render(
@@ -128,6 +129,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/system-logs" element={<Navigate to="/logs" replace />} />
               <Route path="/mail" element={<Mail />} />
               <Route path="/servers" element={<Servers />} />
+              <Route path="/migration" element={<MigrationWizard />} />
               <Route path="/reseller" element={<ResellerDashboard />} />
               <Route path="/reseller/users" element={<ResellerUsers />} />
               <Route path="/users" element={<Navigate to="/settings" replace />} />
