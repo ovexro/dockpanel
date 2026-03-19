@@ -37,7 +37,7 @@ export default function Pricing() {
                 'Unlimited sites',
                 'Free SSL certificates',
                 'Database management + SQL browser',
-                '34 Docker app templates',
+                '50+ Docker app templates',
                 'Scheduled backups & S3',
                 'Web terminal & file manager',
                 'Git deploy with blue-green zero-downtime',
