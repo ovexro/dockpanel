@@ -12,11 +12,12 @@ interface WPSite {
 }
 
 interface SecurityItem {
-  id: string;
+  name: string;
   label: string;
-  status: "pass" | "fail" | "warn";
-  fixable: boolean;
   description?: string;
+  status: string;
+  auto_fixable: boolean;
+  severity?: string;
 }
 
 export default function WordPressToolkit() {
@@ -88,7 +89,9 @@ export default function WordPressToolkit() {
       const result = await api.get<any>(`/sites/${siteId}/wordpress/security-check`);
       const checks: SecurityItem[] = Array.isArray(result?.checks) ? result.checks : Array.isArray(result) ? result : [];
       setSecurityChecks((prev) => ({ ...prev, [siteId]: checks }));
-    } catch {}
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Security check failed");
+    }
   };
 
   // Check all sites
@@ -478,7 +481,7 @@ export default function WordPressToolkit() {
             {sites.map((site) => {
               const checks = securityChecks[site.site_id];
               const failedChecks = checks?.filter((c) => c.status === "fail") || [];
-              const fixableIds = failedChecks.filter((c) => c.fixable).map((c) => c.id);
+              const fixableIds = failedChecks.filter((c) => c.auto_fixable).map((c) => c.name);
 
               return (
                 <div
@@ -526,7 +529,7 @@ export default function WordPressToolkit() {
                     <div className="divide-y divide-dark-600">
                       {checks.map((check) => (
                         <div
-                          key={check.id}
+                          key={check.name}
                           className="flex items-center gap-3 px-4 py-2.5 hover:bg-dark-700/30 transition-colors"
                         >
                           {/* Status icon */}
@@ -534,7 +537,7 @@ export default function WordPressToolkit() {
                             <svg className="w-4 h-4 text-rust-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                               <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
                             </svg>
-                          ) : check.status === "warn" ? (
+                          ) : check.status === "warning" ? (
                             <svg className="w-4 h-4 text-warn-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
                             </svg>
@@ -551,9 +554,9 @@ export default function WordPressToolkit() {
                             )}
                           </div>
 
-                          {check.status === "fail" && check.fixable && (
+                          {check.status === "fail" && check.auto_fixable && (
                             <button
-                              onClick={() => handleHarden(site.site_id, [check.id])}
+                              onClick={() => handleHarden(site.site_id, [check.name])}
                               disabled={hardening === site.site_id}
                               className="shrink-0 px-2.5 py-1 bg-accent-600 text-white rounded text-xs font-medium hover:bg-accent-700 disabled:opacity-50"
                             >
