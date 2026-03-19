@@ -415,7 +415,7 @@ export default function Dashboard() {
     const alertCount = intel?.firing_alerts ?? 0;
     const healthScore = intel?.health_score ?? 100;
     if (alertCount > 0 || healthScore < 50)
-      return { label: "System Issues Detected", color: "bg-red-500/10 border-red-500/20 text-danger-400", dot: "bg-danger-400" };
+      return { label: "System Issues Detected", color: "bg-danger-500/10 border-danger-500/20 text-danger-400", dot: "bg-danger-400" };
     if (healthScore < 80)
       return { label: "Degraded Performance", color: "bg-warn-500/10 border-warn-500/20 text-warn-400", dot: "bg-warn-500" };
     return { label: "All Systems Operational", color: "bg-rust-500/10 border-rust-500/20 text-rust-400", dot: "bg-rust-500" };
@@ -436,7 +436,7 @@ export default function Dashboard() {
         <div className="flex items-center gap-3">
           <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Dashboard</h1>
           <span className="flex items-center gap-1.5" title={wsConnected ? "Receiving live metrics via WebSocket" : "Polling metrics via HTTP"}>
-            <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? "bg-emerald-500 animate-pulse" : "bg-dark-400"}`} />
+            <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? "bg-rust-500 animate-pulse" : "bg-dark-400"}`} />
             <span className="text-[10px] text-dark-400 font-mono">{wsConnected ? "Live" : "Polling"}</span>
           </span>
         </div>
@@ -478,7 +478,7 @@ export default function Dashboard() {
             if (!confirm("REBOOT SERVER?\n\nAll services will be temporarily unavailable. Are you sure?")) return;
             try { await api.post("/system/reboot"); setActionMessage({ text: "Server rebooting...", type: "success" }); setTimeout(() => setActionMessage(null), 5000); }
             catch { setActionMessage({ text: "Failed to reboot server", type: "error" }); setTimeout(() => setActionMessage(null), 3000); }
-          }} className="hidden sm:inline-block px-2.5 py-1.5 bg-red-500/10 border border-red-500/20 rounded-lg text-xs text-danger-400 hover:bg-red-500/20">
+          }} className="hidden sm:inline-block px-2.5 py-1.5 bg-danger-500/10 border border-danger-500/20 rounded-lg text-xs text-danger-400 hover:bg-danger-500/20">
             Reboot
           </button>
         </div>
@@ -531,14 +531,14 @@ export default function Dashboard() {
       {/* Feature #4: Action message toast */}
       {actionMessage && (
         <div className={`rounded-lg border px-4 py-2.5 mb-6 text-sm font-medium ${
-          actionMessage.type === "success" ? "bg-rust-500/10 border-rust-500/20 text-rust-400" : "bg-red-500/10 border-red-500/20 text-danger-400"
+          actionMessage.type === "success" ? "bg-rust-500/10 border-rust-500/20 text-rust-400" : "bg-danger-500/10 border-danger-500/20 text-danger-400"
         }`}>
           {actionMessage.text}
         </div>
       )}
 
       {error && (
-        <div className="bg-red-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-6">
+        <div className="bg-danger-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-danger-500/20 mb-6">
           <div className="flex items-start gap-3">
             <svg className="w-5 h-5 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
@@ -671,9 +671,9 @@ export default function Dashboard() {
           {isVisible("charts") && metricsHistory.length >= 2 && (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
               {[
-                { label: "CPU", data: metricsHistory.map(p => p.cpu), color: "#22c55e" },
-                { label: "Memory", data: metricsHistory.map(p => p.mem), color: "#6366f1" },
-                { label: "Disk", data: metricsHistory.map(p => p.disk), color: "#c48821" },
+                { label: "CPU", data: metricsHistory.map(p => p.cpu), color: "var(--color-rust-500)" },
+                { label: "Memory", data: metricsHistory.map(p => p.mem), color: "var(--color-accent-500)" },
+                { label: "Disk", data: metricsHistory.map(p => p.disk), color: "var(--color-warn-500)" },
               ].map(({ label, data, color }) => (
                 <div key={label} className="border border-dark-500 bg-dark-800 p-4">
                   <div className="flex items-center justify-between mb-2">
@@ -710,17 +710,17 @@ export default function Dashboard() {
             </div>
             {intel && <>
               <div className={`px-4 py-3 flex flex-col ${
-                intel.health_score < 60 ? "bg-red-500/5" : "bg-dark-800"
+                intel.health_score < 60 ? "bg-danger-500/5" : "bg-dark-800"
               }`}>
                 <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Health</span>
                 <span className={`text-sm font-bold ${
                   intel.health_score >= 90 ? "text-rust-400" :
-                  intel.health_score >= 75 ? "text-blue-400" :
+                  intel.health_score >= 75 ? "text-accent-400" :
                   intel.health_score >= 60 ? "text-warn-400" : "text-danger-400"
                 }`}>{intel.health_score}/100 {intel.grade}</span>
               </div>
               <div className={`px-4 py-3 flex flex-col ${
-                intel.firing_alerts > 0 ? "bg-red-500/5" : "bg-dark-800"
+                intel.firing_alerts > 0 ? "bg-danger-500/5" : "bg-dark-800"
               }`}>
                 <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Alerts</span>
                 {intel.firing_alerts > 0
@@ -802,7 +802,7 @@ export default function Dashboard() {
                     <div className="flex items-center gap-2 min-w-0">
                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${
                         a.action?.includes("create") || a.action?.includes("deploy") ? "bg-rust-500/15 text-rust-400" :
-                        a.action?.includes("delete") || a.action?.includes("remove") ? "bg-red-500/15 text-danger-400" :
+                        a.action?.includes("delete") || a.action?.includes("remove") ? "bg-danger-500/15 text-danger-400" :
                         "bg-dark-700 text-dark-200"
                       }`}>{a.action}</span>
                       {a.target_name && <span className="text-dark-100 font-mono truncate">{a.target_name}</span>}
@@ -827,8 +827,8 @@ export default function Dashboard() {
                     {intel.top_issues.slice(0, 4).map((issue, i) => (
                       <div key={i} className="flex items-start gap-2">
                         <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${
-                          issue.severity === "critical" ? "bg-red-500" :
-                          issue.severity === "warning" ? "bg-warn-500" : "bg-blue-500"
+                          issue.severity === "critical" ? "bg-danger-500" :
+                          issue.severity === "warning" ? "bg-warn-500" : "bg-accent-500"
                         }`} />
                         <p className="text-xs text-dark-100 leading-tight">{issue.title}</p>
                       </div>
@@ -846,7 +846,7 @@ export default function Dashboard() {
                         <span className={`text-xs ${
                           ssl.severity === "critical" ? "text-danger-400" :
                           ssl.severity === "warning" ? "text-warn-400" :
-                          ssl.severity === "info" ? "text-blue-400" : "text-rust-400"
+                          ssl.severity === "info" ? "text-accent-400" : "text-rust-400"
                         }`}>{ssl.days_left}d left</span>
                       </div>
                     ))}
@@ -943,7 +943,7 @@ export default function Dashboard() {
                           )}
                         </td>
                         <td className="px-5 py-2.5 text-right font-mono">
-                          <div className="text-sm text-blue-400">
+                          <div className="text-sm text-accent-400">
                             <span className="text-dark-400 mr-0.5">{"\u2191"}</span>
                             {iface.tx_rate != null ? formatRate(iface.tx_rate) : formatSize(iface.tx_bytes)}
                           </div>

@@ -65,7 +65,7 @@ function statusBadge(status: string) {
     pending: "bg-dark-700 text-dark-200",
     deploying: "bg-warn-500/15 text-warn-400 animate-pulse",
     running: "bg-rust-500/15 text-rust-400",
-    failed: "bg-red-500/15 text-danger-400",
+    failed: "bg-danger-500/15 text-danger-400",
     stopped: "bg-dark-700 text-dark-300",
   };
   return map[status] || "bg-dark-700 text-dark-200";
@@ -356,7 +356,7 @@ export default function GitDeploys() {
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
               ? "bg-rust-500/10 text-rust-400 border-rust-500/20"
-              : "bg-red-500/10 text-danger-400 border-red-500/20"
+              : "bg-danger-500/10 text-danger-400 border-danger-500/20"
           }`}
           role="alert"
         >
@@ -450,7 +450,7 @@ export default function GitDeploys() {
                       </button>
                       <button
                         onClick={() => handleDelete(d.id)}
-                        className="px-3 py-1 bg-red-500/10 text-danger-400 rounded-md text-xs font-medium hover:bg-red-500/20 transition-colors"
+                        className="px-3 py-1 bg-danger-500/10 text-danger-400 rounded-md text-xs font-medium hover:bg-danger-500/20 transition-colors"
                       >
                         Delete
                       </button>
@@ -558,7 +558,7 @@ export default function GitDeploys() {
             )}
             <button
               onClick={() => handleDelete(selected.id)}
-              className="px-4 py-2 bg-red-500/10 text-danger-400 rounded-lg text-sm font-medium hover:bg-red-500/20 transition-colors"
+              className="px-4 py-2 bg-danger-500/10 text-danger-400 rounded-lg text-sm font-medium hover:bg-danger-500/20 transition-colors"
             >
               Delete
             </button>
@@ -627,7 +627,7 @@ export default function GitDeploys() {
                     <span className="text-xs text-dark-300 font-mono">stdout + stderr</span>
                     <button onClick={loadContainerLogs} className="text-xs text-rust-400 hover:text-rust-300 transition-colors">Refresh</button>
                   </div>
-                  <pre className="p-4 text-[11px] font-mono text-dark-200 bg-[#020202] max-h-80 overflow-y-auto overflow-x-auto whitespace-pre-wrap">
+                  <pre className="p-4 text-[11px] font-mono text-dark-200 bg-dark-950 max-h-80 overflow-y-auto overflow-x-auto whitespace-pre-wrap">
                     {containerLogs || "No logs available"}
                   </pre>
                 </div>

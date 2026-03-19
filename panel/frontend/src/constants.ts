@@ -1,7 +1,7 @@
 export const statusColors: Record<string, string> = {
-  active: "bg-emerald-500/15 text-emerald-400",
-  creating: "bg-amber-500/15 text-amber-400",
-  error: "bg-red-500/15 text-red-400",
+  active: "bg-rust-500/15 text-rust-400",
+  creating: "bg-warn-500/15 text-warn-400",
+  error: "bg-danger-500/15 text-danger-400",
   stopped: "bg-dark-700 text-dark-200",
 };
 

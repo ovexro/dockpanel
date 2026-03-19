@@ -131,7 +131,7 @@ export default function Layout() {
       <CommandPalette />
 
       {/* Skip to content */}
-      <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:z-[100] focus:top-2 focus:left-2 focus:px-4 focus:py-2 focus:bg-indigo-600 focus:text-white focus:rounded-lg">
+      <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:z-[100] focus:top-2 focus:left-2 focus:px-4 focus:py-2 focus:bg-accent-600 focus:text-dark-50 focus:rounded-lg">
         Skip to main content
       </a>
 
@@ -212,7 +212,7 @@ export default function Layout() {
                         {item.icon}
                         <span>{item.label}</span>
                         {item.to === "/monitoring" && firingCount > 0 ? (
-                          <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-red-500 text-white rounded-full min-w-[20px] text-center">
+                          <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-danger-500 text-white rounded-full min-w-[20px] text-center">
                             {firingCount}
                           </span>
                         ) : isActive ? (
@@ -247,7 +247,7 @@ export default function Layout() {
           </div>
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-2 px-2.5 py-1.5 bg-dark-800 border border-dark-600/40 flex-1">
-              <div className={`w-2 h-2 rounded-full shrink-0 ${apiHealthy === null ? "bg-dark-400" : apiHealthy ? "bg-rust-500" : "bg-red-500 animate-pulse"}`} />
+              <div className={`w-2 h-2 rounded-full shrink-0 ${apiHealthy === null ? "bg-dark-400" : apiHealthy ? "bg-rust-500" : "bg-danger-500 animate-pulse"}`} />
               <span className="text-[10px] font-semibold uppercase tracking-widest text-dark-300 font-mono">{apiHealthy === null ? "Checking..." : apiHealthy ? "All Systems OK" : "Health Issue"}</span>
             </div>
             <button

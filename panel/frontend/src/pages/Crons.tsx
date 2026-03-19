@@ -152,7 +152,7 @@ export default function Crons() {
     <div className="p-6 lg:p-8">
       {/* Breadcrumb */}
       <div className="mb-6">
-        <Link to={`/sites/${id}`} className="text-sm text-dark-200 hover:text-gray-700">
+        <Link to={`/sites/${id}`} className="text-sm text-dark-200 hover:text-dark-50">
           {site?.domain || "Site"}
         </Link>
         <span className="text-sm text-dark-300 mx-2">/</span>
@@ -178,7 +178,7 @@ export default function Crons() {
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
               ? "bg-rust-50 text-rust-400 border-rust-200"
-              : "bg-red-500/10 text-danger-400 border-red-500/20"
+              : "bg-danger-500/10 text-danger-400 border-danger-500/20"
           }`}
           role="alert"
         >
@@ -300,7 +300,7 @@ export default function Crons() {
           </div>
         ) : !showForm && crons.length === 0 ? (
           <div className="p-12 text-center">
-            <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+            <svg className="w-16 h-16 mx-auto text-dark-300 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
             </svg>
             <p className="text-dark-200 text-sm">No cron jobs yet</p>
@@ -362,20 +362,20 @@ export default function Crons() {
                     </button>
                     <button
                       onClick={() => handleEdit(cron)}
-                      className="px-3 py-1 bg-dark-700 text-dark-100 rounded-md text-xs font-medium hover:bg-gray-200 transition-colors"
+                      className="px-3 py-1 bg-dark-700 text-dark-100 rounded-md text-xs font-medium hover:bg-dark-600 transition-colors"
                       aria-label="Edit cron"
                     >
                       Edit
                     </button>
                     {deleteTarget === cron.id ? (
                       <div className="flex items-center gap-1">
-                        <button onClick={() => handleDelete(cron.id)} className="px-2 py-1 bg-red-600 text-white rounded-md text-xs">Confirm</button>
+                        <button onClick={() => handleDelete(cron.id)} className="px-2 py-1 bg-danger-600 text-white rounded-md text-xs">Confirm</button>
                         <button onClick={() => setDeleteTarget(null)} className="px-2 py-1 bg-dark-600 text-dark-200 rounded-md text-xs">Cancel</button>
                       </div>
                     ) : (
                       <button
                         onClick={() => setDeleteTarget(cron.id)}
-                        className="px-3 py-1 bg-red-500/10 text-danger-400 rounded-md text-xs font-medium hover:bg-red-100 transition-colors"
+                        className="px-3 py-1 bg-danger-500/10 text-danger-400 rounded-md text-xs font-medium hover:bg-danger-500/20 transition-colors"
                         aria-label="Delete cron"
                       >
                         Delete
@@ -387,12 +387,12 @@ export default function Crons() {
                 {/* Run output */}
                 {runOutput && runOutput.id === cron.id && (
                   <div className={`mt-3 ml-12 p-3 rounded-lg text-xs font-mono whitespace-pre-wrap max-h-40 overflow-auto ${
-                    runOutput.success ? "bg-dark-900 text-dark-100 border border-dark-500" : "bg-red-500/10 text-danger-400 border border-red-500/20"
+                    runOutput.success ? "bg-dark-900 text-dark-100 border border-dark-500" : "bg-danger-500/10 text-danger-400 border border-danger-500/20"
                   }`}>
                     {runOutput.output || "(no output)"}
                     <button
                       onClick={() => setRunOutput(null)}
-                      className="block mt-2 text-dark-300 hover:text-gray-600 text-xs"
+                      className="block mt-2 text-dark-300 hover:text-dark-200 text-xs"
                     >
                       Dismiss
                     </button>
@@ -438,7 +438,7 @@ export default function Crons() {
                       </button>
                       <button
                         onClick={() => setEditId(null)}
-                        className="px-4 py-2 bg-dark-600 text-dark-100 rounded-lg text-xs font-medium hover:bg-gray-300"
+                        className="px-4 py-2 bg-dark-600 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-500"
                       >
                         Cancel
                       </button>

@@ -280,7 +280,7 @@ export default function Files() {
       </div>
 
       {error && (
-        <div className="mb-4 px-4 py-3 bg-red-500/10 text-danger-400 rounded-lg border border-red-500/20 text-sm">
+        <div className="mb-4 px-4 py-3 bg-danger-500/10 text-danger-400 rounded-lg border border-danger-500/20 text-sm">
           {error}
           <button onClick={() => setError("")} className="ml-2 underline">
             dismiss
@@ -291,7 +291,7 @@ export default function Files() {
       {uploadMessage && (
         <div className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
           uploadMessage.includes("failed")
-            ? "bg-red-500/10 text-danger-400 border-red-500/20"
+            ? "bg-danger-500/10 text-danger-400 border-danger-500/20"
             : "bg-rust-500/10 text-rust-400 border-rust-500/20"
         }`}>
           {uploadMessage}
@@ -575,7 +575,7 @@ export default function Files() {
               </button>
               <button
                 onClick={() => handleDelete(deleteTarget)}
-                className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700"
+                className="px-4 py-2 bg-danger-500 text-white rounded-lg text-sm font-medium hover:bg-danger-600"
               >
                 Delete
               </button>

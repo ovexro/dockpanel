@@ -299,7 +299,7 @@ function SqlBrowser({
           {queryError && (
             <div
               role="alert"
-              className="bg-red-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-red-500/20"
+              className="bg-danger-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-danger-500/20"
             >
               <button
                 onClick={() => setQueryError("")}
@@ -569,7 +569,7 @@ export default function Databases() {
       </div>
 
       {error && (
-        <div role="alert" className="bg-red-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-red-500/20 mb-4">
+        <div role="alert" className="bg-danger-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-danger-500/20 mb-4">
           {error}
           <button onClick={() => setError("")} className="float-right font-bold" aria-label="Close error">
             &times;
@@ -767,7 +767,7 @@ export default function Databases() {
                             <button
                               onClick={() => handleDelete(db.id)}
                               disabled={deletingId === db.id}
-                              className="px-2 py-1 bg-red-600 text-white rounded text-xs hover:bg-red-700 disabled:opacity-50"
+                              className="px-2 py-1 bg-danger-600 text-white rounded text-xs hover:bg-danger-700 disabled:opacity-50"
                             >
                               {deletingId === db.id ? "..." : "Yes"}
                             </button>
