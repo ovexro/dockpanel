@@ -24,6 +24,7 @@ use crate::AppState;
 pub struct GitDeploy {
     pub id: Uuid,
     pub user_id: Uuid,
+    pub server_id: Uuid,
     pub name: String,
     pub repo_url: String,
     pub branch: String,
@@ -53,6 +54,8 @@ pub struct GitDeploy {
     pub github_token: Option<String>,
     pub deploy_cron: Option<String>,
     pub deploy_protected: bool,
+    pub build_method: String,
+    pub preview_ttl_hours: i32,
 }
 
 #[derive(serde::Serialize, sqlx::FromRow)]
@@ -103,6 +106,7 @@ pub struct CreateRequest {
     pub github_token: Option<String>,
     pub deploy_cron: Option<String>,
     pub deploy_protected: Option<bool>,
+    pub preview_ttl_hours: Option<i32>,
 }
 
 #[derive(serde::Deserialize)]
@@ -153,6 +157,7 @@ pub async fn list(
 pub async fn create(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(server_id, _agent): ServerScope,
     Json(body): Json<CreateRequest>,
 ) -> Result<(StatusCode, Json<GitDeploy>), ApiError> {
     require_admin(&claims.role)?;
@@ -203,12 +208,15 @@ pub async fn create(
 
     let deploy_protected = body.deploy_protected.unwrap_or(false);
 
+    let preview_ttl = body.preview_ttl_hours.unwrap_or(24);
+
     let deploy: GitDeploy = sqlx::query_as(
-        "INSERT INTO git_deploys (user_id, name, repo_url, branch, dockerfile, container_port, host_port, domain, env_vars, auto_deploy, webhook_secret, memory_mb, cpu_percent, ssl_email, pre_build_cmd, post_deploy_cmd, build_args, build_context, github_token, deploy_cron, deploy_protected) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) \
+        "INSERT INTO git_deploys (user_id, server_id, name, repo_url, branch, dockerfile, container_port, host_port, domain, env_vars, auto_deploy, webhook_secret, memory_mb, cpu_percent, ssl_email, pre_build_cmd, post_deploy_cmd, build_args, build_context, github_token, deploy_cron, deploy_protected, preview_ttl_hours) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23) \
          RETURNING *",
     )
     .bind(claims.sub)
+    .bind(server_id)
     .bind(&body.name)
     .bind(body.repo_url.trim())
     .bind(branch)
@@ -229,6 +237,7 @@ pub async fn create(
     .bind(&body.github_token)
     .bind(&body.deploy_cron)
     .bind(deploy_protected)
+    .bind(preview_ttl)
     .fetch_one(&state.db)
     .await
     .map_err(|e| {
@@ -875,6 +884,31 @@ pub async fn webhook(
     // Resolve agent for webhook (use local agent)
     let agent = AgentHandle::Local(state.agents.local().clone());
 
+    // Handle branch deletion (GitHub sends after=0000... on delete)
+    let is_branch_delete = payload.get("deleted").and_then(|v| v.as_bool()).unwrap_or(false)
+        || payload.get("after").and_then(|v| v.as_str()).map(|s| s.chars().all(|c| c == '0')).unwrap_or(false);
+
+    if is_branch_delete {
+        // Clean up preview for this deleted branch
+        let deleted = sqlx::query_as::<_, (uuid::Uuid, String)>(
+            "SELECT id, container_name FROM git_previews WHERE git_deploy_id = $1 AND branch = $2"
+        )
+        .bind(config.id)
+        .bind(&push_branch)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+
+        if let Some((preview_id, container_name)) = deleted {
+            let _ = agent.post("/git/cleanup", Some(serde_json::json!({ "name": container_name }))).await;
+            let _ = sqlx::query("DELETE FROM git_previews WHERE id = $1").bind(preview_id).execute(&state.db).await;
+            tracing::info!("Cleaned up preview for deleted branch: {push_branch}");
+        }
+
+        return Ok(Json(serde_json::json!({ "ok": true, "action": "branch_deleted", "branch": push_branch })));
+    }
+
     if !push_branch.is_empty() && push_branch != config.branch {
         // Preview deployment for non-configured branches
         handle_preview_deploy(&state, &agent, &config, push_branch, &payload).await;
@@ -1075,29 +1109,53 @@ fn spawn_deploy_task(
             return; // Skip single-container deployment path
         }
 
-        // Auto-detect: generate Dockerfile if missing
-        match agent.post("/git/auto-detect", Some(serde_json::json!({
-            "name": config.name, "dockerfile": config.dockerfile, "build_context": config.build_context,
-        }))).await {
+        // Try Nixpacks first, then fall back to auto-detect
+        let mut nixpacks_image: Option<String> = None;
+        emit("detect", "Detecting build method", "in_progress", None);
+        match agent.post_long("/git/nixpacks-build", Some(serde_json::json!({
+            "name": config.name,
+            "commit_hash": commit_hash,
+            "build_context": &config.build_context,
+            "env_vars": config.env_vars,
+        })), 660).await {
             Ok(result) => {
-                let auto = result.get("auto_generated").and_then(|v| v.as_bool()).unwrap_or(false);
-                if auto {
-                    emit("detect", "Auto-detected project type", "done", None);
-                }
-            }
-            Err(e) => {
-                emit("detect", "No Dockerfile and auto-detect failed", "error", Some(format!("{e}")));
-                emit("complete", "Deploy failed", "error", None);
-                let duration_ms = started.elapsed().as_millis() as i32;
-                sqlx::query("INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by, duration_ms) VALUES ($1, $2, $3, '', 'failed', $4, $5, $6)")
-                    .bind(git_deploy_id).bind(&commit_hash).bind(&commit_message)
-                    .bind(format!("Auto-detect failed: {e}")).bind(&triggered).bind(duration_ms)
-                    .execute(&db).await.ok();
-                sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                nixpacks_image = result.get("image_tag").and_then(|v| v.as_str()).map(|s| s.to_string());
+                emit("detect", "Built with Nixpacks", "done", None);
+                sqlx::query("UPDATE git_deploys SET build_method = 'nixpacks', updated_at = NOW() WHERE id = $1")
                     .bind(git_deploy_id).execute(&db).await.ok();
-                tokio::time::sleep(Duration::from_secs(60)).await;
-                logs.lock().unwrap().remove(&deploy_id);
-                return;
+            }
+            Err(_) => {
+                // Nixpacks failed or not available — fall back to auto-detect
+                match agent.post("/git/auto-detect", Some(serde_json::json!({
+                    "name": config.name, "dockerfile": config.dockerfile, "build_context": config.build_context,
+                }))).await {
+                    Ok(result) => {
+                        let auto = result.get("auto_generated").and_then(|v| v.as_bool()).unwrap_or(false);
+                        if auto {
+                            emit("detect", "Auto-detected project type", "done", None);
+                            sqlx::query("UPDATE git_deploys SET build_method = 'auto-detect', updated_at = NOW() WHERE id = $1")
+                                .bind(git_deploy_id).execute(&db).await.ok();
+                        } else {
+                            emit("detect", "Using existing Dockerfile", "done", None);
+                            sqlx::query("UPDATE git_deploys SET build_method = 'dockerfile', updated_at = NOW() WHERE id = $1")
+                                .bind(git_deploy_id).execute(&db).await.ok();
+                        }
+                    }
+                    Err(e) => {
+                        emit("detect", "No Dockerfile and auto-detect failed", "error", Some(format!("{e}")));
+                        emit("complete", "Deploy failed", "error", None);
+                        let duration_ms = started.elapsed().as_millis() as i32;
+                        sqlx::query("INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by, duration_ms) VALUES ($1, $2, $3, '', 'failed', $4, $5, $6)")
+                            .bind(git_deploy_id).bind(&commit_hash).bind(&commit_message)
+                            .bind(format!("Auto-detect failed: {e}")).bind(&triggered).bind(duration_ms)
+                            .execute(&db).await.ok();
+                        sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                            .bind(git_deploy_id).execute(&db).await.ok();
+                        tokio::time::sleep(Duration::from_secs(60)).await;
+                        logs.lock().unwrap().remove(&deploy_id);
+                        return;
+                    }
+                }
             }
         }
 
@@ -1122,7 +1180,11 @@ fn spawn_deploy_task(
             }
         }
 
-        // Step 2: Build
+        // Step 2: Build (skip if nixpacks already built the image)
+        let image_tag = if let Some(tag) = nixpacks_image {
+            emit("build", "Image built by Nixpacks", "done", None);
+            tag
+        } else {
         emit("build", "Building Docker image", "in_progress", None);
 
         let build_body = serde_json::json!({
@@ -1133,7 +1195,7 @@ fn spawn_deploy_task(
             "build_context": config.build_context,
         });
 
-        let image_tag = match agent.post_long("/git/build", Some(build_body), 660).await {
+        match agent.post_long("/git/build", Some(build_body), 660).await {
             Ok(result) => {
                 emit("build", "Building Docker image", "done", None);
                 result.get("image_tag").and_then(|v| v.as_str()).unwrap_or("unknown").to_string()
@@ -1169,7 +1231,8 @@ fn spawn_deploy_task(
                 logs.lock().unwrap().remove(&deploy_id);
                 return;
             }
-        };
+        }
+        }; // end nixpacks_image if/else
 
         // Step 3: Deploy
         emit("deploy", "Deploying container", "in_progress", None);
@@ -1628,15 +1691,29 @@ pub async fn trigger_deploy_task(
         }
     }
 
-    // Auto-detect: generate Dockerfile if missing
-    if let Err(e) = agent.post("/git/auto-detect", Some(serde_json::json!({
-        "name": config.name, "dockerfile": config.dockerfile, "build_context": config.build_context,
-    }))).await {
-        tracing::error!("Auto-detect failed ({}): {}: {e}", triggered_by, config.name);
-        record_failed_history(&db, git_deploy_id, &commit_hash, &commit_message, &format!("Auto-detect failed: {e}"), &triggered_by).await;
-        sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+    // Try Nixpacks first, then fall back to auto-detect + docker build
+    let mut nixpacks_image: Option<String> = None;
+    if let Ok(result) = agent.post_long("/git/nixpacks-build", Some(serde_json::json!({
+        "name": config.name,
+        "commit_hash": commit_hash,
+        "build_context": &config.build_context,
+        "env_vars": config.env_vars,
+    })), 660).await {
+        nixpacks_image = result.get("image_tag").and_then(|v| v.as_str()).map(|s| s.to_string());
+        tracing::info!("Nixpacks build succeeded for {}", config.name);
+        sqlx::query("UPDATE git_deploys SET build_method = 'nixpacks', updated_at = NOW() WHERE id = $1")
             .bind(git_deploy_id).execute(&db).await.ok();
-        return;
+    } else {
+        // Nixpacks unavailable — try auto-detect
+        if let Err(e) = agent.post("/git/auto-detect", Some(serde_json::json!({
+            "name": config.name, "dockerfile": config.dockerfile, "build_context": config.build_context,
+        }))).await {
+            tracing::error!("Auto-detect failed ({}): {}: {e}", triggered_by, config.name);
+            record_failed_history(&db, git_deploy_id, &commit_hash, &commit_message, &format!("Auto-detect failed: {e}"), &triggered_by).await;
+            sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                .bind(git_deploy_id).execute(&db).await.ok();
+            return;
+        }
     }
 
     // Pre-build hook
@@ -1648,23 +1725,27 @@ pub async fn trigger_deploy_task(
         }
     }
 
-    // Build
-    let image_tag = match agent.post_long("/git/build", Some(serde_json::json!({
-        "name": config.name, "dockerfile": config.dockerfile, "commit_hash": commit_hash,
-        "build_args": config.build_args, "build_context": config.build_context,
-    })), 660).await {
-        Ok(r) => r.get("image_tag").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
-        Err(e) => {
-            tracing::error!("Scheduled deploy build failed: {}: {e}", config.name);
-            record_failed_history(&db, git_deploy_id, &commit_hash, &commit_message, &format!("Build failed: {e}"), &triggered_by).await;
-            sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
-                .bind(git_deploy_id).execute(&db).await.ok();
-            if let Some(ref gh_token) = config.github_token {
-                if !gh_token.is_empty() && commit_hash != "unknown" {
-                    set_github_status(gh_token, &config.repo_url, &commit_hash, "failure", config.domain.as_deref()).await;
+    // Build (skip if nixpacks already built the image)
+    let image_tag = if let Some(tag) = nixpacks_image {
+        tag
+    } else {
+        match agent.post_long("/git/build", Some(serde_json::json!({
+            "name": config.name, "dockerfile": config.dockerfile, "commit_hash": commit_hash,
+            "build_args": config.build_args, "build_context": config.build_context,
+        })), 660).await {
+            Ok(r) => r.get("image_tag").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
+            Err(e) => {
+                tracing::error!("Scheduled deploy build failed: {}: {e}", config.name);
+                record_failed_history(&db, git_deploy_id, &commit_hash, &commit_message, &format!("Build failed: {e}"), &triggered_by).await;
+                sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                    .bind(git_deploy_id).execute(&db).await.ok();
+                if let Some(ref gh_token) = config.github_token {
+                    if !gh_token.is_empty() && commit_hash != "unknown" {
+                        set_github_status(gh_token, &config.repo_url, &commit_hash, "failure", config.domain.as_deref()).await;
+                    }
                 }
+                return;
             }
-            return;
         }
     };
 

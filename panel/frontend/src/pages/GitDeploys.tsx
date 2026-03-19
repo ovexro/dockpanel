@@ -32,6 +32,8 @@ interface GitDeploy {
   github_token: string | null;
   deploy_cron: string | null;
   deploy_protected: boolean;
+  build_method: string;
+  preview_ttl_hours: number;
 }
 
 interface GitPreview {
@@ -108,6 +110,7 @@ export default function GitDeploys() {
   const [formGithubToken, setFormGithubToken] = useState("");
   const [formCron, setFormCron] = useState("");
   const [formProtected, setFormProtected] = useState(false);
+  const [formPreviewTtl, setFormPreviewTtl] = useState(24);
 
   const loadDeploys = async () => {
     try {
@@ -193,6 +196,7 @@ export default function GitDeploys() {
     setFormGithubToken(selected.github_token && selected.github_token !== "\u25CF\u25CF\u25CF\u25CF\u25CF\u25CF\u25CF\u25CF" ? selected.github_token : "");
     setFormCron(selected.deploy_cron || "");
     setFormProtected(selected.deploy_protected || false);
+    setFormPreviewTtl(selected.preview_ttl_hours ?? 24);
     setEditing(true);
     setShowModal(true);
   };
@@ -225,6 +229,7 @@ export default function GitDeploys() {
       github_token: formGithubToken.trim() || null,
       deploy_cron: formCron.trim() || null,
       deploy_protected: formProtected,
+      preview_ttl_hours: formPreviewTtl,
     };
     try {
       if (editing && selected) {
@@ -495,6 +500,8 @@ export default function GitDeploys() {
                   { label: "SSL Email", value: selected.ssl_email || "\u2014" },
                   { label: "Pre-build Cmd", value: selected.pre_build_cmd || "\u2014" },
                   { label: "Post-deploy Cmd", value: selected.post_deploy_cmd || "\u2014" },
+                  { label: "Build Method", value: selected.build_method === "nixpacks" ? "Nixpacks" : selected.build_method === "auto-detect" ? "Auto-detect" : selected.build_method === "compose" ? "Docker Compose" : "Dockerfile" },
+                  { label: "Preview TTL", value: selected.preview_ttl_hours > 0 ? `${selected.preview_ttl_hours}h` : "No auto-cleanup" },
                   { label: "Build Context", value: selected.build_context || "." },
                   { label: "GitHub", value: selected.github_token ? "Connected" : "Not configured" },
                   { label: "Deploy Schedule", value: selected.deploy_cron || "\u2014" },
@@ -984,6 +991,19 @@ export default function GitDeploys() {
                   <span className="text-sm text-dark-100">Require confirmation before deploy</span>
                 </label>
                 <p className="text-xs text-dark-300 mt-1 ml-6">Shows a confirmation prompt before deploying to prevent accidental deployments</p>
+              </div>
+
+              {/* Preview TTL */}
+              <div>
+                <label className="block text-sm font-medium text-dark-100 mb-1">Preview TTL (hours)</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={formPreviewTtl}
+                  onChange={(e) => setFormPreviewTtl(Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-dark-100 text-sm focus:border-accent-500 focus:outline-none"
+                />
+                <p className="text-xs text-dark-300 mt-1">Auto-cleanup preview environments after this many hours (0 = no cleanup)</p>
               </div>
 
               {/* Pre-build Command */}
