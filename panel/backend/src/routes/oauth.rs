@@ -336,8 +336,9 @@ pub async fn callback(
     ).await;
 
     // Set cookie and redirect to dashboard
+    let secure_flag = if state.config.base_url.starts_with("https") { "; Secure" } else { "" };
     let cookie = format!(
-        "token={token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=7200"
+        "token={token}; HttpOnly{secure_flag}; SameSite=Lax; Path=/; Max-Age=7200"
     );
 
     Ok(Response::builder()
