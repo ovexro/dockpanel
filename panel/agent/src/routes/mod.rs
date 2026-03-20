@@ -100,6 +100,52 @@ pub fn is_valid_container_id(id: &str) -> bool {
         && id.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_domains() {
+        assert!(is_valid_domain("example.com"));
+        assert!(is_valid_domain("sub.example.com"));
+        assert!(is_valid_domain("my-site.example.com"));
+    }
+
+    #[test]
+    fn invalid_domains() {
+        assert!(!is_valid_domain(""));
+        assert!(!is_valid_domain("localhost"));
+        assert!(!is_valid_domain("../etc/passwd"));
+        assert!(!is_valid_domain("-bad.com"));
+    }
+
+    #[test]
+    fn valid_names() {
+        assert!(is_valid_name("mydb"));
+        assert!(is_valid_name("my-app-123"));
+    }
+
+    #[test]
+    fn invalid_names() {
+        assert!(!is_valid_name(""));
+        assert!(!is_valid_name("-bad"));
+        assert!(!is_valid_name("has space"));
+    }
+
+    #[test]
+    fn valid_container_ids() {
+        assert!(is_valid_container_id("abc123def456"));
+        assert!(is_valid_container_id(&"a".repeat(64)));
+    }
+
+    #[test]
+    fn invalid_container_ids() {
+        assert!(!is_valid_container_id(""));
+        assert!(!is_valid_container_id("not-hex!"));
+        assert!(!is_valid_container_id(&"a".repeat(65)));
+    }
+}
+
 /// Auth middleware — validates Bearer token on all routes except /health.
 /// Uses constant-time comparison to prevent timing attacks.
 /// Supports a grace period for the previous token during rotation.

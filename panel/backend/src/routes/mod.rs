@@ -94,6 +94,126 @@ pub fn is_safe_relative_path(path: &str) -> bool {
         && !path.starts_with('/')
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Domain validation ───────────────────────────────────────────────
+
+    #[test]
+    fn valid_domains() {
+        assert!(is_valid_domain("example.com"));
+        assert!(is_valid_domain("sub.example.com"));
+        assert!(is_valid_domain("deep.sub.example.com"));
+        assert!(is_valid_domain("my-site.example.com"));
+        assert!(is_valid_domain("a.b"));
+    }
+
+    #[test]
+    fn invalid_domains() {
+        assert!(!is_valid_domain(""));
+        assert!(!is_valid_domain("localhost")); // no dot
+        assert!(!is_valid_domain(".example.com")); // starts with dot
+        assert!(!is_valid_domain("example.com.")); // trailing dot (empty part)
+        assert!(!is_valid_domain("-example.com")); // label starts with hyphen
+        assert!(!is_valid_domain("example-.com")); // label ends with hyphen
+        assert!(!is_valid_domain("exam ple.com")); // space
+        assert!(!is_valid_domain("exam_ple.com")); // underscore
+        assert!(!is_valid_domain(&"a".repeat(254))); // too long
+    }
+
+    #[test]
+    fn domain_max_label_length() {
+        let long_label = "a".repeat(63);
+        assert!(is_valid_domain(&format!("{long_label}.com")));
+        let too_long = "a".repeat(64);
+        assert!(!is_valid_domain(&format!("{too_long}.com")));
+    }
+
+    // ── Name validation ─────────────────────────────────────────────────
+
+    #[test]
+    fn valid_names() {
+        assert!(is_valid_name("mydb"));
+        assert!(is_valid_name("my-app"));
+        assert!(is_valid_name("my_app_123"));
+        assert!(is_valid_name("a"));
+        assert!(is_valid_name("A1"));
+    }
+
+    #[test]
+    fn invalid_names() {
+        assert!(!is_valid_name(""));
+        assert!(!is_valid_name("-starts-with-dash"));
+        assert!(!is_valid_name("_starts_with_underscore"));
+        assert!(!is_valid_name("has space"));
+        assert!(!is_valid_name("has.dot"));
+        assert!(!is_valid_name("has/slash"));
+        assert!(!is_valid_name(&"a".repeat(65))); // too long
+    }
+
+    // ── Container ID validation ─────────────────────────────────────────
+
+    #[test]
+    fn valid_container_ids() {
+        assert!(is_valid_container_id("abc123"));
+        assert!(is_valid_container_id("deadbeef"));
+        assert!(is_valid_container_id(&"a".repeat(64)));
+    }
+
+    #[test]
+    fn invalid_container_ids() {
+        assert!(!is_valid_container_id(""));
+        assert!(!is_valid_container_id("not-hex!"));
+        assert!(!is_valid_container_id("GHIJKL")); // G-Z are not hex
+        assert!(!is_valid_container_id(&"a".repeat(65))); // too long
+    }
+
+    // ── Path traversal ──────────────────────────────────────────────────
+
+    #[test]
+    fn safe_paths() {
+        assert!(is_safe_relative_path("index.html"));
+        assert!(is_safe_relative_path("css/style.css"));
+        assert!(is_safe_relative_path("wp-content/uploads/image.png"));
+        assert!(is_safe_relative_path(".htaccess"));
+        assert!(is_safe_relative_path("."));
+    }
+
+    #[test]
+    fn unsafe_paths() {
+        assert!(!is_safe_relative_path(""));
+        assert!(!is_safe_relative_path("../etc/passwd"));
+        assert!(!is_safe_relative_path("foo/../../etc/shadow"));
+        assert!(!is_safe_relative_path("/etc/passwd")); // absolute
+        assert!(!is_safe_relative_path("file\0.txt")); // null byte
+    }
+
+    // ── Pagination ──────────────────────────────────────────────────────
+
+    #[test]
+    fn paginate_defaults() {
+        let (limit, offset) = crate::error::paginate(None, None);
+        assert_eq!(limit, 100);
+        assert_eq!(offset, 0);
+    }
+
+    #[test]
+    fn paginate_custom() {
+        let (limit, offset) = crate::error::paginate(Some(50), Some(10));
+        assert_eq!(limit, 50);
+        assert_eq!(offset, 10);
+    }
+
+    #[test]
+    fn paginate_clamps() {
+        let (limit, _) = crate::error::paginate(Some(500), None);
+        assert_eq!(limit, 200); // max
+        let (limit, _) = crate::error::paginate(Some(0), None);
+        assert_eq!(limit, 1); // min
+    }
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         // Auth

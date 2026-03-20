@@ -25,6 +25,50 @@ pub fn cf_headers(token: &str, email: Option<&str>) -> reqwest::header::HeaderMa
     headers
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hash_agent_token_deterministic() {
+        let hash1 = hash_agent_token("test-token-123");
+        let hash2 = hash_agent_token("test-token-123");
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_hash_agent_token_different_inputs() {
+        let hash1 = hash_agent_token("token-a");
+        let hash2 = hash_agent_token("token-b");
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_hash_agent_token_length() {
+        let hash = hash_agent_token("any-token");
+        assert_eq!(hash.len(), 64); // SHA-256 = 32 bytes = 64 hex chars
+    }
+
+    #[test]
+    fn test_hash_agent_token_hex_format() {
+        let hash = hash_agent_token("test");
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_hash_agent_token_known_value() {
+        // SHA-256("hello") = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+        let hash = hash_agent_token("hello");
+        assert_eq!(hash, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+    }
+
+    #[test]
+    fn test_hash_empty_token() {
+        let hash = hash_agent_token("");
+        assert_eq!(hash.len(), 64);
+    }
+}
+
 /// Detect the server's public IPv4 address.
 ///
 /// Tries the ipify.org API first (5s timeout), falls back to local UDP socket detection.
