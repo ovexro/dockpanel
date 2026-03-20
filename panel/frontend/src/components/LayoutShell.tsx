@@ -3,6 +3,7 @@ import CommandLayout from "./CommandLayout";
 
 const GlassLayout = lazy(() => import("./GlassLayout"));
 const AtlasLayout = lazy(() => import("./AtlasLayout"));
+const NexusLayout = lazy(() => import("./NexusLayout"));
 
 const fallback = (
   <div className="flex items-center justify-center h-screen bg-dark-900">
@@ -21,5 +22,6 @@ export default function LayoutShell() {
 
   if (layout === "glass") return <Suspense fallback={fallback}><GlassLayout /></Suspense>;
   if (layout === "atlas") return <Suspense fallback={fallback}><AtlasLayout /></Suspense>;
+  if (layout === "nexus") return <Suspense fallback={fallback}><NexusLayout /></Suspense>;
   return <CommandLayout />;
 }
