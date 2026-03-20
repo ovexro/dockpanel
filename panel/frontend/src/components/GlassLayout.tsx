@@ -229,9 +229,9 @@ export default function GlassLayout() {
                 </button>
               </div>
 
-              {/* Health bar + theme toggle */}
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-2 px-2.5 py-1.5 bg-dark-800/40 border border-dark-600/30 rounded-lg flex-1 min-w-0">
+              {/* Health + layout + theme */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 min-w-0">
                   <div
                     className={[
                       "w-2 h-2 rounded-full shrink-0",
@@ -242,14 +242,11 @@ export default function GlassLayout() {
                           : "bg-danger-500 animate-pulse",
                     ].join(" ")}
                   />
-                  <span className="text-[10px] font-medium text-dark-400 whitespace-nowrap overflow-hidden">
-                    {apiHealthy === null
-                      ? "Checking..."
-                      : apiHealthy
-                        ? "All systems OK"
-                        : "Health issue"}
+                  <span className="text-[10px] font-medium text-dark-400 whitespace-nowrap">
+                    {apiHealthy === null ? "..." : apiHealthy ? "OK" : "!"}
                   </span>
                 </div>
+                <div className="flex items-center gap-1.5">
                 <LayoutSwitcher variant="dark" />
                 <button
                   onClick={cycleTheme}
@@ -271,6 +268,7 @@ export default function GlassLayout() {
                     />
                   </svg>
                 </button>
+                </div>
               </div>
             </div>
           )}
