@@ -143,6 +143,89 @@ else
     fi
 fi
 
+# ── Ensure required directories exist (may be new in this version) ────────
+log "Ensuring required directories exist..."
+mkdir -p /etc/dockpanel/ssl /var/run/dockpanel /var/backups/dockpanel
+mkdir -p /var/www/acme/.well-known/acme-challenge
+mkdir -p /var/lib/dockpanel/git
+# Directories needed by agent ReadWritePaths (created only if missing)
+for d in /etc/postfix /etc/dovecot /var/vmail /var/spool/postfix /run/opendkim /var/lib/nginx; do
+    [ -d "$d" ] || mkdir -p "$d" 2>/dev/null || true
+done
+echo "d /run/dockpanel 0755 root root -" > /etc/tmpfiles.d/dockpanel.conf 2>/dev/null || true
+
+# ── Refresh systemd service files (may have changed between versions) ─────
+log "Updating systemd service files..."
+cat > /etc/systemd/system/dockpanel-agent.service << 'EOF'
+[Unit]
+Description=DockPanel Agent
+After=network.target nginx.service
+Wants=nginx.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/dockpanel-agent
+ExecStartPost=/bin/sh -c 'sleep 1 && chgrp $(getent group www-data >/dev/null 2>&1 && echo www-data || echo nginx) /var/run/dockpanel/agent.sock 2>/dev/null; chmod 660 /var/run/dockpanel/agent.sock 2>/dev/null; true'
+Restart=always
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
+Environment=RUST_LOG=info
+ReadWritePaths=/etc/nginx /etc/dockpanel /var/run/dockpanel /var/backups/dockpanel /var/www /var/log /etc/letsencrypt /var/lib/nginx /run/nginx.pid /etc/postfix /etc/dovecot /etc/opendkim.conf /var/vmail /var/spool/postfix /var/lib/dpkg /var/cache/apt /var/lib/apt /usr /run/opendkim /etc/php /var/spool/cron
+NoNewPrivileges=no
+ProtectSystem=no
+ProtectHome=no
+PrivateTmp=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+MemoryMax=512M
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat > /etc/systemd/system/dockpanel-api.service << 'EOF'
+[Unit]
+Description=DockPanel API
+After=network.target docker.service dockpanel-agent.service
+Wants=dockpanel-agent.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/dockpanel-api
+Restart=always
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
+Environment=RUST_LOG=info
+EnvironmentFile=/etc/dockpanel/api.env
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectSystem=no
+ReadWritePaths=/var/run/dockpanel /tmp
+MemoryMax=1G
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# ── Update nginx frontend path if needed ──────────────────────────────────
+if [ "$INSTALL_FROM_RELEASE" = "1" ]; then
+    FE_DIST="/opt/dockpanel/frontend/dist"
+    for conf in /etc/nginx/sites-enabled/dockpanel-panel.conf /etc/nginx/conf.d/dockpanel-panel.conf; do
+        if [ -f "$conf" ] && grep -q "panel/frontend/dist" "$conf" 2>/dev/null; then
+            sed -i "s|/opt/dockpanel/panel/frontend/dist|${FE_DIST}|g" "$conf"
+            log "Updated nginx frontend path in $conf"
+            nginx -t > /dev/null 2>&1 && nginx -s reload > /dev/null 2>&1
+        fi
+    done
+fi
+
 # ── Deploy binaries ───────────────────────────────────────────────────────
 # Note: ~2-5s downtime during binary swap is expected for self-hosted deployments.
 log "Backing up current binaries..."

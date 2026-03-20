@@ -27,3 +27,14 @@ Thumbs.db
 
 # Logs
 *.log
+
+# SSL/TLS material
+*.pem
+*.key
+*.cert
+*.crt
+!panel/agent/src/**
+
+# Databases
+*.sqlite
+*.db

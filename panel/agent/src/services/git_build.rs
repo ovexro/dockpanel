@@ -844,7 +844,7 @@ async fn blue_green_update(
     container_port: u16,
     old_port: u16,
     domain: &str,
-    _base_host_config: &bollard::service::HostConfig,
+    base_host_config: &bollard::service::HostConfig,
 ) -> Result<GitDeployResult, String> {
     let temp_port = crate::services::docker_apps::find_free_port()?;
     tracing::info!(
@@ -892,6 +892,10 @@ async fn blue_green_update(
             name: Some(bollard::service::RestartPolicyNameEnum::UNLESS_STOPPED),
             ..Default::default()
         }),
+        memory: base_host_config.memory,
+        memory_swap: base_host_config.memory_swap,
+        cpu_period: base_host_config.cpu_period,
+        cpu_quota: base_host_config.cpu_quota,
         ..Default::default()
     };
 

@@ -14,6 +14,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::AppState;
 
+static ACTIVE_TERMINALS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+const MAX_TERMINAL_SESSIONS: u32 = 20;
+
 #[derive(Deserialize)]
 struct TermQuery {
     domain: Option<String>,
@@ -35,6 +38,16 @@ async fn ws_handler(
     Query(q): Query<TermQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
+    // Enforce terminal session limit
+    let current = ACTIVE_TERMINALS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if current >= MAX_TERMINAL_SESSIONS {
+        ACTIVE_TERMINALS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        return Response::builder()
+            .status(503)
+            .body("Too many terminal sessions".into())
+            .unwrap();
+    }
+
     // Validate JWT ticket (short-lived token signed by the API using agent token as secret)
     let user_email = q
         .token
@@ -54,6 +67,7 @@ async fn ws_handler(
             .map(|data| data.claims.sub)
         });
     if user_email.is_none() {
+        ACTIVE_TERMINALS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
         return Response::builder()
             .status(401)
             .body("Unauthorized".into())
@@ -67,6 +81,7 @@ async fn ws_handler(
     if !domain.is_empty()
         && (domain.contains("..") || domain.contains('/') || domain.contains('\0'))
     {
+        ACTIVE_TERMINALS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
         return Response::builder()
             .status(400)
             .body("Invalid domain".into())
@@ -183,6 +198,7 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: Stri
                     format!("Site directory not found: /var/www/{domain}").into(),
                 ))
                 .await;
+            ACTIVE_TERMINALS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
             return;
         }
     } else {
@@ -196,6 +212,7 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: Stri
             let _ = socket
                 .send(Message::Text(format!("Failed to spawn shell: {e}").into()))
                 .await;
+            ACTIVE_TERMINALS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
             return;
         }
     };
@@ -209,6 +226,7 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: Stri
         let _ = socket
             .send(Message::Text("Failed to dup PTY fd".into()))
             .await;
+        ACTIVE_TERMINALS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
         return;
     }
     // Prevent OwnedFd from closing the fd since Files now own them
@@ -332,6 +350,9 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: Stri
             libc::waitpid(child_pid as i32, &mut status, 0);
         }
     }
+
+    // Release terminal session slot
+    ACTIVE_TERMINALS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// The terminal WebSocket route bypasses standard auth middleware

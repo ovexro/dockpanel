@@ -275,7 +275,43 @@ pub async fn callback(
         }
     };
 
-    // Issue JWT session (reuse existing logic)
+    // If 2FA is enabled, issue a temporary token and redirect to 2FA challenge
+    if user.totp_enabled {
+        let now = chrono::Utc::now().timestamp() as usize;
+        #[derive(serde::Serialize)]
+        struct TwoFaClaims {
+            sub: uuid::Uuid,
+            purpose: String,
+            exp: usize,
+        }
+        let temp_claims = TwoFaClaims {
+            sub: user.id,
+            purpose: "2fa".to_string(),
+            exp: now + 300, // 5 minutes
+        };
+        let temp_token = jsonwebtoken::encode(
+            &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+            &temp_claims,
+            &jsonwebtoken::EncodingKey::from_secret(state.config.jwt_secret.as_bytes()),
+        )
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("JWT encode failed: {e}")))?;
+
+        crate::services::activity::log_activity(
+            &state.db, user.id, &user.email, "auth.oauth_login_2fa_required",
+            Some("user"), Some(&provider_name), None, None,
+        ).await;
+
+        // Redirect to frontend 2FA page with temp token
+        let redirect_url = format!("/login?oauth_2fa={temp_token}");
+        return Ok(Response::builder()
+            .status(StatusCode::FOUND)
+            .header(header::LOCATION, redirect_url)
+            .body(axum::body::Body::empty())
+            .unwrap()
+            .into_response());
+    }
+
+    // Issue JWT session (no 2FA required)
     let now = chrono::Utc::now().timestamp() as usize;
     let jti = Uuid::new_v4().to_string();
     let claims = crate::auth::Claims {

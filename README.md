@@ -1,12 +1,16 @@
 # DockPanel
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/ovexro/dockpanel)](https://github.com/ovexro/dockpanel/releases)
+[![Build](https://img.shields.io/github/actions/workflow/status/ovexro/dockpanel/release.yml)](https://github.com/ovexro/dockpanel/actions)
+
 **Your server. Your rules. Your panel.**
 
 A free, self-hosted, Docker-native server management panel built in Rust. No subscriptions, no vendor lock-in, no artificial limits.
 
-v2.0.2 | ~35MB binaries | ~60MB RAM | Installs in <60 seconds | x86_64 + ARM64
+v2.0.3 | ~35MB binaries | ~60MB RAM | Installs in <60 seconds | x86_64 + ARM64
 
-[Live Demo](https://demo.dockpanel.dev) | [Website](https://dockpanel.dev)
+[Live Demo](https://demo.dockpanel.dev) | [Website](https://dockpanel.dev) | [Changelog](CHANGELOG.md) | [Features](FEATURES.md)
 
 ## Quick Start
 
@@ -87,7 +91,7 @@ Browser
         +-- /* -----> Frontend dist/ (static files)
 ```
 
-- **Agent** — Rust binary, runs as root via systemd. Manages host resources (Docker, Nginx, SSL, file system, backups, terminal). Unix socket locally, HTTPS for remote servers.
+- **Agent** — Rust binary, runs as root via systemd. Manages host resources (Docker, Nginx, SSL, file system, backups, terminal). Unix socket locally, HTTPS for remote servers. In multi-server mode (`AGENT_LISTEN_TCP` env var), the agent listens on a TCP port for remote panel connections. When configured with `DOCKPANEL_CENTRAL_URL`, it periodically reports metrics to the central panel — this is opt-in and only used for multi-server management.
 - **API** — Rust binary, runs via systemd. Handles auth, database operations, alert engine, multi-server dispatch, and proxies commands to agents.
 - **Frontend** — React 19 SPA with lazy-loaded pages. Served directly by Nginx from `dist/`.
 
@@ -170,6 +174,18 @@ sudo bash /opt/dockpanel/scripts/update.sh
 ```bash
 sudo bash /opt/dockpanel/scripts/uninstall.sh
 ```
+
+## Documentation
+
+- [FEATURES.md](FEATURES.md) — Complete feature manifest with implementation details
+- [CHANGELOG.md](CHANGELOG.md) — Version history and release notes
+- [SECURITY.md](SECURITY.md) — Security model and vulnerability reporting
+- [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — Environment variables and directory structure
+- [CONTRIBUTING.md](CONTRIBUTING.md) — Development setup and contribution guidelines
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and PR process.
 
 ## License
 

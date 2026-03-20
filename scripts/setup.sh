@@ -212,8 +212,8 @@ detect_os() {
         *) error "Unsupported architecture: $ARCH"; exit 1 ;;
     esac
 
-    # ARM: check for swap (compilation needs ~1GB RAM)
-    if [ "$ARCH" = "aarch64" ] && [ "$INSTALL_FROM_RELEASE" != "1" ]; then
+    # Check for swap on low-memory systems (Rust compilation needs ~1.5GB RAM)
+    if [ "$INSTALL_FROM_RELEASE" != "1" ]; then
         local total_mem
         total_mem=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo "0")
         local swap_total
@@ -245,6 +245,17 @@ install_dependencies() {
     # lsb-release only on Debian-based
     if [ "$PKG_MGR" = "apt" ]; then
         pkg_install gnupg lsb-release
+    fi
+
+    # Build tools required for Rust compilation (cmake for aws-lc-sys, gcc for ring)
+    if [ "$INSTALL_FROM_RELEASE" != "1" ]; then
+        log "Installing build tools for Rust compilation..."
+        if [ "$PKG_MGR" = "apt" ]; then
+            pkg_install build-essential cmake pkg-config libssl-dev
+        else
+            pkg_install gcc gcc-c++ cmake make pkg-config openssl-devel
+        fi
+        log "Build tools installed"
     fi
 
     log "Base packages installed"
@@ -521,7 +532,7 @@ Wants=nginx.service
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/dockpanel-agent
-ExecStartPost=/bin/sh -c 'sleep 1 && chgrp www-data /var/run/dockpanel/agent.sock 2>/dev/null; chmod 660 /var/run/dockpanel/agent.sock 2>/dev/null; true'
+ExecStartPost=/bin/sh -c 'sleep 1 && chgrp $(getent group www-data >/dev/null 2>&1 && echo www-data || echo nginx) /var/run/dockpanel/agent.sock 2>/dev/null; chmod 660 /var/run/dockpanel/agent.sock 2>/dev/null; true'
 Restart=always
 RestartSec=5
 StartLimitBurst=5
@@ -799,8 +810,12 @@ install_recommended_services() {
         ufw allow 22/tcp > /dev/null 2>&1
         ufw allow 80/tcp > /dev/null 2>&1
         ufw allow 443/tcp > /dev/null 2>&1
+        # Allow panel port if not 80/443 (e.g. IP-based installs on port 8443)
+        if [ -n "$PANEL_PORT" ] && [ "$PANEL_PORT" != "80" ] && [ "$PANEL_PORT" != "443" ]; then
+            ufw allow "${PANEL_PORT}/tcp" > /dev/null 2>&1
+        fi
         ufw --force enable > /dev/null 2>&1
-        log "UFW installed and enabled (SSH, HTTP, HTTPS allowed)"
+        log "UFW installed and enabled (SSH, HTTP, HTTPS, panel port allowed)"
     else
         log "UFW already installed"
     fi
@@ -965,7 +980,12 @@ main() {
         echo -e "${BOLD}Enter your panel domain (e.g. panel.example.com)${NC}"
         echo -e "Leave blank to access via IP:${PANEL_PORT} instead"
         echo -n "> "
-        read -r PANEL_DOMAIN
+        if [ -t 0 ]; then
+            read -r PANEL_DOMAIN
+        else
+            # When piped via curl, read from terminal directly
+            read -r PANEL_DOMAIN < /dev/tty 2>/dev/null || PANEL_DOMAIN=""
+        fi
         PANEL_DOMAIN=$(echo "$PANEL_DOMAIN" | tr -d ' ')
     fi
 
