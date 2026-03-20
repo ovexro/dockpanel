@@ -1,28 +1,21 @@
 import { Link } from 'react-router-dom';
+import { Server } from 'lucide-react';
 
 export default function PrivacyPolicy() {
   return (
     <div className="min-h-screen">
       {/* Simple header */}
-      <header className="border-b border-white/5 bg-surface-950/80 backdrop-blur-xl">
+      <header className="border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-xl">
         <div className="mx-auto flex max-w-4xl items-center justify-between px-6 py-4">
           <Link to="/" className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-600">
-              <svg viewBox="0 0 20 20" className="h-4.5 w-4.5 text-white" fill="currentColor">
-                <rect x="2" y="2" width="16" height="4" rx="1" opacity="0.9" />
-                <rect x="2" y="8" width="4" height="4" rx="0.5" opacity="0.7" />
-                <rect x="8" y="8" width="4" height="4" rx="0.5" opacity="0.7" />
-                <rect x="14" y="8" width="4" height="4" rx="0.5" opacity="0.7" />
-                <rect x="2" y="14" width="4" height="4" rx="0.5" opacity="0.5" />
-                <rect x="8" y="14" width="4" height="4" rx="0.5" opacity="0.5" />
-                <rect x="14" y="14" width="4" height="4" rx="0.5" opacity="0.5" />
-              </svg>
+            <div className="w-8 h-8 rounded-lg bg-emerald-500 flex items-center justify-center">
+              <Server className="w-5 h-5 text-zinc-950" />
             </div>
             <span className="text-lg font-bold tracking-tight text-white">
-              Dock<span className="text-brand-400">Panel</span>
+              Dock<span className="text-emerald-400">Panel</span>
             </span>
           </Link>
-          <Link to="/" className="text-sm text-surface-200/60 transition hover:text-white">
+          <Link to="/" className="text-sm text-zinc-400 transition hover:text-white">
             &larr; Back to home
           </Link>
         </div>
@@ -30,9 +23,9 @@ export default function PrivacyPolicy() {
 
       <main className="mx-auto max-w-3xl px-6 py-16">
         <h1 className="text-3xl font-bold tracking-tight text-white md:text-4xl">Privacy Policy</h1>
-        <p className="mt-2 text-sm text-surface-200/40">Last updated: March 13, 2026</p>
+        <p className="mt-2 text-sm text-zinc-500">Last updated: March 13, 2026</p>
 
-        <div className="mt-10 space-y-8 text-surface-200/70 leading-relaxed">
+        <div className="mt-10 space-y-8 text-zinc-400 leading-relaxed">
           <section>
             <h2 className="text-lg font-semibold text-white">Overview</h2>
             <p className="mt-2">
@@ -77,7 +70,7 @@ export default function PrivacyPolicy() {
               address, request headers) as part of CDN delivery and DDoS protection. Please refer to{' '}
               <a
                 href="https://www.cloudflare.com/privacypolicy/"
-                className="text-brand-400 underline underline-offset-2 transition hover:text-brand-300"
+                className="text-emerald-400 underline underline-offset-2 transition hover:text-emerald-300"
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -101,7 +94,7 @@ export default function PrivacyPolicy() {
               If you have questions about this privacy policy, you can open an issue on our{' '}
               <a
                 href="https://github.com/ovexro/dockpanel"
-                className="text-brand-400 underline underline-offset-2 transition hover:text-brand-300"
+                className="text-emerald-400 underline underline-offset-2 transition hover:text-emerald-300"
                 target="_blank"
                 rel="noopener noreferrer"
               >
