@@ -57,7 +57,7 @@ echo ""
 # ── Pull latest code (only for source builds) ────────────────────────────
 if [ "$INSTALL_FROM_RELEASE" != "1" ] && [ -d "$REPO_DIR/.git" ]; then
     log "Pulling latest changes..."
-    (cd "$REPO_DIR" && git pull --ff-only) || {
+    (cd "$REPO_DIR" && git stash -q 2>/dev/null; git pull --ff-only; git stash pop -q 2>/dev/null || true) || {
         error "Git pull failed. Resolve conflicts manually."
         exit 1
     }
@@ -226,6 +226,22 @@ if [ "$INSTALL_FROM_RELEASE" = "1" ]; then
     done
 fi
 
+# Ensure BASE_URL is set in api.env for CORS
+if [ -f /etc/dockpanel/api.env ] && ! grep -q "BASE_URL" /etc/dockpanel/api.env; then
+    # Detect panel URL from nginx config
+    PANEL_DOMAIN=""
+    for conf in /etc/nginx/sites-enabled/dockpanel-panel.conf /etc/nginx/conf.d/dockpanel-panel.conf; do
+        if [ -f "$conf" ]; then
+            PANEL_DOMAIN=$(grep "server_name" "$conf" | head -1 | awk '{print $2}' | tr -d ';')
+            break
+        fi
+    done
+    if [ -n "$PANEL_DOMAIN" ] && [ "$PANEL_DOMAIN" != "_" ]; then
+        echo "BASE_URL=https://${PANEL_DOMAIN}" >> /etc/dockpanel/api.env
+        log "Added BASE_URL=https://${PANEL_DOMAIN} to api.env"
+    fi
+fi
+
 # ── Deploy binaries ───────────────────────────────────────────────────────
 # Note: ~2-5s downtime during binary swap is expected for self-hosted deployments.
 log "Backing up current binaries..."
@@ -267,23 +283,23 @@ rollback() {
 }
 
 log "Running post-deploy health check..."
-sleep 5
+sleep 10
 
 # Basic health endpoint
-if ! curl -sf --max-time 15 http://127.0.0.1:3080/api/health > /dev/null 2>&1; then
+if ! curl -sf --max-time 30 http://127.0.0.1:3080/api/health > /dev/null 2>&1; then
     rollback
 fi
 log "Health check: /api/health OK"
 
 # Auth subsystem (setup-status is unauthenticated, tests DB connectivity)
-if ! curl -sf --max-time 15 -X POST http://127.0.0.1:3080/api/auth/setup-status \
+if ! curl -sf --max-time 30 -X POST http://127.0.0.1:3080/api/auth/setup-status \
     -H "Content-Type: application/json" > /dev/null 2>&1; then
     rollback
 fi
 log "Health check: /api/auth/setup-status OK"
 
 # Agent reachable (non-fatal — agent may start slower)
-if ! curl -sf --max-time 15 http://127.0.0.1:3080/api/system/info > /dev/null 2>&1; then
+if ! curl -sf --max-time 30 http://127.0.0.1:3080/api/system/info > /dev/null 2>&1; then
     warn "Agent connectivity check failed (non-fatal, agent may still be starting)"
 fi
 

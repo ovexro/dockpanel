@@ -102,7 +102,7 @@ preflight_checks() {
         exit 1
     fi
 
-    # Check available memory (need at least 512MB)
+    # Check available memory (warn if very low)
     FREE_MEM=$(free -m | awk '/^Mem:/ {print $7}')
     if [ -n "$FREE_MEM" ] && [ "$FREE_MEM" -lt 256 ]; then
         warn "Less than 256MB available memory. Performance may be degraded."
@@ -240,6 +240,12 @@ install_dependencies() {
     header "Installing Dependencies"
 
     pkg_update
+
+    # EPEL for RHEL-family (needed for certbot, fail2ban, etc.)
+    if [ "$PKG_MGR" != "apt" ]; then
+        pkg_install epel-release || true
+    fi
+
     pkg_install curl openssl ca-certificates
 
     # lsb-release only on Debian-based
@@ -780,11 +786,21 @@ install_recommended_services() {
         log "Installing PHP-FPM..."
         local PHP_VER="8.3"
         if [ "$PKG_MGR" = "apt" ]; then
+            # Add ondrej PPA for PHP 8.3 on older distros
+            if ! apt-cache show php8.3 > /dev/null 2>&1; then
+                apt-get install -y software-properties-common > /dev/null 2>&1
+                add-apt-repository -y ppa:ondrej/php > /dev/null 2>&1 || true
+                apt-get update -y > /dev/null 2>&1
+            fi
             apt-get install -y php${PHP_VER}-fpm php${PHP_VER}-cli php${PHP_VER}-mysql \
                 php${PHP_VER}-pgsql php${PHP_VER}-curl php${PHP_VER}-gd php${PHP_VER}-mbstring \
                 php${PHP_VER}-xml php${PHP_VER}-zip php${PHP_VER}-bcmath php${PHP_VER}-intl \
                 php${PHP_VER}-readline php${PHP_VER}-opcache > /dev/null 2>&1
             systemctl enable --now php${PHP_VER}-fpm > /dev/null 2>&1
+        else
+            # RHEL/Rocky/Fedora
+            pkg_install php-fpm php-cli php-common php-mysqlnd php-pgsql php-xml php-mbstring php-curl php-zip php-gd
+            systemctl enable --now php-fpm > /dev/null 2>&1
         fi
         log "PHP ${PHP_VER} installed with FPM"
     else
@@ -1010,8 +1026,14 @@ main() {
         build_frontend
     fi
 
-    # Remove default nginx config to avoid certbot conflicts
-    rm -f /etc/nginx/sites-enabled/default
+    # Remove default server block that conflicts
+    if [ -f /etc/nginx/sites-enabled/default ]; then
+        rm -f /etc/nginx/sites-enabled/default
+    fi
+    # RHEL: comment out default server block in nginx.conf
+    if [ "$PKG_MGR" != "apt" ] && grep -q "server {" /etc/nginx/nginx.conf 2>/dev/null; then
+        sed -i '/^[[:space:]]*server {/,/^[[:space:]]*}/s/^/#/' /etc/nginx/nginx.conf 2>/dev/null || true
+    fi
 
     # These steps should continue even if one fails
     set +e

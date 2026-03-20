@@ -19,8 +19,11 @@ const CIRCUIT_BREAKER_THRESHOLD: u32 = 5;
 /// Seconds to wait before retrying after circuit opens.
 const CIRCUIT_BREAKER_RESET_SECS: u64 = 30;
 
-/// Maximum concurrent agent connections (prevents FD exhaustion).
+/// Maximum concurrent agent connections for quick requests (prevents FD exhaustion).
 const MAX_CONCURRENT_CONNECTIONS: usize = 20;
+
+/// Maximum concurrent long-running agent operations (docker builds, etc.).
+const MAX_LONG_CONNECTIONS: usize = 5;
 
 /// Maximum response size from agent (50MB).
 const MAX_RESPONSE_SIZE: usize = 50 * 1024 * 1024;
@@ -54,6 +57,7 @@ impl fmt::Display for AgentError {
 #[derive(Clone)]
 struct CircuitBreaker {
     semaphore: Arc<Semaphore>,
+    long_semaphore: Arc<Semaphore>,
     consecutive_failures: Arc<AtomicU32>,
     last_failure_time: Arc<AtomicU64>,
 }
@@ -62,6 +66,7 @@ impl CircuitBreaker {
     fn new() -> Self {
         Self {
             semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS)),
+            long_semaphore: Arc::new(Semaphore::new(MAX_LONG_CONNECTIONS)),
             consecutive_failures: Arc::new(AtomicU32::new(0)),
             last_failure_time: Arc::new(AtomicU64::new(0)),
         }
@@ -329,6 +334,7 @@ impl AgentClient {
     }
 
     /// POST with a custom timeout (seconds). Use for long-running operations like docker build.
+    /// Uses a separate semaphore (5 permits) so long ops don't starve quick requests.
     pub async fn post_long(
         &self,
         path: &str,
@@ -336,8 +342,8 @@ impl AgentClient {
         timeout_secs: u64,
     ) -> Result<serde_json::Value, AgentError> {
         self.cb.check()?;
-        let _permit = self.cb.semaphore.acquire().await.map_err(|e| {
-            AgentError::Connection(format!("connection semaphore closed: {e}"))
+        let _permit = self.cb.long_semaphore.acquire().await.map_err(|e| {
+            AgentError::Connection(format!("long operation semaphore closed: {e}"))
         })?;
 
         let result = tokio::time::timeout(

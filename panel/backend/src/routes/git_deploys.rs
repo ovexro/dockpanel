@@ -173,10 +173,11 @@ pub async fn create(
         return Err(err(StatusCode::BAD_REQUEST, "Repository URL is required"));
     }
 
-    // Auto-allocate host_port: find first gap in 7000-7999
+    // Auto-allocate host_port: find first gap in 7000-7999 (scoped to this server)
     let used_ports: Vec<(i32,)> = sqlx::query_as(
-        "SELECT host_port FROM git_deploys ORDER BY host_port",
+        "SELECT host_port FROM git_deploys WHERE server_id = $1 ORDER BY host_port",
     )
+    .bind(server_id)
     .fetch_all(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -1860,9 +1861,14 @@ async fn handle_preview_deploy(state: &AppState, agent: &AgentHandle, config: &G
     let branch_slug = branch.replace('/', "-").replace('.', "-").to_lowercase();
     if branch_slug.len() > 50 { return; } // Safety limit
 
-    // Allocate preview port
-    let used_ports: Vec<(i32,)> = sqlx::query_as("SELECT host_port FROM git_previews")
-        .fetch_all(&state.db).await.unwrap_or_default();
+    // Allocate preview port (scoped to this server via git_deploys)
+    let used_ports: Vec<(i32,)> = sqlx::query_as(
+        "SELECT gp.host_port FROM git_previews gp \
+         JOIN git_deploys gd ON gd.id = gp.git_deploy_id \
+         WHERE gd.server_id = $1"
+    )
+    .bind(config.server_id)
+    .fetch_all(&state.db).await.unwrap_or_default();
     let used: std::collections::HashSet<i32> = used_ports.into_iter().map(|(p,)| p).collect();
     let port = match (8000..=8999).find(|p| !used.contains(p)) {
         Some(p) => p,
