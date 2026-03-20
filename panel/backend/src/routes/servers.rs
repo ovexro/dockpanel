@@ -80,14 +80,17 @@ pub async fn create(
         String::new()
     };
 
+    let agent_token_hash = crate::helpers::hash_agent_token(&agent_token);
+
     let server: Server = sqlx::query_as(
-        "INSERT INTO servers (user_id, name, ip_address, agent_token, agent_url, status, is_local) \
-         VALUES ($1, $2, $3, $4, $5, 'pending', false) RETURNING *",
+        "INSERT INTO servers (user_id, name, ip_address, agent_token, agent_token_hash, agent_url, status, is_local) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'pending', false) RETURNING *",
     )
     .bind(claims.sub)
     .bind(name)
     .bind(if ip.is_empty() { None } else { Some(&ip) })
     .bind(&agent_token)
+    .bind(&agent_token_hash)
     .bind(if agent_url.is_empty() { None } else { Some(&agent_url) })
     .fetch_one(&state.db)
     .await
@@ -300,4 +303,80 @@ pub async fn update(
     .await;
 
     Ok(Json(updated))
+}
+
+/// POST /api/servers/{id}/rotate-token — Rotate agent token.
+/// Calls the agent's rotation endpoint, then updates the hash in the database.
+pub async fn rotate_token(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Verify server belongs to this admin
+    let _server: Server = sqlx::query_as("SELECT * FROM servers WHERE id = $1 AND user_id = $2")
+        .bind(id)
+        .bind(claims.sub)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Server not found"))?;
+
+    // Get agent handle for this server
+    let agent = state
+        .agents
+        .for_server(id)
+        .await
+        .map_err(|e| crate::error::agent_error("get agent", e))?;
+
+    // Call agent's rotation endpoint
+    let resp: serde_json::Value = agent
+        .post("/auth/rotate-token", Some(serde_json::json!({})))
+        .await
+        .map_err(|e| crate::error::agent_error("rotate token", e))?;
+
+    let new_token = resp
+        .get("new_token")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "Agent did not return new token"))?;
+
+    // Update database with new hash (and plaintext for remote agent communication)
+    let new_hash = crate::helpers::hash_agent_token(new_token);
+    sqlx::query(
+        "UPDATE servers SET agent_token = $1, agent_token_hash = $2 WHERE id = $3",
+    )
+    .bind(new_token)
+    .bind(&new_hash)
+    .bind(id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    // Invalidate cached remote agent client so it picks up the new token
+    state.agents.invalidate(id).await;
+
+    // If this is the local server, update the in-memory agent token too
+    if let Some(local_id) = state.agents.local_server_id().await {
+        if local_id == id {
+            // The local AgentClient reads token from env, but we should update the env-derived config
+            // For now, the local agent already has the new token in memory via its own rotation endpoint
+            tracing::info!("Local agent token rotated — update AGENT_TOKEN in api.env for persistence across API restarts");
+        }
+    }
+
+    activity::log_activity(
+        &state.db,
+        claims.sub,
+        &claims.email,
+        "server.rotate_token",
+        Some("server"),
+        None,
+        None,
+        None,
+    )
+    .await;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Agent token rotated successfully"
+    })))
 }

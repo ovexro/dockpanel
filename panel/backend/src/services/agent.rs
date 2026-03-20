@@ -742,9 +742,11 @@ pub async fn ensure_local_server(db: &sqlx::PgPool, agent_token: &str) -> Uuid {
             .unwrap_or(None);
 
     if let Some((id,)) = existing {
-        // Update token if changed
-        let _ = sqlx::query("UPDATE servers SET agent_token = $1, status = 'online' WHERE id = $2")
+        // Update token + hash if changed
+        let token_hash = crate::helpers::hash_agent_token(agent_token);
+        let _ = sqlx::query("UPDATE servers SET agent_token = $1, agent_token_hash = $2, status = 'online' WHERE id = $3")
             .bind(agent_token)
+            .bind(&token_hash)
             .bind(id)
             .execute(db)
             .await;
@@ -767,13 +769,15 @@ pub async fn ensure_local_server(db: &sqlx::PgPool, agent_token: &str) -> Uuid {
         }
     };
 
+    let token_hash = crate::helpers::hash_agent_token(agent_token);
     let row: (Uuid,) = sqlx::query_as(
-        "INSERT INTO servers (id, user_id, name, agent_token, status, is_local) \
-         VALUES (gen_random_uuid(), $1, 'This Server', $2, 'online', true) \
+        "INSERT INTO servers (id, user_id, name, agent_token, agent_token_hash, status, is_local) \
+         VALUES (gen_random_uuid(), $1, 'This Server', $2, $3, 'online', true) \
          RETURNING id",
     )
     .bind(user_id)
     .bind(agent_token)
+    .bind(&token_hash)
     .fetch_one(db)
     .await
     .expect("Failed to create local server row");
