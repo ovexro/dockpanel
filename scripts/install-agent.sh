@@ -40,18 +40,50 @@ echo ""
 # Detect architecture
 ARCH=$(uname -m)
 case "$ARCH" in
-    x86_64)  ARCH_LABEL="x86_64" ;;
-    aarch64) ARCH_LABEL="aarch64" ;;
-    arm64)   ARCH_LABEL="aarch64" ;;
+    x86_64)  ARCH_LABEL="amd64" ;;
+    aarch64) ARCH_LABEL="arm64" ;;
+    arm64)   ARCH_LABEL="arm64" ;;
     *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
 esac
 echo "[1/7] Architecture: $ARCH_LABEL"
 
+# Detect package manager
+detect_pkg_manager() {
+    if command -v apt-get &> /dev/null; then
+        PKG_MGR="apt"
+    elif command -v dnf &> /dev/null; then
+        PKG_MGR="dnf"
+    elif command -v yum &> /dev/null; then
+        PKG_MGR="yum"
+    else
+        echo "Error: No supported package manager found (apt/dnf/yum)"
+        exit 1
+    fi
+}
+
+pkg_install() {
+    case "$PKG_MGR" in
+        apt)
+            apt-get update -qq > /dev/null 2>&1
+            apt-get install -y -qq "$@" > /dev/null 2>&1
+            ;;
+        dnf) dnf install -y -q "$@" > /dev/null 2>&1 ;;
+        yum) yum install -y -q "$@" > /dev/null 2>&1 ;;
+    esac
+}
+
 # Install dependencies
 echo "[2/7] Installing dependencies..."
-apt-get update -qq > /dev/null 2>&1
-apt-get install -y -qq curl docker.io > /dev/null 2>&1
+detect_pkg_manager
+
+# Install Docker
+if ! command -v docker &> /dev/null; then
+    curl -fsSL https://get.docker.com | sh > /dev/null 2>&1
+fi
 systemctl enable --now docker > /dev/null 2>&1 || true
+
+# Install curl and openssl if missing
+pkg_install curl openssl
 
 # Create directories
 echo "[3/7] Creating directories..."
@@ -61,14 +93,25 @@ mkdir -p /var/www
 mkdir -p /var/backups/dockpanel
 mkdir -p /var/lib/dockpanel/git
 
-# Save agent token
-echo "[4/7] Saving agent token..."
+# Ensure socket directory persists across reboots
+echo "d /run/dockpanel 0755 root root -" > /etc/tmpfiles.d/dockpanel.conf
+
+# Save agent token and server ID
+echo "[4/7] Saving configuration..."
 echo "$TOKEN" > /etc/dockpanel/agent.token
 chmod 600 /etc/dockpanel/agent.token
 
-# Download agent binary
+# Persist server ID for agent identification
+cat > /etc/dockpanel/agent.env << ENVEOF
+AGENT_TOKEN=$TOKEN
+SERVER_ID=$SERVER_ID
+AGENT_LISTEN_TCP=0.0.0.0:$AGENT_PORT
+ENVEOF
+chmod 600 /etc/dockpanel/agent.env
+
+# Download agent binary (naming matches GitHub release assets)
 echo "[5/7] Downloading agent binary..."
-DOWNLOAD_URL="https://github.com/ovexro/dockpanel/releases/latest/download/dockpanel-agent-${ARCH_LABEL}"
+DOWNLOAD_URL="https://github.com/ovexro/dockpanel/releases/latest/download/dockpanel-agent-linux-${ARCH_LABEL}"
 if ! curl -fsSL "$DOWNLOAD_URL" -o /usr/local/bin/dockpanel-agent; then
     echo "  Release download failed. Trying panel download..."
     if [[ -n "$PANEL_URL" ]]; then
@@ -92,7 +135,7 @@ if [[ ! -f /etc/dockpanel/ssl/agent.crt ]]; then
     chmod 600 /etc/dockpanel/ssl/agent.key
 fi
 
-# Create systemd service
+# Create systemd service (matching local agent hardening)
 echo "[7/7] Creating systemd service..."
 cat > /etc/systemd/system/dockpanel-agent.service << 'UNIT'
 [Unit]
@@ -103,16 +146,26 @@ Wants=docker.service
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/dockpanel-agent
+EnvironmentFile=/etc/dockpanel/agent.env
 Environment=RUST_LOG=info
-Environment=AGENT_LISTEN_TCP=0.0.0.0:9443
 Restart=always
 RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
 
-# Permissions
+# Permissions (matching local agent)
 ReadWritePaths=/var/www /var/run/dockpanel /etc/dockpanel /var/backups/dockpanel /var/lib/dockpanel
 ReadWritePaths=/etc/nginx /var/log/nginx /run/nginx.pid /var/lib/nginx
 ReadWritePaths=/etc/letsencrypt /etc/postfix /etc/dovecot /etc/opendkim /var/vmail
-ReadWritePaths=/var/spool/cron /tmp
+ReadWritePaths=/var/spool/cron /tmp /etc/php
+NoNewPrivileges=no
+ProtectSystem=no
+ProtectHome=no
+PrivateTmp=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+MemoryMax=512M
+LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
@@ -121,6 +174,9 @@ UNIT
 # Allow agent port through firewall
 if command -v ufw &> /dev/null; then
     ufw allow ${AGENT_PORT}/tcp > /dev/null 2>&1 || true
+elif command -v firewall-cmd &> /dev/null; then
+    firewall-cmd --permanent --add-port=${AGENT_PORT}/tcp > /dev/null 2>&1 || true
+    firewall-cmd --reload > /dev/null 2>&1 || true
 fi
 
 # Start agent
@@ -136,6 +192,7 @@ echo ""
 echo "  Agent listening on: 0.0.0.0:${AGENT_PORT}"
 echo "  Token: ${TOKEN:0:12}..."
 echo "  Server ID: ${SERVER_ID}"
+echo "  Config: /etc/dockpanel/agent.env"
 echo ""
 echo "  Return to your DockPanel and click"
 echo "  'Test Connection' to verify."

@@ -11,7 +11,7 @@ const faqs = [
   },
   {
     q: 'How does Docker-native work? Are sites in containers?',
-    a: 'Sites run on the host with Nginx, which keeps things fast and simple. Docker is used for databases (MySQL/PostgreSQL containers), 53 one-click app templates (Ghost, Grafana, Nextcloud, n8n, Roundcube, Rspamd, and more), and Docker Compose imports. Containers get health monitoring, CPU/memory limits, and auto reverse proxy with SSL.',
+    a: 'Sites run on the host with Nginx, which keeps things fast and simple. Docker is used for databases (MySQL/PostgreSQL containers), 54 one-click app templates (Ghost, Grafana, Nextcloud, n8n, Roundcube, Rspamd, and more), and Docker Compose imports. Containers get health monitoring, CPU/memory limits, and auto reverse proxy with SSL.',
   },
   {
     q: 'What happens if DockPanel goes down?',
@@ -19,11 +19,11 @@ const faqs = [
   },
   {
     q: 'Can I run DockPanel on a Raspberry Pi?',
-    a: 'Yes. DockPanel compiles to a ~20MB ARM64 binary and uses about 60MB RAM. It runs great on Raspberry Pi 4/5, Oracle Cloud free-tier ARM instances, and any ARM64 server. Same features, same performance.',
+    a: 'Yes. DockPanel compiles to ~35MB total binaries (agent, API, CLI) and uses about 60MB RAM. It runs great on Raspberry Pi 4/5, Oracle Cloud free-tier ARM instances, and any ARM64 server. Same features, same performance.',
   },
   {
     q: 'How is this different from CloudPanel, RunCloud, or cPanel?',
-    a: 'DockPanel is fully self-hosted (no SaaS dependency), Docker-native (databases and apps run in containers), and built in Rust (~20MB binary, ~60MB RAM vs 250-800MB for PHP panels). It includes features other panels charge for: multi-server management, reseller accounts, OAuth login, WordPress toolkit, migration wizard, 50+ app templates, developer CLI, infrastructure as code, and more. All free.',
+    a: 'DockPanel is fully self-hosted (no SaaS dependency), Docker-native (databases and apps run in containers), and built in Rust (~35MB total binaries, ~60MB RAM vs 250-800MB for PHP panels). It includes features other panels charge for: multi-server management, reseller accounts, OAuth login, WordPress toolkit, migration wizard, 50+ app templates, developer CLI, infrastructure as code, and more. All free.',
   },
   {
     q: 'Can I manage multiple servers?',
@@ -35,7 +35,7 @@ const faqs = [
   },
   {
     q: 'Why Rust instead of PHP/Node.js?',
-    a: "Rust compiles to a single ~20MB binary with no runtime dependencies. It uses ~60MB of RAM vs ~300-800MB for PHP-based panels. On a $5 VPS with 1GB RAM, that's the difference between running 2 sites and running 20. Rust also eliminates entire classes of security vulnerabilities (buffer overflows, use-after-free) at compile time.",
+    a: "Rust compiles to compact binaries (~35MB total for agent, API, and CLI) with no runtime dependencies. It uses ~60MB of RAM vs ~300-800MB for PHP-based panels. On a $5 VPS with 1GB RAM, that's the difference between running 2 sites and running 20. Rust also eliminates entire classes of security vulnerabilities (buffer overflows, use-after-free) at compile time.",
   },
   {
     q: 'Can DockPanel manage email?',
