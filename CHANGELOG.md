@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [2.0.3] - 2026-03-20
 
+### Added — Documentation
+- **8 documentation pages** at `docs/`: getting-started, troubleshooting, CLI reference, and 5 guides (WordPress, Git deploy, email, multi-server, backups). 1855 lines of practical, copy-paste-friendly docs.
+
+### Fixed — Fresh Install E2E (real clean VPS test)
+- **Local server not registered after setup**: API returned 503 on all requests after admin creation. Added `ensure_local_server()` call in the setup endpoint.
+- **Site docroot missing /public/ subdirectory**: Agent created `/var/www/{domain}/` but nginx expected `/var/www/{domain}/public/`. Fixed to create the correct subdirectory.
+- **Backup tar flag incompatibility**: Replaced `--no-dereference` with `-h` (POSIX-compatible).
+
 ### Fixed — Comprehensive Audit (57 findings across 7 audit types)
 
 #### Critical
