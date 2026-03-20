@@ -191,7 +191,7 @@ export default function NexusLayout() {
           <div className={`flex items-center gap-2.5 px-3 py-2 rounded-lg ${state.apiHealthy === true ? "bg-emerald-50" : state.apiHealthy === false ? "bg-rose-50" : "bg-slate-50"}`}>
             <div className={`w-2 h-2 rounded-full shrink-0 ${state.apiHealthy === true ? "bg-emerald-500" : state.apiHealthy === false ? "bg-rose-500" : "bg-slate-400"}`} />
             <span className={`text-xs font-medium ${state.apiHealthy === true ? "text-emerald-700" : state.apiHealthy === false ? "text-rose-700" : "text-slate-500"}`}>
-              {state.apiHealthy === true ? "All Systems Operational" : state.apiHealthy === false ? "Issues Detected" : "Checking..."}
+              {state.apiHealthy === true ? "All Systems OK" : state.apiHealthy === false ? "Issues Detected" : "Checking..."}
             </span>
           </div>
           {/* User + layout + logout */}
