@@ -45,18 +45,23 @@ pub async fn checkin(
         .parse()
         .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid server_id"))?;
 
-    // Verify token matches server record
-    let existing: Option<(String,)> =
-        sqlx::query_as("SELECT agent_token FROM servers WHERE id = $1")
+    // Verify token matches server record (hash-based, falls back to plaintext for unmigrated rows)
+    let token_hash = crate::helpers::hash_agent_token(token);
+    let existing: Option<(Option<String>, String)> =
+        sqlx::query_as("SELECT agent_token_hash, agent_token FROM servers WHERE id = $1")
             .bind(server_id)
             .fetch_optional(&state.db)
             .await
             .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let (stored_token,) =
+    let (stored_hash, stored_token) =
         existing.ok_or_else(|| err(StatusCode::NOT_FOUND, "Server not found"))?;
 
-    if stored_token != token {
+    let token_valid = match stored_hash {
+        Some(ref hash) => hash == &token_hash,
+        None => stored_token == token, // fallback for pre-migration rows
+    };
+    if !token_valid {
         return Err(err(StatusCode::UNAUTHORIZED, "Invalid token"));
     }
 

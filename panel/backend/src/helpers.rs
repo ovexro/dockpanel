@@ -1,4 +1,12 @@
 /// Shared helper functions used across multiple route modules.
+use sha2::{Sha256, Digest};
+
+/// Hash an agent token using SHA-256. Agent tokens are high-entropy (UUIDs)
+/// so SHA-256 is sufficient — no need for slow hashing (argon2/bcrypt).
+pub fn hash_agent_token(token: &str) -> String {
+    let hash = Sha256::digest(token.as_bytes());
+    hex::encode(hash)
+}
 
 /// Build Cloudflare API headers from credentials.
 ///

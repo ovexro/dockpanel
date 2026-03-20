@@ -124,22 +124,34 @@ async fn main() {
     }
 
     // Build CORS with configurable origin whitelist (CORS_ORIGINS env var or defaults)
-    let allowed_origins: Vec<axum::http::HeaderValue> = config
-        .cors_origins
-        .iter()
-        .filter_map(|o| o.parse::<axum::http::HeaderValue>().ok())
-        .collect();
-
-    let cors = CorsLayer::new()
-        .allow_origin(AllowOrigin::list(allowed_origins))
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-        .allow_headers([
-            axum::http::header::CONTENT_TYPE,
-            axum::http::header::AUTHORIZATION,
-            axum::http::header::ACCEPT,
-            axum::http::HeaderName::from_static("x-server-id"),
-        ])
-        .allow_credentials(true);
+    let cors = if config.cors_origins.is_empty() {
+        // No origins configured — allow any origin (IP-based or development access)
+        CorsLayer::new()
+            .allow_origin(AllowOrigin::any())
+            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+            .allow_headers([
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::ACCEPT,
+                axum::http::HeaderName::from_static("x-server-id"),
+            ])
+    } else {
+        let allowed_origins: Vec<axum::http::HeaderValue> = config
+            .cors_origins
+            .iter()
+            .filter_map(|o| o.parse::<axum::http::HeaderValue>().ok())
+            .collect();
+        CorsLayer::new()
+            .allow_origin(AllowOrigin::list(allowed_origins))
+            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+            .allow_headers([
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::ACCEPT,
+                axum::http::HeaderName::from_static("x-server-id"),
+            ])
+            .allow_credentials(true)
+    };
 
     let config = Arc::new(config);
     let listen_addr = config.listen_addr.clone();

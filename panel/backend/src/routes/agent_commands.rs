@@ -23,6 +23,7 @@ pub struct AgentCommand {
 }
 
 /// Helper: extract + verify Bearer token → returns server_id.
+/// Uses hash-based lookup with plaintext fallback for unmigrated rows.
 async fn auth_agent(
     state: &AppState,
     headers: &HeaderMap,
@@ -33,8 +34,22 @@ async fn auth_agent(
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "Missing authorization"))?;
 
+    // Try hash-based lookup first
+    let token_hash = crate::helpers::hash_agent_token(token);
     let row: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM servers WHERE agent_token = $1")
+        sqlx::query_as("SELECT id FROM servers WHERE agent_token_hash = $1")
+            .bind(&token_hash)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    if let Some(r) = row {
+        return Ok(r.0);
+    }
+
+    // Fallback: plaintext lookup for pre-migration rows
+    let row: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM servers WHERE agent_token = $1 AND agent_token_hash IS NULL")
             .bind(token)
             .fetch_optional(&state.db)
             .await
