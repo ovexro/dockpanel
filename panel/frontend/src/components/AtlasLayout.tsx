@@ -128,7 +128,7 @@ export default function AtlasLayout() {
                     to={item.to}
                     end={item.to === "/"}
                     className={({ isActive }) =>
-                      `flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md whitespace-nowrap transition-colors ${
+                      `flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md whitespace-nowrap shrink-0 transition-colors ${
                         isActive
                           ? "bg-rust-500/10 text-rust-400 font-medium"
                           : "text-dark-300 hover:text-dark-100 hover:bg-dark-700/30"
