@@ -60,7 +60,7 @@ export default function Hero() {
             </div>
           </div>
           <p className="mt-3 text-center text-xs text-surface-200/60">
-            Works on Ubuntu 20+, Debian 11+, CentOS 9+, Amazon Linux 2023 &mdash; x86_64 &amp; ARM64
+            Works on Ubuntu 20+, Debian 11+, CentOS 9+, Rocky Linux 9+, Amazon Linux 2023 &mdash; x86_64 &amp; ARM64
           </p>
         </div>
 
@@ -84,7 +84,7 @@ export default function Hero() {
         {/* Social proof */}
         <div className="mt-16 flex flex-col items-center gap-6 md:flex-row md:justify-center md:gap-12">
           {[
-            { value: '~20MB', label: 'Binary size' },
+            { value: '~35MB', label: 'Total binaries' },
             { value: '~60MB', label: 'RAM usage' },
             { value: '<60s', label: 'Install time' },
             { value: 'ARM64', label: 'Homelab ready' },

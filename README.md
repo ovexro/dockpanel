@@ -4,7 +4,7 @@
 
 A free, self-hosted, Docker-native server management panel built in Rust. No subscriptions, no vendor lock-in, no artificial limits.
 
-~20MB binary | ~60MB RAM | Installs in <60 seconds | x86_64 + ARM64
+v2.0.2 | ~35MB binaries | ~60MB RAM | Installs in <60 seconds | x86_64 + ARM64
 
 [Live Demo](https://demo.dockpanel.dev) | [Website](https://dockpanel.dev)
 
@@ -30,7 +30,7 @@ After installation, open `http://YOUR_SERVER_IP:8443` and create your admin acco
 - **Site Management** — Static, PHP (multiple versions), Node.js, Python, and reverse proxy sites with automatic Nginx configuration
 - **Free SSL** — Automatic Let's Encrypt provisioning and renewal
 - **Database Management** — MySQL and PostgreSQL in Docker containers with built-in SQL browser
-- **Docker Apps** — 50+ one-click templates across 10 categories + Docker Compose stack management
+- **Docker Apps** — 54 one-click templates across 10 categories + Docker Compose stack management
 - **Git Deploy** — Push-to-deploy with blue-green zero-downtime updates, Nixpacks auto-detection (30+ languages), preview environments with TTL cleanup
 - **WordPress Toolkit** — Multi-site dashboard, vulnerability scanning (14+ known exploits), security hardening (7 checks, 6 auto-fixable), bulk updates
 - **One-Click CMS** — WordPress, Laravel, Drupal, Joomla, Symfony, CodeIgniter with database + SSL provisioning

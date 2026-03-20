@@ -3,7 +3,7 @@ const panels = [
   { name: 'Plesk', ram: '~512 MB', install: '~20 min', size: '~1.5 GB', price: '$10/mo', tech: 'PHP', docker: false, selfHosted: true },
   { name: 'RunCloud', ram: 'N/A (SaaS)', install: '~5 min', size: 'Agent', price: '$8/mo', tech: 'PHP', docker: false, selfHosted: false },
   { name: 'CloudPanel', ram: '~250 MB', install: '~10 min', size: '~600 MB', price: 'Free', tech: 'PHP', docker: false, selfHosted: true },
-  { name: 'DockPanel', ram: '~60 MB', install: '<60 sec', size: '~20 MB', price: 'Free', tech: 'Rust', docker: true, selfHosted: true, highlight: true },
+  { name: 'DockPanel', ram: '~60 MB', install: '<60 sec', size: '~35 MB', price: 'Free', tech: 'Rust', docker: true, selfHosted: true, highlight: true },
 ];
 
 const specs = [
