@@ -7,11 +7,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [2.0.4] - 2026-03-20
 
 ### Security
-- **jsonwebtoken upgraded 9 → 10.3.0** (agent + backend): Fixes type confusion vulnerability (CVE) that could lead to authorization bypass. Switched to `aws_lc_rs` crypto backend.
-- **serde_yml replaced with serde_yaml_ng** (agent + CLI): `serde_yml` and its dependency `libyml` are unsound and unmaintained. Replaced with actively maintained `serde_yaml_ng` v0.10.0, a community fork of `serde_yaml`.
+- **CORS lockdown**: Deny all cross-origin requests by default. Same-origin panel UI is unaffected. Previously defaulted to `AllowOrigin::any()` which allowed CSRF from any website.
+- **Constant-time token comparison**: Agent auth middleware now uses `subtle::ConstantTimeEq` to prevent timing attacks on token validation.
+- **Token hashing in database**: Agent tokens stored as SHA-256 hashes in `agent_token_hash` column. DB dump no longer exposes plaintext tokens for inbound auth.
+- **Token rotation**: New `POST /auth/rotate-token` on agent + `POST /api/servers/{id}/rotate-token` on API. 60-second grace period for old token during rotation. Updates `api.env` on disk for persistence.
+- **Secure cookie fix**: `BASE_URL` defaulted to `https://panel.example.com`, causing `Secure` flag on cookies over HTTP. Fixed — defaults to empty, setup script sets from domain.
+- **jsonwebtoken upgraded 9 → 10.3.0**: Fixes type confusion vulnerability that could lead to authorization bypass.
+- **serde_yml replaced with serde_yaml_ng**: `serde_yml` and `libyml` are unsound/unmaintained. Replaced with `serde_yaml_ng` v0.10.0.
+
+### Fixed
+- **Cascade cron cleanup**: Deleting a site now removes cron entries from the system crontab. Previously, DB records were cleaned via CASCADE but crontab entries were orphaned.
+- **UFW port gap**: Setup script now adds panel ports (80, 443, 8443) to UFW even when the firewall is pre-existing. Previously skipped port rules if UFW was already installed.
+- **Token rotation API→agent desync**: Rotating the agent token now updates the API's in-memory `AgentClient` token AND writes to `api.env` on disk. Previously left the API with the old token, breaking all agent communication.
 
 ### Added
-- **GitHub FUNDING.yml**: Sponsor button on repository page linking to GitHub Sponsors and plugins.ovexro.com.
+- **CI pipeline** (`.github/workflows/ci.yml`): Rust clippy, frontend type check, build verification, unit tests, `cargo-audit` + `npm audit` security scanning. Runs on every push to main and PRs.
+- **E2E test suite** (`tests/e2e.sh`): 62 tests across 27 categories — full CRUD lifecycle, security edge cases, zero-leftover cleanup. Run: `bash tests/e2e.sh <host> [port]`.
+- **Deep E2E test suite** (`tests/deep-e2e.sh`): 51 tests for advanced features — WordPress install, backup restore, git deploy, reseller system, file operations, compose stacks, concurrent operations, extensions API.
+- **29 unit tests**: Config parsing (BASE_URL defaults, Secure flag logic), token hashing, input validation (domains, names, container IDs, path traversal, pagination).
+- **API reference** (`docs/api-reference.md`): 648 lines documenting all 371 endpoints with request bodies and examples.
+- **Competitor comparison** (`COMPARISON.md`): Honest comparison vs HestiaCP, CloudPanel, RunCloud, CyberPanel, Ploi.
+- **README overhaul**: Dashboard screenshot, comparison table, collapsible screenshot gallery, cleaner structure.
+- **FUNDING.yml**: PayPal sponsor link (paypal.me/ovexro).
+
+### Verified
+- **Reboot recovery**: All services start automatically after server reboot. 62/62 E2E tests pass post-reboot.
+- **Fresh install E2E**: Full install via `INSTALL_FROM_RELEASE=1` on clean Ubuntu 24.04 VPS — all features operational.
 
 ## [2.0.3] - 2026-03-20
 
