@@ -48,23 +48,23 @@ function ServerSelector() {
     <div className="px-3 pt-3" ref={ref}>
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-600 hover:text-slate-900 hover:border-slate-300 transition-colors"
+        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-dark-800 border border-dark-600 text-sm text-dark-300 hover:text-dark-50 hover:border-dark-400 transition-colors"
       >
         <div className={`w-2 h-2 rounded-full shrink-0 ${activeServer?.status === "online" ? "bg-emerald-500" : activeServer?.status === "offline" ? "bg-rose-500" : "bg-slate-500"}`} />
         <span className="flex-1 text-left truncate">{activeServer?.name || "Select server"}</span>
         <svg className={`w-4 h-4 transition-transform ${open ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" /></svg>
       </button>
       {open && (
-        <div className="mt-1 bg-white border border-slate-200 rounded-lg shadow-xl overflow-hidden">
+        <div className="mt-1 bg-dark-900 border border-dark-600 rounded-lg shadow-xl overflow-hidden">
           {servers.map((s) => (
             <button
               key={s.id}
               onClick={() => { setActiveServerId(s.id); setOpen(false); window.location.href = "/"; }}
-              className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-slate-50 transition-colors ${s.id === activeServer?.id ? "bg-slate-100 text-slate-900" : "text-slate-500"}`}
+              className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-dark-800 transition-colors ${s.id === activeServer?.id ? "bg-dark-800 text-dark-50" : "text-dark-400"}`}
             >
               <div className={`w-2 h-2 rounded-full shrink-0 ${s.status === "online" ? "bg-emerald-500" : s.status === "offline" ? "bg-rose-500" : "bg-slate-500"}`} />
               <span className="flex-1 truncate">{s.name}</span>
-              {s.is_local && <span className="text-[10px] text-slate-400 uppercase">local</span>}
+              {s.is_local && <span className="text-[10px] text-dark-400 uppercase">local</span>}
             </button>
           ))}
         </div>
@@ -78,10 +78,20 @@ export default function NexusLayout() {
   const state = useLayoutState();
   const branding = useBranding();
 
-  // Nexus layout forces light theme for consistent appearance
+  // Nexus layout supports light/dark
+  const [isDark, setIsDark] = useState(() => {
+    const stored = localStorage.getItem("dp-nexus-dark");
+    return stored === "1";
+  });
+
   useEffect(() => {
-    document.documentElement.setAttribute("data-theme", "nexus");
-  }, []);
+    const theme = isDark ? "nexus-dark" : "nexus";
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("dp-theme", theme);
+    localStorage.setItem("dp-nexus-dark", isDark ? "1" : "0");
+  }, [isDark]);
+
+  const toggleDark = () => setIsDark(prev => !prev);
 
   if (state.loading) {
     return (
@@ -97,7 +107,7 @@ export default function NexusLayout() {
   const allItems = state.visibleGroups.flatMap(g => g.items);
 
   return (
-    <div className="flex h-screen bg-slate-50 font-sans overflow-hidden">
+    <div className={`flex h-screen font-sans overflow-hidden ${isDark ? "bg-[#0d1117]" : "bg-slate-50"}`}>
       <CommandPalette />
 
       {/* Skip to content */}
@@ -116,12 +126,12 @@ export default function NexusLayout() {
 
       {/* ── Sidebar ──────────────────────────────────────────────────── */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-64 bg-white text-slate-600 shadow-sm flex flex-col h-screen border-r border-slate-200 transform transition-transform duration-200 ease-in-out md:relative md:translate-x-0 ${
-          state.sidebarOpen ? "translate-x-0" : "-translate-x-full"
-        }`}
+        className={`fixed inset-y-0 left-0 z-50 w-64 flex flex-col h-screen border-r transform transition-transform duration-200 ease-in-out md:relative md:translate-x-0 ${
+          isDark ? "bg-[#161b22] text-gray-300 border-gray-700/40 shadow-xl shadow-black/20" : "bg-white text-slate-600 border-slate-200 shadow-sm"
+        } ${state.sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}
       >
         {/* Logo */}
-        <div className="h-16 flex items-center justify-between px-6 border-b border-slate-200">
+        <div className={`h-16 flex items-center justify-between px-6 border-b ${isDark ? "border-[#2d333b]/60" : "border-slate-200"}`}>
           <Link to="/" className="flex items-center gap-3 hover:opacity-90 transition-opacity">
             {branding.logoUrl ? (
               <img src={branding.logoUrl} alt={branding.panelName} className="h-8 w-auto max-w-[160px] object-contain" />
@@ -136,7 +146,7 @@ export default function NexusLayout() {
                   </svg>
                 </div>
                 {!branding.hideBranding && (
-                  <span className="text-lg font-bold text-slate-900 tracking-tight">
+                  <span className={`text-lg font-bold tracking-tight ${isDark ? "text-gray-100" : "text-slate-900"}`}>
                     {branding.panelName}
                   </span>
                 )}
@@ -145,7 +155,7 @@ export default function NexusLayout() {
           </Link>
           <button
             onClick={() => state.setSidebarOpen(false)}
-            className="p-1.5 text-slate-400 hover:text-slate-900 md:hidden rounded-lg"
+            className={`p-1.5 md:hidden rounded-lg ${isDark ? "text-gray-400 hover:text-gray-100" : "text-slate-400 hover:text-slate-900"}`}
             aria-label="Close sidebar"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
@@ -165,14 +175,14 @@ export default function NexusLayout() {
               className={({ isActive }) =>
                 `flex items-center gap-3 px-3 py-2.5 text-sm font-medium rounded-lg transition-colors ${
                   isActive
-                    ? "bg-blue-50 text-blue-700"
-                    : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                    ? isDark ? "bg-blue-500/10 text-blue-400" : "bg-blue-50 text-blue-700"
+                    : isDark ? "text-[#8b949e] hover:bg-[#1c2333] hover:text-[#e6edf3]" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
                 }`
               }
             >
               {({ isActive }) => (
                 <>
-                  <span className={isActive ? "text-blue-700" : "text-slate-400"}>{getIcon(item.iconName)}</span>
+                  <span className={isActive ? (isDark ? "text-blue-400" : "text-blue-700") : (isDark ? "text-gray-500" : "text-slate-400")}>{getIcon(item.iconName)}</span>
                   <span>{item.label}</span>
                   {item.to === "/monitoring" && state.firingCount > 0 && (
                     <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-rose-500 text-white rounded-full min-w-[20px] text-center">
@@ -186,11 +196,19 @@ export default function NexusLayout() {
         </nav>
 
         {/* Footer */}
-        <div className="p-4 border-t border-slate-200 space-y-3">
+        <div className={`p-4 border-t space-y-3 ${isDark ? "border-[#2d333b]/60" : "border-slate-200"}`}>
           {/* Health */}
-          <div className={`flex items-center gap-2.5 px-3 py-2 rounded-lg ${state.apiHealthy === true ? "bg-emerald-50" : state.apiHealthy === false ? "bg-rose-50" : "bg-slate-50"}`}>
+          <div className={`flex items-center gap-2.5 px-3 py-2 rounded-lg ${
+  state.apiHealthy === true ? (isDark ? "bg-emerald-500/10 border border-emerald-500/10" : "bg-emerald-50") :
+  state.apiHealthy === false ? (isDark ? "bg-rose-500/10 border border-rose-500/10" : "bg-rose-50") :
+  (isDark ? "bg-[#1c2333]" : "bg-slate-50")
+}`}>
             <div className={`w-2 h-2 rounded-full shrink-0 ${state.apiHealthy === true ? "bg-emerald-500" : state.apiHealthy === false ? "bg-rose-500" : "bg-slate-400"}`} />
-            <span className={`text-xs font-medium ${state.apiHealthy === true ? "text-emerald-700" : state.apiHealthy === false ? "text-rose-700" : "text-slate-500"}`}>
+            <span className={`text-xs font-medium ${
+  state.apiHealthy === true ? (isDark ? "text-emerald-400" : "text-emerald-700") :
+  state.apiHealthy === false ? (isDark ? "text-rose-400" : "text-rose-700") :
+  (isDark ? "text-gray-500" : "text-slate-500")
+}`}>
               {state.apiHealthy === true ? "All Systems OK" : state.apiHealthy === false ? "Issues Detected" : "Checking..."}
             </span>
           </div>
@@ -199,7 +217,7 @@ export default function NexusLayout() {
             <div className="w-7 h-7 bg-blue-600 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0">
               {state.user.email[0]?.toUpperCase()}
             </div>
-            <span className="flex-1 text-sm text-slate-600 truncate">{state.user.email}</span>
+            <span className={`flex-1 text-sm truncate ${isDark ? "text-gray-400" : "text-slate-600"}`}>{state.user.email}</span>
             <button
               onClick={state.logout}
               className="p-1 text-slate-400 hover:text-rose-400 transition-colors"
@@ -215,10 +233,10 @@ export default function NexusLayout() {
       <div className="flex-1 flex flex-col h-screen overflow-hidden">
 
         {/* Header */}
-        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0">
+        <header className={`h-16 border-b flex items-center justify-between px-6 shrink-0 ${isDark ? "bg-[#161b22] border-gray-700/40" : "bg-white border-slate-200"}`}>
           {/* Mobile hamburger */}
           <button
-            className="p-2 text-slate-400 hover:text-slate-900 md:hidden rounded-lg"
+            className={`p-2 md:hidden rounded-lg ${isDark ? "text-gray-400 hover:text-gray-100" : "text-slate-400 hover:text-slate-900"}`}
             onClick={() => state.setSidebarOpen(true)}
             aria-label="Open menu"
           >
@@ -229,11 +247,13 @@ export default function NexusLayout() {
           <div className="flex-1 flex items-center max-w-md">
             <button
               onClick={() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }))}
-              className="w-full flex items-center gap-2 pl-3 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-400 hover:border-blue-300 hover:bg-white transition-all"
+              className={`w-full flex items-center gap-2 pl-3 pr-4 py-2 border rounded-lg text-sm transition-all ${
+  isDark ? "bg-[#0d1117] border-[#2d333b] text-[#8b949e] hover:border-blue-500/50" : "bg-slate-50 border-slate-200 text-slate-400 hover:border-blue-300 hover:bg-white"
+}`}
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
               <span className="flex-1 text-left">Search...</span>
-              <kbd className="text-[10px] px-1.5 py-0.5 border border-slate-300 rounded bg-white text-slate-400">Ctrl K</kbd>
+              <kbd className={`text-[10px] px-1.5 py-0.5 border rounded ${isDark ? "border-[#2d333b] bg-[#1c2333] text-[#636e7b]" : "border-slate-300 bg-white text-slate-400"}`}>Ctrl K</kbd>
             </button>
           </div>
 
@@ -247,7 +267,21 @@ export default function NexusLayout() {
               </Link>
             )}
 
-            <div className="h-6 w-px bg-slate-200 hidden sm:block" />
+            <div className={`h-6 w-px hidden sm:block ${isDark ? "bg-[#2d333b]" : "bg-slate-200"}`} />
+
+            {/* Dark mode toggle */}
+            <button
+              onClick={toggleDark}
+              className={`p-2 rounded-lg transition-colors ${isDark ? "text-yellow-400 hover:bg-[#1c2333]" : "text-slate-400 hover:bg-slate-100"}`}
+              title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+              aria-label="Toggle dark mode"
+            >
+              {isDark ? (
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><circle cx="12" cy="12" r="5" /><line x1="12" y1="1" x2="12" y2="3" /><line x1="12" y1="21" x2="12" y2="23" /><line x1="4.22" y1="4.22" x2="5.64" y2="5.64" /><line x1="18.36" y1="18.36" x2="19.78" y2="19.78" /><line x1="1" y1="12" x2="3" y2="12" /><line x1="21" y1="12" x2="23" y2="12" /><line x1="4.22" y1="19.78" x2="5.64" y2="18.36" /><line x1="18.36" y1="5.64" x2="19.78" y2="4.22" /></svg>
+              ) : (
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z" /></svg>
+              )}
+            </button>
 
             {/* Layout switcher */}
             <div className="hidden sm:block">
@@ -256,12 +290,12 @@ export default function NexusLayout() {
 
             {/* User info (desktop) */}
             <div className="hidden sm:flex items-center gap-2">
-              <div className="w-8 h-8 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-semibold text-sm">
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center font-semibold text-sm ${isDark ? "bg-blue-500/15 text-blue-400" : "bg-blue-100 text-blue-600"}`}>
                 {state.user.email[0]?.toUpperCase()}{state.user.email[1]?.toUpperCase()}
               </div>
               <div className="text-left">
-                <p className="text-sm font-medium text-slate-900 leading-none">{state.user.email.split("@")[0]}</p>
-                <p className="text-xs text-slate-400 mt-0.5">{state.user.role}</p>
+                <p className={`text-sm font-medium leading-none ${isDark ? "text-gray-100" : "text-slate-900"}`}>{state.user.email.split("@")[0]}</p>
+                <p className={`text-xs mt-0.5 ${isDark ? "text-gray-500" : "text-slate-400"}`}>{state.user.role}</p>
               </div>
             </div>
           </div>
@@ -269,7 +303,7 @@ export default function NexusLayout() {
 
         {/* 2FA enforcement banner */}
         {state.twoFaEnforced && !state.twoFaEnabled && (
-          <div className="bg-amber-50 border-b border-amber-200 px-6 py-2 text-sm text-amber-800 flex items-center gap-2">
+          <div className={`border-b px-6 py-2 text-sm flex items-center gap-2 ${isDark ? "bg-amber-500/10 border-amber-500/20 text-amber-300" : "bg-amber-50 border-amber-200 text-amber-800"}`}>
             <svg className="w-4 h-4 text-amber-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z" /><path strokeLinecap="round" strokeLinejoin="round" d="M12 15.75h.007v.008H12v-.008z" /></svg>
             <span>Two-factor authentication is required.</span>
             <Link to="/settings" className="font-medium text-amber-900 underline hover:no-underline ml-1">Set up 2FA</Link>
@@ -277,7 +311,7 @@ export default function NexusLayout() {
         )}
 
         {/* Content */}
-        <main id="main-content" className="flex-1 overflow-y-auto bg-slate-50">
+        <main id="main-content" className={`flex-1 overflow-y-auto ${isDark ? "bg-[#0d1117]" : "bg-slate-50"}`}>
           <Outlet />
         </main>
       </div>

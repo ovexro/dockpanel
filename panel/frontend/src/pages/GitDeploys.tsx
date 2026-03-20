@@ -395,7 +395,7 @@ export default function GitDeploys() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75 22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3-4.5 16.5" />
             </svg>
             <p className="text-dark-200 font-medium">No Git deploys yet</p>
-            <p className="text-dark-300 text-sm mt-1">Deploy containers directly from Git repositories</p>
+            <p className="text-dark-300 text-sm mt-2 max-w-md mx-auto">Connect a Git repository for automatic builds and zero-downtime deployments with webhook triggers, preview environments, and rollback support.</p>
             <button onClick={openCreate} className="mt-3 px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors">
               Create your first deploy
             </button>
