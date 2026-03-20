@@ -66,7 +66,7 @@ pub async fn ws_token(
     let token = encode(
         &Header::default(),
         &ticket,
-        &EncodingKey::from_secret(agent.token().as_bytes()),
+        &EncodingKey::from_secret(agent.token().await.as_bytes()),
     )
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
