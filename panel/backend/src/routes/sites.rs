@@ -157,6 +157,20 @@ pub async fn create(
         return Err(err(StatusCode::CONFLICT, "Domain already exists"));
     }
 
+    // Cross-table domain uniqueness: check git_deploys
+    let git_conflict: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM git_deploys WHERE domain = $1 AND server_id = $2"
+    )
+    .bind(&body.domain)
+    .bind(server_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    if git_conflict.is_some() {
+        return Err(err(StatusCode::CONFLICT, "Domain already in use by a git deployment"));
+    }
+
     // Check reseller quota before creating site
     check_reseller_quota(&state.db, claims.sub, "sites").await?;
 

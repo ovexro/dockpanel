@@ -83,11 +83,23 @@ rm -f /etc/nginx/sites-enabled/dockpanel-panel.conf
 rm -f /etc/nginx/conf.d/dockpanel-panel.conf
 nginx -t > /dev/null 2>&1 && (nginx -s reload 2>/dev/null || systemctl reload nginx 2>/dev/null) || true
 
+# Remove CLI binary
+echo -e "${GREEN}[+]${NC} Removing CLI binary..."
+rm -f /usr/local/bin/dockpanel
+
 # Remove directories
 echo -e "${GREEN}[+]${NC} Removing data directories..."
 rm -rf /etc/dockpanel
 rm -rf /var/run/dockpanel
 rm -rf /var/backups/dockpanel
+rm -rf /var/lib/dockpanel
+rm -rf /var/www/acme
+
+# Remove tmpfiles.d config
+rm -f /etc/tmpfiles.d/dockpanel.conf
+
+# Remove DockPanel crontab entries
+(crontab -l 2>/dev/null | grep -v "dockpanel" | crontab -) 2>/dev/null || true
 
 # Remove source (if installed to /opt/dockpanel by install.sh)
 if [ -d /opt/dockpanel ]; then

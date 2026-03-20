@@ -41,7 +41,7 @@ impl Config {
             agent_token: std::env::var("AGENT_TOKEN")
                 .expect("AGENT_TOKEN must be set"),
             listen_addr: std::env::var("LISTEN_ADDR")
-                .unwrap_or_else(|_| "0.0.0.0:3000".into()),
+                .unwrap_or_else(|_| "127.0.0.1:3080".into()),
             db_max_connections: std::env::var("DB_MAX_CONNECTIONS")
                 .ok()
                 .and_then(|v| v.parse().ok())
