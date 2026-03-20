@@ -113,7 +113,7 @@ impl CircuitBreaker {
 #[derive(Clone)]
 pub struct AgentClient {
     socket_path: String,
-    token: String,
+    token: Arc<tokio::sync::RwLock<String>>,
     cb: CircuitBreaker,
 }
 
@@ -121,13 +121,19 @@ impl AgentClient {
     pub fn new(socket_path: String, token: String) -> Self {
         Self {
             socket_path,
-            token,
+            token: Arc::new(tokio::sync::RwLock::new(token)),
             cb: CircuitBreaker::new(),
         }
     }
 
-    pub fn token(&self) -> &str {
-        &self.token
+    pub async fn current_token(&self) -> String {
+        self.token.read().await.clone()
+    }
+
+    /// Update the agent token after rotation.
+    pub async fn update_token(&self, new_token: String) {
+        let mut t = self.token.write().await;
+        *t = new_token;
     }
 
     async fn request(
@@ -187,10 +193,11 @@ impl AgentClient {
             None => Full::new(Bytes::new()),
         };
 
+        let token = self.token.read().await;
         let mut builder = Request::builder()
             .method(method)
             .uri(format!("http://localhost{path}"))
-            .header("authorization", format!("Bearer {}", self.token));
+            .header("authorization", format!("Bearer {token}"));
 
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
@@ -297,10 +304,11 @@ impl AgentClient {
             }
         });
 
+        let token = self.token.read().await;
         let req = Request::builder()
             .method("GET")
             .uri(format!("http://localhost{path}"))
-            .header("authorization", format!("Bearer {}", self.token))
+            .header("authorization", format!("Bearer {token}"))
             .body(Full::new(Bytes::new()))
             .map_err(|e| AgentError::Request(e.to_string()))?;
 
@@ -616,10 +624,10 @@ impl AgentHandle {
         }
     }
 
-    pub fn token(&self) -> &str {
+    pub async fn token(&self) -> String {
         match self {
-            Self::Local(c) => c.token(),
-            Self::Remote(c) => &c.token,
+            Self::Local(c) => c.current_token().await,
+            Self::Remote(c) => c.token.clone(),
         }
     }
 }
