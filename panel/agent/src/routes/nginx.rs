@@ -166,12 +166,18 @@ async fn put_site(
     }
 
     // Create document root with default index.html
+    // Nginx templates use: root {{ root }}/{{ domain }}/public (for static/PHP)
+    // So we need to create the /public subdirectory for non-proxy runtimes
     let default_root = format!("/var/www/{domain}");
     let doc_root = config.root.as_deref().unwrap_or(&default_root);
-    if let Err(e) = std::fs::create_dir_all(doc_root) {
-        tracing::warn!("Failed to create document root {doc_root}: {e}");
+    let actual_root = match config.runtime.as_str() {
+        "proxy" | "node" | "python" => doc_root.to_string(),
+        _ => format!("{doc_root}/public"),
+    };
+    if let Err(e) = std::fs::create_dir_all(&actual_root) {
+        tracing::warn!("Failed to create document root {actual_root}: {e}");
     } else {
-        let index_path = format!("{doc_root}/index.html");
+        let index_path = format!("{actual_root}/index.html");
         if !std::path::Path::new(&index_path).exists() {
             let _ = std::fs::write(&index_path, format!(
                 "<!DOCTYPE html><html><head><title>{domain}</title></head>\
