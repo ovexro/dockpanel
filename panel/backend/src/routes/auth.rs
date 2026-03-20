@@ -115,6 +115,19 @@ pub async fn setup(
 
     tracing::info!("Initial admin created: {}", user.email);
 
+    // Now that we have an admin user, register the local server (deferred from startup)
+    if state.agents.local_server_id().await.is_none() {
+        let local_id = crate::services::agent::ensure_local_server(
+            &state.db,
+            &state.config.agent_token,
+        )
+        .await;
+        if !local_id.is_nil() {
+            state.agents.set_local_server_id(local_id).await;
+            tracing::info!("Local server registered after setup: {local_id}");
+        }
+    }
+
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({
