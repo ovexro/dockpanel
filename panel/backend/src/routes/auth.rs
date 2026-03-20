@@ -131,18 +131,14 @@ pub async fn login(
     headers: HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> Result<(StatusCode, [(header::HeaderName, String); 1], Json<serde_json::Value>), ApiError> {
-    // Extract client IP for rate limiting
+    // Extract client IP for rate limiting.
+    // Use X-Real-IP (set by nginx from $remote_addr — trustworthy) and fall back
+    // to the peer address.  Do NOT trust X-Forwarded-For as it can be forged by
+    // the client, allowing rate-limit bypass.
     let ip = headers
-        .get("x-forwarded-for")
+        .get("x-real-ip")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
         .map(|s| s.trim().to_string())
-        .or_else(|| {
-            headers
-                .get("x-real-ip")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string())
-        })
         .unwrap_or_else(|| "unknown".to_string());
 
     // Rate limit: max 5 attempts per 15 minutes

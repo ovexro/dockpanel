@@ -17,13 +17,24 @@ use crate::services::activity;
 use crate::services::agent::AgentHandle;
 use crate::AppState;
 
-/// GET /api/health — Public health check.
-pub async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "status": "ok",
-        "service": "dockpanel-api",
-        "version": env!("CARGO_PKG_VERSION"),
-    }))
+/// GET /api/health — Public health check (includes DB connectivity).
+pub async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let db_ok = sqlx::query("SELECT 1").execute(&state.db).await.is_ok();
+
+    if db_ok {
+        Json(serde_json::json!({
+            "status": "ok",
+            "service": "dockpanel-api",
+            "version": env!("CARGO_PKG_VERSION"),
+        }))
+    } else {
+        Json(serde_json::json!({
+            "status": "degraded",
+            "db": "unreachable",
+            "service": "dockpanel-api",
+            "version": env!("CARGO_PKG_VERSION"),
+        }))
+    }
 }
 
 /// GET /api/system/info — Proxy to agent's system info (authenticated).
