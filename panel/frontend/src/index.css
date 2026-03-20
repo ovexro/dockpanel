@@ -379,7 +379,9 @@ body {
 }
 
 [data-theme="nexus"] body {
+  background-color: #f9fafb;
   background-image: none;
+  color: #111827;
 }
 
 [data-theme="nexus"] .logo-glow {
@@ -388,6 +390,97 @@ body {
 
 [data-theme="nexus"] .logo-icon-glow {
   box-shadow: 0 2px 8px rgba(99, 102, 241, 0.15), 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* ── Nexus: override dark-theme design language ── */
+
+/* Remove uppercase text transform from headings and labels */
+[data-theme="nexus"] .uppercase {
+  text-transform: none !important;
+}
+
+/* Override monospace font everywhere except terminal/code */
+[data-theme="nexus"] .font-mono:not([class*="terminal"]):not(code):not(pre):not(kbd) {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
+}
+
+/* Softer borders */
+[data-theme="nexus"] [class*="border-dark-"] {
+  border-color: #e5e7eb !important;
+}
+
+/* Card shadows for depth */
+[data-theme="nexus"] [class*="bg-dark-950"] {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+/* Blinking cursor hidden in nexus */
+[data-theme="nexus"] .blinking-cursor {
+  display: none;
+}
+
+/* Scanlines hidden */
+[data-theme="nexus"] .typewriter {
+  border-right-color: transparent;
+  animation: none;
+}
+
+/* Scrollbar — light style */
+[data-theme="nexus"] ::-webkit-scrollbar-track {
+  background: #f9fafb;
+  border-left: 1px solid #e5e7eb;
+}
+
+[data-theme="nexus"] ::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 4px;
+}
+
+[data-theme="nexus"] ::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+/* Selection — indigo */
+[data-theme="nexus"] ::selection {
+  background: rgba(99, 102, 241, 0.2);
+  color: #1f2937;
+}
+
+/* Focus rings — indigo */
+[data-theme="nexus"] *:focus-visible {
+  outline-color: #6366f1;
+}
+
+[data-theme="nexus"] input:focus-visible,
+[data-theme="nexus"] textarea:focus-visible,
+[data-theme="nexus"] select:focus-visible {
+  outline-color: #6366f1;
+}
+
+/* Form elements — light */
+[data-theme="nexus"] input,
+[data-theme="nexus"] select,
+[data-theme="nexus"] textarea {
+  background-color: #ffffff;
+  color: #111827;
+  border-color: #d1d5db;
+}
+
+[data-theme="nexus"] input::placeholder,
+[data-theme="nexus"] textarea::placeholder {
+  color: #9ca3af;
+}
+
+[data-theme="nexus"] select {
+  background-color: #ffffff;
+  border-color: #d1d5db;
+  color: #374151;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%239ca3af' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
+}
+
+/* Hover lift — softer shadow for light bg */
+[data-theme="nexus"] .hover-lift:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
 

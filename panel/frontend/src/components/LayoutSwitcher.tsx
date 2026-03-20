@@ -15,7 +15,7 @@ export default function LayoutSwitcher({ variant = "dark" }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
-  const [pos, setPos] = useState({ top: 0, left: 0 });
+  const [pos, setPos] = useState({ top: 0, left: 0, openDown: false });
   const current = localStorage.getItem("dp-layout") || "command";
 
   useEffect(() => {
@@ -29,8 +29,18 @@ export default function LayoutSwitcher({ variant = "dark" }: Props) {
   const toggle = useCallback(() => {
     if (!open && btnRef.current) {
       const rect = btnRef.current.getBoundingClientRect();
-      // Open above the button
-      setPos({ top: rect.top - 4, left: rect.left });
+      const dropdownHeight = layouts.length * 52 + 8; // ~52px per item + padding
+      const spaceAbove = rect.top;
+      const spaceBelow = window.innerHeight - rect.bottom;
+
+      // Open downward if near top of screen (e.g. in a header/navbar)
+      const openDown = spaceAbove < dropdownHeight && spaceBelow > dropdownHeight;
+
+      if (openDown) {
+        setPos({ top: rect.bottom + 4, left: rect.left, openDown: true });
+      } else {
+        setPos({ top: rect.top - 4, left: rect.left, openDown: false });
+      }
     }
     setOpen(!open);
   }, [open]);
@@ -71,9 +81,13 @@ export default function LayoutSwitcher({ variant = "dark" }: Props) {
       {open && (
         <div
           className={`fixed w-52 rounded-lg shadow-2xl overflow-hidden z-[9999] ${
-            isDark ? "bg-dark-900 border border-dark-600" : "bg-white border border-zinc-200"
+            isDark ? "bg-dark-900 border border-dark-600" : "bg-white border border-zinc-200 shadow-lg"
           }`}
-          style={{ top: pos.top, left: pos.left, transform: "translateY(-100%)" }}
+          style={{
+            top: pos.top,
+            left: Math.min(pos.left, window.innerWidth - 220),
+            transform: pos.openDown ? "none" : "translateY(-100%)",
+          }}
         >
           {layouts.map(l => (
             <button
