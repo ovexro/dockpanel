@@ -41,15 +41,24 @@ pub fn resolve_safe_path(domain: &str, relative_path: &str) -> Result<PathBuf, S
             .canonicalize()
             .map_err(|e| format!("Path error: {e}"))?
     } else {
-        let parent = candidate
-            .parent()
-            .ok_or("Invalid path")?
+        // Walk up to find the first existing ancestor, then append the remainder
+        let mut existing = candidate.clone();
+        let mut trail = Vec::new();
+        while !existing.exists() {
+            if let Some(name) = existing.file_name() {
+                trail.push(name.to_owned());
+            } else {
+                return Err("Invalid path".into());
+            }
+            existing = existing.parent().ok_or("Invalid path")?.to_path_buf();
+        }
+        let mut resolved = existing
             .canonicalize()
-            .map_err(|e| format!("Parent directory error: {e}"))?;
-        let filename = candidate
-            .file_name()
-            .ok_or("Invalid filename")?;
-        parent.join(filename)
+            .map_err(|e| format!("Path resolution error: {e}"))?;
+        for component in trail.into_iter().rev() {
+            resolved = resolved.join(component);
+        }
+        resolved
     };
 
     if !canon.starts_with(&canon_base) {
@@ -151,8 +160,16 @@ pub async fn read_file(path: &Path) -> Result<FileContent, String> {
     })
 }
 
-/// Write file content.
+/// Write file content. Creates parent directories if needed.
 pub async fn write_file(path: &Path, content: &str) -> Result<(), String> {
+    // Ensure parent directory exists
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|e| format!("Failed to create directory: {e}"))?;
+        }
+    }
     // Write atomically via temp file
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, content)

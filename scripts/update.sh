@@ -283,7 +283,7 @@ rollback() {
 }
 
 log "Running post-deploy health check..."
-sleep 10
+sleep 20
 
 # Basic health endpoint
 if ! curl -sf --max-time 30 http://127.0.0.1:3080/api/health > /dev/null 2>&1; then
