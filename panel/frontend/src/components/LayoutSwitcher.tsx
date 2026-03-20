@@ -16,12 +16,17 @@ export default function LayoutSwitcher({ variant = "dark" }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ top: 0, left: 0, openDown: false });
   const current = localStorage.getItem("dp-layout") || "command";
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      // Ignore clicks inside the button or the portalled dropdown
+      if (ref.current?.contains(target)) return;
+      if (dropdownRef.current?.contains(target)) return;
+      setOpen(false);
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
@@ -80,6 +85,7 @@ export default function LayoutSwitcher({ variant = "dark" }: Props) {
 
       {open && createPortal(
         <div
+          ref={dropdownRef}
           className={`fixed w-52 rounded-lg shadow-2xl overflow-hidden z-[9999] ${
             isDark ? "bg-dark-900 border border-dark-600" : "bg-white border border-zinc-200 shadow-lg"
           }`}
