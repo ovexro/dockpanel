@@ -123,11 +123,20 @@ async fn main() {
         tracing::info!("Local server ID: {local_server_id}");
     }
 
-    // Build CORS with configurable origin whitelist (CORS_ORIGINS env var or defaults)
+    // Build CORS policy.
+    //
+    // The panel frontend is always served by nginx on the same origin as the API
+    // (nginx proxies /api/* to the backend). So frontend→API calls are same-origin
+    // and don't need CORS at all.
+    //
+    // CORS only applies to cross-origin requests (other websites calling the API).
+    // When CORS_ORIGINS is not configured, we deny all cross-origin requests.
+    // When configured (e.g. for development or external integrations), we whitelist.
     let cors = if config.cors_origins.is_empty() {
-        // No origins configured — allow any origin (IP-based or development access)
+        // No CORS origins configured — deny all cross-origin requests.
+        // Same-origin requests (the panel UI) are unaffected by CORS.
         CorsLayer::new()
-            .allow_origin(AllowOrigin::any())
+            .allow_origin(AllowOrigin::list(Vec::<axum::http::HeaderValue>::new()))
             .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
             .allow_headers([
                 axum::http::header::CONTENT_TYPE,
