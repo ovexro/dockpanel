@@ -1,28 +1,5 @@
 @import "tailwindcss";
 
-@theme {
-  /* Brand Colors — Harmonized green (matches panel rust-* scale) */
-  --color-brand-50: #f0fdf6;
-  --color-brand-100: #d6fce4;
-  --color-brand-200: #a8f8c4;
-  --color-brand-300: #72f8a3;
-  --color-brand-400: #72f8a3;
-  --color-brand-500: #43ef82;
-  --color-brand-600: #22c55e;
-  --color-brand-700: #16a34a;
-  --color-brand-800: #15803d;
-  --color-brand-900: #14532d;
-
-  /* Surface Colors — GitHub-style neutral darks */
-  --color-surface-50: #f0f6fc;
-  --color-surface-100: #c9d1d9;
-  --color-surface-200: #e6edf3;
-  --color-surface-800: #161b22;
-  --color-surface-900: #0d1117;
-  --color-surface-950: #0b0f14;
-}
-
-/* Base styles */
 html {
   scroll-behavior: smooth;
   -webkit-font-smoothing: antialiased;
@@ -31,31 +8,15 @@ html {
 
 body {
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
-  background: var(--color-surface-950);
-  color: #e6edf3;
+  background: #09090b;
+  color: #a1a1aa;
 }
 
 ::selection {
-  background: var(--color-brand-600);
+  background: rgba(16, 185, 129, 0.3);
   color: white;
 }
 
-/* Code blocks */
 code, pre {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-}
-
-/* Alternating section background */
-.section-alt {
-  background:
-    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(74, 222, 128, 0.03), transparent 70%),
-    rgba(255, 255, 255, 0.008);
-}
-
-/* Subtle pricing glow for popular card */
-.pricing-glow {
-  box-shadow:
-    0 0 60px -15px rgba(22, 163, 74, 0.25),
-    0 0 30px -10px rgba(74, 222, 128, 0.15),
-    0 25px 50px -12px rgba(0, 0, 0, 0.4);
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
 }
