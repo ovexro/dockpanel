@@ -151,6 +151,11 @@ export default function CommandLayout() {
         <nav className="flex-1 px-3 pt-4 overflow-y-auto">
           {state.visibleGroups.map((group, gi) => (
             <div key={group.label} className={gi > 0 ? "mt-5" : ""}>
+              {gi > 0 && (
+                <div className="px-4 pb-1.5 text-[10px] text-dark-400 uppercase tracking-widest font-medium">
+                  {group.label}
+                </div>
+              )}
               <div className="space-y-1">
                 {group.items.map((item) => (
                   <NavLink

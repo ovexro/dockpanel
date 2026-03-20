@@ -511,7 +511,8 @@ export default function Monitors() {
           <svg className="w-12 h-12 text-dark-300 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
           </svg>
-          <p className="text-dark-200 text-sm">No monitors yet. Add one to start tracking uptime.</p>
+          <p className="text-dark-200 font-medium">No monitors yet</p>
+          <p className="text-dark-300 text-sm mt-2 max-w-md mx-auto">Monitor HTTP endpoints, TCP ports, and ping targets with customizable intervals, alerting via Slack, Discord, and email, and a public status page.</p>
           <button onClick={() => { setFormSlackUrl(globalSlackUrl); setFormDiscordUrl(globalDiscordUrl); setShowForm(true); }} className="mt-3 px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors">
             Add your first monitor
           </button>

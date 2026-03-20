@@ -303,8 +303,8 @@ export default function Crons() {
             <svg className="w-16 h-16 mx-auto text-dark-300 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
             </svg>
-            <p className="text-dark-200 text-sm">No cron jobs yet</p>
-            <p className="text-dark-300 text-xs mt-1">Add a cron job to schedule recurring tasks</p>
+            <p className="text-dark-200 font-medium">No cron jobs yet</p>
+            <p className="text-dark-300 text-sm mt-2 max-w-md mx-auto">Schedule recurring tasks with cron expressions. Run scripts, backups, or maintenance commands on any interval.</p>
           </div>
         ) : (
           <div className="divide-y divide-dark-600">

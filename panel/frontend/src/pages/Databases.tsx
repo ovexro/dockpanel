@@ -689,9 +689,7 @@ export default function Databases() {
             />
           </svg>
           <p className="text-dark-200 font-medium">No databases yet</p>
-          <p className="text-dark-300 text-sm mt-1">
-            Create a database for any of your sites
-          </p>
+          <p className="text-dark-300 text-sm mt-2 max-w-md mx-auto">Create MySQL or PostgreSQL databases with automatic Docker containers, user management, and a built-in SQL browser.</p>
           <button onClick={() => setShowForm(true)} className="mt-3 px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors">
             Create your first database
           </button>

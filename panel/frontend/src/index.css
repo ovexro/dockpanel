@@ -245,14 +245,14 @@ body {
 
 [data-theme="ember"] {
   /* Warm stone surfaces */
-  --color-dark-950: #0c0a09;
-  --color-dark-900: #1a1614;
-  --color-dark-800: #241f1c;
-  --color-dark-700: #332b26;
-  --color-dark-600: #473c33;
-  --color-dark-500: #625548;
-  --color-dark-400: #8a7968;
-  --color-dark-300: #b3a08c;
+  --color-dark-950: #100e0d;
+  --color-dark-900: #1c1917;
+  --color-dark-800: #292524;
+  --color-dark-700: #3b3533;
+  --color-dark-600: #57534e;
+  --color-dark-500: #78716c;
+  --color-dark-400: #a8a29e;
+  --color-dark-300: #d6d3d1;
   --color-dark-200: #d6c7b7;
   --color-dark-100: #ebe2d9;
   --color-dark-50:  #faf7f5;
@@ -262,8 +262,8 @@ body {
   --color-rust-100: #ffedd5;
   --color-rust-200: #fed7aa;
   --color-rust-300: #fdba74;
-  --color-rust-400: #fb923c;
-  --color-rust-500: #f97316;
+  --color-rust-400: #fdba74;
+  --color-rust-500: #fb923c;
   --color-rust-600: #ea580c;
   --color-rust-700: #c2410c;
   --color-rust-800: #9a3412;
@@ -440,6 +440,28 @@ body {
   background: #9ca3af;
 }
 
+/* Nexus: elevated cards get light shadow instead of dark */
+[data-theme="nexus"] .card-elevated {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0, 0, 0, 0.04) !important;
+}
+
+/* Nexus: metric cards - white bg with blue tint border */
+[data-theme="nexus"] main [class*="shadow-lg"] {
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04) !important;
+  border-color: #dbeafe !important;
+}
+
+/* Nexus: sidebar white bg with subtle right border */
+[data-theme="nexus"] aside {
+  background-color: #ffffff !important;
+  border-color: #e5e7eb !important;
+}
+
+/* Nexus: active nav item - blue tint instead of rust */
+[data-theme="nexus"] aside a [class*="bg-rust-500\\/10"] {
+  background-color: rgba(37, 99, 235, 0.08) !important;
+}
+
 /* Selection — indigo */
 [data-theme="nexus"] ::selection {
   background: rgba(37, 99, 235, 0.2);
@@ -546,13 +568,17 @@ body {
   background-color: #eff6ff !important;
 }
 
-/* Status badges — Nexus style (softer colors) */
-[data-theme="nexus"] [class*="bg-rust-500\\/15"],
-[data-theme="nexus"] [class*="bg-rust-500\\/10"] {
+/* Status badges & tinted backgrounds — Nexus style (softer blue tint) */
+[data-theme="nexus"] [class*="bg-rust-500/15"],
+[data-theme="nexus"] [class*="bg-rust-500/10"],
+[data-theme="nexus"] [class*="bg-rust-500/20"],
+[data-theme="nexus"] [class*="bg-rust-500/5"] {
   background-color: rgba(37, 99, 235, 0.08) !important;
 }
 
-/* Buttons — indigo primary, clean secondary */
+/* Buttons — indigo primary, clean secondary.
+   IMPORTANT: This also matches tinted classes (bg-rust-500/10 contains "bg-rust-500").
+   The tinted override rules below MUST come after this rule. */
 [data-theme="nexus"] button[class*="bg-rust-500"],
 [data-theme="nexus"] button[class*="bg-rust-600"],
 [data-theme="nexus"] a[class*="bg-rust-500"] {
@@ -564,6 +590,53 @@ body {
 [data-theme="nexus"] button[class*="bg-rust-500"]:hover,
 [data-theme="nexus"] button[class*="bg-rust-600"]:hover {
   background-color: #1d4ed8 !important;
+}
+
+/* Tinted selection buttons — override solid button rule above.
+   bg-rust-500/10, /15, /20 are light tints, NOT solid backgrounds.
+   Re-apply tint styling with same specificity (last rule wins). */
+[data-theme="nexus"] button[class*="bg-rust-500/10"],
+[data-theme="nexus"] button[class*="bg-rust-500/15"],
+[data-theme="nexus"] button[class*="bg-rust-500/20"] {
+  background-color: rgba(37, 99, 235, 0.08) !important;
+  color: #1e40af !important;
+  border-color: #93c5fd !important;
+}
+
+[data-theme="nexus"] button[class*="bg-rust-500/10"]:hover,
+[data-theme="nexus"] button[class*="bg-rust-500/15"]:hover,
+[data-theme="nexus"] button[class*="bg-rust-500/20"]:hover {
+  background-color: rgba(37, 99, 235, 0.12) !important;
+}
+
+/* Ensure child text in tinted selection cards is readable */
+[data-theme="nexus"] button[class*="bg-rust-500/10"] [class*="text-rust-"],
+[data-theme="nexus"] button[class*="bg-rust-500/15"] [class*="text-rust-"],
+[data-theme="nexus"] button[class*="bg-rust-500/10"] .font-bold,
+[data-theme="nexus"] button[class*="bg-rust-500/15"] .font-bold {
+  color: #1e40af !important;
+}
+
+[data-theme="nexus"] button[class*="bg-rust-500/10"] [class*="text-dark-400"],
+[data-theme="nexus"] button[class*="bg-rust-500/15"] [class*="text-dark-400"] {
+  color: #6b7280 !important;
+}
+
+/* Tinted anchor links (non-button) — same treatment */
+[data-theme="nexus"] a[class*="bg-rust-500/10"],
+[data-theme="nexus"] a[class*="bg-rust-500/15"] {
+  background-color: rgba(37, 99, 235, 0.08) !important;
+  color: #1e40af !important;
+}
+
+/* Accent-tinted toggles — ensure readable in Nexus */
+[data-theme="nexus"] [class*="bg-accent-500/15"],
+[data-theme="nexus"] [class*="bg-accent-500/10"] {
+  background-color: rgba(37, 99, 235, 0.08) !important;
+}
+
+[data-theme="nexus"] [class*="text-accent-400"] {
+  color: #2563eb !important;
 }
 
 /* Secondary/outline buttons */
@@ -657,6 +730,21 @@ body {
   border: 1px solid #f3f4f6;
 }
 
+/* Nexus: onboarding completed steps — no opacity wash */
+[data-theme="nexus"] main [class*="opacity-60"] {
+  opacity: 0.5;
+}
+
+/* Nexus: status bar cells — light gray bg */
+[data-theme="nexus"] [class*="gap-px"] > [class*="bg-dark-800"] {
+  background-color: #ffffff !important;
+}
+
+/* Nexus: progress bar track — light gray */
+[data-theme="nexus"] [class*="bg-dark-700"][class*="rounded-full"][class*="overflow-hidden"] {
+  background-color: #e2e8f0 !important;
+}
+
 /* Tracking wider — remove for Nexus (terminal artifact) */
 [data-theme="nexus"] [class*="tracking-wider"],
 [data-theme="nexus"] [class*="tracking-widest"] {
@@ -675,6 +763,89 @@ body {
 [data-theme="nexus"] [class*="bg-rust-500"][role="switch"],
 [data-theme="nexus"] button[class*="bg-rust-500"][class*="rounded-full"] {
   background-color: #2563eb !important;
+}
+
+
+/* ═══════════════════════════════════════════════════════
+   THEME: NEXUS DARK — Premium dark SaaS, blue accent
+   ═══════════════════════════════════════════════════════ */
+
+[data-theme="nexus-dark"] {
+  /* GitHub-dark inspired surfaces — clear layering for depth */
+  --color-dark-950: #0d1117;  /* page background (darkest) */
+  --color-dark-900: #161b22;  /* sidebar, header, elevated surfaces */
+  --color-dark-800: #1c2333;  /* cards, panels (visibly lighter than bg) */
+  --color-dark-700: #2d333b;  /* borders, dividers */
+  --color-dark-600: #444c56;  /* subtle borders, separators */
+  --color-dark-500: #636e7b;  /* muted text, placeholders */
+  --color-dark-400: #8b949e;  /* secondary text */
+  --color-dark-300: #b1bac4;  /* primary secondary text */
+  --color-dark-200: #d0d7de;  /* strong secondary text */
+  --color-dark-100: #e6edf3;  /* near-white text */
+  --color-dark-50:  #f0f6fc;  /* white text */
+
+  /* Blue accent — matches Nexus light */
+  --color-rust-50:  #eff6ff;
+  --color-rust-100: #dbeafe;
+  --color-rust-200: #bfdbfe;
+  --color-rust-300: #93c5fd;
+  --color-rust-400: #60a5fa;
+  --color-rust-500: #3b82f6;
+  --color-rust-600: #2563eb;
+  --color-rust-700: #1d4ed8;
+  --color-rust-800: #1e40af;
+  --color-rust-900: #1e3a8a;
+
+  /* Blue interactive */
+  --color-accent-50:  #eff6ff;
+  --color-accent-100: #dbeafe;
+  --color-accent-200: #bfdbfe;
+  --color-accent-300: #93c5fd;
+  --color-accent-400: #60a5fa;
+  --color-accent-500: #3b82f6;
+  --color-accent-600: #2563eb;
+  --color-accent-700: #1d4ed8;
+  --color-accent-800: #1e40af;
+  --color-accent-900: #1e3a8a;
+
+  /* Sans-serif typography */
+  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  /* Rounded corners — matches Nexus light */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-3xl: 24px;
+}
+
+[data-theme="nexus-dark"] body {
+  background-image: none;
+}
+
+[data-theme="nexus-dark"] .logo-glow {
+  text-shadow: 0 0 14px rgba(59, 130, 246, 0.3);
+}
+
+[data-theme="nexus-dark"] .logo-icon-glow {
+  box-shadow: 0 0 18px rgba(59, 130, 246, 0.25), 0 0 5px rgba(59, 130, 246, 0.1);
+}
+
+/* Nexus Dark: hide terminal artifacts */
+[data-theme="nexus-dark"] .blinking-cursor { display: none; }
+[data-theme="nexus-dark"] .typewriter { border-right-color: transparent; animation: none; }
+
+/* Nexus Dark: override uppercase/tracking for SaaS feel */
+[data-theme="nexus-dark"] .uppercase { text-transform: none !important; }
+[data-theme="nexus-dark"] .font-mono:not([class*="terminal"]):not(code):not(pre):not(kbd) {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
+}
+[data-theme="nexus-dark"] [class*="tracking-wider"],
+[data-theme="nexus-dark"] [class*="tracking-widest"] {
+  letter-spacing: normal !important;
 }
 
 
@@ -820,6 +991,11 @@ select:focus-visible {
 .hover-lift:hover {
   transform: translateY(-1px);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* Elevated card — subtle depth for primary content */
+.card-elevated {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
 /* Reduce motion for users who prefer it */

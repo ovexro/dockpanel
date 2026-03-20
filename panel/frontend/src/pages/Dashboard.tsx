@@ -141,13 +141,15 @@ function CountUp({ value }: { value: number }) {
 }
 
 function barColor(pct: number): string {
-  if (pct < 60) return "bg-dark-300";
-  if (pct < 85) return "bg-warn-500";
+  if (pct < 60) return "bg-rust-500";
+  if (pct < 80) return "bg-warn-500";
   return "bg-danger-500";
 }
 
-function pctColor(_pct: number): string {
-  return "text-dark-50";
+function pctColor(pct: number): string {
+  if (pct < 60) return "text-dark-50";
+  if (pct < 80) return "text-warn-400";
+  return "text-danger-400";
 }
 
 function tempColor(temp: number): string {
@@ -580,14 +582,14 @@ export default function Dashboard() {
                   to={step.link}
                   className={`border p-4 transition-all hover-lift ${
                     step.check()
-                      ? "border-rust-500/30 bg-rust-500/5"
+                      ? "border-rust-500/30 bg-dark-900/50 opacity-60"
                       : "border-dark-500 bg-dark-900/50 hover:border-rust-500/40"
                   }`}
                 >
                   <div className="flex items-center gap-2 mb-2">
                     {step.check() ? (
-                      <div className="w-5 h-5 bg-rust-500/15 flex items-center justify-center">
-                        <svg className="w-3 h-3 text-rust-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                      <div className="w-5 h-5 rounded-full bg-rust-500 flex items-center justify-center">
+                        <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
                       </div>
                     ) : (
                       <div className="w-5 h-5 border border-dark-400 flex items-center justify-center">
@@ -628,7 +630,7 @@ export default function Dashboard() {
               { label: "Disk", pct: system.disk_usage_pct, detail: `${system.disk_used_gb.toFixed(0)} / ${system.disk_total_gb.toFixed(0)} GB · ${(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB free${dockerDiskUsage ? ` · Images: ${dockerDiskUsage}` : ""}`,
                 icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 17.25v-.228a4.5 4.5 0 0 0-.12-1.03l-2.268-9.64a3.375 3.375 0 0 0-3.285-2.602H7.923a3.375 3.375 0 0 0-3.285 2.602l-2.268 9.64a4.5 4.5 0 0 0-.12 1.03v.228m19.5 0a3 3 0 0 1-3 3H5.25a3 3 0 0 1-3-3m19.5 0a3 3 0 0 0-3-3H5.25a3 3 0 0 0-3 3m16.5 0h.008v.008h-.008v-.008Zm-3 0h.008v.008h-.008v-.008Z" /></svg> },
             ].map(({ label, pct, detail, icon }) => (
-              <div key={label} className="border border-dark-500 bg-dark-800 p-5 relative overflow-hidden">
+              <div key={label} className="border border-dark-600 bg-dark-800 p-5 relative overflow-hidden shadow-lg shadow-black/10">
                 <div className={`absolute inset-0 opacity-[0.03] ${pct < 60 ? "bg-dark-50" : pct < 85 ? "bg-warn-500" : "bg-danger-500"}`} />
                 <div className="relative text-center">
                   <div className="flex items-center justify-center gap-1.5 text-dark-200 mb-1">
@@ -656,11 +658,11 @@ export default function Dashboard() {
           {/* Feature #3: Disk I/O widget */}
           {isVisible("disk_io") && diskIo && (
             <div className="grid grid-cols-2 gap-4 mb-6 max-w-md">
-              <div className="border border-dark-600 rounded-lg p-3 text-center">
+              <div className="border border-dark-700 rounded-lg p-3 text-center bg-dark-800/50">
                 <p className="text-xs text-dark-300 uppercase font-mono tracking-wider">Disk Read</p>
                 <p className="text-sm font-bold text-dark-50 mt-1">{formatRate(diskIo.read_bytes_sec)}</p>
               </div>
-              <div className="border border-dark-600 rounded-lg p-3 text-center">
+              <div className="border border-dark-700 rounded-lg p-3 text-center bg-dark-800/50">
                 <p className="text-xs text-dark-300 uppercase font-mono tracking-wider">Disk Write</p>
                 <p className="text-sm font-bold text-dark-50 mt-1">{formatRate(diskIo.write_bytes_sec)}</p>
               </div>
@@ -687,7 +689,7 @@ export default function Dashboard() {
           )}
 
           {/* Status Bar — grid of stat cells */}
-          {isVisible("status_bar") && <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-px bg-dark-600 border border-dark-500 mb-6">
+          {isVisible("status_bar") && <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-px bg-dark-600 border border-dark-600 mb-6 shadow-sm shadow-black/5">
             <div className="bg-dark-800 px-4 py-3 flex flex-col">
               <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Uptime</span>
               <span className="text-sm text-dark-50 font-medium">{formatUptime(system.uptime_secs)}</span>

@@ -4,6 +4,26 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.5] - 2026-03-20
+
+### Added
+- **Nexus Dark theme**: Premium dark mode for the Nexus layout with sun/moon toggle. GitHub Dark-inspired three-layer depth palette, Inter font, rounded corners, blue accent. Persists across sessions.
+- **Sidebar group labels**: Navigation groups (Reseller, Operations, Admin) now display small uppercase labels in the Command layout sidebar.
+- **Glass sidebar tooltips**: Native browser tooltips show nav item names when the Glass layout sidebar is collapsed.
+- **Card elevation utility**: `.card-elevated` CSS class for subtle depth on primary content cards.
+
+### Improved
+- **Dynamic progress bar colors**: CPU/Memory/Disk bars change from blue/green (<60%) → amber (60-80%) → red (>80%). Percentage numbers also change color at high usage.
+- **Dashboard visual hierarchy**: Metric cards have shadow elevation; disk I/O cards are visually lighter as secondary content; status bar has subtle shadow.
+- **Onboarding wizard**: Completed steps show a solid green circle with white checkmark instead of tinted rectangles. Incomplete steps are more prominent.
+- **Ember theme contrast**: Lightened surfaces and brightened orange accent for better text readability.
+- **Atlas layout nav**: Added `shrink-0` to nav items so they scroll horizontally instead of compressing.
+- **Richer empty states**: Sites, Databases, Git Deploys, Monitors, and Crons pages show contextual feature descriptions instead of bare "No X yet" text.
+
+### Fixed
+- **Nexus light theme: tinted selection buttons**: Migration source cards (cPanel/Plesk/HestiaCP), Settings proxy selector (nginx/Traefik), and all `bg-rust-500/10`-style toggle buttons were rendering as solid blue blobs with invisible text. Root cause: CSS `[class*="bg-rust-500"]` matched tinted variants. Fixed with properly unescaped selectors and higher-specificity overrides.
+- **Nexus light theme: accent toggle visibility**: `bg-accent-500/15` toggles (log auto-scroll, compose tabs) now render with readable blue tint and text.
+
 ## [2.0.4] - 2026-03-20
 
 ### Security
