@@ -14,7 +14,7 @@ pub(crate) fn urlenc(s: &str) -> String {
 pub async fn cmd_export(token: &str, output: Option<&str>) -> Result<(), String> {
     let data = client::agent_get("/iac/export", token).await?;
 
-    let yaml = serde_yaml::to_string(&data)
+    let yaml = serde_yml::to_string(&data)
         .map_err(|e| format!("Failed to serialize YAML: {e}"))?;
 
     // Add a header comment
@@ -39,7 +39,7 @@ pub async fn cmd_apply(token: &str, file: &str, dry_run: bool, email: Option<&st
     let yaml_content = std::fs::read_to_string(file)
         .map_err(|e| format!("Cannot read {file}: {e}"))?;
 
-    let desired: serde_json::Value = serde_yaml::from_str(&yaml_content)
+    let desired: serde_json::Value = serde_yml::from_str(&yaml_content)
         .map_err(|e| format!("Invalid YAML: {e}"))?;
 
     // Get current state

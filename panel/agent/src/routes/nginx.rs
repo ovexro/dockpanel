@@ -98,8 +98,31 @@ async fn put_site(
         }
     }
 
-    // Write PHP-FPM pool config if PHP site with resource limits
+    // Check PHP-FPM socket exists before creating a PHP site
     if config.runtime == "php" {
+        if let Some(ref socket) = config.php_socket {
+            // Extract socket path (e.g., "unix:/run/php/php8.4-fpm.sock" → "/run/php/php8.4-fpm.sock")
+            let socket_path = socket.strip_prefix("unix:").unwrap_or(socket);
+            if !std::path::Path::new(socket_path).exists() {
+                // Extract version for a helpful error message
+                let version = socket_path
+                    .strip_prefix("/run/php/php")
+                    .and_then(|s| s.strip_suffix("-fpm.sock"))
+                    .unwrap_or("unknown");
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(NginxResponse {
+                        success: false,
+                        message: format!(
+                            "PHP {version} is not installed or PHP-FPM is not running. \
+                             Install it from Settings > Services before creating a PHP site."
+                        ),
+                    }),
+                ));
+            }
+        }
+
+        // Write PHP-FPM pool config if PHP site with resource limits
         if let Some(ref socket) = config.php_socket {
             // Extract PHP version from socket path (e.g., "unix:/run/php/php8.4-fpm.sock" → "8.4")
             if let Some(ver) = socket.strip_prefix("unix:/run/php/php").and_then(|s| s.strip_suffix("-fpm.sock")) {
@@ -140,6 +163,22 @@ async fn put_site(
                 message: format!("Failed to write config: {e}"),
             }),
         ));
+    }
+
+    // Create document root with default index.html
+    let default_root = format!("/var/www/{domain}");
+    let doc_root = config.root.as_deref().unwrap_or(&default_root);
+    if let Err(e) = std::fs::create_dir_all(doc_root) {
+        tracing::warn!("Failed to create document root {doc_root}: {e}");
+    } else {
+        let index_path = format!("{doc_root}/index.html");
+        if !std::path::Path::new(&index_path).exists() {
+            let _ = std::fs::write(&index_path, format!(
+                "<!DOCTYPE html><html><head><title>{domain}</title></head>\
+                 <body><h1>Welcome to {domain}</h1>\
+                 <p>Site is ready. Upload your files to replace this page.</p></body></html>"
+            ));
+        }
     }
 
     // Test nginx config

@@ -281,8 +281,9 @@ fn issue_session(state: &AppState, user: &User) -> Result<(String, String), ApiE
     )
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
+    let secure_flag = if state.config.base_url.starts_with("https") { "; Secure" } else { "" };
     let cookie = format!(
-        "token={token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=7200"
+        "token={token}; Path=/; HttpOnly{secure_flag}; SameSite=Lax; Max-Age=7200"
     );
     Ok((token, cookie))
 }
@@ -309,7 +310,8 @@ pub async fn logout(
         }
     }
 
-    let cookie = "token=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0".to_string();
+    let secure_flag = if state.config.base_url.starts_with("https") { "; Secure" } else { "" };
+    let cookie = format!("token=; Path=/; HttpOnly{secure_flag}; SameSite=Lax; Max-Age=0");
     (
         StatusCode::OK,
         [(header::SET_COOKIE, cookie)],
