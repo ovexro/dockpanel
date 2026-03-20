@@ -41,6 +41,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **README.md**: Added badges (license, release, build), doc links, contributing section, phone-home disclosure.
 - **.gitignore**: Added SSL material, database file patterns.
 
+### Fixed — Adversarial Security Pentest
+- **Rate limit bypass via X-Forwarded-For**: Login rate limiter now uses `X-Real-IP` (set by nginx, not forgeable) instead of `X-Forwarded-For`.
+- **SSRF filter bypass in extensions**: Webhook URL validation replaced string-matching with DNS resolution + `is_loopback()`/`is_private()`/`is_link_local()` checks. Blocks hex IPs, decimal IPs, IPv6 loopback, DNS-to-localhost, cloud metadata.
+- **Nginx version disclosure**: Added `server_tokens off` to nginx config.
+
+### Fixed — Disaster Recovery
+- **Agent fails after every reboot**: Removed `ReadWritePaths` and `PrivateTmp=yes` from agent systemd service (redundant with `ProtectSystem=no`, and caused NAMESPACE errors for missing dirs). Added `ExecStartPre` to create `/run/dockpanel`.
+- **Health endpoint false "ok"**: `/api/health` now checks DB connectivity, returns `"degraded"` when database is unreachable.
+- **StartLimitIntervalSec in wrong section**: Moved from `[Service]` to `[Unit]` in all 3 scripts.
+
+### Fixed — UX Walkthrough (fresh VPS testing)
+- **Secure cookie over HTTP**: Login cookie conditionally sets `Secure` flag based on `BASE_URL` scheme. `SameSite` changed from `Strict` to `Lax` (Strict blocked OAuth redirects).
+- **Site document root not created**: Agent now creates `/var/www/{domain}/public/` with a default `index.html` during site provisioning.
+- **PHP site without PHP check**: Agent validates PHP-FPM socket exists before writing PHP nginx config. Returns clear error with install instructions.
+
+### Fixed — Supply Chain
+- **`serde_yaml` archived**: Replaced with `serde_yml` in agent and CLI (serde_yaml maintainer archived the crate in 2024).
+- **MailHog abandoned**: Replaced `mailhog/mailhog` template with `axllent/mailpit` (MailHog last updated 2020).
+- **Stale build templates**: Updated `rust:1.82-slim` → `rust:1.94-slim`, `golang:1.23-alpine` → `golang:1.24-alpine`.
+
+### Fixed — Code Quality
+- **Cloudflare auth header deduplication**: 5 inline blocks → shared `helpers::cf_headers()`.
+- **Server IP detection deduplication**: 6 inline blocks → shared `helpers::detect_public_ip()`.
+- **Agent semaphore split**: Long-running ops (Docker builds) use separate 5-permit semaphore, quick requests keep 20.
+- **Extension webhook rate limiting**: Max 20 concurrent deliveries with atomic counter.
+- **DB pool acquire timeout**: 5-second timeout prevents indefinite blocking.
+- **Uptime monitor N+1 query**: Maintenance window check batched into single query.
+
 ## [2.0.2] - 2026-03-20
 
 ### Changed
