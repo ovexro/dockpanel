@@ -314,46 +314,46 @@ body {
 
 
 /* ═══════════════════════════════════════════════════════
-   THEME: NEXUS — Light SaaS, indigo accent, Inter font
+   THEME: NEXUS — Light SaaS, blue accent, Inter font
    ═══════════════════════════════════════════════════════ */
 
 [data-theme="nexus"] {
-  /* Clean white surfaces (inverted: 950=white, 50=near-black) */
+  /* Clean white/slate surfaces (inverted: 950=white, 50=near-black) */
   --color-dark-950: #ffffff;
-  --color-dark-900: #f9fafb;
-  --color-dark-800: #f3f4f6;
-  --color-dark-700: #e5e7eb;
-  --color-dark-600: #d1d5db;
-  --color-dark-500: #9ca3af;
-  --color-dark-400: #6b7280;
-  --color-dark-300: #4b5563;
-  --color-dark-200: #374151;
-  --color-dark-100: #1f2937;
-  --color-dark-50:  #111827;
+  --color-dark-900: #f8fafc;
+  --color-dark-800: #f1f5f9;
+  --color-dark-700: #e2e8f0;
+  --color-dark-600: #cbd5e1;
+  --color-dark-500: #94a3b8;
+  --color-dark-400: #64748b;
+  --color-dark-300: #475569;
+  --color-dark-200: #334155;
+  --color-dark-100: #1e293b;
+  --color-dark-50:  #0f172a;
 
-  /* Indigo accent — matches Nexus sidebar */
-  --color-rust-50:  #eef2ff;
-  --color-rust-100: #e0e7ff;
-  --color-rust-200: #c7d2fe;
-  --color-rust-300: #a5b4fc;
-  --color-rust-400: #818cf8;
-  --color-rust-500: #6366f1;
-  --color-rust-600: #4f46e5;
-  --color-rust-700: #4338ca;
-  --color-rust-800: #3730a3;
-  --color-rust-900: #312e81;
+  /* Blue accent — matches NexusCP sidebar */
+  --color-rust-50:  #eff6ff;
+  --color-rust-100: #dbeafe;
+  --color-rust-200: #bfdbfe;
+  --color-rust-300: #93c5fd;
+  --color-rust-400: #60a5fa;
+  --color-rust-500: #2563eb;
+  --color-rust-600: #1d4ed8;
+  --color-rust-700: #1e40af;
+  --color-rust-800: #1e3a8a;
+  --color-rust-900: #172554;
 
-  /* Indigo interactive */
-  --color-accent-50:  #eef2ff;
-  --color-accent-100: #e0e7ff;
-  --color-accent-200: #c7d2fe;
-  --color-accent-300: #a5b4fc;
-  --color-accent-400: #818cf8;
-  --color-accent-500: #6366f1;
-  --color-accent-600: #4f46e5;
-  --color-accent-700: #4338ca;
-  --color-accent-800: #3730a3;
-  --color-accent-900: #312e81;
+  /* Blue interactive */
+  --color-accent-50:  #eff6ff;
+  --color-accent-100: #dbeafe;
+  --color-accent-200: #bfdbfe;
+  --color-accent-300: #93c5fd;
+  --color-accent-400: #60a5fa;
+  --color-accent-500: #2563eb;
+  --color-accent-600: #1d4ed8;
+  --color-accent-700: #1e40af;
+  --color-accent-800: #1e3a8a;
+  --color-accent-900: #172554;
 
   /* Adjusted status colors for light bg */
   --color-warn-400: #d97706;
@@ -389,7 +389,7 @@ body {
 }
 
 [data-theme="nexus"] .logo-icon-glow {
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.15), 0 1px 3px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.15), 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
 /* ── Nexus: override dark-theme design language ── */
@@ -406,7 +406,7 @@ body {
 
 /* Softer borders */
 [data-theme="nexus"] [class*="border-dark-"] {
-  border-color: #e5e7eb !important;
+  border-color: #e2e8f0 !important;
 }
 
 /* Card shadows for depth */
@@ -442,19 +442,19 @@ body {
 
 /* Selection — indigo */
 [data-theme="nexus"] ::selection {
-  background: rgba(99, 102, 241, 0.2);
+  background: rgba(37, 99, 235, 0.2);
   color: #1f2937;
 }
 
 /* Focus rings — indigo */
 [data-theme="nexus"] *:focus-visible {
-  outline-color: #6366f1;
+  outline-color: #2563eb;
 }
 
 [data-theme="nexus"] input:focus-visible,
 [data-theme="nexus"] textarea:focus-visible,
 [data-theme="nexus"] select:focus-visible {
-  outline-color: #6366f1;
+  outline-color: #2563eb;
 }
 
 /* Form elements — light */
@@ -488,17 +488,17 @@ body {
    rather than "inverted dark theme".
    ─────────────────────────────────────────────────────── */
 
-/* All cards/panels: white bg, subtle border, rounded, light shadow */
-[data-theme="nexus"] [class*="bg-dark-950"],
-[data-theme="nexus"] [class*="bg-dark-900"] {
+/* Cards/panels in content area: white bg, subtle border, rounded, light shadow */
+[data-theme="nexus"] main [class*="bg-dark-950"],
+[data-theme="nexus"] main [class*="bg-dark-900"] {
   background-color: #ffffff !important;
-  border-color: #e5e7eb !important;
+  border-color: #e2e8f0 !important;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02) !important;
   border-radius: 12px !important;
 }
 
-/* Inner card tint (used for metric cards, sub-cards) — very light gray instead of dark */
-[data-theme="nexus"] [class*="bg-dark-800"] {
+/* Inner card tint in content area */
+[data-theme="nexus"] main [class*="bg-dark-800"] {
   background-color: #f9fafb !important;
 }
 
@@ -529,27 +529,27 @@ body {
 
 /* Table row hover — light indigo tint */
 [data-theme="nexus"] tbody tr:hover {
-  background-color: #f5f3ff !important;
+  background-color: #eff6ff !important;
 }
 
 /* Status badges — Nexus style (softer colors) */
 [data-theme="nexus"] [class*="bg-rust-500\\/15"],
 [data-theme="nexus"] [class*="bg-rust-500\\/10"] {
-  background-color: rgba(99, 102, 241, 0.08) !important;
+  background-color: rgba(37, 99, 235, 0.08) !important;
 }
 
 /* Buttons — indigo primary, clean secondary */
 [data-theme="nexus"] button[class*="bg-rust-500"],
 [data-theme="nexus"] button[class*="bg-rust-600"],
 [data-theme="nexus"] a[class*="bg-rust-500"] {
-  background-color: #6366f1 !important;
+  background-color: #2563eb !important;
   color: white !important;
   border-radius: 8px !important;
 }
 
 [data-theme="nexus"] button[class*="bg-rust-500"]:hover,
 [data-theme="nexus"] button[class*="bg-rust-600"]:hover {
-  background-color: #4f46e5 !important;
+  background-color: #1d4ed8 !important;
 }
 
 /* Secondary/outline buttons */
@@ -560,8 +560,8 @@ body {
 }
 
 [data-theme="nexus"] button[class*="border-dark-"]:hover {
-  border-color: #6366f1 !important;
-  background-color: #f5f3ff !important;
+  border-color: #2563eb !important;
+  background-color: #eff6ff !important;
 }
 
 /* Action bar buttons (Customize, Deploy App, etc.) */
@@ -574,8 +574,8 @@ body {
 
 [data-theme="nexus"] button[class*="bg-dark-700"]:hover,
 [data-theme="nexus"] button[class*="bg-dark-800"]:hover {
-  background-color: #f5f3ff !important;
-  border-color: #6366f1 !important;
+  background-color: #eff6ff !important;
+  border-color: #2563eb !important;
 }
 
 /* Danger button (Reboot) keeps red */
@@ -587,12 +587,12 @@ body {
 /* Progress bars — indigo instead of green (only narrow bar elements) */
 [data-theme="nexus"] [class*="bg-rust-500"][class*="h-2"],
 [data-theme="nexus"] [class*="bg-rust-500"][class*="h-1"] {
-  background-color: #6366f1 !important;
+  background-color: #2563eb !important;
 }
 
 /* Active tab underlines — indigo */
 [data-theme="nexus"] [class*="border-rust-500"] {
-  border-color: #6366f1 !important;
+  border-color: #2563eb !important;
 }
 
 /* Activity badges — softer */
@@ -612,7 +612,7 @@ body {
 
 /* "All Systems Operational" banner — softer indigo tint */
 [data-theme="nexus"] [class*="bg-rust-500\\/5"] {
-  background-color: rgba(99, 102, 241, 0.06) !important;
+  background-color: rgba(37, 99, 235, 0.06) !important;
 }
 
 /* Stat grid (Uptime, Sites, Databases, etc.) — add subtle card styling */
@@ -640,7 +640,7 @@ body {
 /* Toggle switches — indigo when active */
 [data-theme="nexus"] [class*="bg-rust-500"][role="switch"],
 [data-theme="nexus"] button[class*="bg-rust-500"][class*="rounded-full"] {
-  background-color: #6366f1 !important;
+  background-color: #2563eb !important;
 }
 
 

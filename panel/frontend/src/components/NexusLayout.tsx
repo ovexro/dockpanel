@@ -6,7 +6,7 @@ import CommandPalette from "./CommandPalette";
 import LayoutSwitcher from "./LayoutSwitcher";
 import React, { useState, useRef, useEffect } from "react";
 
-/* ── Lucide-style inline SVG icons (indigo accent) ────────────────────── */
+/* ── Lucide-style inline SVG icons (blue accent) ──────────────────────── */
 const icons: Record<string, React.ReactNode> = {
   dashboard: <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>,
   sites: <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><circle cx="12" cy="12" r="10" /><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></svg>,
@@ -48,23 +48,23 @@ function ServerSelector() {
     <div className="px-3 pt-3" ref={ref}>
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-zinc-300 hover:text-white hover:border-zinc-600 transition-colors"
+        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-600 hover:text-slate-900 hover:border-slate-300 transition-colors"
       >
-        <div className={`w-2 h-2 rounded-full shrink-0 ${activeServer?.status === "online" ? "bg-emerald-500" : activeServer?.status === "offline" ? "bg-rose-500" : "bg-zinc-500"}`} />
+        <div className={`w-2 h-2 rounded-full shrink-0 ${activeServer?.status === "online" ? "bg-emerald-500" : activeServer?.status === "offline" ? "bg-rose-500" : "bg-slate-500"}`} />
         <span className="flex-1 text-left truncate">{activeServer?.name || "Select server"}</span>
         <svg className={`w-4 h-4 transition-transform ${open ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" /></svg>
       </button>
       {open && (
-        <div className="mt-1 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl overflow-hidden">
+        <div className="mt-1 bg-white border border-slate-200 rounded-lg shadow-xl overflow-hidden">
           {servers.map((s) => (
             <button
               key={s.id}
               onClick={() => { setActiveServerId(s.id); setOpen(false); window.location.href = "/"; }}
-              className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-zinc-800 transition-colors ${s.id === activeServer?.id ? "bg-zinc-800 text-white" : "text-zinc-400"}`}
+              className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-slate-50 transition-colors ${s.id === activeServer?.id ? "bg-slate-100 text-slate-900" : "text-slate-500"}`}
             >
-              <div className={`w-2 h-2 rounded-full shrink-0 ${s.status === "online" ? "bg-emerald-500" : s.status === "offline" ? "bg-rose-500" : "bg-zinc-500"}`} />
+              <div className={`w-2 h-2 rounded-full shrink-0 ${s.status === "online" ? "bg-emerald-500" : s.status === "offline" ? "bg-rose-500" : "bg-slate-500"}`} />
               <span className="flex-1 truncate">{s.name}</span>
-              {s.is_local && <span className="text-[10px] text-zinc-500 uppercase">local</span>}
+              {s.is_local && <span className="text-[10px] text-slate-400 uppercase">local</span>}
             </button>
           ))}
         </div>
@@ -85,8 +85,8 @@ export default function NexusLayout() {
 
   if (state.loading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-zinc-50">
-        <div className="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+      <div className="flex items-center justify-center h-screen bg-slate-50">
+        <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
@@ -97,11 +97,11 @@ export default function NexusLayout() {
   const allItems = state.visibleGroups.flatMap(g => g.items);
 
   return (
-    <div className="flex h-screen bg-zinc-50 font-sans overflow-hidden">
+    <div className="flex h-screen bg-slate-50 font-sans overflow-hidden">
       <CommandPalette />
 
       {/* Skip to content */}
-      <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:z-[100] focus:top-2 focus:left-2 focus:px-4 focus:py-2 focus:bg-indigo-600 focus:text-white focus:rounded-lg">
+      <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:z-[100] focus:top-2 focus:left-2 focus:px-4 focus:py-2 focus:bg-blue-600 focus:text-white focus:rounded-lg">
         Skip to main content
       </a>
 
@@ -116,18 +116,18 @@ export default function NexusLayout() {
 
       {/* ── Sidebar ──────────────────────────────────────────────────── */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-64 bg-zinc-950 text-zinc-300 flex flex-col h-screen border-r border-zinc-800 transform transition-transform duration-200 ease-in-out md:relative md:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 w-64 bg-white text-slate-600 shadow-sm flex flex-col h-screen border-r border-slate-200 transform transition-transform duration-200 ease-in-out md:relative md:translate-x-0 ${
           state.sidebarOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
         {/* Logo */}
-        <div className="h-16 flex items-center justify-between px-6 border-b border-zinc-800">
+        <div className="h-16 flex items-center justify-between px-6 border-b border-slate-200">
           <Link to="/" className="flex items-center gap-3 hover:opacity-90 transition-opacity">
             {branding.logoUrl ? (
               <img src={branding.logoUrl} alt={branding.panelName} className="h-8 w-auto max-w-[160px] object-contain" />
             ) : (
               <>
-                <div className="p-1.5 bg-indigo-600 rounded-lg">
+                <div className="p-1.5 bg-blue-600 rounded-lg">
                   <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <rect x="2" y="2" width="20" height="8" rx="2" />
                     <rect x="2" y="14" width="20" height="8" rx="2" />
@@ -136,7 +136,7 @@ export default function NexusLayout() {
                   </svg>
                 </div>
                 {!branding.hideBranding && (
-                  <span className="text-lg font-semibold text-white tracking-tight">
+                  <span className="text-lg font-bold text-slate-900 tracking-tight">
                     {branding.panelName}
                   </span>
                 )}
@@ -145,7 +145,7 @@ export default function NexusLayout() {
           </Link>
           <button
             onClick={() => state.setSidebarOpen(false)}
-            className="p-1.5 text-zinc-400 hover:text-white md:hidden rounded-lg"
+            className="p-1.5 text-slate-400 hover:text-slate-900 md:hidden rounded-lg"
             aria-label="Close sidebar"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
@@ -165,14 +165,14 @@ export default function NexusLayout() {
               className={({ isActive }) =>
                 `flex items-center gap-3 px-3 py-2.5 text-sm font-medium rounded-lg transition-colors ${
                   isActive
-                    ? "bg-indigo-500/10 text-indigo-400"
-                    : "text-zinc-400 hover:bg-zinc-900 hover:text-white"
+                    ? "bg-blue-50 text-blue-700"
+                    : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
                 }`
               }
             >
               {({ isActive }) => (
                 <>
-                  <span className={isActive ? "text-indigo-400" : "text-zinc-500"}>{getIcon(item.iconName)}</span>
+                  <span className={isActive ? "text-blue-700" : "text-slate-400"}>{getIcon(item.iconName)}</span>
                   <span>{item.label}</span>
                   {item.to === "/monitoring" && state.firingCount > 0 && (
                     <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-rose-500 text-white rounded-full min-w-[20px] text-center">
@@ -186,21 +186,21 @@ export default function NexusLayout() {
         </nav>
 
         {/* Footer */}
-        <div className="p-4 border-t border-zinc-800 space-y-3">
+        <div className="p-4 border-t border-slate-200 space-y-3">
           {/* Health */}
           <div className="flex items-center gap-2 px-3">
-            <div className={`w-2 h-2 rounded-full ${state.apiHealthy === true ? "bg-emerald-500" : state.apiHealthy === false ? "bg-rose-500" : "bg-zinc-500"}`} />
-            <span className="text-xs text-zinc-500">{state.apiHealthy === true ? "All systems OK" : state.apiHealthy === false ? "Issues detected" : "Checking..."}</span>
+            <div className={`w-2 h-2 rounded-full ${state.apiHealthy === true ? "bg-emerald-500" : state.apiHealthy === false ? "bg-rose-500" : "bg-slate-500"}`} />
+            <span className="text-xs text-slate-400">{state.apiHealthy === true ? "All systems OK" : state.apiHealthy === false ? "Issues detected" : "Checking..."}</span>
           </div>
           {/* User + layout + logout */}
           <div className="flex items-center gap-2 px-3">
-            <div className="w-7 h-7 bg-indigo-600 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0">
+            <div className="w-7 h-7 bg-blue-600 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0">
               {state.user.email[0]?.toUpperCase()}
             </div>
-            <span className="flex-1 text-sm text-zinc-300 truncate">{state.user.email}</span>
+            <span className="flex-1 text-sm text-slate-600 truncate">{state.user.email}</span>
             <button
               onClick={state.logout}
-              className="p-1 text-zinc-500 hover:text-rose-400 transition-colors"
+              className="p-1 text-slate-400 hover:text-rose-400 transition-colors"
               title="Log out"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3-3l3-3m0 0l-3-3m3 3H9" /></svg>
@@ -213,10 +213,10 @@ export default function NexusLayout() {
       <div className="flex-1 flex flex-col h-screen overflow-hidden">
 
         {/* Header */}
-        <header className="h-16 bg-white border-b border-zinc-200 flex items-center justify-between px-6 shrink-0">
+        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0">
           {/* Mobile hamburger */}
           <button
-            className="p-2 text-zinc-500 hover:text-zinc-900 md:hidden rounded-lg"
+            className="p-2 text-slate-400 hover:text-slate-900 md:hidden rounded-lg"
             onClick={() => state.setSidebarOpen(true)}
             aria-label="Open menu"
           >
@@ -227,11 +227,11 @@ export default function NexusLayout() {
           <div className="flex-1 flex items-center max-w-md">
             <button
               onClick={() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }))}
-              className="w-full flex items-center gap-2 pl-3 pr-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm text-zinc-400 hover:border-indigo-300 hover:bg-white transition-all"
+              className="w-full flex items-center gap-2 pl-3 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-400 hover:border-blue-300 hover:bg-white transition-all"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
               <span className="flex-1 text-left">Search...</span>
-              <kbd className="text-[10px] px-1.5 py-0.5 border border-zinc-300 rounded bg-white text-zinc-400">Ctrl K</kbd>
+              <kbd className="text-[10px] px-1.5 py-0.5 border border-slate-300 rounded bg-white text-slate-400">Ctrl K</kbd>
             </button>
           </div>
 
@@ -239,13 +239,13 @@ export default function NexusLayout() {
           <div className="flex items-center gap-3">
             {/* Alert badge */}
             {state.firingCount > 0 && (
-              <Link to="/monitoring" className="relative p-2 text-zinc-500 hover:bg-zinc-100 rounded-full transition-colors">
+              <Link to="/monitoring" className="relative p-2 text-slate-400 hover:bg-slate-100 rounded-full transition-colors">
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" /></svg>
                 <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-rose-500 rounded-full border-2 border-white" />
               </Link>
             )}
 
-            <div className="h-6 w-px bg-zinc-200 hidden sm:block" />
+            <div className="h-6 w-px bg-slate-200 hidden sm:block" />
 
             {/* Layout switcher */}
             <div className="hidden sm:block">
@@ -254,12 +254,12 @@ export default function NexusLayout() {
 
             {/* User info (desktop) */}
             <div className="hidden sm:flex items-center gap-2">
-              <div className="w-8 h-8 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center font-semibold text-sm">
+              <div className="w-8 h-8 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-semibold text-sm">
                 {state.user.email[0]?.toUpperCase()}{state.user.email[1]?.toUpperCase()}
               </div>
               <div className="text-left">
-                <p className="text-sm font-medium text-zinc-900 leading-none">{state.user.email.split("@")[0]}</p>
-                <p className="text-xs text-zinc-500 mt-0.5">{state.user.role}</p>
+                <p className="text-sm font-medium text-slate-900 leading-none">{state.user.email.split("@")[0]}</p>
+                <p className="text-xs text-slate-400 mt-0.5">{state.user.role}</p>
               </div>
             </div>
           </div>
@@ -275,7 +275,7 @@ export default function NexusLayout() {
         )}
 
         {/* Content */}
-        <main id="main-content" className="flex-1 overflow-y-auto bg-zinc-50">
+        <main id="main-content" className="flex-1 overflow-y-auto bg-slate-50">
           <Outlet />
         </main>
       </div>
