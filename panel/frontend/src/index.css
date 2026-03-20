@@ -598,15 +598,35 @@ body {
   border-radius: 8px !important;
 }
 
-/* Progress bars — indigo instead of green (only narrow bar elements) */
+/* Progress bars — blue (catch all thin bar variants) */
 [data-theme="nexus"] [class*="bg-rust-500"][class*="h-2"],
-[data-theme="nexus"] [class*="bg-rust-500"][class*="h-1"] {
+[data-theme="nexus"] [class*="bg-rust-500"][class*="h-1"],
+[data-theme="nexus"] [class*="bg-dark-100"][class*="h-2"],
+[data-theme="nexus"] [class*="bg-dark-50"][class*="h-2"] {
   background-color: #2563eb !important;
+}
+
+/* Text links that use rust color — make blue */
+[data-theme="nexus"] [class*="text-rust-400"],
+[data-theme="nexus"] [class*="text-rust-500"],
+[data-theme="nexus"] a[class*="text-rust-"] {
+  color: #2563eb !important;
+}
+
+[data-theme="nexus"] [class*="text-rust-"]:hover {
+  color: #1d4ed8 !important;
 }
 
 /* Active tab underlines — indigo */
 [data-theme="nexus"] [class*="border-rust-500"] {
   border-color: #2563eb !important;
+}
+
+/* Warning progress bars — softer amber */
+[data-theme="nexus"] [class*="bg-warn-500"][class*="h-2"],
+[data-theme="nexus"] [class*="bg-warn-500"][class*="h-1"],
+[data-theme="nexus"] [class*="bg-warn-400"][class*="h-2"] {
+  background-color: #f59e0b !important;
 }
 
 /* Activity badges — softer */
