@@ -303,27 +303,10 @@ pub async fn create(
                  WHERE user_id = (SELECT reseller_id FROM users WHERE id = $1 AND reseller_id IS NOT NULL)"
             ).bind(claims.sub).execute(&state.db).await;
 
-            // Auto-create uptime monitor (linked to site for cascade cleanup)
-            {
-                let monitor_db = state.db.clone();
-                let monitor_domain = body.domain.clone();
-                let monitor_user = claims.sub;
-                let monitor_site_id = site.id;
-                tokio::spawn(async move {
-                    let url = format!("https://{monitor_domain}");
-                    let _ = sqlx::query(
-                        "INSERT INTO monitors (user_id, site_id, url, name, check_interval, alert_email) \
-                         VALUES ($1, $2, $3, $4, 60, true) ON CONFLICT DO NOTHING"
-                    )
-                    .bind(monitor_user)
-                    .bind(monitor_site_id)
-                    .bind(&url)
-                    .bind(&monitor_domain)
-                    .execute(&monitor_db)
-                    .await;
-                    tracing::info!("Auto-monitor created for {monitor_domain}");
-                });
-            }
+            // NOTE: Auto-monitor creation disabled — on fresh installs without DNS
+            // configured, auto-created monitors immediately show "down" which confuses
+            // new users. Users can create monitors manually when ready.
+            // See: https://github.com/ovexro/dockpanel/issues/XX
 
             // Auto-create backup schedule for first site
             {

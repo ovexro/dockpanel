@@ -1,0 +1,10 @@
+[book]
+title = "DockPanel Documentation"
+authors = ["DockPanel"]
+language = "en"
+src = "."
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/ovexro/dockpanel"
