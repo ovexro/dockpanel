@@ -1,191 +1,186 @@
-# DockPanel
+<p align="center">
+  <img src=".github/screenshots/dp-dashboard.png" alt="DockPanel Dashboard" width="800">
+</p>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/ovexro/dockpanel)](https://github.com/ovexro/dockpanel/releases)
-[![Build](https://img.shields.io/github/actions/workflow/status/ovexro/dockpanel/release.yml)](https://github.com/ovexro/dockpanel/actions)
+<h1 align="center">DockPanel</h1>
 
-**Your server. Your rules. Your panel.**
+<p align="center">
+  <strong>Your server. Your rules. Your panel.</strong><br>
+  A free, self-hosted, Docker-native server management panel built in Rust.
+</p>
 
-A free, self-hosted, Docker-native server management panel built in Rust. No subscriptions, no vendor lock-in, no artificial limits.
+<p align="center">
+  <a href="https://github.com/ovexro/dockpanel/releases"><img src="https://img.shields.io/github/v/release/ovexro/dockpanel" alt="Release"></a>
+  <a href="https://github.com/ovexro/dockpanel/actions"><img src="https://img.shields.io/github/actions/workflow/status/ovexro/dockpanel/ci.yml?label=CI" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"></a>
+  <a href="https://panel.example.com"><img src="https://img.shields.io/badge/demo-live-brightgreen" alt="Live Demo"></a>
+</p>
 
-v2.0.3 | ~35MB binaries | ~60MB RAM | Installs in <60 seconds | x86_64 + ARM64
+<p align="center">
+  <a href="https://panel.example.com">Live Demo</a> &bull;
+  <a href="https://dockpanel.dev">Website</a> &bull;
+  <a href="https://docs.dockpanel.dev">Docs</a> &bull;
+  <a href="CHANGELOG.md">Changelog</a> &bull;
+  <a href="https://github.com/ovexro/dockpanel/discussions">Discussions</a>
+</p>
 
-[Live Demo](https://panel.example.com) | [Website](https://dockpanel.dev) | [Docs](https://docs.dockpanel.dev) | [Discussions](https://github.com/ovexro/dockpanel/discussions) | [Changelog](CHANGELOG.md)
+---
 
-## Quick Start
+## Install
 
 ```bash
 curl -sL https://dockpanel.dev/install.sh | sudo bash
 ```
 
-Or clone and run manually:
+Open `http://YOUR_SERVER_IP:8443`, create your admin account, done.
 
-```bash
-git clone https://github.com/ovexro/dockpanel.git /opt/dockpanel
-cd /opt/dockpanel
-sudo bash scripts/setup.sh
-```
+Supports Ubuntu 20+, Debian 11+, CentOS 9+, Rocky 9+, Fedora 39+, Amazon Linux 2023. x86_64 and ARM64.
 
-After installation, open `http://YOUR_SERVER_IP:8443` and create your admin account.
+## Why DockPanel?
+
+| | DockPanel | HestiaCP | CloudPanel | RunCloud |
+|---|---|---|---|---|
+| **Price** | Free | Free | Free | $8/mo+ |
+| **Stack** | Rust + React | PHP | PHP | PHP (SaaS) |
+| **Docker native** | Yes | No | No | No |
+| **Multi-server** | Yes | No | No | Yes |
+| **Git deploy** | Yes (blue-green) | No | No | Yes |
+| **CLI + IaC** | Yes | Limited | No | No |
+| **RAM usage** | ~60MB | ~200MB+ | ~150MB+ | SaaS |
+| **ARM64** | Yes | Partial | No | No |
+| **Self-hosted** | Yes | Yes | Yes | No |
+
+## Screenshots
+
+<details>
+<summary><strong>Docker Apps</strong> — 54 one-click templates</summary>
+
+![Docker Apps](.github/screenshots/dp-apps.png)
+</details>
+
+<details>
+<summary><strong>Sites</strong> — PHP, Node.js, Python, static, reverse proxy</summary>
+
+![Sites](.github/screenshots/dp-sites.png)
+</details>
+
+<details>
+<summary><strong>Security</strong> — Firewall, Fail2Ban, SSH hardening, scanning</summary>
+
+![Security](.github/screenshots/dp-security.png)
+</details>
+
+<details>
+<summary><strong>Terminal</strong> — Full SSH in the browser</summary>
+
+![Terminal](.github/screenshots/dp-terminal.png)
+</details>
 
 ## Features
 
-### Hosting & Sites
-- **Site Management** — Static, PHP (multiple versions), Node.js, Python, and reverse proxy sites with automatic Nginx configuration
-- **Free SSL** — Automatic Let's Encrypt provisioning and renewal
-- **Database Management** — MySQL and PostgreSQL in Docker containers with built-in SQL browser
-- **Docker Apps** — 54 one-click templates across 10 categories + Docker Compose stack management
-- **Git Deploy** — Push-to-deploy with blue-green zero-downtime updates, Nixpacks auto-detection (30+ languages), preview environments with TTL cleanup
-- **WordPress Toolkit** — Multi-site dashboard, vulnerability scanning (14+ known exploits), security hardening (7 checks, 6 auto-fixable), bulk updates
-- **One-Click CMS** — WordPress, Laravel, Drupal, Joomla, Symfony, CodeIgniter with database + SSL provisioning
-- **Staging** — Create staging environments, sync from production, push to live
+### Hosting
+- **Sites** — Static, PHP (8.1-8.4), Node.js, Python, reverse proxy. Automatic Nginx config, SSL, PHP-FPM pools.
+- **Databases** — MySQL/PostgreSQL in Docker. Built-in SQL browser. Auto-cleanup on site delete.
+- **Docker Apps** — 54 templates (WordPress, Redis, PostgreSQL, Grafana, n8n, Gitea...). Compose stacks. Resource limits.
+- **Git Deploy** — Push-to-deploy. Blue-green zero-downtime updates. Nixpacks (30+ languages). Preview environments.
+- **WordPress Toolkit** — Multi-site dashboard, vulnerability scanning, security hardening, bulk updates.
+- **CMS Install** — WordPress, Laravel, Drupal, Joomla, Symfony, CodeIgniter — one click.
+- **Backups** — Scheduled, S3/SFTP remote destinations, one-click restore.
 
-### Infrastructure
-- **Multi-Server** — Manage unlimited remote servers from a single panel with per-server resource scoping
-- **Traefik Option** — Choose nginx or Traefik as reverse proxy for Docker apps (auto-SSL, service discovery)
-- **DNS Management** — Cloudflare + PowerDNS with zone templates, propagation checker, DNSSEC
-- **Email Management** — Full mail server (Postfix + Dovecot + OpenDKIM), webmail, spam filtering, SMTP relay
-- **Backups** — Scheduled backups with S3-compatible remote destinations and one-click restore
+### Operations
+- **Multi-Server** — Manage remote servers from one panel. Agent auto-registers.
+- **DNS** — Cloudflare + PowerDNS. Zone templates, propagation checker, DNSSEC.
+- **Mail** — Postfix + Dovecot + OpenDKIM. Webmail (Roundcube), spam filter (Rspamd), SMTP relay.
+- **Monitoring** — HTTP/TCP/ping uptime checks, SLA tracking, public status pages, PagerDuty.
+- **Terminal** — Full SSH with tabs, themes, sharing, session recording.
 
-### Monitoring & Security
-- **Real-Time Dashboards** — CPU, RAM, disk, network, Docker containers, historical sparkline charts
-- **Uptime Monitoring** — HTTP/TCP/ping checks with SLA tracking, public status pages, PagerDuty
-- **Alerts** — CPU/memory/disk thresholds, server offline, SSL expiry, service health — email, Slack, Discord
-- **Security** — Firewall, Fail2Ban, SSH hardening, vulnerability scanning, compliance reports, auto-healing
-- **2FA** — TOTP two-factor authentication with recovery codes
+### Security
+- **2FA/TOTP** — Two-factor authentication with recovery codes.
+- **Firewall** — UFW management with smart port opener.
+- **Fail2Ban** — View/ban/unban IPs, panel-specific jail.
+- **SSH Hardening** — Disable password/root login, change port — one click.
+- **Vulnerability Scanning** — Container scanning, file integrity, security headers.
+- **Auto-Healing** — Restart crashed services, clean disk, renew expiring SSL.
 
 ### Developer Experience
-- **Web Terminal** — Full SSH terminal with tabs, themes, sharing, session recording
-- **File Manager** — Browse, edit, upload, and download files from the browser
-- **CLI** — Full command-line interface (`dockpanel status`, `dockpanel sites`, `dockpanel diagnose`)
-- **Infrastructure as Code** — Export/import server config as YAML (`dockpanel export`, `dockpanel apply`)
-- **Smart Diagnostics** — Pattern-based issue detection with one-click fixes
+- **CLI** — `dockpanel status`, `sites`, `apps`, `diagnose`, `export`, `apply`
+- **Infrastructure as Code** — Export/import server config as YAML.
+- **Smart Diagnostics** — 6 check categories with one-click fixes.
+- **File Manager** — Browse, edit, upload files from the browser.
+- **Command Palette** — Ctrl+K to navigate anywhere.
 
-### Business Features
-- **Reseller Accounts** — Admin → Reseller → User hierarchy with quotas, server allocation, and branding
-- **White-Label** — Custom logo, panel name, accent color, and hide DockPanel branding per reseller
-- **OAuth / SSO** — Login via Google, GitHub, or GitLab (OAuth 2.0)
-- **Extension API** — Webhook-based integrations with HMAC-signed event delivery and scoped API keys
-- **Migration Wizard** — Import sites, databases, and email from cPanel, Plesk, or HestiaCP
-- **Teams** — Multi-user access with admin/reseller/user roles and team-based permissions
-- **Activity Log** — Full audit trail of all panel actions
-- **ARM64** — Runs on Raspberry Pi, Oracle Cloud free-tier ARM, and any ARM64 server
+### Business
+- **Reseller Accounts** — Admin → Reseller → User hierarchy with quotas.
+- **White-Label** — Custom logo, colors, panel name per reseller.
+- **OAuth/SSO** — Google, GitHub, GitLab login.
+- **Extension API** — Webhook events with HMAC signing and scoped API keys.
+- **Migration Wizard** — Import from cPanel, Plesk, HestiaCP.
+- **Teams** — Multi-user access with role-based permissions.
 
 ## Architecture
 
 ```
-Browser
-  |
-  +-- React SPA (Vite + Tailwind)
-  |
-  +-- Nginx (reverse proxy + static files)
-        |
-        +-- /api/* --> API (Rust/Axum, port 3080)
-        |                 |
-        |                 +-- PostgreSQL 16 (Docker, port 5450)
-        |                 |
-        |                 +-- Agent (Unix socket or HTTPS for remote)
-        |                       |
-        |                       +-- Docker, Nginx, SSL, Files, Backups, Terminal
-        |
-        +-- /* -----> Frontend dist/ (static files)
+Browser → React 19 SPA → Nginx
+                           ├── /api/* → API (Rust/Axum)
+                           │              ├── PostgreSQL 16
+                           │              └── Agent (Unix socket / HTTPS)
+                           │                     └── Docker, Nginx, SSL, files, terminal
+                           └── /*     → Frontend (static files)
 ```
 
-- **Agent** — Rust binary, runs as root via systemd. Manages host resources (Docker, Nginx, SSL, file system, backups, terminal). Unix socket locally, HTTPS for remote servers. In multi-server mode (`AGENT_LISTEN_TCP` env var), the agent listens on a TCP port for remote panel connections. When configured with `DOCKPANEL_CENTRAL_URL`, it periodically reports metrics to the central panel — this is opt-in and only used for multi-server management.
-- **API** — Rust binary, runs via systemd. Handles auth, database operations, alert engine, multi-server dispatch, and proxies commands to agents.
-- **Frontend** — React 19 SPA with lazy-loaded pages. Served directly by Nginx from `dist/`.
+**3 Rust binaries**: Agent (~20MB), API (~14MB), CLI (~1.7MB). Total RAM: ~60MB.
 
-## Requirements
-
-- Ubuntu 20.04+, Debian 11+, CentOS 9+, Rocky Linux 9+, Fedora 39+, or Amazon Linux 2023
-- x86_64 or ARM64 (aarch64)
-- 512MB RAM minimum (1GB recommended)
-- Docker (installed automatically)
-- Nginx (installed automatically)
-
-## Directory Structure
-
-```
-dockpanel/
-+-- panel/
-|   +-- agent/          # Rust agent (host-level operations)
-|   +-- backend/        # Rust API server
-|   +-- cli/            # Rust CLI binary
-|   +-- frontend/       # React frontend
-+-- scripts/
-|   +-- install.sh      # Quick installer (curl | bash)
-|   +-- install-agent.sh # Remote agent installer (multi-server)
-|   +-- setup.sh        # Full setup script
-|   +-- update.sh       # Update to latest version
-|   +-- uninstall.sh    # Complete removal
-+-- website/            # Marketing site (dockpanel.dev)
-```
+| Component | Tech | Role |
+|-----------|------|------|
+| Agent | Rust/Axum | Root-level host operations (Docker, Nginx, SSL, files) |
+| API | Rust/Axum + SQLx | Auth, business logic, multi-server dispatch, background tasks |
+| CLI | Rust/Clap | Command-line interface for automation |
+| Frontend | React 19 + Vite + Tailwind 4 | Browser UI with 3 layout themes |
 
 ## Development
 
-### Prerequisites
-
-- Rust 1.94+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
-- Node.js 20+ and npm
-
-### Build
-
 ```bash
-# Agent
-cd panel/agent && cargo build --release
+git clone https://github.com/ovexro/dockpanel.git && cd dockpanel
 
-# API
-cd panel/backend && cargo build --release
+# Start database
+docker run -d --name dockpanel-postgres \
+  -e POSTGRES_USER=dockpanel -e POSTGRES_PASSWORD=dockpanel -e POSTGRES_DB=dockpanel \
+  -p 5450:5432 postgres:16
 
-# CLI
-cd panel/cli && cargo build --release
-
-# Frontend
+# Build
+cargo build --release --manifest-path panel/agent/Cargo.toml
+cargo build --release --manifest-path panel/backend/Cargo.toml
+cargo build --release --manifest-path panel/cli/Cargo.toml
 cd panel/frontend && npm install && npx vite build
 ```
 
-### Running Locally
+See [CONTRIBUTING.md](CONTRIBUTING.md) for full development setup.
 
-1. Start PostgreSQL (Docker): `docker run -d --name dockpanel-postgres -e POSTGRES_USER=dockpanel -e POSTGRES_PASSWORD=dockpanel -e POSTGRES_DB=dockpanel -p 5450:5432 postgres:16`
-2. Create `/etc/dockpanel/api.env` with: `DATABASE_URL=postgres://dockpanel:dockpanel@localhost:5450/dockpanel` and `JWT_SECRET=<random-64-char-hex>`
-3. Start the agent: `sudo ./panel/agent/target/release/dockpanel-agent`
-4. Start the API: `./panel/backend/target/release/dockpanel-api`
-5. Start the frontend dev server: `cd panel/frontend && npm run dev`
-
-### CLI Usage
+## CLI
 
 ```bash
-dockpanel status              # Server status
-dockpanel sites               # List sites
+dockpanel status              # Server status (CPU, RAM, disk)
+dockpanel sites               # List all sites
 dockpanel apps                # List Docker apps
-dockpanel diagnose            # Run diagnostics
-dockpanel export -o config.yml  # Export server config
-dockpanel apply config.yml    # Apply config from YAML
+dockpanel diagnose            # Run smart diagnostics
+dockpanel export -o config.yml  # Export server config as YAML
+dockpanel apply config.yml    # Apply config (Infrastructure as Code)
 ```
 
-## Update
+## Update / Uninstall
 
 ```bash
-sudo bash /opt/dockpanel/scripts/update.sh
-```
-
-## Uninstall
-
-```bash
-sudo bash /opt/dockpanel/scripts/uninstall.sh
+sudo bash /opt/dockpanel/scripts/update.sh     # Update
+sudo bash /opt/dockpanel/scripts/uninstall.sh   # Remove
 ```
 
 ## Documentation
 
-- [FEATURES.md](FEATURES.md) — Complete feature manifest with implementation details
-- [CHANGELOG.md](CHANGELOG.md) — Version history and release notes
+- [Live Docs](https://docs.dockpanel.dev) — Getting started, guides, configuration
+- [FEATURES.md](FEATURES.md) — Complete feature manifest (41 features, ~166 capabilities)
+- [CHANGELOG.md](CHANGELOG.md) — Version history
 - [SECURITY.md](SECURITY.md) — Security model and vulnerability reporting
-- [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — Environment variables and directory structure
-- [CONTRIBUTING.md](CONTRIBUTING.md) — Development setup and contribution guidelines
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and PR process.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — Development setup and PR process
 
 ## License
 
