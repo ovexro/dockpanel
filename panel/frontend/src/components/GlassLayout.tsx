@@ -3,6 +3,7 @@ import { Navigate, Outlet, NavLink, Link } from "react-router-dom";
 import { useLayoutState } from "../hooks/useLayoutState";
 import { Icon } from "../data/icons";
 import CommandPalette from "./CommandPalette";
+import LayoutSwitcher from "./LayoutSwitcher";
 
 export default function GlassLayout() {
   const {
@@ -249,6 +250,7 @@ export default function GlassLayout() {
                         : "Health issue"}
                   </span>
                 </div>
+                <LayoutSwitcher variant="dark" />
                 <button
                   onClick={cycleTheme}
                   className="p-1.5 text-dark-400 hover:text-dark-100 bg-dark-800/40 border border-dark-600/30 rounded-lg transition-colors shrink-0"

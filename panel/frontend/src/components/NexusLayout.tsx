@@ -3,6 +3,7 @@ import { useLayoutState } from "../hooks/useLayoutState";
 import { useServer } from "../context/ServerContext";
 import { useBranding } from "../context/BrandingContext";
 import CommandPalette from "./CommandPalette";
+import LayoutSwitcher from "./LayoutSwitcher";
 import React, { useState, useRef, useEffect } from "react";
 
 /* ── Lucide-style inline SVG icons (indigo accent) ────────────────────── */
@@ -247,19 +248,9 @@ export default function NexusLayout() {
             <div className="h-6 w-px bg-zinc-200 hidden sm:block" />
 
             {/* Layout switcher */}
-            <select
-              value={state.layout}
-              onChange={(e) => {
-                localStorage.setItem("dp-layout", e.target.value);
-                window.dispatchEvent(new Event("dp-layout-change"));
-              }}
-              className="text-xs border border-zinc-200 rounded-md px-2 py-1 bg-white text-zinc-600 hidden sm:block"
-            >
-              <option value="command">Terminal</option>
-              <option value="glass">Glass</option>
-              <option value="atlas">Atlas</option>
-              <option value="nexus">Nexus</option>
-            </select>
+            <div className="hidden sm:block">
+              <LayoutSwitcher variant="light" />
+            </div>
 
             {/* User info (desktop) */}
             <div className="hidden sm:flex items-center gap-2">
