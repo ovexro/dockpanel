@@ -991,6 +991,21 @@ pub async fn remove(
     agent.delete(&agent_path).await
         .map_err(|e| agent_error("Site removal", e))?;
 
+    // Remove cron entries from system crontab before CASCADE deletes DB records
+    let crons: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM crons WHERE site_id = $1",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    for (cron_id,) in &crons {
+        if let Err(e) = agent.delete(&format!("/crons/remove/{cron_id}")).await {
+            tracing::warn!("Failed to remove crontab entry {cron_id}: {e}");
+        }
+    }
+
     // Delete monitors linked to this site (FK is SET NULL, not CASCADE)
     sqlx::query("DELETE FROM monitors WHERE site_id = $1")
         .bind(id)
