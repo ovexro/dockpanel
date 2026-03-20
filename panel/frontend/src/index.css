@@ -502,12 +502,26 @@ body {
   background-color: #f9fafb !important;
 }
 
-/* Prevent double-rounding on deeply nested elements */
+/* Round all bordered containers in content area */
+[data-theme="nexus"] main [class*="border-dark-"] {
+  border-radius: 12px;
+}
+
+/* Prevent rounding on table internals and nested dividers */
 [data-theme="nexus"] td,
 [data-theme="nexus"] th,
-[data-theme="nexus"] tr {
+[data-theme="nexus"] tr,
+[data-theme="nexus"] thead,
+[data-theme="nexus"] tbody,
+[data-theme="nexus"] main [class*="divide-"] > * {
   border-radius: 0 !important;
   box-shadow: none !important;
+}
+
+/* Keep table wrapper containers rounded */
+[data-theme="nexus"] main [class*="overflow-hidden"][class*="border-dark-"],
+[data-theme="nexus"] main [class*="overflow-x-auto"] {
+  border-radius: 12px;
 }
 
 /* Table headers — clean light style */
