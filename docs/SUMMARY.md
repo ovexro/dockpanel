@@ -8,5 +8,6 @@
   - [Email](guides/email.md)
   - [Multi-Server](guides/multi-server.md)
   - [Backups](guides/backups.md)
+- [API Reference](api-reference.md)
 - [CLI Reference](cli-reference.md)
 - [Troubleshooting](troubleshooting.md)
