@@ -338,6 +338,7 @@ create_directories() {
     # (these may not exist yet on a fresh install — services are installed later)
     mkdir -p /etc/postfix /etc/dovecot /var/vmail /var/spool/postfix /run/opendkim
     mkdir -p /var/lib/nginx /etc/letsencrypt /var/lib/dpkg /var/cache/apt /var/lib/apt
+    mkdir -p /etc/php /var/spool/cron /var/lib/dockpanel/git
     touch /etc/opendkim.conf /run/nginx.pid 2>/dev/null || true
 
     log "Directories created"
