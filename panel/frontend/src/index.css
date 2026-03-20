@@ -314,6 +314,84 @@ body {
 
 
 /* ═══════════════════════════════════════════════════════
+   THEME: NEXUS — Light SaaS, indigo accent, Inter font
+   ═══════════════════════════════════════════════════════ */
+
+[data-theme="nexus"] {
+  /* Clean white surfaces (inverted: 950=white, 50=near-black) */
+  --color-dark-950: #ffffff;
+  --color-dark-900: #f9fafb;
+  --color-dark-800: #f3f4f6;
+  --color-dark-700: #e5e7eb;
+  --color-dark-600: #d1d5db;
+  --color-dark-500: #9ca3af;
+  --color-dark-400: #6b7280;
+  --color-dark-300: #4b5563;
+  --color-dark-200: #374151;
+  --color-dark-100: #1f2937;
+  --color-dark-50:  #111827;
+
+  /* Indigo accent — matches Nexus sidebar */
+  --color-rust-50:  #eef2ff;
+  --color-rust-100: #e0e7ff;
+  --color-rust-200: #c7d2fe;
+  --color-rust-300: #a5b4fc;
+  --color-rust-400: #818cf8;
+  --color-rust-500: #6366f1;
+  --color-rust-600: #4f46e5;
+  --color-rust-700: #4338ca;
+  --color-rust-800: #3730a3;
+  --color-rust-900: #312e81;
+
+  /* Indigo interactive */
+  --color-accent-50:  #eef2ff;
+  --color-accent-100: #e0e7ff;
+  --color-accent-200: #c7d2fe;
+  --color-accent-300: #a5b4fc;
+  --color-accent-400: #818cf8;
+  --color-accent-500: #6366f1;
+  --color-accent-600: #4f46e5;
+  --color-accent-700: #4338ca;
+  --color-accent-800: #3730a3;
+  --color-accent-900: #312e81;
+
+  /* Adjusted status colors for light bg */
+  --color-warn-400: #d97706;
+  --color-warn-500: #b45309;
+  --color-warn-600: #92400e;
+
+  --color-danger-400: #dc2626;
+  --color-danger-500: #b91c1c;
+  --color-danger-600: #991b1b;
+
+  /* Inter font — clean SaaS look */
+  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  /* Rounded corners */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-3xl: 24px;
+}
+
+[data-theme="nexus"] body {
+  background-image: none;
+}
+
+[data-theme="nexus"] .logo-glow {
+  text-shadow: none;
+}
+
+[data-theme="nexus"] .logo-icon-glow {
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.15), 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+
+/* ═══════════════════════════════════════════════════════
    SHARED RULES — form elements, scrollbar, focus, etc.
    ═══════════════════════════════════════════════════════ */
 

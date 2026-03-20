@@ -80,7 +80,7 @@ export default function NexusLayout() {
 
   // Nexus layout forces light theme for consistent appearance
   useEffect(() => {
-    document.documentElement.setAttribute("data-theme", "arctic");
+    document.documentElement.setAttribute("data-theme", "nexus");
   }, []);
 
   if (state.loading) {
