@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 
 const layouts = [
   { id: "command", label: "Terminal", desc: "Dark, CLI aesthetic" },
@@ -78,7 +79,7 @@ export default function LayoutSwitcher({ variant = "dark" }: Props) {
         </svg>
       </button>
 
-      {open && (
+      {open && createPortal(
         <div
           className={`fixed w-52 rounded-lg shadow-2xl overflow-hidden z-[9999] ${
             isDark ? "bg-dark-900 border border-dark-600" : "bg-white border border-zinc-200 shadow-lg"
@@ -95,7 +96,7 @@ export default function LayoutSwitcher({ variant = "dark" }: Props) {
               onClick={() => switchLayout(l.id)}
               className={`w-full text-left px-3 py-2.5 transition-colors ${
                 l.id === current
-                  ? isDark ? "bg-dark-800 text-dark-50" : "bg-indigo-50 text-indigo-700"
+                  ? isDark ? "bg-dark-800 text-dark-50" : "bg-blue-50 text-blue-700"
                   : isDark ? "text-dark-300 hover:bg-dark-800 hover:text-dark-100" : "text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
               }`}
             >
@@ -103,7 +104,8 @@ export default function LayoutSwitcher({ variant = "dark" }: Props) {
               <div className={`text-xs mt-0.5 ${isDark ? "text-dark-500" : "text-zinc-400"}`}>{l.desc}</div>
             </button>
           ))}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
