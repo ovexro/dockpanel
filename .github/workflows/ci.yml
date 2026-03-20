@@ -1,0 +1,166 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  lint-rust:
+    name: Lint (Rust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            panel/agent/target/
+            panel/backend/target/
+            panel/cli/target/
+          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-lint-
+
+      - name: Clippy — Agent
+        run: cargo clippy --manifest-path panel/agent/Cargo.toml --release -- -D warnings 2>&1 || true
+
+      - name: Clippy — Backend
+        run: cargo clippy --manifest-path panel/backend/Cargo.toml --release -- -D warnings 2>&1 || true
+
+      - name: Clippy — CLI
+        run: cargo clippy --manifest-path panel/cli/Cargo.toml --release -- -D warnings 2>&1 || true
+
+  lint-frontend:
+    name: Lint (Frontend)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: panel/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: cd panel/frontend && npm ci
+
+      - name: Type check
+        run: cd panel/frontend && npx tsc --noEmit
+
+      - name: Audit
+        run: cd panel/frontend && npm audit --audit-level=high || true
+
+  build-rust:
+    name: Build (Rust)
+    runs-on: ubuntu-latest
+    needs: lint-rust
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            panel/agent/target/
+            panel/backend/target/
+            panel/cli/target/
+          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-build-
+
+      - name: Build Agent
+        run: cargo build --release --manifest-path panel/agent/Cargo.toml
+
+      - name: Build Backend
+        run: cargo build --release --manifest-path panel/backend/Cargo.toml
+
+      - name: Build CLI
+        run: cargo build --release --manifest-path panel/cli/Cargo.toml
+
+      - name: Report binary sizes
+        run: |
+          echo "| Binary | Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Agent | $(du -h panel/agent/target/release/dockpanel-agent | cut -f1) |" >> $GITHUB_STEP_SUMMARY
+          echo "| API | $(du -h panel/backend/target/release/dockpanel-api | cut -f1) |" >> $GITHUB_STEP_SUMMARY
+          echo "| CLI | $(du -h panel/cli/target/release/dockpanel | cut -f1) |" >> $GITHUB_STEP_SUMMARY
+
+  build-frontend:
+    name: Build (Frontend)
+    runs-on: ubuntu-latest
+    needs: lint-frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: panel/frontend/package-lock.json
+
+      - name: Install and build
+        run: |
+          cd panel/frontend
+          npm ci
+          npx vite build
+
+      - name: Report bundle size
+        run: |
+          echo "### Frontend Bundle" >> $GITHUB_STEP_SUMMARY
+          du -sh panel/frontend/dist/ >> $GITHUB_STEP_SUMMARY
+
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked 2>/dev/null || true
+
+      - name: Audit Agent
+        run: cd panel/agent && cargo audit || true
+
+      - name: Audit Backend
+        run: cd panel/backend && cargo audit || true
+
+      - name: Audit CLI
+        run: cd panel/cli && cargo audit || true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Audit Frontend
+        run: cd panel/frontend && npm ci && npm audit --audit-level=high || true
+
+      - name: Audit Marketing Site
+        run: cd website/client && npm ci && npm audit --audit-level=high || true
