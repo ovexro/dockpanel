@@ -10,7 +10,7 @@ A free, self-hosted, Docker-native server management panel built in Rust. No sub
 
 v2.0.3 | ~35MB binaries | ~60MB RAM | Installs in <60 seconds | x86_64 + ARM64
 
-[Live Demo](https://panel.example.com) | [Website](https://dockpanel.dev) | [Changelog](CHANGELOG.md) | [Features](FEATURES.md)
+[Live Demo](https://panel.example.com) | [Website](https://dockpanel.dev) | [Docs](https://docs.dockpanel.dev) | [Discussions](https://github.com/ovexro/dockpanel/discussions) | [Changelog](CHANGELOG.md)
 
 ## Quick Start
 
