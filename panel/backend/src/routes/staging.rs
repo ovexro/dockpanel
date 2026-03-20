@@ -40,7 +40,7 @@ async fn get_site(state: &AppState, id: Uuid, user_id: Uuid) -> Result<Site, Api
 pub async fn create(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<CreateStagingRequest>,
 ) -> Result<(StatusCode, Json<Site>), ApiError> {
@@ -95,10 +95,11 @@ pub async fn create(
 
     // Insert staging site
     let staging: Site = sqlx::query_as(
-        "INSERT INTO sites (user_id, domain, runtime, status, proxy_port, php_version, parent_site_id) \
-         VALUES ($1, $2, $3, 'creating', $4, $5, $6) RETURNING *",
+        "INSERT INTO sites (user_id, server_id, domain, runtime, status, proxy_port, php_version, parent_site_id) \
+         VALUES ($1, $2, $3, $4, 'creating', $5, $6, $7) RETURNING *",
     )
     .bind(claims.sub)
+    .bind(server_id)
     .bind(&staging_domain)
     .bind(&parent.runtime)
     .bind(parent.proxy_port)

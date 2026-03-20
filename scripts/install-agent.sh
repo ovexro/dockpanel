@@ -101,11 +101,15 @@ echo "[4/7] Saving configuration..."
 echo "$TOKEN" > /etc/dockpanel/agent.token
 chmod 600 /etc/dockpanel/agent.token
 
-# Persist server ID for agent identification
+# Persist agent configuration
+# AGENT_TOKEN + AGENT_LISTEN_TCP = direct multi-server TCP access
+# DOCKPANEL_* vars = phone-home mode (agent checks in with central panel)
 cat > /etc/dockpanel/agent.env << ENVEOF
 AGENT_TOKEN=$TOKEN
-SERVER_ID=$SERVER_ID
 AGENT_LISTEN_TCP=0.0.0.0:$AGENT_PORT
+DOCKPANEL_SERVER_TOKEN=$TOKEN
+DOCKPANEL_SERVER_ID=$SERVER_ID
+DOCKPANEL_CENTRAL_URL=$PANEL_URL
 ENVEOF
 chmod 600 /etc/dockpanel/agent.env
 

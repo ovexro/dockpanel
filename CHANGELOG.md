@@ -4,6 +4,43 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.3] - 2026-03-20
+
+### Fixed — Comprehensive Audit (57 findings across 7 audit types)
+
+#### Critical
+- **Migration ordering**: `whitelabel_oauth` migration was running before `reseller_system` (ALTERing a table before it existed). Renumbered to `20260320050000`.
+- **OAuth bypasses 2FA**: OAuth login issued full session without checking `totp_enabled`. Now redirects to 2FA challenge when enabled.
+- **Setup script missing build tools**: Fresh VPS source builds failed — added `build-essential cmake pkg-config` installation.
+- **No swap on x86_64 low-RAM VPS**: Swap creation only triggered on ARM. Now applies to all architectures when building from source.
+- **install-agent.sh wrong env vars**: Remote agents never entered phone-home mode (`AGENT_TOKEN` vs `DOCKPANEL_SERVER_TOKEN`). Fixed to write both sets.
+- **Systemd services never updated during upgrade**: `update.sh` now rewrites service files with current `ReadWritePaths` and hardening.
+- **Required directories not created during upgrade**: `update.sh` now creates `/etc/postfix`, `/var/vmail`, and other directories needed by new features.
+
+#### High
+- **UFW blocks panel port 8443**: IP-based installs now open the configured panel port in UFW.
+- **ExecStartPost hardcodes www-data**: Agent socket `chgrp` now auto-detects nginx group (`www-data` or `nginx`).
+- **`read` prompt broken in curl-pipe-bash**: Domain prompt now reads from `/dev/tty` when stdin is piped.
+- **Frontend path mismatch after upgrade**: `update.sh` now fixes nginx root path when switching between source and release modes.
+- **config.rs default LISTEN_ADDR was 0.0.0.0:3000**: Changed to `127.0.0.1:3080` to match all scripts and nginx config.
+- **uninstall.sh incomplete cleanup**: Now removes CLI binary, tmpfiles.d, crontab entries, `/var/www/acme`, `/var/lib/dockpanel`.
+- **Stacks INSERT missing server_id**: Docker Compose stacks now include `server_id` in INSERT.
+- **Staging site INSERT missing server_id**: Staging environments now inherit parent site's server_id.
+- **No domain uniqueness across sites + git_deploys**: Cross-table domain conflict check prevents silent hijacking.
+- **Blue-green deploy dropped resource limits**: New container now inherits `memory`/`cpu_period`/`cpu_quota` from config.
+- **Git preview port has no unique constraint**: Added `UNIQUE INDEX` on `git_previews(host_port)`.
+- **Site proxy_port has no unique constraint**: Added partial `UNIQUE INDEX` on `sites(proxy_port)`.
+- **No terminal session limit**: Added `AtomicU32` counter with max 20 concurrent PTY sessions.
+
+### Added
+- **CONTRIBUTING.md**: Development setup, architecture overview, code style, PR process.
+- **GitHub issue templates**: Bug report and feature request forms with structured fields.
+- **GitHub PR template**: Checklist for builds, tests, and changelog.
+
+### Changed
+- **README.md**: Added badges (license, release, build), doc links, contributing section, phone-home disclosure.
+- **.gitignore**: Added SSL material, database file patterns.
+
 ## [2.0.2] - 2026-03-20
 
 ### Changed

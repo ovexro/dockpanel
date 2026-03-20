@@ -149,7 +149,7 @@ pub async fn get_one(
 pub async fn create(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Json(body): Json<CreateStackRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     require_admin(&claims.role)?;
@@ -177,11 +177,12 @@ pub async fn create(
 
     // Create DB record first to get the stack ID
     let stack: Stack = sqlx::query_as(
-        "INSERT INTO docker_stacks (user_id, name, yaml, service_count) \
-         VALUES ($1, $2, $3, $4) \
+        "INSERT INTO docker_stacks (user_id, server_id, name, yaml, service_count) \
+         VALUES ($1, $2, $3, $4, $5) \
          RETURNING id, user_id, name, yaml, service_count, created_at, updated_at",
     )
     .bind(claims.sub)
+    .bind(server_id)
     .bind(&body.name)
     .bind(&body.yaml)
     .bind(service_count)

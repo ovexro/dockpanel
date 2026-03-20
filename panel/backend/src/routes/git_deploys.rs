@@ -213,6 +213,37 @@ pub async fn create(
 
     let preview_ttl = body.preview_ttl_hours.unwrap_or(24);
 
+    // Cross-table domain uniqueness: check sites table
+    if let Some(ref domain) = body.domain {
+        if !domain.is_empty() {
+            let site_conflict: Option<(Uuid,)> = sqlx::query_as(
+                "SELECT id FROM sites WHERE domain = $1 AND server_id = $2"
+            )
+            .bind(domain)
+            .bind(server_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+            if site_conflict.is_some() {
+                return Err(err(StatusCode::CONFLICT, "Domain already in use by a site"));
+            }
+
+            let git_conflict: Option<(Uuid,)> = sqlx::query_as(
+                "SELECT id FROM git_deploys WHERE domain = $1 AND server_id = $2"
+            )
+            .bind(domain)
+            .bind(server_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+            if git_conflict.is_some() {
+                return Err(err(StatusCode::CONFLICT, "Domain already in use by another git deployment"));
+            }
+        }
+    }
+
     let deploy: GitDeploy = sqlx::query_as(
         "INSERT INTO git_deploys (user_id, server_id, name, repo_url, branch, dockerfile, container_port, host_port, domain, env_vars, auto_deploy, webhook_secret, memory_mb, cpu_percent, ssl_email, pre_build_cmd, post_deploy_cmd, build_args, build_context, github_token, deploy_cron, deploy_protected, preview_ttl_hours) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23) \
