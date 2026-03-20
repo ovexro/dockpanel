@@ -4,6 +4,15 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.4] - 2026-03-20
+
+### Security
+- **jsonwebtoken upgraded 9 → 10.3.0** (agent + backend): Fixes type confusion vulnerability (CVE) that could lead to authorization bypass. Switched to `aws_lc_rs` crypto backend.
+- **serde_yml replaced with serde_yaml_ng** (agent + CLI): `serde_yml` and its dependency `libyml` are unsound and unmaintained. Replaced with actively maintained `serde_yaml_ng` v0.10.0, a community fork of `serde_yaml`.
+
+### Added
+- **GitHub FUNDING.yml**: Sponsor button on repository page linking to GitHub Sponsors and plugins.ovexro.com.
+
 ## [2.0.3] - 2026-03-20
 
 ### Added
