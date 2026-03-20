@@ -966,6 +966,11 @@ pub async fn change_password(
 
     let hash = user.ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?.0;
 
+    // OAuth users have no password hash — they must use their OAuth provider
+    if hash.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "OAuth users cannot change passwords. Use your OAuth provider instead."));
+    }
+
     let parsed = PasswordHash::new(&hash)
         .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Password hash error"))?;
     Argon2::default()

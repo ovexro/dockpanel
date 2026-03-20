@@ -13,8 +13,19 @@ fn http_client() -> &'static reqwest::Client {
     })
 }
 
+/// Maximum concurrent webhook deliveries across all extensions.
+static ACTIVE_DELIVERIES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+const MAX_CONCURRENT_DELIVERIES: u32 = 20;
+
 /// Emit an event to all subscribed extensions (fire-and-forget).
 pub async fn emit_event(pool: &PgPool, event_type: &str, data: serde_json::Value) {
+    // Rate limit: skip if too many deliveries in flight
+    let active = ACTIVE_DELIVERIES.load(std::sync::atomic::Ordering::Relaxed);
+    if active >= MAX_CONCURRENT_DELIVERIES {
+        tracing::warn!("extension webhook rate limit hit ({active} in-flight), skipping {event_type}");
+        return;
+    }
+
     // Find all enabled extensions subscribed to this event
     let extensions: Vec<(uuid::Uuid, String, String)> = match sqlx::query_as(
         "SELECT id, webhook_url, webhook_secret FROM extensions WHERE enabled = TRUE",
@@ -43,6 +54,7 @@ pub async fn emit_event(pool: &PgPool, event_type: &str, data: serde_json::Value
         let payload_str = payload_str.clone();
         let delivery_id = delivery_id.clone();
 
+        ACTIVE_DELIVERIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         tokio::spawn(async move {
             let started = Instant::now();
 
@@ -61,6 +73,7 @@ pub async fn emit_event(pool: &PgPool, event_type: &str, data: serde_json::Value
                         "INSERT INTO extension_events (extension_id, event_type, payload, response_body, duration_ms) \
                          VALUES ($1, $2, $3, 'HMAC key error — delivery skipped', 0)"
                     ).bind(ext_id).bind(&event_type).bind(&payload_str).execute(&pool).await;
+                    ACTIVE_DELIVERIES.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     return; // Exit this spawned task, don't deliver unsigned webhook
                 }
             };
@@ -116,6 +129,8 @@ pub async fn emit_event(pool: &PgPool, event_type: &str, data: serde_json::Value
                     );
                 }
             }
+
+            ACTIVE_DELIVERIES.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         });
     }
 }

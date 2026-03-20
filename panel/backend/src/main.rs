@@ -1,6 +1,7 @@
 mod auth;
 mod config;
 pub mod error;
+pub mod helpers;
 mod models;
 mod routes;
 mod services;
@@ -71,6 +72,7 @@ async fn main() {
         match PgPoolOptions::new()
             .max_connections(config.db_max_connections)
             .min_connections(2)
+            .acquire_timeout(Duration::from_secs(5))
             // Note: slow query logging (log_min_duration_statement) should be configured
             // in postgresql.conf, not per-connection. Set to 1000ms for production.
             .after_connect(|conn, _meta| {

@@ -75,24 +75,9 @@ async fn get_zone(state: &AppState, zone_id: Uuid, user_id: Uuid) -> Result<DnsZ
 
 fn cf_client(token: &str, email: Option<&str>) -> Result<(reqwest::Client, reqwest::header::HeaderMap), ApiError> {
     let client = reqwest::Client::new();
-    let mut headers = reqwest::header::HeaderMap::new();
-    if let Some(email) = email {
-        headers.insert(
-            "X-Auth-Email",
-            reqwest::header::HeaderValue::from_str(email)
-                .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid email"))?,
-        );
-        headers.insert(
-            "X-Auth-Key",
-            reqwest::header::HeaderValue::from_str(token)
-                .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid API key"))?,
-        );
-    } else {
-        headers.insert(
-            "Authorization",
-            reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
-                .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid API token"))?,
-        );
+    let mut headers = crate::helpers::cf_headers(token, email);
+    if headers.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid Cloudflare credentials"));
     }
     headers.insert(
         "Content-Type",

@@ -802,38 +802,12 @@ fn extract_parent_domain(domain: &str) -> String {
 
 /// Detect the server's public IPv4 address.
 async fn detect_public_ip() -> String {
-    match reqwest::Client::new()
-        .get("https://api.ipify.org")
-        .timeout(std::time::Duration::from_secs(5))
-        .send()
-        .await
-    {
-        Ok(resp) => {
-            let ip = resp.text().await.unwrap_or_default().trim().to_string();
-            if ip.is_empty() { String::new() } else { ip }
-        }
-        Err(_) => {
-            use std::net::UdpSocket;
-            UdpSocket::bind("0.0.0.0:0")
-                .and_then(|s| { s.connect("8.8.8.8:53")?; s.local_addr() })
-                .map(|a| a.ip().to_string())
-                .unwrap_or_default()
-        }
-    }
+    crate::helpers::detect_public_ip().await
 }
 
 /// Build Cloudflare API headers from credentials.
 fn cf_headers(token: &str, email: Option<&str>) -> reqwest::header::HeaderMap {
-    let mut headers = reqwest::header::HeaderMap::new();
-    if let Some(em) = email {
-        if let (Ok(e_val), Ok(k_val)) = (em.parse(), token.parse()) {
-            headers.insert("X-Auth-Email", e_val);
-            headers.insert("X-Auth-Key", k_val);
-        }
-    } else if let Ok(bearer) = format!("Bearer {token}").parse() {
-        headers.insert("Authorization", bearer);
-    }
-    headers
+    crate::helpers::cf_headers(token, email)
 }
 
 /// Auto-create DNS records (MX, A, SPF, DMARC, DKIM) for a new mail domain.
@@ -1351,14 +1325,10 @@ pub async fn blacklist_check(
     AdminUser(_claims): AdminUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Get server IP
-    let ip = reqwest::Client::new()
-        .get("https://api.ipify.org")
-        .timeout(std::time::Duration::from_secs(5))
-        .send().await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("IP lookup failed: {e}")))?
-        .text().await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?
-        .trim().to_string();
+    let ip = crate::helpers::detect_public_ip().await;
+    if ip.is_empty() {
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, "IP lookup failed: could not detect public IP"));
+    }
 
     // Reverse the IP for DNSBL lookup
     let reversed: String = ip.split('.').rev().collect::<Vec<_>>().join(".");

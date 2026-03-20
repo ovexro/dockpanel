@@ -61,16 +61,17 @@ pub async fn run(pool: PgPool, mut shutdown_rx: tokio::sync::broadcast::Receiver
             }
         };
 
+        // Batch-load users in maintenance windows (avoid N+1 query per monitor)
+        let maintenance_users: std::collections::HashSet<uuid::Uuid> = sqlx::query_scalar::<_, uuid::Uuid>(
+            "SELECT DISTINCT user_id FROM maintenance_windows WHERE starts_at <= NOW() AND ends_at >= NOW()"
+        ).fetch_all(&pool).await.unwrap_or_default().into_iter().collect();
+
         // Process monitors concurrently (max 10 at a time)
         let mut set = tokio::task::JoinSet::new();
         for monitor in monitors {
-            // Check if user is in a maintenance window — skip checks during maintenance
-            let in_maintenance: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM maintenance_windows WHERE user_id = $1 AND starts_at <= NOW() AND ends_at >= NOW())"
-            ).bind(monitor.user_id).fetch_one(&pool).await.unwrap_or(false);
-
-            if in_maintenance {
-                continue; // Skip this monitor during maintenance
+            // Skip monitors for users in maintenance windows
+            if maintenance_users.contains(&monitor.user_id) {
+                continue;
             }
 
             let c = client.clone();
