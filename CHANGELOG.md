@@ -4,6 +4,23 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.2] - 2026-03-20
+
+### Changed
+- **Version alignment**: All Cargo.toml and package.json versions bumped to 2.0.2 (were 0.1.0/1.0.0). API health endpoint and CLI --version now report correct version.
+- **Binary size claims**: Marketing site, README, and FAQ updated from "~20MB" (agent-only) to "~35MB" (total of agent + API + CLI) for honest comparison.
+- **Template count**: FAQ corrected from 53 to 54 app templates.
+- **OS support**: Hero section now includes Rocky Linux 9+ alongside other supported distros.
+
+### Fixed
+- **install-agent.sh binary naming**: Was downloading `dockpanel-agent-x86_64` / `dockpanel-agent-aarch64` but GitHub Releases publishes `dockpanel-agent-linux-amd64` / `dockpanel-agent-linux-arm64`. Fixed to match release naming.
+- **install-agent.sh apt-get hardcoding**: Now detects package manager (apt/dnf/yum) instead of hardcoding apt-get. CentOS, Rocky, Fedora, and Amazon Linux now supported for remote agent installs.
+- **install-agent.sh server-id persistence**: `--server-id` was accepted but never written to config. Now persisted to `/etc/dockpanel/api.env` as `SERVER_ID`.
+- **install-agent.sh tmpfiles.d**: Added `/run/dockpanel` tmpfiles.d entry so socket directory survives reboots.
+- **install-agent.sh systemd hardening**: Remote agent service now matches local agent hardening (MemoryMax, LimitNOFILE, PrivateTmp, ProtectKernelLogs/Modules).
+- **update.sh pre-built binary path**: Added `INSTALL_FROM_RELEASE=1` support so ARM users who installed via release binaries can update without Rust toolchain.
+- **update.sh redundant health check**: Removed duplicate wait-for-health loop after rollback-capable check.
+
 ## [2.0.0] - 2026-03-19
 
 ### Added — High-Impact Features

@@ -127,7 +127,7 @@ const features = [
       </svg>
     ),
     title: 'ARM & Homelab Ready',
-    description: 'Runs on Raspberry Pi, Oracle Cloud free-tier ARM instances, and any ARM64 server. Same ~20MB binary, same features, same performance.',
+    description: 'Runs on Raspberry Pi, Oracle Cloud free-tier ARM instances, and any ARM64 server. Same ~35MB binaries, same features, same performance.',
     iconBg: 'bg-brand-500/10',
     iconColor: 'text-brand-400',
   },
