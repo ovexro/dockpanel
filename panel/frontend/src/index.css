@@ -483,6 +483,166 @@ body {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
+/* ── Nexus: page structure overrides ────────────────────
+   Makes cards, tables, metrics, badges look SaaS-native
+   rather than "inverted dark theme".
+   ─────────────────────────────────────────────────────── */
+
+/* All cards/panels: white bg, subtle border, rounded, light shadow */
+[data-theme="nexus"] [class*="bg-dark-950"],
+[data-theme="nexus"] [class*="bg-dark-900"] {
+  background-color: #ffffff !important;
+  border-color: #e5e7eb !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02) !important;
+  border-radius: 12px !important;
+}
+
+/* Inner card tint (used for metric cards, sub-cards) — very light gray instead of dark */
+[data-theme="nexus"] [class*="bg-dark-800"] {
+  background-color: #f9fafb !important;
+}
+
+/* Prevent double-rounding on deeply nested elements */
+[data-theme="nexus"] td,
+[data-theme="nexus"] th,
+[data-theme="nexus"] tr {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Table headers — clean light style */
+[data-theme="nexus"] thead {
+  background-color: #f9fafb !important;
+}
+
+[data-theme="nexus"] thead th {
+  color: #6b7280 !important;
+  font-weight: 500 !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+}
+
+/* Table row dividers — softer */
+[data-theme="nexus"] tbody tr {
+  border-color: #f3f4f6 !important;
+}
+
+/* Table row hover — light indigo tint */
+[data-theme="nexus"] tbody tr:hover {
+  background-color: #f5f3ff !important;
+}
+
+/* Status badges — Nexus style (softer colors) */
+[data-theme="nexus"] [class*="bg-rust-500\\/15"],
+[data-theme="nexus"] [class*="bg-rust-500\\/10"] {
+  background-color: rgba(99, 102, 241, 0.08) !important;
+}
+
+/* Buttons — indigo primary, clean secondary */
+[data-theme="nexus"] button[class*="bg-rust-500"],
+[data-theme="nexus"] button[class*="bg-rust-600"],
+[data-theme="nexus"] a[class*="bg-rust-500"] {
+  background-color: #6366f1 !important;
+  color: white !important;
+  border-radius: 8px !important;
+}
+
+[data-theme="nexus"] button[class*="bg-rust-500"]:hover,
+[data-theme="nexus"] button[class*="bg-rust-600"]:hover {
+  background-color: #4f46e5 !important;
+}
+
+/* Secondary/outline buttons */
+[data-theme="nexus"] button[class*="border-dark-"] {
+  border-color: #d1d5db !important;
+  border-radius: 8px !important;
+  background-color: #ffffff !important;
+}
+
+[data-theme="nexus"] button[class*="border-dark-"]:hover {
+  border-color: #6366f1 !important;
+  background-color: #f5f3ff !important;
+}
+
+/* Action bar buttons (Customize, Deploy App, etc.) */
+[data-theme="nexus"] button[class*="bg-dark-700"],
+[data-theme="nexus"] button[class*="bg-dark-800"] {
+  background-color: #ffffff !important;
+  border: 1px solid #d1d5db !important;
+  border-radius: 8px !important;
+}
+
+[data-theme="nexus"] button[class*="bg-dark-700"]:hover,
+[data-theme="nexus"] button[class*="bg-dark-800"]:hover {
+  background-color: #f5f3ff !important;
+  border-color: #6366f1 !important;
+}
+
+/* Danger button (Reboot) keeps red */
+[data-theme="nexus"] button[class*="bg-danger-"],
+[data-theme="nexus"] button[class*="text-danger-"] {
+  border-radius: 8px !important;
+}
+
+/* Progress bars — indigo instead of green (only narrow bar elements) */
+[data-theme="nexus"] [class*="bg-rust-500"][class*="h-2"],
+[data-theme="nexus"] [class*="bg-rust-500"][class*="h-1"] {
+  background-color: #6366f1 !important;
+}
+
+/* Active tab underlines — indigo */
+[data-theme="nexus"] [class*="border-rust-500"] {
+  border-color: #6366f1 !important;
+}
+
+/* Activity badges — softer */
+[data-theme="nexus"] [class*="bg-danger-500\\/15"] {
+  background-color: rgba(220, 38, 38, 0.08) !important;
+}
+
+[data-theme="nexus"] [class*="bg-warn-500\\/15"] {
+  background-color: rgba(217, 119, 6, 0.08) !important;
+}
+
+/* Sparkline chart containers — white bg */
+[data-theme="nexus"] svg[class*="sparkline"],
+[data-theme="nexus"] [class*="h-\\["] svg {
+  background-color: transparent !important;
+}
+
+/* "All Systems Operational" banner — softer indigo tint */
+[data-theme="nexus"] [class*="bg-rust-500\\/5"] {
+  background-color: rgba(99, 102, 241, 0.06) !important;
+}
+
+/* Stat grid (Uptime, Sites, Databases, etc.) — add subtle card styling */
+[data-theme="nexus"] [class*="grid"] > [class*="text-center"] {
+  background-color: #ffffff;
+  border-radius: 8px;
+  padding: 12px;
+  border: 1px solid #f3f4f6;
+}
+
+/* Tracking wider — remove for Nexus (terminal artifact) */
+[data-theme="nexus"] [class*="tracking-wider"],
+[data-theme="nexus"] [class*="tracking-widest"] {
+  letter-spacing: normal !important;
+}
+
+/* Code/mono blocks in content — light bg */
+[data-theme="nexus"] code,
+[data-theme="nexus"] pre {
+  background-color: #f3f4f6 !important;
+  color: #1f2937 !important;
+  border-radius: 6px;
+}
+
+/* Toggle switches — indigo when active */
+[data-theme="nexus"] [class*="bg-rust-500"][role="switch"],
+[data-theme="nexus"] button[class*="bg-rust-500"][class*="rounded-full"] {
+  background-color: #6366f1 !important;
+}
+
 
 /* ═══════════════════════════════════════════════════════
    SHARED RULES — form elements, scrollbar, focus, etc.
