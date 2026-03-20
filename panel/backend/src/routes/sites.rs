@@ -196,9 +196,10 @@ pub async fn create(
         // Find first available port in 4000-4999 range
         let row: Option<(i32,)> = sqlx::query_as(
             "SELECT s.port FROM generate_series(5000, 5999) AS s(port) \
-             WHERE s.port NOT IN (SELECT proxy_port FROM sites WHERE proxy_port IS NOT NULL) \
+             WHERE s.port NOT IN (SELECT proxy_port FROM sites WHERE proxy_port IS NOT NULL AND server_id = $1) \
              LIMIT 1"
         )
+        .bind(server_id)
         .fetch_optional(&mut *tx)
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -221,7 +222,14 @@ pub async fn create(
     .bind(&body.app_command)
     .fetch_one(&mut *tx)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("duplicate key") || msg.contains("unique") {
+            err(StatusCode::CONFLICT, "Domain already exists")
+        } else {
+            err(StatusCode::INTERNAL_SERVER_ERROR, &msg)
+        }
+    })?;
 
     // Create provisioning log channel
     let (broadcast_tx, _) = broadcast::channel::<ProvisionStep>(64);
@@ -359,30 +367,12 @@ pub async fn create(
                     ).bind(&parent).bind(dns_user_id).fetch_optional(&dns_db).await.ok().flatten();
 
                     if let Some((provider, cf_zone_id, cf_api_token, cf_api_email)) = zone {
-                        // Detect server's public IP (try external service first, fallback to local detection)
-                        let server_ip = match reqwest::Client::new()
-                            .get("https://api.ipify.org")
-                            .timeout(std::time::Duration::from_secs(5))
-                            .send().await
-                        {
-                            Ok(resp) => resp.text().await.unwrap_or_default().trim().to_string(),
-                            Err(_) => {
-                                std::net::UdpSocket::bind("0.0.0.0:0")
-                                    .and_then(|s| { s.connect("8.8.8.8:53")?; s.local_addr() })
-                                    .map(|a| a.ip().to_string()).unwrap_or_default()
-                            }
-                        };
+                        let server_ip = crate::helpers::detect_public_ip().await;
 
                         if provider == "cloudflare" {
                             if let (Some(zid), Some(tok)) = (cf_zone_id, cf_api_token) {
                                 let client = reqwest::Client::new();
-                                let mut headers = reqwest::header::HeaderMap::new();
-                                if let Some(em) = cf_api_email {
-                                    headers.insert("X-Auth-Email", em.parse().unwrap_or_else(|_| "".parse().unwrap()));
-                                    headers.insert("X-Auth-Key", tok.parse().unwrap_or_else(|_| "".parse().unwrap()));
-                                } else {
-                                    headers.insert("Authorization", format!("Bearer {tok}").parse().unwrap_or_else(|_| "".parse().unwrap()));
-                                }
+                                let headers = crate::helpers::cf_headers(&tok, cf_api_email.as_deref());
                                 let _ = client.post(&format!("https://api.cloudflare.com/client/v4/zones/{zid}/dns_records"))
                                     .headers(headers)
                                     .json(&serde_json::json!({"type":"A","name":dns_domain,"content":server_ip,"proxied":true,"ttl":1}))
@@ -1067,29 +1057,12 @@ pub async fn remove(
             ).bind(&parent).bind(dns_user).fetch_optional(&dns_db).await.ok().flatten();
 
             if let Some((provider, cf_zone_id, cf_api_token, cf_api_email)) = zone {
-                let server_ip = match reqwest::Client::new()
-                    .get("https://api.ipify.org")
-                    .timeout(std::time::Duration::from_secs(5))
-                    .send().await
-                {
-                    Ok(resp) => resp.text().await.unwrap_or_default().trim().to_string(),
-                    Err(_) => {
-                        std::net::UdpSocket::bind("0.0.0.0:0")
-                            .and_then(|s| { s.connect("8.8.8.8:53")?; s.local_addr() })
-                            .map(|a| a.ip().to_string()).unwrap_or_default()
-                    }
-                };
+                let server_ip = crate::helpers::detect_public_ip().await;
 
                 if provider == "cloudflare" {
                     if let (Some(zid), Some(tok)) = (cf_zone_id, cf_api_token) {
                         let client = reqwest::Client::new();
-                        let mut headers = reqwest::header::HeaderMap::new();
-                        if let Some(em) = cf_api_email {
-                            headers.insert("X-Auth-Email", em.parse().unwrap_or_else(|_| "".parse().unwrap()));
-                            headers.insert("X-Auth-Key", tok.parse().unwrap_or_else(|_| "".parse().unwrap()));
-                        } else {
-                            headers.insert("Authorization", format!("Bearer {tok}").parse().unwrap_or_else(|_| "".parse().unwrap()));
-                        }
+                        let headers = crate::helpers::cf_headers(&tok, cf_api_email.as_deref());
                         // Find the A record for this domain
                         if let Ok(resp) = client.get(&format!("https://api.cloudflare.com/client/v4/zones/{zid}/dns_records?type=A&name={dns_domain}"))
                             .headers(headers.clone()).send().await {

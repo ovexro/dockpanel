@@ -173,35 +173,12 @@ pub async fn deploy(
             .flatten();
 
             if let Some((_zone_id, provider, cf_zone_id, cf_api_token, cf_api_email)) = zone {
-                // Detect server's public IP (try external service first, fallback to local detection)
-                let server_ip = match reqwest::Client::new()
-                    .get("https://api.ipify.org")
-                    .timeout(std::time::Duration::from_secs(5))
-                    .send().await
-                {
-                    Ok(resp) => {
-                        let ip = resp.text().await.unwrap_or_default().trim().to_string();
-                        if ip.is_empty() { String::new() } else { ip }
-                    }
-                    Err(_) => {
-                        use std::net::UdpSocket;
-                        UdpSocket::bind("0.0.0.0:0")
-                            .and_then(|s| { s.connect("8.8.8.8:53")?; s.local_addr() })
-                            .map(|a| a.ip().to_string())
-                            .unwrap_or_default()
-                    }
-                };
+                let server_ip = crate::helpers::detect_public_ip().await;
 
                 if provider == "cloudflare" {
                     if let (Some(zone_id), Some(token)) = (cf_zone_id, cf_api_token) {
                         let client = reqwest::Client::new();
-                        let mut headers = reqwest::header::HeaderMap::new();
-                        if let Some(em) = cf_api_email {
-                            headers.insert("X-Auth-Email", em.parse().unwrap_or_else(|_| "".parse().unwrap()));
-                            headers.insert("X-Auth-Key", token.parse().unwrap_or_else(|_| "".parse().unwrap()));
-                        } else {
-                            headers.insert("Authorization", format!("Bearer {token}").parse().unwrap_or_else(|_| "".parse().unwrap()));
-                        }
+                        let headers = crate::helpers::cf_headers(&token, cf_api_email.as_deref());
 
                         let result = client
                             .post(&format!("https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records"))
@@ -927,29 +904,12 @@ pub async fn remove_app(
             ).bind(&parent).bind(dns_user).fetch_optional(&dns_db).await.ok().flatten();
 
             if let Some((provider, cf_zone_id, cf_api_token, cf_api_email)) = zone {
-                let server_ip = match reqwest::Client::new()
-                    .get("https://api.ipify.org")
-                    .timeout(std::time::Duration::from_secs(5))
-                    .send().await
-                {
-                    Ok(resp) => resp.text().await.unwrap_or_default().trim().to_string(),
-                    Err(_) => {
-                        std::net::UdpSocket::bind("0.0.0.0:0")
-                            .and_then(|s| { s.connect("8.8.8.8:53")?; s.local_addr() })
-                            .map(|a| a.ip().to_string()).unwrap_or_default()
-                    }
-                };
+                let server_ip = crate::helpers::detect_public_ip().await;
 
                 if provider == "cloudflare" {
                     if let (Some(zid), Some(tok)) = (cf_zone_id, cf_api_token) {
                         let client = reqwest::Client::new();
-                        let mut headers = reqwest::header::HeaderMap::new();
-                        if let Some(em) = cf_api_email {
-                            headers.insert("X-Auth-Email", em.parse().unwrap_or_else(|_| "".parse().unwrap()));
-                            headers.insert("X-Auth-Key", tok.parse().unwrap_or_else(|_| "".parse().unwrap()));
-                        } else {
-                            headers.insert("Authorization", format!("Bearer {tok}").parse().unwrap_or_else(|_| "".parse().unwrap()));
-                        }
+                        let headers = crate::helpers::cf_headers(&tok, cf_api_email.as_deref());
                         // Find the A record for this domain
                         if let Ok(resp) = client.get(&format!("https://api.cloudflare.com/client/v4/zones/{zid}/dns_records?type=A&name={dns_domain}"))
                             .headers(headers.clone()).send().await {

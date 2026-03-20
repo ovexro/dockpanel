@@ -340,10 +340,9 @@ pub async fn import(
                     "done",
                     Some("Skipped (domain already exists)".into()),
                 );
-                results["sites_skipped"]
-                    .as_array_mut()
-                    .unwrap()
-                    .push(serde_json::json!(domain));
+                if let Some(arr) = results["sites_skipped"].as_array_mut() {
+                    arr.push(serde_json::json!(domain));
+                }
                 completed += 1;
                 continue;
             }
@@ -359,7 +358,7 @@ pub async fn import(
                 let msg = format!("Nginx config failed for {domain}: {e}");
                 tracing::error!("{msg}");
                 emit_step(&logs, id, &step_key, &format!("Site {domain}"), "error", Some(msg.clone()));
-                results["errors"].as_array_mut().unwrap().push(serde_json::json!(msg));
+                if let Some(arr) = results["errors"].as_array_mut() { arr.push(serde_json::json!(msg)); }
                 completed += 1;
                 continue;
             }
@@ -382,7 +381,7 @@ pub async fn import(
                     let msg = format!("DB insert failed for {domain}: {e}");
                     tracing::error!("{msg}");
                     emit_step(&logs, id, &step_key, &format!("Site {domain}"), "error", Some(msg.clone()));
-                    results["errors"].as_array_mut().unwrap().push(serde_json::json!(msg));
+                    if let Some(arr) = results["errors"].as_array_mut() { arr.push(serde_json::json!(msg)); }
                     completed += 1;
                     continue;
                 }
@@ -402,7 +401,7 @@ pub async fn import(
                 let msg = format!("File import failed for {domain}: {e}");
                 tracing::error!("{msg}");
                 emit_step(&logs, id, &step_key, &format!("Site {domain}"), "error", Some(msg.clone()));
-                results["errors"].as_array_mut().unwrap().push(serde_json::json!(msg));
+                if let Some(arr) = results["errors"].as_array_mut() { arr.push(serde_json::json!(msg)); }
                 // Site record exists but files failed — mark as error status
                 let _ = sqlx::query("UPDATE sites SET status = 'error', updated_at = NOW() WHERE id = $1")
                     .bind(site_id)
@@ -420,10 +419,9 @@ pub async fn import(
                 "done",
                 Some("Imported".into()),
             );
-            results["sites_imported"]
-                .as_array_mut()
-                .unwrap()
-                .push(serde_json::json!({ "domain": domain, "site_id": site_id }));
+            if let Some(arr) = results["sites_imported"].as_array_mut() {
+                arr.push(serde_json::json!({ "domain": domain, "site_id": site_id }));
+            }
 
             completed += 1;
             tracing::info!(
@@ -472,8 +470,8 @@ pub async fn import(
                     let msg = format!("No available port for database {db_name}");
                     tracing::error!("{msg}");
                     emit_step(&logs, id, &step_key, &format!("Database {db_name}"), "error", Some(msg.clone()));
-                    results["databases_failed"].as_array_mut().unwrap().push(serde_json::json!(db_name));
-                    results["errors"].as_array_mut().unwrap().push(serde_json::json!(msg));
+                    if let Some(arr) = results["databases_failed"].as_array_mut() { arr.push(serde_json::json!(db_name)); }
+                    if let Some(arr) = results["errors"].as_array_mut() { arr.push(serde_json::json!(msg)); }
                     completed += 1;
                     continue;
                 }
@@ -497,8 +495,8 @@ pub async fn import(
                     let msg = format!("Database container creation failed for {db_name}: {e}");
                     tracing::error!("{msg}");
                     emit_step(&logs, id, &step_key, &format!("Database {db_name}"), "error", Some(msg.clone()));
-                    results["databases_failed"].as_array_mut().unwrap().push(serde_json::json!(db_name));
-                    results["errors"].as_array_mut().unwrap().push(serde_json::json!(msg));
+                    if let Some(arr) = results["databases_failed"].as_array_mut() { arr.push(serde_json::json!(db_name)); }
+                    if let Some(arr) = results["errors"].as_array_mut() { arr.push(serde_json::json!(msg)); }
                     completed += 1;
                     continue;
                 }
@@ -553,17 +551,16 @@ pub async fn import(
                         "done",
                         Some("Imported".into()),
                     );
-                    results["databases_imported"]
-                        .as_array_mut()
-                        .unwrap()
-                        .push(serde_json::json!({ "name": db_name, "port": port }));
+                    if let Some(arr) = results["databases_imported"].as_array_mut() {
+                        arr.push(serde_json::json!({ "name": db_name, "port": port }));
+                    }
                 }
                 Err(e) => {
                     let msg = format!("SQL import failed for {db_name}: {e}");
                     tracing::error!("{msg}");
                     emit_step(&logs, id, &step_key, &format!("Database {db_name}"), "error", Some(msg.clone()));
-                    results["databases_failed"].as_array_mut().unwrap().push(serde_json::json!(db_name));
-                    results["errors"].as_array_mut().unwrap().push(serde_json::json!(msg));
+                    if let Some(arr) = results["databases_failed"].as_array_mut() { arr.push(serde_json::json!(db_name)); }
+                    if let Some(arr) = results["errors"].as_array_mut() { arr.push(serde_json::json!(msg)); }
                 }
             }
 
