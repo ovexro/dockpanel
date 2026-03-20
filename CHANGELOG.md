@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [2.0.3] - 2026-03-20
 
+### Added
+- **Documentation site** at `docs.dockpanel.dev`: mdBook-generated, 8 pages (getting-started, troubleshooting, CLI reference, WordPress, Git deploy, email, multi-server, backups). 1855 lines.
+
+### Changed
+- **Docker app templates pinned**: 33 of 39 `:latest` tags replaced with specific major versions (e.g., `redis:7`, `ghost:5`, `grafana/grafana:11`). 6 kept at `:latest` due to non-standard versioning (minio, nocodb, etc.).
+- **Auto-monitors removed**: Sites no longer auto-create uptime monitors on creation. Users create monitors manually when DNS is configured.
+
 ### Added — Documentation
 - **8 documentation pages** at `docs/`: getting-started, troubleshooting, CLI reference, and 5 guides (WordPress, Git deploy, email, multi-server, backups). 1855 lines of practical, copy-paste-friendly docs.
 

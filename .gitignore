@@ -38,3 +38,6 @@ Thumbs.db
 # Databases
 *.sqlite
 *.db
+
+# mdBook build output
+docs/book/
