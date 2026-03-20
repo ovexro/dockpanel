@@ -49,6 +49,7 @@ async fn ws_handler(
     }
 
     // Validate JWT ticket (short-lived token signed by the API using agent token as secret)
+    let token_value = state.token.read().await.clone();
     let user_email = q
         .token
         .as_deref()
@@ -59,7 +60,7 @@ async fn ws_handler(
             validation.validate_exp = true;
             jsonwebtoken::decode::<TerminalTicket>(
                 t,
-                &jsonwebtoken::DecodingKey::from_secret(state.token.as_bytes()),
+                &jsonwebtoken::DecodingKey::from_secret(token_value.as_bytes()),
                 &validation,
             )
             .ok()

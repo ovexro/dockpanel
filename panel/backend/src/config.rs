@@ -20,17 +20,20 @@ impl Config {
             panic!("JWT_SECRET must be at least 32 characters (got {}). Generate with: openssl rand -hex 32", jwt_secret.len());
         }
 
-        let base_url = std::env::var("BASE_URL").unwrap_or_else(|_| "https://demo.dockpanel.dev".into());
+        let base_url = std::env::var("BASE_URL").unwrap_or_default();
 
         let cors_origins = std::env::var("CORS_ORIGINS")
             .ok()
             .filter(|s| !s.is_empty())
             .map(|s| s.split(',').map(|o| o.trim().to_string()).filter(|o| !o.is_empty()).collect::<Vec<_>>())
-            .unwrap_or_else(|| vec![
-                base_url.clone(),
-                "https://demo.dockpanel.dev".into(),
-                "https://dockpanel.dev".into(),
-            ]);
+            .unwrap_or_else(|| {
+                if base_url.is_empty() {
+                    // No BASE_URL set — allow all origins (typical for IP-based access)
+                    vec![]
+                } else {
+                    vec![base_url.clone()]
+                }
+            });
 
         Self {
             database_url: std::env::var("DATABASE_URL")

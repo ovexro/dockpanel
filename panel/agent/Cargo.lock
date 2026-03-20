@@ -517,6 +517,7 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "sha2",
+ "subtle",
  "sysinfo",
  "tera",
  "tokio",

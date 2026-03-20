@@ -139,6 +139,7 @@ async fn stream_handler(
     ws: WebSocketUpgrade,
 ) -> Response {
     // Validate JWT ticket
+    let token_value = state.token.read().await.clone();
     let valid = q
         .token
         .as_deref()
@@ -149,7 +150,7 @@ async fn stream_handler(
             validation.validate_exp = true;
             jsonwebtoken::decode::<StreamTicket>(
                 t,
-                &jsonwebtoken::DecodingKey::from_secret(state.token.as_bytes()),
+                &jsonwebtoken::DecodingKey::from_secret(token_value.as_bytes()),
                 &validation,
             )
             .map(|data| data.claims.purpose == "log_stream")

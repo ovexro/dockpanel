@@ -589,13 +589,19 @@ LimitNOFILE=65535
 WantedBy=multi-user.target
 EOF
 
-    # API environment
+    # API environment — determine BASE_URL from domain or leave empty for IP access
+    local API_BASE_URL=""
+    if [ -n "$PANEL_DOMAIN" ]; then
+        API_BASE_URL="https://${PANEL_DOMAIN}"
+    fi
+
     cat > "$CONFIG_DIR/api.env" << EOF
 DATABASE_URL=postgresql://dockpanel:${DB_PASSWORD}@127.0.0.1:${DB_PORT}/dockpanel
 JWT_SECRET=${JWT_SECRET}
 AGENT_SOCKET=/var/run/dockpanel/agent.sock
 AGENT_TOKEN=${AGENT_TOKEN}
 LISTEN_ADDR=127.0.0.1:3080
+BASE_URL=${API_BASE_URL}
 EOF
     chmod 600 "$CONFIG_DIR/api.env"
 
@@ -828,16 +834,20 @@ install_recommended_services() {
         ufw default deny incoming > /dev/null 2>&1
         ufw default allow outgoing > /dev/null 2>&1
         ufw allow 22/tcp > /dev/null 2>&1
+        ufw --force enable > /dev/null 2>&1
+        log "UFW installed and enabled"
+    else
+        log "UFW already installed"
+    fi
+
+    # Ensure panel ports are always open (even if UFW was pre-existing)
+    if command -v ufw &> /dev/null; then
         ufw allow 80/tcp > /dev/null 2>&1
         ufw allow 443/tcp > /dev/null 2>&1
-        # Allow panel port if not 80/443 (e.g. IP-based installs on port 8443)
         if [ -n "$PANEL_PORT" ] && [ "$PANEL_PORT" != "80" ] && [ "$PANEL_PORT" != "443" ]; then
             ufw allow "${PANEL_PORT}/tcp" > /dev/null 2>&1
         fi
-        ufw --force enable > /dev/null 2>&1
-        log "UFW installed and enabled (SSH, HTTP, HTTPS, panel port allowed)"
-    else
-        log "UFW already installed"
+        log "Firewall: ports 80, 443${PANEL_PORT:+, $PANEL_PORT} allowed"
     fi
 
     # Fail2Ban (intrusion prevention)
