@@ -146,26 +146,21 @@ cat > /etc/systemd/system/dockpanel-agent.service << 'UNIT'
 Description=DockPanel Agent
 After=network.target docker.service
 Wants=docker.service
+StartLimitBurst=5
+StartLimitIntervalSec=60
 
 [Service]
 Type=simple
+ExecStartPre=/bin/sh -c 'mkdir -p /run/dockpanel /var/lib/dockpanel/git'
 ExecStart=/usr/local/bin/dockpanel-agent
 EnvironmentFile=/etc/dockpanel/agent.env
 Environment=RUST_LOG=info
 Restart=always
 RestartSec=5
-StartLimitBurst=5
-StartLimitIntervalSec=60
-
-# Permissions (matching local agent)
-ReadWritePaths=/var/www /var/run/dockpanel /etc/dockpanel /var/backups/dockpanel /var/lib/dockpanel
-ReadWritePaths=/etc/nginx /var/log/nginx /run/nginx.pid /var/lib/nginx
-ReadWritePaths=/etc/letsencrypt /etc/postfix /etc/dovecot /etc/opendkim /var/vmail
-ReadWritePaths=/var/spool/cron /tmp /etc/php
 NoNewPrivileges=no
 ProtectSystem=no
 ProtectHome=no
-PrivateTmp=yes
+PrivateTmp=no
 ProtectKernelLogs=yes
 ProtectKernelModules=yes
 MemoryMax=512M
