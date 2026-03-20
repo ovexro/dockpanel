@@ -161,21 +161,21 @@ cat > /etc/systemd/system/dockpanel-agent.service << 'EOF'
 Description=DockPanel Agent
 After=network.target nginx.service
 Wants=nginx.service
+StartLimitBurst=5
+StartLimitIntervalSec=60
 
 [Service]
 Type=simple
+ExecStartPre=/bin/sh -c 'mkdir -p /run/dockpanel /var/lib/dockpanel/git'
 ExecStart=/usr/local/bin/dockpanel-agent
 ExecStartPost=/bin/sh -c 'sleep 1 && chgrp $(getent group www-data >/dev/null 2>&1 && echo www-data || echo nginx) /var/run/dockpanel/agent.sock 2>/dev/null; chmod 660 /var/run/dockpanel/agent.sock 2>/dev/null; true'
 Restart=always
 RestartSec=5
-StartLimitBurst=5
-StartLimitIntervalSec=60
 Environment=RUST_LOG=info
-ReadWritePaths=/etc/nginx /etc/dockpanel /var/run/dockpanel /var/backups/dockpanel /var/www /var/log /etc/letsencrypt /var/lib/nginx /run/nginx.pid /etc/postfix /etc/dovecot /etc/opendkim.conf /var/vmail /var/spool/postfix /var/lib/dpkg /var/cache/apt /var/lib/apt /usr /run/opendkim /etc/php /var/spool/cron
 NoNewPrivileges=no
 ProtectSystem=no
 ProtectHome=no
-PrivateTmp=yes
+PrivateTmp=no
 ProtectKernelLogs=yes
 ProtectKernelModules=yes
 MemoryMax=512M
@@ -190,14 +190,14 @@ cat > /etc/systemd/system/dockpanel-api.service << 'EOF'
 Description=DockPanel API
 After=network.target docker.service dockpanel-agent.service
 Wants=dockpanel-agent.service
+StartLimitBurst=5
+StartLimitIntervalSec=60
 
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/dockpanel-api
 Restart=always
 RestartSec=5
-StartLimitBurst=5
-StartLimitIntervalSec=60
 Environment=RUST_LOG=info
 EnvironmentFile=/etc/dockpanel/api.env
 NoNewPrivileges=yes
