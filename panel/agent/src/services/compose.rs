@@ -46,7 +46,7 @@ struct ComposeFile {
 #[serde(default)]
 struct ServiceDef {
     image: Option<String>,
-    ports: Option<Vec<serde_yml::Value>>,
+    ports: Option<Vec<serde_yaml_ng::Value>>,
     environment: Option<EnvironmentDef>,
     volumes: Option<Vec<String>>,
     restart: Option<String>,
@@ -56,7 +56,7 @@ struct ServiceDef {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum EnvironmentDef {
-    Map(HashMap<String, serde_yml::Value>),
+    Map(HashMap<String, serde_yaml_ng::Value>),
     List(Vec<String>),
 }
 
@@ -69,7 +69,7 @@ impl Default for EnvironmentDef {
 /// Parse a docker-compose.yml string into a list of services.
 pub fn parse_compose(yaml: &str) -> Result<Vec<ComposeService>, String> {
     let compose: ComposeFile =
-        serde_yml::from_str(yaml).map_err(|e| format!("Invalid YAML: {e}"))?;
+        serde_yaml_ng::from_str(yaml).map_err(|e| format!("Invalid YAML: {e}"))?;
 
     let services = compose
         .services
@@ -95,9 +95,9 @@ pub fn parse_compose(yaml: &str) -> Result<Vec<ComposeService>, String> {
                 .iter()
                 .map(|(k, v)| {
                     let val = match v {
-                        serde_yml::Value::String(s) => s.clone(),
-                        serde_yml::Value::Number(n) => n.to_string(),
-                        serde_yml::Value::Bool(b) => b.to_string(),
+                        serde_yaml_ng::Value::String(s) => s.clone(),
+                        serde_yaml_ng::Value::Number(n) => n.to_string(),
+                        serde_yaml_ng::Value::Bool(b) => b.to_string(),
                         _ => format!("{v:?}"),
                     };
                     (k.clone(), val)
@@ -136,7 +136,7 @@ pub fn parse_compose(yaml: &str) -> Result<Vec<ComposeService>, String> {
     Ok(result)
 }
 
-fn parse_ports(ports_val: &Option<Vec<serde_yml::Value>>) -> Vec<PortMapping> {
+fn parse_ports(ports_val: &Option<Vec<serde_yaml_ng::Value>>) -> Vec<PortMapping> {
     let ports = match ports_val {
         Some(p) => p,
         None => return Vec::new(),
@@ -146,8 +146,8 @@ fn parse_ports(ports_val: &Option<Vec<serde_yml::Value>>) -> Vec<PortMapping> {
 
     for port in ports {
         let port_str = match port {
-            serde_yml::Value::String(s) => s.clone(),
-            serde_yml::Value::Number(n) => n.to_string(),
+            serde_yaml_ng::Value::String(s) => s.clone(),
+            serde_yaml_ng::Value::Number(n) => n.to_string(),
             _ => continue,
         };
 
