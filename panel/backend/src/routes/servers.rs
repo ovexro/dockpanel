@@ -354,12 +354,32 @@ pub async fn rotate_token(
     // Invalidate cached remote agent client so it picks up the new token
     state.agents.invalidate(id).await;
 
-    // If this is the local server, update the in-memory agent token too
+    // If this is the local server, update the in-memory AgentClient token and api.env on disk
     if let Some(local_id) = state.agents.local_server_id().await {
         if local_id == id {
-            // The local AgentClient reads token from env, but we should update the env-derived config
-            // For now, the local agent already has the new token in memory via its own rotation endpoint
-            tracing::info!("Local agent token rotated — update AGENT_TOKEN in api.env for persistence across API restarts");
+            // Update in-memory token so the API can immediately communicate with the agent
+            state.agents.local().update_token(new_token.to_string()).await;
+
+            // Update api.env on disk for persistence across API restarts
+            let env_path = "/etc/dockpanel/api.env";
+            if let Ok(contents) = std::fs::read_to_string(env_path) {
+                let updated = contents
+                    .lines()
+                    .map(|line| {
+                        if line.starts_with("AGENT_TOKEN=") {
+                            format!("AGENT_TOKEN={new_token}")
+                        } else {
+                            line.to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if let Err(e) = std::fs::write(env_path, &updated) {
+                    tracing::warn!("Failed to update api.env with new token: {e}");
+                } else {
+                    tracing::info!("Updated AGENT_TOKEN in {env_path}");
+                }
+            }
         }
     }
 
