@@ -3,6 +3,7 @@ import { Navigate, Outlet, NavLink, Link, useLocation } from "react-router-dom";
 import { useLayoutState } from "../hooks/useLayoutState";
 import { Icon } from "../data/icons";
 import CommandPalette from "./CommandPalette";
+import LayoutSwitcher from "./LayoutSwitcher";
 
 export default function AtlasLayout() {
   const {
@@ -190,6 +191,9 @@ export default function AtlasLayout() {
                   : "Health Issue"
               }
             />
+
+            {/* Layout switcher */}
+            <LayoutSwitcher variant="dark" />
 
             {/* Theme cycle */}
             <button

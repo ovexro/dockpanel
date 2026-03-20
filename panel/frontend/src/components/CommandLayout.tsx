@@ -4,6 +4,7 @@ import { useServer } from "../context/ServerContext";
 import { useBranding } from "../context/BrandingContext";
 import { Icon } from "../data/icons";
 import CommandPalette from "./CommandPalette";
+import LayoutSwitcher from "./LayoutSwitcher";
 import { useState, useRef, useEffect } from "react";
 
 function ServerSelector() {
@@ -206,6 +207,7 @@ export default function CommandLayout() {
               <div className={`w-2 h-2 rounded-full shrink-0 ${state.apiHealthy === null ? "bg-dark-400" : state.apiHealthy ? "bg-rust-500" : "bg-danger-500 animate-pulse"}`} />
               <span className="text-[10px] font-semibold uppercase tracking-widest text-dark-300 font-mono">{state.apiHealthy === null ? "Checking..." : state.apiHealthy ? "All Systems OK" : "Health Issue"}</span>
             </div>
+            <LayoutSwitcher variant="dark" />
             <button
               onClick={state.cycleTheme}
               className="p-1.5 text-dark-300 hover:text-dark-50 bg-dark-800 border border-dark-600/40 transition-colors rounded"
