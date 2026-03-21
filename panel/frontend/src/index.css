@@ -1132,6 +1132,63 @@ select:focus-visible {
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.25), 0 8px 24px rgba(0, 0, 0, 0.15);
 }
 
+/* ── Premium card depth for dark themes ──
+   Adds subtle shadow + slightly brighter border on hover
+   to create layered depth instead of flat rectangles */
+[data-theme="terminal"] main [class*="bg-dark-800"][class*="border"],
+[data-theme="terminal"] main [class*="bg-dark-900"][class*="border"],
+[data-theme="midnight"] main [class*="bg-dark-800"][class*="border"],
+[data-theme="midnight"] main [class*="bg-dark-900"][class*="border"],
+[data-theme="ember"] main [class*="bg-dark-800"][class*="border"],
+[data-theme="ember"] main [class*="bg-dark-900"][class*="border"],
+[data-theme="nexus-dark"] main [class*="bg-dark-800"][class*="border"],
+[data-theme="nexus-dark"] main [class*="bg-dark-900"][class*="border"] {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2), 0 2px 8px rgba(0, 0, 0, 0.1);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+/* ── Progress bar polish ──
+   Round all progress bars, add subtle glow on the fill */
+[class*="rounded-full"][class*="overflow-hidden"][class*="bg-dark-"] [class*="bg-rust-"],
+[class*="rounded-full"][class*="overflow-hidden"][class*="bg-dark-"] [class*="bg-warn-"],
+[class*="rounded-full"][class*="overflow-hidden"][class*="bg-dark-"] [class*="bg-danger-"] {
+  border-radius: 9999px;
+  transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Progress bar glow — accent-colored shadow on the fill bar */
+[data-theme="terminal"] [class*="rounded-full"][class*="overflow-hidden"] [class*="bg-rust-500"] {
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.3);
+}
+[data-theme="midnight"] [class*="rounded-full"][class*="overflow-hidden"] [class*="bg-rust-500"] {
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.3);
+}
+[data-theme="ember"] [class*="rounded-full"][class*="overflow-hidden"] [class*="bg-rust-500"] {
+  box-shadow: 0 0 8px rgba(251, 146, 60, 0.3);
+}
+[data-theme="nexus-dark"] [class*="rounded-full"][class*="overflow-hidden"] [class*="bg-rust-500"] {
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.3);
+}
+
+/* ── Bolder status indicators ──
+   Make status dots larger and add subtle glow */
+[class*="rounded-full"][class*="bg-rust-500"][class*="w-2"],
+[class*="rounded-full"][class*="bg-rust-400"][class*="w-2"] {
+  width: 10px !important;
+  height: 10px !important;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.4);
+}
+[class*="rounded-full"][class*="bg-danger-"][class*="w-2"] {
+  width: 10px !important;
+  height: 10px !important;
+  box-shadow: 0 0 6px rgba(236, 70, 70, 0.4);
+}
+[class*="rounded-full"][class*="bg-warn-"][class*="w-2"] {
+  width: 10px !important;
+  height: 10px !important;
+  box-shadow: 0 0 6px rgba(236, 175, 70, 0.4);
+}
+
 /* Progress bar upgrade */
 .progress-bar {
   border-radius: 9999px;
