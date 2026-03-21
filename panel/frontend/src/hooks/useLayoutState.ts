@@ -3,7 +3,7 @@ import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 import { navGroups, type NavGroup } from "../data/navItems";
 
-const themeOrder = ["terminal", "midnight", "ember", "arctic"] as const;
+const themeOrder = ["terminal", "midnight", "ember", "arctic", "nexus", "nexus-dark"] as const;
 
 export interface LayoutState {
   user: { email: string; role: string };
@@ -34,13 +34,6 @@ export function useLayoutState(): LayoutState {
     const stored = localStorage.getItem("dp-theme");
     if (!stored || stored === "dark") return "terminal";
     if (stored === "light") return "arctic";
-    // If theme is nexus/nexus-dark but layout is NOT nexus, restore the pre-nexus theme
-    const currentLayout = localStorage.getItem("dp-layout") || "command";
-    if ((stored === "nexus" || stored === "nexus-dark") && currentLayout !== "nexus") {
-      const restored = localStorage.getItem("dp-pre-nexus-theme") || "terminal";
-      localStorage.setItem("dp-theme", restored);
-      return restored;
-    }
     return stored;
   });
 

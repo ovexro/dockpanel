@@ -18,10 +18,6 @@ import "./index.css";
   if (theme === "light") theme = "arctic";
   // Layout initialization
   const layout = localStorage.getItem("dp-layout") || "command";
-  // If theme is nexus/nexus-dark but layout is NOT nexus, restore pre-nexus theme
-  if ((theme === "nexus" || theme === "nexus-dark") && layout !== "nexus") {
-    theme = localStorage.getItem("dp-pre-nexus-theme") || "terminal";
-  }
   localStorage.setItem("dp-theme", theme);
   document.documentElement.setAttribute("data-theme", theme);
   document.documentElement.setAttribute("data-layout", layout);

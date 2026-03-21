@@ -78,28 +78,13 @@ export default function NexusLayout() {
   const state = useLayoutState();
   const branding = useBranding();
 
-  // Nexus layout supports light/dark
-  const [isDark, setIsDark] = useState(() => {
-    const stored = localStorage.getItem("dp-nexus-dark");
-    return stored === "1";
-  });
+  // Nexus layout supports light/dark toggle (uses the global theme state)
+  const isDark = state.theme === "nexus-dark";
 
-  // Save previous theme on first mount so it can be restored when leaving Nexus
-  useEffect(() => {
-    const currentTheme = localStorage.getItem("dp-theme") || "terminal";
-    if (currentTheme !== "nexus" && currentTheme !== "nexus-dark") {
-      localStorage.setItem("dp-pre-nexus-theme", currentTheme);
-    }
-  }, []);
-
-  useEffect(() => {
-    const theme = isDark ? "nexus-dark" : "nexus";
-    document.documentElement.setAttribute("data-theme", theme);
-    localStorage.setItem("dp-theme", theme);
-    localStorage.setItem("dp-nexus-dark", isDark ? "1" : "0");
-  }, [isDark]);
-
-  const toggleDark = () => setIsDark(prev => !prev);
+  const toggleDark = () => {
+    const next = isDark ? "nexus" : "nexus-dark";
+    state.setTheme(next);
+  };
 
   if (state.loading) {
     return (
