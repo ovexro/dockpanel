@@ -32,7 +32,7 @@ export function useLayoutState(): LayoutState {
 
   const [theme, setThemeRaw] = useState(() => {
     const stored = localStorage.getItem("dp-theme");
-    if (!stored || stored === "dark") return "terminal";
+    if (!stored || stored === "dark") return "midnight";
     if (stored === "light") return "arctic";
     return stored;
   });
