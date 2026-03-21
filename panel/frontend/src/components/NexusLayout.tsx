@@ -78,11 +78,12 @@ export default function NexusLayout() {
   const state = useLayoutState();
   const branding = useBranding();
 
-  // Nexus layout supports light/dark toggle (uses the global theme state)
-  const isDark = state.theme === "nexus-dark";
+  // Nexus layout supports light/dark — detect from ANY active theme
+  const isLightTheme = state.theme === "nexus" || state.theme === "arctic";
+  const isDark = !isLightTheme;
 
   const toggleDark = () => {
-    const next = isDark ? "nexus" : "nexus-dark";
+    const next = isLightTheme ? "nexus-dark" : "nexus";
     state.setTheme(next);
   };
 

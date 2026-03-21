@@ -52,7 +52,22 @@ export default function LayoutSwitcher({ variant = "dark" }: Props) {
   }, [open]);
 
   const switchLayout = (id: string) => {
+    const prevLayout = localStorage.getItem("dp-layout") || "command";
+    const currentTheme = localStorage.getItem("dp-theme") || "terminal";
     localStorage.setItem("dp-layout", id);
+
+    // Smart theme transition: when leaving Nexus layout on a light theme,
+    // auto-switch to dark variant to avoid jarring white-on-dark-layout
+    if (prevLayout === "nexus" && id !== "nexus") {
+      if (currentTheme === "nexus") {
+        localStorage.setItem("dp-theme", "nexus-dark");
+        document.documentElement.setAttribute("data-theme", "nexus-dark");
+      } else if (currentTheme === "arctic") {
+        localStorage.setItem("dp-theme", "midnight");
+        document.documentElement.setAttribute("data-theme", "midnight");
+      }
+    }
+
     document.documentElement.setAttribute("data-layout", id);
     window.dispatchEvent(new Event("dp-layout-change"));
     setOpen(false);
