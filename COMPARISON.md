@@ -1,6 +1,6 @@
 # DockPanel vs Alternatives
 
-A honest comparison. Every panel has strengths — this is where DockPanel fits.
+An honest comparison. We're not shy about where DockPanel leads — and we're upfront about where others still win.
 
 ## Quick Comparison
 
@@ -21,17 +21,17 @@ A honest comparison. Every panel has strengths — this is where DockPanel fits.
 | **Reseller** | Yes | No | No | No | Yes | No |
 | **OAuth/SSO** | Yes | No | No | No | No | No |
 
-## Where DockPanel Wins
+## Where DockPanel Wins — Massively
 
-**Performance** — Rust binaries total ~35MB, use ~60MB RAM. Starts in <2 seconds. No PHP interpreter overhead.
+**10x lighter** — The entire panel is 35MB on disk and 60MB in RAM. cPanel uses 800MB+ of RAM. CloudPanel uses 250MB+. On a $5 VPS with 1GB of RAM, that difference is the gap between running your apps and running out of memory.
 
-**Docker native** — Databases, apps, and stacks are Docker containers. 54 one-click templates. Compose stack management. Not bolted on — it's the foundation.
+**Docker integration that no other free panel has** — 54 one-click app templates. Docker Compose stack management. Container logs, shell, stats, resource limits, health checks. Blue-green zero-downtime updates. This is a full container management platform built into a hosting panel. HestiaCP, CloudPanel, and CyberPanel have nothing close to this.
 
-**Developer tools** — Git push-to-deploy with blue-green zero-downtime updates, Nixpacks auto-detection (30+ languages), preview environments, CLI, Infrastructure as Code (YAML export/import).
+**A complete developer toolkit** — Git push-to-deploy with Nixpacks auto-build (30+ languages, no Dockerfile needed), preview environments with TTL, a full CLI for automation, and Infrastructure as Code (YAML export/import). These are features that RunCloud and Ploi charge $8-15/month for. DockPanel includes all of them for free.
 
-**Modern stack** — React 19 frontend with 3 layout themes, command palette (Ctrl+K), real-time metrics, WebSocket terminal.
+**Business-ready out of the box** — Multi-server management (unlimited), reseller accounts with quotas and white-label branding, OAuth/SSO (Google, GitHub, GitLab), extension API with HMAC-signed webhooks, migration wizard (import from cPanel/Plesk/HestiaCP), and teams with role-based access. Most panels don't have even half of these at any price.
 
-**Business features out of the box** — Reseller accounts, white-label branding, OAuth/SSO, extension API, migration wizard (import from cPanel/Plesk/HestiaCP).
+**6 themes, 4 layouts** — Terminal (hacker), Midnight (navy), Ember (warm premium), Arctic (light), Nexus (light SaaS), Nexus Dark (GitHub-dark). Four layout options: sidebar, collapsible, top navbar, flat SaaS. Every combination works. No other panel lets you personalize the interface like this.
 
 ## Where Others Win
 
