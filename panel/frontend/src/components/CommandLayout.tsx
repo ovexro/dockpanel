@@ -191,36 +191,41 @@ export default function CommandLayout() {
           ))}
         </nav>
 
-        {/* User + Build Status */}
-        <div className="mx-3 px-4 py-4 border-t border-dark-600/50 space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="min-w-0">
+        {/* User + Status */}
+        <div className="px-3 py-3 border-t border-dark-600/50">
+          {/* User info row */}
+          <div className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-dark-800/50 transition-colors group">
+            <div className="w-8 h-8 rounded-full bg-dark-700 flex items-center justify-center shrink-0">
+              <span className="text-xs font-bold text-dark-200 uppercase">{state.user.email?.charAt(0) || "?"}</span>
+            </div>
+            <div className="flex-1 min-w-0">
               <p className="text-sm font-medium truncate">{state.user.email}</p>
-              <p className="text-xs text-dark-200 capitalize">{state.user.role}</p>
+              <p className="text-[11px] text-dark-400 capitalize">{state.user.role}</p>
             </div>
             <button
               onClick={state.logout}
-              className="p-2 text-dark-200 hover:text-dark-50 hover:bg-dark-800 rounded-lg transition-colors"
+              className="p-1.5 text-dark-400 hover:text-dark-100 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
               title="Logout"
               aria-label="Logout"
             >
-              <Icon name="logout" className="w-5 h-5" />
+              <Icon name="logout" className="w-4 h-4" />
             </button>
           </div>
-          <div className="flex items-center justify-between">
+          {/* Status bar */}
+          <div className="flex items-center justify-between px-3 mt-2">
             <div className="flex items-center gap-2">
-              <div className={`w-2 h-2 rounded-full shrink-0 ${state.apiHealthy === null ? "bg-dark-400" : state.apiHealthy ? "bg-rust-500" : "bg-danger-500 animate-pulse"}`} />
-              <span className="text-[10px] font-semibold uppercase tracking-widest text-dark-300 font-mono">{state.apiHealthy === null ? "..." : state.apiHealthy ? "OK" : "Issue"}</span>
+              <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${state.apiHealthy === null ? "bg-dark-400" : state.apiHealthy ? "bg-rust-500" : "bg-danger-500 animate-pulse"}`} />
+              <span className="text-[10px] text-dark-400">{state.apiHealthy === null ? "Checking..." : state.apiHealthy ? "Connected" : "Disconnected"}</span>
             </div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1">
               <LayoutSwitcher variant="dark" />
               <button
                 onClick={state.cycleTheme}
-                className="p-1.5 text-dark-300 hover:text-dark-50 bg-dark-800 border border-dark-600/40 transition-colors rounded"
+                className="p-1.5 text-dark-400 hover:text-dark-200 transition-colors rounded"
                 title={`Theme: ${state.theme}`}
                 aria-label="Cycle theme"
               >
-                <svg className="w-[17px] h-[17px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4.098 19.902a3.75 3.75 0 0 0 5.304 0l6.401-6.402M6.75 21A3.75 3.75 0 0 1 3 17.25V4.125C3 3.504 3.504 3 4.125 3h5.25c.621 0 1.125.504 1.125 1.125v4.072M6.75 21a3.75 3.75 0 0 0 3.75-3.75V8.197M6.75 21h13.125c.621 0 1.125-.504 1.125-1.125v-5.25c0-.621-.504-1.125-1.125-1.125h-4.072M10.5 8.197l2.88-2.88c.438-.439 1.15-.439 1.59 0l3.712 3.713c.44.44.44 1.152 0 1.59l-2.88 2.88M6.75 17.25h.008v.008H6.75v-.008Z" />
                 </svg>
               </button>

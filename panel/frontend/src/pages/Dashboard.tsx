@@ -140,9 +140,15 @@ function CountUp({ value }: { value: number }) {
   return <>{displayed.toFixed(0)}</>;
 }
 
-function barColor(pct: number): string {
-  if (pct < 60) return "bg-rust-500";
-  if (pct < 80) return "bg-warn-500";
+function barColor(pct: number, type: "cpu" | "mem" | "disk" = "cpu"): string {
+  if (type === "disk") {
+    if (pct < 80) return "bg-rust-500";
+    if (pct <= 90) return "bg-warn-500";
+    return "bg-danger-500";
+  }
+  // CPU and Memory
+  if (pct < 70) return "bg-rust-500";
+  if (pct <= 90) return "bg-warn-500";
   return "bg-danger-500";
 }
 
@@ -170,6 +176,7 @@ export default function Dashboard() {
   const [updateCount, setUpdateCount] = useState(0);
   const [rebootRequired, setRebootRequired] = useState(false);
   const [dismissed, setDismissed] = useState(() => localStorage.getItem("dp-onboarding-dismissed") === "1");
+  const [onboardingCollapsed, setOnboardingCollapsed] = useState(() => localStorage.getItem('dp-onboarding-collapsed') === '1');
   const [metricsHistory, setMetricsHistory] = useState<MetricPoint[]>([]);
   const [twoFaEnabled, setTwoFaEnabled] = useState(false);
   const [sitesList, setSitesList] = useState<SiteDetail[]>([]);
@@ -434,9 +441,12 @@ export default function Dashboard() {
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 animate-fade-up">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
+      <div className="page-header">
         <div className="flex items-center gap-3">
-          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Dashboard</h1>
+          <div>
+            <h1 className="page-header-title">Dashboard</h1>
+            <p className="text-xs text-dark-400 mt-0.5">{system?.hostname || "Loading..."}</p>
+          </div>
           <span className="flex items-center gap-1.5" title={wsConnected ? "Receiving live metrics via WebSocket" : "Polling metrics via HTTP"}>
             <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? "bg-rust-500 animate-pulse" : "bg-dark-400"}`} />
             <span className="text-[10px] text-dark-400 font-mono">{wsConnected ? "Live" : "Polling"}</span>
@@ -444,19 +454,19 @@ export default function Dashboard() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <button onClick={() => setShowWidgetConfig(!showWidgetConfig)}
-            className="px-2 py-1 bg-dark-700 text-dark-200 rounded text-xs hover:bg-dark-600 transition-colors">
+            className="px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs transition-colors">
             {showWidgetConfig ? "Done" : "Customize"}
           </button>
           <div className="h-4 w-px bg-dark-600 hidden sm:block" />
-          <Link to="/apps" className="px-3 py-1.5 bg-dark-800 border border-dark-500 rounded-lg text-xs font-medium text-dark-100 hover:bg-dark-700 hover:text-dark-50 flex items-center gap-1.5">
+          <Link to="/apps" className="px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors">
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
             Deploy App
           </Link>
-          <Link to="/sites" className="px-3 py-1.5 bg-dark-800 border border-dark-500 rounded-lg text-xs font-medium text-dark-100 hover:bg-dark-700 hover:text-dark-50 flex items-center gap-1.5">
+          <Link to="/sites" className="px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors">
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
             Add Site
           </Link>
-          <Link to="/security" className="px-3 py-1.5 bg-dark-800 border border-dark-500 rounded-lg text-xs font-medium text-dark-100 hover:bg-dark-700 hover:text-dark-50 flex items-center gap-1.5">
+          <Link to="/security" className="px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors">
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z" /></svg>
             Diagnostics
           </Link>
@@ -466,14 +476,14 @@ export default function Dashboard() {
             if (!confirm("Restart Nginx? This will briefly interrupt all web traffic.")) return;
             try { await api.post("/agent/diagnostics/fix", { fix: "restart_nginx" }); setActionMessage({ text: "Nginx restarted", type: "success" }); setTimeout(() => setActionMessage(null), 3000); }
             catch { setActionMessage({ text: "Failed to restart Nginx", type: "error" }); setTimeout(() => setActionMessage(null), 3000); }
-          }} className="hidden sm:inline-block px-2.5 py-1.5 bg-dark-800 border border-dark-500 rounded-lg text-xs text-dark-200 hover:bg-dark-700 hover:text-dark-50">
+          }} className="hidden sm:inline-block px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs transition-colors">
             Restart Nginx
           </button>
           <button onClick={async () => {
             if (!confirm("Restart PHP-FPM? Active requests may be interrupted.")) return;
             try { await api.post("/agent/diagnostics/fix", { fix: "restart_php" }); setActionMessage({ text: "PHP-FPM restarted", type: "success" }); setTimeout(() => setActionMessage(null), 3000); }
             catch { setActionMessage({ text: "Failed to restart PHP-FPM", type: "error" }); setTimeout(() => setActionMessage(null), 3000); }
-          }} className="hidden sm:inline-block px-2.5 py-1.5 bg-dark-800 border border-dark-500 rounded-lg text-xs text-dark-200 hover:bg-dark-700 hover:text-dark-50">
+          }} className="hidden sm:inline-block px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs transition-colors">
             Restart PHP
           </button>
           <button onClick={async () => {
@@ -567,12 +577,40 @@ export default function Dashboard() {
           { id: "diagnostics", label: "Run diagnostics", description: "Check your server health and fix issues", link: "/diagnostics", check: () => true },
         ];
         const completed = steps.filter(s => s.check()).length;
-        if (completed >= 3) return null;
+        const isCollapsed = onboardingCollapsed || (completed >= 3 && localStorage.getItem('dp-onboarding-collapsed') !== '0');
+        const toggleCollapse = () => {
+          const next = !isCollapsed;
+          setOnboardingCollapsed(next);
+          localStorage.setItem('dp-onboarding-collapsed', next ? '1' : '0');
+        };
+
+        if (isCollapsed) {
+          return (
+            <div className="mb-6 bg-dark-800 border border-dark-500 px-5 py-3 animate-fade-up flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-medium text-dark-200">Setup: {completed}/{steps.length} complete</span>
+                <div className="flex gap-1">
+                  {steps.map(step => (
+                    <div key={step.id} className={`w-2 h-2 rounded-full ${step.check() ? "bg-rust-500" : "bg-dark-600"}`} />
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <button onClick={toggleCollapse} className="text-rust-400 hover:text-rust-300 text-xs font-medium">Expand</button>
+                <button onClick={dismissOnboarding} className="text-dark-400 hover:text-dark-300 text-xs">Dismiss</button>
+              </div>
+            </div>
+          );
+        }
+
         return (
           <div className="mb-6 bg-dark-800 border border-dark-500 p-5 animate-fade-up">
             <div className="flex items-center justify-between mb-1">
               <h3 className="text-sm font-bold text-dark-50 typewriter inline-block">Welcome to DockPanel</h3>
-              <button onClick={dismissOnboarding} className="text-dark-300 hover:text-dark-200 text-xs shrink-0 ml-4">Dismiss</button>
+              <div className="flex items-center gap-3">
+                <button onClick={toggleCollapse} className="text-dark-300 hover:text-dark-200 text-xs shrink-0">Collapse</button>
+                <button onClick={dismissOnboarding} className="text-dark-300 hover:text-dark-200 text-xs shrink-0">Dismiss</button>
+              </div>
             </div>
             <p className="text-xs text-dark-300 mb-4">Complete these steps to set up your server. <span className="text-dark-200">{completed}/{steps.length} done</span></p>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 stagger-children">
@@ -623,14 +661,14 @@ export default function Dashboard() {
           {/* Resource Metrics — 3 column */}
           {isVisible("metrics") && <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6 stagger-children">
             {[
-              { label: "CPU Usage", pct: system.cpu_usage, detail: `${system.cpu_count} cores${system.load_avg_1 !== undefined ? ` · Load ${system.load_avg_1?.toFixed(2)}` : ""}`,
+              { label: "CPU Usage", pct: system.cpu_usage, type: "cpu" as const, detail: `${system.cpu_count} cores${system.load_avg_1 !== undefined ? ` · Load ${system.load_avg_1?.toFixed(2)}` : ""}`,
                 icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><rect x="6" y="6" width="12" height="12" rx="1" /><path d="M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4M19 9h4m-4 6h4" strokeLinecap="round" /></svg> },
-              { label: "Memory", pct: system.mem_usage_pct, detail: `${(system.mem_used_mb / 1024).toFixed(1)} / ${(system.mem_total_mb / 1024).toFixed(1)} GB${system.swap_total_mb > 0 ? ` · Swap ${(system.swap_used_mb / 1024).toFixed(1)}G` : ""}`,
+              { label: "Memory", pct: system.mem_usage_pct, type: "mem" as const, detail: `${(system.mem_used_mb / 1024).toFixed(1)} / ${(system.mem_total_mb / 1024).toFixed(1)} GB${system.swap_total_mb > 0 ? ` · Swap ${(system.swap_used_mb / 1024).toFixed(1)}G` : ""}`,
                 icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><rect x="3" y="4" width="18" height="16" rx="1" /><path d="M7 4v3m4-3v3m4-3v3M3 10h18" strokeLinecap="round" /></svg> },
-              { label: "Disk", pct: system.disk_usage_pct, detail: `${system.disk_used_gb.toFixed(0)} / ${system.disk_total_gb.toFixed(0)} GB · ${(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB free${dockerDiskUsage ? ` · Images: ${dockerDiskUsage}` : ""}`,
+              { label: "Disk", pct: system.disk_usage_pct, type: "disk" as const, detail: `${system.disk_used_gb.toFixed(0)} / ${system.disk_total_gb.toFixed(0)} GB · ${(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB free${dockerDiskUsage ? ` · Images: ${dockerDiskUsage}` : ""}`,
                 icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 17.25v-.228a4.5 4.5 0 0 0-.12-1.03l-2.268-9.64a3.375 3.375 0 0 0-3.285-2.602H7.923a3.375 3.375 0 0 0-3.285 2.602l-2.268 9.64a4.5 4.5 0 0 0-.12 1.03v.228m19.5 0a3 3 0 0 1-3 3H5.25a3 3 0 0 1-3-3m19.5 0a3 3 0 0 0-3-3H5.25a3 3 0 0 0-3 3m16.5 0h.008v.008h-.008v-.008Zm-3 0h.008v.008h-.008v-.008Z" /></svg> },
-            ].map(({ label, pct, detail, icon }) => (
-              <div key={label} className="border border-dark-600 bg-dark-800 p-5 relative overflow-hidden shadow-lg shadow-black/10">
+            ].map(({ label, pct, type, detail, icon }) => (
+              <div key={label} className="border border-dark-600 bg-dark-800 p-5 relative overflow-hidden shadow-lg shadow-black/10 elevation-1">
                 <div className={`absolute inset-0 opacity-[0.03] ${pct < 60 ? "bg-dark-50" : pct < 85 ? "bg-warn-500" : "bg-danger-500"}`} />
                 <div className="relative text-center">
                   <div className="flex items-center justify-center gap-1.5 text-dark-200 mb-1">
@@ -641,7 +679,7 @@ export default function Dashboard() {
                     <CountUp value={pct} /><span className="text-xl text-dark-300 ml-0.5">%</span>
                   </div>
                   <div className="h-2 bg-dark-700 rounded-full overflow-hidden mt-3 mx-auto max-w-[80%]">
-                    <div className={`h-full rounded-full transition-all duration-700 ${barColor(pct)}`} style={{ width: `${Math.min(pct, 100)}%` }} />
+                    <div className={`h-full rounded-full transition-all duration-500 ${barColor(pct, type)}`} style={{ width: `${Math.min(pct, 100)}%` }} />
                   </div>
                   <p className="text-xs text-dark-300 mt-3">{detail}</p>
                   {/* Feature #7: Disk full forecast */}
@@ -671,13 +709,13 @@ export default function Dashboard() {
 
           {/* Historical Charts */}
           {isVisible("charts") && metricsHistory.length >= 2 && (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6 animate-fade-up">
               {[
                 { label: "CPU", data: metricsHistory.map(p => p.cpu), color: "var(--color-rust-500)" },
                 { label: "Memory", data: metricsHistory.map(p => p.mem), color: "var(--color-accent-500)" },
                 { label: "Disk", data: metricsHistory.map(p => p.disk), color: "var(--color-warn-500)" },
               ].map(({ label, data, color }) => (
-                <div key={label} className="border border-dark-500 bg-dark-800 p-4">
+                <div key={label} className="border border-dark-500 bg-dark-800 p-4 elevation-1">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-[10px] uppercase tracking-widest text-dark-300 font-medium">{label} (24h)</span>
                     <span className="text-xs text-dark-200 font-mono">{data[data.length - 1]?.toFixed(1)}%</span>
@@ -689,21 +727,21 @@ export default function Dashboard() {
           )}
 
           {/* Status Bar — grid of stat cells */}
-          {isVisible("status_bar") && <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-px bg-dark-600 border border-dark-600 mb-6 shadow-sm shadow-black/5">
-            <div className="bg-dark-800 px-4 py-3 flex flex-col">
+          {isVisible("status_bar") && <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-px bg-dark-600 border border-dark-600 mb-6 shadow-sm shadow-black/5 stagger-children">
+            <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
               <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Uptime</span>
               <span className="text-sm text-dark-50 font-medium">{formatUptime(system.uptime_secs)}</span>
             </div>
-            <div className="bg-dark-800 px-4 py-3 flex flex-col">
+            <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
               <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Sites</span>
               <span className="text-sm text-dark-50 font-medium">{sites.total}{sites.active > 0 && <span className="text-rust-400 ml-1 text-xs">({sites.active} active)</span>}</span>
             </div>
-            <div className="bg-dark-800 px-4 py-3 flex flex-col">
+            <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
               <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Databases</span>
               <span className="text-sm text-dark-50 font-medium">{dbCount}</span>
             </div>
             {/* Feature #1: Docker container overview */}
-            <div className="bg-dark-800 px-4 py-3 flex flex-col">
+            <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
               <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Docker</span>
               <span className="text-sm text-dark-50 font-medium">
                 {dockerInfo?.running ?? 0}<span className="text-xs text-dark-300 font-normal">/{dockerInfo?.total ?? 0}</span>
@@ -711,7 +749,7 @@ export default function Dashboard() {
               </span>
             </div>
             {intel && <>
-              <div className={`px-4 py-3 flex flex-col ${
+              <div className={`px-4 py-3 flex flex-col card-interactive ${
                 intel.health_score < 60 ? "bg-danger-500/5" : "bg-dark-800"
               }`}>
                 <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Health</span>
@@ -721,7 +759,7 @@ export default function Dashboard() {
                   intel.health_score >= 60 ? "text-warn-400" : "text-danger-400"
                 }`}>{intel.health_score}/100 {intel.grade}</span>
               </div>
-              <div className={`px-4 py-3 flex flex-col ${
+              <div className={`px-4 py-3 flex flex-col card-interactive ${
                 intel.firing_alerts > 0 ? "bg-danger-500/5" : "bg-dark-800"
               }`}>
                 <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Alerts</span>
@@ -730,12 +768,12 @@ export default function Dashboard() {
                   : <span className="text-sm text-rust-400 font-medium">0</span>
                 }
               </div>
-              <div className="bg-dark-800 px-4 py-3 flex flex-col">
+              <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
                 <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">SSL</span>
                 <span className="text-sm text-dark-50 font-medium">{intel.ssl_countdowns.length} certs</span>
               </div>
             </>}
-            <div className="bg-dark-800 px-4 py-3 flex flex-col">
+            <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
               <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Updates</span>
               {updateCount > 0
                 ? <span className="text-sm text-warn-400 font-bold">{updateCount} available</span>
@@ -743,7 +781,7 @@ export default function Dashboard() {
               }
             </div>
             {/* Feature #6: Bandwidth usage summary */}
-            <div className="bg-dark-800 px-4 py-3 flex flex-col">
+            <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
               <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Bandwidth</span>
               <span className="text-sm text-dark-50 font-medium">
                 <span className="text-dark-400">{"\u2193"}</span>{formatSize(bandwidthTotal.rx)}
@@ -751,7 +789,7 @@ export default function Dashboard() {
               </span>
             </div>
             {/* Feature #9: Mail queue widget */}
-            <div className="bg-dark-800 px-4 py-3 flex flex-col">
+            <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
               <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Mail Queue</span>
               <span className={`text-sm font-medium ${(mailQueue ?? 0) > 0 ? "text-warn-400" : "text-dark-50"}`}>
                 {mailQueue ?? 0} <span className="text-[10px] text-dark-400">messages</span>
@@ -868,7 +906,7 @@ export default function Dashboard() {
               ["Temperature", system.cpu_temp != null ? `${system.cpu_temp.toFixed(0)}°C` : "N/A"],
               ["Processes", system.process_count.toLocaleString()],
             ].map(([label, value]) => (
-              <div key={label} className="bg-dark-800 px-4 py-3 flex flex-col">
+              <div key={label} className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
                 <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">{label}</span>
                 <span title={String(value)} className={`text-sm text-dark-50 font-medium truncate ${label === "Temperature" && system.cpu_temp != null ? tempColor(system.cpu_temp) : ""}`}>{value}</span>
               </div>

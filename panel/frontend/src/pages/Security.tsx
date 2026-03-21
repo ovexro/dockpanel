@@ -274,14 +274,17 @@ export default function Security() {
   }
 
   return (
-    <div className="p-6 lg:p-8">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
-        <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Security</h1>
+    <div>
+      <div className="page-header">
+        <div>
+          <h1 className="page-header-title">Security</h1>
+          <p className="page-header-subtitle">Firewall, fail2ban, and security scanning</p>
+        </div>
         <div className="flex items-center gap-2">
           <a
             href="/api/security/report"
             target="_blank"
-            className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 transition-colors"
+            className="px-4 py-2 bg-dark-700 text-dark-200 hover:bg-dark-600 hover:text-dark-100 border border-dark-600 rounded-lg text-sm font-medium transition-colors"
           >
             Download Report
           </a>
@@ -301,6 +304,7 @@ export default function Security() {
         </div>
       </div>
 
+      <div className="p-6 lg:p-8">
       {message.text && (
         <div
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
@@ -352,10 +356,10 @@ export default function Security() {
       {tab === "overview" && (
         <>
           {/* Security Posture + Overview Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
             {/* Security Score */}
             {posture && posture.score >= 0 && (
-              <div className="bg-dark-800 rounded-lg border border-dark-500 p-5 md:col-span-2 lg:col-span-1">
+              <div className="bg-dark-800 rounded-lg border border-dark-500 p-5 min-h-[140px]">
                 <div className="flex items-center gap-2.5">
                   <div className="w-10 h-10 rounded-lg bg-accent-600/10 flex items-center justify-center">
                     <svg className="w-6 h-6 text-accent-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -377,7 +381,7 @@ export default function Security() {
 
             {overview && (
               <>
-                <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
+                <div className="bg-dark-800 rounded-lg border border-dark-500 p-5 min-h-[140px]">
                   <div className="flex items-center gap-2.5">
                     <div className="w-9 h-9 rounded-lg bg-warn-500/10 flex items-center justify-center">
                       <svg className="w-5 h-5 text-warn-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -396,7 +400,7 @@ export default function Security() {
                   <p className="text-xs text-dark-300 mt-1">{overview.firewall_rules_count} rules</p>
                 </div>
 
-                <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
+                <div className="bg-dark-800 rounded-lg border border-dark-500 p-5 min-h-[140px]">
                   <div className="flex items-center gap-2.5">
                     <div className="w-9 h-9 rounded-lg bg-danger-500/10 flex items-center justify-center">
                       <svg className="w-5 h-5 text-danger-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -414,7 +418,7 @@ export default function Security() {
                   <p className="text-xs text-dark-300 mt-1"><span className="font-mono">{overview.fail2ban_banned_total}</span> banned IPs</p>
                 </div>
 
-                <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
+                <div className="bg-dark-800 rounded-lg border border-dark-500 p-5 min-h-[140px]">
                   <div className="flex items-center gap-2.5">
                     <div className="w-9 h-9 rounded-lg bg-rust-500/10 flex items-center justify-center">
                       <svg className="w-5 h-5 text-rust-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -444,7 +448,7 @@ export default function Security() {
                           loadData();
                         } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
                       }}
-                      className={`px-2 py-1 rounded text-xs font-medium transition-colors ${overview.ssh_password_auth ? "bg-warn-500/15 text-warn-400 hover:bg-warn-500/25" : "bg-dark-700 text-dark-200 hover:bg-dark-600"}`}
+                      className="px-3 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 border border-dark-600 rounded text-xs font-medium transition-colors"
                     >
                       {overview.ssh_password_auth ? "Disable Password" : "Enable Password"}
                     </button>
@@ -458,7 +462,7 @@ export default function Security() {
                             loadData();
                           } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
                         }}
-                        className="px-2 py-1 rounded text-xs font-medium transition-colors bg-warn-500/15 text-warn-400 hover:bg-warn-500/25"
+                        className="px-3 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 border border-dark-600 rounded text-xs font-medium transition-colors"
                       >
                         Disable Root
                       </button>
@@ -476,14 +480,14 @@ export default function Security() {
                           loadData();
                         } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
                       }}
-                      className="px-2 py-1 rounded text-xs font-medium transition-colors bg-dark-700 text-dark-200 hover:bg-dark-600"
+                      className="px-3 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 border border-dark-600 rounded text-xs font-medium transition-colors"
                     >
                       Change Port
                     </button>
                   </div>
                 </div>
 
-                <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
+                <div className="bg-dark-800 rounded-lg border border-dark-500 p-5 min-h-[140px]">
                   <div className="flex items-center gap-2.5">
                     <div className="w-9 h-9 rounded-lg bg-warn-500/10 flex items-center justify-center">
                       <svg className="w-5 h-5 text-warn-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -496,7 +500,7 @@ export default function Security() {
                   <p className="text-xs text-dark-300 mt-1">Active certificates</p>
                 </div>
 
-                <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
+                <div className="bg-dark-800 rounded-lg border border-dark-500 p-5 min-h-[140px]">
                   <div className="flex items-center gap-2.5">
                     <div className="w-9 h-9 rounded-lg bg-accent-500/10 flex items-center justify-center">
                       <svg className="w-5 h-5 text-accent-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -518,7 +522,7 @@ export default function Security() {
                           setMessage({ text: "Panel Fail2Ban jail activated", type: "success" });
                         } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
                       }}
-                      className="mt-3 px-3 py-1.5 bg-rust-500 text-white rounded text-xs font-medium hover:bg-rust-600 transition-colors"
+                      className="mt-3 px-3 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 border border-dark-600 rounded text-xs font-medium transition-colors"
                     >
                       Enable Protection
                     </button>
@@ -585,7 +589,7 @@ export default function Security() {
                   </thead>
                   <tbody className="divide-y divide-dark-600">
                     {firewall.rules.map((rule) => (
-                      <tr key={rule.number} className="hover:bg-dark-700/30 transition-colors">
+                      <tr key={rule.number} className="table-row-hover">
                         <td className="px-5 py-2.5 text-sm text-dark-300 font-mono">{rule.number}</td>
                         <td className="px-5 py-2.5 text-sm text-dark-50 font-mono">{rule.to}</td>
                         <td className="px-5 py-2.5">
@@ -637,7 +641,7 @@ export default function Security() {
                       {fail2ban.jails.map((jail) => (
                         <tr
                           key={jail.name}
-                          className="hover:bg-dark-700/30 transition-colors cursor-pointer"
+                          className="table-row-hover cursor-pointer"
                           onClick={() => { if (selectedJail === jail.name) { setSelectedJail(null); } else { loadBannedIps(jail.name); if (!banJail) setBanJail(jail.name); } }}
                         >
                           <td className="px-5 py-2.5 text-sm text-dark-50 font-mono flex items-center gap-2">
@@ -912,7 +916,7 @@ export default function Security() {
                 </tr></thead>
                 <tbody className="divide-y divide-dark-600">
                   {loginAudit.ssh.map((e: any, i: number) => (
-                    <tr key={i} className="hover:bg-dark-700/30">
+                    <tr key={i} className="table-row-hover">
                       <td className="px-5 py-2 text-xs text-dark-200 font-mono">{e.time}</td>
                       <td className="px-5 py-2 text-sm text-dark-50 font-mono">{e.user}</td>
                       <td className="px-5 py-2 text-sm text-dark-100 font-mono">{e.ip}</td>
@@ -944,7 +948,7 @@ export default function Security() {
                 </tr></thead>
                 <tbody className="divide-y divide-dark-600">
                   {loginAudit.panel.map((e: any, i: number) => (
-                    <tr key={i} className="hover:bg-dark-700/30">
+                    <tr key={i} className="table-row-hover">
                       <td className="px-5 py-2 text-xs text-dark-200 font-mono">{new Date(e.time).toLocaleString()}</td>
                       <td className="px-5 py-2 text-sm text-dark-50">{e.action}</td>
                       <td className="px-5 py-2">
@@ -991,8 +995,8 @@ export default function Security() {
         ];
 
         return (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowAddRule(false)}>
-          <div className="bg-dark-800 border border-dark-500 shadow-xl p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()} role="dialog" aria-labelledby="add-rule-title">
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 dp-modal-overlay" onClick={() => setShowAddRule(false)}>
+          <div className="bg-dark-800 border border-dark-500 shadow-xl p-6 w-full max-w-md dp-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-labelledby="add-rule-title">
             <h3 id="add-rule-title" className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-4">Open Port</h3>
 
             {/* Quick presets */}
@@ -1067,6 +1071,7 @@ export default function Security() {
         </div>
         );
       })()}
+      </div>
     </div>
   );
 }

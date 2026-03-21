@@ -308,28 +308,35 @@ export default function Monitors() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
-        <p className="text-sm text-dark-200 font-mono">
-          {monitors.length > 0 ? (
-            <>{upCount} up, {downCount} down, {monitors.length - upCount - downCount} pending</>
-          ) : (
-            "Monitor your sites and services"
-          )}
-        </p>
-        <button
-          onClick={() => {
-            if (!showForm) {
-              // Pre-fill notification fields with global defaults
-              setFormSlackUrl(globalSlackUrl);
-              setFormDiscordUrl(globalDiscordUrl);
-            }
-            setShowForm(!showForm);
-          }}
-          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
-        >
-          Add Monitor
-        </button>
+      <div className="page-header">
+        <div>
+          <h1 className="page-header-title">Monitoring</h1>
+          <p className="page-header-subtitle">
+            {monitors.length > 0 ? (
+              <>{upCount} up, {downCount} down, {monitors.length - upCount - downCount} pending</>
+            ) : (
+              "Monitor your sites and services"
+            )}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              if (!showForm) {
+                // Pre-fill notification fields with global defaults
+                setFormSlackUrl(globalSlackUrl);
+                setFormDiscordUrl(globalDiscordUrl);
+              }
+              setShowForm(!showForm);
+            }}
+            className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
+          >
+            Add Monitor
+          </button>
+        </div>
       </div>
+
+      <div className="p-6 lg:p-8">
 
       {error && (
         <div className="bg-danger-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-danger-500/20 mb-4">
@@ -520,7 +527,7 @@ export default function Monitors() {
       ) : monitors.length > 0 ? (
         <div className="space-y-3">
           {monitors.slice(0, displayCount).map((m) => (
-            <div key={m.id} className="bg-dark-800 rounded-lg border border-dark-500">
+            <div key={m.id} className="bg-dark-800 rounded-lg border border-dark-500 card-interactive">
               <div className="p-4 cursor-pointer" onClick={() => toggleExpand(m.id)}>
                 <div className="flex items-start sm:items-center justify-between gap-2">
                   <div className="flex items-center gap-3 min-w-0">
@@ -712,6 +719,7 @@ export default function Monitors() {
           )}
         </div>
       ) : null}
+      </div>
     </div>
   );
 }

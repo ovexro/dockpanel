@@ -63,7 +63,7 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-dark-950 px-4">
+    <div className="min-h-screen flex items-center justify-center login-bg px-4">
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="text-center mb-8">
@@ -92,7 +92,7 @@ export default function Login() {
 
         {/* 2FA Form */}
         {twoFaToken ? (
-          <form onSubmit={handle2fa} className="bg-dark-800 rounded-lg border border-dark-600 p-6 space-y-4">
+          <form onSubmit={handle2fa} className="bg-dark-800 rounded-lg border border-dark-600 p-6 space-y-4 elevation-2">
             {error && (
               <div role="alert" className="bg-danger-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-danger-500/20">
                 {error}
@@ -138,7 +138,7 @@ export default function Login() {
           </form>
         ) : (
           /* Login Form */
-          <form onSubmit={handleSubmit} className="bg-dark-800 rounded-lg border border-dark-600 p-6 space-y-4">
+          <form onSubmit={handleSubmit} className="bg-dark-800 rounded-lg border border-dark-600 p-6 space-y-4 elevation-2">
             {error && (
               <div role="alert" className="bg-danger-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-danger-500/20">
                 {error}
@@ -224,18 +224,9 @@ export default function Login() {
           </Link>
         </p>
 
-        {/* Made with Rust */}
-        <div className="flex items-center justify-center gap-2.5 mt-10 group">
-          <svg className="w-5 h-5 text-dark-300 group-hover:text-dark-200 transition-colors duration-300" viewBox="0 0 64 64" fill="none">
-            {/* Gear teeth */}
-            <path d="M28 2h8v7.2a23 23 0 0 1 7.6 3.1l5.1-5.1 5.7 5.7-5.1 5.1A23 23 0 0 1 52.4 26H60v8h-7.6a23 23 0 0 1-3.1 7.6l5.1 5.1-5.7 5.7-5.1-5.1a23 23 0 0 1-7.6 3.1V58h-8v-7.6a23 23 0 0 1-7.6-3.1l-5.1 5.1-5.7-5.7 5.1-5.1A23 23 0 0 1 11.6 34H4v-8h7.6a23 23 0 0 1 3.1-7.6l-5.1-5.1 5.7-5.7 5.1 5.1A23 23 0 0 1 28 9.6V2z" fill="currentColor" />
-            {/* Inner hole */}
-            <circle cx="32" cy="30" r="11" className="fill-dark-950" />
-            {/* R letter */}
-            <text x="32" y="35" textAnchor="middle" fill="currentColor" fontFamily="'Georgia', serif" fontWeight="bold" fontSize="17">R</text>
-          </svg>
-          <span className="text-[11px] font-mono text-dark-300 group-hover:text-dark-200 tracking-widest uppercase transition-colors duration-300">Made with Rust</span>
-        </div>
+        <p className="text-center text-dark-400 text-[10px] mt-8 tracking-wider uppercase">
+          Powered by Rust
+        </p>
       </div>
     </div>
   );

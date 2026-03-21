@@ -16,10 +16,14 @@ import "./index.css";
   let theme = stored || "terminal";
   if (theme === "dark") theme = "terminal";
   if (theme === "light") theme = "arctic";
-  localStorage.setItem("dp-theme", theme);
-  document.documentElement.setAttribute("data-theme", theme);
   // Layout initialization
   const layout = localStorage.getItem("dp-layout") || "command";
+  // If theme is nexus/nexus-dark but layout is NOT nexus, restore pre-nexus theme
+  if ((theme === "nexus" || theme === "nexus-dark") && layout !== "nexus") {
+    theme = localStorage.getItem("dp-pre-nexus-theme") || "terminal";
+  }
+  localStorage.setItem("dp-theme", theme);
+  document.documentElement.setAttribute("data-theme", theme);
   document.documentElement.setAttribute("data-layout", layout);
 })();
 

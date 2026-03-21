@@ -105,11 +105,12 @@ export default function Users() {
 
   return (
     <div>
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
-        <p className="text-sm text-dark-200 font-mono">
-          Manage user accounts and permissions
-        </p>
-        <div className="flex items-center gap-3">
+      <div className="page-header">
+        <div>
+          <h1 className="page-header-title">Users</h1>
+          <p className="page-header-subtitle">Manage user accounts and permissions</p>
+        </div>
+        <div className="flex items-center gap-2">
           {users.length >= 2 && (
             <input
               type="text"
@@ -130,6 +131,8 @@ export default function Users() {
           </button>
         </div>
       </div>
+
+      <div className="p-6 lg:p-8">
 
       {message.text && (
         <div
@@ -169,7 +172,7 @@ export default function Users() {
             </thead>
             <tbody className="divide-y divide-dark-600">
               {users.filter((u) => u.email.toLowerCase().includes(search.toLowerCase())).map((user) => (
-                <tr key={user.id} className="hover:bg-dark-700/30 transition-colors">
+                <tr key={user.id} className="table-row-hover">
                   <td className="px-5 py-4">
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-rust-500/15 text-rust-500 flex items-center justify-center text-sm font-medium">{user.email[0].toUpperCase()}</div>
@@ -238,11 +241,12 @@ export default function Users() {
           </>
         )}
       </div>
+      </div>
 
       {/* Create dialog */}
       {showCreate && (
         <div
-          className="fixed inset-0 bg-black/30 flex items-center justify-center z-50"
+          className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 dp-modal-overlay"
           role="dialog"
           aria-labelledby="create-user-title"
           onKeyDown={(e) => {
@@ -253,7 +257,7 @@ export default function Users() {
             }
           }}
         >
-          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-[420px]">
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-[420px] dp-modal">
             <h3 id="create-user-title" className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-4">
               Create User
             </h3>

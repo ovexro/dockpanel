@@ -466,8 +466,8 @@ export default function Files() {
 
       {/* Create dialog */}
       {showCreate && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-96">
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 dp-modal-overlay">
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-96 dp-modal">
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-4">
               Create New
             </h3>
@@ -525,8 +525,8 @@ export default function Files() {
 
       {/* Rename dialog */}
       {renaming && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-96">
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 dp-modal-overlay">
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-96 dp-modal">
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-4">
               Rename "{renaming}"
             </h3>
@@ -558,8 +558,8 @@ export default function Files() {
 
       {/* Delete confirm */}
       {deleteTarget && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-96">
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 dp-modal-overlay">
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-96 dp-modal">
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-2">
               Delete "{deleteTarget}"?
             </h3>

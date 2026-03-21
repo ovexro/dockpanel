@@ -34,6 +34,13 @@ export function useLayoutState(): LayoutState {
     const stored = localStorage.getItem("dp-theme");
     if (!stored || stored === "dark") return "terminal";
     if (stored === "light") return "arctic";
+    // If theme is nexus/nexus-dark but layout is NOT nexus, restore the pre-nexus theme
+    const currentLayout = localStorage.getItem("dp-layout") || "command";
+    if ((stored === "nexus" || stored === "nexus-dark") && currentLayout !== "nexus") {
+      const restored = localStorage.getItem("dp-pre-nexus-theme") || "terminal";
+      localStorage.setItem("dp-theme", restored);
+      return restored;
+    }
     return stored;
   });
 
