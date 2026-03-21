@@ -86,19 +86,23 @@ export default function Servers() {
   };
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
+    <div>
+      <div className="page-header">
         <div>
-          <h1 className="text-2xl font-bold text-dark-50 font-mono">Servers</h1>
-          <p className="text-sm text-dark-300 mt-1">Manage local and remote servers</p>
+          <h1 className="page-header-title">Servers</h1>
+          <p className="page-header-subtitle">Manage local and remote servers</p>
         </div>
-        <button
-          onClick={() => { setCreating(!creating); setInstallScript(null); setError(""); }}
-          className="px-4 py-2 bg-rust-500 text-dark-950 rounded-lg text-sm font-bold hover:bg-rust-400 transition-colors"
-        >
-          + Add Server
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => { setCreating(!creating); setInstallScript(null); setError(""); }}
+            className="px-4 py-2 bg-rust-500 text-dark-950 rounded-lg text-sm font-bold hover:bg-rust-400 transition-colors"
+          >
+            + Add Server
+          </button>
+        </div>
       </div>
+
+      <div className="p-6 space-y-6">
 
       {error && (
         <div className="px-4 py-3 bg-danger-500/10 border border-danger-500/30 rounded-lg text-sm text-danger-400">{error}</div>
@@ -157,7 +161,7 @@ export default function Servers() {
       {/* Server list */}
       <div className="space-y-3">
         {servers.map((s) => (
-          <div key={s.id} className="bg-dark-800 border border-dark-600 rounded-lg p-5">
+          <div key={s.id} className="bg-dark-800 border border-dark-600 rounded-lg p-5 card-interactive">
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
                 <div className={`w-3 h-3 rounded-full ${s.status === "online" ? "bg-rust-500" : s.status === "offline" ? "bg-danger-500 animate-pulse" : "bg-dark-400"}`} />
@@ -245,6 +249,7 @@ export default function Servers() {
             No servers found. The local server should appear automatically.
           </div>
         )}
+      </div>
       </div>
     </div>
   );

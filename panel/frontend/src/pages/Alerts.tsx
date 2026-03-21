@@ -114,14 +114,22 @@ export default function Alerts() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
-        <button
-          onClick={fetchAlerts}
-          className="px-3 py-1.5 bg-dark-700 text-dark-200 rounded-lg text-sm hover:bg-dark-600 ml-auto"
-        >
-          Refresh
-        </button>
+      <div className="page-header">
+        <div>
+          <h1 className="page-header-title">Alerts</h1>
+          <p className="page-header-subtitle">Monitor and manage system alerts</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={fetchAlerts}
+            className="px-3 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 hover:text-dark-100 border border-dark-600 rounded-lg text-sm transition-colors"
+          >
+            Refresh
+          </button>
+        </div>
       </div>
+
+      <div className="p-6 lg:p-8">
 
       {message && (
         <div className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
@@ -275,6 +283,7 @@ export default function Alerts() {
           })}
         </div>
       )}
+      </div>
     </div>
   );
 }

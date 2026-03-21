@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { api } from "../api";
 import ProvisionLog from "../components/ProvisionLog";
 
@@ -340,20 +341,24 @@ export default function GitDeploys() {
   };
 
   return (
-    <div className="p-6 lg:p-8 animate-fade-up">
+    <div className="animate-fade-up">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
+      <div className="page-header">
         <div>
-          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Git Deploy</h1>
-          <p className="text-sm text-dark-200 font-mono mt-1">Deploy from Git repositories</p>
+          <h1 className="page-header-title">Git Deploy</h1>
+          <p className="page-header-subtitle">Deploy from Git repositories</p>
         </div>
-        <button
-          onClick={openCreate}
-          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
-        >
-          New Deploy
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={openCreate}
+            className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
+          >
+            New Deploy
+          </button>
+        </div>
       </div>
+
+      <div className="p-6 lg:p-8">
 
       {/* Message */}
       {message.text && (
@@ -769,14 +774,16 @@ export default function GitDeploys() {
         </div>
       )}
 
+      </div>
+
       {/* Create / Edit Modal */}
-      {showModal && (
+      {showModal && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           {/* Overlay */}
-          <div className="absolute inset-0 bg-black/60" onClick={() => { setShowModal(false); resetForm(); }} />
+          <div className="absolute inset-0 bg-black/60 dp-modal-overlay" onClick={() => { setShowModal(false); resetForm(); }} />
 
           {/* Modal card */}
-          <div className="relative bg-dark-800 rounded-lg border border-dark-500 w-full max-w-lg max-h-[90vh] overflow-y-auto animate-fade-up">
+          <div className="relative bg-dark-800 rounded-lg border border-dark-500 w-full max-w-lg max-h-[90vh] overflow-y-auto animate-fade-up dp-modal">
             <div className="px-5 py-4 border-b border-dark-600 flex items-center justify-between">
               <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">
                 {editing ? "Edit Deploy" : "New Deploy"}
@@ -1127,7 +1134,8 @@ export default function GitDeploys() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

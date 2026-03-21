@@ -908,13 +908,11 @@ volumes:
   const crashedApps = apps.filter(a => a.status === 'exited' || a.status === 'dead');
 
   return (
-    <div className="p-6 lg:p-8">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
+    <div>
+      <div className="page-header">
         <div>
-          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Docker Apps</h1>
-          <p className="text-sm text-dark-200 font-mono mt-1">
-            One-click deploy popular applications
-          </p>
+          <h1 className="page-header-title">Docker Apps</h1>
+          <p className="page-header-subtitle">One-click deploy popular applications</p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -946,6 +944,8 @@ volumes:
           </button>
         </div>
       </div>
+
+      <div className="p-6 lg:p-8">
 
       {/* Deploy provisioning log */}
       {deployId && (
@@ -1368,12 +1368,12 @@ volumes:
               : logLines;
             return (
               <div
-                className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+                className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 dp-modal-overlay"
                 role="dialog"
                 aria-labelledby="logs-dialog-title"
                 onKeyDown={(e) => { if (e.key === "Escape") closeLogs(); }}
               >
-                <div className="bg-dark-800 rounded-lg shadow-xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden border border-dark-500">
+                <div className="bg-dark-800 rounded-lg shadow-xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden border border-dark-500 dp-modal">
                   {/* Header */}
                   <div className="flex items-center justify-between px-5 py-3 border-b border-dark-600">
                     <div className="flex items-center gap-3">
@@ -1511,7 +1511,7 @@ volumes:
             <button
               key={tmpl.id}
               onClick={() => openDeploy(tmpl)}
-              className="bg-dark-800 rounded-lg border border-dark-500 p-5 text-left hover:border-indigo-300 hover:shadow-sm transition-all group"
+              className="bg-dark-800 rounded-lg border border-dark-500 p-5 text-left hover:border-indigo-300 hover:shadow-sm transition-all group card-interactive hover-lift"
             >
               <div className="flex items-center gap-3 mb-3">
                 <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${categoryColors[tmpl.category] || "bg-dark-700"}`}>
@@ -1537,12 +1537,12 @@ volumes:
       {/* Deploy dialog */}
       {selected && (
         <div
-          className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4"
+          className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4 dp-modal-overlay"
           role="dialog"
           aria-labelledby="deploy-dialog-title"
           onKeyDown={(e) => { if (e.key === "Escape") setSelected(null); }}
         >
-          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-[480px] max-h-[80vh] overflow-y-auto">
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-[480px] max-h-[80vh] overflow-y-auto dp-modal">
             <h3 id="deploy-dialog-title" className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-1">
               Deploy {selected.name}
             </h3>
@@ -1719,12 +1719,12 @@ volumes:
       {/* Env Vars Modal */}
       {envTarget && (
         <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 dp-modal-overlay"
           role="dialog"
           aria-labelledby="env-dialog-title"
           onKeyDown={(e) => { if (e.key === "Escape") { setEnvTarget(null); setEnvEditing(false); }}}
         >
-          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto border border-dark-500">
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto border border-dark-500 dp-modal">
             <div className="flex items-center justify-between mb-4">
               <h3 id="env-dialog-title" className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">
                 Environment Variables
@@ -1837,8 +1837,8 @@ volumes:
 
       {/* Container Shell Modal */}
       {shellContainer && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-dark-800 rounded-lg border border-dark-500 w-full max-w-2xl max-h-[80vh] flex flex-col">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 dp-modal-overlay">
+          <div className="bg-dark-800 rounded-lg border border-dark-500 w-full max-w-2xl max-h-[80vh] flex flex-col dp-modal">
             <div className="px-4 py-3 border-b border-dark-600 flex justify-between items-center">
               <div className="flex items-center gap-2">
                 <svg className="w-4 h-4 text-dark-200" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
@@ -1882,10 +1882,10 @@ volumes:
       {/* Volume Browser Modal */}
       {volumeTarget && (
         <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 dp-modal-overlay"
           onKeyDown={(e) => { if (e.key === "Escape") setVolumeTarget(null); }}
         >
-          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-2xl max-h-[80vh] overflow-y-auto border border-dark-500">
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-2xl max-h-[80vh] overflow-y-auto border border-dark-500 dp-modal">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">
                 Volume Browser: {apps.find(a => a.container_id === volumeTarget)?.name}
@@ -1934,10 +1934,10 @@ volumes:
       {/* Private Registries Section */}
       {showRegistries && (
         <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 dp-modal-overlay"
           onKeyDown={(e) => { if (e.key === "Escape") setShowRegistries(false); }}
         >
-          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto border border-dark-500">
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto border border-dark-500 dp-modal">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">
                 Private Registries
@@ -2011,10 +2011,10 @@ volumes:
       {/* Docker Images Modal (Feature #6) */}
       {showImages && (
         <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 dp-modal-overlay"
           onKeyDown={(e) => { if (e.key === "Escape") setShowImages(false); }}
         >
-          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-3xl max-h-[80vh] overflow-y-auto border border-dark-500">
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-3xl max-h-[80vh] overflow-y-auto border border-dark-500 dp-modal">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">
                 Docker Images
@@ -2086,12 +2086,12 @@ volumes:
       {/* Compose Import Dialog */}
       {showCompose && (
         <div
-          className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4"
+          className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4 dp-modal-overlay"
           role="dialog"
           aria-labelledby="compose-dialog-title"
           onKeyDown={(e) => { if (e.key === "Escape") { setShowCompose(false); setComposeParsed(null); setComposeError(""); }}}
         >
-          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-2xl max-h-[85vh] overflow-y-auto">
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-2xl max-h-[85vh] overflow-y-auto dp-modal">
             <div className="flex items-center justify-between mb-4">
               <h3 id="compose-dialog-title" className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">
                 Deploy Multi-Container
@@ -2271,6 +2271,7 @@ volumes:
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

@@ -296,13 +296,16 @@ export default function Settings() {
   }
 
   return (
-    <div className="p-6 lg:p-8">
-      <div className="mb-6 pb-4 border-b border-dark-600">
-        <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Settings</h1>
-        <p className="text-sm text-dark-200 font-mono mt-1">Manage panel configuration</p>
+    <div>
+      <div className="page-header">
+        <div>
+          <h1 className="page-header-title">Settings</h1>
+          <p className="page-header-subtitle">Manage panel configuration</p>
+        </div>
       </div>
 
-      <div className="flex gap-1 mb-6 border-b border-dark-600 pb-1 pt-3 overflow-x-auto">
+      <div className="p-6 lg:p-8">
+      <div className="flex gap-1 mb-6 border-b border-dark-600 pb-1 overflow-x-auto">
         {[
           { id: "general", label: "General" },
           { id: "email", label: "Email" },
@@ -1645,6 +1648,7 @@ export default function Settings() {
         {tab === "users" && (
           <UsersContent />
         )}
+      </div>
       </div>
     </div>
   );

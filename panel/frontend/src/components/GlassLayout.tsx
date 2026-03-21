@@ -213,16 +213,19 @@ export default function GlassLayout() {
 
           {/* Expanded: full footer */}
           {(expanded || sidebarOpen) && (
-            <div className="space-y-2.5 px-1">
+            <div className="px-1">
               {/* User row */}
-              <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0">
+              <div className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-dark-800/50 transition-colors group">
+                <div className="w-8 h-8 rounded-full bg-dark-700 flex items-center justify-center shrink-0">
+                  <span className="text-xs font-bold text-dark-200 uppercase">{user.email?.charAt(0) || "?"}</span>
+                </div>
+                <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium truncate">{user.email}</p>
-                  <p className="text-xs text-dark-400 capitalize">{user.role}</p>
+                  <p className="text-[11px] text-dark-400 capitalize">{user.role}</p>
                 </div>
                 <button
                   onClick={logout}
-                  className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700/30 rounded-lg transition-colors shrink-0"
+                  className="p-1.5 text-dark-400 hover:text-dark-100 rounded-lg transition-colors opacity-0 group-hover:opacity-100 shrink-0"
                   title="Logout"
                   aria-label="Logout"
                 >
@@ -231,11 +234,11 @@ export default function GlassLayout() {
               </div>
 
               {/* Health + layout + theme */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 min-w-0">
+              <div className="flex items-center justify-between px-2 mt-2">
+                <div className="flex items-center gap-2">
                   <div
                     className={[
-                      "w-2 h-2 rounded-full shrink-0",
+                      "w-1.5 h-1.5 rounded-full shrink-0",
                       apiHealthy === null
                         ? "bg-dark-400"
                         : apiHealthy
@@ -243,20 +246,20 @@ export default function GlassLayout() {
                           : "bg-danger-500 animate-pulse",
                     ].join(" ")}
                   />
-                  <span className="text-[10px] font-medium text-dark-400 whitespace-nowrap">
-                    {apiHealthy === null ? "..." : apiHealthy ? "OK" : "!"}
+                  <span className="text-[10px] text-dark-400">
+                    {apiHealthy === null ? "Checking..." : apiHealthy ? "Connected" : "Disconnected"}
                   </span>
                 </div>
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1">
                 <LayoutSwitcher variant="dark" />
                 <button
                   onClick={cycleTheme}
-                  className="p-1.5 text-dark-400 hover:text-dark-100 bg-dark-800/40 border border-dark-600/30 rounded-lg transition-colors shrink-0"
+                  className="p-1.5 text-dark-400 hover:text-dark-200 transition-colors rounded shrink-0"
                   title={`Theme: ${theme}`}
                   aria-label="Cycle theme"
                 >
                   <svg
-                    className="w-4 h-4"
+                    className="w-3.5 h-3.5"
                     fill="none"
                     viewBox="0 0 24 24"
                     stroke="currentColor"

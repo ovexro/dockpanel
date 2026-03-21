@@ -529,6 +529,63 @@ body {
   border-radius: 12px;
 }
 
+/* ── Nexus: Modal overrides — fixed overlays inside <main> need proper contrast ── */
+[data-theme="nexus"] .dp-modal {
+  background-color: #ffffff !important;
+  border: 1px solid #d1d5db !important;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15), 0 4px 16px rgba(0, 0, 0, 0.1) !important;
+  border-radius: 12px !important;
+}
+
+[data-theme="nexus"] .dp-modal-overlay {
+  background-color: rgba(0, 0, 0, 0.4) !important;
+}
+
+[data-theme="nexus"] .dp-modal input,
+[data-theme="nexus"] .dp-modal select,
+[data-theme="nexus"] .dp-modal textarea {
+  background-color: #ffffff !important;
+  border-color: #d1d5db !important;
+  color: #111827 !important;
+}
+
+[data-theme="nexus"] .dp-modal input::placeholder,
+[data-theme="nexus"] .dp-modal textarea::placeholder {
+  color: #9ca3af !important;
+}
+
+[data-theme="nexus"] .dp-modal label {
+  color: #374151 !important;
+}
+
+[data-theme="nexus"] .dp-modal h2,
+[data-theme="nexus"] .dp-modal h3 {
+  color: #111827 !important;
+}
+
+[data-theme="nexus"] .dp-modal p,
+[data-theme="nexus"] .dp-modal span {
+  color: #4b5563;
+}
+
+[data-theme="nexus"] .dp-modal [class*="border-dark-"] {
+  border-color: #e5e7eb !important;
+}
+
+[data-theme="nexus"] .dp-modal [class*="text-dark-100"],
+[data-theme="nexus"] .dp-modal [class*="text-dark-50"] {
+  color: #111827 !important;
+}
+
+[data-theme="nexus"] .dp-modal [class*="text-dark-200"],
+[data-theme="nexus"] .dp-modal [class*="text-dark-300"] {
+  color: #4b5563 !important;
+}
+
+[data-theme="nexus"] .dp-modal [class*="text-dark-400"] {
+  color: #6b7280 !important;
+}
+
 /* Prevent rounding on table internals and nested dividers */
 [data-theme="nexus"] td,
 [data-theme="nexus"] th,
@@ -848,6 +905,70 @@ body {
   letter-spacing: normal !important;
 }
 
+/* Midnight: clean SaaS typography */
+[data-theme="midnight"] .uppercase {
+  text-transform: none !important;
+}
+[data-theme="midnight"] [class*="tracking-wider"],
+[data-theme="midnight"] [class*="tracking-widest"] {
+  letter-spacing: normal !important;
+}
+
+/* Ember: warm SaaS typography */
+[data-theme="ember"] .uppercase {
+  text-transform: none !important;
+}
+[data-theme="ember"] [class*="tracking-wider"],
+[data-theme="ember"] [class*="tracking-widest"] {
+  letter-spacing: normal !important;
+}
+
+/* Slightly larger body text for sans-serif themes */
+[data-theme="midnight"] body,
+[data-theme="arctic"] body,
+[data-theme="ember"] body,
+[data-theme="nexus"] body,
+[data-theme="nexus-dark"] body {
+  font-size: 0.9375rem; /* 15px instead of 14px for better readability with Inter */
+}
+
+/* But keep small text (.text-sm, .text-xs) at their Tailwind sizes */
+[data-theme="midnight"] .text-sm,
+[data-theme="arctic"] .text-sm,
+[data-theme="ember"] .text-sm,
+[data-theme="nexus"] .text-sm,
+[data-theme="nexus-dark"] .text-sm {
+  font-size: 0.875rem;
+}
+
+[data-theme="midnight"] .text-xs,
+[data-theme="arctic"] .text-xs,
+[data-theme="ember"] .text-xs,
+[data-theme="nexus"] .text-xs,
+[data-theme="nexus-dark"] .text-xs {
+  font-size: 0.75rem;
+}
+
+/* ── Light theme overrides — table/card/elevation ── */
+
+[data-theme="arctic"] tr.table-row-hover:hover,
+[data-theme="nexus"] tr.table-row-hover:hover {
+  background-color: var(--color-dark-800) !important;
+}
+
+[data-theme="arctic"] .card-interactive:hover,
+[data-theme="nexus"] .card-interactive:hover {
+  border-color: var(--color-dark-600);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="arctic"] .elevation-1,
+[data-theme="arctic"] .elevation-2,
+[data-theme="nexus"] .elevation-1,
+[data-theme="nexus"] .elevation-2 {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
 
 /* ═══════════════════════════════════════════════════════
    SHARED RULES — form elements, scrollbar, focus, etc.
@@ -996,6 +1117,118 @@ select:focus-visible {
 /* Elevated card — subtle depth for primary content */
 .card-elevated {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Elevation levels — progressive depth */
+.elevation-1 {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.elevation-2 {
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2), 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+.elevation-3 {
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.25), 0 8px 24px rgba(0, 0, 0, 0.15);
+}
+
+/* Progress bar upgrade */
+.progress-bar {
+  border-radius: 9999px;
+  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.progress-track {
+  border-radius: 9999px;
+  overflow: hidden;
+}
+
+/* Table row hover */
+tr.table-row-hover {
+  transition: background-color 0.15s ease;
+}
+tr.table-row-hover:hover {
+  background-color: var(--color-dark-700);
+}
+
+/* Card hover interaction */
+.card-interactive {
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.card-interactive:hover {
+  border-color: var(--color-dark-500);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+/* Login page background */
+.login-bg {
+  background-color: var(--color-dark-950);
+  background-image:
+    radial-gradient(ellipse at 20% 50%, rgba(var(--login-glow-rgb, 34, 197, 94), 0.06) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, rgba(var(--login-glow-rgb, 34, 197, 94), 0.04) 0%, transparent 50%);
+}
+
+[data-theme="midnight"] .login-bg {
+  --login-glow-rgb: 59, 130, 246;
+}
+[data-theme="arctic"] .login-bg {
+  background-color: var(--color-dark-900);
+  --login-glow-rgb: 13, 148, 136;
+}
+[data-theme="ember"] .login-bg {
+  --login-glow-rgb: 249, 115, 22;
+}
+[data-theme="nexus"] .login-bg {
+  background-color: #f1f5f9;
+  background-image:
+    radial-gradient(ellipse at 20% 50%, rgba(37, 99, 235, 0.04) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, rgba(37, 99, 235, 0.03) 0%, transparent 50%);
+}
+[data-theme="nexus-dark"] .login-bg {
+  --login-glow-rgb: 59, 130, 246;
+}
+
+/* Page header bar */
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--color-dark-600);
+  background-color: var(--color-dark-900);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  margin-bottom: 1.25rem;
+}
+
+@media (min-width: 768px) {
+  .page-header {
+    padding: 1.25rem 2rem;
+  }
+}
+
+.page-header-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--color-dark-50);
+  letter-spacing: 0.025em;
+}
+
+.page-header-subtitle {
+  font-size: 0.8125rem;
+  color: var(--color-dark-300);
+  margin-top: 0.125rem;
+}
+
+[data-theme="nexus"] .page-header {
+  background-color: #ffffff;
+  border-color: #e5e7eb;
+}
+
+[data-theme="arctic"] .page-header {
+  background-color: var(--color-dark-950);
+  border-color: var(--color-dark-700);
 }
 
 /* Reduce motion for users who prefer it */
