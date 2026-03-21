@@ -78,14 +78,9 @@ export default function NexusLayout() {
   const state = useLayoutState();
   const branding = useBranding();
 
-  // Nexus layout supports light/dark — detect from ANY active theme
+  // Detect light vs dark from ANY active theme
   const isLightTheme = state.theme === "nexus" || state.theme === "arctic";
   const isDark = !isLightTheme;
-
-  const toggleDark = () => {
-    const next = isLightTheme ? "nexus-dark" : "nexus";
-    state.setTheme(next);
-  };
 
   if (state.loading) {
     return (
@@ -263,23 +258,21 @@ export default function NexusLayout() {
 
             <div className={`h-6 w-px hidden sm:block ${isDark ? "bg-[#2d333b]" : "bg-slate-200"}`} />
 
-            {/* Dark mode toggle */}
+            {/* Theme cycle — same paint bucket as other layouts */}
             <button
-              onClick={toggleDark}
-              className={`p-2 rounded-lg transition-colors ${isDark ? "text-yellow-400 hover:bg-[#1c2333]" : "text-slate-400 hover:bg-slate-100"}`}
-              title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-              aria-label="Toggle dark mode"
+              onClick={state.cycleTheme}
+              className={`p-2 rounded-lg transition-colors ${isDark ? "text-gray-400 hover:text-gray-100 hover:bg-[#1c2333]" : "text-slate-400 hover:text-slate-700 hover:bg-slate-100"}`}
+              title={`Theme: ${state.theme}`}
+              aria-label="Cycle theme"
             >
-              {isDark ? (
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><circle cx="12" cy="12" r="5" /><line x1="12" y1="1" x2="12" y2="3" /><line x1="12" y1="21" x2="12" y2="23" /><line x1="4.22" y1="4.22" x2="5.64" y2="5.64" /><line x1="18.36" y1="18.36" x2="19.78" y2="19.78" /><line x1="1" y1="12" x2="3" y2="12" /><line x1="21" y1="12" x2="23" y2="12" /><line x1="4.22" y1="19.78" x2="5.64" y2="18.36" /><line x1="18.36" y1="5.64" x2="19.78" y2="4.22" /></svg>
-              ) : (
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z" /></svg>
-              )}
+              <svg className="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4.098 19.902a3.75 3.75 0 0 0 5.304 0l6.401-6.402M6.75 21A3.75 3.75 0 0 1 3 17.25V4.125C3 3.504 3.504 3 4.125 3h5.25c.621 0 1.125.504 1.125 1.125v4.072M6.75 21a3.75 3.75 0 0 0 3.75-3.75V8.197M6.75 21h13.125c.621 0 1.125-.504 1.125-1.125v-5.25c0-.621-.504-1.125-1.125-1.125h-4.072M10.5 8.197l2.88-2.88c.438-.439 1.15-.439 1.59 0l3.712 3.713c.44.44.44 1.152 0 1.59l-2.88 2.88M6.75 17.25h.008v.008H6.75v-.008Z" />
+              </svg>
             </button>
 
             {/* Layout switcher */}
             <div className="hidden sm:block">
-              <LayoutSwitcher variant="light" />
+              <LayoutSwitcher variant={isDark ? "dark" : "light"} />
             </div>
 
             {/* User info (desktop) */}

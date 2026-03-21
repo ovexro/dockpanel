@@ -914,6 +914,15 @@ body {
   letter-spacing: normal !important;
 }
 
+/* Arctic: clean SaaS typography */
+[data-theme="arctic"] .uppercase {
+  text-transform: none !important;
+}
+[data-theme="arctic"] [class*="tracking-wider"],
+[data-theme="arctic"] [class*="tracking-widest"] {
+  letter-spacing: normal !important;
+}
+
 /* Ember: warm SaaS typography */
 [data-theme="ember"] .uppercase {
   text-transform: none !important;
