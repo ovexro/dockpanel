@@ -43,7 +43,7 @@ const faqs = [
   { q: 'How does Docker-native work? Are sites in containers?', a: 'Sites run on the host with Nginx, which keeps things fast and simple. Docker is used for databases (MySQL/PostgreSQL containers), 54 one-click app templates (Ghost, Grafana, Nextcloud, n8n, Roundcube, Rspamd, and more), and Docker Compose imports. Containers get health monitoring, CPU/memory limits, and auto reverse proxy with SSL.' },
   { q: 'What happens if DockPanel goes down?', a: 'Your sites continue running. DockPanel manages Nginx configs and Docker containers, but they operate independently. Even if the panel process stops, all your sites, databases, and SSL certificates keep working. The panel auto-restarts via systemd.' },
   { q: 'Can I run DockPanel on a Raspberry Pi?', a: 'Yes. DockPanel compiles to ~35MB total binaries (agent, API, CLI) and uses about 60MB RAM. It runs great on Raspberry Pi 4/5, Oracle Cloud free-tier ARM instances, and any ARM64 server. Same features, same performance.' },
-  { q: 'How is this different from CloudPanel, RunCloud, or cPanel?', a: 'DockPanel is fully self-hosted (no SaaS dependency), Docker-native (databases and apps run in containers), and built in Rust (~35MB total binaries, ~60MB RAM vs 250-800MB for PHP panels). It includes features other panels charge for: multi-server management, reseller accounts, OAuth login, WordPress toolkit, migration wizard, 54 app templates, developer CLI, infrastructure as code, and more. All free.' },
+  { q: 'How is this different from CloudPanel, RunCloud, or cPanel?', a: 'Dramatically. cPanel uses 800MB of RAM, costs $15/month, and has no Docker support. CloudPanel is free but has no Git deploy, no Docker apps, no CLI, no multi-server, no reseller accounts. RunCloud charges $8/month for features DockPanel includes for free. DockPanel runs on 60MB of RAM, includes 54 Docker app templates, blue-green Git deploy, a full CLI, Infrastructure as Code, multi-server management, reseller accounts with white-label, and a WordPress toolkit. No other free panel has anything close to this feature set.' },
   { q: 'Can I manage multiple servers?', a: 'Yes, with no limits. Each server runs a lightweight agent that communicates with the central API. You can view per-server metrics, run commands, and manage sites across all your servers from a single dashboard.' },
   { q: 'Is there a demo I can try?', a: 'Yes. Visit panel.example.com to explore the full panel interface with sample data — no signup required. You can also install DockPanel on your own server with one command.' },
   { q: 'Why Rust instead of PHP/Node.js?', a: "Rust compiles to compact binaries (~35MB total for agent, API, and CLI) with no runtime dependencies. It uses ~60MB of RAM vs ~300-800MB for PHP-based panels. On a $5 VPS with 1GB RAM, that's the difference between running 2 sites and running 20. Rust also eliminates entire classes of security vulnerabilities (buffer overflows, use-after-free) at compile time." },
@@ -106,11 +106,11 @@ export default function Landing() {
               100% free &amp; open source — no subscriptions, no limits
             </span>
             <h1 className="text-5xl md:text-7xl font-extrabold text-white tracking-tight mb-6 leading-tight">
-              Your server. <br className="hidden sm:block" />
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-400">Your rules. Your panel.</span>
+              The server panel <br className="hidden sm:block" />
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-400">that does everything.</span>
             </h1>
             <p className="max-w-2xl mx-auto text-lg md:text-xl text-zinc-400 mb-10 leading-relaxed">
-              DockPanel is a free, self-hosted, Docker-native server management panel built in Rust. No vendor lock-in. No billing. No limits. Install in under 60 seconds and own your infrastructure.
+              54 Docker app templates. Git deploy with zero-downtime. Multi-server management. Reseller accounts. A full CLI. All running on 60MB of RAM. All free. No other panel comes close.
             </p>
 
             <div className="max-w-2xl mx-auto mb-12">
@@ -249,9 +249,9 @@ export default function Landing() {
       <section id="features" className="py-24 bg-zinc-900/30 border-y border-zinc-800/50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center max-w-3xl mx-auto mb-20">
-            <h2 className="text-3xl md:text-5xl font-bold text-white mb-6 tracking-tight">Everything you need — nothing you don't</h2>
+            <h2 className="text-3xl md:text-5xl font-bold text-white mb-6 tracking-tight">A massive feature set. Zero monthly fees.</h2>
             <p className="text-lg text-zinc-400">
-              No bloat, no legacy PHP, no 500MB installations, no subscriptions. Just the tools you actually use, built with modern technology. All features included for free.
+              25 integrated systems. 371 API endpoints. Features that competitors charge $8-15/month for — Git deploy, multi-server, reseller accounts, Docker orchestration, WordPress toolkit — all included for free. Built in Rust, not legacy PHP.
             </p>
           </div>
 
@@ -324,9 +324,9 @@ export default function Landing() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center max-w-3xl mx-auto mb-16">
             <h2 className="text-sm font-bold text-emerald-400 uppercase tracking-widest mb-2">Comparison</h2>
-            <h3 className="text-3xl md:text-5xl font-bold text-white tracking-tight mb-6">See the difference</h3>
+            <h3 className="text-3xl md:text-5xl font-bold text-white tracking-tight mb-6">10x lighter. 10x more features.</h3>
             <p className="text-lg text-zinc-400">
-              Traditional panels were built for bare metal servers in 2005. SaaS panels lock you in with monthly fees. DockPanel is free, self-hosted, and built for modern infrastructure.
+              cPanel uses 800MB of RAM and charges $15/month. CloudPanel is free but has no Docker, no Git deploy, no CLI. DockPanel gives you more than any of them — on 60MB of RAM — for free.
             </p>
           </div>
 
@@ -378,9 +378,9 @@ export default function Landing() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center max-w-3xl mx-auto mb-16">
             <h2 className="text-sm font-bold text-emerald-400 uppercase tracking-widest mb-2">Pricing</h2>
-            <h3 className="text-3xl md:text-5xl font-bold text-white tracking-tight mb-6">Free. Forever. No strings attached.</h3>
+            <h3 className="text-3xl md:text-5xl font-bold text-white tracking-tight mb-6">Free. Forever. Everything included.</h3>
             <p className="text-lg text-zinc-400">
-              Every feature is included. No artificial limits. No premium tiers. DockPanel is free and open source because server management shouldn't cost extra.
+              No "starter" tier. No "upgrade for multi-server." No "contact sales for reseller." Every single feature — all 25 systems, all 371 endpoints, all 54 templates — is free and open source under MIT. This is the panel that paid alternatives don't want you to find.
             </p>
           </div>
 

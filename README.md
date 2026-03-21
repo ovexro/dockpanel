@@ -5,8 +5,8 @@
 <h1 align="center">DockPanel</h1>
 
 <p align="center">
-  <strong>Your server. Your rules. Your panel.</strong><br>
-  A free, self-hosted, Docker-native server management panel built in Rust.
+  <strong>The most feature-packed free server panel ever built.</strong><br>
+  Self-hosted. Docker-native. Written in Rust. 60MB RAM. 371 API endpoints. Zero subscriptions.
 </p>
 
 <p align="center">
@@ -38,17 +38,20 @@ Supports Ubuntu 20+, Debian 11+, CentOS 9+, Rocky 9+, Fedora 39+, Amazon Linux 2
 
 ## Why DockPanel?
 
+No other free panel gives you Git push-to-deploy with blue-green zero-downtime updates, 54 one-click Docker app templates, multi-server management, reseller accounts, a developer CLI, and Infrastructure as Code — all running on 60MB of RAM. DockPanel does.
+
 | | DockPanel | HestiaCP | CloudPanel | RunCloud |
 |---|---|---|---|---|
-| **Price** | Free | Free | Free | $8/mo+ |
-| **Stack** | Rust + React | PHP | PHP | PHP (SaaS) |
-| **Docker native** | Yes | No | No | No |
-| **Multi-server** | Yes | No | No | Yes |
-| **Git deploy** | Yes (blue-green) | No | No | Yes |
-| **CLI + IaC** | Yes | Limited | No | No |
-| **RAM usage** | ~60MB | ~200MB+ | ~150MB+ | SaaS |
-| **ARM64** | Yes | Partial | No | No |
-| **Self-hosted** | Yes | Yes | Yes | No |
+| **Price** | **Free** | Free | Free | $8/mo+ |
+| **Stack** | **Rust + React** | PHP | PHP | PHP (SaaS) |
+| **Docker native** | **54 templates** | No | No | No |
+| **Git deploy** | **Blue-green, zero-downtime** | No | No | Basic |
+| **Multi-server** | **Unlimited** | No | No | Yes |
+| **Reseller + white-label** | **Yes** | No | No | No |
+| **CLI + IaC** | **Full CLI + YAML export** | Limited | No | No |
+| **RAM usage** | **~60MB** | ~200MB+ | ~150MB+ | SaaS |
+| **ARM64 / Homelab** | **Yes** | Partial | No | No |
+| **Self-hosted** | **Yes** | Yes | Yes | No |
 
 ## Screenshots
 
