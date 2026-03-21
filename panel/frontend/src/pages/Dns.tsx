@@ -455,28 +455,32 @@ export default function Dns() {
   }
 
   return (
-    <div className="p-6 lg:p-8">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
+    <div>
+      <div className="page-header">
         <div>
-          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">DNS Management</h1>
-          <p className="text-sm text-dark-200 font-mono mt-1 hidden sm:block">Manage DNS records via Cloudflare or PowerDNS</p>
+          <h1 className="page-header-title">DNS Management</h1>
+          <p className="page-header-subtitle">Manage DNS records via Cloudflare or PowerDNS</p>
         </div>
-        {showAddZone ? (
-          <button
-            onClick={() => setShowAddZone(false)}
-            className="px-4 py-2 text-dark-300 border border-dark-600 rounded-lg text-sm font-medium hover:text-dark-100 hover:border-dark-400 transition-colors"
-          >
-            Cancel
-          </button>
-        ) : (
-          <button
-            onClick={() => setShowAddZone(true)}
-            className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
-          >
-            Add Zone
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {showAddZone ? (
+            <button
+              onClick={() => setShowAddZone(false)}
+              className="px-4 py-2 text-dark-300 border border-dark-600 rounded-lg text-sm font-medium hover:text-dark-100 hover:border-dark-400 transition-colors"
+            >
+              Cancel
+            </button>
+          ) : (
+            <button
+              onClick={() => setShowAddZone(true)}
+              className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
+            >
+              Add Zone
+            </button>
+          )}
+        </div>
       </div>
+
+      <div className="p-6 lg:p-8">
 
       {message.text && (
         <div className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
@@ -702,28 +706,28 @@ export default function Dns() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <button
                       onClick={() => selectZone(selectedZone)}
-                      className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600"
+                      className="px-3 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium transition-colors"
                     >
                       Refresh
                     </button>
                     <button onClick={handleExport} disabled={records.length === 0}
-                      className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600 disabled:opacity-50">
+                      className="px-3 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium disabled:opacity-50 transition-colors">
                       Export
                     </button>
                     <button onClick={() => setShowImport(!showImport)}
-                      className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600">
+                      className="px-3 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium transition-colors">
                       {showImport ? "Cancel Import" : "Import"}
                     </button>
                     <button onClick={() => setShowTemplates(!showTemplates)}
-                      className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600">
+                      className="px-3 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium transition-colors">
                       Templates
                     </button>
                     <button onClick={runHealthCheck} disabled={checkingHealth}
-                      className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600 disabled:opacity-50">
+                      className="px-3 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium disabled:opacity-50 transition-colors">
                       {checkingHealth ? "Checking..." : "Health Check"}
                     </button>
                     <button onClick={loadChangelog} disabled={loadingChangelog}
-                      className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600 disabled:opacity-50">
+                      className="px-3 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium disabled:opacity-50 transition-colors">
                       {loadingChangelog ? "Loading..." : "Changelog"}
                     </button>
                     {selectedRecords.size > 0 && (
@@ -902,7 +906,7 @@ export default function Dns() {
                   </thead>
                   <tbody className="divide-y divide-dark-600">
                     {filteredRecords.map((r) => (
-                      <tr key={r.id} className="hover:bg-dark-700/30 transition-colors">
+                      <tr key={r.id} className="table-row-hover">
                         <td className="px-2">
                           <input type="checkbox"
                             checked={selectedRecords.has(r.id)}
@@ -1154,6 +1158,7 @@ export default function Dns() {
             </div>
           )}
         </div>
+      </div>
       </div>
     </div>
   );

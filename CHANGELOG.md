@@ -4,25 +4,38 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [2.0.5] - 2026-03-20
+## [2.0.5] - 2026-03-21
 
 ### Added
 - **Nexus Dark theme**: Premium dark mode for the Nexus layout with sun/moon toggle. GitHub Dark-inspired three-layer depth palette, Inter font, rounded corners, blue accent. Persists across sessions.
 - **Sidebar group labels**: Navigation groups (Reseller, Operations, Admin) now display small uppercase labels in the Command layout sidebar.
 - **Glass sidebar tooltips**: Native browser tooltips show nav item names when the Glass layout sidebar is collapsed.
-- **Card elevation utility**: `.card-elevated` CSS class for subtle depth on primary content cards.
+- **Card elevation system**: Three elevation levels (`.elevation-1/2/3`), `.card-interactive` hover effects, `.hover-lift` card animations. Applied to dashboard cards, sites table, mail service cards, app templates, server/monitor items.
+- **Page header system**: Sticky `page-header` bar with title, subtitle, and action buttons. Applied to 13 pages (Dashboard, Sites, Databases, Apps, Security, Settings, Servers, Mail, Monitoring, DNS, Users, Git Deploy, Alerts).
+- **Login background gradient**: Subtle radial gradient that adapts per theme (green/blue/teal/orange).
+- **Modal portal system**: `dp-modal` / `dp-modal-overlay` CSS classes for Nexus-compatible modal styling across 15 modals in 6 pages.
 
 ### Improved
-- **Dynamic progress bar colors**: CPU/Memory/Disk bars change from blue/green (<60%) → amber (60-80%) → red (>80%). Percentage numbers also change color at high usage.
-- **Dashboard visual hierarchy**: Metric cards have shadow elevation; disk I/O cards are visually lighter as secondary content; status bar has subtle shadow.
-- **Onboarding wizard**: Completed steps show a solid green circle with white checkmark instead of tinted rectangles. Incomplete steps are more prominent.
+- **Button color hierarchy**: Only primary CTAs (Create Site, Run Scan, Add Record) stay green. All secondary/utility buttons (Customize, Restart Nginx, Export, Refresh, etc.) use neutral gray — breaks the green monotone across 6 pages, ~25 buttons.
+- **Dynamic progress bar colors**: CPU/Memory/Disk bars change from green (<70%) → amber (70-90%) → red (>90%). Disk uses 80/90 thresholds. Rounded ends with smooth 500ms transitions.
+- **Dashboard visual hierarchy**: Metric cards with elevation, 24h chart fade-in animation, staggered stat grid, collapsible onboarding wizard (auto-collapses after 3+ steps, persists to localStorage).
+- **Sidebar footer redesign**: User avatar circle with initial, hover-reveal logout button, descriptive health status ("Connected"/"Disconnected" replaces "OK"/"!"). Applied to both Command and Glass layouts.
+- **Typography for non-terminal themes**: Midnight and Ember now remove uppercase/tracking like Nexus. All 5 sans-serif themes get 15px body text for better Inter readability.
+- **Security card grid**: Changed from 5-column with orphan card to balanced 3-column grid with equal `min-h-[140px]` heights.
+- **Table hover states**: `table-row-hover` class added to Security, DNS, and Users table rows with theme-aware hover colors.
+- **Onboarding wizard**: Completed steps show a solid green circle with white checkmark. Collapsible with compact "Setup: X/5 complete" view.
 - **Ember theme contrast**: Lightened surfaces and brightened orange accent for better text readability.
 - **Atlas layout nav**: Added `shrink-0` to nav items so they scroll horizontally instead of compressing.
 - **Richer empty states**: Sites, Databases, Git Deploys, Monitors, and Crons pages show contextual feature descriptions instead of bare "No X yet" text.
+- **Login page**: Removed bulky "Made with Rust" gear icon, replaced with minimal "Powered by Rust" text. Card shadows added.
 
 ### Fixed
-- **Nexus light theme: tinted selection buttons**: Migration source cards (cPanel/Plesk/HestiaCP), Settings proxy selector (nginx/Traefik), and all `bg-rust-500/10`-style toggle buttons were rendering as solid blue blobs with invisible text. Root cause: CSS `[class*="bg-rust-500"]` matched tinted variants. Fixed with properly unescaped selectors and higher-specificity overrides.
-- **Nexus light theme: accent toggle visibility**: `bg-accent-500/15` toggles (log auto-scroll, compose tabs) now render with readable blue tint and text.
+- **Theme switching: Nexus→Terminal white screen**: Switching from Nexus layout to any other layout left `dp-theme=nexus` (white) active, rendering a white Terminal layout. Fixed with `dp-pre-nexus-theme` save/restore in LayoutSwitcher, NexusLayout, useLayoutState, and main.tsx IIFE.
+- **Nexus modal clipping**: Modals in Nexus layout were clipped by `overflow-hidden` on the main wrapper, hiding the top fields. Fixed with `createPortal` to render at `document.body`.
+- **Nexus modal contrast**: Modal cards in Nexus light had the same `#f9fafb` background as the page (invisible). Fixed with `dp-modal` class providing white background, strong shadow, and proper text colors.
+- **Page header spacing**: Added `margin-bottom: 1.25rem` to `.page-header` for consistent spacing between header and content.
+- **Nexus light theme: tinted selection buttons**: Migration source cards, Settings proxy selector, and all `bg-rust-500/10`-style toggle buttons were rendering as solid blue blobs. Fixed with properly unescaped selectors.
+- **Nexus light theme: accent toggle visibility**: `bg-accent-500/15` toggles now render with readable blue tint and text.
 
 ## [2.0.4] - 2026-03-20
 

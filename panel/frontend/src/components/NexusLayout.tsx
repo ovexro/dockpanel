@@ -84,6 +84,14 @@ export default function NexusLayout() {
     return stored === "1";
   });
 
+  // Save previous theme on first mount so it can be restored when leaving Nexus
+  useEffect(() => {
+    const currentTheme = localStorage.getItem("dp-theme") || "terminal";
+    if (currentTheme !== "nexus" && currentTheme !== "nexus-dark") {
+      localStorage.setItem("dp-pre-nexus-theme", currentTheme);
+    }
+  }, []);
+
   useEffect(() => {
     const theme = isDark ? "nexus-dark" : "nexus";
     document.documentElement.setAttribute("data-theme", theme);

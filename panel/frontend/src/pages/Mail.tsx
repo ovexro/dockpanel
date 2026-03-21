@@ -339,27 +339,31 @@ export default function Mail() {
   }
 
   return (
-    <div className="p-6 lg:p-8 animate-fade-up">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
+    <div className="animate-fade-up">
+      <div className="page-header">
         <div>
-          <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Mail</h1>
-          <p className="text-sm text-dark-200 font-mono mt-1 hidden sm:block">Manage email domains, mailboxes, and aliases</p>
+          <h1 className="page-header-title">Mail</h1>
+          <p className="page-header-subtitle">Manage email domains, mailboxes, and aliases</p>
         </div>
-        {showAddDomain ? (
-          <button onClick={() => setShowAddDomain(false)} className="px-4 py-2 text-dark-300 border border-dark-600 rounded-lg text-sm font-medium hover:text-dark-100 hover:border-dark-400 transition-colors">
-            Cancel
-          </button>
-        ) : (
-          <button
-            onClick={() => setShowAddDomain(true)}
-            disabled={!mailStatus?.installed}
-            title={!mailStatus?.installed ? "Install Mail Server in Settings → Services first" : ""}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${mailStatus?.installed ? "bg-rust-500 text-white hover:bg-rust-600" : "bg-dark-700 text-dark-400 cursor-not-allowed"}`}
-          >
-            Add Domain
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {showAddDomain ? (
+            <button onClick={() => setShowAddDomain(false)} className="px-4 py-2 text-dark-300 border border-dark-600 rounded-lg text-sm font-medium hover:text-dark-100 hover:border-dark-400 transition-colors">
+              Cancel
+            </button>
+          ) : (
+            <button
+              onClick={() => setShowAddDomain(true)}
+              disabled={!mailStatus?.installed}
+              title={!mailStatus?.installed ? "Install Mail Server in Settings → Services first" : ""}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${mailStatus?.installed ? "bg-rust-500 text-white hover:bg-rust-600" : "bg-dark-700 text-dark-400 cursor-not-allowed"}`}
+            >
+              Add Domain
+            </button>
+          )}
+        </div>
       </div>
+
+      <div className="p-6 lg:p-8">
 
       {message.text && (
         <div className={`mb-4 px-4 py-3 rounded-lg text-sm border ${message.type === "success" ? "bg-rust-500/10 text-rust-400 border-rust-500/20" : "bg-danger-500/10 text-danger-400 border-danger-500/20"}`}>
@@ -396,7 +400,7 @@ export default function Mail() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
           {/* Spam Filter (Rspamd) */}
           {rspamd && (
-            <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
+            <div className="bg-dark-800 rounded-lg border border-dark-500 p-4 elevation-1">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Spam Filter</h3>
                 <div className={`w-2.5 h-2.5 rounded-full ${rspamd.running ? "bg-rust-500" : rspamd.installed ? "bg-warn-500" : "bg-dark-500"}`} />
@@ -422,7 +426,7 @@ export default function Mail() {
 
           {/* Webmail (Roundcube) */}
           {webmail && (
-            <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
+            <div className="bg-dark-800 rounded-lg border border-dark-500 p-4 elevation-1">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Webmail</h3>
                 <div className={`w-2.5 h-2.5 rounded-full ${webmail.running ? "bg-rust-500" : webmail.installed ? "bg-warn-500" : "bg-dark-500"}`} />
@@ -452,7 +456,7 @@ export default function Mail() {
           )}
 
           {/* SMTP Relay */}
-          <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
+          <div className="bg-dark-800 rounded-lg border border-dark-500 p-4 elevation-1">
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">SMTP Relay</h3>
               <div className={`w-2.5 h-2.5 rounded-full ${relay?.configured ? "bg-rust-500" : "bg-dark-500"}`} />
@@ -464,14 +468,14 @@ export default function Mail() {
               <button onClick={async () => {
                 try { await api.post("/mail/relay/remove", {}); setRelay({ configured: false, relayhost: "" }); setMessage({ text: "Relay removed", type: "success" }); }
                 catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-              }} className="w-full px-3 py-1.5 bg-dark-700 text-dark-100 rounded text-xs font-medium hover:bg-dark-600 transition-colors">Remove Relay</button>
+              }} className="w-full px-3 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 border border-dark-600 rounded text-xs font-medium transition-colors">Remove Relay</button>
             ) : (
               <button onClick={() => setShowRelayForm(!showRelayForm)} className="w-full px-3 py-1.5 bg-rust-500 text-white rounded text-xs font-medium hover:bg-rust-600 transition-colors">Configure</button>
             )}
           </div>
 
           {/* Email Reputation */}
-          <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
+          <div className="bg-dark-800 rounded-lg border border-dark-500 p-4 elevation-1">
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Reputation</h3>
               {blacklist && <div className={`w-2.5 h-2.5 rounded-full ${blacklist.clean ? "bg-rust-500" : "bg-danger-400"}`} />}
@@ -488,13 +492,13 @@ export default function Mail() {
               try { const data = await api.get<{ ip: string; results: { rbl: string; name: string; listed: boolean }[]; clean: boolean }>("/mail/blacklist-check"); setBlacklist(data); }
               catch (e) { setMessage({ text: e instanceof Error ? e.message : "Check failed", type: "error" }); }
               finally { setCheckingBl(false); }
-            }} className="w-full px-3 py-1.5 bg-rust-500 text-white rounded text-xs font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors">
+            }} className="w-full px-3 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 border border-dark-600 rounded text-xs font-medium disabled:opacity-50 transition-colors">
               {checkingBl ? "Checking..." : "Check"}
             </button>
           </div>
 
           {/* Rate Limiting */}
-          <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
+          <div className="bg-dark-800 rounded-lg border border-dark-500 p-4 elevation-1">
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Rate Limiting</h3>
             <div className="flex items-center gap-2 mt-2">
               <div className={`w-2.5 h-2.5 rounded-full ${rateLimit?.configured ? "bg-rust-500" : "bg-dark-500"}`} />
@@ -511,18 +515,18 @@ export default function Mail() {
               <button onClick={async () => {
                 try { await api.post("/mail/rate-limit/set", { rate: rateLimitValue }); setRateLimit({ configured: true, rate: rateLimitValue }); setMessage({ text: "Rate limit set", type: "success" }); }
                 catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-              }} className="px-2 py-1.5 bg-rust-500 text-white rounded text-xs font-medium hover:bg-rust-600">Set</button>
+              }} className="px-2 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 border border-dark-600 rounded text-xs font-medium transition-colors">Set</button>
               {rateLimit?.configured && (
                 <button onClick={async () => {
                   try { await api.post("/mail/rate-limit/remove"); setRateLimit({ configured: false, rate: "" }); setMessage({ text: "Rate limit removed", type: "success" }); }
                   catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-                }} className="px-2 py-1.5 bg-dark-700 text-dark-100 rounded text-xs font-medium hover:bg-dark-600">Remove</button>
+                }} className="px-2 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 border border-dark-600 rounded text-xs font-medium transition-colors">Remove</button>
               )}
             </div>
           </div>
 
           {/* TLS Encryption */}
-          <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
+          <div className="bg-dark-800 rounded-lg border border-dark-500 p-4 elevation-1">
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">TLS Encryption</h3>
             {tls && (
               <>
@@ -540,14 +544,14 @@ export default function Mail() {
                   <button onClick={async () => {
                     try { await api.post("/mail/tls/enforce", { inbound: "encrypt", outbound: "encrypt" }); setTls({ ...tls, inbound_tls: "encrypt", outbound_tls: "encrypt", inbound_enforced: true, outbound_enforced: true }); setMessage({ text: "TLS enforced", type: "success" }); }
                     catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-                  }} className={`px-2 py-1.5 rounded text-xs font-medium transition-colors ${tls.inbound_enforced && tls.outbound_enforced ? "bg-rust-500/15 text-rust-400" : "bg-dark-700 text-dark-100 hover:bg-dark-600"}`}>
+                  }} className="px-2 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 border border-dark-600 rounded text-xs font-medium transition-colors">
                     {tls.inbound_enforced && tls.outbound_enforced ? "Enforced" : "Enforce TLS"}
                   </button>
                   {(tls.inbound_enforced || tls.outbound_enforced) && (
                     <button onClick={async () => {
                       try { await api.post("/mail/tls/enforce", { inbound: "may", outbound: "may" }); setTls({ ...tls, inbound_tls: "may", outbound_tls: "may", inbound_enforced: false, outbound_enforced: false }); setMessage({ text: "TLS set to opportunistic", type: "success" }); }
                       catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-                    }} className="px-2 py-1.5 bg-dark-700 text-dark-100 rounded text-xs font-medium hover:bg-dark-600">Opportunistic</button>
+                    }} className="px-2 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 border border-dark-600 rounded text-xs font-medium transition-colors">Opportunistic</button>
                   )}
                 </div>
               </>
@@ -851,8 +855,8 @@ export default function Mail() {
 
                     {/* Edit Account Modal */}
                     {editAccount && (
-                      <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" onClick={() => setEditAccount(null)}>
-                        <div className="bg-dark-800 border border-dark-500 p-6 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+                      <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4 dp-modal-overlay" onClick={() => setEditAccount(null)}>
+                        <div className="bg-dark-800 border border-dark-500 p-6 w-full max-w-lg dp-modal" onClick={(e) => e.stopPropagation()}>
                           <h3 className="text-sm font-medium text-dark-50 mb-4">Edit {editAccount.email}</h3>
                           <div className="space-y-3">
                             <div>
@@ -1130,6 +1134,7 @@ export default function Mail() {
             </div>
           )}
         </div>
+      </div>
       </div>
     </div>
   );

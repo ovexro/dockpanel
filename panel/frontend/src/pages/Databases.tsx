@@ -546,10 +546,13 @@ export default function Databases() {
   }
 
   return (
-    <div className="p-6 lg:p-8 animate-fade-up">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-dark-600">
-        <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">Databases</h1>
-        <div className="flex items-center gap-3">
+    <div className="animate-fade-up">
+      <div className="page-header">
+        <div>
+          <h1 className="page-header-title">Databases</h1>
+          <p className="page-header-subtitle">Create and manage your databases</p>
+        </div>
+        <div className="flex items-center gap-2">
           {databases.length >= 2 && (
             <input
               type="text"
@@ -567,6 +570,8 @@ export default function Databases() {
           </button>
         </div>
       </div>
+
+      <div className="p-6 lg:p-8">
 
       {error && (
         <div role="alert" className="bg-danger-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-danger-500/20 mb-4">
@@ -879,6 +884,7 @@ export default function Databases() {
           )}
         </div>
       ) : null}
+      </div>
     </div>
   );
 }
