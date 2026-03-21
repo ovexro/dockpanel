@@ -4,6 +4,18 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.6] - 2026-03-21
+
+### Fixed
+- **Nexus themes decoupled from layout**: Nexus and Nexus Dark themes were previously locked to the Nexus layout only. They are now independent color themes that work with any layout (Terminal, Glass, Atlas, Nexus). Theme cycling (Ctrl+K) and Settings picker now include all 6 themes.
+
+### Improved
+- **Premium card depth**: Dark theme cards (Terminal, Midnight, Ember, Nexus Dark) now have subtle box shadows creating layered depth instead of flat rectangles.
+- **Progress bar polish**: All progress bars now have rounded ends and a subtle accent-colored glow per theme (green/blue/orange).
+- **Bolder status indicators**: Status dots (online/offline/warning) are larger (10px) with colored glow halos for better visibility on dense pages.
+- **Theme picker expanded**: Settings appearance panel now shows all 6 themes (was 4) with accurate mini-previews including Nexus Dark and Nexus Light.
+- **Layout switcher description**: Nexus layout description updated to "Modern SaaS, flat nav" (was "Light, clean SaaS" which was misleading since dark themes now work with it).
+
 ## [2.0.5] - 2026-03-21
 
 ### Added

@@ -5,7 +5,7 @@ const layouts = [
   { id: "command", label: "Terminal", desc: "Dark, CLI aesthetic" },
   { id: "glass", label: "Glass", desc: "Collapsible sidebar" },
   { id: "atlas", label: "Atlas", desc: "Top navbar, breadcrumbs" },
-  { id: "nexus", label: "Nexus", desc: "Light, clean SaaS" },
+  { id: "nexus", label: "Nexus", desc: "Modern SaaS, flat nav" },
 ];
 
 interface Props {
@@ -52,27 +52,7 @@ export default function LayoutSwitcher({ variant = "dark" }: Props) {
   }, [open]);
 
   const switchLayout = (id: string) => {
-    const prevLayout = localStorage.getItem("dp-layout") || "command";
     localStorage.setItem("dp-layout", id);
-
-    // Theme coordination:
-    // - Switching TO nexus: save current theme, apply nexus/nexus-dark
-    // - Switching FROM nexus: restore the previously saved theme
-    if (id === "nexus" && prevLayout !== "nexus") {
-      // Save current theme so we can restore it when leaving Nexus
-      const currentTheme = localStorage.getItem("dp-theme") || "terminal";
-      localStorage.setItem("dp-pre-nexus-theme", currentTheme);
-      const nexusDark = localStorage.getItem("dp-nexus-dark") === "1";
-      const nexusTheme = nexusDark ? "nexus-dark" : "nexus";
-      localStorage.setItem("dp-theme", nexusTheme);
-      document.documentElement.setAttribute("data-theme", nexusTheme);
-    } else if (id !== "nexus" && prevLayout === "nexus") {
-      // Leaving Nexus — restore the theme that was active before Nexus
-      const restored = localStorage.getItem("dp-pre-nexus-theme") || "terminal";
-      localStorage.setItem("dp-theme", restored);
-      document.documentElement.setAttribute("data-theme", restored);
-    }
-
     document.documentElement.setAttribute("data-layout", id);
     window.dispatchEvent(new Event("dp-layout-change"));
     setOpen(false);
