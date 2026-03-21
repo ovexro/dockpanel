@@ -1,0 +1,10 @@
+# Cargo audit configuration
+# See: https://github.com/rustsec/rustsec/tree/main/cargo-audit
+
+[advisories]
+# RUSTSEC-2023-0071: rsa timing side-channel (Marvin Attack)
+# This crate is NOT compiled into the binary — it's a phantom lockfile entry
+# pulled in by sqlx-macros-core which unconditionally depends on sqlx-mysql.
+# DockPanel only uses PostgreSQL. No fix available upstream.
+# Tracked: https://github.com/launchbadge/sqlx/issues/3505
+ignore = ["RUSTSEC-2023-0071"]

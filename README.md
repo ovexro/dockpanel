@@ -56,27 +56,39 @@ No other free panel gives you Git push-to-deploy with blue-green zero-downtime u
 ## Screenshots
 
 <details>
-<summary><strong>Docker Apps</strong> — 54 one-click templates</summary>
+<summary><strong>Docker Apps</strong> — 54 one-click templates across 10 categories</summary>
 
 ![Docker Apps](.github/screenshots/dp-apps.png)
 </details>
 
 <details>
-<summary><strong>Sites</strong> — PHP, Node.js, Python, static, reverse proxy</summary>
-
-![Sites](.github/screenshots/dp-sites.png)
-</details>
-
-<details>
-<summary><strong>Security</strong> — Firewall, Fail2Ban, SSH hardening, scanning</summary>
+<summary><strong>Security</strong> — Firewall, Fail2Ban, SSH hardening, vulnerability scanning</summary>
 
 ![Security](.github/screenshots/dp-security.png)
 </details>
 
 <details>
-<summary><strong>Terminal</strong> — Full SSH in the browser</summary>
+<summary><strong>DNS Management</strong> — Cloudflare + PowerDNS, zone templates, propagation checker</summary>
+
+![DNS](.github/screenshots/dp-dns.png)
+</details>
+
+<details>
+<summary><strong>Mail</strong> — Postfix + Dovecot + DKIM, Roundcube webmail, Rspamd spam filter</summary>
+
+![Mail](.github/screenshots/dp-mail.png)
+</details>
+
+<details>
+<summary><strong>Terminal</strong> — Full SSH in the browser with tabs, themes, session recording</summary>
 
 ![Terminal](.github/screenshots/dp-terminal.png)
+</details>
+
+<details>
+<summary><strong>Settings</strong> — Auto-healing, reverse proxy choice, timezone, notifications</summary>
+
+![Settings](.github/screenshots/dp-settings.png)
 </details>
 
 ## Features
