@@ -438,6 +438,169 @@ async fn get_site(
     }))
 }
 
+/// POST /nginx/sites/{domain}/rename — Rename a site's domain.
+async fn rename_site(
+    Path(old_domain): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<NginxResponse>, (StatusCode, Json<NginxResponse>)> {
+    if !is_valid_domain(&old_domain) {
+        return Err((StatusCode::BAD_REQUEST, Json(NginxResponse {
+            success: false, message: "Invalid old domain format".into(),
+        })));
+    }
+
+    let new_domain = body.get("new_domain")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if !is_valid_domain(new_domain) {
+        return Err((StatusCode::BAD_REQUEST, Json(NginxResponse {
+            success: false, message: "Invalid new domain format".into(),
+        })));
+    }
+
+    let old_conf = format!("/etc/nginx/sites-enabled/{old_domain}.conf");
+    if !std::path::Path::new(&old_conf).exists() {
+        return Err((StatusCode::NOT_FOUND, Json(NginxResponse {
+            success: false, message: format!("No nginx config for {old_domain}"),
+        })));
+    }
+
+    // 1. Rename site directory
+    let old_dir = format!("/var/www/{old_domain}");
+    let new_dir = format!("/var/www/{new_domain}");
+    if std::path::Path::new(&old_dir).exists() {
+        if let Err(e) = std::fs::rename(&old_dir, &new_dir) {
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(NginxResponse {
+                success: false, message: format!("Failed to rename site directory: {e}"),
+            })));
+        }
+        tracing::info!("Renamed site dir: {old_dir} → {new_dir}");
+    }
+
+    // 2. Read nginx config and replace domain references
+    let config_content = std::fs::read_to_string(&old_conf).unwrap_or_default();
+    let new_content = config_content.replace(&old_domain, new_domain);
+
+    // 3. Write new nginx config
+    let new_conf = format!("/etc/nginx/sites-enabled/{new_domain}.conf");
+    if let Err(e) = std::fs::write(&new_conf, &new_content) {
+        // Rollback directory rename
+        if std::path::Path::new(&new_dir).exists() {
+            std::fs::rename(&new_dir, &old_dir).ok();
+        }
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(NginxResponse {
+            success: false, message: format!("Failed to write new config: {e}"),
+        })));
+    }
+
+    // 4. Remove old config
+    std::fs::remove_file(&old_conf).ok();
+
+    // 5. Rename SSL certificates directory
+    let old_ssl = format!("/etc/dockpanel/ssl/{old_domain}");
+    let new_ssl = format!("/etc/dockpanel/ssl/{new_domain}");
+    if std::path::Path::new(&old_ssl).exists() {
+        std::fs::rename(&old_ssl, &new_ssl).ok();
+    }
+
+    // 6. Rename log files
+    for suffix in &["access.log", "error.log"] {
+        let old_log = format!("/var/log/nginx/{old_domain}.{suffix}");
+        let new_log = format!("/var/log/nginx/{new_domain}.{suffix}");
+        if std::path::Path::new(&old_log).exists() {
+            std::fs::rename(&old_log, &new_log).ok();
+        }
+    }
+
+    // 7. Rename PHP-FPM pool configs
+    let old_pool = old_domain.replace('.', "_");
+    let new_pool = new_domain.replace('.', "_");
+    for version in &["8.1", "8.2", "8.3", "8.4"] {
+        let old_pool_path = format!("/etc/php/{version}/fpm/pool.d/{old_pool}.conf");
+        let new_pool_path = format!("/etc/php/{version}/fpm/pool.d/{new_pool}.conf");
+        if std::path::Path::new(&old_pool_path).exists() {
+            if let Ok(pool_content) = std::fs::read_to_string(&old_pool_path) {
+                let updated = pool_content.replace(&old_domain, new_domain);
+                std::fs::write(&new_pool_path, updated).ok();
+                std::fs::remove_file(&old_pool_path).ok();
+            }
+        }
+    }
+
+    // 8. Rename Fail2Ban jail
+    let old_jail = format!("nginx-{}", old_domain.replace('.', "-"));
+    let new_jail = format!("nginx-{}", new_domain.replace('.', "-"));
+    let old_jail_path = format!("/etc/fail2ban/jail.d/{old_jail}.conf");
+    let new_jail_path = format!("/etc/fail2ban/jail.d/{new_jail}.conf");
+    if std::path::Path::new(&old_jail_path).exists() {
+        if let Ok(jail_content) = std::fs::read_to_string(&old_jail_path) {
+            let updated = jail_content
+                .replace(&old_jail, &new_jail)
+                .replace(&old_domain, new_domain);
+            std::fs::write(&new_jail_path, updated).ok();
+            std::fs::remove_file(&old_jail_path).ok();
+            let _ = std::process::Command::new("systemctl")
+                .args(["reload", "fail2ban"])
+                .output();
+        }
+    }
+
+    // 9. Rename redirect/auth/htpasswd configs
+    for dir in &["/etc/nginx/redirects", "/etc/nginx/auth", "/etc/nginx/htpasswd"] {
+        let old_file = format!("{dir}/{old_domain}.conf");
+        let new_file = format!("{dir}/{new_domain}.conf");
+        if std::path::Path::new(&old_file).exists() {
+            std::fs::rename(&old_file, &new_file).ok();
+        }
+        // Also handle files without .conf extension (htpasswd)
+        let old_plain = format!("{dir}/{old_domain}");
+        let new_plain = format!("{dir}/{new_domain}");
+        if std::path::Path::new(&old_plain).exists() && !old_plain.ends_with(".conf") {
+            std::fs::rename(&old_plain, &new_plain).ok();
+        }
+    }
+
+    // 10. Test and reload nginx
+    match services::nginx::test_config().await {
+        Ok(output) if output.success => {
+            if let Err(e) = services::nginx::reload().await {
+                return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(NginxResponse {
+                    success: false, message: format!("Config valid but reload failed: {e}"),
+                })));
+            }
+            tracing::info!("Domain renamed: {old_domain} → {new_domain}");
+            Ok(Json(NginxResponse {
+                success: true,
+                message: format!("Domain renamed from {old_domain} to {new_domain}"),
+            }))
+        }
+        Ok(output) => {
+            // Rollback: restore old config
+            std::fs::write(&old_conf, &config_content).ok();
+            std::fs::remove_file(&new_conf).ok();
+            if std::path::Path::new(&new_dir).exists() {
+                std::fs::rename(&new_dir, &old_dir).ok();
+            }
+            Err((StatusCode::BAD_REQUEST, Json(NginxResponse {
+                success: false,
+                message: format!("Nginx config test failed after rename: {}", output.stderr),
+            })))
+        }
+        Err(e) => {
+            std::fs::write(&old_conf, &config_content).ok();
+            std::fs::remove_file(&new_conf).ok();
+            if std::path::Path::new(&new_dir).exists() {
+                std::fs::rename(&new_dir, &old_dir).ok();
+            }
+            Err((StatusCode::INTERNAL_SERVER_ERROR, Json(NginxResponse {
+                success: false,
+                message: format!("Failed to test config: {e}"),
+            })))
+        }
+    }
+}
+
 // ──────────────────────────────────────────────────────────────
 // Redirect Rules
 // ──────────────────────────────────────────────────────────────
@@ -1175,6 +1338,7 @@ pub fn router() -> Router<AppState> {
         .route("/nginx/sites/{domain}", put(put_site))
         .route("/nginx/sites/{domain}", delete(delete_site))
         .route("/nginx/sites/{domain}", get(get_site))
+        .route("/nginx/sites/{domain}/rename", post(rename_site))
         .route("/nginx/test", post(test_nginx))
         .route("/nginx/reload", post(reload_nginx))
         // Redirects

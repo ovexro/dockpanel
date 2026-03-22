@@ -246,6 +246,8 @@ pub fn router() -> Router<AppState> {
         // Session management
         .route("/api/auth/sessions", get(auth::list_sessions))
         .route("/api/auth/sessions/{id}", delete(auth::revoke_session))
+        // GDPR data export
+        .route("/api/auth/export-my-data", get(auth::export_my_data))
         // Two-Factor Authentication
         .route("/api/auth/2fa/setup", post(auth::twofa_setup))
         .route("/api/auth/2fa/enable", post(auth::twofa_enable))
@@ -261,6 +263,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/sites/{id}/provision-log", get(sites::provision_log))
         .route("/api/sites/{id}/php", put(sites::switch_php))
         .route("/api/sites/{id}/limits", put(sites::update_limits))
+        .route("/api/sites/{id}/domain", put(sites::rename_domain))
         // PHP versions
         .route("/api/php/versions", get(sites::php_versions))
         .route("/api/php/install", post(sites::php_install))
@@ -332,6 +335,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/apps/{container_id}/exec", post(docker_apps::exec_command))
         .route("/api/apps/{container_id}/volumes", get(docker_apps::container_volumes))
         .route("/api/apps/{container_id}/snapshot", post(docker_apps::snapshot_container))
+        .route("/api/apps/{container_id}/image", put(docker_apps::update_image))
+        .route("/api/apps/{container_id}/limits", put(docker_apps::update_limits))
         // Git Deploy
         .route("/api/git-deploys", get(git_deploys::list).post(git_deploys::create))
         .route("/api/git-deploys/{id}", get(git_deploys::get_one).put(git_deploys::update).delete(git_deploys::remove))
@@ -345,8 +350,13 @@ pub fn router() -> Router<AppState> {
         .route("/api/git-deploys/{id}/logs", get(git_deploys::container_logs))
         .route("/api/git-deploys/{id}/previews", get(git_deploys::list_previews))
         .route("/api/git-deploys/{id}/previews/{preview_id}", delete(git_deploys::delete_preview))
+        .route("/api/git-deploys/{id}/schedule", post(git_deploys::schedule_deploy).delete(git_deploys::cancel_scheduled_deploy))
         .route("/api/git-deploys/deploy/{deploy_id}/log", get(git_deploys::deploy_log))
         .route("/api/webhooks/git/{id}/{secret}", post(git_deploys::webhook))
+        // Deploy Approvals
+        .route("/api/deploy-approvals", get(git_deploys::list_approvals))
+        .route("/api/deploy-approvals/{id}/approve", post(git_deploys::approve_deploy))
+        .route("/api/deploy-approvals/{id}/reject", post(git_deploys::reject_deploy))
         // Security (admin)
         .route("/api/security/overview", get(security::overview))
         .route("/api/security/firewall", get(security::firewall_status))
@@ -551,6 +561,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/backup-orchestrator/volume-backups/{id}/restore", post(backup_orchestrator::restore_volume_backup))
         .route("/api/backup-orchestrator/verify", post(backup_orchestrator::trigger_verify))
         .route("/api/backup-orchestrator/verifications", get(backup_orchestrator::list_verifications))
+        .route("/api/backup-orchestrator/storage-history", get(backup_orchestrator::storage_history))
         // Webhook Gateway
         .route("/api/webhook-gateway/endpoints", get(webhook_gateway::list_endpoints).post(webhook_gateway::create_endpoint))
         .route("/api/webhook-gateway/endpoints/{id}", delete(webhook_gateway::delete_endpoint))

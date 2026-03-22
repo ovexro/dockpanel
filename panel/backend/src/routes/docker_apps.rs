@@ -647,6 +647,102 @@ pub async fn container_stats(
     Ok(Json(result))
 }
 
+/// PUT /api/apps/{container_id}/image — Change Docker app image tag.
+pub async fn update_image(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(container_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    if !is_valid_container_id(&container_id) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
+    }
+
+    let image = body.get("image")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+
+    if image.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "image is required (e.g., postgres:17)"));
+    }
+
+    // Validate image format: allow alphanumeric, dots, dashes, slashes, colons, underscores
+    if image.len() > 256 || image.contains(' ') || image.contains('\0') {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid image format"));
+    }
+
+    let result = agent
+        .post(
+            &format!("/apps/{container_id}/change-image"),
+            Some(serde_json::json!({ "image": image })),
+        )
+        .await
+        .map_err(|e| agent_error("Change image", e))?;
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "app.change_image",
+        Some("app"), Some(&container_id), Some(image), None,
+    ).await;
+
+    tracing::info!("App image changed: {container_id} → {image}");
+    Ok(Json(result))
+}
+
+/// PUT /api/apps/{container_id}/limits — Update CPU/memory limits on a running container.
+pub async fn update_limits(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(container_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    if !is_valid_container_id(&container_id) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
+    }
+
+    let memory_mb = body.get("memory_mb").and_then(|v| v.as_u64());
+    let cpu_percent = body.get("cpu_percent").and_then(|v| v.as_u64());
+
+    if memory_mb.is_none() && cpu_percent.is_none() {
+        return Err(err(StatusCode::BAD_REQUEST, "At least one of memory_mb or cpu_percent is required"));
+    }
+
+    if let Some(mem) = memory_mb {
+        if mem < 4 || mem > 65536 {
+            return Err(err(StatusCode::BAD_REQUEST, "memory_mb must be between 4 and 65536"));
+        }
+    }
+
+    if let Some(cpu) = cpu_percent {
+        if cpu == 0 || cpu > 10000 {
+            return Err(err(StatusCode::BAD_REQUEST, "cpu_percent must be between 1 and 10000"));
+        }
+    }
+
+    let result = agent
+        .post(
+            &format!("/apps/{container_id}/update-limits"),
+            Some(serde_json::json!({
+                "memory_mb": memory_mb,
+                "cpu_percent": cpu_percent,
+            })),
+        )
+        .await
+        .map_err(|e| agent_error("Update limits", e))?;
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "app.update_limits",
+        Some("app"), Some(&container_id), None, None,
+    ).await;
+
+    tracing::info!("App limits updated: {container_id} (mem: {:?}MB, cpu: {:?}%)", memory_mb, cpu_percent);
+    Ok(Json(result))
+}
+
 /// GET /api/apps/{container_id}/shell-info — Get shell availability.
 pub async fn shell_info(
     State(state): State<AppState>,

@@ -166,6 +166,99 @@ pub async fn restore_backup(domain: &str, filename: &str) -> Result<(), String> 
     Ok(())
 }
 
+/// List files in a backup archive (max 500 entries).
+pub async fn list_backup_files(domain: &str, filename: &str) -> Result<Vec<String>, String> {
+    if !is_safe_filename(filename) {
+        return Err("Invalid backup filename".into());
+    }
+
+    let filepath = backup_dir(domain).join(filename);
+    if !filepath.exists() {
+        return Err("Backup file not found".into());
+    }
+
+    let filepath_str = filepath
+        .to_str()
+        .ok_or_else(|| "Invalid backup path encoding".to_string())?;
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        Command::new("tar")
+            .args(["tzf", filepath_str])
+            .output(),
+    )
+    .await
+    .map_err(|_| "Listing timed out (30s)".to_string())?
+    .map_err(|e| format!("Failed to run tar: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to list archive: {stderr}"));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let files: Vec<String> = stdout
+        .lines()
+        .take(500)
+        .map(|l| l.to_string())
+        .collect();
+
+    Ok(files)
+}
+
+/// Restore a single file from a backup archive.
+pub async fn restore_single_file(domain: &str, filename: &str, file_path: &str) -> Result<(), String> {
+    if !is_safe_filename(filename) {
+        return Err("Invalid backup filename".into());
+    }
+
+    // Validate file_path: no path traversal, no leading /
+    if file_path.is_empty() {
+        return Err("File path cannot be empty".into());
+    }
+    if file_path.contains("..") {
+        return Err("File path must not contain '..'".into());
+    }
+    if file_path.starts_with('/') {
+        return Err("File path must not start with '/'".into());
+    }
+
+    let backup_filepath = backup_dir(domain).join(filename);
+    if !backup_filepath.exists() {
+        return Err("Backup file not found".into());
+    }
+
+    let target = format!("{WEBROOT}/{domain}");
+    let backup_str = backup_filepath
+        .to_str()
+        .ok_or_else(|| "Invalid backup path encoding".to_string())?;
+
+    // Normalize: ensure it starts with ./
+    let extract_path = if file_path.starts_with("./") {
+        file_path.to_string()
+    } else {
+        format!("./{file_path}")
+    };
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        Command::new("tar")
+            .args(["xzf", backup_str, "-C", &target, &extract_path])
+            .output(),
+    )
+    .await
+    .map_err(|_| "Restore timed out (60s)".to_string())?
+    .map_err(|e| format!("Failed to run tar: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Single-file restore failed: {stderr}"));
+    }
+
+    tracing::info!("Single file restored from {filename}: {file_path} for {domain}");
+    Ok(())
+}
+
 /// Delete a backup file.
 pub fn delete_backup(domain: &str, filename: &str) -> Result<(), String> {
     if !is_safe_filename(filename) {

@@ -660,15 +660,32 @@ async fn run_retention_cleanup(pool: &PgPool) {
     // GAP 33: Weekly digest — send summary email on Mondays during cleanup cycle
     send_weekly_digest(pool).await;
 
-    // Delete monitor_checks older than 7 days
-    match sqlx::query("DELETE FROM monitor_checks WHERE checked_at < NOW() - INTERVAL '7 days'")
+    // GAP 67: Read configurable retention periods from settings (fall back to defaults)
+    let settings: Vec<(String, String)> = sqlx::query_as(
+        "SELECT key, value FROM settings WHERE key LIKE 'retention_%'"
+    ).fetch_all(pool).await.unwrap_or_default();
+
+    let get = |key: &str, default: i64| -> i64 {
+        settings.iter().find(|(k, _)| k == key).and_then(|(_, v)| v.parse().ok()).unwrap_or(default)
+    };
+
+    let activity_days = get("retention_activity_days", 365);
+    let system_log_days = get("retention_system_log_days", 30);
+    let alert_days = get("retention_alert_days", 90);
+    let scan_days = get("retention_scan_days", 90);
+    let webhook_days = get("retention_webhook_days", 7);
+    let notification_days = get("retention_notification_days", 30);
+    let monitor_days = get("retention_monitor_days", 7);
+
+    // Delete monitor_checks older than configured days (default 7)
+    match sqlx::query(&format!("DELETE FROM monitor_checks WHERE checked_at < NOW() - INTERVAL '{monitor_days} days'"))
         .execute(pool)
         .await
     {
         Ok(r) => {
             if r.rows_affected() > 0 {
                 tracing::info!(
-                    "Retention: deleted {} old monitor_checks",
+                    "Retention: deleted {} old monitor_checks (>{monitor_days} days)",
                     r.rows_affected()
                 );
             }
@@ -676,30 +693,30 @@ async fn run_retention_cleanup(pool: &PgPool) {
         Err(e) => tracing::warn!("Retention cleanup (monitor_checks) failed: {e}"),
     }
 
-    // Delete resolved alerts older than 90 days
-    match sqlx::query(
-        "DELETE FROM alerts WHERE status = 'resolved' AND created_at < NOW() - INTERVAL '90 days'",
-    )
+    // Delete resolved alerts older than configured days (default 90)
+    match sqlx::query(&format!(
+        "DELETE FROM alerts WHERE status = 'resolved' AND created_at < NOW() - INTERVAL '{alert_days} days'",
+    ))
     .execute(pool)
     .await
     {
         Ok(r) => {
             if r.rows_affected() > 0 {
-                tracing::info!("Retention: deleted {} old resolved alerts", r.rows_affected());
+                tracing::info!("Retention: deleted {} old resolved alerts (>{alert_days} days)", r.rows_affected());
             }
         }
         Err(e) => tracing::warn!("Retention cleanup (alerts) failed: {e}"),
     }
 
-    // Delete activity_logs older than 1 year
-    match sqlx::query("DELETE FROM activity_logs WHERE created_at < NOW() - INTERVAL '1 year'")
+    // Delete activity_logs older than configured days (default 365)
+    match sqlx::query(&format!("DELETE FROM activity_logs WHERE created_at < NOW() - INTERVAL '{activity_days} days'"))
         .execute(pool)
         .await
     {
         Ok(r) => {
             if r.rows_affected() > 0 {
                 tracing::info!(
-                    "Retention: deleted {} old activity_logs",
+                    "Retention: deleted {} old activity_logs (>{activity_days} days)",
                     r.rows_affected()
                 );
             }
@@ -707,15 +724,15 @@ async fn run_retention_cleanup(pool: &PgPool) {
         Err(e) => tracing::warn!("Retention cleanup (activity_logs) failed: {e}"),
     }
 
-    // Delete system_logs older than 30 days
-    match sqlx::query("DELETE FROM system_logs WHERE created_at < NOW() - INTERVAL '30 days'")
+    // Delete system_logs older than configured days (default 30)
+    match sqlx::query(&format!("DELETE FROM system_logs WHERE created_at < NOW() - INTERVAL '{system_log_days} days'"))
         .execute(pool)
         .await
     {
         Ok(r) => {
             if r.rows_affected() > 0 {
                 tracing::info!(
-                    "Retention: deleted {} old system_logs",
+                    "Retention: deleted {} old system_logs (>{system_log_days} days)",
                     r.rows_affected()
                 );
             }
@@ -723,25 +740,25 @@ async fn run_retention_cleanup(pool: &PgPool) {
         Err(e) => tracing::warn!("Retention cleanup (system_logs) failed: {e}"),
     }
 
-    // Extension events: 90 days
-    let ext_events_deleted = sqlx::query("DELETE FROM extension_events WHERE delivered_at < NOW() - INTERVAL '90 days'")
+    // Extension events: configured days (default 90)
+    let ext_events_deleted = sqlx::query(&format!("DELETE FROM extension_events WHERE delivered_at < NOW() - INTERVAL '{scan_days} days'"))
         .execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
     if ext_events_deleted > 0 {
-        tracing::info!("Retention: deleted {ext_events_deleted} extension events (>90 days)");
+        tracing::info!("Retention: deleted {ext_events_deleted} extension events (>{scan_days} days)");
     }
 
-    // GAP 18: Webhook gateway deliveries: 7 days
-    let wh_deleted = sqlx::query("DELETE FROM webhook_deliveries WHERE received_at < NOW() - INTERVAL '7 days'")
+    // GAP 18: Webhook gateway deliveries: configured days (default 7)
+    let wh_deleted = sqlx::query(&format!("DELETE FROM webhook_deliveries WHERE received_at < NOW() - INTERVAL '{webhook_days} days'"))
         .execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
     if wh_deleted > 0 {
-        tracing::info!("Retention: deleted {wh_deleted} webhook deliveries (>7 days)");
+        tracing::info!("Retention: deleted {wh_deleted} webhook deliveries (>{webhook_days} days)");
     }
 
-    // Backup verifications: 90 days
-    let bv_deleted = sqlx::query("DELETE FROM backup_verifications WHERE created_at < NOW() - INTERVAL '90 days'")
+    // Backup verifications: configured days (default 90)
+    let bv_deleted = sqlx::query(&format!("DELETE FROM backup_verifications WHERE created_at < NOW() - INTERVAL '{scan_days} days'"))
         .execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
     if bv_deleted > 0 {
-        tracing::info!("Retention: deleted {bv_deleted} backup verifications (>90 days)");
+        tracing::info!("Retention: deleted {bv_deleted} backup verifications (>{scan_days} days)");
     }
 
     // User sessions: 24 hours since last seen (JWT expires after 2h, but clean stale records)
@@ -751,10 +768,17 @@ async fn run_retention_cleanup(pool: &PgPool) {
         tracing::info!("Retention: deleted {sess_deleted} expired user sessions (>24h)");
     }
 
-    // Panel notifications: 30 days
-    let notif_deleted = sqlx::query("DELETE FROM panel_notifications WHERE created_at < NOW() - INTERVAL '30 days'")
+    // Panel notifications: configured days (default 30)
+    let notif_deleted = sqlx::query(&format!("DELETE FROM panel_notifications WHERE created_at < NOW() - INTERVAL '{notification_days} days'"))
         .execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
     if notif_deleted > 0 {
-        tracing::info!("Retention: deleted {notif_deleted} panel notifications (>30 days)");
+        tracing::info!("Retention: deleted {notif_deleted} panel notifications (>{notification_days} days)");
+    }
+
+    // GAP 66: Clean expired token blacklist entries
+    let bl_deleted = sqlx::query("DELETE FROM token_blacklist WHERE expires_at < NOW()")
+        .execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
+    if bl_deleted > 0 {
+        tracing::info!("Retention: deleted {bl_deleted} expired token blacklist entries");
     }
 }

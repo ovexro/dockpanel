@@ -456,6 +456,35 @@ async fn execute_deploy(
         }
     }
 
+    // GAP 56: Auto-run database migrations for Laravel sites after successful deploy
+    if success {
+        let site_preset: Option<(Option<String>,)> = sqlx::query_as(
+            "SELECT php_preset FROM sites WHERE id = $1"
+        )
+        .bind(site_id)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten();
+
+        if let Some((Some(preset),)) = site_preset {
+            if preset == "laravel" {
+                let migration_cmd = format!(
+                    "cd /var/www/{domain}/public/.. && php artisan migrate --force 2>&1"
+                );
+                match agent.post(
+                    "/diagnostics/fix",
+                    Some(serde_json::json!({
+                        "fix_id": format!("exec-shell:{}:{}", domain, migration_cmd)
+                    })),
+                ).await {
+                    Ok(_) => tracing::info!("Post-deploy: Laravel migrations run for {domain}"),
+                    Err(e) => tracing::warn!("Post-deploy: Laravel migrations failed for {domain}: {e}"),
+                }
+            }
+        }
+    }
+
     // GAP 37: Post-deploy cache invalidation — clear nginx fastcgi cache for the domain
     if success {
         let _ = agent.post(

@@ -9,7 +9,7 @@
 
 | Feature | Description | Backend | Agent | Frontend | DB Tables |
 |---------|-------------|---------|-------|----------|-----------|
-| **Sites** | Static, PHP (7.4-8.3), Node.js, Python sites with nginx | `routes/sites.rs`, `ssl.rs`, `files.rs` | `nginx.rs`, `php.rs`, `ssl.rs`, `files.rs`, `cms.rs` | `Sites.tsx`, `SiteDetail.tsx`, `Files.tsx` | `sites` |
+| **Sites** | Static, PHP (7.4-8.3), Node.js, Python sites with nginx. Domain rename, auto-firewall for proxy ports, Laravel auto-migrations | `routes/sites.rs`, `ssl.rs`, `files.rs`, `deploy.rs` | `nginx.rs`, `php.rs`, `ssl.rs`, `files.rs`, `cms.rs` | `Sites.tsx`, `SiteDetail.tsx`, `Files.tsx` | `sites` |
 | **Databases** | MySQL/PostgreSQL via Docker, SQL browser, schema viewer | `routes/databases.rs` | `database.rs` | `Databases.tsx` | `databases` |
 | **Backups** | Scheduled backups, S3/SFTP/B2/GCS remote storage, one-click restore | `routes/backups.rs`, `backup_schedules.rs`, `backup_destinations.rs` | `backups.rs`, `remote_backup.rs` | `Backups.tsx` | `backups`, `backup_schedules`, `backup_destinations` |
 | **Backup Orchestrator** | DB/volume/site backups, AES-256 encryption, restore verification, policies, health dashboard, auto-verifier | `routes/backup_orchestrator.rs` | `database_backup.rs`, `volume_backup.rs`, `encryption.rs`, `backup_verify.rs` | `BackupOrchestrator.tsx` | `backup_policies`, `database_backups`, `volume_backups`, `backup_verifications` |
@@ -18,8 +18,8 @@
 | **Incident Management** | Incident lifecycle (investigating→resolved→postmortem), timeline updates, severity, affected components, postmortem | `routes/incidents.rs` | — | `IncidentManagement.tsx` | `managed_incidents`, `incident_updates`, `managed_incident_components` |
 | **Public Status Page** | Customizable status page with component groups, incident history, subscriber notifications, overall status | `routes/incidents.rs` | — | `PublicStatusPage.tsx` | `status_page_config`, `status_page_components`, `status_page_subscribers` |
 | **Cron Jobs** | Cron scheduling with manual execution and history | `routes/crons.rs` | `crons.rs` | `Crons.tsx` | (via agent crontab) |
-| **Docker Apps** | 54 templates, Compose stacks, container lifecycle, registry | `routes/docker_apps.rs`, `stacks.rs` | `docker_apps.rs` | `Apps.tsx` | `docker_stacks` |
-| **Git Deploy** | Push-to-deploy, blue-green, Nixpacks (30+ langs), preview envs | `routes/git_deploys.rs` | `git_build.rs` | `GitDeploys.tsx` | `git_deploys`, `git_deploy_history`, `git_previews` |
+| **Docker Apps** | 54 templates, Compose stacks, container lifecycle, registry, image tag change, live resource limits | `routes/docker_apps.rs`, `stacks.rs` | `docker_apps.rs` | `Apps.tsx` | `docker_stacks` |
+| **Git Deploy** | Push-to-deploy, blue-green, Nixpacks (30+ langs), preview envs, one-time scheduled deploys | `routes/git_deploys.rs` | `git_build.rs` | `GitDeploys.tsx` | `git_deploys`, `git_deploy_history`, `git_previews` |
 | **WordPress Toolkit** | Multi-site dashboard, vuln scanning (14 known), hardening (7 checks), bulk updates | `routes/wordpress.rs` | `wordpress.rs`, `wp_vulnerability.rs` | `WordPressToolkit.tsx`, `WordPress.tsx` | `wp_vuln_scans`, `wp_hardening` |
 | **Migration Wizard** | Import from cPanel/Plesk/HestiaCP — sites, databases, mail | `routes/migration.rs` | `migration.rs` | `Migration.tsx` | `migrations` |
 | **Staging** | Clone site to staging, sync to/from production | `routes/staging.rs` | `staging.rs` | (in SiteDetail) | `sites.parent_site_id` |
