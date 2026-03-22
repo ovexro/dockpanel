@@ -67,6 +67,9 @@ pub async fn update(
         "oauth_gitlab_client_id", "oauth_gitlab_client_secret",
         "oauth_auto_create", "hide_branding",
         "reverse_proxy",
+        // Gap #70: Customizable notification templates
+        "notif_template_email", "notif_template_slack",
+        "notif_template_discord", "notif_template_webhook",
     ];
     for key in body.keys() {
         if !allowed_keys.contains(&key.as_str()) {
@@ -339,10 +342,11 @@ pub async fn branding(
     })))
 }
 
-/// GET /api/settings/export — Export all panel settings as JSON.
+/// GET /api/settings/export — Export all panel settings, alert rules, monitors,
+/// backup schedules, and backup policies as JSON (Gap #71).
 pub async fn export_config(
     State(state): State<AppState>,
-    AdminUser(_claims): AdminUser,
+    AdminUser(claims): AdminUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let rows: Vec<SettingRow> = sqlx::query_as("SELECT key, value FROM settings")
         .fetch_all(&state.db)
@@ -356,7 +360,114 @@ pub async fn export_config(
         .map(|r| (r.key, r.value))
         .collect();
 
-    Ok(Json(serde_json::json!({ "settings": map, "exported_at": chrono::Utc::now().to_rfc3339() })))
+    // Gap #71: Export alert rules (user's own rules only, exclude webhook secrets)
+    let alert_rule_rows = sqlx::query(
+        "SELECT server_id, cpu_threshold, cpu_duration, memory_threshold, memory_duration, \
+         disk_threshold, alert_cpu, alert_memory, alert_disk, alert_offline, \
+         alert_backup_failure, alert_ssl_expiry, alert_service_health, \
+         ssl_warning_days, notify_email, cooldown_minutes, muted_types \
+         FROM alert_rules WHERE user_id = $1 ORDER BY server_id NULLS FIRST"
+    )
+    .bind(claims.sub)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let alert_rules: Vec<serde_json::Value> = alert_rule_rows.iter().map(|r| {
+        use sqlx::Row;
+        serde_json::json!({
+            "server_id": r.get::<Option<uuid::Uuid>, _>("server_id"),
+            "cpu_threshold": r.get::<i32, _>("cpu_threshold"),
+            "cpu_duration": r.get::<i32, _>("cpu_duration"),
+            "memory_threshold": r.get::<i32, _>("memory_threshold"),
+            "memory_duration": r.get::<i32, _>("memory_duration"),
+            "disk_threshold": r.get::<i32, _>("disk_threshold"),
+            "alert_cpu": r.get::<bool, _>("alert_cpu"),
+            "alert_memory": r.get::<bool, _>("alert_memory"),
+            "alert_disk": r.get::<bool, _>("alert_disk"),
+            "alert_offline": r.get::<bool, _>("alert_offline"),
+            "alert_backup_failure": r.get::<bool, _>("alert_backup_failure"),
+            "alert_ssl_expiry": r.get::<bool, _>("alert_ssl_expiry"),
+            "alert_service_health": r.get::<bool, _>("alert_service_health"),
+            "ssl_warning_days": r.get::<String, _>("ssl_warning_days"),
+            "notify_email": r.get::<bool, _>("notify_email"),
+            "cooldown_minutes": r.get::<i32, _>("cooldown_minutes"),
+            "muted_types": r.get::<String, _>("muted_types"),
+        })
+    }).collect();
+
+    // Gap #71: Export monitors (name, url, type, interval, keyword — no secrets)
+    let monitor_rows = sqlx::query(
+        "SELECT name, url, monitor_type, check_interval, keyword \
+         FROM monitors WHERE user_id = $1 ORDER BY name"
+    )
+    .bind(claims.sub)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let monitors: Vec<serde_json::Value> = monitor_rows.iter().map(|r| {
+        use sqlx::Row;
+        serde_json::json!({
+            "name": r.get::<String, _>("name"),
+            "url": r.get::<String, _>("url"),
+            "monitor_type": r.get::<String, _>("monitor_type"),
+            "check_interval": r.get::<i32, _>("check_interval"),
+            "keyword": r.get::<Option<String>, _>("keyword"),
+        })
+    }).collect();
+
+    // Gap #71: Export backup schedules
+    let schedule_rows = sqlx::query(
+        "SELECT site_id, schedule, retention_count, enabled FROM backup_schedules"
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let schedules: Vec<serde_json::Value> = schedule_rows.iter().map(|r| {
+        use sqlx::Row;
+        serde_json::json!({
+            "site_id": r.get::<uuid::Uuid, _>("site_id"),
+            "schedule": r.get::<String, _>("schedule"),
+            "retention_count": r.get::<i32, _>("retention_count"),
+            "enabled": r.get::<bool, _>("enabled"),
+        })
+    }).collect();
+
+    // Gap #71: Export backup policies
+    let policy_rows = sqlx::query(
+        "SELECT name, schedule, backup_sites, backup_databases, backup_volumes, \
+         retention_count, encrypt, verify_after_backup \
+         FROM backup_policies WHERE user_id = $1 ORDER BY name"
+    )
+    .bind(claims.sub)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let policies: Vec<serde_json::Value> = policy_rows.iter().map(|r| {
+        use sqlx::Row;
+        serde_json::json!({
+            "name": r.get::<String, _>("name"),
+            "schedule": r.get::<String, _>("schedule"),
+            "backup_sites": r.get::<bool, _>("backup_sites"),
+            "backup_databases": r.get::<bool, _>("backup_databases"),
+            "backup_volumes": r.get::<bool, _>("backup_volumes"),
+            "retention_count": r.get::<i32, _>("retention_count"),
+            "encrypt": r.get::<bool, _>("encrypt"),
+            "verify_after_backup": r.get::<bool, _>("verify_after_backup"),
+        })
+    }).collect();
+
+    Ok(Json(serde_json::json!({
+        "settings": map,
+        "alert_rules": alert_rules,
+        "monitors": monitors,
+        "backup_schedules": schedules,
+        "backup_policies": policies,
+        "exported_at": chrono::Utc::now().to_rfc3339(),
+    })))
 }
 
 /// POST /api/settings/import — Import panel settings from JSON.

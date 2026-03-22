@@ -4,6 +4,16 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.6.1] - 2026-03-22
+
+### Added (LOW Priority Gap Fixes)
+- **Domain rename** — New `PUT /api/sites/{id}/domain` endpoint to rename a site's domain. Agent handler renames nginx config, site directory, SSL certs, log files, PHP-FPM pools, Fail2Ban jails, redirects, and htpasswd configs. Backend updates monitors, status page components, and logs activity
+- **Auto-firewall for proxy ports** — Sites created with proxy/node/python runtime automatically get a UFW deny rule blocking external access to the allocated proxy port (traffic only allowed through nginx). Rule is auto-removed on site deletion
+- **Laravel auto-migrations** — Site deploys for Laravel sites (`php_preset = "laravel"`) now auto-run `php artisan migrate --force` after successful deploy
+- **One-time scheduled deploy** — New `POST /api/git-deploys/{id}/schedule` endpoint to schedule a deploy at a specific time. New `scheduled_deploy_at` column on `git_deploys`. Deploy scheduler checks for due one-time schedules every 60s and auto-clears after triggering. Cancel with `DELETE /api/git-deploys/{id}/schedule`
+- **Change Docker app image** — New `PUT /api/apps/{container_id}/image` endpoint to change a running container's image tag. Pulls new image, stops old container, creates new one preserving volumes, rolls back on failure
+- **Update Docker app resource limits** — New `PUT /api/apps/{container_id}/limits` endpoint to update CPU/memory limits on running containers via `docker update`. Accepts `memory_mb` and `cpu_percent`
+
 ## [2.6.0] - 2026-03-22
 
 ### Fixed (Automation Gap Audit — Priority 1)

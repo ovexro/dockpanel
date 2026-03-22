@@ -60,6 +60,33 @@ async fn check_schedules(pool: &PgPool, agent: &AgentClient) {
             ).await;
         }
     }
+
+    // GAP 58: Check for one-time scheduled deploys
+    let one_time: Vec<(uuid::Uuid, String, uuid::Uuid)> = match sqlx::query_as(
+        "SELECT id, name, user_id FROM git_deploys \
+         WHERE scheduled_deploy_at IS NOT NULL \
+         AND scheduled_deploy_at <= NOW() \
+         AND status NOT IN ('building', 'deploying')"
+    ).fetch_all(pool).await {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+
+    for (id, name, user_id) in &one_time {
+        tracing::info!("One-time scheduled deploy triggered: {name}");
+
+        // Clear the schedule first (prevent re-trigger)
+        sqlx::query("UPDATE git_deploys SET scheduled_deploy_at = NULL, updated_at = NOW() WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await
+            .ok();
+
+        // Trigger the deploy
+        crate::routes::git_deploys::trigger_deploy_task(
+            pool.clone(), agent.clone(), *id, *user_id, "scheduled-once".to_string(),
+        ).await;
+    }
 }
 
 /// Simple cron check: supports "M H * * *" format (minute hour day month weekday)

@@ -289,6 +289,17 @@ pub async fn create(
                 .await
                 .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
+            // GAP 50: Block direct external access to proxy port (only allow localhost via nginx)
+            if let Some(port) = effective_proxy_port {
+                let _ = agent.post("/security/firewall/rules", Some(serde_json::json!({
+                    "port": port as u16,
+                    "proto": "tcp",
+                    "action": "deny",
+                    "from": null
+                }))).await;
+                tracing::info!("Auto-firewall: blocked external access to port {port} for {}", body.domain);
+            }
+
             tracing::info!("Site created: {} ({})", body.domain, runtime);
             let ip = crate::routes::client_ip(&headers);
             activity::log_activity(
@@ -1083,6 +1094,25 @@ pub async fn remove(
     for (container_id,) in &databases {
         if let Err(e) = agent.delete(&format!("/databases/{container_id}")).await {
             tracing::warn!("Failed to remove database container {container_id}: {e}");
+        }
+    }
+
+    // GAP 50: Remove firewall rule for proxy port on site deletion
+    if let Some(port) = site.proxy_port {
+        // Get current firewall rules and find the matching rule number to delete
+        if let Ok(fw_status) = agent.get("/security/firewall").await {
+            if let Some(rules) = fw_status.get("rules").and_then(|v| v.as_array()) {
+                for rule in rules {
+                    let rule_port = rule.get("port").and_then(|v| v.as_str()).unwrap_or("");
+                    let rule_action = rule.get("action").and_then(|v| v.as_str()).unwrap_or("");
+                    if rule_port == format!("{port}/tcp") && rule_action.to_lowercase().contains("deny") {
+                        if let Some(num) = rule.get("number").and_then(|v| v.as_u64()) {
+                            let _ = agent.delete(&format!("/security/firewall/rules/{num}")).await;
+                            tracing::info!("Auto-firewall: removed deny rule for port {port}");
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1886,4 +1916,112 @@ pub async fn set_env_vars(
     agent.put(&format!("/nginx/env/{domain}"), body).await
         .map_err(|e| agent_error("Env vars", e))?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// PUT /api/sites/{id}/domain — Rename a site's domain.
+pub async fn rename_domain(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Get current site
+    let site: crate::models::Site = sqlx::query_as(
+        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    let new_domain = body.get("new_domain")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    if !is_valid_domain(&new_domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
+
+    if new_domain == site.domain {
+        return Err(err(StatusCode::BAD_REQUEST, "New domain is the same as current domain"));
+    }
+
+    // Check uniqueness
+    let existing: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM sites WHERE domain = $1")
+            .bind(&new_domain)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    if existing.is_some() {
+        return Err(err(StatusCode::CONFLICT, "Domain already exists"));
+    }
+
+    let git_conflict: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM git_deploys WHERE domain = $1"
+    )
+    .bind(&new_domain)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    if git_conflict.is_some() {
+        return Err(err(StatusCode::CONFLICT, "Domain already in use by a git deployment"));
+    }
+
+    // Call agent to rename nginx config, site dir, logs
+    let old_domain = site.domain.clone();
+    agent.post(
+        &format!("/nginx/sites/{}/rename", old_domain),
+        Some(serde_json::json!({ "new_domain": new_domain })),
+    ).await.map_err(|e| agent_error("Domain rename", e))?;
+
+    // Update site record
+    sqlx::query("UPDATE sites SET domain = $1, updated_at = NOW() WHERE id = $2")
+        .bind(&new_domain)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    // Update monitors linked to this site
+    let new_url = format!("https://{new_domain}");
+    sqlx::query("UPDATE monitors SET name = $1, url = $2 WHERE site_id = $3")
+        .bind(&new_domain)
+        .bind(&new_url)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .ok();
+
+    // Update status page components
+    sqlx::query("UPDATE status_page_components SET name = $1 WHERE name = $2")
+        .bind(&new_domain)
+        .bind(&old_domain)
+        .execute(&state.db)
+        .await
+        .ok();
+
+    tracing::info!("Domain renamed: {old_domain} → {new_domain}");
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "site.rename_domain",
+        Some("site"), Some(&new_domain), Some(&old_domain), None,
+    ).await;
+
+    notifications::notify_panel(&state.db, Some(claims.sub),
+        &format!("Domain renamed: {old_domain} → {new_domain}"),
+        "Site domain has been updated", "info", "site", None,
+    ).await;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "old_domain": old_domain,
+        "new_domain": new_domain,
+    })))
 }

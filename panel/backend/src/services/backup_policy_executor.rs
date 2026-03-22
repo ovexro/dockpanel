@@ -79,6 +79,20 @@ async fn tick(db: &PgPool, agent: &AgentClient) -> Result<(), String> {
         execute_policy(db, agent, policy).await;
     }
 
+    // Record backup storage metric for growth tracking
+    let total_storage: Option<(i64,)> = sqlx::query_as(
+        "SELECT COALESCE(SUM(size_bytes), 0) FROM ( \
+            SELECT size_bytes FROM backups UNION ALL \
+            SELECT size_bytes FROM database_backups UNION ALL \
+            SELECT size_bytes FROM volume_backups \
+        ) t"
+    ).fetch_one(db).await.ok();
+    if let Some((bytes,)) = total_storage {
+        let _ = sqlx::query(
+            "INSERT INTO system_logs (level, source, message) VALUES ('info', 'backup_storage', $1)"
+        ).bind(format!("{}", bytes)).execute(db).await;
+    }
+
     // Proactive backup freshness alerting — once per hour
     let now_ts = now.timestamp();
     let last_check = LAST_STALE_CHECK.load(std::sync::atomic::Ordering::Relaxed);

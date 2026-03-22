@@ -414,6 +414,7 @@ async fn send_alerts(pool: &PgPool, monitor: &MonitorRow, message: &str) {
         discord_url: monitor.alert_discord_url.clone(),
         pagerduty_key,
         webhook_url,
+        muted_types: String::new(),
     };
 
     let subject = format!("DockPanel Alert: {}", monitor.name);
@@ -537,6 +538,7 @@ async fn notify_status_subscribers(pool: &PgPool, monitor_name: &str, status: &s
                 discord_url: None,
                 pagerduty_key: None,
                 webhook_url: None,
+                muted_types: String::new(),
             },
             &subject,
             message,

@@ -168,6 +168,19 @@ pub async fn login(
         }
     }
 
+    // GAP 68: IP whitelist check — block login from non-whitelisted IPs
+    let whitelist: Option<(String,)> = sqlx::query_as(
+        "SELECT value FROM settings WHERE key = 'allowed_panel_ips'"
+    ).fetch_optional(&state.db).await.ok().flatten();
+    if let Some((ips,)) = whitelist {
+        if !ips.is_empty() {
+            let client_ip = headers.get("x-real-ip").and_then(|v| v.to_str().ok()).unwrap_or("");
+            if !ips.split(',').any(|allowed| allowed.trim() == client_ip) {
+                return Err(err(StatusCode::FORBIDDEN, "Access denied: IP not whitelisted"));
+            }
+        }
+    }
+
     let user_opt: Option<User> = sqlx::query_as("SELECT * FROM users WHERE email = $1")
         .bind(&body.email)
         .fetch_optional(&state.db)
@@ -336,6 +349,10 @@ pub async fn logout(
         if let Some(jti) = claims.jti {
             let mut blacklist = state.token_blacklist.write().await;
             blacklist.insert(jti.clone());
+            drop(blacklist);
+            // GAP 66: Persist to DB (survives restart)
+            let _ = sqlx::query("INSERT INTO token_blacklist (jti, expires_at) VALUES ($1, NOW() + INTERVAL '2 hours') ON CONFLICT DO NOTHING")
+                .bind(&jti).execute(&state.db).await;
             // Remove session record
             let _ = sqlx::query("DELETE FROM user_sessions WHERE jti = $1")
                 .bind(&jti)
@@ -1138,8 +1155,12 @@ pub async fn revoke_session(
     if let Some((jti,)) = session {
         // Add to token blacklist so the JWT is immediately invalid
         let mut blacklist = state.token_blacklist.write().await;
-        blacklist.insert(jti);
+        blacklist.insert(jti.clone());
         drop(blacklist);
+
+        // GAP 66: Persist to DB (survives restart)
+        let _ = sqlx::query("INSERT INTO token_blacklist (jti, expires_at) VALUES ($1, NOW() + INTERVAL '2 hours') ON CONFLICT DO NOTHING")
+            .bind(&jti).execute(&state.db).await;
 
         // Delete session record
         sqlx::query("DELETE FROM user_sessions WHERE id = $1")
@@ -1152,4 +1173,35 @@ pub async fn revoke_session(
     } else {
         Err(err(StatusCode::NOT_FOUND, "Session not found"))
     }
+}
+
+/// GET /api/auth/export-my-data — Export all personal data (GDPR)
+pub async fn export_my_data(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = sqlx::query_as::<_, (String, String, Option<String>, bool, chrono::DateTime<chrono::Utc>)>(
+        "SELECT email, role, oauth_provider, totp_enabled, created_at FROM users WHERE id = $1"
+    ).bind(claims.sub).fetch_one(&state.db).await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let sites: Vec<(String, String)> = sqlx::query_as(
+        "SELECT domain, runtime FROM sites WHERE user_id = $1"
+    ).bind(claims.sub).fetch_all(&state.db).await.unwrap_or_default();
+
+    let activity: Vec<(String, Option<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT action, target_name, created_at FROM activity_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100"
+    ).bind(claims.sub).fetch_all(&state.db).await.unwrap_or_default();
+
+    let sessions: Vec<(Option<String>, Option<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT ip_address, user_agent, created_at FROM user_sessions WHERE user_id = $1"
+    ).bind(claims.sub).fetch_all(&state.db).await.unwrap_or_default();
+
+    Ok(Json(serde_json::json!({
+        "user": { "email": user.0, "role": user.1, "oauth_provider": user.2, "2fa_enabled": user.3, "created_at": user.4 },
+        "sites": sites.iter().map(|(d,r)| serde_json::json!({"domain": d, "runtime": r})).collect::<Vec<_>>(),
+        "recent_activity": activity.iter().map(|(a,t,c)| serde_json::json!({"action": a, "target": t, "at": c})).collect::<Vec<_>>(),
+        "sessions": sessions.iter().map(|(ip,ua,c)| serde_json::json!({"ip": ip, "user_agent": ua, "at": c})).collect::<Vec<_>>(),
+        "exported_at": chrono::Utc::now(),
+    })))
 }
