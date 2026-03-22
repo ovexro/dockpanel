@@ -41,6 +41,7 @@ export const navGroups: NavGroup[] = [
     items: [
       { to: "/dns", label: "DNS", iconName: "dns" },
       { to: "/mail", label: "Mail", iconName: "mail", adminOnly: true },
+      { to: "/backup-orchestrator", label: "Backups", iconName: "backups", adminOnly: true },
       { to: "/monitoring", label: "Monitoring", iconName: "monitoring" },
       { to: "/logs", label: "Logs", iconName: "logs", adminOnly: true },
       { to: "/terminal", label: "Terminal", iconName: "terminal" },

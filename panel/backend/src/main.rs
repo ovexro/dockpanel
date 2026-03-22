@@ -266,6 +266,9 @@ async fn main() {
     let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
     spawn_supervised("preview_cleanup", &shutdown_tx, move |rx| services::preview_cleanup::run(s_db.clone(), s_agent.clone(), rx));
 
+    let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
+    spawn_supervised("backup_verifier", &shutdown_tx, move |rx| services::backup_verifier::run(s_db.clone(), s_agent.clone(), rx));
+
     // Periodic cleanup of token blacklist and rate limiters (every 15 minutes)
     let cleanup_blacklist = state.token_blacklist.clone();
     let cleanup_login = state.login_attempts.clone();

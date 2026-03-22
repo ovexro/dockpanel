@@ -94,6 +94,7 @@ const Servers = lazyRetry(() => import("./pages/Servers"));
 const ResellerDashboard = lazyRetry(() => import("./pages/ResellerDashboard"));
 const MigrationWizard = lazyRetry(() => import("./pages/Migration"));
 const ResellerUsers = lazyRetry(() => import("./pages/ResellerUsers"));
+const BackupOrchestrator = lazyRetry(() => import("./pages/BackupOrchestrator"));
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -139,6 +140,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/reseller" element={<ResellerDashboard />} />
               <Route path="/reseller/users" element={<ResellerUsers />} />
               <Route path="/users" element={<Navigate to="/settings" replace />} />
+              <Route path="/backup-orchestrator" element={<BackupOrchestrator />} />
               <Route path="/monitoring" element={<Monitoring />} />
               <Route path="/monitors" element={<Navigate to="/monitoring" replace />} />
               <Route path="/alerts" element={<Navigate to="/monitoring" replace />} />
