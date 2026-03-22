@@ -376,7 +376,7 @@ export default function CommandLayout() {
 
         {/* 2FA warning */}
         {state.twoFaEnforced && !state.twoFaEnabled && (
-          <div className={`border-b px-4 py-3 flex items-center justify-between ${isLight ? "bg-amber-50 border-amber-200" : "bg-warn-500/10 border-warn-500/20"}`}>
+          <div className={`border-b px-4 py-3 flex items-center justify-between ${isLight ? "bg-warn-500/5 border-warn-500/20" : "bg-warn-500/10 border-warn-500/20"}`}>
             <div className="flex items-center gap-2">
               <svg className="w-5 h-5 text-warn-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />

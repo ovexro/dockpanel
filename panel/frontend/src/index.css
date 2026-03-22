@@ -295,8 +295,8 @@ body {
   --radius: 8px;
   --radius-md: 8px;
   --radius-lg: 12px;
-  --radius-xl: 14px;
-  --radius-2xl: 18px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
   --radius-3xl: 24px;
 }
 
@@ -433,7 +433,7 @@ body {
 
 [data-theme="clean"] ::-webkit-scrollbar-thumb {
   background: #d1d5db;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 
 [data-theme="clean"] ::-webkit-scrollbar-thumb:hover {
@@ -516,7 +516,7 @@ body {
   background-color: #ffffff !important;
   border-color: #e2e8f0 !important;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02) !important;
-  border-radius: 12px !important;
+  border-radius: var(--radius-lg) !important;
 }
 
 /* Inner card tint in content area */
@@ -526,7 +526,7 @@ body {
 
 /* Round all bordered containers in content area */
 [data-theme="clean"] main [class*="border-dark-"] {
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 
 /* ── Nexus: Modal overrides — fixed overlays inside <main> need proper contrast ── */
@@ -534,7 +534,7 @@ body {
   background-color: #ffffff !important;
   border: 1px solid #d1d5db !important;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15), 0 4px 16px rgba(0, 0, 0, 0.1) !important;
-  border-radius: 12px !important;
+  border-radius: var(--radius-lg) !important;
 }
 
 [data-theme="clean"] .dp-modal-overlay {
@@ -600,7 +600,7 @@ body {
 /* Keep table wrapper containers rounded */
 [data-theme="clean"] main [class*="overflow-hidden"][class*="border-dark-"],
 [data-theme="clean"] main [class*="overflow-x-auto"] {
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 
 /* Table headers — clean light style */
@@ -641,7 +641,7 @@ body {
 [data-theme="clean"] a[class*="bg-rust-500"] {
   background-color: #2563eb !important;
   color: white !important;
-  border-radius: 8px !important;
+  border-radius: var(--radius-md) !important;
 }
 
 [data-theme="clean"] button[class*="bg-rust-500"]:hover,
@@ -699,7 +699,7 @@ body {
 /* Secondary/outline buttons */
 [data-theme="clean"] button[class*="border-dark-"] {
   border-color: #d1d5db !important;
-  border-radius: 8px !important;
+  border-radius: var(--radius-md) !important;
   background-color: #ffffff !important;
 }
 
@@ -713,7 +713,7 @@ body {
 [data-theme="clean"] button[class*="bg-dark-800"] {
   background-color: #ffffff !important;
   border: 1px solid #d1d5db !important;
-  border-radius: 8px !important;
+  border-radius: var(--radius-md) !important;
 }
 
 [data-theme="clean"] button[class*="bg-dark-700"]:hover,
@@ -725,7 +725,7 @@ body {
 /* Danger button (Reboot) keeps red */
 [data-theme="clean"] button[class*="bg-danger-"],
 [data-theme="clean"] button[class*="text-danger-"] {
-  border-radius: 8px !important;
+  border-radius: var(--radius-md) !important;
 }
 
 /* Progress bars — blue (catch all thin bar variants) */
@@ -782,7 +782,7 @@ body {
 /* Stat grid (Uptime, Sites, Databases, etc.) — add subtle card styling */
 [data-theme="clean"] [class*="grid"] > [class*="text-center"] {
   background-color: #ffffff;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 12px;
   border: 1px solid #f3f4f6;
 }
@@ -813,7 +813,7 @@ body {
 [data-theme="clean"] pre {
   background-color: #f3f4f6 !important;
   color: #1f2937 !important;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 
 /* Toggle switches — indigo when active */
@@ -903,6 +903,139 @@ body {
 [data-theme="clean-dark"] [class*="tracking-wider"],
 [data-theme="clean-dark"] [class*="tracking-widest"] {
   letter-spacing: normal !important;
+}
+
+/* ── Clean-Dark: rounding & structural overrides (parity with Clean) ── */
+
+/* Cards/panels in content area: enforce round corners */
+[data-theme="clean-dark"] main [class*="bg-dark-950"],
+[data-theme="clean-dark"] main [class*="bg-dark-900"] {
+  border-radius: var(--radius-lg) !important;
+}
+
+/* Round all bordered containers in content area */
+[data-theme="clean-dark"] main [class*="border-dark-"] {
+  border-radius: var(--radius-lg);
+}
+
+/* Modal — rounded */
+[data-theme="clean-dark"] .dp-modal {
+  border-radius: var(--radius-lg) !important;
+}
+
+/* Prevent rounding on table internals and nested dividers */
+[data-theme="clean-dark"] td,
+[data-theme="clean-dark"] th,
+[data-theme="clean-dark"] tr,
+[data-theme="clean-dark"] thead,
+[data-theme="clean-dark"] tbody,
+[data-theme="clean-dark"] main [class*="divide-"] > * {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Keep table wrapper containers rounded */
+[data-theme="clean-dark"] main [class*="overflow-hidden"][class*="border-dark-"],
+[data-theme="clean-dark"] main [class*="overflow-x-auto"] {
+  border-radius: var(--radius-lg);
+}
+
+/* Table headers — slightly lighter bg for contrast */
+[data-theme="clean-dark"] thead {
+  background-color: var(--color-dark-900) !important;
+}
+
+[data-theme="clean-dark"] thead th {
+  font-weight: 500 !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+}
+
+/* Table row hover */
+[data-theme="clean-dark"] tbody tr:hover {
+  background-color: var(--color-dark-800) !important;
+}
+
+/* Buttons — rounded */
+[data-theme="clean-dark"] button[class*="bg-rust-500"],
+[data-theme="clean-dark"] button[class*="bg-rust-600"],
+[data-theme="clean-dark"] a[class*="bg-rust-500"] {
+  border-radius: var(--radius-md) !important;
+}
+
+/* Secondary/outline buttons */
+[data-theme="clean-dark"] button[class*="border-dark-"] {
+  border-radius: var(--radius-md) !important;
+}
+
+/* Action bar buttons */
+[data-theme="clean-dark"] button[class*="bg-dark-700"],
+[data-theme="clean-dark"] button[class*="bg-dark-800"] {
+  border-radius: var(--radius-md) !important;
+}
+
+/* Danger button */
+[data-theme="clean-dark"] button[class*="bg-danger-"],
+[data-theme="clean-dark"] button[class*="text-danger-"] {
+  border-radius: var(--radius-md) !important;
+}
+
+/* Elevated cards — refined shadow */
+[data-theme="clean-dark"] .card-elevated {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.15) !important;
+}
+
+/* Hover lift — refined */
+[data-theme="clean-dark"] .hover-lift:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+/* Scrollbar — subtle dark */
+[data-theme="clean-dark"] ::-webkit-scrollbar-track {
+  background: var(--color-dark-950);
+  border-left: 1px solid var(--color-dark-700);
+}
+
+[data-theme="clean-dark"] ::-webkit-scrollbar-thumb {
+  background: var(--color-dark-600);
+  border-radius: var(--radius-xs);
+}
+
+[data-theme="clean-dark"] ::-webkit-scrollbar-thumb:hover {
+  background: var(--color-dark-500);
+}
+
+/* Selection */
+[data-theme="clean-dark"] ::selection {
+  background: rgba(59, 130, 246, 0.3);
+  color: #f0f6fc;
+}
+
+/* Focus rings */
+[data-theme="clean-dark"] *:focus-visible {
+  outline-color: #3b82f6;
+}
+
+[data-theme="clean-dark"] input:focus-visible,
+[data-theme="clean-dark"] textarea:focus-visible,
+[data-theme="clean-dark"] select:focus-visible {
+  outline-color: #3b82f6;
+}
+
+/* Progress bar track */
+[data-theme="clean-dark"] [class*="bg-dark-700"][class*="rounded-full"][class*="overflow-hidden"] {
+  background-color: var(--color-dark-600) !important;
+}
+
+/* Code blocks */
+[data-theme="clean-dark"] code,
+[data-theme="clean-dark"] pre {
+  border-radius: var(--radius-sm);
+}
+
+/* Page header — subtle border */
+[data-theme="clean-dark"] .page-header {
+  border-color: var(--color-dark-700);
 }
 
 /* Midnight: clean SaaS typography */
@@ -1187,14 +1320,45 @@ select:focus-visible {
 [data-theme="clean-dark"] [class*="rounded-full"][class*="overflow-hidden"] [class*="bg-rust-500"] {
   box-shadow: 0 0 8px rgba(59, 130, 246, 0.3);
 }
+[data-theme="arctic"] [class*="rounded-full"][class*="overflow-hidden"] [class*="bg-rust-500"] {
+  box-shadow: 0 0 8px rgba(13, 148, 136, 0.3);
+}
+[data-theme="clean"] [class*="rounded-full"][class*="overflow-hidden"] [class*="bg-rust-500"] {
+  box-shadow: 0 0 8px rgba(37, 99, 235, 0.3);
+}
 
 /* ── Bolder status indicators ──
    Make status dots larger and add subtle glow */
-[class*="rounded-full"][class*="bg-rust-500"][class*="w-2"],
-[class*="rounded-full"][class*="bg-rust-400"][class*="w-2"] {
+/* Status dots — per-theme glow colors */
+[data-theme="terminal"] [class*="rounded-full"][class*="bg-rust-"][class*="w-2"] {
   width: 10px !important;
   height: 10px !important;
   box-shadow: 0 0 6px rgba(34, 197, 94, 0.4);
+}
+[data-theme="midnight"] [class*="rounded-full"][class*="bg-rust-"][class*="w-2"] {
+  width: 10px !important;
+  height: 10px !important;
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.4);
+}
+[data-theme="ember"] [class*="rounded-full"][class*="bg-rust-"][class*="w-2"] {
+  width: 10px !important;
+  height: 10px !important;
+  box-shadow: 0 0 6px rgba(251, 146, 60, 0.4);
+}
+[data-theme="arctic"] [class*="rounded-full"][class*="bg-rust-"][class*="w-2"] {
+  width: 10px !important;
+  height: 10px !important;
+  box-shadow: 0 0 6px rgba(13, 148, 136, 0.4);
+}
+[data-theme="clean"] [class*="rounded-full"][class*="bg-rust-"][class*="w-2"] {
+  width: 10px !important;
+  height: 10px !important;
+  box-shadow: 0 0 6px rgba(37, 99, 235, 0.4);
+}
+[data-theme="clean-dark"] [class*="rounded-full"][class*="bg-rust-"][class*="w-2"] {
+  width: 10px !important;
+  height: 10px !important;
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.4);
 }
 [class*="rounded-full"][class*="bg-danger-"][class*="w-2"] {
   width: 10px !important;
