@@ -15,6 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Database restore** — New `POST /db-backups/{db_name}/restore/{filename}` agent endpoint + `POST /api/backup-orchestrator/db-backups/{id}/restore` API endpoint. Supports MySQL/MariaDB, PostgreSQL, and MongoDB restore from backup files
 - **Dashboard health score** — Now factors in backup freshness (-5 per stale site), security scan findings (-10 critical, -3 warning), and open incidents (-10 each)
 - **Smart recommendations** — Dashboard intelligence endpoint returns actionable recommendations: stale backups, security findings, open incidents, expiring SSL, firing alerts, diagnostic issues. Rendered as a new Recommendations panel on the dashboard
+- **Alert escalation** — Unacknowledged firing alerts re-notify with `[ESCALATED]` prefix after 15 minutes, then every 30 minutes. New `escalated_at` column + migration
+- **Alert-to-incident correlation** — Before creating a new incident from an alert, checks for existing active incidents within 5 minutes. Appends as incident update instead of creating duplicates
+- **Auto-healer restart limit** — Tracks restart count per service over 30-minute window. After 3 failed restarts, stops healing, creates critical incident, sends notification, and marks state as `exhausted`
 
 ## [2.5.2] - 2026-03-22
 
