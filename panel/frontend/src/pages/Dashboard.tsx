@@ -704,19 +704,7 @@ export default function Dashboard() {
             ))}
           </div>}
 
-          {/* Feature #3: Disk I/O widget */}
-          {isVisible("disk_io") && diskIo && (
-            <div className="grid grid-cols-2 gap-4 mb-6 max-w-md">
-              <div className="border border-dark-700 rounded-lg p-3 text-center bg-dark-800/50">
-                <p className="text-xs text-dark-300 uppercase font-mono tracking-wider">Disk Read</p>
-                <p className="text-sm font-bold text-dark-50 mt-1">{formatRate(diskIo.read_bytes_sec)}</p>
-              </div>
-              <div className="border border-dark-700 rounded-lg p-3 text-center bg-dark-800/50">
-                <p className="text-xs text-dark-300 uppercase font-mono tracking-wider">Disk Write</p>
-                <p className="text-sm font-bold text-dark-50 mt-1">{formatRate(diskIo.write_bytes_sec)}</p>
-              </div>
-            </div>
-          )}
+          {/* Disk I/O moved into stat bar below */}
 
           {/* Historical Charts */}
           {isVisible("charts") && metricsHistory.length >= 2 && (
@@ -809,6 +797,17 @@ export default function Dashboard() {
                 : <span className="text-sm text-rust-400 font-medium">up to date</span>
               }
             </div>
+            {/* Disk I/O */}
+            {diskIo && <>
+              <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
+                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Disk Read</span>
+                <span className="text-sm text-dark-50 font-medium font-mono">{formatRate(diskIo.read_bytes_sec)}</span>
+              </div>
+              <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
+                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Disk Write</span>
+                <span className="text-sm text-dark-50 font-medium font-mono">{formatRate(diskIo.write_bytes_sec)}</span>
+              </div>
+            </>}
             {/* Feature #6: Bandwidth usage summary */}
             <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
               <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Bandwidth</span>
