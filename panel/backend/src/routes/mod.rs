@@ -593,6 +593,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/dashboard/metrics-history", get(dashboard::metrics_history))
         .route("/api/dashboard/docker", get(dashboard::docker_summary))
         .route("/api/dashboard/timeline", get(dashboard::timeline))
+        .route("/api/dashboard/fleet", get(dashboard::fleet_overview))
         // Live metrics WebSocket
         .route("/api/ws/metrics", get(ws_metrics::handler))
         // SSH Keys
