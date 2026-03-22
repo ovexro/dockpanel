@@ -1,8 +1,12 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
+    response::sse::{Event, KeepAlive, Sse},
     Json,
 };
+use futures::stream::StreamExt;
+use std::time::Duration;
+use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
@@ -90,4 +94,33 @@ pub async fn mark_all_read(
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// GET /api/notifications/stream — SSE stream for real-time notification delivery.
+/// Filters events to only those belonging to the authenticated user.
+pub async fn stream(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Sse<impl futures::Stream<Item = Result<Event, axum::BoxError>>> {
+    let rx = state.notif_tx.subscribe();
+    let user_id = claims.sub;
+
+    let live_stream = BroadcastStream::new(rx).filter_map(move |result| {
+        let user_id = user_id;
+        async move {
+            match result {
+                Ok((uid, json)) if uid == user_id => {
+                    Some(Ok(Event::default().data(json)))
+                }
+                Ok(_) => None,           // Not for this user
+                Err(_) => None,           // Lagged or closed — skip
+            }
+        }
+    });
+
+    Sse::new(live_stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(30))
+            .text("keepalive"),
+    )
 }

@@ -1,6 +1,7 @@
 use sqlx::PgPool;
 use std::sync::OnceLock;
 use std::time::Duration;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 /// Shared HTTP client for webhook notifications (reuses connections).
@@ -12,6 +13,17 @@ fn http_client() -> &'static reqwest::Client {
             .build()
             .unwrap_or_default()
     })
+}
+
+// ── Real-time notification broadcast (SSE) ─────────────────────────────────
+
+/// Global broadcast sender for real-time notification delivery.
+/// Initialized once from main.rs at startup via `init_notif_broadcast`.
+static NOTIF_TX: OnceLock<broadcast::Sender<(Uuid, String)>> = OnceLock::new();
+
+/// Register the broadcast sender (called once from main.rs).
+pub fn init_notif_broadcast(tx: broadcast::Sender<(Uuid, String)>) {
+    NOTIF_TX.set(tx).ok();
 }
 
 /// Notification channels for delivering alerts.
@@ -345,6 +357,7 @@ pub async fn try_fire_alert(
 
 /// Insert notification into the panel notification center (bell icon).
 /// Pass user_id = None to notify all admins.
+/// Also broadcasts via SSE for real-time delivery.
 pub async fn notify_panel(
     db: &sqlx::PgPool,
     user_id: Option<uuid::Uuid>,
@@ -354,11 +367,26 @@ pub async fn notify_panel(
     category: &str,
     link: Option<&str>,
 ) {
+    // Build JSON payload once for SSE broadcast
+    let notif_json = serde_json::json!({
+        "title": title,
+        "message": message,
+        "severity": severity,
+        "category": category,
+        "link": link,
+    })
+    .to_string();
+
     if let Some(uid) = user_id {
         let _ = sqlx::query(
             "INSERT INTO panel_notifications (user_id, title, message, severity, category, link) VALUES ($1, $2, $3, $4, $5, $6)"
         ).bind(uid).bind(title).bind(message).bind(severity).bind(category).bind(link)
         .execute(db).await;
+
+        // Broadcast to SSE subscribers
+        if let Some(tx) = NOTIF_TX.get() {
+            let _ = tx.send((uid, notif_json));
+        }
     } else {
         let admins: Vec<(uuid::Uuid,)> = sqlx::query_as("SELECT id FROM users WHERE role = 'admin'")
             .fetch_all(db).await.unwrap_or_default();
@@ -367,6 +395,11 @@ pub async fn notify_panel(
                 "INSERT INTO panel_notifications (user_id, title, message, severity, category, link) VALUES ($1, $2, $3, $4, $5, $6)"
             ).bind(admin_id).bind(title).bind(message).bind(severity).bind(category).bind(link)
             .execute(db).await;
+
+            // Broadcast to SSE subscribers
+            if let Some(tx) = NOTIF_TX.get() {
+                let _ = tx.send((*admin_id, notif_json.clone()));
+            }
         }
     }
 }

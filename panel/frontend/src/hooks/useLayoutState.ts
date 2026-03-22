@@ -64,7 +64,7 @@ export function useLayoutState(): LayoutState {
     localStorage.setItem("dp-theme", theme);
   }, [theme]);
 
-  // Alert count + notification count polling
+  // Alert count + notification count polling (fallback, 60s since SSE handles real-time)
   const alertTimer = useRef<ReturnType<typeof setInterval>>(undefined);
   useEffect(() => {
     const fetchCounts = () => {
@@ -79,8 +79,23 @@ export function useLayoutState(): LayoutState {
         .catch(() => {});
     };
     fetchCounts();
-    alertTimer.current = setInterval(fetchCounts, 30000);
+    alertTimer.current = setInterval(fetchCounts, 60000);
     return () => { if (alertTimer.current) clearInterval(alertTimer.current); };
+  }, []);
+
+  // SSE connection for real-time notification delivery
+  useEffect(() => {
+    const es = new EventSource("/api/notifications/stream");
+    es.onmessage = () => {
+      // Refresh unread count on any new notification
+      api.get<{ count: number }>("/notifications/unread-count")
+        .then((d) => setNotifCount(d.count))
+        .catch(() => {});
+    };
+    es.onerror = () => {
+      // Browser auto-reconnects EventSource on error
+    };
+    return () => es.close();
   }, []);
 
   // Health check polling
