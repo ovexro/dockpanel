@@ -308,6 +308,26 @@ pub async fn deploy(
                 crate::services::extensions::fire_event(&db, "app.deployed", serde_json::json!({
                     "name": app_name, "domain": deploy_domain,
                 }));
+
+                // GAP 12: Auto-create monitor for Docker app with domain
+                if let Some(ref domain) = deploy_domain {
+                    let url = format!("https://{domain}");
+                    let _ = sqlx::query(
+                        "INSERT INTO monitors (user_id, url, name, check_interval, status, enabled, monitor_type) \
+                         VALUES ($1, $2, $3, 60, 'pending', TRUE, 'http') ON CONFLICT DO NOTHING"
+                    )
+                    .bind(user_id).bind(&url).bind(&format!("{app_name} ({domain})"))
+                    .execute(&db).await;
+
+                    // Auto-create status page component
+                    let _ = sqlx::query(
+                        "INSERT INTO status_page_components (user_id, name, description, group_name) \
+                         SELECT $1, $2, $3, 'Docker Apps' WHERE EXISTS (SELECT 1 FROM status_page_config WHERE user_id = $1 AND enabled = TRUE)"
+                    )
+                    .bind(user_id).bind(&app_name)
+                    .bind(format!("Docker app: {app_name}"))
+                    .execute(&db).await;
+                }
             }
             Err(e) => {
                 emit("pull", "Pulling Docker image", "error", Some(format!("Deploy failed: {e}")));
