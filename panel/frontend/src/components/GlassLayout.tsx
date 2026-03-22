@@ -14,6 +14,7 @@ export default function GlassLayout() {
     theme,
     cycleTheme,
     firingCount,
+    incidentCount,
     apiHealthy,
     twoFaEnforced,
     twoFaEnabled,
@@ -191,6 +192,11 @@ export default function GlassLayout() {
                         {item.to === "/monitoring" && firingCount > 0 && (
                           <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-danger-500 text-white rounded-full min-w-[20px] text-center shrink-0">
                             {firingCount}
+                          </span>
+                        )}
+                        {item.to === "/incidents" && incidentCount > 0 && (
+                          <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-warn-500 text-dark-900 rounded-full min-w-[20px] text-center shrink-0">
+                            {incidentCount}
                           </span>
                         )}
                       </div>
