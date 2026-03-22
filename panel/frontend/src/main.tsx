@@ -23,6 +23,7 @@ import "./index.css";
   localStorage.setItem("dp-theme", theme);
   document.documentElement.setAttribute("data-theme", theme);
   document.documentElement.setAttribute("data-layout", layout);
+  document.documentElement.setAttribute("data-color-scheme", (theme === "clean" || theme === "arctic") ? "light" : "dark");
 })();
 
 // Retry lazy import — handles stale chunks after deploy
