@@ -110,9 +110,9 @@ export default function CommandLayout() {
                   </svg>
                 </div>
                 {!branding.hideBranding && (
-                  <span className="text-lg font-bold tracking-widest uppercase font-mono logo-glow">
+                  <span className="text-lg font-bold logo-glow">
                     {branding.panelName === "DockPanel" ? (
-                      <><span className="text-rust-500">Dock</span><span className="text-dark-50">Panel</span></>
+                      <><span className="text-rust-400">Dock</span><span className="text-dark-50">Panel</span></>
                     ) : (
                       <span className="text-dark-50">{branding.panelName}</span>
                     )}
@@ -167,8 +167,8 @@ export default function CommandLayout() {
                     className={({ isActive }) =>
                       `flex items-center gap-3 px-4 py-2 transition-colors text-sm uppercase tracking-wider ${
                         isActive
-                          ? "bg-dark-50/5 text-dark-50 font-bold border-l-2 border-dark-50"
-                          : "text-dark-300 hover:text-dark-50 hover:bg-dark-700/50"
+                          ? "bg-rust-500/10 text-rust-400 font-bold border-l-2 border-rust-500"
+                          : "text-dark-300 hover:text-dark-100 hover:bg-dark-700/30"
                       }`
                     }
                   >
@@ -238,7 +238,7 @@ export default function CommandLayout() {
       {/* Main content */}
       <main id="main-content" className="flex-1 overflow-auto">
         {/* Mobile header with hamburger */}
-        <div className="sticky top-0 z-30 flex items-center gap-3 px-4 py-3 bg-dark-900 border-b border-dark-600 md:hidden">
+        <div className="sticky top-0 z-30 flex items-center gap-3 px-4 py-3 bg-dark-900/80 backdrop-blur-lg border-b border-dark-600 md:hidden">
           <button
             onClick={() => state.setSidebarOpen(true)}
             className="p-2 text-dark-200 hover:text-dark-50 hover:bg-dark-700 rounded-lg"
@@ -248,12 +248,12 @@ export default function CommandLayout() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
             </svg>
           </button>
-          <span className="text-base font-bold tracking-widest uppercase font-mono logo-glow">
-            {branding.hideBranding ? "" : branding.panelName === "DockPanel" ? <><span className="text-rust-500">Dock</span><span className="text-dark-100">Panel</span></> : <span className="text-dark-100">{branding.panelName}</span>}
+          <span className="text-base font-bold logo-glow">
+            {branding.hideBranding ? "" : branding.panelName === "DockPanel" ? <><span className="text-rust-400">Dock</span><span className="text-dark-50">Panel</span></> : <span className="text-dark-50">{branding.panelName}</span>}
           </span>
         </div>
         {state.twoFaEnforced && !state.twoFaEnabled && (
-          <div className="bg-warn-500/10 border-b border-warn-500/20 px-4 py-3 flex items-center justify-between">
+          <div className={`border-b px-4 py-3 flex items-center justify-between ${isLight ? "bg-amber-50 border-amber-200" : "bg-warn-500/10 border-warn-500/20"}`}>
             <div className="flex items-center gap-2">
               <svg className="w-5 h-5 text-warn-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />

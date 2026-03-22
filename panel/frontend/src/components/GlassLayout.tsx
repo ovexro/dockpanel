@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Navigate, Outlet, NavLink, Link } from "react-router-dom";
 import { useLayoutState } from "../hooks/useLayoutState";
+import { useServer } from "../context/ServerContext";
 import { Icon } from "../data/icons";
 import CommandPalette from "./CommandPalette";
 import LayoutSwitcher from "./LayoutSwitcher";
@@ -21,6 +22,7 @@ export default function GlassLayout() {
     visibleGroups,
   } = useLayoutState();
   const isLight = theme === "clean" || theme === "arctic";
+  const { servers, activeServer, setActiveServerId } = useServer();
 
   const [hovered, setHovered] = useState(false);
 
@@ -134,6 +136,19 @@ export default function GlassLayout() {
             </kbd>
           </button>
         </div>
+
+        {/* Server selector (expanded only) */}
+        {servers.length > 1 && (expanded || sidebarOpen) && (
+          <div className="px-3 pt-2">
+            <select
+              value={activeServer?.id || ""}
+              onChange={e => { setActiveServerId(e.target.value); window.location.href = "/"; }}
+              className="w-full px-3 py-2 rounded-lg bg-dark-800/50 border border-dark-600/30 text-sm text-dark-200 outline-none"
+            >
+              {servers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+        )}
 
         {/* ── Nav ────────────────────────────────────────────────── */}
         <nav className="flex-1 px-2 pt-4 overflow-y-auto overflow-x-hidden">
@@ -299,7 +314,7 @@ export default function GlassLayout() {
 
         {/* 2FA enforcement warning */}
         {twoFaEnforced && !twoFaEnabled && (
-          <div className="bg-warn-500/10 border-b border-warn-500/20 px-4 py-3 flex items-center justify-between">
+          <div className={`border-b px-4 py-3 flex items-center justify-between ${isLight ? "bg-amber-50 border-amber-200" : "bg-warn-500/10 border-warn-500/20"}`}>
             <div className="flex items-center gap-2">
               <svg
                 className="w-5 h-5 text-warn-400"

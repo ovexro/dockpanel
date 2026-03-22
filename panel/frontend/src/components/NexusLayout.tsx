@@ -29,7 +29,7 @@ function ServerSelector() {
         onClick={() => setOpen(!open)}
         className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-dark-800 border border-dark-600 text-sm text-dark-300 hover:text-dark-50 hover:border-dark-400 transition-colors"
       >
-        <div className={`w-2 h-2 rounded-full shrink-0 ${activeServer?.status === "online" ? "bg-emerald-500" : activeServer?.status === "offline" ? "bg-rose-500" : "bg-dark-400"}`} />
+        <div className={`w-2 h-2 rounded-full shrink-0 ${activeServer?.status === "online" ? "bg-rust-500" : activeServer?.status === "offline" ? "bg-danger-500" : "bg-dark-400"}`} />
         <span className="flex-1 text-left truncate">{activeServer?.name || "Select server"}</span>
         <svg className={`w-4 h-4 transition-transform ${open ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" /></svg>
       </button>
@@ -41,7 +41,7 @@ function ServerSelector() {
               onClick={() => { setActiveServerId(s.id); setOpen(false); window.location.href = "/"; }}
               className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-dark-800 transition-colors ${s.id === activeServer?.id ? "bg-dark-800 text-dark-50" : "text-dark-400"}`}
             >
-              <div className={`w-2 h-2 rounded-full shrink-0 ${s.status === "online" ? "bg-emerald-500" : s.status === "offline" ? "bg-rose-500" : "bg-dark-400"}`} />
+              <div className={`w-2 h-2 rounded-full shrink-0 ${s.status === "online" ? "bg-rust-500" : s.status === "offline" ? "bg-danger-500" : "bg-dark-400"}`} />
               <span className="flex-1 truncate">{s.name}</span>
               {s.is_local && <span className="text-[10px] text-dark-400 uppercase">local</span>}
             </button>
@@ -104,17 +104,22 @@ export default function NexusLayout() {
               <img src={branding.logoUrl} alt={branding.panelName} className="h-8 w-auto max-w-[160px] object-contain" />
             ) : (
               <>
-                <div className="p-1.5 bg-rust-500 rounded-lg">
-                  <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <rect x="2" y="2" width="20" height="8" rx="2" />
-                    <rect x="2" y="14" width="20" height="8" rx="2" />
-                    <circle cx="6" cy="6" r="1" fill="currentColor" />
-                    <circle cx="6" cy="18" r="1" fill="currentColor" />
+                <div className="w-8 h-8 bg-rust-500 rounded-lg flex items-center justify-center">
+                  <svg className="w-5 h-5 text-dark-950" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+                    <path d="M5 16h4" strokeLinecap="square" />
+                    <path d="M5 12h8" strokeLinecap="square" />
+                    <path d="M5 8h6" strokeLinecap="square" />
+                    <rect x="16" y="7" width="4" height="4" fill="currentColor" stroke="none" />
+                    <rect x="16" y="13" width="4" height="4" fill="currentColor" stroke="none" />
                   </svg>
                 </div>
                 {!branding.hideBranding && (
-                  <span className="text-lg font-bold tracking-tight text-dark-50">
-                    {branding.panelName}
+                  <span className="text-lg font-bold tracking-tight">
+                    {branding.panelName === "DockPanel" ? (
+                      <><span className="text-rust-400">Dock</span><span className="text-dark-50">Panel</span></>
+                    ) : (
+                      <span className="text-dark-50">{branding.panelName}</span>
+                    )}
                   </span>
                 )}
               </>
@@ -152,7 +157,7 @@ export default function NexusLayout() {
                   <span className={isActive ? "text-rust-400" : "text-dark-500"}><Icon name={item.iconName} className="w-5 h-5" /></span>
                   <span>{item.label}</span>
                   {item.to === "/monitoring" && state.firingCount > 0 && (
-                    <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-rose-500 text-white rounded-full min-w-[20px] text-center">
+                    <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-danger-500 text-white rounded-full min-w-[20px] text-center">
                       {state.firingCount}
                     </span>
                   )}
@@ -166,14 +171,14 @@ export default function NexusLayout() {
         <div className="p-4 border-t border-dark-700 space-y-3">
           {/* Health */}
           <div className={`flex items-center gap-2.5 px-3 py-2 rounded-lg ${
-  state.apiHealthy === true ? (isLight ? "bg-emerald-50" : "bg-emerald-500/10 border border-emerald-500/10") :
-  state.apiHealthy === false ? (isLight ? "bg-rose-50" : "bg-rose-500/10 border border-rose-500/10") :
+  state.apiHealthy === true ? "bg-rust-500/10 border border-rust-500/10" :
+  state.apiHealthy === false ? "bg-danger-500/10 border border-danger-500/10" :
   "bg-dark-800"
 }`}>
-            <div className={`w-2 h-2 rounded-full shrink-0 ${state.apiHealthy === true ? "bg-emerald-500" : state.apiHealthy === false ? "bg-rose-500" : "bg-dark-400"}`} />
+            <div className={`w-2 h-2 rounded-full shrink-0 ${state.apiHealthy === true ? "bg-rust-500" : state.apiHealthy === false ? "bg-danger-500 animate-pulse" : "bg-dark-400"}`} />
             <span className={`text-xs font-medium ${
-  state.apiHealthy === true ? (isLight ? "text-emerald-700" : "text-emerald-400") :
-  state.apiHealthy === false ? (isLight ? "text-rose-700" : "text-rose-400") :
+  state.apiHealthy === true ? "text-rust-400" :
+  state.apiHealthy === false ? "text-danger-400" :
   "text-dark-500"
 }`}>
               {state.apiHealthy === true ? "All Systems OK" : state.apiHealthy === false ? "Issues Detected" : "Checking..."}
@@ -181,7 +186,7 @@ export default function NexusLayout() {
           </div>
           {/* User + layout + logout */}
           <div className="flex items-center gap-2 px-3">
-            <div className="w-7 h-7 bg-rust-500 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0">
+            <div className="w-8 h-8 rounded-full bg-rust-500/15 flex items-center justify-center text-rust-400 text-xs font-bold shrink-0">
               {state.user.email[0]?.toUpperCase()}
             </div>
             <span className="flex-1 text-sm truncate text-dark-400">{state.user.email}</span>
@@ -228,7 +233,7 @@ export default function NexusLayout() {
             {state.firingCount > 0 && (
               <Link to="/monitoring" className="relative p-2 text-dark-400 hover:bg-dark-800 rounded-full transition-colors">
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" /></svg>
-                <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-rose-500 rounded-full border-2 border-dark-900" />
+                <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-danger-500 rounded-full border-2 border-dark-900" />
               </Link>
             )}
 
