@@ -458,16 +458,16 @@ export default function Dashboard() {
             <h1 className="page-header-title">Dashboard</h1>
             <p className="text-xs text-dark-400 mt-0.5">{system?.hostname || "Loading..."}</p>
           </div>
-          <span className="flex items-center gap-1.5" title={wsConnected ? "Receiving live metrics via WebSocket" : "Polling metrics via HTTP"}>
-            <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? "bg-rust-500 animate-pulse" : "bg-dark-400"}`} />
-            <span className="text-[10px] text-dark-400 font-mono">{wsConnected ? "Live" : "Polling"}</span>
-          </span>
           {intel && (
             <span className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium ${overallStatus.color}`}>
               <span className={`w-1.5 h-1.5 rounded-full ${overallStatus.dot} ${overallStatus.dot === "bg-rust-500" ? "animate-pulse" : ""}`} />
               {overallStatus.label}
             </span>
           )}
+          <span className="flex items-center gap-1.5" title={wsConnected ? "Receiving live metrics via WebSocket" : "Polling metrics via HTTP"}>
+            <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? "bg-rust-500 animate-pulse" : "bg-dark-400"}`} />
+            <span className="text-[10px] text-dark-400 font-mono">{wsConnected ? "Live" : "Polling"}</span>
+          </span>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <button onClick={() => setShowWidgetConfig(!showWidgetConfig)}
