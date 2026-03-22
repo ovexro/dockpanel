@@ -18,7 +18,7 @@ const features = [
   { icon: FileCode2, title: 'Infrastructure as Code', desc: 'Export your entire server config as YAML. Version control it, review diffs, apply to new servers. Reproducible infrastructure with dry-run support.' },
   { icon: Activity, title: 'Monitoring & Alerts', desc: 'Real-time CPU, RAM, disk, and network dashboards with historical sparklines. Uptime monitoring with configurable alert rules. Email, Slack, Discord, and PagerDuty notifications.' },
   { icon: Stethoscope, title: 'Smart Diagnostics', desc: 'Pattern-based log analysis, misconfiguration detection, and resource bottleneck identification. One-click fixes for common server issues.' },
-  { icon: HardDriveDownload, title: 'Backups & S3 Storage', desc: 'Scheduled backups with S3-compatible remote destinations. Per-site backup policies, one-click restore, and connection testing.' },
+  { icon: HardDriveDownload, title: 'Backup Orchestrator', desc: 'Database, volume & site backups with AES-256 encryption, automatic restore verification, and cross-resource policies. S3, B2, GCS, and SFTP destinations. Health dashboard with staleness alerts.' },
   { icon: Terminal, title: 'Web Terminal & File Manager', desc: 'Full SSH terminal in your browser with tabs, themes, sharing, and session recording. Built-in file manager — browse, edit, upload, and download files.' },
   { icon: ShieldCheck, title: 'Security & Scanning', desc: 'Firewall management, Fail2Ban, SSH hardening. Automated vulnerability scanning with compliance reports and security scoring. Auto-remediation for common findings.' },
   { icon: Cpu, title: 'ARM & Homelab Ready', desc: 'Runs on Raspberry Pi, Oracle Cloud free-tier ARM instances, and any ARM64 server. Same ~35MB binaries, same features, same performance.' },
@@ -418,7 +418,7 @@ export default function Landing() {
                     {[
                       'Unlimited servers', 'Unlimited sites', 'Free SSL certificates',
                       'Database management + SQL browser', '54 Docker app templates',
-                      'Scheduled backups & S3', 'Web terminal & file manager',
+                      'Backup orchestrator (DB, volumes, encryption, verification)', 'Web terminal & file manager',
                       'Git deploy with zero-downtime', 'Nixpacks auto-build (30+ languages)',
                       'Preview environments with TTL', 'DNS management (CF + PowerDNS)',
                       'Email management (Postfix + Dovecot)', 'Uptime monitoring & alerts',

@@ -3,6 +3,7 @@ pub mod agent;
 pub mod alert_engine;
 pub mod auto_healer;
 pub mod backup_scheduler;
+pub mod backup_verifier;
 pub mod deploy_scheduler;
 pub mod email;
 pub mod extensions;
