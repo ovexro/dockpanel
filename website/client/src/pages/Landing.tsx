@@ -6,7 +6,8 @@ import {
   FileCode2, Activity, Stethoscope, HardDriveDownload, Cpu,
   KeyRound, Wrench, ClipboardList, Mail, Zap, Users, LogIn,
   Package, ArrowRightLeft, LayoutTemplate, Puzzle, Network,
-  ChevronDown, Check, Github, Play, Copy, CheckCircle2, X
+  ChevronDown, Check, Github, Play, Copy, CheckCircle2, X,
+  Palette
 } from 'lucide-react';
 
 const features = [
@@ -35,6 +36,7 @@ const features = [
   { icon: LayoutTemplate, title: 'WordPress Toolkit', desc: 'Multi-site WP dashboard with vulnerability scanning against known exploits. Security hardening with one-click fixes. Bulk update plugins, themes, and core.' },
   { icon: Puzzle, title: 'Webhook Gateway', desc: 'Receive external webhooks, inspect requests, route to destinations with JSON filtering. HMAC-SHA256/SHA1 verification, retry with backoff, replay past deliveries. Plus outbound extension webhooks with scoped API keys.' },
   { icon: Network, title: 'Traefik Reverse Proxy', desc: "Choose nginx or Traefik for Docker app routing. Traefik provides native Docker service discovery, automatic Let's Encrypt SSL, and a built-in routing dashboard." },
+  { icon: Palette, title: '6 Themes + 3 Layouts', desc: 'Terminal, Midnight, Ember, Arctic, Clean, and Clean Dark themes — each with Sidebar, Compact, and Topbar layouts. No other panel lets you choose how your dashboard looks and feels.' },
 ];
 
 const faqs = [
@@ -42,11 +44,11 @@ const faqs = [
   { q: 'Is DockPanel really free?', a: 'Yes. DockPanel is 100% free and open source under the MIT License. There are no artificial limits, no premium features hidden behind a paywall, and no subscriptions required. Every feature works on every installation.' },
   { q: 'How does Docker-native work? Are sites in containers?', a: 'Sites run on the host with Nginx, which keeps things fast and simple. Docker is used for databases (MySQL/PostgreSQL containers), 54 one-click app templates (Ghost, Grafana, Nextcloud, n8n, Roundcube, Rspamd, and more), and Docker Compose imports. Containers get health monitoring, CPU/memory limits, and auto reverse proxy with SSL.' },
   { q: 'What happens if DockPanel goes down?', a: 'Your sites continue running. DockPanel manages Nginx configs and Docker containers, but they operate independently. Even if the panel process stops, all your sites, databases, and SSL certificates keep working. The panel auto-restarts via systemd.' },
-  { q: 'Can I run DockPanel on a Raspberry Pi?', a: 'Yes. DockPanel compiles to ~35MB total binaries (agent, API, CLI) and uses about 60MB RAM. It runs great on Raspberry Pi 4/5, Oracle Cloud free-tier ARM instances, and any ARM64 server. Same features, same performance.' },
-  { q: 'How is this different from CloudPanel, RunCloud, or cPanel?', a: 'Dramatically. cPanel uses 800MB of RAM, costs $15/month, and has no Docker support. CloudPanel is free but has no Git deploy, no Docker apps, no CLI, no multi-server, no reseller accounts. RunCloud charges $8/month for features DockPanel includes for free. DockPanel runs on 60MB of RAM, includes 54 Docker app templates, blue-green Git deploy, a full CLI, Infrastructure as Code, multi-server management, reseller accounts with white-label, and a WordPress toolkit. No other free panel has anything close to this feature set.' },
+  { q: 'Can I run DockPanel on a Raspberry Pi?', a: 'Yes. DockPanel compiles to ~35MB total binaries (agent, API, CLI) and uses about 57MB RAM. It runs great on Raspberry Pi 4/5, Oracle Cloud free-tier ARM instances, and any ARM64 server. Same features, same performance.' },
+  { q: 'How is this different from CloudPanel, RunCloud, or cPanel?', a: 'Dramatically. cPanel uses 800MB of RAM, costs $15/month, and has no Docker support. CloudPanel is free but has no Git deploy, no Docker apps, no CLI, no multi-server, no reseller accounts. RunCloud charges $8/month for features DockPanel includes for free. DockPanel runs on 57MB of RAM, includes 54 Docker app templates, blue-green Git deploy, a full CLI, Infrastructure as Code, multi-server management, reseller accounts with white-label, and a WordPress toolkit. No other free panel has anything close to this feature set.' },
   { q: 'Can I manage multiple servers?', a: 'Yes, with no limits. Each server runs a lightweight agent that communicates with the central API. You can view per-server metrics, run commands, and manage sites across all your servers from a single dashboard.' },
   { q: 'Is there a demo I can try?', a: 'Yes. Visit panel.example.com to explore the full panel interface with sample data — no signup required. You can also install DockPanel on your own server with one command.' },
-  { q: 'Why Rust instead of PHP/Node.js?', a: "Rust compiles to compact binaries (~35MB total for agent, API, and CLI) with no runtime dependencies. It uses ~60MB of RAM vs ~300-800MB for PHP-based panels. On a $5 VPS with 1GB RAM, that's the difference between running 2 sites and running 20. Rust also eliminates entire classes of security vulnerabilities (buffer overflows, use-after-free) at compile time." },
+  { q: 'Why Rust instead of PHP/Node.js?', a: "Rust compiles to compact binaries (~35MB total for agent, API, and CLI) with no runtime dependencies. It uses ~57MB of RAM vs ~300-800MB for PHP-based panels. On a $5 VPS with 1GB RAM, that's the difference between running 2 sites and running 20. Rust also eliminates entire classes of security vulnerabilities (buffer overflows, use-after-free) at compile time." },
   { q: 'Can DockPanel manage email?', a: "Yes. DockPanel has full email management — one-click install of Postfix + Dovecot + OpenDKIM, mail domains, mailboxes with quotas, aliases, forwarding, autoresponders, DKIM signing, DNS helper (generates MX/SPF/DKIM/DMARC records), and a mail queue viewer. Roundcube webmail and Rspamd spam filter are available as one-click Docker apps." },
   { q: 'What gets installed automatically?', a: 'The install script sets up everything: Docker, Nginx, PHP-FPM, Certbot (SSL), UFW (firewall), Fail2Ban (intrusion prevention), and the DockPanel agent + API + frontend. Mail server, webmail, and DNS server are optional one-click installs from the panel. Zero manual configuration needed.' },
   { q: 'Can I install WordPress / Laravel / Drupal with one click?', a: 'Yes. DockPanel supports one-click install for 6 frameworks: WordPress, Laravel, Drupal, Joomla, Symfony, and CodeIgniter. Select one, enter your domain, and DockPanel auto-creates the database, downloads the framework, configures everything, and provisions SSL — with real-time progress indicators showing each step as it completes.' },
@@ -105,12 +107,15 @@ export default function Landing() {
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
               100% free &amp; open source — no subscriptions, no limits
             </span>
-            <h1 className="text-5xl md:text-7xl font-extrabold text-white tracking-tight mb-6 leading-tight">
+            <h1 className="text-5xl md:text-7xl font-extrabold text-white tracking-tight mb-4 leading-tight">
               The server panel <br className="hidden sm:block" />
               <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-400">that does everything.</span>
             </h1>
+            <p className="text-lg md:text-xl font-semibold text-zinc-400 mb-6 tracking-wide">
+              Your server. Your rules. Your panel.
+            </p>
             <p className="max-w-2xl mx-auto text-lg md:text-xl text-zinc-400 mb-10 leading-relaxed">
-              54 Docker app templates. Git deploy with zero-downtime. Multi-server management. Reseller accounts. A full CLI. All running on 60MB of RAM. All free. No other panel comes close.
+              54 Docker app templates. Git deploy with zero-downtime. Multi-server management. Reseller accounts. A full CLI. All running on 57MB of RAM. No vendor lock-in. All free. No other panel comes close.
             </p>
 
             <div className="max-w-2xl mx-auto mb-12">
@@ -151,13 +156,16 @@ export default function Landing() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: 0.2 }}
-            className="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-4xl mx-auto mt-20"
+            className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-4 max-w-6xl mx-auto mt-20"
           >
             {[
               { label: 'Total binaries', value: '~35MB' },
-              { label: 'RAM usage', value: '~60MB' },
+              { label: 'RAM usage', value: '~57MB' },
               { label: 'Install time', value: '<60s' },
               { label: 'Homelab ready', value: 'ARM64' },
+              { label: 'API Endpoints', value: '371' },
+              { label: 'E2E Tests', value: '116' },
+              { label: 'App Templates', value: '54' },
             ].map((stat, i) => (
               <div key={i} className="bg-zinc-900/50 border border-zinc-800/50 rounded-xl p-6 backdrop-blur-sm">
                 <div className="text-3xl font-bold text-white mb-1">{stat.value}</div>
@@ -226,7 +234,7 @@ export default function Landing() {
                   { label: 'Databases', value: '8', sub: '2.1 GB used', icon: Database, color: 'text-purple-400', bg: 'bg-purple-400/10' },
                   { label: 'Docker Apps', value: '5', sub: 'All running', icon: Box, color: 'text-orange-400', bg: 'bg-orange-400/10' },
                   { label: 'Backups', value: '47', sub: 'Last: 2h ago', icon: HardDriveDownload, color: 'text-cyan-400', bg: 'bg-cyan-400/10' },
-                  { label: 'CPU / RAM', value: '3%', sub: '60 MB used', icon: Cpu, color: 'text-pink-400', bg: 'bg-pink-400/10' },
+                  { label: 'CPU / RAM', value: '3%', sub: '57 MB used', icon: Cpu, color: 'text-pink-400', bg: 'bg-pink-400/10' },
                 ].map((card, i) => (
                   <div key={i} className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
                     <div className="flex justify-between items-start mb-4">
@@ -326,7 +334,7 @@ export default function Landing() {
             <h2 className="text-sm font-bold text-emerald-400 uppercase tracking-widest mb-2">Comparison</h2>
             <h3 className="text-3xl md:text-5xl font-bold text-white tracking-tight mb-6">10x lighter. 10x more features.</h3>
             <p className="text-lg text-zinc-400">
-              cPanel uses 800MB of RAM and charges $15/month. CloudPanel is free but has no Docker, no Git deploy, no CLI. DockPanel gives you more than any of them — on 60MB of RAM — for free.
+              cPanel uses 800MB of RAM and charges $15/month. CloudPanel is free but has no Docker, no Git deploy, no CLI. DockPanel gives you more than any of them — on 57MB of RAM — for free.
             </p>
           </div>
 
@@ -350,7 +358,8 @@ export default function Landing() {
                   { name: 'Plesk', ram: '~512 MB', time: '~20 min', disk: '~1.5 GB', price: '$10/mo', built: 'PHP', docker: false, self: true },
                   { name: 'RunCloud', ram: 'N/A (SaaS)', time: '~5 min', disk: 'Agent', price: '$8/mo', built: 'PHP', docker: false, self: false },
                   { name: 'CloudPanel', ram: '~250 MB', time: '~10 min', disk: '~600 MB', price: 'Free', built: 'PHP', docker: false, self: true },
-                  { name: 'DockPanel', ram: '~60 MB', time: '<60 sec', disk: '~35 MB', price: 'Free', built: 'Rust', docker: true, self: true, highlight: true },
+                  { name: 'HestiaCP', ram: '~512 MB', time: '~2 min', disk: '~2 GB', price: 'Free', built: 'PHP', docker: false, self: true },
+                  { name: 'DockPanel', ram: '~57 MB', time: '<60 sec', disk: '~35 MB', price: 'Free', built: 'Rust', docker: true, self: true, highlight: true },
                 ].map((row, i) => (
                   <tr key={i} className={row.highlight ? 'bg-emerald-500/5' : ''}>
                     <td className={`p-4 font-medium ${row.highlight ? 'text-emerald-400' : 'text-white'}`}>{row.name}</td>
@@ -422,6 +431,10 @@ export default function Landing() {
                       'Git deploy with zero-downtime', 'Nixpacks auto-build (30+ languages)',
                       'Preview environments with TTL', 'DNS management (CF + PowerDNS)',
                       'Email management (Postfix + Dovecot)', 'Uptime monitoring & alerts',
+                      'Incident management + public status page',
+                      'Secrets manager (AES-256-GCM vaults)',
+                      'Webhook gateway (HMAC verification)',
+                      '6 themes + 3 layouts',
                       'Security scanning & hardening', '2FA / TOTP + OAuth',
                       'Auto-healing engine', 'Smart diagnostics', 'Developer CLI',
                       'Multi-server management', 'Reseller accounts & white-label',

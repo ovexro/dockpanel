@@ -1,6 +1,6 @@
 # DockPanel Feature Manifest
 
-> **Last verified**: 2026-03-22 | **Version**: v2.4.0 | **Total**: 46 major features, ~215 capabilities
+> **Last verified**: 2026-03-22 | **Version**: v2.5.2 | **Total**: 45 major features, ~215 capabilities
 >
 > This file is the single source of truth for what DockPanel offers.
 > Update it whenever features are added, changed, or removed.
@@ -80,7 +80,7 @@
 | **OAuth/SSO** | Google, GitHub, GitLab OAuth 2.0 with auto-create | `routes/oauth.rs` | (in Login) |
 | **Branding** | Public `/api/branding` with panel name, logo, colors, OAuth providers | `routes/settings.rs` | `BrandingContext.tsx` |
 
-## Background Services (9 supervised)
+## Background Services (11 supervised)
 
 | Service | Interval | Purpose |
 |---------|----------|---------|
@@ -93,6 +93,8 @@
 | `metrics_collector` | 60s | Store CPU/mem/disk history, 7-day retention |
 | `deploy_scheduler` | 60s | Trigger cron-scheduled Git deploys |
 | `preview_cleanup` | 300s | Remove expired preview environments |
+| `backup_policy_executor` | per policy | Execute backup policies (retention, scheduling) |
+| `backup_verifier` | per policy | Verify backup integrity after creation |
 
 ## CLI Commands
 
@@ -125,5 +127,5 @@
 | App templates | 54 | 2026-03-19 |
 | API endpoints | 50+ tested | 2026-03-19 |
 | Frontend pages | 19 | 2026-03-19 |
-| DB tables | 45+ | 2026-03-19 |
-| Background services | 9 | 2026-03-19 |
+| DB tables | 62 | 2026-03-22 |
+| Background services | 11 | 2026-03-22 |
