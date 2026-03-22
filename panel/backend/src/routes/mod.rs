@@ -42,6 +42,7 @@ pub mod users;
 pub mod reseller_dashboard;
 pub mod migration;
 pub mod resellers;
+pub mod secrets;
 pub mod wordpress;
 pub mod ws_metrics;
 
@@ -524,6 +525,14 @@ pub fn router() -> Router<AppState> {
         .route("/api/backup-orchestrator/volume-backups", get(backup_orchestrator::list_volume_backups))
         .route("/api/backup-orchestrator/verify", post(backup_orchestrator::trigger_verify))
         .route("/api/backup-orchestrator/verifications", get(backup_orchestrator::list_verifications))
+        // Secrets Manager
+        .route("/api/secrets/vaults", get(secrets::list_vaults).post(secrets::create_vault))
+        .route("/api/secrets/vaults/{vault_id}", delete(secrets::delete_vault))
+        .route("/api/secrets/vaults/{vault_id}/secrets", get(secrets::list_secrets).post(secrets::create_secret))
+        .route("/api/secrets/vaults/{vault_id}/secrets/{secret_id}", put(secrets::update_secret).delete(secrets::delete_secret))
+        .route("/api/secrets/vaults/{vault_id}/secrets/{secret_id}/versions", get(secrets::list_versions))
+        .route("/api/secrets/vaults/{vault_id}/inject/{site_id}", post(secrets::inject_to_site))
+        .route("/api/secrets/vaults/{vault_id}/pull", get(secrets::pull))
         // Incident Management
         .route("/api/incidents", get(incidents::list).post(incidents::create))
         .route("/api/incidents/{id}", get(incidents::get_one).put(incidents::update).delete(incidents::remove))

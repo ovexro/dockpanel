@@ -4,6 +4,27 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.3.0] - 2026-03-22
+
+### Added
+- **Secrets Manager**: AES-256-GCM encrypted secret storage with version history.
+  - **Secret vaults**: Project-scoped vaults for organizing secrets (global or per-site).
+  - **Encrypted storage**: All secret values encrypted with AES-256-GCM (random nonce per secret, key derived from JWT_SECRET via SHA-256).
+  - **Secret types**: Environment variables, API keys, passwords, certificates, custom — with type-specific UI badges.
+  - **Version history**: Every update creates a versioned snapshot. Full audit trail with who changed what and when.
+  - **Auto-inject**: Mark secrets for automatic injection into site `.env` files on deploy. One-click inject from vault to site.
+  - **Masked by default**: API returns masked values (`xxxx••••••••`) unless `?reveal=true` is explicitly requested.
+  - **Pull endpoint**: `GET /api/secrets/vaults/{id}/pull` returns all secrets as decrypted key-value pairs (for CLI integration).
+  - **Vault sidebar UI**: Split-pane layout with vault list on left, secrets table on right. Create/edit/delete with inline forms.
+  - **E2E test suite**: `tests/secrets-manager-e2e.sh` — vault CRUD, secret CRUD, encryption roundtrip, version history, pull.
+
+### Infrastructure
+- New crate dependencies: `aes-gcm 0.10`, `base64 0.22` for AES-256-GCM encryption.
+- New service: `secrets_crypto.rs` — encrypt/decrypt with nonce+ciphertext format, unit tests included.
+- New migration: `secret_vaults`, `secrets`, `secret_versions` tables.
+- 8 new API endpoints under `/api/secrets/`.
+- Frontend: `SecretsManager.tsx` with vault browser, reveal toggle, version history panel.
+
 ## [2.2.0] - 2026-03-22
 
 ### Added
