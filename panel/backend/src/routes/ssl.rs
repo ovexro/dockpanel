@@ -107,6 +107,14 @@ pub async fn provision(
 
     tracing::info!("SSL provisioned for {}", site.domain);
 
+    // GAP 15: Auto-activate paused monitors now that SSL/DNS is working
+    let _ = sqlx::query(
+        "UPDATE monitors SET enabled = TRUE WHERE site_id = $1 AND enabled = FALSE AND status = 'pending'"
+    )
+    .bind(id)
+    .execute(&state.db)
+    .await;
+
     Ok(Json(serde_json::json!({
         "ok": true,
         "domain": site.domain,

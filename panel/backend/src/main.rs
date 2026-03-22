@@ -269,6 +269,9 @@ async fn main() {
     let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
     spawn_supervised("backup_verifier", &shutdown_tx, move |rx| services::backup_verifier::run(s_db.clone(), s_agent.clone(), rx));
 
+    let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
+    spawn_supervised("backup_policy_executor", &shutdown_tx, move |rx| services::backup_policy_executor::run(s_db.clone(), s_agent.clone(), rx));
+
     // Periodic cleanup of token blacklist and rate limiters (every 15 minutes)
     let cleanup_blacklist = state.token_blacklist.clone();
     let cleanup_login = state.login_attempts.clone();
@@ -329,6 +332,7 @@ async fn main() {
             if let Ok(mut map) = cleanup_oauth.lock() {
                 map.retain(|_, (_, created)| now.duration_since(*created) < Duration::from_secs(600));
             }
+            // GAP 18: Webhook delivery + backup verification cleanup handled by auto_healer retention
         }
     });
 

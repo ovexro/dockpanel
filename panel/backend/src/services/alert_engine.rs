@@ -70,7 +70,26 @@ async fn fire_alert_with_retry(
         )
         .await
         {
-            Ok(_) => return,
+            Ok(_) => {
+                // GAP 9: Auto-create managed incident for critical alerts
+                if severity == "critical" || alert_type == "offline" || alert_type == "service_down" {
+                    let incident_severity = if severity == "critical" { "critical" } else { "major" };
+                    let _ = sqlx::query(
+                        "INSERT INTO managed_incidents (user_id, title, status, severity, description, visible_on_status_page) \
+                         VALUES ($1, $2, 'investigating', $3, $4, TRUE)"
+                    )
+                    .bind(user_id).bind(title).bind(incident_severity).bind(message)
+                    .execute(pool).await;
+
+                    let _ = sqlx::query(
+                        "INSERT INTO incident_updates (incident_id, status, message, author_email) \
+                         SELECT id, 'investigating', $2, 'system' FROM managed_incidents WHERE title = $1 AND status = 'investigating' ORDER BY created_at DESC LIMIT 1"
+                    )
+                    .bind(title).bind(format!("Auto-created from {alert_type} alert: {message}"))
+                    .execute(pool).await;
+                }
+                return;
+            },
             Err(e) => {
                 tracing::warn!("Alert fire attempt {} failed: {}", attempt + 1, e);
                 if attempt == 1 {

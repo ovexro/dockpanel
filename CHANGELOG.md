@@ -4,6 +4,28 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.5.0] - 2026-03-22
+
+### Fixed (21-Gap Automation Audit)
+- **GAP 1: Backup policies now execute** — New `backup_policy_executor` background service runs every 60s, evaluates cron schedules, executes backup policies across sites, databases, and volumes. Policies are no longer dead config.
+- **GAP 2: Verifier respects policy_id** — Backup verifier checks `verify_after_backup` flag. Policy executor triggers verification after successful backups.
+- **GAP 3: Auto-incidents from monitoring** — When a monitor goes down, the system auto-creates a managed incident with timeline, links affected status page components, and auto-resolves when the monitor recovers.
+- **GAP 4: Auto status page components** — New sites automatically get a status page component (if status page is enabled).
+- **GAP 5: Auto-inject secrets on deploy** — After a successful deploy, the system checks for a linked vault with `auto_inject` secrets and injects them into the site's `.env` file automatically.
+- **GAP 6: Auto-vault for new sites** — Every new site gets an auto-created secrets vault linked via `site_id`.
+- **GAP 8: fire_event in all new features** — Backup orchestrator, incident management, and secrets manager now emit extension webhook events (`db_backup.created`, `incident.created`, `secrets.injected`, etc.).
+- **GAP 9: Critical alerts create incidents** — Critical alerts and server offline/service down alerts auto-create managed incidents visible on the status page.
+- **GAP 10: Backup failure creates incident** — When a backup policy has failures, a managed incident is auto-created.
+- **GAP 14: Backup for ALL sites** — Removed the `site_count <= 1` gate. Every new site now gets a daily backup schedule automatically.
+- **GAP 15: Auto-monitor with deferred activation** — New sites get a paused HTTP monitor that auto-activates after successful SSL provisioning (when DNS is confirmed working).
+- **GAP 18: Webhook delivery cleanup** — Added 7-day retention cleanup for `webhook_deliveries` and 90-day for `backup_verifications` in the auto-healer retention cycle.
+- **GAP 19: Subscribers notified of auto-downtime** — Status page subscribers now receive email notifications when monitors detect downtime, not just for manually-created incidents.
+- **GAP 20: Policy encrypt flag works** — The backup policy executor passes the encrypt flag through to agent backup endpoints when `encrypt = TRUE`.
+
+### Infrastructure
+- New background service: `backup_policy_executor` (supervised, 60s interval) — 11th background service
+- Modified: `uptime.rs` (auto-incidents + subscriber notifications), `alert_engine.rs` (critical→incident), `sites.rs` (auto-vault, auto-monitor, auto-component, backup for all), `ssl.rs` (activate monitors), `deploy.rs` (auto-inject secrets), `auto_healer.rs` (retention cleanup), `backup_orchestrator.rs` + `incidents.rs` + `secrets.rs` (fire_event calls)
+
 ## [2.4.0] - 2026-03-22
 
 ### Added
