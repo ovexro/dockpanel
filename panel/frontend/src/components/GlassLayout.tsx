@@ -20,6 +20,7 @@ export default function GlassLayout() {
     setSidebarOpen,
     visibleGroups,
   } = useLayoutState();
+  const isLight = theme === "clean" || theme === "arctic";
 
   const [hovered, setHovered] = useState(false);
 
@@ -251,7 +252,7 @@ export default function GlassLayout() {
                   </span>
                 </div>
                 <div className="flex items-center gap-1">
-                <LayoutSwitcher variant="dark" />
+                <LayoutSwitcher variant={isLight ? "light" : "dark"} />
                 <button
                   onClick={cycleTheme}
                   className="p-1.5 text-dark-400 hover:text-dark-200 transition-colors rounded shrink-0"
