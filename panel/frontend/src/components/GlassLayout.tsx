@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Navigate, Outlet, NavLink, Link } from "react-router-dom";
 import { useLayoutState } from "../hooks/useLayoutState";
 import { useServer } from "../context/ServerContext";
@@ -26,6 +26,13 @@ export default function GlassLayout() {
   const { servers, activeServer, setActiveServerId } = useServer();
 
   const [hovered, setHovered] = useState(false);
+  const [flatNav, setFlatNav] = useState(() => localStorage.getItem("dp-flat-nav") === "true");
+
+  useEffect(() => {
+    const handler = () => setFlatNav(localStorage.getItem("dp-flat-nav") === "true");
+    window.addEventListener("dp-layout-options-change", handler);
+    return () => window.removeEventListener("dp-layout-options-change", handler);
+  }, []);
 
   /* ── Auth guard ──────────────────────────────────────────────────── */
   if (loading) {
@@ -153,59 +160,102 @@ export default function GlassLayout() {
 
         {/* ── Nav ────────────────────────────────────────────────── */}
         <nav className="flex-1 px-2 pt-4 overflow-y-auto overflow-x-hidden">
-          {visibleGroups.map((group, gi) => (
-            <div key={group.key} className={gi > 0 ? "mt-5" : ""}>
-              {/* Group label — only when expanded */}
-              <div
-                className={[
-                  "px-3 pb-1.5 text-[10px] text-dark-400 uppercase tracking-widest whitespace-nowrap overflow-hidden transition-opacity duration-200",
-                  expanded || sidebarOpen ? "opacity-100" : "opacity-0",
-                ].join(" ")}
-              >
-                {group.label}
-              </div>
-
-              <div className="space-y-0.5">
-                {group.items.map((item) => (
-                  <NavLink
-                    key={item.to}
-                    to={item.to}
-                    end={item.to === "/"}
-                    onClick={() => setSidebarOpen(false)}
-                  >
-                    {({ isActive }) => (
-                      <div
-                        title={!expanded && !sidebarOpen ? item.label : undefined}
-                        className={[
-                          "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all",
-                          isActive
-                            ? "bg-rust-500/10 text-rust-400 border-l-2 border-rust-500 ml-0.5"
-                            : "text-dark-300 hover:text-dark-100 hover:bg-dark-700/30",
-                        ].join(" ")}
-                      >
-                        <div className="w-5 h-5 shrink-0 flex items-center justify-center">
-                          <Icon name={item.iconName} className="w-[19px] h-[19px]" />
-                        </div>
-                        <span className="text-sm whitespace-nowrap overflow-hidden">
-                          {item.label}
-                        </span>
-                        {item.to === "/monitoring" && firingCount > 0 && (
-                          <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-danger-500 text-white rounded-full min-w-[20px] text-center shrink-0">
-                            {firingCount}
-                          </span>
-                        )}
-                        {item.to === "/incidents" && incidentCount > 0 && (
-                          <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-warn-500 text-dark-900 rounded-full min-w-[20px] text-center shrink-0">
-                            {incidentCount}
-                          </span>
-                        )}
+          {flatNav ? (
+            /* Flat nav — no group labels */
+            <div className="space-y-0.5">
+              {visibleGroups.flatMap(g => g.items).map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.to === "/"}
+                  onClick={() => setSidebarOpen(false)}
+                >
+                  {({ isActive }) => (
+                    <div
+                      title={!expanded && !sidebarOpen ? item.label : undefined}
+                      className={[
+                        "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all",
+                        isActive
+                          ? "bg-rust-500/10 text-rust-400 border-l-2 border-rust-500 ml-0.5"
+                          : "text-dark-300 hover:text-dark-100 hover:bg-dark-700/30",
+                      ].join(" ")}
+                    >
+                      <div className="w-5 h-5 shrink-0 flex items-center justify-center">
+                        <Icon name={item.iconName} className="w-[19px] h-[19px]" />
                       </div>
-                    )}
-                  </NavLink>
-                ))}
-              </div>
+                      <span className="text-sm whitespace-nowrap overflow-hidden">
+                        {item.label}
+                      </span>
+                      {item.to === "/monitoring" && firingCount > 0 && (
+                        <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-danger-500 text-white rounded-full min-w-[20px] text-center shrink-0">
+                          {firingCount}
+                        </span>
+                      )}
+                      {item.to === "/incidents" && incidentCount > 0 && (
+                        <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-warn-500 text-dark-900 rounded-full min-w-[20px] text-center shrink-0">
+                          {incidentCount}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </NavLink>
+              ))}
             </div>
-          ))}
+          ) : (
+            /* Grouped nav */
+            visibleGroups.map((group, gi) => (
+              <div key={group.key} className={gi > 0 ? "mt-5" : ""}>
+                <div
+                  className={[
+                    "px-3 pb-1.5 text-[10px] text-dark-400 uppercase tracking-widest whitespace-nowrap overflow-hidden transition-opacity duration-200",
+                    expanded || sidebarOpen ? "opacity-100" : "opacity-0",
+                  ].join(" ")}
+                >
+                  {group.label}
+                </div>
+
+                <div className="space-y-0.5">
+                  {group.items.map((item) => (
+                    <NavLink
+                      key={item.to}
+                      to={item.to}
+                      end={item.to === "/"}
+                      onClick={() => setSidebarOpen(false)}
+                    >
+                      {({ isActive }) => (
+                        <div
+                          title={!expanded && !sidebarOpen ? item.label : undefined}
+                          className={[
+                            "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all",
+                            isActive
+                              ? "bg-rust-500/10 text-rust-400 border-l-2 border-rust-500 ml-0.5"
+                              : "text-dark-300 hover:text-dark-100 hover:bg-dark-700/30",
+                          ].join(" ")}
+                        >
+                          <div className="w-5 h-5 shrink-0 flex items-center justify-center">
+                            <Icon name={item.iconName} className="w-[19px] h-[19px]" />
+                          </div>
+                          <span className="text-sm whitespace-nowrap overflow-hidden">
+                            {item.label}
+                          </span>
+                          {item.to === "/monitoring" && firingCount > 0 && (
+                            <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-danger-500 text-white rounded-full min-w-[20px] text-center shrink-0">
+                              {firingCount}
+                            </span>
+                          )}
+                          {item.to === "/incidents" && incidentCount > 0 && (
+                            <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-warn-500 text-dark-900 rounded-full min-w-[20px] text-center shrink-0">
+                              {incidentCount}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </NavLink>
+                  ))}
+                </div>
+              </div>
+            ))
+          )}
         </nav>
 
         {/* ── Footer ─────────────────────────────────────────────── */}
@@ -235,9 +285,9 @@ export default function GlassLayout() {
 
           {/* Expanded: full footer */}
           {(expanded || sidebarOpen) && (
-            <div className="px-1">
+            <div>
               {/* User row */}
-              <div className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-dark-800/50 transition-colors group">
+              <div className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-dark-800/50 transition-colors group">
                 <div className="w-8 h-8 rounded-full bg-dark-700 flex items-center justify-center shrink-0">
                   <span className="text-xs font-bold text-dark-200 uppercase">{user.email?.charAt(0) || "?"}</span>
                 </div>
@@ -256,7 +306,7 @@ export default function GlassLayout() {
               </div>
 
               {/* Health + layout + theme */}
-              <div className="flex items-center justify-between px-2 mt-2">
+              <div className="flex items-center justify-between px-3 mt-2">
                 <div className="flex items-center gap-2">
                   <div
                     className={[
