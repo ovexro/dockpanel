@@ -658,7 +658,7 @@ export default function Settings() {
               <p className="text-sm text-dark-100 mb-3">Layout</p>
               <div className="grid grid-cols-3 gap-3">
                 {([
-                  { id: "command", name: "Command", desc: "Full sidebar, grouped nav",
+                  { id: "command", name: "Sidebar", desc: "Full sidebar, grouped nav",
                     preview: (c: { bg: string; bar: string; accent: string; text: string }) => (
                       <div className="flex gap-1" style={{ height: "44px" }}>
                         <div style={{ background: c.bar, width: "22%", borderRadius: "2px" }} className="flex flex-col gap-0.5 p-1">
@@ -673,7 +673,7 @@ export default function Settings() {
                         </div>
                       </div>
                     )},
-                  { id: "glass", name: "Glass", desc: "Collapsible icon sidebar",
+                  { id: "glass", name: "Compact", desc: "Collapsible icon sidebar",
                     preview: (c: { bg: string; bar: string; accent: string; text: string }) => (
                       <div className="flex gap-1" style={{ height: "44px" }}>
                         <div style={{ background: c.bar, width: "10%", borderRadius: "2px", opacity: 0.6 }} className="flex flex-col items-center gap-1.5 pt-1.5">
@@ -687,7 +687,7 @@ export default function Settings() {
                         </div>
                       </div>
                     )},
-                  { id: "atlas", name: "Atlas", desc: "Top navbar, breadcrumbs",
+                  { id: "atlas", name: "Topbar", desc: "Horizontal navbar, breadcrumbs",
                     preview: (c: { bg: string; bar: string; accent: string; text: string }) => (
                       <div className="flex flex-col gap-0.5" style={{ height: "44px" }}>
                         <div style={{ background: c.bar, height: "10px", borderRadius: "1px" }} className="flex items-center gap-1 px-1">
