@@ -4,6 +4,29 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.1.0] - 2026-03-22
+
+### Added
+- **Backup Orchestrator**: New centralized backup management system for databases, Docker volumes, and sites.
+  - **Database backups**: MySQL/MariaDB (`mysqldump`), PostgreSQL (`pg_dump`), and MongoDB (`mongodump`) dump + restore via Docker exec. Compressed with gzip.
+  - **Docker volume backups**: Back up any Docker volume to `.tar.gz` using a temporary Alpine container. Restore volumes with one click.
+  - **Encryption at rest**: Optional AES-256-CBC encryption (PBKDF2, 100k iterations) for all backup types via OpenSSL. Encrypted files get `.enc` suffix, originals are auto-deleted.
+  - **Automatic restore verification**: Verify backups by spinning up temporary database containers and restoring dumps, or extracting archives to temp directories. Checks file integrity, table counts, and entry points.
+  - **Backup policies**: Cross-resource policies with cron scheduling, destination selection, retention count, encryption toggle, and auto-verification.
+  - **Backup health dashboard**: Global overview with total counts, storage usage, 24h success/failure rates, active policies, verification stats, and stale backup warnings.
+  - **Background verifier**: Supervised service running every 6 hours that automatically verifies unverified backups and fires alerts on failures.
+  - **B2 and GCS destinations**: Backblaze B2 and Google Cloud Storage now supported as backup destinations (S3-compatible API).
+  - **CLI commands**: `dockpanel backup db-create`, `db-list`, `vol-create`, `vol-list`, `verify`, `health` — full backup management from the command line.
+  - **E2E test suite**: Dedicated backup orchestrator test script (`tests/backup-orchestrator-e2e.sh`) covering health, policies CRUD, database backup lifecycle with verification.
+- **Nav item**: "Backups" in Operations section links to the new Backup Orchestrator page.
+
+### Infrastructure
+- New migration: `backup_policies`, `database_backups`, `volume_backups`, `backup_verifications` tables.
+- Extended `backup_destinations` with `encryption_enabled`, `encryption_key` columns, and B2/GCS dtype support.
+- Agent: 4 new services (`database_backup`, `volume_backup`, `encryption`, `backup_verify`) + 3 new route modules.
+- Backend: `backup_orchestrator` routes (11 endpoints), `backup_verifier` supervised background service.
+- Frontend: `BackupOrchestrator.tsx` page with 5 tabs (Overview, Policies, DB Backups, Volume Backups, Verifications).
+
 ## [2.0.6] - 2026-03-21
 
 ### Fixed

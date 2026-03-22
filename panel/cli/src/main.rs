@@ -275,6 +275,51 @@ enum BackupCmd {
         /// Backup filename
         filename: String,
     },
+    /// Create a database backup
+    DbCreate {
+        /// Container name (e.g., dockpanel-db-mydb)
+        container: String,
+        /// Database name
+        db_name: String,
+        /// Database type: mysql, postgres, mongo
+        #[arg(long, default_value = "postgres")]
+        db_type: String,
+        /// Database user
+        #[arg(long, default_value = "root")]
+        user: String,
+        /// Database password
+        #[arg(long)]
+        password: String,
+    },
+    /// List database backups
+    DbList {
+        /// Database name
+        db_name: String,
+    },
+    /// Create a volume backup
+    VolCreate {
+        /// Docker volume name
+        volume: String,
+        /// Container name (for organizing backups)
+        container: String,
+    },
+    /// List volume backups
+    VolList {
+        /// Container name
+        container: String,
+    },
+    /// Verify a backup
+    Verify {
+        /// Backup type: site, database, volume
+        #[arg(long)]
+        r#type: String,
+        /// Resource name (domain for site, db_name for database, container for volume)
+        name: String,
+        /// Backup filename
+        filename: String,
+    },
+    /// Show backup health overview
+    Health,
 }
 
 #[derive(Subcommand)]
@@ -399,6 +444,24 @@ async fn main() {
             }
             BackupCmd::Delete { domain, filename } => {
                 commands::backup::cmd_backup_delete(&token, &domain, &filename).await
+            }
+            BackupCmd::DbCreate { container, db_name, db_type, user, password } => {
+                commands::backup::cmd_db_backup_create(&token, &container, &db_name, &db_type, &user, &password).await
+            }
+            BackupCmd::DbList { db_name } => {
+                commands::backup::cmd_db_backup_list(&token, &db_name, &output).await
+            }
+            BackupCmd::VolCreate { volume, container } => {
+                commands::backup::cmd_vol_backup_create(&token, &volume, &container).await
+            }
+            BackupCmd::VolList { container } => {
+                commands::backup::cmd_vol_backup_list(&token, &container, &output).await
+            }
+            BackupCmd::Verify { r#type, name, filename } => {
+                commands::backup::cmd_backup_verify(&token, &r#type, &name, &filename).await
+            }
+            BackupCmd::Health => {
+                commands::backup::cmd_backup_health(&token).await
             }
         },
         Commands::Logs {

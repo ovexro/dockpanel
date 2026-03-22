@@ -6,10 +6,11 @@ pub mod agent_updates;
 pub mod api_keys;
 pub mod auth;
 pub mod backup_destinations;
-pub mod oauth;
-pub mod dashboard;
+pub mod backup_orchestrator;
 pub mod backup_schedules;
 pub mod backups;
+pub mod dashboard;
+pub mod oauth;
 pub mod billing;
 pub mod crons;
 pub mod databases;
@@ -508,6 +509,17 @@ pub fn router() -> Router<AppState> {
         .route("/api/alerts/{id}/resolve", put(alerts::resolve))
         .route("/api/alert-rules", get(alerts::get_rules).put(alerts::update_rules))
         .route("/api/alert-rules/{server_id}", put(alerts::update_server_rules).delete(alerts::delete_server_rules))
+        // Backup Orchestrator
+        .route("/api/backup-orchestrator/health", get(backup_orchestrator::health))
+        .route("/api/backup-orchestrator/policies", get(backup_orchestrator::list_policies).post(backup_orchestrator::create_policy))
+        .route("/api/backup-orchestrator/policies/{id}", put(backup_orchestrator::update_policy).delete(backup_orchestrator::delete_policy))
+        .route("/api/backup-orchestrator/db-backup", post(backup_orchestrator::create_db_backup))
+        .route("/api/backup-orchestrator/db-backups", get(backup_orchestrator::list_db_backups))
+        .route("/api/backup-orchestrator/db-backups/{id}", delete(backup_orchestrator::delete_db_backup))
+        .route("/api/backup-orchestrator/volume-backup", post(backup_orchestrator::create_volume_backup))
+        .route("/api/backup-orchestrator/volume-backups", get(backup_orchestrator::list_volume_backups))
+        .route("/api/backup-orchestrator/verify", post(backup_orchestrator::trigger_verify))
+        .route("/api/backup-orchestrator/verifications", get(backup_orchestrator::list_verifications))
         // Dashboard Intelligence
         .route("/api/dashboard/intelligence", get(dashboard::intelligence))
         .route("/api/dashboard/metrics-history", get(dashboard::metrics_history))

@@ -38,6 +38,8 @@ async fn main() {
     std::fs::create_dir_all(CONFIG_DIR).ok();
     std::fs::create_dir_all("/etc/dockpanel/ssl").ok();
     std::fs::create_dir_all("/var/backups/dockpanel").ok();
+    std::fs::create_dir_all("/var/backups/dockpanel/databases").ok();
+    std::fs::create_dir_all("/var/backups/dockpanel/volumes").ok();
     std::fs::create_dir_all("/var/www/acme/.well-known/acme-challenge").ok();
 
     // Load or generate auth token
@@ -98,6 +100,9 @@ async fn main() {
         .merge(routes::crons::router())
         .merge(routes::php::router())
         .merge(routes::remote_backup::router())
+        .merge(routes::database_backup::router())
+        .merge(routes::volume_backup::router())
+        .merge(routes::backup_verify::router())
         .merge(routes::deploy::router())
         .merge(routes::git_build::router())
         .merge(routes::smtp::router())

@@ -1,5 +1,7 @@
+pub mod backup_verify;
 pub mod backups;
 pub mod cms;
+pub mod database_backup;
 pub mod crons;
 pub mod database;
 pub mod deploy;
@@ -26,6 +28,7 @@ pub mod traefik;
 pub mod system;
 pub mod terminal;
 pub mod updates;
+pub mod volume_backup;
 pub mod wordpress;
 
 use axum::{
