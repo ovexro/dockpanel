@@ -19,6 +19,7 @@ pub mod dns;
 pub mod docker_apps;
 pub mod extensions;
 pub mod files;
+pub mod incidents;
 pub mod git_deploys;
 pub mod logs;
 pub mod mail;
@@ -440,6 +441,9 @@ pub fn router() -> Router<AppState> {
         .route("/api/auth/oauth/{provider}", get(oauth::authorize))
         .route("/api/auth/oauth/{provider}/callback", get(oauth::callback))
         .route("/api/status-page", get(monitors::status_page))
+        .route("/api/status-page/public", get(incidents::public_status_page))
+        .route("/api/status-page/subscribe", post(incidents::subscribe))
+        .route("/api/status-page/unsubscribe", post(incidents::unsubscribe))
         .route("/api/terminal/shared/{id}", get(terminal::view_shared))
         // Heartbeat endpoint (no auth — monitor validates by ID)
         .route("/api/heartbeat/{monitor_id}/{token}", post(monitors::heartbeat))
@@ -520,6 +524,15 @@ pub fn router() -> Router<AppState> {
         .route("/api/backup-orchestrator/volume-backups", get(backup_orchestrator::list_volume_backups))
         .route("/api/backup-orchestrator/verify", post(backup_orchestrator::trigger_verify))
         .route("/api/backup-orchestrator/verifications", get(backup_orchestrator::list_verifications))
+        // Incident Management
+        .route("/api/incidents", get(incidents::list).post(incidents::create))
+        .route("/api/incidents/{id}", get(incidents::get_one).put(incidents::update).delete(incidents::remove))
+        .route("/api/incidents/{id}/updates", get(incidents::list_updates).post(incidents::post_update))
+        // Status Page Management
+        .route("/api/status-page/config", get(incidents::get_config).put(incidents::update_config))
+        .route("/api/status-page/components", get(incidents::list_components).post(incidents::create_component))
+        .route("/api/status-page/components/{id}", delete(incidents::delete_component))
+        .route("/api/status-page/subscribers", get(incidents::list_subscribers))
         // Dashboard Intelligence
         .route("/api/dashboard/intelligence", get(dashboard::intelligence))
         .route("/api/dashboard/metrics-history", get(dashboard::metrics_history))
