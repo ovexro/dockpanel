@@ -319,12 +319,12 @@ export default function Settings() {
           { id: "users", label: "Users" },
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
-            className={`relative px-3 py-2 text-sm font-medium rounded-t-lg transition-colors whitespace-nowrap shrink-0 ${
+            className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-t-lg transition-colors whitespace-nowrap shrink-0 ${
               tab === t.id ? "text-rust-400 border-b-2 border-rust-400" : "text-dark-300 hover:text-dark-100"
             }`}>
             {t.label}
             {t.id === "updates" && updateCount > 0 && (
-              <span className="absolute -top-1 -right-1 px-1.5 py-0.5 text-[10px] font-bold bg-red-500 text-white rounded-full min-w-[18px] text-center leading-none">
+              <span className="px-1.5 py-0.5 text-[10px] font-bold bg-danger-500 text-white rounded-full min-w-[18px] text-center leading-none">
                 {updateCount}
               </span>
             )}
