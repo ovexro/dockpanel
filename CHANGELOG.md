@@ -4,6 +4,25 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.5.2] - 2026-03-22
+
+### Fixed (Theme & Layout Consistency Audit)
+- **Clean-Dark rounding parity** — Added ~120 lines of structural overrides (cards, modals, tables, buttons, scrollbar, selection, focus rings, progress bars, code blocks) so Clean-Dark has round corners everywhere, matching Clean
+- **Ember radius normalized** — `--radius-xl` and `--radius-2xl` were 2px smaller than all other themes; fixed to 16px/20px
+- **Clean hardcoded border-radius → CSS variables** — All 11 instances of hardcoded `12px/8px/6px/4px` converted to `var(--radius-lg/md/sm/xs)` for theme consistency
+- **Status dot glow per-theme** — Green glow was hardcoded for all themes; now uses theme-appropriate accent color (blue for Midnight/Clean-Dark, orange for Ember, teal for Arctic, blue for Clean)
+- **Progress bar glow for Arctic & Clean** — Missing glow rules added for both light themes
+- **Settings theme picker missing `data-color-scheme`** — Switching to light themes now correctly sets color scheme attribute
+- **Default theme mismatch** — Settings.tsx fallback aligned to `midnight` (was `terminal`)
+- **FOUC prevention** — Added inline script in index.html to apply theme before CSS loads
+- **LayoutSwitcher light variant** — Replaced hardcoded `zinc/blue/white` colors with theme variables
+- **2FA banner in all layouts** — Replaced `amber-*` (stock Tailwind) with `warn-*` (theme tokens)
+- **NexusLayout logout hover** — `rose-400` replaced with `danger-400` theme token
+- **PublicStatusPage full theme adoption** — 40+ hardcoded color references replaced with theme variables
+- **Terminal.tsx** — `bg-gray-300` and `bg-red-500` replaced with theme tokens
+- **Login.tsx** — Google OAuth button uses theme-mapped text/hover colors
+- **Settings.tsx hardcoded colors** — 13 instances of `blue-500/red-500` replaced with `accent/danger` tokens
+
 ## [2.5.1] - 2026-03-22
 
 ### Fixed (Remaining 7 Gaps — Phase D)

@@ -296,7 +296,7 @@ export default function AtlasLayout() {
 
       {/* ── 2FA Warning ────────────────────────────────────────────────── */}
       {twoFaEnforced && !twoFaEnabled && (
-        <div className={`border-b px-4 py-3 flex items-center justify-between ${isLight ? "bg-amber-50 border-amber-200" : "bg-warn-500/10 border-warn-500/20"}`}>
+        <div className={`border-b px-4 py-3 flex items-center justify-between ${isLight ? "bg-warn-500/5 border-warn-500/20" : "bg-warn-500/10 border-warn-500/20"}`}>
           <div className="flex items-center gap-2">
             <svg
               className="w-5 h-5 text-warn-400"
