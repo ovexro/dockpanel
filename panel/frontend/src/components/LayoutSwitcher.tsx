@@ -66,12 +66,8 @@ export default function LayoutSwitcher({ variant = "dark", compact = false }: Pr
       <button
         ref={btnRef}
         onClick={toggle}
-        className={`flex items-center gap-1.5 rounded-lg text-xs font-medium transition-colors ${
+        className={`flex items-center gap-1.5 rounded-lg text-xs font-medium transition-colors text-dark-400 hover:text-dark-200 hover:bg-dark-600/15 ${
           compact ? "p-1.5" : "px-2 py-1.5"
-        } ${
-          isDark
-            ? "text-dark-400 hover:text-dark-200 hover:bg-dark-800/50"
-            : "text-dark-400 hover:text-dark-100 hover:bg-dark-800"
         }`}
         title="Switch layout"
       >
