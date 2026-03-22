@@ -4,6 +4,24 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.4.0] - 2026-03-22
+
+### Added
+- **Webhook Gateway**: Receive, inspect, route, and replay incoming webhooks.
+  - **Inbound endpoints**: Each gets a unique URL (`/api/webhooks/gateway/{token}`). Unlimited endpoints per user.
+  - **Signature verification**: HMAC-SHA256 and HMAC-SHA1 modes for GitHub, Stripe, and other providers. Configurable header name and secret.
+  - **Request inspector**: Full request logging — headers, body, source IP, signature validation status. Click any delivery to view complete details.
+  - **Route builder**: Forward incoming webhooks to any destination URL. JSON path filtering (e.g., only forward `action=push`). Custom header injection. Configurable retry (0-10 attempts with exponential backoff).
+  - **Replay**: Re-send any past delivery to all configured routes. Useful for debugging or recovery.
+  - **Delivery tracking**: Per-route forwarding status, response body, duration. Endpoint-level counters.
+  - **E2E test suite**: `tests/webhook-gateway-e2e.sh` — endpoint CRUD, webhook receive, delivery inspection, routes, replay, filtering.
+
+### Infrastructure
+- New crate dependency: `sha1 0.10` for HMAC-SHA1 signature verification.
+- New migration: `webhook_endpoints`, `webhook_deliveries`, `webhook_routes` tables.
+- 8 new API endpoints (7 admin, 1 public inbound).
+- Frontend: `WebhookGateway.tsx` with 3 tabs (Endpoints, Request Inspector, Routes).
+
 ## [2.3.0] - 2026-03-22
 
 ### Added
