@@ -523,6 +523,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/backup-orchestrator/db-backup", post(backup_orchestrator::create_db_backup))
         .route("/api/backup-orchestrator/db-backups", get(backup_orchestrator::list_db_backups))
         .route("/api/backup-orchestrator/db-backups/{id}", delete(backup_orchestrator::delete_db_backup))
+        .route("/api/backup-orchestrator/db-backups/{id}/restore", post(backup_orchestrator::restore_db_backup))
         .route("/api/backup-orchestrator/volume-backup", post(backup_orchestrator::create_volume_backup))
         .route("/api/backup-orchestrator/volume-backups", get(backup_orchestrator::list_volume_backups))
         .route("/api/backup-orchestrator/verify", post(backup_orchestrator::trigger_verify))

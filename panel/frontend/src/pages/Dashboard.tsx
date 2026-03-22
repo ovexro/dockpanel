@@ -99,13 +99,24 @@ interface TopIssue {
   since: string;
 }
 
+interface Recommendation {
+  severity: string;
+  message: string;
+  action: string;
+}
+
 interface Intelligence {
   health_score: number;
   grade: string;
   firing_alerts: number;
   acknowledged_alerts: number;
+  open_incidents: number;
+  stale_backups: number;
+  scan_critical: number;
+  scan_warnings: number;
   ssl_countdowns: SslCountdown[];
   top_issues: TopIssue[];
+  recommendations: Recommendation[];
 }
 
 interface MetricPoint {
@@ -772,6 +783,24 @@ export default function Dashboard() {
                 <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">SSL</span>
                 <span className="text-sm text-dark-50 font-medium">{intel.ssl_countdowns.length} certs</span>
               </div>
+              <div className={`px-4 py-3 flex flex-col card-interactive ${
+                intel.open_incidents > 0 ? "bg-danger-500/5" : "bg-dark-800"
+              }`}>
+                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Incidents</span>
+                {intel.open_incidents > 0
+                  ? <span className="text-sm text-danger-400 font-bold">{intel.open_incidents} open</span>
+                  : <span className="text-sm text-rust-400 font-medium">0</span>
+                }
+              </div>
+              <div className={`px-4 py-3 flex flex-col card-interactive ${
+                intel.stale_backups > 0 ? "bg-warn-500/5" : "bg-dark-800"
+              }`}>
+                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Backups</span>
+                {intel.stale_backups > 0
+                  ? <span className="text-sm text-warn-400 font-bold">{intel.stale_backups} stale</span>
+                  : <span className="text-sm text-rust-400 font-medium">fresh</span>
+                }
+              </div>
             </>}
             <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
               <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Updates</span>
@@ -893,6 +922,36 @@ export default function Dashboard() {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Smart Recommendations */}
+          {intel && intel.recommendations && intel.recommendations.length > 0 && (
+            <div className="border border-dark-500 bg-dark-800 rounded-lg overflow-hidden mb-6">
+              <div className="px-4 py-2.5 border-b border-dark-600 flex justify-between items-center">
+                <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Recommendations</h3>
+                <span className="text-[10px] text-dark-400">{intel.recommendations.length} item{intel.recommendations.length !== 1 ? "s" : ""}</span>
+              </div>
+              <div className="divide-y divide-dark-600">
+                {intel.recommendations.map((rec, i) => (
+                  <div key={i} className="px-4 py-3 flex items-start gap-3">
+                    <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${
+                      rec.severity === "critical" ? "bg-danger-500" :
+                      rec.severity === "warning" ? "bg-warn-500" : "bg-accent-500"
+                    }`} />
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-xs leading-tight ${
+                        rec.severity === "critical" ? "text-danger-400" :
+                        rec.severity === "warning" ? "text-warn-400" : "text-dark-100"
+                      }`}>{rec.message}</p>
+                    </div>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wider font-bold flex-shrink-0 ${
+                      rec.severity === "critical" ? "bg-danger-500/10 text-danger-400" :
+                      rec.severity === "warning" ? "bg-warn-500/10 text-warn-400" : "bg-accent-500/10 text-accent-400"
+                    }`}>{rec.severity}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

@@ -472,6 +472,75 @@ pub async fn delete_db_backup(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+/// POST /api/backup-orchestrator/db-backups/{id}/restore — Restore a database from backup.
+pub async fn restore_db_backup(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Look up the backup record, verify ownership
+    let backup: Option<DatabaseBackup> = sqlx::query_as(
+        "SELECT db.* FROM database_backups db \
+         JOIN databases d ON d.id = db.database_id JOIN sites s ON d.site_id = s.id AND s.user_id = $1 \
+         WHERE db.id = $2"
+    )
+    .bind(claims.sub).bind(id)
+    .fetch_optional(&state.db).await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let backup = backup.ok_or_else(|| err(StatusCode::NOT_FOUND, "Backup not found"))?;
+
+    // Fetch database credentials (join with sites for user/password)
+    let creds: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT d.engine, d.db_user, d.db_password_enc FROM databases d WHERE d.id = $1"
+    )
+    .bind(backup.database_id)
+    .fetch_optional(&state.db).await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let (_engine, user, password) =
+        creds.ok_or_else(|| err(StatusCode::NOT_FOUND, "Database not found"))?;
+
+    let container_name = format!("dockpanel-db-{}", backup.db_name);
+
+    // Get encryption key if backup is encrypted
+    let encryption_key: Option<String> = if backup.encrypted {
+        let key: Option<String> = sqlx::query_scalar(
+            "SELECT bd.encryption_key FROM backup_destinations bd \
+             WHERE bd.encryption_enabled = TRUE \
+             LIMIT 1"
+        ).fetch_optional(&state.db).await.unwrap_or(None);
+        Some(key.ok_or_else(|| err(StatusCode::BAD_REQUEST, "Encrypted backup but no encryption key found"))?)
+    } else {
+        None
+    };
+
+    // Call agent to restore database
+    let body = serde_json::json!({
+        "container_name": container_name,
+        "db_type": backup.db_type,
+        "user": user,
+        "password": password,
+        "encryption_key": encryption_key,
+    });
+
+    let agent_path = format!("/db-backups/{}/restore/{}", backup.db_name, backup.filename);
+    let result = agent.post(&agent_path, Some(body)).await
+        .map_err(|e| agent_error("Database restore", e))?;
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "db_backup.restore",
+        Some("database"), Some(&backup.db_name), Some(&backup.filename), None,
+    ).await;
+
+    fire_event(&state.db, "db_backup.restored", serde_json::json!({
+        "database": &backup.db_name, "filename": &backup.filename, "backup_id": id.to_string(),
+    }));
+
+    Ok(Json(result))
+}
+
 // ── Volume Backups ──────────────────────────────────────────────────────────
 
 #[derive(serde::Deserialize)]

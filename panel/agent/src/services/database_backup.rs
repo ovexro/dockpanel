@@ -188,6 +188,110 @@ pub async fn dump_mongo(
     })
 }
 
+/// Restore a MySQL/MariaDB database from a backup file.
+pub async fn restore_mysql(
+    container_name: &str,
+    db_name: &str,
+    user: &str,
+    password: &str,
+    filepath: &str,
+) -> Result<(), String> {
+    let shell_cmd = format!(
+        "gunzip -c '{}' | docker exec -i -e MYSQL_PWD='{}' {} mysql -u {} {}",
+        filepath.replace('\'', "'\\''"),
+        password.replace('\'', "'\\''"),
+        container_name,
+        user,
+        db_name,
+    );
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(600),
+        Command::new("bash")
+            .args(["-c", &shell_cmd])
+            .output(),
+    )
+    .await
+    .map_err(|_| "Database restore timed out (10 minutes)".to_string())?
+    .map_err(|e| format!("Failed to run restore: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("MySQL restore failed: {stderr}"));
+    }
+
+    tracing::info!("MySQL database {db_name} restored from {filepath}");
+    Ok(())
+}
+
+/// Restore a PostgreSQL database from a backup file.
+pub async fn restore_postgres(
+    container_name: &str,
+    db_name: &str,
+    user: &str,
+    password: &str,
+    filepath: &str,
+) -> Result<(), String> {
+    let shell_cmd = format!(
+        "gunzip -c '{}' | docker exec -i -e PGPASSWORD='{}' {} psql -U {} -d {}",
+        filepath.replace('\'', "'\\''"),
+        password.replace('\'', "'\\''"),
+        container_name,
+        user,
+        db_name,
+    );
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(600),
+        Command::new("bash")
+            .args(["-c", &shell_cmd])
+            .output(),
+    )
+    .await
+    .map_err(|_| "Database restore timed out (10 minutes)".to_string())?
+    .map_err(|e| format!("Failed to run restore: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("PostgreSQL restore failed: {stderr}"));
+    }
+
+    tracing::info!("PostgreSQL database {db_name} restored from {filepath}");
+    Ok(())
+}
+
+/// Restore a MongoDB database from a backup file.
+pub async fn restore_mongo(
+    container_name: &str,
+    db_name: &str,
+    filepath: &str,
+) -> Result<(), String> {
+    let shell_cmd = format!(
+        "cat '{}' | docker exec -i {} mongorestore --db {} --archive --gzip --drop",
+        filepath.replace('\'', "'\\''"),
+        container_name,
+        db_name,
+    );
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(600),
+        Command::new("bash")
+            .args(["-c", &shell_cmd])
+            .output(),
+    )
+    .await
+    .map_err(|_| "Database restore timed out (10 minutes)".to_string())?
+    .map_err(|e| format!("Failed to run restore: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("MongoDB restore failed: {stderr}"));
+    }
+
+    tracing::info!("MongoDB database {db_name} restored from {filepath}");
+    Ok(())
+}
+
 /// List database backups for a given database name.
 pub fn list_db_backups(db_name: &str) -> Result<Vec<BackupInfo>, String> {
     let dir = backup_dir(db_name);
