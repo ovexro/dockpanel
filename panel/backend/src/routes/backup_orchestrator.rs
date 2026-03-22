@@ -342,6 +342,59 @@ pub async fn delete_policy(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+/// POST /api/backup-orchestrator/policies/protect-all — Create a backup-everything policy.
+pub async fn protect_all(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let db = &state.db;
+    let policy_name = "Protect Everything";
+
+    // Check if already exists
+    let existing: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM backup_policies WHERE user_id = $1 AND name = $2"
+    )
+    .bind(claims.sub).bind(policy_name)
+    .fetch_optional(db).await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    if let Some((existing_id,)) = existing {
+        return Err(err(StatusCode::CONFLICT,
+            &format!("Policy '{}' already exists (id: {})", policy_name, existing_id)));
+    }
+
+    let policy: BackupPolicy = sqlx::query_as(
+        "INSERT INTO backup_policies (user_id, name, backup_sites, backup_databases, backup_volumes, \
+         schedule, retention_count, encrypt, verify_after_backup, enabled) \
+         VALUES ($1, $2, TRUE, TRUE, TRUE, '0 2 * * *', 7, FALSE, TRUE, TRUE) \
+         RETURNING *"
+    )
+    .bind(claims.sub)
+    .bind(policy_name)
+    .fetch_one(db).await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    activity::log_activity(
+        db, claims.sub, &claims.email, "backup_policy.protect_all",
+        Some("backup_policy"), Some(policy_name), None, None,
+    ).await;
+
+    fire_event(db, "backup_policy.created", serde_json::json!({
+        "policy_id": policy.id, "name": policy_name, "preset": "protect-all",
+    }));
+
+    Ok((StatusCode::CREATED, Json(serde_json::json!({
+        "id": policy.id,
+        "name": policy_name,
+        "schedule": "0 2 * * *",
+        "backup_sites": true,
+        "backup_databases": true,
+        "backup_volumes": true,
+        "retention_count": 7,
+        "verify_after_backup": true,
+    }))))
+}
+
 // ── Database Backups ────────────────────────────────────────────────────────
 
 #[derive(serde::Deserialize)]
@@ -609,6 +662,41 @@ pub async fn list_volume_backups(
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     Ok(Json(backups))
+}
+
+/// POST /api/backup-orchestrator/volume-backups/{id}/restore — Restore a volume from backup.
+pub async fn restore_volume_backup(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Look up the volume backup record
+    let backup: Option<VolumeBackup> = sqlx::query_as(
+        "SELECT * FROM volume_backups WHERE id = $1"
+    )
+    .bind(id)
+    .fetch_optional(&state.db).await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let backup = backup.ok_or_else(|| err(StatusCode::NOT_FOUND, "Volume backup not found"))?;
+
+    // Call agent to restore volume
+    let agent_path = format!("/volume-backups/{}/restore/{}", backup.container_name, backup.filename);
+    let result = agent.post(&agent_path, None).await
+        .map_err(|e| agent_error("Volume restore", e))?;
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "volume_backup.restore",
+        Some("volume"), Some(&backup.container_name), Some(&backup.filename), None,
+    ).await;
+
+    fire_event(&state.db, "volume_backup.restored", serde_json::json!({
+        "container_name": &backup.container_name, "volume_name": &backup.volume_name,
+        "filename": &backup.filename, "backup_id": id.to_string(),
+    }));
+
+    Ok(Json(result))
 }
 
 // ── Verification ────────────────────────────────────────────────────────────

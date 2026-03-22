@@ -48,6 +48,9 @@ pub async fn run(db: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync::b
     }
 }
 
+/// Track last stale-backup check to avoid spamming (once per hour).
+static LAST_STALE_CHECK: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
 async fn tick(db: &PgPool, agent: &AgentClient) -> Result<(), String> {
     let now = chrono::Utc::now();
 
@@ -76,6 +79,28 @@ async fn tick(db: &PgPool, agent: &AgentClient) -> Result<(), String> {
         execute_policy(db, agent, policy).await;
     }
 
+    // Proactive backup freshness alerting — once per hour
+    let now_ts = now.timestamp();
+    let last_check = LAST_STALE_CHECK.load(std::sync::atomic::Ordering::Relaxed);
+    if now_ts - last_check >= 3600 {
+        LAST_STALE_CHECK.store(now_ts, std::sync::atomic::Ordering::Relaxed);
+
+        let stale: Vec<(String,)> = sqlx::query_as(
+            "SELECT s.domain FROM sites s WHERE s.status = 'active' \
+             AND NOT EXISTS (SELECT 1 FROM backups b WHERE b.site_id = s.id AND b.created_at > NOW() - INTERVAL '48 hours')"
+        ).fetch_all(db).await.unwrap_or_default();
+
+        if !stale.is_empty() {
+            let domains: Vec<&str> = stale.iter().map(|s| s.0.as_str()).collect();
+            notifications::notify_panel(db, None,
+                &format!("{} site(s) have stale backups", stale.len()),
+                &format!("These sites have no backup in 48+ hours: {}", domains.join(", ")),
+                "warning", "backup", Some("/backup-orchestrator")
+            ).await;
+            tracing::warn!("Stale backup alert: {} sites without recent backups", stale.len());
+        }
+    }
+
     Ok(())
 }
 
@@ -102,10 +127,16 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow) {
         .fetch_all(db).await.unwrap_or_default();
 
         for (site_id, domain) in &sites {
-            match agent.post(&format!("/backups/{domain}/create"), None).await {
-                Ok(result) => {
-                    let filename = result.get("filename").and_then(|v| v.as_str()).unwrap_or("");
-                    let size_bytes = result.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0) as i64;
+            let mut result = agent.post(&format!("/backups/{domain}/create"), None).await;
+            // Retry once on failure
+            if result.is_err() {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                result = agent.post(&format!("/backups/{domain}/create"), None).await;
+            }
+            match result {
+                Ok(resp) => {
+                    let filename = resp.get("filename").and_then(|v| v.as_str()).unwrap_or("");
+                    let size_bytes = resp.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0) as i64;
 
                     let _ = sqlx::query(
                         "INSERT INTO backups (site_id, filename, size_bytes) VALUES ($1, $2, $3)"
@@ -116,7 +147,7 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow) {
                     successes += 1;
                 }
                 Err(e) => {
-                    tracing::error!("Policy '{}': site backup failed for {domain}: {e}", policy.name);
+                    tracing::error!("Policy '{}': site backup failed for {domain} (after retry): {e}", policy.name);
                     failures += 1;
                 }
             }
@@ -143,10 +174,16 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow) {
                 "encryption_key": encryption_key,
             });
 
-            match agent.post("/db-backups/dump", Some(body)).await {
-                Ok(result) => {
-                    let filename = result.get("filename").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let size_bytes = result.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0) as i64;
+            let mut result = agent.post("/db-backups/dump", Some(body.clone())).await;
+            // Retry once on failure
+            if result.is_err() {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                result = agent.post("/db-backups/dump", Some(body)).await;
+            }
+            match result {
+                Ok(resp) => {
+                    let filename = resp.get("filename").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let size_bytes = resp.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0) as i64;
                     let encrypted = encryption_key.is_some();
 
                     let _ = sqlx::query(
@@ -160,7 +197,7 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow) {
                     successes += 1;
                 }
                 Err(e) => {
-                    tracing::error!("Policy '{}': DB backup failed for {db_name}: {e}", policy.name);
+                    tracing::error!("Policy '{}': DB backup failed for {db_name} (after retry): {e}", policy.name);
                     failures += 1;
                 }
             }
@@ -191,10 +228,16 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow) {
                                         "container_name": container_name,
                                     });
 
-                                    match agent.post("/volume-backups/create", Some(body)).await {
-                                        Ok(result) => {
-                                            let filename = result.get("filename").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                            let size_bytes = result.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0) as i64;
+                                    let mut result = agent.post("/volume-backups/create", Some(body.clone())).await;
+                                    // Retry once on failure
+                                    if result.is_err() {
+                                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                                        result = agent.post("/volume-backups/create", Some(body)).await;
+                                    }
+                                    match result {
+                                        Ok(resp) => {
+                                            let filename = resp.get("filename").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                            let size_bytes = resp.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0) as i64;
 
                                             let _ = sqlx::query(
                                                 "INSERT INTO volume_backups (container_id, container_name, server_id, volume_name, filename, size_bytes, policy_id) \
@@ -207,7 +250,7 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow) {
                                             successes += 1;
                                         }
                                         Err(e) => {
-                                            tracing::error!("Policy '{}': volume backup failed for {container_name}/{vol_name}: {e}", policy.name);
+                                            tracing::error!("Policy '{}': volume backup failed for {container_name}/{vol_name} (after retry): {e}", policy.name);
                                             failures += 1;
                                         }
                                     }

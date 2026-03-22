@@ -325,3 +325,113 @@ pub async fn metrics_history(
 
     Ok(Json(serde_json::json!({ "points": points })))
 }
+
+/// GET /api/dashboard/timeline — Unified chronological event feed.
+/// Merges recent events from deploys, backups, incidents, alerts, and security scans.
+pub async fn timeline(
+    AuthUser(_claims): AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    let mut events: Vec<serde_json::Value> = Vec::new();
+
+    // Recent deploys (join sites for domain)
+    let deploys: Vec<(String, Option<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT dl.status, s.domain, dl.created_at \
+         FROM deploy_logs dl \
+         JOIN sites s ON s.id = dl.site_id \
+         ORDER BY dl.created_at DESC LIMIT 10",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    for (status, domain, created_at) in &deploys {
+        events.push(serde_json::json!({
+            "type": "deploy",
+            "detail": status,
+            "target": domain,
+            "created_at": created_at.to_rfc3339(),
+        }));
+    }
+
+    // Recent backups (join sites for domain)
+    let backups: Vec<(String, Option<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT b.filename, s.domain, b.created_at \
+         FROM backups b \
+         JOIN sites s ON s.id = b.site_id \
+         ORDER BY b.created_at DESC LIMIT 10",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    for (filename, domain, created_at) in &backups {
+        events.push(serde_json::json!({
+            "type": "backup",
+            "detail": filename,
+            "target": domain,
+            "created_at": created_at.to_rfc3339(),
+        }));
+    }
+
+    // Recent incidents
+    let incidents: Vec<(String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT severity, title, created_at FROM managed_incidents ORDER BY created_at DESC LIMIT 10",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    for (severity, title, created_at) in &incidents {
+        events.push(serde_json::json!({
+            "type": "incident",
+            "detail": severity,
+            "target": title,
+            "created_at": created_at.to_rfc3339(),
+        }));
+    }
+
+    // Recent alerts
+    let alerts: Vec<(String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT severity, title, created_at FROM alerts ORDER BY created_at DESC LIMIT 10",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    for (severity, title, created_at) in &alerts {
+        events.push(serde_json::json!({
+            "type": "alert",
+            "detail": severity,
+            "target": title,
+            "created_at": created_at.to_rfc3339(),
+        }));
+    }
+
+    // Recent security scans
+    let scans: Vec<(i32, i32, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT critical_count, warning_count, created_at FROM security_scans ORDER BY created_at DESC LIMIT 5",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    for (critical, warning, created_at) in &scans {
+        events.push(serde_json::json!({
+            "type": "security",
+            "detail": format!("{} critical, {} warnings", critical, warning),
+            "target": "Security Scan",
+            "created_at": created_at.to_rfc3339(),
+        }));
+    }
+
+    // Sort by created_at descending and take top 30
+    events.sort_by(|a, b| {
+        let ts_a = a.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
+        let ts_b = b.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
+        ts_b.cmp(ts_a)
+    });
+    events.truncate(30);
+
+    Ok(Json(events))
+}

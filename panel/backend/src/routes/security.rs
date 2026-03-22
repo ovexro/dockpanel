@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::Html,
     Json,
 };
@@ -297,15 +297,17 @@ pub async fn apply_security_fix(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
+    headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let result = agent.post("/security/fix", Some(body.clone())).await
         .map_err(|e| agent_error("Security fix", e))?;
     let fix_type = body.get("fix_type").and_then(|v| v.as_str()).unwrap_or("unknown");
     let target = body.get("target").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let ip = crate::routes::client_ip(&headers);
     activity::log_activity(
         &state.db, claims.sub, &claims.email, &format!("security.fix.{fix_type}"),
-        Some("security"), Some(target), None, None,
+        Some("security"), Some(target), None, ip.as_deref(),
     ).await;
     Ok(Json(result))
 }
