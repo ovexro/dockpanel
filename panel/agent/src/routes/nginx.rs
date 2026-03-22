@@ -200,6 +200,28 @@ async fn put_site(
                     }),
                 ));
             }
+            // Auto-configure Fail2Ban jail for this site's access log
+            let jail_name = format!("nginx-{}", domain.replace('.', "-"));
+            let jail_config = format!(
+                "[{jail_name}]\n\
+                 enabled = true\n\
+                 port = http,https\n\
+                 filter = nginx-http-auth\n\
+                 logpath = /var/log/nginx/{domain}.access.log\n\
+                 maxretry = 10\n\
+                 findtime = 300\n\
+                 bantime = 3600\n"
+            );
+
+            let jail_path = format!("/etc/fail2ban/jail.d/{jail_name}.conf");
+            if let Ok(()) = std::fs::write(&jail_path, &jail_config) {
+                // Reload fail2ban (best-effort)
+                let _ = std::process::Command::new("systemctl")
+                    .args(["reload", "fail2ban"])
+                    .output();
+                tracing::info!("Auto-configured Fail2Ban jail for {domain}");
+            }
+
             Ok(Json(NginxResponse {
                 success: true,
                 message: format!("Site {domain} configured and nginx reloaded"),
@@ -323,6 +345,17 @@ async fn delete_site(
     if crate::services::wordpress::is_auto_update_enabled(&domain) {
         crate::services::wordpress::set_auto_update(&domain, false).await.ok();
         tracing::info!("Removed WordPress auto-update cron for {domain}");
+    }
+
+    // Fail2Ban jail
+    let jail_name = format!("nginx-{}", domain.replace('.', "-"));
+    let jail_path = format!("/etc/fail2ban/jail.d/{jail_name}.conf");
+    if std::path::Path::new(&jail_path).exists() {
+        let _ = std::fs::remove_file(&jail_path);
+        let _ = std::process::Command::new("systemctl")
+            .args(["reload", "fail2ban"])
+            .output();
+        tracing::info!("Removed Fail2Ban jail for {domain}");
     }
 
     Ok(Json(NginxResponse {

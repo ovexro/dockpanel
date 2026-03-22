@@ -454,6 +454,18 @@ pub async fn deploy(
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     require_admin(&claims.role)?;
 
+    // Check for active critical/major incidents — block deploy during outage
+    let active_incidents: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM managed_incidents \
+         WHERE status NOT IN ('resolved', 'postmortem') \
+         AND severity IN ('critical', 'major')"
+    ).fetch_one(&state.db).await.unwrap_or((0,));
+
+    if active_incidents.0 > 0 {
+        return Err(err(StatusCode::CONFLICT,
+            "Deploy blocked: active critical/major incident in progress. Resolve the incident first."));
+    }
+
     let config: GitDeploy = sqlx::query_as(
         "SELECT * FROM git_deploys WHERE id = $1 AND user_id = $2",
     )
@@ -923,6 +935,18 @@ pub async fn webhook(
 
     if !config.auto_deploy {
         return Err(err(StatusCode::BAD_REQUEST, "Auto-deploy is not enabled for this project"));
+    }
+
+    // Check for active critical/major incidents — skip webhook deploy during outage
+    let active_incidents: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM managed_incidents \
+         WHERE status NOT IN ('resolved', 'postmortem') \
+         AND severity IN ('critical', 'major')"
+    ).fetch_one(&state.db).await.unwrap_or((0,));
+
+    if active_incidents.0 > 0 {
+        tracing::warn!("Deploy blocked for {}: active incident in progress", config.name);
+        return Ok(Json(serde_json::json!({ "ok": false, "message": "Deploy skipped: active incident" })));
     }
 
     // Parse body to check branch (GitHub/GitLab push payload)
@@ -1672,6 +1696,18 @@ pub async fn trigger_deploy_task(
     user_id: Uuid,
     triggered_by: String,
 ) {
+    // Check for active critical/major incidents — skip scheduled deploy during outage
+    let active_incidents: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM managed_incidents \
+         WHERE status NOT IN ('resolved', 'postmortem') \
+         AND severity IN ('critical', 'major')"
+    ).fetch_one(&db).await.unwrap_or((0,));
+
+    if active_incidents.0 > 0 {
+        tracing::warn!("Scheduled deploy blocked for {git_deploy_id}: active incident in progress");
+        return;
+    }
+
     // Wrap the AgentClient in an AgentHandle for uniform API
     let agent = AgentHandle::Local(agent);
 
