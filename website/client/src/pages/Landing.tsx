@@ -33,7 +33,7 @@ const features = [
   { icon: Package, title: 'Nixpacks Auto-Build', desc: 'Deploy any app without a Dockerfile. Nixpacks auto-detects 30+ languages and builds optimized Docker images. Blue-green zero-downtime deployments included.' },
   { icon: ArrowRightLeft, title: 'Migration Wizard', desc: 'Import sites, databases, and email from cPanel, Plesk, or HestiaCP. Upload your backup, review what was found, and import selected items with real-time progress.' },
   { icon: LayoutTemplate, title: 'WordPress Toolkit', desc: 'Multi-site WP dashboard with vulnerability scanning against known exploits. Security hardening with one-click fixes. Bulk update plugins, themes, and core.' },
-  { icon: Puzzle, title: 'Extension / Plugin API', desc: 'Webhook-based integrations with HMAC-signed event delivery. Register extensions that receive site, deploy, backup, and security events. Scoped API keys.' },
+  { icon: Puzzle, title: 'Webhook Gateway', desc: 'Receive external webhooks, inspect requests, route to destinations with JSON filtering. HMAC-SHA256/SHA1 verification, retry with backoff, replay past deliveries. Plus outbound extension webhooks with scoped API keys.' },
   { icon: Network, title: 'Traefik Reverse Proxy', desc: "Choose nginx or Traefik for Docker app routing. Traefik provides native Docker service discovery, automatic Let's Encrypt SSL, and a built-in routing dashboard." },
 ];
 
