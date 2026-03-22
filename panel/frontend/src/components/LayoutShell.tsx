@@ -3,7 +3,6 @@ import CommandLayout from "./CommandLayout";
 
 const GlassLayout = lazy(() => import("./GlassLayout"));
 const AtlasLayout = lazy(() => import("./AtlasLayout"));
-const NexusLayout = lazy(() => import("./NexusLayout"));
 
 const fallback = (
   <div className="flex items-center justify-center h-screen bg-dark-900">
@@ -12,7 +11,17 @@ const fallback = (
 );
 
 export default function LayoutShell() {
-  const [layout, setLayout] = useState(() => localStorage.getItem("dp-layout") || "command");
+  const [layout, setLayout] = useState(() => {
+    const stored = localStorage.getItem("dp-layout") || "command";
+    // Migrate Nexus layout → Command with header + flat nav
+    if (stored === "nexus") {
+      localStorage.setItem("dp-layout", "command");
+      localStorage.setItem("dp-show-header", "true");
+      localStorage.setItem("dp-flat-nav", "true");
+      return "command";
+    }
+    return stored;
+  });
 
   useEffect(() => {
     const handler = () => setLayout(localStorage.getItem("dp-layout") || "command");
@@ -22,6 +31,5 @@ export default function LayoutShell() {
 
   if (layout === "glass") return <Suspense fallback={fallback}><GlassLayout /></Suspense>;
   if (layout === "atlas") return <Suspense fallback={fallback}><AtlasLayout /></Suspense>;
-  if (layout === "nexus") return <Suspense fallback={fallback}><NexusLayout /></Suspense>;
   return <CommandLayout />;
 }
