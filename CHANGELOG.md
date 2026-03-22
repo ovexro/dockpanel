@@ -18,6 +18,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Alert escalation** — Unacknowledged firing alerts re-notify with `[ESCALATED]` prefix after 15 minutes, then every 30 minutes. New `escalated_at` column + migration
 - **Alert-to-incident correlation** — Before creating a new incident from an alert, checks for existing active incidents within 5 minutes. Appends as incident update instead of creating duplicates
 - **Auto-healer restart limit** — Tracks restart count per service over 30-minute window. After 3 failed restarts, stops healing, creates critical incident, sends notification, and marks state as `exhausted`
+- **Disk-full forecast alerting** — Computes disk fill rate from metrics history; alerts when disk projected full within 48h (critical if <12h)
+- **Memory leak trend detection** — Compares recent vs older memory averages; warns when sustained >10% increase with usage above 60%
+- **Docker container crash detection** — New `check_container_health` in alert engine detects exited, crash-looping, and unhealthy containers
+- **Docker container auto-restart** — Auto-healer restarts exited/dead Docker containers with same 3-attempt limit as system services
+- **Incidents pause deploys** — All 5 deploy paths (manual site, webhook site, manual git, webhook git, scheduled git) check for active critical/major incidents before proceeding
+- **Security scanner auto-fix** — Auto-renews expiring SSL certificates detected by security scans (safe findings only, never auto-deletes)
+- **Fail2Ban auto-configuration** — New sites auto-get a Fail2Ban jail monitoring their access log; removed on site deletion
+- **Session management** — New `user_sessions` table, `GET /api/auth/sessions` (list with is_current flag), `DELETE /api/auth/sessions/{id}` (revoke), auto-cleanup of expired sessions
 
 ## [2.5.2] - 2026-03-22
 
