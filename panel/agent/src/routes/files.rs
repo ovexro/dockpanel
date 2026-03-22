@@ -215,35 +215,19 @@ async fn upload_file(
     if body.filename.contains("..") || body.filename.contains('/') || body.filename.contains('\\') {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid filename"));
     }
-    if body.path.contains("..") {
-        return Err(err(StatusCode::BAD_REQUEST, "Invalid path"));
-    }
 
-    let site_dir = format!("/var/www/{domain}");
-    if !std::path::Path::new(&site_dir).exists() {
-        return Err(err(StatusCode::NOT_FOUND, "Site not found"));
-    }
-
-    let target_dir = if body.path.is_empty() || body.path == "/" || body.path == "." {
-        site_dir.clone()
+    // Use resolve_safe_path to prevent TOCTOU race (validate before create_dir_all)
+    let upload_rel = if body.path.is_empty() || body.path == "/" || body.path == "." {
+        body.filename.clone()
     } else {
-        format!("{site_dir}/{}", body.path.trim_start_matches('/'))
+        format!("{}/{}", body.path.trim_start_matches('/'), body.filename)
     };
+    let full_path = files::resolve_safe_path(&domain, &upload_rel)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
 
-    let full_path = format!("{target_dir}/{}", body.filename);
-
-    // Ensure target directory exists
-    tokio::fs::create_dir_all(&target_dir).await.ok();
-
-    // Validate path stays within site dir
-    let canon_site = std::path::Path::new(&site_dir)
-        .canonicalize()
-        .map_err(|_| err(StatusCode::NOT_FOUND, "Site not found"))?;
-    let canon_target = std::path::Path::new(&target_dir)
-        .canonicalize()
-        .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid target directory"))?;
-    if !canon_target.starts_with(&canon_site) {
-        return Err(err(StatusCode::FORBIDDEN, "Access denied"));
+    // Ensure parent directory exists (safe — path already validated)
+    if let Some(parent) = full_path.parent() {
+        tokio::fs::create_dir_all(parent).await.ok();
     }
 
     // Decode base64
@@ -265,12 +249,13 @@ async fn upload_file(
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Write failed: {e}")))?;
 
     // Fix ownership
+    let path_str = full_path.to_string_lossy().to_string();
     let _ = tokio::process::Command::new("chown")
-        .args(["www-data:www-data", &full_path])
+        .args(["www-data:www-data", &path_str])
         .output()
         .await;
 
-    tracing::info!("File uploaded: {full_path} ({} bytes)", bytes.len());
+    tracing::info!("File uploaded: {} ({} bytes)", path_str, bytes.len());
     Ok(Json(serde_json::json!({ "ok": true, "size": bytes.len() })))
 }
 

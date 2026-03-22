@@ -323,7 +323,12 @@ fn issue_session(state: &AppState, user: &User) -> Result<(String, String, Strin
     )
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let secure_flag = if state.config.base_url.starts_with("https") { "; Secure" } else { "" };
+    // Default to Secure when BASE_URL is not set (most deployments use HTTPS)
+    let secure_flag = if state.config.base_url.is_empty() || state.config.base_url.starts_with("https") {
+        "; Secure"
+    } else {
+        ""
+    };
     let cookie = format!(
         "token={token}; Path=/; HttpOnly{secure_flag}; SameSite=Lax; Max-Age=7200"
     );
@@ -361,7 +366,12 @@ pub async fn logout(
         }
     }
 
-    let secure_flag = if state.config.base_url.starts_with("https") { "; Secure" } else { "" };
+    // Default to Secure when BASE_URL is not set (most deployments use HTTPS)
+    let secure_flag = if state.config.base_url.is_empty() || state.config.base_url.starts_with("https") {
+        "; Secure"
+    } else {
+        ""
+    };
     let cookie = format!("token=; Path=/; HttpOnly{secure_flag}; SameSite=Lax; Max-Age=0");
     (
         StatusCode::OK,
@@ -393,6 +403,27 @@ pub async fn register(
     headers: HeaderMap,
     Json(body): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    // Rate limit: 3 registrations per IP per hour
+    let ip = headers
+        .get("x-real-ip")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    {
+        let rate_key = format!("register:{ip}");
+        let mut attempts = state.login_attempts.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        let entry = attempts.entry(rate_key).or_default();
+        entry.retain(|t| now.duration_since(*t).as_secs() < 3600);
+        if entry.len() >= 3 {
+            return Err(err(
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many registration attempts. Try again later.",
+            ));
+        }
+        entry.push(now);
+    }
+
     if body.email.is_empty() || body.email.len() > 254 || !body.email.contains('@') {
         return Err(err(StatusCode::BAD_REQUEST, "Valid email address is required"));
     }
@@ -539,6 +570,22 @@ pub async fn forgot_password(
     headers: HeaderMap,
     Json(body): Json<ForgotPasswordRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Rate limit: 3 requests per email per 15 minutes
+    {
+        let rate_key = format!("forgot:{}", body.email.to_lowercase());
+        let mut attempts = state.login_attempts.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        let entry = attempts.entry(rate_key).or_default();
+        entry.retain(|t| now.duration_since(*t).as_secs() < 900);
+        if entry.len() >= 3 {
+            return Err(err(
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many password reset requests. Try again later.",
+            ));
+        }
+        entry.push(now);
+    }
+
     // Always return success to prevent email enumeration
     let success_msg = serde_json::json!({
         "ok": true,
@@ -597,8 +644,30 @@ pub struct ResetPasswordRequest {
 /// POST /api/auth/reset-password — Reset password with token.
 pub async fn reset_password(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<ResetPasswordRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Rate limit: 5 attempts per IP per 15 minutes
+    let ip = headers
+        .get("x-real-ip")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    {
+        let rate_key = format!("reset:{ip}");
+        let mut attempts = state.login_attempts.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        let entry = attempts.entry(rate_key).or_default();
+        entry.retain(|t| now.duration_since(*t).as_secs() < 900);
+        if entry.len() >= 5 {
+            return Err(err(
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many reset attempts. Try again later.",
+            ));
+        }
+        entry.push(now);
+    }
+
     if body.password.len() < 8 {
         return Err(err(StatusCode::BAD_REQUEST, "Password must be at least 8 characters"));
     }
