@@ -232,6 +232,9 @@ pub fn router() -> Router<AppState> {
         .route("/api/auth/reset-password", post(auth::reset_password))
         .route("/api/auth/change-password", post(auth::change_password))
         .route("/api/auth/revoke-all", post(auth::revoke_all_sessions))
+        // Session management
+        .route("/api/auth/sessions", get(auth::list_sessions))
+        .route("/api/auth/sessions/{id}", delete(auth::revoke_session))
         // Two-Factor Authentication
         .route("/api/auth/2fa/setup", post(auth::twofa_setup))
         .route("/api/auth/2fa/enable", post(auth::twofa_enable))
