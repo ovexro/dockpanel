@@ -180,8 +180,8 @@ export default function GlassLayout() {
                           : "text-dark-300 hover:text-dark-100 hover:bg-dark-700/30",
                       ].join(" ")}
                     >
-                      <div className="w-5 h-5 shrink-0 flex items-center justify-center">
-                        <Icon name={item.iconName} className="w-[19px] h-[19px]" />
+                      <div className={`shrink-0 flex items-center justify-center transition-all duration-200 ${expanded || sidebarOpen ? "w-5 h-5" : "w-7 h-7"}`}>
+                        <Icon name={item.iconName} className={`transition-all duration-200 ${expanded || sidebarOpen ? "w-[19px] h-[19px]" : "w-6 h-6"}`} />
                       </div>
                       <span className="text-sm whitespace-nowrap overflow-hidden">
                         {item.label}
