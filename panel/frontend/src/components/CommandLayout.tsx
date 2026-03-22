@@ -195,6 +195,11 @@ export default function CommandLayout() {
                           {state.firingCount}
                         </span>
                       )}
+                      {item.to === "/incidents" && state.incidentCount > 0 && (
+                        <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-warn-500 text-dark-900 rounded-full min-w-[20px] text-center">
+                          {state.incidentCount}
+                        </span>
+                      )}
                     </>
                   )}
                 </NavLink>
@@ -231,6 +236,10 @@ export default function CommandLayout() {
                           {item.to === "/monitoring" && state.firingCount > 0 ? (
                             <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-danger-500 text-white rounded-full min-w-[20px] text-center">
                               {state.firingCount}
+                            </span>
+                          ) : item.to === "/incidents" && state.incidentCount > 0 ? (
+                            <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-warn-500 text-dark-900 rounded-full min-w-[20px] text-center">
+                              {state.incidentCount}
                             </span>
                           ) : isActive ? (
                             <span className="ml-auto blinking-cursor text-xs">_</span>
@@ -327,9 +336,9 @@ export default function CommandLayout() {
             {/* Right side */}
             <div className="flex items-center gap-3">
               {state.firingCount > 0 && (
-                <Link to="/monitoring" className="relative p-2 text-dark-400 hover:bg-dark-800 rounded-full transition-colors">
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" /></svg>
-                  <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-danger-500 rounded-full border-2 border-dark-900" />
+                <Link to="/monitoring" className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold bg-danger-500/15 text-danger-400 rounded-lg hover:bg-danger-500/25 transition-colors">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" /></svg>
+                  {state.firingCount}
                 </Link>
               )}
               <div className="h-6 w-px hidden sm:block bg-dark-700" />

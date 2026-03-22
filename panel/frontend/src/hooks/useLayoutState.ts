@@ -14,6 +14,7 @@ export interface LayoutState {
   cycleTheme: () => void;
   layout: string;
   firingCount: number;
+  incidentCount: number;
   apiHealthy: boolean | null;
   twoFaEnforced: boolean;
   twoFaEnabled: boolean;
@@ -26,6 +27,7 @@ export function useLayoutState(): LayoutState {
   const { user, logout, loading } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [firingCount, setFiringCount] = useState(0);
+  const [incidentCount, setIncidentCount] = useState(0);
   const [apiHealthy, setApiHealthy] = useState<boolean | null>(null);
   const [twoFaEnforced, setTwoFaEnforced] = useState(false);
   const [twoFaEnabled, setTwoFaEnabled] = useState(true);
@@ -63,13 +65,16 @@ export function useLayoutState(): LayoutState {
   // Alert count polling
   const alertTimer = useRef<ReturnType<typeof setInterval>>(undefined);
   useEffect(() => {
-    const fetchFiring = () => {
+    const fetchCounts = () => {
       api.get<{ firing: number }>("/alerts/summary")
         .then((s) => setFiringCount(s.firing))
         .catch(() => {});
+      api.get<{ id: string; status: string }[]>("/incidents?status=investigating&limit=100")
+        .then((incs) => setIncidentCount(Array.isArray(incs) ? incs.length : 0))
+        .catch(() => {});
     };
-    fetchFiring();
-    alertTimer.current = setInterval(fetchFiring, 30000);
+    fetchCounts();
+    alertTimer.current = setInterval(fetchCounts, 30000);
     return () => { if (alertTimer.current) clearInterval(alertTimer.current); };
   }, []);
 
@@ -119,6 +124,7 @@ export function useLayoutState(): LayoutState {
     cycleTheme,
     layout,
     firingCount,
+    incidentCount,
     apiHealthy,
     twoFaEnforced,
     twoFaEnabled,
