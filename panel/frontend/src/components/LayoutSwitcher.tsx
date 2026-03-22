@@ -5,7 +5,6 @@ const layouts = [
   { id: "command", label: "Command", desc: "Full sidebar, grouped nav" },
   { id: "glass", label: "Glass", desc: "Collapsible icon sidebar" },
   { id: "atlas", label: "Atlas", desc: "Top navbar, breadcrumbs" },
-  { id: "nexus", label: "Nexus", desc: "Modern SaaS, flat nav" },
 ];
 
 interface Props {
