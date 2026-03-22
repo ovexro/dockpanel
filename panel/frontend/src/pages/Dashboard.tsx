@@ -462,6 +462,12 @@ export default function Dashboard() {
             <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? "bg-rust-500 animate-pulse" : "bg-dark-400"}`} />
             <span className="text-[10px] text-dark-400 font-mono">{wsConnected ? "Live" : "Polling"}</span>
           </span>
+          {intel && (
+            <span className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium ${overallStatus.color}`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${overallStatus.dot} ${overallStatus.dot === "bg-rust-500" ? "animate-pulse" : ""}`} />
+              {overallStatus.label}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <button onClick={() => setShowWidgetConfig(!showWidgetConfig)}
@@ -540,16 +546,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Feature #10: Visual health indicator */}
-      {isVisible("health_banner") && intel && (
-        <div className={`rounded-lg border px-4 py-2.5 flex items-center gap-2.5 mb-6 ${overallStatus.color}`}>
-          <div className={`w-2.5 h-2.5 rounded-full ${overallStatus.dot} ${overallStatus.dot === "bg-rust-500" ? "animate-pulse" : ""}`} />
-          <span className="text-sm font-medium">{overallStatus.label}</span>
-          {intel.firing_alerts > 0 && (
-            <Link to="/monitors" className="ml-auto text-[10px] underline opacity-70 hover:opacity-100">View alerts</Link>
-          )}
-        </div>
-      )}
+      {/* Health banner moved to page header */}
 
       {/* Feature #4: Action message toast */}
       {actionMessage && (
