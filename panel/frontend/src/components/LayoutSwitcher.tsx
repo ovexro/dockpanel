@@ -59,9 +59,9 @@ export default function LayoutSwitcher({ variant = "dark" }: Props) {
     // Smart theme transition: when leaving Nexus layout on a light theme,
     // auto-switch to dark variant to avoid jarring white-on-dark-layout
     if (prevLayout === "nexus" && id !== "nexus") {
-      if (currentTheme === "nexus") {
-        localStorage.setItem("dp-theme", "nexus-dark");
-        document.documentElement.setAttribute("data-theme", "nexus-dark");
+      if (currentTheme === "clean") {
+        localStorage.setItem("dp-theme", "clean-dark");
+        document.documentElement.setAttribute("data-theme", "clean-dark");
       } else if (currentTheme === "arctic") {
         localStorage.setItem("dp-theme", "midnight");
         document.documentElement.setAttribute("data-theme", "midnight");

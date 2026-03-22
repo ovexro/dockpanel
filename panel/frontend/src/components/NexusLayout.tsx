@@ -79,7 +79,7 @@ export default function NexusLayout() {
   const branding = useBranding();
 
   // Light theme detection — only needed for status color tones (emerald/rose/amber)
-  const isLight = state.theme === "nexus" || state.theme === "arctic";
+  const isLight = state.theme === "clean" || state.theme === "arctic";
 
   if (state.loading) {
     return (

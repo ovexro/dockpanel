@@ -317,7 +317,7 @@ body {
    THEME: NEXUS — Light SaaS, blue accent, Inter font
    ═══════════════════════════════════════════════════════ */
 
-[data-theme="nexus"] {
+[data-theme="clean"] {
   /* Clean white/slate surfaces (inverted: 950=white, 50=near-black) */
   --color-dark-950: #ffffff;
   --color-dark-900: #f8fafc;
@@ -378,122 +378,122 @@ body {
   --radius-3xl: 24px;
 }
 
-[data-theme="nexus"] body {
+[data-theme="clean"] body {
   background-color: #f9fafb;
   background-image: none;
   color: #111827;
 }
 
-[data-theme="nexus"] .logo-glow {
+[data-theme="clean"] .logo-glow {
   text-shadow: none;
 }
 
-[data-theme="nexus"] .logo-icon-glow {
+[data-theme="clean"] .logo-icon-glow {
   box-shadow: 0 2px 8px rgba(37, 99, 235, 0.15), 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
 /* ── Nexus: override dark-theme design language ── */
 
 /* Remove uppercase text transform from headings and labels */
-[data-theme="nexus"] .uppercase {
+[data-theme="clean"] .uppercase {
   text-transform: none !important;
 }
 
 /* Override monospace font everywhere except terminal/code */
-[data-theme="nexus"] .font-mono:not([class*="terminal"]):not(code):not(pre):not(kbd) {
+[data-theme="clean"] .font-mono:not([class*="terminal"]):not(code):not(pre):not(kbd) {
   font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
 }
 
 /* Softer borders */
-[data-theme="nexus"] [class*="border-dark-"] {
+[data-theme="clean"] [class*="border-dark-"] {
   border-color: #e2e8f0 !important;
 }
 
 /* Card shadows for depth */
-[data-theme="nexus"] [class*="bg-dark-950"] {
+[data-theme="clean"] [class*="bg-dark-950"] {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
 }
 
 /* Blinking cursor hidden in nexus */
-[data-theme="nexus"] .blinking-cursor {
+[data-theme="clean"] .blinking-cursor {
   display: none;
 }
 
 /* Scanlines hidden */
-[data-theme="nexus"] .typewriter {
+[data-theme="clean"] .typewriter {
   border-right-color: transparent;
   animation: none;
 }
 
 /* Scrollbar — light style */
-[data-theme="nexus"] ::-webkit-scrollbar-track {
+[data-theme="clean"] ::-webkit-scrollbar-track {
   background: #f9fafb;
   border-left: 1px solid #e5e7eb;
 }
 
-[data-theme="nexus"] ::-webkit-scrollbar-thumb {
+[data-theme="clean"] ::-webkit-scrollbar-thumb {
   background: #d1d5db;
   border-radius: 4px;
 }
 
-[data-theme="nexus"] ::-webkit-scrollbar-thumb:hover {
+[data-theme="clean"] ::-webkit-scrollbar-thumb:hover {
   background: #9ca3af;
 }
 
 /* Nexus: elevated cards get light shadow instead of dark */
-[data-theme="nexus"] .card-elevated {
+[data-theme="clean"] .card-elevated {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0, 0, 0, 0.04) !important;
 }
 
 /* Nexus: metric cards - white bg with blue tint border */
-[data-theme="nexus"] main [class*="shadow-lg"] {
+[data-theme="clean"] main [class*="shadow-lg"] {
   box-shadow: 0 4px 12px rgba(37, 99, 235, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04) !important;
   border-color: #dbeafe !important;
 }
 
 /* Nexus: sidebar white bg with subtle right border */
-[data-theme="nexus"] aside {
+[data-theme="clean"] aside {
   background-color: #ffffff !important;
   border-color: #e5e7eb !important;
 }
 
 /* Nexus: active nav item - blue tint instead of rust */
-[data-theme="nexus"] aside a [class*="bg-rust-500\\/10"] {
+[data-theme="clean"] aside a [class*="bg-rust-500\\/10"] {
   background-color: rgba(37, 99, 235, 0.08) !important;
 }
 
 /* Selection — indigo */
-[data-theme="nexus"] ::selection {
+[data-theme="clean"] ::selection {
   background: rgba(37, 99, 235, 0.2);
   color: #1f2937;
 }
 
 /* Focus rings — indigo */
-[data-theme="nexus"] *:focus-visible {
+[data-theme="clean"] *:focus-visible {
   outline-color: #2563eb;
 }
 
-[data-theme="nexus"] input:focus-visible,
-[data-theme="nexus"] textarea:focus-visible,
-[data-theme="nexus"] select:focus-visible {
+[data-theme="clean"] input:focus-visible,
+[data-theme="clean"] textarea:focus-visible,
+[data-theme="clean"] select:focus-visible {
   outline-color: #2563eb;
 }
 
 /* Form elements — light */
-[data-theme="nexus"] input,
-[data-theme="nexus"] select,
-[data-theme="nexus"] textarea {
+[data-theme="clean"] input,
+[data-theme="clean"] select,
+[data-theme="clean"] textarea {
   background-color: #ffffff;
   color: #111827;
   border-color: #d1d5db;
 }
 
-[data-theme="nexus"] input::placeholder,
-[data-theme="nexus"] textarea::placeholder {
+[data-theme="clean"] input::placeholder,
+[data-theme="clean"] textarea::placeholder {
   color: #9ca3af;
 }
 
-[data-theme="nexus"] select {
+[data-theme="clean"] select {
   background-color: #ffffff;
   border-color: #d1d5db;
   color: #374151;
@@ -501,7 +501,7 @@ body {
 }
 
 /* Hover lift — softer shadow for light bg */
-[data-theme="nexus"] .hover-lift:hover {
+[data-theme="clean"] .hover-lift:hover {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
@@ -511,8 +511,8 @@ body {
    ─────────────────────────────────────────────────────── */
 
 /* Cards/panels in content area: white bg, subtle border, rounded, light shadow */
-[data-theme="nexus"] main [class*="bg-dark-950"],
-[data-theme="nexus"] main [class*="bg-dark-900"] {
+[data-theme="clean"] main [class*="bg-dark-950"],
+[data-theme="clean"] main [class*="bg-dark-900"] {
   background-color: #ffffff !important;
   border-color: #e2e8f0 !important;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02) !important;
@@ -520,95 +520,95 @@ body {
 }
 
 /* Inner card tint in content area */
-[data-theme="nexus"] main [class*="bg-dark-800"] {
+[data-theme="clean"] main [class*="bg-dark-800"] {
   background-color: #f9fafb !important;
 }
 
 /* Round all bordered containers in content area */
-[data-theme="nexus"] main [class*="border-dark-"] {
+[data-theme="clean"] main [class*="border-dark-"] {
   border-radius: 12px;
 }
 
 /* ── Nexus: Modal overrides — fixed overlays inside <main> need proper contrast ── */
-[data-theme="nexus"] .dp-modal {
+[data-theme="clean"] .dp-modal {
   background-color: #ffffff !important;
   border: 1px solid #d1d5db !important;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15), 0 4px 16px rgba(0, 0, 0, 0.1) !important;
   border-radius: 12px !important;
 }
 
-[data-theme="nexus"] .dp-modal-overlay {
+[data-theme="clean"] .dp-modal-overlay {
   background-color: rgba(0, 0, 0, 0.4) !important;
 }
 
-[data-theme="nexus"] .dp-modal input,
-[data-theme="nexus"] .dp-modal select,
-[data-theme="nexus"] .dp-modal textarea {
+[data-theme="clean"] .dp-modal input,
+[data-theme="clean"] .dp-modal select,
+[data-theme="clean"] .dp-modal textarea {
   background-color: #ffffff !important;
   border-color: #d1d5db !important;
   color: #111827 !important;
 }
 
-[data-theme="nexus"] .dp-modal input::placeholder,
-[data-theme="nexus"] .dp-modal textarea::placeholder {
+[data-theme="clean"] .dp-modal input::placeholder,
+[data-theme="clean"] .dp-modal textarea::placeholder {
   color: #9ca3af !important;
 }
 
-[data-theme="nexus"] .dp-modal label {
+[data-theme="clean"] .dp-modal label {
   color: #374151 !important;
 }
 
-[data-theme="nexus"] .dp-modal h2,
-[data-theme="nexus"] .dp-modal h3 {
+[data-theme="clean"] .dp-modal h2,
+[data-theme="clean"] .dp-modal h3 {
   color: #111827 !important;
 }
 
-[data-theme="nexus"] .dp-modal p,
-[data-theme="nexus"] .dp-modal span {
+[data-theme="clean"] .dp-modal p,
+[data-theme="clean"] .dp-modal span {
   color: #4b5563;
 }
 
-[data-theme="nexus"] .dp-modal [class*="border-dark-"] {
+[data-theme="clean"] .dp-modal [class*="border-dark-"] {
   border-color: #e5e7eb !important;
 }
 
-[data-theme="nexus"] .dp-modal [class*="text-dark-100"],
-[data-theme="nexus"] .dp-modal [class*="text-dark-50"] {
+[data-theme="clean"] .dp-modal [class*="text-dark-100"],
+[data-theme="clean"] .dp-modal [class*="text-dark-50"] {
   color: #111827 !important;
 }
 
-[data-theme="nexus"] .dp-modal [class*="text-dark-200"],
-[data-theme="nexus"] .dp-modal [class*="text-dark-300"] {
+[data-theme="clean"] .dp-modal [class*="text-dark-200"],
+[data-theme="clean"] .dp-modal [class*="text-dark-300"] {
   color: #4b5563 !important;
 }
 
-[data-theme="nexus"] .dp-modal [class*="text-dark-400"] {
+[data-theme="clean"] .dp-modal [class*="text-dark-400"] {
   color: #6b7280 !important;
 }
 
 /* Prevent rounding on table internals and nested dividers */
-[data-theme="nexus"] td,
-[data-theme="nexus"] th,
-[data-theme="nexus"] tr,
-[data-theme="nexus"] thead,
-[data-theme="nexus"] tbody,
-[data-theme="nexus"] main [class*="divide-"] > * {
+[data-theme="clean"] td,
+[data-theme="clean"] th,
+[data-theme="clean"] tr,
+[data-theme="clean"] thead,
+[data-theme="clean"] tbody,
+[data-theme="clean"] main [class*="divide-"] > * {
   border-radius: 0 !important;
   box-shadow: none !important;
 }
 
 /* Keep table wrapper containers rounded */
-[data-theme="nexus"] main [class*="overflow-hidden"][class*="border-dark-"],
-[data-theme="nexus"] main [class*="overflow-x-auto"] {
+[data-theme="clean"] main [class*="overflow-hidden"][class*="border-dark-"],
+[data-theme="clean"] main [class*="overflow-x-auto"] {
   border-radius: 12px;
 }
 
 /* Table headers — clean light style */
-[data-theme="nexus"] thead {
+[data-theme="clean"] thead {
   background-color: #f9fafb !important;
 }
 
-[data-theme="nexus"] thead th {
+[data-theme="clean"] thead th {
   color: #6b7280 !important;
   font-weight: 500 !important;
   text-transform: none !important;
@@ -616,171 +616,171 @@ body {
 }
 
 /* Table row dividers — softer */
-[data-theme="nexus"] tbody tr {
+[data-theme="clean"] tbody tr {
   border-color: #f3f4f6 !important;
 }
 
 /* Table row hover — light indigo tint */
-[data-theme="nexus"] tbody tr:hover {
+[data-theme="clean"] tbody tr:hover {
   background-color: #eff6ff !important;
 }
 
 /* Status badges & tinted backgrounds — Nexus style (softer blue tint) */
-[data-theme="nexus"] [class*="bg-rust-500/15"],
-[data-theme="nexus"] [class*="bg-rust-500/10"],
-[data-theme="nexus"] [class*="bg-rust-500/20"],
-[data-theme="nexus"] [class*="bg-rust-500/5"] {
+[data-theme="clean"] [class*="bg-rust-500/15"],
+[data-theme="clean"] [class*="bg-rust-500/10"],
+[data-theme="clean"] [class*="bg-rust-500/20"],
+[data-theme="clean"] [class*="bg-rust-500/5"] {
   background-color: rgba(37, 99, 235, 0.08) !important;
 }
 
 /* Buttons — indigo primary, clean secondary.
    IMPORTANT: This also matches tinted classes (bg-rust-500/10 contains "bg-rust-500").
    The tinted override rules below MUST come after this rule. */
-[data-theme="nexus"] button[class*="bg-rust-500"],
-[data-theme="nexus"] button[class*="bg-rust-600"],
-[data-theme="nexus"] a[class*="bg-rust-500"] {
+[data-theme="clean"] button[class*="bg-rust-500"],
+[data-theme="clean"] button[class*="bg-rust-600"],
+[data-theme="clean"] a[class*="bg-rust-500"] {
   background-color: #2563eb !important;
   color: white !important;
   border-radius: 8px !important;
 }
 
-[data-theme="nexus"] button[class*="bg-rust-500"]:hover,
-[data-theme="nexus"] button[class*="bg-rust-600"]:hover {
+[data-theme="clean"] button[class*="bg-rust-500"]:hover,
+[data-theme="clean"] button[class*="bg-rust-600"]:hover {
   background-color: #1d4ed8 !important;
 }
 
 /* Tinted selection buttons — override solid button rule above.
    bg-rust-500/10, /15, /20 are light tints, NOT solid backgrounds.
    Re-apply tint styling with same specificity (last rule wins). */
-[data-theme="nexus"] button[class*="bg-rust-500/10"],
-[data-theme="nexus"] button[class*="bg-rust-500/15"],
-[data-theme="nexus"] button[class*="bg-rust-500/20"] {
+[data-theme="clean"] button[class*="bg-rust-500/10"],
+[data-theme="clean"] button[class*="bg-rust-500/15"],
+[data-theme="clean"] button[class*="bg-rust-500/20"] {
   background-color: rgba(37, 99, 235, 0.08) !important;
   color: #1e40af !important;
   border-color: #93c5fd !important;
 }
 
-[data-theme="nexus"] button[class*="bg-rust-500/10"]:hover,
-[data-theme="nexus"] button[class*="bg-rust-500/15"]:hover,
-[data-theme="nexus"] button[class*="bg-rust-500/20"]:hover {
+[data-theme="clean"] button[class*="bg-rust-500/10"]:hover,
+[data-theme="clean"] button[class*="bg-rust-500/15"]:hover,
+[data-theme="clean"] button[class*="bg-rust-500/20"]:hover {
   background-color: rgba(37, 99, 235, 0.12) !important;
 }
 
 /* Ensure child text in tinted selection cards is readable */
-[data-theme="nexus"] button[class*="bg-rust-500/10"] [class*="text-rust-"],
-[data-theme="nexus"] button[class*="bg-rust-500/15"] [class*="text-rust-"],
-[data-theme="nexus"] button[class*="bg-rust-500/10"] .font-bold,
-[data-theme="nexus"] button[class*="bg-rust-500/15"] .font-bold {
+[data-theme="clean"] button[class*="bg-rust-500/10"] [class*="text-rust-"],
+[data-theme="clean"] button[class*="bg-rust-500/15"] [class*="text-rust-"],
+[data-theme="clean"] button[class*="bg-rust-500/10"] .font-bold,
+[data-theme="clean"] button[class*="bg-rust-500/15"] .font-bold {
   color: #1e40af !important;
 }
 
-[data-theme="nexus"] button[class*="bg-rust-500/10"] [class*="text-dark-400"],
-[data-theme="nexus"] button[class*="bg-rust-500/15"] [class*="text-dark-400"] {
+[data-theme="clean"] button[class*="bg-rust-500/10"] [class*="text-dark-400"],
+[data-theme="clean"] button[class*="bg-rust-500/15"] [class*="text-dark-400"] {
   color: #6b7280 !important;
 }
 
 /* Tinted anchor links (non-button) — same treatment */
-[data-theme="nexus"] a[class*="bg-rust-500/10"],
-[data-theme="nexus"] a[class*="bg-rust-500/15"] {
+[data-theme="clean"] a[class*="bg-rust-500/10"],
+[data-theme="clean"] a[class*="bg-rust-500/15"] {
   background-color: rgba(37, 99, 235, 0.08) !important;
   color: #1e40af !important;
 }
 
 /* Accent-tinted toggles — ensure readable in Nexus */
-[data-theme="nexus"] [class*="bg-accent-500/15"],
-[data-theme="nexus"] [class*="bg-accent-500/10"] {
+[data-theme="clean"] [class*="bg-accent-500/15"],
+[data-theme="clean"] [class*="bg-accent-500/10"] {
   background-color: rgba(37, 99, 235, 0.08) !important;
 }
 
-[data-theme="nexus"] [class*="text-accent-400"] {
+[data-theme="clean"] [class*="text-accent-400"] {
   color: #2563eb !important;
 }
 
 /* Secondary/outline buttons */
-[data-theme="nexus"] button[class*="border-dark-"] {
+[data-theme="clean"] button[class*="border-dark-"] {
   border-color: #d1d5db !important;
   border-radius: 8px !important;
   background-color: #ffffff !important;
 }
 
-[data-theme="nexus"] button[class*="border-dark-"]:hover {
+[data-theme="clean"] button[class*="border-dark-"]:hover {
   border-color: #2563eb !important;
   background-color: #eff6ff !important;
 }
 
 /* Action bar buttons (Customize, Deploy App, etc.) */
-[data-theme="nexus"] button[class*="bg-dark-700"],
-[data-theme="nexus"] button[class*="bg-dark-800"] {
+[data-theme="clean"] button[class*="bg-dark-700"],
+[data-theme="clean"] button[class*="bg-dark-800"] {
   background-color: #ffffff !important;
   border: 1px solid #d1d5db !important;
   border-radius: 8px !important;
 }
 
-[data-theme="nexus"] button[class*="bg-dark-700"]:hover,
-[data-theme="nexus"] button[class*="bg-dark-800"]:hover {
+[data-theme="clean"] button[class*="bg-dark-700"]:hover,
+[data-theme="clean"] button[class*="bg-dark-800"]:hover {
   background-color: #eff6ff !important;
   border-color: #2563eb !important;
 }
 
 /* Danger button (Reboot) keeps red */
-[data-theme="nexus"] button[class*="bg-danger-"],
-[data-theme="nexus"] button[class*="text-danger-"] {
+[data-theme="clean"] button[class*="bg-danger-"],
+[data-theme="clean"] button[class*="text-danger-"] {
   border-radius: 8px !important;
 }
 
 /* Progress bars — blue (catch all thin bar variants) */
-[data-theme="nexus"] [class*="bg-rust-500"][class*="h-2"],
-[data-theme="nexus"] [class*="bg-rust-500"][class*="h-1"],
-[data-theme="nexus"] [class*="bg-dark-100"][class*="h-2"],
-[data-theme="nexus"] [class*="bg-dark-50"][class*="h-2"] {
+[data-theme="clean"] [class*="bg-rust-500"][class*="h-2"],
+[data-theme="clean"] [class*="bg-rust-500"][class*="h-1"],
+[data-theme="clean"] [class*="bg-dark-100"][class*="h-2"],
+[data-theme="clean"] [class*="bg-dark-50"][class*="h-2"] {
   background-color: #2563eb !important;
 }
 
 /* Text links that use rust color — make blue */
-[data-theme="nexus"] [class*="text-rust-400"],
-[data-theme="nexus"] [class*="text-rust-500"],
-[data-theme="nexus"] a[class*="text-rust-"] {
+[data-theme="clean"] [class*="text-rust-400"],
+[data-theme="clean"] [class*="text-rust-500"],
+[data-theme="clean"] a[class*="text-rust-"] {
   color: #2563eb !important;
 }
 
-[data-theme="nexus"] [class*="text-rust-"]:hover {
+[data-theme="clean"] [class*="text-rust-"]:hover {
   color: #1d4ed8 !important;
 }
 
 /* Active tab underlines — indigo */
-[data-theme="nexus"] [class*="border-rust-500"] {
+[data-theme="clean"] [class*="border-rust-500"] {
   border-color: #2563eb !important;
 }
 
 /* Warning progress bars — softer amber */
-[data-theme="nexus"] [class*="bg-warn-500"][class*="h-2"],
-[data-theme="nexus"] [class*="bg-warn-500"][class*="h-1"],
-[data-theme="nexus"] [class*="bg-warn-400"][class*="h-2"] {
+[data-theme="clean"] [class*="bg-warn-500"][class*="h-2"],
+[data-theme="clean"] [class*="bg-warn-500"][class*="h-1"],
+[data-theme="clean"] [class*="bg-warn-400"][class*="h-2"] {
   background-color: #f59e0b !important;
 }
 
 /* Activity badges — softer */
-[data-theme="nexus"] [class*="bg-danger-500\\/15"] {
+[data-theme="clean"] [class*="bg-danger-500\\/15"] {
   background-color: rgba(220, 38, 38, 0.08) !important;
 }
 
-[data-theme="nexus"] [class*="bg-warn-500\\/15"] {
+[data-theme="clean"] [class*="bg-warn-500\\/15"] {
   background-color: rgba(217, 119, 6, 0.08) !important;
 }
 
 /* Sparkline chart containers — white bg */
-[data-theme="nexus"] svg[class*="sparkline"],
-[data-theme="nexus"] [class*="h-\\["] svg {
+[data-theme="clean"] svg[class*="sparkline"],
+[data-theme="clean"] [class*="h-\\["] svg {
   background-color: transparent !important;
 }
 
 /* "All Systems Operational" banner — softer indigo tint */
-[data-theme="nexus"] [class*="bg-rust-500\\/5"] {
+[data-theme="clean"] [class*="bg-rust-500\\/5"] {
   background-color: rgba(37, 99, 235, 0.06) !important;
 }
 
 /* Stat grid (Uptime, Sites, Databases, etc.) — add subtle card styling */
-[data-theme="nexus"] [class*="grid"] > [class*="text-center"] {
+[data-theme="clean"] [class*="grid"] > [class*="text-center"] {
   background-color: #ffffff;
   border-radius: 8px;
   padding: 12px;
@@ -788,37 +788,37 @@ body {
 }
 
 /* Nexus: onboarding completed steps — no opacity wash */
-[data-theme="nexus"] main [class*="opacity-60"] {
+[data-theme="clean"] main [class*="opacity-60"] {
   opacity: 0.5;
 }
 
 /* Nexus: status bar cells — light gray bg */
-[data-theme="nexus"] [class*="gap-px"] > [class*="bg-dark-800"] {
+[data-theme="clean"] [class*="gap-px"] > [class*="bg-dark-800"] {
   background-color: #ffffff !important;
 }
 
 /* Nexus: progress bar track — light gray */
-[data-theme="nexus"] [class*="bg-dark-700"][class*="rounded-full"][class*="overflow-hidden"] {
+[data-theme="clean"] [class*="bg-dark-700"][class*="rounded-full"][class*="overflow-hidden"] {
   background-color: #e2e8f0 !important;
 }
 
 /* Tracking wider — remove for Nexus (terminal artifact) */
-[data-theme="nexus"] [class*="tracking-wider"],
-[data-theme="nexus"] [class*="tracking-widest"] {
+[data-theme="clean"] [class*="tracking-wider"],
+[data-theme="clean"] [class*="tracking-widest"] {
   letter-spacing: normal !important;
 }
 
 /* Code/mono blocks in content — light bg */
-[data-theme="nexus"] code,
-[data-theme="nexus"] pre {
+[data-theme="clean"] code,
+[data-theme="clean"] pre {
   background-color: #f3f4f6 !important;
   color: #1f2937 !important;
   border-radius: 6px;
 }
 
 /* Toggle switches — indigo when active */
-[data-theme="nexus"] [class*="bg-rust-500"][role="switch"],
-[data-theme="nexus"] button[class*="bg-rust-500"][class*="rounded-full"] {
+[data-theme="clean"] [class*="bg-rust-500"][role="switch"],
+[data-theme="clean"] button[class*="bg-rust-500"][class*="rounded-full"] {
   background-color: #2563eb !important;
 }
 
@@ -827,7 +827,7 @@ body {
    THEME: NEXUS DARK — Premium dark SaaS, blue accent
    ═══════════════════════════════════════════════════════ */
 
-[data-theme="nexus-dark"] {
+[data-theme="clean-dark"] {
   /* GitHub-dark inspired surfaces — clear layering for depth */
   --color-dark-950: #0d1117;  /* page background (darkest) */
   --color-dark-900: #161b22;  /* sidebar, header, elevated surfaces */
@@ -879,29 +879,29 @@ body {
   --radius-3xl: 24px;
 }
 
-[data-theme="nexus-dark"] body {
+[data-theme="clean-dark"] body {
   background-image: none;
 }
 
-[data-theme="nexus-dark"] .logo-glow {
+[data-theme="clean-dark"] .logo-glow {
   text-shadow: 0 0 14px rgba(59, 130, 246, 0.3);
 }
 
-[data-theme="nexus-dark"] .logo-icon-glow {
+[data-theme="clean-dark"] .logo-icon-glow {
   box-shadow: 0 0 18px rgba(59, 130, 246, 0.25), 0 0 5px rgba(59, 130, 246, 0.1);
 }
 
 /* Nexus Dark: hide terminal artifacts */
-[data-theme="nexus-dark"] .blinking-cursor { display: none; }
-[data-theme="nexus-dark"] .typewriter { border-right-color: transparent; animation: none; }
+[data-theme="clean-dark"] .blinking-cursor { display: none; }
+[data-theme="clean-dark"] .typewriter { border-right-color: transparent; animation: none; }
 
 /* Nexus Dark: override uppercase/tracking for SaaS feel */
-[data-theme="nexus-dark"] .uppercase { text-transform: none !important; }
-[data-theme="nexus-dark"] .font-mono:not([class*="terminal"]):not(code):not(pre):not(kbd) {
+[data-theme="clean-dark"] .uppercase { text-transform: none !important; }
+[data-theme="clean-dark"] .font-mono:not([class*="terminal"]):not(code):not(pre):not(kbd) {
   font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
 }
-[data-theme="nexus-dark"] [class*="tracking-wider"],
-[data-theme="nexus-dark"] [class*="tracking-widest"] {
+[data-theme="clean-dark"] [class*="tracking-wider"],
+[data-theme="clean-dark"] [class*="tracking-widest"] {
   letter-spacing: normal !important;
 }
 
@@ -936,8 +936,8 @@ body {
 [data-theme="midnight"] body,
 [data-theme="arctic"] body,
 [data-theme="ember"] body,
-[data-theme="nexus"] body,
-[data-theme="nexus-dark"] body {
+[data-theme="clean"] body,
+[data-theme="clean-dark"] body {
   font-size: 0.9375rem; /* 15px instead of 14px for better readability with Inter */
 }
 
@@ -945,36 +945,36 @@ body {
 [data-theme="midnight"] .text-sm,
 [data-theme="arctic"] .text-sm,
 [data-theme="ember"] .text-sm,
-[data-theme="nexus"] .text-sm,
-[data-theme="nexus-dark"] .text-sm {
+[data-theme="clean"] .text-sm,
+[data-theme="clean-dark"] .text-sm {
   font-size: 0.875rem;
 }
 
 [data-theme="midnight"] .text-xs,
 [data-theme="arctic"] .text-xs,
 [data-theme="ember"] .text-xs,
-[data-theme="nexus"] .text-xs,
-[data-theme="nexus-dark"] .text-xs {
+[data-theme="clean"] .text-xs,
+[data-theme="clean-dark"] .text-xs {
   font-size: 0.75rem;
 }
 
 /* ── Light theme overrides — table/card/elevation ── */
 
 [data-theme="arctic"] tr.table-row-hover:hover,
-[data-theme="nexus"] tr.table-row-hover:hover {
+[data-theme="clean"] tr.table-row-hover:hover {
   background-color: var(--color-dark-800) !important;
 }
 
 [data-theme="arctic"] .card-interactive:hover,
-[data-theme="nexus"] .card-interactive:hover {
+[data-theme="clean"] .card-interactive:hover {
   border-color: var(--color-dark-600);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
 }
 
 [data-theme="arctic"] .elevation-1,
 [data-theme="arctic"] .elevation-2,
-[data-theme="nexus"] .elevation-1,
-[data-theme="nexus"] .elevation-2 {
+[data-theme="clean"] .elevation-1,
+[data-theme="clean"] .elevation-2 {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
@@ -1150,8 +1150,8 @@ select:focus-visible {
 [data-theme="midnight"] main [class*="bg-dark-900"][class*="border"],
 [data-theme="ember"] main [class*="bg-dark-800"][class*="border"],
 [data-theme="ember"] main [class*="bg-dark-900"][class*="border"],
-[data-theme="nexus-dark"] main [class*="bg-dark-800"][class*="border"],
-[data-theme="nexus-dark"] main [class*="bg-dark-900"][class*="border"] {
+[data-theme="clean-dark"] main [class*="bg-dark-800"][class*="border"],
+[data-theme="clean-dark"] main [class*="bg-dark-900"][class*="border"] {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2), 0 2px 8px rgba(0, 0, 0, 0.1);
   transition: box-shadow 0.2s ease, border-color 0.2s ease;
 }
@@ -1175,7 +1175,7 @@ select:focus-visible {
 [data-theme="ember"] [class*="rounded-full"][class*="overflow-hidden"] [class*="bg-rust-500"] {
   box-shadow: 0 0 8px rgba(251, 146, 60, 0.3);
 }
-[data-theme="nexus-dark"] [class*="rounded-full"][class*="overflow-hidden"] [class*="bg-rust-500"] {
+[data-theme="clean-dark"] [class*="rounded-full"][class*="overflow-hidden"] [class*="bg-rust-500"] {
   box-shadow: 0 0 8px rgba(59, 130, 246, 0.3);
 }
 
@@ -1244,13 +1244,13 @@ tr.table-row-hover:hover {
 [data-theme="ember"] .login-bg {
   --login-glow-rgb: 249, 115, 22;
 }
-[data-theme="nexus"] .login-bg {
+[data-theme="clean"] .login-bg {
   background-color: #f1f5f9;
   background-image:
     radial-gradient(ellipse at 20% 50%, rgba(37, 99, 235, 0.04) 0%, transparent 50%),
     radial-gradient(ellipse at 80% 20%, rgba(37, 99, 235, 0.03) 0%, transparent 50%);
 }
-[data-theme="nexus-dark"] .login-bg {
+[data-theme="clean-dark"] .login-bg {
   --login-glow-rgb: 59, 130, 246;
 }
 
@@ -1287,7 +1287,7 @@ tr.table-row-hover:hover {
   margin-top: 0.125rem;
 }
 
-[data-theme="nexus"] .page-header {
+[data-theme="clean"] .page-header {
   background-color: #ffffff;
   border-color: #e5e7eb;
 }
