@@ -43,6 +43,7 @@ pub mod reseller_dashboard;
 pub mod migration;
 pub mod resellers;
 pub mod secrets;
+pub mod webhook_gateway;
 pub mod wordpress;
 pub mod ws_metrics;
 
@@ -443,6 +444,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/auth/oauth/{provider}/callback", get(oauth::callback))
         .route("/api/status-page", get(monitors::status_page))
         .route("/api/status-page/public", get(incidents::public_status_page))
+        .route("/api/webhooks/gateway/{token}", post(webhook_gateway::receive_webhook))
         .route("/api/status-page/subscribe", post(incidents::subscribe))
         .route("/api/status-page/unsubscribe", post(incidents::unsubscribe))
         .route("/api/terminal/shared/{id}", get(terminal::view_shared))
@@ -525,6 +527,13 @@ pub fn router() -> Router<AppState> {
         .route("/api/backup-orchestrator/volume-backups", get(backup_orchestrator::list_volume_backups))
         .route("/api/backup-orchestrator/verify", post(backup_orchestrator::trigger_verify))
         .route("/api/backup-orchestrator/verifications", get(backup_orchestrator::list_verifications))
+        // Webhook Gateway
+        .route("/api/webhook-gateway/endpoints", get(webhook_gateway::list_endpoints).post(webhook_gateway::create_endpoint))
+        .route("/api/webhook-gateway/endpoints/{id}", delete(webhook_gateway::delete_endpoint))
+        .route("/api/webhook-gateway/endpoints/{id}/deliveries", get(webhook_gateway::list_deliveries))
+        .route("/api/webhook-gateway/endpoints/{id}/routes", get(webhook_gateway::list_routes).post(webhook_gateway::create_route))
+        .route("/api/webhook-gateway/routes/{route_id}", delete(webhook_gateway::delete_route))
+        .route("/api/webhook-gateway/deliveries/{delivery_id}/replay", post(webhook_gateway::replay_delivery))
         // Secrets Manager
         .route("/api/secrets/vaults", get(secrets::list_vaults).post(secrets::create_vault))
         .route("/api/secrets/vaults/{vault_id}", delete(secrets::delete_vault))

@@ -29,6 +29,7 @@ urlencoding = "2"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "builder", "smtp-transport", "tokio1", "hostname"] }
 rand = "0.8"
+sha1 = "0.10"
 sha2 = "0.10"
 hmac = "0.12"
 hex = "0.4"

@@ -1,6 +1,6 @@
 # DockPanel Feature Manifest
 
-> **Last verified**: 2026-03-22 | **Version**: v2.3.0 | **Total**: 45 major features, ~205 capabilities
+> **Last verified**: 2026-03-22 | **Version**: v2.4.0 | **Total**: 46 major features, ~215 capabilities
 >
 > This file is the single source of truth for what DockPanel offers.
 > Update it whenever features are added, changed, or removed.
@@ -13,6 +13,7 @@
 | **Databases** | MySQL/PostgreSQL via Docker, SQL browser, schema viewer | `routes/databases.rs` | `database.rs` | `Databases.tsx` | `databases` |
 | **Backups** | Scheduled backups, S3/SFTP/B2/GCS remote storage, one-click restore | `routes/backups.rs`, `backup_schedules.rs`, `backup_destinations.rs` | `backups.rs`, `remote_backup.rs` | `Backups.tsx` | `backups`, `backup_schedules`, `backup_destinations` |
 | **Backup Orchestrator** | DB/volume/site backups, AES-256 encryption, restore verification, policies, health dashboard, auto-verifier | `routes/backup_orchestrator.rs` | `database_backup.rs`, `volume_backup.rs`, `encryption.rs`, `backup_verify.rs` | `BackupOrchestrator.tsx` | `backup_policies`, `database_backups`, `volume_backups`, `backup_verifications` |
+| **Webhook Gateway** | Receive, inspect, route, replay webhooks. HMAC-SHA256/SHA1 verification, JSON path filtering, retry with backoff, delivery logging | `routes/webhook_gateway.rs` | — | `WebhookGateway.tsx` | `webhook_endpoints`, `webhook_deliveries`, `webhook_routes` |
 | **Secrets Manager** | AES-256-GCM encrypted vaults, version history, auto-inject to .env, masked API, pull for CLI | `routes/secrets.rs`, `services/secrets_crypto.rs` | — | `SecretsManager.tsx` | `secret_vaults`, `secrets`, `secret_versions` |
 | **Incident Management** | Incident lifecycle (investigating→resolved→postmortem), timeline updates, severity, affected components, postmortem | `routes/incidents.rs` | — | `IncidentManagement.tsx` | `managed_incidents`, `incident_updates`, `managed_incident_components` |
 | **Public Status Page** | Customizable status page with component groups, incident history, subscriber notifications, overall status | `routes/incidents.rs` | — | `PublicStatusPage.tsx` | `status_page_config`, `status_page_components`, `status_page_subscribers` |
