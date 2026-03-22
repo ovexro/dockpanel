@@ -218,23 +218,35 @@ async fn write_crontab(content: &str) -> Result<(), String> {
 
 /// Reject commands with shell injection vectors.
 fn is_safe_command(cmd: &str) -> bool {
-    let dangerous = [
-        "rm -rf /", "; rm ", "&& rm ",
-        "$(", "`",                           // command substitution
-        "| ", "||", "&&",                     // pipes and chaining
-        "> /etc/", "> /root/", "> /var/",     // redirects to system dirs
-        "< /etc/", "< /root/",               // reading system files
-        "curl ", "wget ",                     // network access
-        "chmod 777", "chown ",               // permission changes
-        "mkfs", "dd if=",                    // destructive disk ops
-        "shutdown", "reboot", "init ",       // system control
-        "passwd", "useradd", "userdel",      // user management
-        "\\x", "\\0",                        // escape sequences
+    // Hard length limit
+    if cmd.is_empty() || cmd.len() > 4096 || cmd.contains('\0') {
+        return false;
+    }
+
+    // Reject commands with shell metacharacters that enable chaining/substitution
+    if cmd.contains('`') || cmd.contains("$(") || cmd.contains("| ") || cmd.contains("|/") {
+        return false;
+    }
+
+    let blocked = [
+        "rm -rf /", "rm -rf /*", "mkfs", "dd if=", "> /dev/",
+        "chmod 777 /", "chown", "passwd", "shadow",
+        "|sh", "|bash", "| sh", "| bash",
+        ";sh", ";bash", "; sh", "; bash",
+        "`", "$(",  "eval ", "exec ",
+        "base64", "python", "perl", "ruby", "node -e", "php -r",
+        "nc ", "ncat ", "socat ", "telnet ",
+        "curl", "wget",
+        "/etc/passwd", "/etc/shadow", "/etc/sudoers",
+        "||", "&&", "; ",
+        "> /etc/", "> /root/", "> /var/",
+        "< /etc/", "< /root/",
+        "shutdown", "reboot", "init ",
+        "useradd", "userdel",
+        "\\x", "\\0",
     ];
-    let cmd_lower = cmd.to_lowercase();
-    !dangerous.iter().any(|p| cmd_lower.contains(p))
-        && !cmd.contains('\0')
-        && cmd.len() <= 4096
+    let lower = cmd.to_lowercase();
+    !blocked.iter().any(|b| lower.contains(b))
 }
 
 /// Basic cron schedule validation (5 fields).

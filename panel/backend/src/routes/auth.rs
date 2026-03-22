@@ -1073,9 +1073,10 @@ pub async fn change_password(
 }
 
 /// POST /api/auth/revoke-all — Revoke all active sessions (forces re-login for everyone).
+/// Admin-only: only admins can force everyone to re-login.
 pub async fn revoke_all_sessions(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    crate::auth::AdminUser(claims): crate::auth::AdminUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Store a timestamp marker — auth middleware can check this to invalidate older tokens
     sqlx::query(

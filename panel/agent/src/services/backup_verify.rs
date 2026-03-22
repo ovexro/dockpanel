@@ -100,6 +100,13 @@ pub async fn verify_site_backup(domain: &str, filename: &str) -> Result<Verifica
     })
 }
 
+/// Validate a resource name (database, app, container, etc.).
+fn is_valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
 /// Verify a database backup by restoring to a temporary container.
 pub async fn verify_db_backup(
     db_type: &str,
@@ -108,6 +115,13 @@ pub async fn verify_db_backup(
 ) -> Result<VerificationResult, String> {
     let start = std::time::Instant::now();
     let mut checks = Vec::new();
+
+    if !is_valid_name(db_name) {
+        return Err("Invalid database name".to_string());
+    }
+    if !is_valid_name(filename) {
+        return Err("Invalid filename".to_string());
+    }
 
     let backup_path = format!("/var/backups/dockpanel/databases/{db_name}/{filename}");
     if !std::path::Path::new(&backup_path).exists() {
@@ -217,10 +231,11 @@ async fn verify_mysql_restore(
     }
 
     // Restore the dump
+    let safe_password = password.replace('\'', "'\\''");
     let restore_cmd = format!(
         "zcat '{}' | docker exec -i -e MYSQL_PWD='{}' {} mariadb -u root {}",
         backup_path.replace('\'', "'\\''"),
-        password,
+        safe_password,
         container_name,
         db_name,
     );
@@ -326,10 +341,11 @@ async fn verify_postgres_restore(
     }
 
     // Restore the dump
+    let safe_password = password.replace('\'', "'\\''");
     let restore_cmd = format!(
         "zcat '{}' | docker exec -i -e PGPASSWORD='{}' {} psql -U verify -d {} --quiet",
         backup_path.replace('\'', "'\\''"),
-        password,
+        safe_password,
         container_name,
         db_name,
     );
@@ -382,6 +398,13 @@ pub async fn verify_volume_backup(
 ) -> Result<VerificationResult, String> {
     let start = std::time::Instant::now();
     let mut checks = Vec::new();
+
+    if !is_valid_name(container_name) {
+        return Err("Invalid container name".to_string());
+    }
+    if !is_valid_name(filename) {
+        return Err("Invalid filename".to_string());
+    }
 
     let backup_path = format!("/var/backups/dockpanel/volumes/{container_name}/{filename}");
     if !std::path::Path::new(&backup_path).exists() {
