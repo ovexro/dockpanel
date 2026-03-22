@@ -87,6 +87,8 @@ export default function Settings() {
 
   // Theme
   const [currentTheme, setCurrentTheme] = useState(() => localStorage.getItem("dp-theme") || "terminal");
+  const [showHeader, setShowHeader] = useState(() => localStorage.getItem("dp-show-header") === "true");
+  const [flatNav, setFlatNav] = useState(() => localStorage.getItem("dp-flat-nav") === "true");
 
   // Backup destinations
   const [destinations, setDestinations] = useState<BackupDestination[]>([]);
@@ -737,9 +739,11 @@ export default function Settings() {
             <div className="flex gap-6 text-sm">
               <label className="flex items-center gap-2 text-dark-100 cursor-pointer">
                 <input type="checkbox"
-                  checked={localStorage.getItem("dp-show-header") === "true"}
+                  checked={showHeader}
                   onChange={e => {
-                    localStorage.setItem("dp-show-header", e.target.checked ? "true" : "false");
+                    const val = e.target.checked;
+                    setShowHeader(val);
+                    localStorage.setItem("dp-show-header", val ? "true" : "false");
                     window.dispatchEvent(new Event("dp-layout-options-change"));
                   }}
                 />
@@ -747,9 +751,11 @@ export default function Settings() {
               </label>
               <label className="flex items-center gap-2 text-dark-100 cursor-pointer">
                 <input type="checkbox"
-                  checked={localStorage.getItem("dp-flat-nav") === "true"}
+                  checked={flatNav}
                   onChange={e => {
-                    localStorage.setItem("dp-flat-nav", e.target.checked ? "true" : "false");
+                    const val = e.target.checked;
+                    setFlatNav(val);
+                    localStorage.setItem("dp-flat-nav", val ? "true" : "false");
                     window.dispatchEvent(new Event("dp-layout-options-change"));
                   }}
                 />
