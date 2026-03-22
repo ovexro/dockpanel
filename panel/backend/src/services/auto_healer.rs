@@ -141,6 +141,9 @@ async fn auto_restart_services(pool: &PgPool, agent: &AgentClient) {
                     notifications::send_notification(pool, &channels, &subject, &incident_msg, &html).await;
                 }
 
+                // Panel notification
+                notifications::notify_panel(pool, None, &format!("Auto-healer exhausted: {}", service_name), &format!("{} keeps crashing after 3 restart attempts. Manual intervention required.", service_name), "critical", "auto_heal", Some("/incidents")).await;
+
                 // Log the exhaustion event
                 crate::services::system_log::log_event(
                     pool,
@@ -386,6 +389,9 @@ async fn auto_clean_disk(pool: &PgPool, agent: &AgentClient) {
         .await;
 
         tracing::info!("Auto-heal: disk cleanup succeeded, disk alert state reset");
+
+        // Panel notification
+        notifications::notify_panel(pool, None, "Disk cleanup completed", "Automatic disk cleanup was performed to free space", "info", "auto_heal", None).await;
     }
 }
 
@@ -502,6 +508,9 @@ async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
                 }
             }
             tracing::info!("Auto-heal: SSL renewed for {domain}");
+
+            // Panel notification
+            notifications::notify_panel(pool, None, &format!("SSL renewed: {}", domain), &format!("SSL certificate for {} was automatically renewed", domain), "info", "ssl", None).await;
         } else {
             // Fire an alert so the user is notified about the SSL renewal failure
             let server: Option<(uuid::Uuid,)> = sqlx::query_as(

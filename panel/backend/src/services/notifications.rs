@@ -318,17 +318,8 @@ pub async fn try_fire_alert(
     .await
     .map_err(|e| format!("Failed to record alert: {e}"))?;
 
-    // Also store in panel notification center (bell icon)
-    let _ = sqlx::query(
-        "INSERT INTO panel_notifications (user_id, title, message, severity, category) \
-         VALUES ($1, $2, $3, $4, 'alert')",
-    )
-    .bind(user_id)
-    .bind(title)
-    .bind(message)
-    .bind(severity)
-    .execute(pool)
-    .await;
+    // Also store in panel notification center (bell icon) — notify all admins
+    notify_panel(pool, None, title, message, severity, "alert", None).await;
 
     // Send notification
     if let Some(channels) = get_user_channels(pool, user_id, server_id).await {
@@ -350,6 +341,34 @@ pub async fn try_fire_alert(
     }
 
     Ok(())
+}
+
+/// Insert notification into the panel notification center (bell icon).
+/// Pass user_id = None to notify all admins.
+pub async fn notify_panel(
+    db: &sqlx::PgPool,
+    user_id: Option<uuid::Uuid>,
+    title: &str,
+    message: &str,
+    severity: &str,
+    category: &str,
+    link: Option<&str>,
+) {
+    if let Some(uid) = user_id {
+        let _ = sqlx::query(
+            "INSERT INTO panel_notifications (user_id, title, message, severity, category, link) VALUES ($1, $2, $3, $4, $5, $6)"
+        ).bind(uid).bind(title).bind(message).bind(severity).bind(category).bind(link)
+        .execute(db).await;
+    } else {
+        let admins: Vec<(uuid::Uuid,)> = sqlx::query_as("SELECT id FROM users WHERE role = 'admin'")
+            .fetch_all(db).await.unwrap_or_default();
+        for (admin_id,) in &admins {
+            let _ = sqlx::query(
+                "INSERT INTO panel_notifications (user_id, title, message, severity, category, link) VALUES ($1, $2, $3, $4, $5, $6)"
+            ).bind(admin_id).bind(title).bind(message).bind(severity).bind(category).bind(link)
+            .execute(db).await;
+        }
+    }
 }
 
 /// Resolve a firing alert and send recovery notification.
@@ -397,4 +416,7 @@ pub async fn resolve_alert(
         );
         send_notification(pool, &channels, &subject, message, &html).await;
     }
+
+    // Panel notification center
+    notify_panel(pool, Some(user_id), &format!("Resolved: {}", title), message, "info", "alert", None).await;
 }

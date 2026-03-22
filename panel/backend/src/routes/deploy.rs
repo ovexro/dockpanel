@@ -13,6 +13,7 @@ use crate::error::{err, agent_error, paginate, ApiError};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
 use crate::services::agent::AgentHandle;
+use crate::services::notifications;
 use crate::AppState;
 
 #[derive(serde::Serialize, sqlx::FromRow)]
@@ -487,6 +488,15 @@ async fn execute_deploy(
     .ok();
 
     tracing::info!("Deploy {status} for {domain} (commit: {:?}, trigger: {triggered_by})", commit_hash);
+
+    // Panel notification center
+    let user_id: Option<uuid::Uuid> = sqlx::query_scalar("SELECT user_id FROM sites WHERE id = $1")
+        .bind(site_id).fetch_optional(db).await.ok().flatten();
+    if success {
+        notifications::notify_panel(db, user_id, &format!("Deploy complete: {}", domain), "Site deployment completed successfully", "info", "deploy", None).await;
+    } else {
+        notifications::notify_panel(db, user_id, &format!("Deploy failed: {}", domain), output, "critical", "deploy", None).await;
+    }
 
     Ok(log)
 }
