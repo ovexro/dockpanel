@@ -48,27 +48,33 @@ async fn file_upload(
     Json(body): Json<UploadRequest>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
     use base64::Engine as _;
+    use crate::services::files as file_svc;
 
-    let root = if domain == "_server" {
-        "/".to_string()
-    } else {
-        format!("/var/www/{domain}")
-    };
-
-    let full_path = format!("{root}/{}", body.path.trim_start_matches('/'));
-
-    // Security: prevent path traversal
-    if full_path.contains("..") {
-        return Err(err(StatusCode::BAD_REQUEST, "Path traversal not allowed"));
+    // Validate domain
+    if domain != "_server" && !super::is_valid_domain(&domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
     }
 
-    // Decode base64 content
+    // Decode base64 content first (fail fast before any FS ops)
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(&body.content_base64)
         .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid base64 content"))?;
 
-    // Create parent directory
-    if let Some(parent) = std::path::Path::new(&full_path).parent() {
+    let full_path = if domain == "_server" {
+        // Server-level upload: validate no traversal manually
+        let p = format!("/{}", body.path.trim_start_matches('/'));
+        if p.contains("..") {
+            return Err(err(StatusCode::BAD_REQUEST, "Path traversal not allowed"));
+        }
+        std::path::PathBuf::from(p)
+    } else {
+        // Site upload: use resolve_safe_path to prevent TOCTOU race
+        file_svc::resolve_safe_path(&domain, &body.path)
+            .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?
+    };
+
+    // Create parent directory (safe — path already validated)
+    if let Some(parent) = full_path.parent() {
         tokio::fs::create_dir_all(parent).await
             .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to create directory: {e}")))?;
     }
@@ -76,8 +82,9 @@ async fn file_upload(
     tokio::fs::write(&full_path, &bytes).await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write file: {e}")))?;
 
-    tracing::info!("File uploaded: {} ({} bytes)", full_path, bytes.len());
-    Ok(Json(serde_json::json!({ "ok": true, "path": full_path, "size": bytes.len() })))
+    let path_str = full_path.to_string_lossy().to_string();
+    tracing::info!("File uploaded: {} ({} bytes)", path_str, bytes.len());
+    Ok(Json(serde_json::json!({ "ok": true, "path": path_str, "size": bytes.len() })))
 }
 
 // ── SSH Key Management ──────────────────────────────────────────────────
