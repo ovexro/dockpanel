@@ -25,6 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Dashboard stat grid square corners** — Added `rounded-lg overflow-hidden` to stat bar and system info grids; added explicit `rounded-lg` to metric cards, sparkline cards, onboarding section, and issues panels
 - **Compact layout flat nav** — GlassLayout now respects `dp-flat-nav` setting (was only implemented in Sidebar layout)
 - **Compact layout footer spacing** — Removed nested padding wrapper, aligned `px-3` to match Sidebar layout spacing
+- **Layout switcher dropdown redesign** — Added `p-1` padding and `rounded-md` items to match panel dropdown style; compact mode hides label text to save space; removed bordered button style for cleaner ghost-button look
 
 ## [2.5.1] - 2026-03-22
 
