@@ -54,7 +54,7 @@ async fn ws_handler(
     // Enforce terminal session limit
     let current = ACTIVE_TERMINALS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     if current >= MAX_TERMINAL_SESSIONS {
-        ACTIVE_TERMINALS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        let _ = ACTIVE_TERMINALS.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| Some(v.saturating_sub(1)));
         return Response::builder()
             .status(503)
             .body("Too many terminal sessions".into())
@@ -81,7 +81,7 @@ async fn ws_handler(
             .map(|data| data.claims.sub)
         });
     if user_email.is_none() {
-        ACTIVE_TERMINALS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        let _ = ACTIVE_TERMINALS.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| Some(v.saturating_sub(1)));
         return Response::builder()
             .status(401)
             .body("Unauthorized".into())
@@ -95,13 +95,13 @@ async fn ws_handler(
     if !domain.is_empty()
         && (domain.contains("..") || domain.contains('/') || domain.contains('\0'))
     {
-        ACTIVE_TERMINALS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        let _ = ACTIVE_TERMINALS.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| Some(v.saturating_sub(1)));
         return (StatusCode::BAD_REQUEST, "Invalid domain").into_response();
     }
 
     // Verify site directory exists before upgrading to WebSocket
     if !domain.is_empty() && !std::path::Path::new(&format!("/var/www/{domain}")).is_dir() {
-        ACTIVE_TERMINALS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        let _ = ACTIVE_TERMINALS.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| Some(v.saturating_sub(1)));
         return (StatusCode::BAD_REQUEST, "Site directory not found").into_response();
     }
 
@@ -112,7 +112,8 @@ async fn ws_handler(
 }
 
 /// Open a PTY pair and spawn a shell in the child side.
-fn open_pty_shell(cwd: &str, cols: u16, rows: u16) -> Result<(OwnedFd, u32), String> {
+/// If `site_domain` is Some, drop privileges to www-data for the site terminal.
+fn open_pty_shell(cwd: &str, cols: u16, rows: u16, site_domain: Option<&str>) -> Result<(OwnedFd, u32), String> {
     // Open PTY master
     let master_fd = rustix::pty::openpt(rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY)
         .map_err(|e| format!("openpt: {e}"))?;
@@ -176,12 +177,37 @@ fn open_pty_shell(cwd: &str, cols: u16, rows: u16) -> Result<(OwnedFd, u32), Str
             let term = std::ffi::CString::new("TERM=xterm-256color").unwrap();
             libc::putenv(term.as_ptr() as *mut _);
 
-            let home = std::ffi::CString::new("HOME=/root").unwrap();
-            libc::putenv(home.as_ptr() as *mut _);
-
             // Change directory
             let cwd_cstr = std::ffi::CString::new(cwd).unwrap();
             libc::chdir(cwd_cstr.as_ptr());
+
+            // Drop privileges for site terminals (run as www-data instead of root)
+            if site_domain.is_some() {
+                let username = b"www-data\0".as_ptr() as *const libc::c_char;
+                let pw = libc::getpwnam(username);
+                if !pw.is_null() {
+                    let uid = (*pw).pw_uid;
+                    let gid = (*pw).pw_gid;
+                    // Set group first (must happen before setuid drops root)
+                    libc::setgid(gid);
+                    libc::initgroups(username, gid);
+                    libc::setuid(uid);
+
+                    // Set HOME to site directory
+                    let home = std::ffi::CString::new(format!("HOME={}", cwd)).unwrap();
+                    libc::putenv(home.as_ptr() as *mut _);
+
+                    let user_env = std::ffi::CString::new("USER=www-data").unwrap();
+                    libc::putenv(user_env.as_ptr() as *mut _);
+                } else {
+                    // www-data user not found — abort rather than run as root
+                    libc::_exit(1);
+                }
+            } else {
+                // Server terminal — keep root
+                let home = std::ffi::CString::new("HOME=/root").unwrap();
+                libc::putenv(home.as_ptr() as *mut _);
+            }
 
             // Exec bash (or sh)
             let shell_path = if std::path::Path::new("/bin/bash").exists() {
@@ -215,21 +241,22 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: Stri
                     format!("Site directory not found: /var/www/{domain}").into(),
                 ))
                 .await;
-            ACTIVE_TERMINALS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = ACTIVE_TERMINALS.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| Some(v.saturating_sub(1)));
             return;
         }
     } else {
         "/root".to_string()
     };
 
-    // Spawn shell with PTY
-    let (master_fd, child_pid) = match open_pty_shell(&cwd, cols, rows) {
+    // Spawn shell with PTY (drop to www-data for site terminals)
+    let site_domain = if domain.is_empty() { None } else { Some(domain.as_str()) };
+    let (master_fd, child_pid) = match open_pty_shell(&cwd, cols, rows, site_domain) {
         Ok(v) => v,
         Err(e) => {
             let _ = socket
                 .send(Message::Text(format!("Failed to spawn shell: {e}").into()))
                 .await;
-            ACTIVE_TERMINALS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = ACTIVE_TERMINALS.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| Some(v.saturating_sub(1)));
             return;
         }
     };
@@ -243,7 +270,7 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: Stri
         let _ = socket
             .send(Message::Text("Failed to dup PTY fd".into()))
             .await;
-        ACTIVE_TERMINALS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        let _ = ACTIVE_TERMINALS.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| Some(v.saturating_sub(1)));
         return;
     }
     // Prevent OwnedFd from closing the fd since Files now own them
@@ -369,7 +396,7 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: Stri
     }
 
     // Release terminal session slot
-    ACTIVE_TERMINALS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    let _ = ACTIVE_TERMINALS.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| Some(v.saturating_sub(1)));
 }
 
 /// The terminal WebSocket route bypasses standard auth middleware

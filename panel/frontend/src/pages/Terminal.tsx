@@ -145,7 +145,7 @@ export default function Terminal() {
   // Terminal Recording
   const [recording, setRecording] = useState(false);
   const recordingRef = useRef(false);
-  const recordingData = useRef<{ time: number; data: string }[]>([]);
+  const recordingData = useRef<{ time: number; data: string; type: "o" | "i" }[]>([]);
   const recordingStart = useRef<number>(0);
 
   // Keep statusRef in sync with status state
@@ -273,7 +273,7 @@ export default function Terminal() {
           term.write(event.data);
           // Capture output for recording (use ref to avoid stale closure)
           if (recordingRef.current) {
-            recordingData.current.push({ time: Date.now(), data: event.data });
+            recordingData.current.push({ time: Date.now(), data: event.data, type: "o" });
           }
         };
 
@@ -309,6 +309,10 @@ export default function Terminal() {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: "input", data: inputData }));
             resetIdleTimer();
+            // Capture input for recording (asciinema "i" event type)
+            if (recordingRef.current) {
+              recordingData.current.push({ time: Date.now(), data: inputData, type: "i" });
+            }
           }
         });
 
@@ -399,7 +403,7 @@ export default function Terminal() {
         .map((e) =>
           JSON.stringify([
             (e.time - recordingStart.current) / 1000,
-            "o",
+            e.type,
             e.data,
           ])
         )
