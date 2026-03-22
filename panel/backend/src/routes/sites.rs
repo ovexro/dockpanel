@@ -440,11 +440,14 @@ pub async fn create(
 
             // Auto-SSL: try to provision Let's Encrypt cert in background
             let ssl_agent = agent.clone();
+            let ssl_db = state.db.clone();
             let ssl_domain = body.domain.clone();
             let ssl_email = claims.email.clone();
             let ssl_runtime = runtime.to_string();
             let ssl_php_socket = body.php_version.as_ref().map(|v| format!("unix:/run/php/php{v}-fpm.sock"));
             let ssl_proxy_port = body.proxy_port;
+            let ssl_php_preset = body.php_preset.clone();
+            let ssl_root_path: Option<String> = None; // default root
             let ssl_logs = logs.clone();
             tokio::spawn(async move {
                 // Retry SSL with backoff: 3s, 30s, 2m, 5m
@@ -452,16 +455,52 @@ pub async fn create(
                 for (i, delay) in delays.iter().enumerate() {
                     tokio::time::sleep(Duration::from_secs(*delay)).await;
                     emit_step(&ssl_logs, site_id, "ssl", "Provisioning SSL certificate", "in_progress", None);
-                    let ssl_body = serde_json::json!({
+                    let mut ssl_body = serde_json::json!({
                         "email": ssl_email,
                         "runtime": ssl_runtime,
                         "php_socket": ssl_php_socket,
                         "proxy_port": ssl_proxy_port,
                     });
+                    if let Some(ref preset) = ssl_php_preset {
+                        ssl_body["php_preset"] = serde_json::json!(preset);
+                    }
+                    if let Some(ref root) = ssl_root_path {
+                        ssl_body["root"] = serde_json::json!(root);
+                    }
                     match ssl_agent.post(&format!("/ssl/provision/{ssl_domain}"), Some(ssl_body)).await {
-                        Ok(_) => {
+                        Ok(result) => {
                             tracing::info!("Auto-SSL provisioned for {ssl_domain} (attempt {})", i + 1);
                             emit_step(&ssl_logs, site_id, "ssl", "Provisioning SSL certificate", "done", None);
+
+                            // Parse cert details from agent response
+                            let ssl_expiry = result
+                                .get("expiry")
+                                .and_then(|v| v.as_str())
+                                .and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f UTC").ok())
+                                .map(|dt| dt.and_utc());
+                            let cert_path = result.get("cert_path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let key_path = result.get("key_path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+                            // Update site DB record with SSL status
+                            let _ = sqlx::query(
+                                "UPDATE sites SET ssl_enabled = true, ssl_cert_path = $1, ssl_key_path = $2, \
+                                 ssl_expiry = $3, updated_at = NOW() WHERE id = $4"
+                            )
+                            .bind(&cert_path)
+                            .bind(&key_path)
+                            .bind(ssl_expiry)
+                            .bind(site_id)
+                            .execute(&ssl_db)
+                            .await;
+
+                            // Activate paused monitors now that SSL is working
+                            let _ = sqlx::query(
+                                "UPDATE monitors SET enabled = TRUE WHERE site_id = $1 AND enabled = FALSE AND status = 'pending'"
+                            )
+                            .bind(site_id)
+                            .execute(&ssl_db)
+                            .await;
+
                             return; // Success, stop retrying
                         }
                         Err(e) => {
@@ -1066,6 +1105,19 @@ pub async fn remove(
         .execute(&state.db)
         .await
         .ok();
+
+    // Clean up status page components matching this domain
+    sqlx::query("DELETE FROM status_page_components WHERE name = $1")
+        .bind(&site.domain)
+        .execute(&state.db)
+        .await
+        .ok();
+
+    // Pre-delete backup: snapshot site files before permanent deletion (best-effort)
+    let _ = agent.post(
+        &format!("/backups/{}/create", site.domain),
+        Some(serde_json::json!({"reason": "pre-delete"})),
+    ).await;
 
     // Delete from DB (CASCADE removes databases, backups, crons, etc.)
     sqlx::query("DELETE FROM sites WHERE id = $1")

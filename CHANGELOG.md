@@ -4,6 +4,18 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.6.0] - 2026-03-22
+
+### Fixed (Automation Gap Audit — Priority 1)
+- **Auto-SSL DB update** — Background SSL provisioning now updates `ssl_enabled`, `ssl_cert_path`, `ssl_key_path`, `ssl_expiry` in the database and activates paused monitors (was silently succeeding without DB update)
+- **Auto-SSL config preservation** — SSL provisioning now passes `php_preset` and `root_path` to the agent, preventing custom nginx config from being wiped
+- **Pre-deploy backup** — All deploy paths (site deploy, git deploy manual, git deploy webhook/scheduled) now create a site backup before deploying
+- **Pre-delete backup** — Site deletion creates a final backup before CASCADE-deleting the site record
+- **Site deletion cleanup** — Now removes orphaned `status_page_components` matching the deleted domain
+- **Database restore** — New `POST /db-backups/{db_name}/restore/{filename}` agent endpoint + `POST /api/backup-orchestrator/db-backups/{id}/restore` API endpoint. Supports MySQL/MariaDB, PostgreSQL, and MongoDB restore from backup files
+- **Dashboard health score** — Now factors in backup freshness (-5 per stale site), security scan findings (-10 critical, -3 warning), and open incidents (-10 each)
+- **Smart recommendations** — Dashboard intelligence endpoint returns actionable recommendations: stale backups, security findings, open incidents, expiring SSL, firing alerts, diagnostic issues. Rendered as a new Recommendations panel on the dashboard
+
 ## [2.5.2] - 2026-03-22
 
 ### Fixed (Theme & Layout Consistency Audit)
