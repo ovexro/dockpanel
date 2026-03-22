@@ -102,6 +102,7 @@ const IncidentManagement = lazyRetry(() => import("./pages/IncidentManagement"))
 const PublicStatusPage = lazyRetry(() => import("./pages/PublicStatusPage"));
 const SecretsManager = lazyRetry(() => import("./pages/SecretsManager"));
 const WebhookGateway = lazyRetry(() => import("./pages/WebhookGateway"));
+const Notifications = lazyRetry(() => import("./pages/Notifications"));
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -151,6 +152,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/incidents" element={<IncidentManagement />} />
               <Route path="/secrets" element={<SecretsManager />} />
               <Route path="/webhooks" element={<WebhookGateway />} />
+              <Route path="/notifications" element={<Notifications />} />
               <Route path="/monitoring" element={<Monitoring />} />
               <Route path="/monitors" element={<Navigate to="/monitoring" replace />} />
               <Route path="/alerts" element={<Navigate to="/monitoring" replace />} />

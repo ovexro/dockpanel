@@ -318,6 +318,18 @@ pub async fn try_fire_alert(
     .await
     .map_err(|e| format!("Failed to record alert: {e}"))?;
 
+    // Also store in panel notification center (bell icon)
+    let _ = sqlx::query(
+        "INSERT INTO panel_notifications (user_id, title, message, severity, category) \
+         VALUES ($1, $2, $3, $4, 'alert')",
+    )
+    .bind(user_id)
+    .bind(title)
+    .bind(message)
+    .bind(severity)
+    .execute(pool)
+    .await;
+
     // Send notification
     if let Some(channels) = get_user_channels(pool, user_id, server_id).await {
         let subject = format!("DockPanel Alert: {title}");

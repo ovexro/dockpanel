@@ -15,6 +15,7 @@ export interface LayoutState {
   layout: string;
   firingCount: number;
   incidentCount: number;
+  notifCount: number;
   apiHealthy: boolean | null;
   twoFaEnforced: boolean;
   twoFaEnabled: boolean;
@@ -28,6 +29,7 @@ export function useLayoutState(): LayoutState {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [firingCount, setFiringCount] = useState(0);
   const [incidentCount, setIncidentCount] = useState(0);
+  const [notifCount, setNotifCount] = useState(0);
   const [apiHealthy, setApiHealthy] = useState<boolean | null>(null);
   const [twoFaEnforced, setTwoFaEnforced] = useState(false);
   const [twoFaEnabled, setTwoFaEnabled] = useState(true);
@@ -62,7 +64,7 @@ export function useLayoutState(): LayoutState {
     localStorage.setItem("dp-theme", theme);
   }, [theme]);
 
-  // Alert count polling
+  // Alert count + notification count polling
   const alertTimer = useRef<ReturnType<typeof setInterval>>(undefined);
   useEffect(() => {
     const fetchCounts = () => {
@@ -71,6 +73,9 @@ export function useLayoutState(): LayoutState {
         .catch(() => {});
       api.get<{ id: string; status: string }[]>("/incidents?status=investigating&limit=100")
         .then((incs) => setIncidentCount(Array.isArray(incs) ? incs.length : 0))
+        .catch(() => {});
+      api.get<{ count: number }>("/notifications/unread-count")
+        .then((d) => setNotifCount(d.count))
         .catch(() => {});
     };
     fetchCounts();
@@ -125,6 +130,7 @@ export function useLayoutState(): LayoutState {
     layout,
     firingCount,
     incidentCount,
+    notifCount,
     apiHealthy,
     twoFaEnforced,
     twoFaEnabled,
