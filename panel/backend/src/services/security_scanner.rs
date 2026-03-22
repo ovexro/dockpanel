@@ -192,6 +192,9 @@ async fn run_scan(pool: &PgPool, agent: &AgentClient) {
     // Send alerts if critical or warning findings
     if critical > 0 || warning > 0 {
         send_scan_alerts(pool, critical, warning, total).await;
+    } else {
+        // Clean scan — notify panel
+        notifications::notify_panel(pool, None, "Security scan: all clear", "No vulnerabilities or issues detected", "info", "security", Some("/security")).await;
     }
 }
 

@@ -17,7 +17,7 @@ use totp_rs::{Algorithm, TOTP, Secret};
 use crate::auth::{AuthUser, Claims};
 use crate::error::{err, ApiError};
 use crate::models::User;
-use crate::services::{activity, email};
+use crate::services::{activity, email, notifications};
 use crate::AppState;
 
 /// A zero-valued UUID used for activity logging when there is no authenticated user.
@@ -620,6 +620,9 @@ pub async fn reset_password(
         &state.db, user.id, &user.email, "auth.password_reset",
         None, None, None, None,
     ).await;
+
+    // Panel notification
+    notifications::notify_panel(&state.db, Some(user.id), "Password reset", "Your password was reset successfully", "warning", "security", None).await;
 
     Ok(Json(serde_json::json!({ "ok": true, "message": "Password reset successfully" })))
 }
