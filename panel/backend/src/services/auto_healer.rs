@@ -260,6 +260,64 @@ async fn auto_restart_services(pool: &PgPool, agent: &AgentClient) {
             tracing::info!("Auto-heal: service {service_name} restarted successfully, alert resolved");
         }
     }
+
+    // Auto-restart exited/dead Docker containers
+    if let Ok(containers) = agent.get("/apps").await {
+        if let Some(arr) = containers.as_array() {
+            for c in arr {
+                let name = c.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let state = c.get("state").and_then(|v| v.as_str()).unwrap_or("");
+                let container_id = c.get("id").and_then(|v| v.as_str()).unwrap_or("");
+
+                if (state == "exited" || state == "dead") && !name.is_empty() && !container_id.is_empty() {
+                    // Check restart count in last 30 minutes — give up after 3 attempts
+                    let restart_count: (i64,) = sqlx::query_as(
+                        "SELECT COUNT(*) FROM activity_logs \
+                         WHERE action = 'auto_heal.container_restart' AND target_name = $1 \
+                         AND created_at > NOW() - INTERVAL '30 minutes'"
+                    ).bind(name).fetch_one(pool).await.unwrap_or((0,));
+
+                    if restart_count.0 >= 3 {
+                        tracing::warn!("Auto-healer gave up on container {name} after 3 restarts in 30 minutes");
+                        continue;
+                    }
+
+                    // 10-minute cooldown between attempts
+                    let recent_heal: (i64,) = sqlx::query_as(
+                        "SELECT COUNT(*) FROM activity_logs \
+                         WHERE action = 'auto_heal.container_restart' AND target_name = $1 \
+                         AND created_at > NOW() - INTERVAL '10 minutes'"
+                    ).bind(name).fetch_one(pool).await.unwrap_or((0,));
+
+                    if recent_heal.0 > 0 {
+                        continue;
+                    }
+
+                    tracing::info!("Auto-heal: restarting container {name} (attempt {} of 3)", restart_count.0 + 1);
+
+                    let result = agent.post(
+                        &format!("/apps/{}/restart", container_id),
+                        None::<serde_json::Value>,
+                    ).await;
+
+                    let success = result.is_ok();
+                    let system_id = uuid::Uuid::nil();
+                    activity::log_activity(
+                        pool, system_id, "auto-healer", "auto_heal.container_restart",
+                        Some("container"), Some(name),
+                        Some(&format!("success={success}, state={state}")),
+                        None,
+                    ).await;
+
+                    if success {
+                        tracing::info!("Auto-healer: restarted container {name}");
+                    } else {
+                        tracing::warn!("Auto-healer: failed to restart container {name}");
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Auto-clean logs when disk usage > 90%.
@@ -568,5 +626,12 @@ async fn run_retention_cleanup(pool: &PgPool) {
         .execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
     if bv_deleted > 0 {
         tracing::info!("Retention: deleted {bv_deleted} backup verifications (>90 days)");
+    }
+
+    // User sessions: 24 hours since last seen (JWT expires after 2h, but clean stale records)
+    let sess_deleted = sqlx::query("DELETE FROM user_sessions WHERE last_seen_at < NOW() - INTERVAL '24 hours'")
+        .execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
+    if sess_deleted > 0 {
+        tracing::info!("Retention: deleted {sess_deleted} expired user sessions (>24h)");
     }
 }
