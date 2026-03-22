@@ -519,12 +519,194 @@ pub async fn import_config(
         }
     }
 
+    // Import alert rules
+    let mut alert_rules_imported = 0i64;
+    if let Some(rules) = body.get("alert_rules").and_then(|v| v.as_array()) {
+        for rule in rules {
+            let cpu_threshold = rule.get("cpu_threshold").and_then(|v| v.as_i64()).unwrap_or(90) as i32;
+            let cpu_duration = rule.get("cpu_duration").and_then(|v| v.as_i64()).unwrap_or(5) as i32;
+            let mem_threshold = rule.get("memory_threshold").and_then(|v| v.as_i64()).unwrap_or(90) as i32;
+            let mem_duration = rule.get("memory_duration").and_then(|v| v.as_i64()).unwrap_or(5) as i32;
+            let disk_threshold = rule.get("disk_threshold").and_then(|v| v.as_i64()).unwrap_or(90) as i32;
+            let alert_cpu = rule.get("alert_cpu").and_then(|v| v.as_bool()).unwrap_or(true);
+            let alert_memory = rule.get("alert_memory").and_then(|v| v.as_bool()).unwrap_or(true);
+            let alert_disk = rule.get("alert_disk").and_then(|v| v.as_bool()).unwrap_or(true);
+            let alert_offline = rule.get("alert_offline").and_then(|v| v.as_bool()).unwrap_or(true);
+            let alert_backup_failure = rule.get("alert_backup_failure").and_then(|v| v.as_bool()).unwrap_or(false);
+            let alert_ssl_expiry = rule.get("alert_ssl_expiry").and_then(|v| v.as_bool()).unwrap_or(false);
+            let alert_service_health = rule.get("alert_service_health").and_then(|v| v.as_bool()).unwrap_or(false);
+            let ssl_warning_days = rule.get("ssl_warning_days").and_then(|v| v.as_str()).unwrap_or("14");
+            let notify_email = rule.get("notify_email").and_then(|v| v.as_bool()).unwrap_or(true);
+            let cooldown = rule.get("cooldown_minutes").and_then(|v| v.as_i64()).unwrap_or(15) as i32;
+            let muted_types = rule.get("muted_types").and_then(|v| v.as_str()).unwrap_or("");
+
+            // Upsert: if server_id is null, update the global (server_id IS NULL) rule
+            let server_id: Option<uuid::Uuid> = rule
+                .get("server_id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse().ok());
+
+            let result = if let Some(sid) = server_id {
+                sqlx::query(
+                    "INSERT INTO alert_rules (user_id, server_id, cpu_threshold, cpu_duration, \
+                     memory_threshold, memory_duration, disk_threshold, alert_cpu, alert_memory, \
+                     alert_disk, alert_offline, alert_backup_failure, alert_ssl_expiry, \
+                     alert_service_health, ssl_warning_days, notify_email, cooldown_minutes, muted_types) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) \
+                     ON CONFLICT (user_id, server_id) DO UPDATE SET \
+                     cpu_threshold=$3, cpu_duration=$4, memory_threshold=$5, memory_duration=$6, \
+                     disk_threshold=$7, alert_cpu=$8, alert_memory=$9, alert_disk=$10, \
+                     alert_offline=$11, alert_backup_failure=$12, alert_ssl_expiry=$13, \
+                     alert_service_health=$14, ssl_warning_days=$15, notify_email=$16, \
+                     cooldown_minutes=$17, muted_types=$18"
+                )
+                .bind(claims.sub).bind(sid)
+                .bind(cpu_threshold).bind(cpu_duration)
+                .bind(mem_threshold).bind(mem_duration)
+                .bind(disk_threshold)
+                .bind(alert_cpu).bind(alert_memory).bind(alert_disk)
+                .bind(alert_offline).bind(alert_backup_failure)
+                .bind(alert_ssl_expiry).bind(alert_service_health)
+                .bind(ssl_warning_days).bind(notify_email)
+                .bind(cooldown).bind(muted_types)
+                .execute(&state.db).await
+            } else {
+                sqlx::query(
+                    "INSERT INTO alert_rules (user_id, cpu_threshold, cpu_duration, \
+                     memory_threshold, memory_duration, disk_threshold, alert_cpu, alert_memory, \
+                     alert_disk, alert_offline, alert_backup_failure, alert_ssl_expiry, \
+                     alert_service_health, ssl_warning_days, notify_email, cooldown_minutes, muted_types) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) \
+                     ON CONFLICT DO NOTHING"
+                )
+                .bind(claims.sub)
+                .bind(cpu_threshold).bind(cpu_duration)
+                .bind(mem_threshold).bind(mem_duration)
+                .bind(disk_threshold)
+                .bind(alert_cpu).bind(alert_memory).bind(alert_disk)
+                .bind(alert_offline).bind(alert_backup_failure)
+                .bind(alert_ssl_expiry).bind(alert_service_health)
+                .bind(ssl_warning_days).bind(notify_email)
+                .bind(cooldown).bind(muted_types)
+                .execute(&state.db).await
+            };
+            if result.is_ok() {
+                alert_rules_imported += 1;
+            }
+        }
+    }
+
+    // Import monitors
+    let mut monitors_imported = 0i64;
+    if let Some(monitors) = body.get("monitors").and_then(|v| v.as_array()) {
+        for m in monitors {
+            let name = m.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let url = m.get("url").and_then(|v| v.as_str()).unwrap_or("");
+            let monitor_type = m.get("monitor_type").and_then(|v| v.as_str()).unwrap_or("http");
+            let interval = m.get("check_interval").and_then(|v| v.as_i64()).unwrap_or(60) as i32;
+            let keyword = m.get("keyword").and_then(|v| v.as_str());
+
+            if !name.is_empty() && !url.is_empty() {
+                let result = sqlx::query(
+                    "INSERT INTO monitors (user_id, name, url, monitor_type, check_interval, keyword) \
+                     VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
+                )
+                .bind(claims.sub)
+                .bind(name)
+                .bind(url)
+                .bind(monitor_type)
+                .bind(interval)
+                .bind(keyword)
+                .execute(&state.db)
+                .await;
+                if result.is_ok() {
+                    monitors_imported += 1;
+                }
+            }
+        }
+    }
+
+    // Import backup schedules
+    let mut schedules_imported = 0i64;
+    if let Some(schedules) = body.get("backup_schedules").and_then(|v| v.as_array()) {
+        for s in schedules {
+            let site_id: Option<uuid::Uuid> = s
+                .get("site_id")
+                .and_then(|v| v.as_str())
+                .and_then(|v| v.parse().ok());
+            let schedule = s.get("schedule").and_then(|v| v.as_str()).unwrap_or("0 2 * * *");
+            let retention = s.get("retention_count").and_then(|v| v.as_i64()).unwrap_or(7) as i32;
+            let enabled = s.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+
+            if let Some(sid) = site_id {
+                let result = sqlx::query(
+                    "INSERT INTO backup_schedules (site_id, schedule, retention_count, enabled) \
+                     VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+                )
+                .bind(sid)
+                .bind(schedule)
+                .bind(retention)
+                .bind(enabled)
+                .execute(&state.db)
+                .await;
+                if result.is_ok() {
+                    schedules_imported += 1;
+                }
+            }
+        }
+    }
+
+    // Import backup policies
+    let mut policies_imported = 0i64;
+    if let Some(policies) = body.get("backup_policies").and_then(|v| v.as_array()) {
+        for p in policies {
+            let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let schedule = p.get("schedule").and_then(|v| v.as_str()).unwrap_or("0 2 * * *");
+            let backup_sites = p.get("backup_sites").and_then(|v| v.as_bool()).unwrap_or(true);
+            let backup_databases = p.get("backup_databases").and_then(|v| v.as_bool()).unwrap_or(true);
+            let backup_volumes = p.get("backup_volumes").and_then(|v| v.as_bool()).unwrap_or(false);
+            let retention = p.get("retention_count").and_then(|v| v.as_i64()).unwrap_or(7) as i32;
+            let encrypt = p.get("encrypt").and_then(|v| v.as_bool()).unwrap_or(false);
+            let verify = p.get("verify_after_backup").and_then(|v| v.as_bool()).unwrap_or(false);
+
+            if !name.is_empty() {
+                let result = sqlx::query(
+                    "INSERT INTO backup_policies (user_id, name, schedule, backup_sites, backup_databases, \
+                     backup_volumes, retention_count, encrypt, verify_after_backup) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT DO NOTHING",
+                )
+                .bind(claims.sub)
+                .bind(name)
+                .bind(schedule)
+                .bind(backup_sites)
+                .bind(backup_databases)
+                .bind(backup_volumes)
+                .bind(retention)
+                .bind(encrypt)
+                .bind(verify)
+                .execute(&state.db)
+                .await;
+                if result.is_ok() {
+                    policies_imported += 1;
+                }
+            }
+        }
+    }
+
     crate::services::activity::log_activity(
         &state.db, claims.sub, &claims.email, "settings.import",
         Some("settings"), None, None, None,
     ).await;
 
-    Ok(Json(serde_json::json!({ "ok": true, "imported": imported, "skipped": skipped })))
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "imported": imported,
+        "skipped": skipped,
+        "alert_rules_imported": alert_rules_imported,
+        "monitors_imported": monitors_imported,
+        "schedules_imported": schedules_imported,
+        "policies_imported": policies_imported,
+    })))
 }
 
 /// GET /api/settings/health — System health check (admin only).

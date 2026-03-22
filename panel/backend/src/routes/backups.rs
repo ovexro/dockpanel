@@ -203,6 +203,38 @@ pub async fn restore(
         match agent.post(&agent_path, None).await {
             Ok(_) => {
                 emit("restore", "Restoring backup", "done", None);
+
+                // Post-restore: reload services to pick up restored files
+                emit("services", "Reloading services", "in_progress", None);
+
+                // Reload nginx to pick up any config changes
+                let _ = agent.post("/diagnostics/fix", Some(serde_json::json!({
+                    "fix_id": "restart-service:nginx"
+                }))).await;
+
+                // Restart PHP-FPM if the site uses PHP (clear OPcache)
+                let site_info: Option<(String, Option<String>)> = sqlx::query_as(
+                    "SELECT runtime, php_version FROM sites WHERE id = $1"
+                ).bind(id).fetch_optional(&db).await.ok().flatten();
+
+                if let Some((runtime, php_version)) = &site_info {
+                    if runtime == "php" {
+                        if let Some(ver) = php_version {
+                            let _ = agent.post("/diagnostics/fix", Some(serde_json::json!({
+                                "fix_id": format!("restart-service:php{}-fpm", ver)
+                            }))).await;
+                        }
+                    }
+                }
+
+                // Invalidate nginx cache for this domain
+                let _ = agent.post("/diagnostics/fix", Some(serde_json::json!({
+                    "fix_id": format!("clean-cache:{}", domain_clone)
+                }))).await;
+
+                emit("services", "Services reloaded", "done", None);
+                tracing::info!("Post-restore service reload completed for {domain_clone}");
+
                 emit("complete", "Backup restored", "done", None);
                 tracing::info!("Backup restored: {filename} for {domain_clone}");
                 activity::log_activity(

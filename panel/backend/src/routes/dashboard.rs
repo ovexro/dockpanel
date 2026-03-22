@@ -2,7 +2,7 @@ use axum::{extract::State, http::StatusCode, Json};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::auth::{AuthUser, ServerScope};
+use crate::auth::{AdminUser, AuthUser, ServerScope};
 use crate::error::{err, ApiError};
 use crate::AppState;
 
@@ -434,4 +434,102 @@ pub async fn timeline(
     events.truncate(30);
 
     Ok(Json(events))
+}
+
+/// GET /api/dashboard/fleet — Unified health across all servers (admin only).
+/// Aggregates firing alerts, active incidents, sites, databases, and latest
+/// metrics for every server the admin owns.
+pub async fn fleet_overview(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let servers: Vec<(uuid::Uuid, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, name, hostname, ip_address FROM servers WHERE user_id = $1 ORDER BY name",
+    )
+    .bind(claims.sub)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let mut fleet = Vec::new();
+    for (id, name, hostname, ip) in &servers {
+        let firing: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM alerts WHERE server_id = $1 AND status = 'firing'",
+        )
+        .bind(id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or((0,));
+
+        let incidents: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM managed_incidents WHERE user_id = $1 AND status NOT IN ('resolved', 'postmortem')",
+        )
+        .bind(claims.sub)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or((0,));
+
+        let sites: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sites WHERE server_id = $1 AND status = 'active'",
+        )
+        .bind(id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or((0,));
+
+        let dbs: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM databases WHERE site_id IN (SELECT id FROM sites WHERE server_id = $1)",
+        )
+        .bind(id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or((0,));
+
+        // Latest metrics for this server
+        let metrics: Option<(f32, f32, f32)> = sqlx::query_as(
+            "SELECT cpu_pct, mem_pct, disk_pct FROM metrics_history \
+             WHERE server_id = $1 ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+
+        fleet.push(serde_json::json!({
+            "id": id,
+            "name": name,
+            "hostname": hostname,
+            "ip_address": ip,
+            "firing_alerts": firing.0,
+            "active_incidents": incidents.0,
+            "sites": sites.0,
+            "databases": dbs.0,
+            "cpu_pct": metrics.as_ref().map(|m| m.0),
+            "mem_pct": metrics.as_ref().map(|m| m.1),
+            "disk_pct": metrics.as_ref().map(|m| m.2),
+            "status": if firing.0 > 0 { "warning" } else { "healthy" },
+        }));
+    }
+
+    let total_firing: i64 = fleet
+        .iter()
+        .filter_map(|s| s.get("firing_alerts").and_then(|v| v.as_i64()))
+        .sum();
+    let total_incidents: i64 = fleet
+        .iter()
+        .filter_map(|s| s.get("active_incidents").and_then(|v| v.as_i64()))
+        .sum();
+    let total_sites: i64 = fleet
+        .iter()
+        .filter_map(|s| s.get("sites").and_then(|v| v.as_i64()))
+        .sum();
+
+    Ok(Json(serde_json::json!({
+        "servers": fleet,
+        "total_servers": servers.len(),
+        "total_firing": total_firing,
+        "total_incidents": total_incidents,
+        "total_sites": total_sites,
+    })))
 }

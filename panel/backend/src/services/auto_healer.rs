@@ -67,6 +67,49 @@ async fn is_enabled(pool: &PgPool) -> bool {
 
 /// Auto-restart crashed services (service_down alerts that are firing).
 async fn auto_restart_services(pool: &PgPool, agent: &AgentClient) {
+    // Recovery check: if an exhausted service is now running, clear the state
+    let exhausted_services: Vec<(String,)> = sqlx::query_as(
+        "SELECT state_key FROM alert_state WHERE alert_type = 'service_down' AND current_state = 'exhausted'"
+    ).fetch_all(pool).await.unwrap_or_default();
+
+    if !exhausted_services.is_empty() {
+        if let Ok(health_result) = agent.get("/services/health").await {
+            if let Some(services_arr) = health_result.as_array() {
+                for (service_name,) in &exhausted_services {
+                    let is_running = services_arr.iter().any(|svc| {
+                        svc.get("name").and_then(|n| n.as_str()) == Some(service_name.as_str())
+                            && svc.get("status").and_then(|s| s.as_str()) == Some("running")
+                    });
+
+                    if is_running {
+                        // Service recovered! Clear exhausted state
+                        let _ = sqlx::query(
+                            "DELETE FROM alert_state WHERE alert_type = 'service_down' AND state_key = $1 AND current_state = 'exhausted'"
+                        ).bind(service_name).execute(pool).await;
+                        tracing::info!("Auto-healer: {service_name} recovered, cleared exhausted state");
+
+                        // Resolve the associated incident
+                        let _ = sqlx::query(
+                            "UPDATE managed_incidents SET status = 'resolved', updated_at = NOW() \
+                             WHERE title LIKE $1 AND status NOT IN ('resolved', 'postmortem')"
+                        ).bind(format!("%{}%", service_name)).execute(pool).await;
+
+                        notifications::notify_panel(pool, None,
+                            &format!("Service recovered: {}", service_name),
+                            &format!("{} is running again after auto-healer exhaustion. Monitoring resumed.", service_name),
+                            "info", "auto_heal", Some("/incidents")).await;
+
+                        crate::services::system_log::log_event(
+                            pool, "info", "auto_healer",
+                            &format!("{service_name} recovered from exhausted state, monitoring resumed"),
+                            None,
+                        ).await;
+                    }
+                }
+            }
+        }
+    }
+
     // Find service_down alerts that are currently firing
     let firing: Vec<(String,)> = match sqlx::query_as(
         "SELECT state_key FROM alert_state \
