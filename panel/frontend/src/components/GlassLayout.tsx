@@ -323,7 +323,7 @@ export default function GlassLayout() {
                   </span>
                 </div>
                 <div className="flex items-center gap-1">
-                <LayoutSwitcher variant={isLight ? "light" : "dark"} />
+                <LayoutSwitcher variant={isLight ? "light" : "dark"} compact />
                 <button
                   onClick={cycleTheme}
                   className="p-1.5 text-dark-400 hover:text-dark-200 transition-colors rounded shrink-0"
