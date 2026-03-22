@@ -11,12 +11,6 @@ interface Site {
   domain: string;
 }
 
-interface TermTab {
-  id: string;
-  label: string;
-  siteId: string;
-}
-
 // ── Terminal themes ──
 const themes: Record<string, Record<string, string>> = {
   mocha: {
@@ -103,6 +97,7 @@ const snippets = [
 ];
 
 const IDLE_TIMEOUT = 30 * 60 * 1000; // 30 minutes
+const MAX_RECONNECT_ATTEMPTS = 3;
 
 export default function Terminal() {
   const [searchParams] = useSearchParams();
@@ -114,17 +109,17 @@ export default function Terminal() {
   const searchAddonRef = useRef<SearchAddon | null>(null);
   const idleTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
+  // Refs for avoiding stale closures
+  const intentionalClose = useRef(false);
+  const reconnectAttempts = useRef(0);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const statusRef = useRef("");
+
   const [connected, setConnected] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [sites, setSites] = useState<Site[]>([]);
   const [selectedSite, setSelectedSite] = useState(initialSiteId);
-
-  // Tabs
-  const [tabs, setTabs] = useState<TermTab[]>([
-    { id: "default", label: initialSiteId ? "Site" : "Server", siteId: initialSiteId },
-  ]);
-  const [activeTab, setActiveTab] = useState("default");
 
   // Snippets
   const [showSnippets, setShowSnippets] = useState(false);
@@ -153,6 +148,11 @@ export default function Terminal() {
   const recordingData = useRef<{ time: number; data: string }[]>([]);
   const recordingStart = useRef<number>(0);
 
+  // Keep statusRef in sync with status state
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+
   // Persist font size
   useEffect(() => {
     localStorage.setItem("dp-terminal-font", fontSize.toString());
@@ -173,6 +173,7 @@ export default function Terminal() {
     if (idleTimer.current) clearTimeout(idleTimer.current);
     idleTimer.current = setTimeout(() => {
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        intentionalClose.current = true;
         wsRef.current.close();
         setStatus("Disconnected (idle timeout — 30 min)");
         setConnected(false);
@@ -186,7 +187,14 @@ export default function Terminal() {
       setError("");
       setStatus("");
 
+      // Clear any pending reconnect timer
+      if (reconnectTimer.current) {
+        clearTimeout(reconnectTimer.current);
+        reconnectTimer.current = undefined;
+      }
+
       // Cleanup previous
+      intentionalClose.current = true; // Prevent reconnect from the old socket's onclose
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
@@ -195,6 +203,7 @@ export default function Terminal() {
         xtermRef.current.dispose();
         xtermRef.current = null;
       }
+      intentionalClose.current = false; // Reset for the new connection
 
       const currentTheme = themes[themeName] || themes.mocha;
 
@@ -254,6 +263,8 @@ export default function Terminal() {
         ws.onopen = () => {
           setConnected(true);
           setStatus("");
+          setError("");
+          reconnectAttempts.current = 0;
           term.clear();
           resetIdleTimer();
         };
@@ -268,8 +279,23 @@ export default function Terminal() {
 
         ws.onclose = () => {
           setConnected(false);
-          if (!status) {
-            term.writeln("\r\n\x1b[31m● Connection closed\x1b[0m");
+
+          // Auto-reconnect on unexpected close
+          if (!intentionalClose.current && reconnectAttempts.current < MAX_RECONNECT_ATTEMPTS) {
+            const delay = Math.min(2000 * Math.pow(2, reconnectAttempts.current), 10000);
+            reconnectAttempts.current++;
+            const msg = `Connection lost. Reconnecting in ${delay / 1000}s... (attempt ${reconnectAttempts.current}/${MAX_RECONNECT_ATTEMPTS})`;
+            setError(msg);
+            term.writeln(`\r\n\x1b[33m● ${msg}\x1b[0m`);
+            reconnectTimer.current = setTimeout(() => connect(siteIdParam), delay);
+          } else if (!intentionalClose.current && reconnectAttempts.current >= MAX_RECONNECT_ATTEMPTS) {
+            setError("Connection lost. Click Reconnect to try again.");
+            term.writeln("\r\n\x1b[31m● Connection lost after 3 attempts. Click Reconnect to try again.\x1b[0m");
+          } else {
+            // Intentional close or already showing a status message
+            if (!statusRef.current) {
+              term.writeln("\r\n\x1b[31m● Connection closed\x1b[0m");
+            }
           }
         };
 
@@ -299,7 +325,7 @@ export default function Terminal() {
         );
       }
     },
-    [fontSize, themeName, resetIdleTimer, status]
+    [fontSize, themeName, resetIdleTimer]
   );
 
   // Connect on mount
@@ -307,6 +333,8 @@ export default function Terminal() {
     connect(selectedSite || undefined);
     return () => {
       if (idleTimer.current) clearTimeout(idleTimer.current);
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      intentionalClose.current = true;
       wsRef.current?.close();
       xtermRef.current?.dispose();
     };
@@ -322,40 +350,13 @@ export default function Terminal() {
 
   const handleSiteChange = (newSiteId: string) => {
     setSelectedSite(newSiteId);
-    // Update active tab's siteId
-    setTabs((prev) =>
-      prev.map((t) => (t.id === activeTab ? { ...t, siteId: newSiteId } : t))
-    );
+    reconnectAttempts.current = 0;
     connect(newSiteId || undefined);
   };
 
-  const switchTab = (tabId: string) => {
-    const tab = tabs.find((t) => t.id === tabId);
-    if (!tab || tabId === activeTab) return;
-    setActiveTab(tabId);
-    setSelectedSite(tab.siteId);
-    connect(tab.siteId || undefined);
-  };
-
-  const addTab = () => {
-    const id = Date.now().toString();
-    const newTab: TermTab = { id, label: "New", siteId: "" };
-    setTabs((prev) => [...prev, newTab]);
-    setActiveTab(id);
-    setSelectedSite("");
-    connect();
-  };
-
-  const closeTab = (tabId: string) => {
-    if (tabs.length <= 1) return;
-    const remaining = tabs.filter((t) => t.id !== tabId);
-    setTabs(remaining);
-    if (activeTab === tabId) {
-      const next = remaining[0];
-      setActiveTab(next.id);
-      setSelectedSite(next.siteId);
-      connect(next.siteId || undefined);
-    }
+  const handleReconnect = () => {
+    reconnectAttempts.current = 0;
+    connect(selectedSite || undefined);
   };
 
   const changeFontSize = (delta: number) => {
@@ -429,6 +430,11 @@ export default function Terminal() {
     }
   };
 
+  // Derive header label from selected site
+  const headerLabel = selectedSite
+    ? sites.find((s) => s.id === selectedSite)?.domain || "Site Terminal"
+    : "Server Terminal";
+
   const currentThemeBg = (themes[themeName] || themes.mocha).background;
 
   return (
@@ -439,7 +445,7 @@ export default function Terminal() {
           <div className="flex items-center gap-4">
             <div>
               <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">
-                Terminal
+                {headerLabel}
               </h1>
               <div className="flex items-center gap-2 mt-0.5">
                 <div
@@ -529,6 +535,7 @@ export default function Terminal() {
                           filename: file.name,
                           content: base64,
                         });
+                        setError("");
                         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
                           wsRef.current.send(
                             JSON.stringify({
@@ -537,6 +544,8 @@ export default function Terminal() {
                             })
                           );
                         }
+                        setStatus(`Uploaded: ${file.name}`);
+                        setTimeout(() => setStatus(""), 3000);
                       } catch {
                         setError(`Upload failed: ${file.name}`);
                       }
@@ -558,9 +567,16 @@ export default function Terminal() {
                     const line = buffer.getLine(i);
                     if (line) text += line.translateToString(true) + "\n";
                   }
-                  navigator.clipboard.writeText(text.trimEnd());
-                  setStatus("Terminal output copied to clipboard");
-                  setTimeout(() => setStatus(""), 2000);
+                  navigator.clipboard
+                    .writeText(text.trimEnd())
+                    .then(() => {
+                      setError("");
+                      setStatus("Terminal output copied to clipboard");
+                      setTimeout(() => setStatus(""), 2000);
+                    })
+                    .catch(() => {
+                      setError("Failed to copy to clipboard");
+                    });
                 }
               }}
               className="px-2 py-1 bg-dark-700 text-dark-200 rounded text-xs hover:bg-dark-600 transition-colors"
@@ -585,9 +601,16 @@ export default function Terminal() {
                     url: string;
                   }>("/terminal/share", { content: text.trimEnd() });
                   const url = `${window.location.origin}${result.url}`;
-                  navigator.clipboard.writeText(url);
-                  setStatus("Share link copied! Expires in 1 hour");
-                  setTimeout(() => setStatus(""), 3000);
+                  navigator.clipboard
+                    .writeText(url)
+                    .then(() => {
+                      setError("");
+                      setStatus("Share link copied! Expires in 1 hour");
+                      setTimeout(() => setStatus(""), 3000);
+                    })
+                    .catch(() => {
+                      setError("Failed to copy share link to clipboard");
+                    });
                 } catch {
                   setError("Failed to create share link");
                 }
@@ -625,53 +648,12 @@ export default function Terminal() {
 
             {/* Reconnect */}
             <button
-              onClick={() => connect(selectedSite || undefined)}
+              onClick={handleReconnect}
               className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-sm hover:bg-dark-600 transition-colors"
             >
               Reconnect
             </button>
           </div>
-        </div>
-
-        {/* Tab bar */}
-        <div className="flex items-center border-b border-dark-600 bg-dark-800/50 shrink-0">
-          <div className="flex gap-0.5 px-2 overflow-x-auto">
-            {tabs.map((tab) => (
-              <div
-                key={tab.id}
-                className={`flex items-center gap-1 px-3 py-1.5 text-xs cursor-pointer border-b-2 transition-colors shrink-0 ${
-                  activeTab === tab.id
-                    ? "border-rust-400 text-rust-400"
-                    : "border-transparent text-dark-300 hover:text-dark-100"
-                }`}
-              >
-                <button onClick={() => switchTab(tab.id)} className="font-mono">
-                  {tab.label}
-                  {tab.siteId
-                    ? ` (${sites.find((s) => s.id === tab.siteId)?.domain || "site"})`
-                    : ""}
-                </button>
-                {tabs.length > 1 && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      closeTab(tab.id);
-                    }}
-                    className="text-dark-400 hover:text-danger-400 ml-1"
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-          <button
-            onClick={addTab}
-            className="px-2 py-1.5 text-dark-400 hover:text-dark-100 text-xs shrink-0"
-            title="New tab"
-          >
-            +
-          </button>
         </div>
 
         {/* Snippets bar */}
@@ -682,13 +664,14 @@ export default function Terminal() {
                 key={s.label}
                 onClick={() => {
                   if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                    // Paste command without executing — user presses Enter to confirm
                     wsRef.current.send(
-                      JSON.stringify({ type: "input", data: s.cmd + "\n" })
+                      JSON.stringify({ type: "input", data: s.cmd })
                     );
                   }
                 }}
                 className="px-2 py-1 bg-dark-700 text-dark-200 rounded text-[11px] font-mono hover:bg-dark-600 hover:text-dark-50 transition-colors"
-                title={s.cmd}
+                title={`${s.cmd} (pastes into terminal — press Enter to run)`}
               >
                 {s.label}
               </button>
@@ -709,7 +692,9 @@ export default function Terminal() {
               </code>
               <button
                 onClick={() =>
-                  navigator.clipboard.writeText(window.location.hostname)
+                  navigator.clipboard
+                    .writeText(window.location.hostname)
+                    .catch(() => setError("Failed to copy"))
                 }
                 className="text-dark-400 hover:text-dark-100"
               >
@@ -735,9 +720,9 @@ export default function Terminal() {
               </code>
               <button
                 onClick={() =>
-                  navigator.clipboard.writeText(
-                    `ssh root@${window.location.hostname}`
-                  )
+                  navigator.clipboard
+                    .writeText(`ssh root@${window.location.hostname}`)
+                    .catch(() => setError("Failed to copy"))
                 }
                 className="text-dark-400 hover:text-dark-100"
               >
@@ -757,8 +742,14 @@ export default function Terminal() {
         )}
 
         {error && (
-          <div className="px-6 py-2 bg-danger-500/10 text-danger-400 text-sm border-b border-danger-500/20 shrink-0">
-            {error}
+          <div className="px-6 py-2 bg-danger-500/10 text-danger-400 text-sm border-b border-danger-500/20 shrink-0 flex items-center justify-between">
+            <span>{error}</span>
+            <button
+              onClick={() => setError("")}
+              className="text-danger-400 hover:text-danger-300 ml-4 text-xs"
+            >
+              Dismiss
+            </button>
           </div>
         )}
 

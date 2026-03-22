@@ -824,4 +824,13 @@ async fn run_retention_cleanup(pool: &PgPool) {
     if bl_deleted > 0 {
         tracing::info!("Retention: deleted {bl_deleted} expired token blacklist entries");
     }
+
+    // Clean expired terminal shares (older than 1 hour, timestamp stored as prefix in value)
+    let ts_deleted = sqlx::query(
+        "DELETE FROM settings WHERE key LIKE 'terminal_share_%' AND \
+         CAST(SPLIT_PART(value, '|', 1) AS BIGINT) < EXTRACT(EPOCH FROM NOW()) - 3600"
+    ).execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
+    if ts_deleted > 0 {
+        tracing::info!("Retention: deleted {ts_deleted} expired terminal shares (>1 hour)");
+    }
 }

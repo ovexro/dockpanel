@@ -3,18 +3,21 @@ use axum::{
         ws::{Message, WebSocket},
         Query, State, WebSocketUpgrade,
     },
-    response::Response,
+    http::StatusCode,
+    response::{IntoResponse, Response},
     routing::get,
     Router,
 };
 use serde::Deserialize;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::AppState;
 
 static ACTIVE_TERMINALS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static LAST_CONNECT: AtomicU64 = AtomicU64::new(0);
 const MAX_TERMINAL_SESSIONS: u32 = 20;
 
 #[derive(Deserialize)]
@@ -38,6 +41,16 @@ async fn ws_handler(
     Query(q): Query<TermQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
+    // Rate limit: max 1 connection per second (prevents rapid reconnect storms)
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let last = LAST_CONNECT.swap(now, Ordering::Relaxed);
+    if now == last {
+        return (StatusCode::TOO_MANY_REQUESTS, "Too many terminal connections").into_response();
+    }
+
     // Enforce terminal session limit
     let current = ACTIVE_TERMINALS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     if current >= MAX_TERMINAL_SESSIONS {
@@ -83,10 +96,13 @@ async fn ws_handler(
         && (domain.contains("..") || domain.contains('/') || domain.contains('\0'))
     {
         ACTIVE_TERMINALS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-        return Response::builder()
-            .status(400)
-            .body("Invalid domain".into())
-            .unwrap();
+        return (StatusCode::BAD_REQUEST, "Invalid domain").into_response();
+    }
+
+    // Verify site directory exists before upgrading to WebSocket
+    if !domain.is_empty() && !std::path::Path::new(&format!("/var/www/{domain}")).is_dir() {
+        ACTIVE_TERMINALS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        return (StatusCode::BAD_REQUEST, "Site directory not found").into_response();
     }
 
     let cols = q.cols.unwrap_or(80);
