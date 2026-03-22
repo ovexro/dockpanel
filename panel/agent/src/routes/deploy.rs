@@ -5,7 +5,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use super::AppState;
+use super::{is_valid_domain, AppState};
 use crate::services::deploy;
 
 type ApiErr = (StatusCode, Json<serde_json::Value>);
@@ -33,7 +33,7 @@ async fn run_deploy(
     Json(body): Json<DeployRequest>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
     // Validate domain
-    if body.domain.is_empty() || body.domain.contains("..") {
+    if !is_valid_domain(&body.domain) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid domain"));
     }
 
@@ -103,7 +103,7 @@ async fn run_deploy(
 async fn keygen(
     Json(body): Json<KeygenRequest>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
-    if body.domain.is_empty() || body.domain.contains("..") {
+    if !is_valid_domain(&body.domain) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid domain"));
     }
 
