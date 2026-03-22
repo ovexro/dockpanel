@@ -16,6 +16,8 @@ import "./index.css";
   let theme = stored || "midnight";
   if (theme === "dark") theme = "midnight";
   if (theme === "light") theme = "arctic";
+  if (theme === "nexus") theme = "clean";
+  if (theme === "nexus-dark") theme = "clean-dark";
   // Layout initialization
   const layout = localStorage.getItem("dp-layout") || "command";
   localStorage.setItem("dp-theme", theme);

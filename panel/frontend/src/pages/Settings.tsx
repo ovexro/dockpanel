@@ -700,7 +700,7 @@ export default function Settings() {
                         <div style={{ background: c.bar, flex: 1, borderRadius: "1px" }} />
                       </div>
                     )},
-                  { id: "nexus", name: "Nexus", desc: "Light, clean SaaS",
+                  { id: "nexus", name: "Nexus", desc: "Modern SaaS, flat nav",
                     preview: () => (
                       <div className="flex gap-1" style={{ height: "44px" }}>
                         <div style={{ background: "#ffffff", width: "22%", borderRadius: "2px", border: "1px solid #e2e8f0" }} className="flex flex-col gap-0.5 p-1">
@@ -748,17 +748,17 @@ export default function Settings() {
               </div>
             </div>
 
-            {/* Color flavor selector */}
+            {/* Theme selector */}
             <div>
-              <p className="text-sm text-dark-100 mb-3">Color</p>
+              <p className="text-sm text-dark-100 mb-3">Theme</p>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {([
                   { id: "terminal", name: "Terminal", desc: "Hacker aesthetic", bg: "#111113", sidebar: "#09090b", accent: "#22c55e", card: "#18181b", text: "#71717a", bar: "#27272a" },
                   { id: "midnight", name: "Midnight", desc: "Deep navy, modern", bg: "#0a1628", sidebar: "#050a18", accent: "#3b82f6", card: "#0f1f3a", text: "#6280a8", bar: "#182d50" },
                   { id: "ember", name: "Ember", desc: "Warm & premium", bg: "#1a1614", sidebar: "#0c0a09", accent: "#f97316", card: "#241f1c", text: "#8a7968", bar: "#332b26" },
-                  { id: "nexus-dark", name: "Nexus Dark", desc: "GitHub-dark SaaS", bg: "#161b22", sidebar: "#0d1117", accent: "#3b82f6", card: "#1c2333", text: "#636e7b", bar: "#2d333b" },
-                  { id: "arctic", name: "Arctic", desc: "Clean & light", bg: "#f7f9fc", sidebar: "#ffffff", accent: "#0d9488", card: "#edf1f7", text: "#8d9bb0", bar: "#dce3ed" },
-                  { id: "nexus", name: "Nexus", desc: "Light SaaS, blue", bg: "#f8fafc", sidebar: "#ffffff", accent: "#2563eb", card: "#f1f5f9", text: "#94a3b8", bar: "#e2e8f0" },
+                  { id: "clean-dark", name: "Clean Dark", desc: "GitHub-dark, rounded", bg: "#161b22", sidebar: "#0d1117", accent: "#3b82f6", card: "#1c2333", text: "#636e7b", bar: "#2d333b" },
+                  { id: "arctic", name: "Arctic", desc: "Teal & light", bg: "#f7f9fc", sidebar: "#ffffff", accent: "#0d9488", card: "#edf1f7", text: "#8d9bb0", bar: "#dce3ed" },
+                  { id: "clean", name: "Clean Light", desc: "Modern SaaS, blue", bg: "#f8fafc", sidebar: "#ffffff", accent: "#2563eb", card: "#f1f5f9", text: "#94a3b8", bar: "#e2e8f0" },
                 ] as const).map(t => {
                   const active = currentTheme === t.id;
                   return (

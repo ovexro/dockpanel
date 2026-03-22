@@ -3,7 +3,7 @@ import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 import { navGroups, type NavGroup } from "../data/navItems";
 
-const themeOrder = ["terminal", "midnight", "ember", "arctic", "nexus", "nexus-dark"] as const;
+const themeOrder = ["terminal", "midnight", "ember", "arctic", "clean", "clean-dark"] as const;
 
 export interface LayoutState {
   user: { email: string; role: string };
@@ -34,6 +34,8 @@ export function useLayoutState(): LayoutState {
     const stored = localStorage.getItem("dp-theme");
     if (!stored || stored === "dark") return "midnight";
     if (stored === "light") return "arctic";
+    if (stored === "nexus") return "clean";
+    if (stored === "nexus-dark") return "clean-dark";
     return stored;
   });
 
