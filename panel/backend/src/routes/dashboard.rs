@@ -104,7 +104,39 @@ pub async fn intelligence(
         diagnostics_summary = diag;
     }
 
-    // 6. Compute health score (0-100)
+    // 6. Backup freshness — sites with no backup in the last 7 days
+    let (stale_backups,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM sites s WHERE s.status = 'active' AND s.server_id = $1 \
+         AND NOT EXISTS (SELECT 1 FROM backups b WHERE b.site_id = s.id AND b.created_at > NOW() - INTERVAL '7 days')",
+    )
+    .bind(server_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or((0,));
+
+    // 7. Security scan — latest scan critical/warning counts
+    let scan_findings: Option<(i32, i32)> = sqlx::query_as(
+        "SELECT critical_count, warning_count FROM security_scans \
+         WHERE server_id = $1 AND status = 'completed' ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(server_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    let (scan_crits, scan_warns) = scan_findings.unwrap_or((0, 0));
+
+    // 8. Open incidents (scoped by user, not server — incidents are user-level)
+    let (open_incidents,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM managed_incidents \
+         WHERE user_id = $1 AND status NOT IN ('resolved', 'postmortem')",
+    )
+    .bind(claims.sub)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or((0,));
+
+    // 9. Compute health score (0-100)
     let diag_critical = diagnostics_summary
         .get("summary")
         .and_then(|s| s.get("critical"))
@@ -129,6 +161,13 @@ pub async fn intelligence(
             _ => {}
         }
     }
+    // Backup freshness penalty
+    score -= stale_backups * 5;          // -5 per site with stale backups
+    // Security scan penalty
+    score -= scan_crits as i64 * 10;    // -10 per critical finding
+    score -= scan_warns as i64 * 3;     // -3 per warning finding
+    // Open incident penalty
+    score -= open_incidents * 10;        // -10 per active incident
     let score = score.max(0).min(100);
 
     let grade = match score {
@@ -139,13 +178,83 @@ pub async fn intelligence(
         _ => "F",
     };
 
+    // 10. Build smart recommendations
+    let mut recommendations: Vec<serde_json::Value> = Vec::new();
+
+    if stale_backups > 0 {
+        recommendations.push(serde_json::json!({
+            "severity": "warning",
+            "message": format!("{} site(s) have no backup in the last 7 days", stale_backups),
+            "action": "backup",
+        }));
+    }
+    if scan_crits > 0 {
+        recommendations.push(serde_json::json!({
+            "severity": "critical",
+            "message": format!("Security scan found {} critical vulnerabilit{}", scan_crits, if scan_crits == 1 { "y" } else { "ies" }),
+            "action": "security",
+        }));
+    }
+    if scan_warns > 0 {
+        recommendations.push(serde_json::json!({
+            "severity": "warning",
+            "message": format!("Security scan found {} warning{}", scan_warns, if scan_warns == 1 { "" } else { "s" }),
+            "action": "security",
+        }));
+    }
+    if open_incidents > 0 {
+        recommendations.push(serde_json::json!({
+            "severity": if open_incidents >= 3 { "critical" } else { "warning" },
+            "message": format!("{} active incident{} require attention", open_incidents, if open_incidents == 1 { "" } else { "s" }),
+            "action": "incidents",
+        }));
+    }
+    for ssl in &ssl_countdowns {
+        let days = ssl.get("days_left").and_then(|d| d.as_i64()).unwrap_or(999);
+        let domain = ssl.get("domain").and_then(|d| d.as_str()).unwrap_or("unknown");
+        if days <= 14 {
+            recommendations.push(serde_json::json!({
+                "severity": if days <= 3 { "critical" } else { "warning" },
+                "message": format!("SSL certificate for {} expires in {} day{}", domain, days, if days == 1 { "" } else { "s" }),
+                "action": "ssl",
+            }));
+        }
+    }
+    if firing_count > 0 {
+        recommendations.push(serde_json::json!({
+            "severity": "critical",
+            "message": format!("{} alert{} currently firing", firing_count, if firing_count == 1 { "" } else { "s" }),
+            "action": "alerts",
+        }));
+    }
+    if diag_critical > 0 {
+        recommendations.push(serde_json::json!({
+            "severity": "critical",
+            "message": format!("{} critical diagnostic issue{} detected", diag_critical, if diag_critical == 1 { "" } else { "s" }),
+            "action": "diagnostics",
+        }));
+    }
+
+    // Sort recommendations: critical first, then warning
+    recommendations.sort_by(|a, b| {
+        let sev_a = a.get("severity").and_then(|s| s.as_str()).unwrap_or("info");
+        let sev_b = b.get("severity").and_then(|s| s.as_str()).unwrap_or("info");
+        let ord = |s: &str| -> u8 { match s { "critical" => 0, "warning" => 1, _ => 2 } };
+        ord(sev_a).cmp(&ord(sev_b))
+    });
+
     let result = serde_json::json!({
         "health_score": score,
         "grade": grade,
         "firing_alerts": firing_count,
         "acknowledged_alerts": ack_count,
+        "open_incidents": open_incidents,
+        "stale_backups": stale_backups,
+        "scan_critical": scan_crits,
+        "scan_warnings": scan_warns,
         "ssl_countdowns": ssl_countdowns,
         "top_issues": issues,
+        "recommendations": recommendations,
         "diagnostics": diagnostics_summary,
     });
 

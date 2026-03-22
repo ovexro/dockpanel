@@ -1056,6 +1056,17 @@ fn spawn_deploy_task(
             }
         }
 
+        // Pre-deploy backup: snapshot before deploying (best-effort, don't block deploy on failure)
+        if let Some(ref domain) = config.domain {
+            emit("backup", "Pre-deploy backup", "in_progress", None);
+            let _ = agent.post(
+                &format!("/backups/{}/create", domain),
+                Some(serde_json::json!({"reason": "pre-deploy"})),
+            ).await;
+            emit("backup", "Pre-deploy backup", "done", None);
+            tracing::info!("Pre-deploy backup requested for {domain}");
+        }
+
         // Build clone body
         let mut clone_body = serde_json::json!({
             "name": config.name,
@@ -1685,6 +1696,15 @@ pub async fn trigger_deploy_task(
         if !gh_token.is_empty() {
             set_github_status(gh_token, &config.repo_url, "HEAD", "pending", config.domain.as_deref()).await;
         }
+    }
+
+    // Pre-deploy backup: snapshot before deploying (best-effort, don't block deploy on failure)
+    if let Some(ref domain) = config.domain {
+        let _ = agent.post(
+            &format!("/backups/{}/create", domain),
+            Some(serde_json::json!({"reason": "pre-deploy"})),
+        ).await;
+        tracing::info!("Pre-deploy backup requested for {domain}");
     }
 
     // Clone

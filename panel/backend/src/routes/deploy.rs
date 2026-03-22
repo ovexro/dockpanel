@@ -383,6 +383,13 @@ async fn execute_deploy(
     config: &DeployConfig,
     triggered_by: &str,
 ) -> Result<DeployLog, ApiError> {
+    // Pre-deploy backup: snapshot before deploying (best-effort, don't block deploy on failure)
+    let _ = agent.post(
+        &format!("/backups/{}/create", domain),
+        Some(serde_json::json!({"reason": "pre-deploy"})),
+    ).await;
+    tracing::info!("Pre-deploy backup requested for {domain}");
+
     let agent_body = serde_json::json!({
         "domain": domain,
         "repo_url": config.repo_url,

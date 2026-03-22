@@ -24,6 +24,15 @@ pub struct DumpRequest {
     pub encryption_key: Option<String>,
 }
 
+#[derive(serde::Deserialize)]
+pub struct RestoreRequest {
+    pub container_name: String,
+    pub db_type: String,
+    pub user: String,
+    pub password: String,
+    pub encryption_key: Option<String>,
+}
+
 /// POST /db-backups/dump — Dump a database.
 async fn dump(
     Json(req): Json<DumpRequest>,
@@ -95,6 +104,67 @@ async fn remove(
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
+/// POST /db-backups/{db_name}/restore/{filename} — Restore a database from backup.
+async fn restore(
+    Path((db_name, filename)): Path<(String, String)>,
+    Json(req): Json<RestoreRequest>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    if !is_valid_name(&db_name) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid database name"));
+    }
+
+    // Resolve and validate backup file path
+    let filepath = database_backup::get_backup_path(&db_name, &filename)
+        .map_err(|e| err(StatusCode::NOT_FOUND, &e))?;
+
+    // If the file is encrypted, decrypt it first
+    let restore_path = if filepath.ends_with(".enc") {
+        let key = req.encryption_key.as_deref()
+            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Encryption key required for encrypted backup"))?;
+        if key.is_empty() {
+            return Err(err(StatusCode::BAD_REQUEST, "Encryption key required for encrypted backup"));
+        }
+        encryption::decrypt_file(&filepath, key)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?
+    } else {
+        filepath.clone()
+    };
+
+    let result = match req.db_type.as_str() {
+        "mysql" | "mariadb" => {
+            database_backup::restore_mysql(
+                &req.container_name, &db_name, &req.user, &req.password, &restore_path,
+            ).await
+        }
+        "postgres" | "postgresql" => {
+            database_backup::restore_postgres(
+                &req.container_name, &db_name, &req.user, &req.password, &restore_path,
+            ).await
+        }
+        "mongo" | "mongodb" => {
+            database_backup::restore_mongo(
+                &req.container_name, &db_name, &restore_path,
+            ).await
+        }
+        _ => Err("Unsupported database type".to_string()),
+    };
+
+    // Clean up decrypted temp file if we created one
+    if restore_path != filepath {
+        std::fs::remove_file(&restore_path).ok();
+    }
+
+    result.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "db_name": db_name,
+        "filename": filename,
+        "db_type": req.db_type,
+    })))
+}
+
 /// GET /db-backups/{db_name}/{filename}/path — Get filesystem path for upload.
 async fn get_path(
     Path((db_name, filename)): Path<(String, String)>,
@@ -114,4 +184,5 @@ pub fn router() -> Router<AppState> {
         .route("/db-backups/{db_name}/list", get(list))
         .route("/db-backups/{db_name}/{filename}", delete(remove))
         .route("/db-backups/{db_name}/{filename}/path", get(get_path))
+        .route("/db-backups/{db_name}/restore/{filename}", post(restore))
 }
