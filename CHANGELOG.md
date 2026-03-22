@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Terminal.tsx** — `bg-gray-300` and `bg-red-500` replaced with theme tokens
 - **Login.tsx** — Google OAuth button uses theme-mapped text/hover colors
 - **Settings.tsx hardcoded colors** — 13 instances of `blue-500/red-500` replaced with `accent/danger` tokens
+- **Dashboard stat grid square corners** — Added `rounded-lg overflow-hidden` to stat bar and system info grids; added explicit `rounded-lg` to metric cards, sparkline cards, onboarding section, and issues panels
 
 ## [2.5.1] - 2026-03-22
 
