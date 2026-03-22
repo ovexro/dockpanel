@@ -1,5 +1,5 @@
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::{header, HeaderMap, StatusCode},
     Json,
 };
@@ -239,7 +239,22 @@ pub async fn login(
         ));
     }
 
-    let (token, cookie) = issue_session(&state, &user)?;
+    let (_token, cookie, jti) = issue_session(&state, &user)?;
+
+    // Record session
+    let user_agent = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let _ = sqlx::query(
+        "INSERT INTO user_sessions (user_id, jti, ip_address, user_agent) VALUES ($1, $2, $3, $4)"
+    )
+    .bind(user.id)
+    .bind(&jti)
+    .bind(&ip)
+    .bind(&user_agent)
+    .execute(&state.db)
+    .await;
 
     // Check if 2FA is enforced
     let enforce_2fa: bool = sqlx::query_scalar::<_, String>(
@@ -275,7 +290,8 @@ pub async fn login(
 }
 
 /// Issue a JWT session token + cookie for a user.
-fn issue_session(state: &AppState, user: &User) -> Result<(String, String), ApiError> {
+/// Returns (token, cookie, jti) so callers can record the session.
+fn issue_session(state: &AppState, user: &User) -> Result<(String, String, String), ApiError> {
     let now = chrono::Utc::now();
     let jti = uuid::Uuid::new_v4().to_string();
     let claims = Claims {
@@ -284,7 +300,7 @@ fn issue_session(state: &AppState, user: &User) -> Result<(String, String), ApiE
         role: user.role.clone(),
         iat: now.timestamp() as usize,
         exp: (now + chrono::Duration::hours(2)).timestamp() as usize,
-        jti: Some(jti),
+        jti: Some(jti.clone()),
     };
 
     let token = encode(
@@ -298,7 +314,7 @@ fn issue_session(state: &AppState, user: &User) -> Result<(String, String), ApiE
     let cookie = format!(
         "token={token}; Path=/; HttpOnly{secure_flag}; SameSite=Lax; Max-Age=7200"
     );
-    Ok((token, cookie))
+    Ok((token, cookie, jti))
 }
 
 fn record_login_attempt(
@@ -319,7 +335,12 @@ pub async fn logout(
     if let Ok(AuthUser(claims)) = auth {
         if let Some(jti) = claims.jti {
             let mut blacklist = state.token_blacklist.write().await;
-            blacklist.insert(jti);
+            blacklist.insert(jti.clone());
+            // Remove session record
+            let _ = sqlx::query("DELETE FROM user_sessions WHERE jti = $1")
+                .bind(&jti)
+                .execute(&state.db)
+                .await;
         }
     }
 
@@ -758,6 +779,7 @@ pub struct TwoFaLoginRequest {
 /// POST /api/auth/2fa/verify — Complete login with TOTP code.
 pub async fn twofa_verify(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<TwoFaLoginRequest>,
 ) -> Result<(StatusCode, [(header::HeaderName, String); 1], Json<serde_json::Value>), ApiError> {
     // Decode temp token
@@ -836,7 +858,27 @@ pub async fn twofa_verify(
         attempts.remove(&user_id);
     }
 
-    let (_token, cookie) = issue_session(&state, &user)?;
+    let (_token, cookie, jti) = issue_session(&state, &user)?;
+
+    // Record session
+    let ip = headers
+        .get("x-real-ip")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let user_agent = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let _ = sqlx::query(
+        "INSERT INTO user_sessions (user_id, jti, ip_address, user_agent) VALUES ($1, $2, $3, $4)"
+    )
+    .bind(user.id)
+    .bind(&jti)
+    .bind(&ip)
+    .bind(&user_agent)
+    .execute(&state.db)
+    .await;
 
     Ok((
         StatusCode::OK,
@@ -1031,4 +1073,80 @@ pub async fn revoke_all_sessions(
     ).await;
 
     Ok(Json(serde_json::json!({ "ok": true, "message": "All sessions revoked. Users will need to re-login." })))
+}
+
+// ─── Session Management ─────────────────────────────────────────────────────
+
+/// GET /api/auth/sessions — List active sessions for the current user.
+pub async fn list_sessions(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let sessions: Vec<(
+        uuid::Uuid,
+        String,
+        Option<String>,
+        Option<String>,
+        chrono::DateTime<chrono::Utc>,
+        chrono::DateTime<chrono::Utc>,
+    )> = sqlx::query_as(
+        "SELECT id, jti, ip_address, user_agent, created_at, last_seen_at \
+         FROM user_sessions WHERE user_id = $1 ORDER BY last_seen_at DESC",
+    )
+    .bind(claims.sub)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let current_jti = claims.jti.unwrap_or_default();
+    let result: Vec<serde_json::Value> = sessions
+        .iter()
+        .map(|(id, jti, ip, ua, created, seen)| {
+            serde_json::json!({
+                "id": id,
+                "ip_address": ip,
+                "user_agent": ua,
+                "created_at": created,
+                "last_seen_at": seen,
+                "is_current": jti == &current_jti,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "sessions": result })))
+}
+
+/// DELETE /api/auth/sessions/{id} — Revoke a specific session.
+pub async fn revoke_session(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Get the JTI for this session (must belong to the current user)
+    let session: Option<(String,)> = sqlx::query_as(
+        "SELECT jti FROM user_sessions WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    if let Some((jti,)) = session {
+        // Add to token blacklist so the JWT is immediately invalid
+        let mut blacklist = state.token_blacklist.write().await;
+        blacklist.insert(jti);
+        drop(blacklist);
+
+        // Delete session record
+        sqlx::query("DELETE FROM user_sessions WHERE id = $1")
+            .bind(id)
+            .execute(&state.db)
+            .await
+            .ok();
+
+        Ok(Json(serde_json::json!({ "ok": true })))
+    } else {
+        Err(err(StatusCode::NOT_FOUND, "Session not found"))
+    }
 }
