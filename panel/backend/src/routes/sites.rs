@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::sse::{Event, KeepAlive, Sse},
     Json,
 };
@@ -107,6 +107,7 @@ pub async fn create(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(server_id, agent): ServerScope,
+    headers: HeaderMap,
     Json(body): Json<CreateSiteRequest>,
 ) -> Result<(StatusCode, Json<Site>), ApiError> {
     // Validate domain format
@@ -289,9 +290,10 @@ pub async fn create(
                 .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
             tracing::info!("Site created: {} ({})", body.domain, runtime);
+            let ip = crate::routes::client_ip(&headers);
             activity::log_activity(
                 &state.db, claims.sub, &claims.email, "site.create",
-                Some("site"), Some(&body.domain), Some(runtime), None,
+                Some("site"), Some(&body.domain), Some(runtime), ip.as_deref(),
             ).await;
 
             // Panel notification
@@ -1056,6 +1058,7 @@ pub async fn remove(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(_server_id, agent): ServerScope,
+    headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: Site = sqlx::query_as(
@@ -1137,9 +1140,10 @@ pub async fn remove(
     ).bind(claims.sub).execute(&state.db).await;
 
     tracing::info!("Site deleted: {}", site.domain);
+    let ip = crate::routes::client_ip(&headers);
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "site.delete",
-        Some("site"), Some(&site.domain), None, None,
+        Some("site"), Some(&site.domain), None, ip.as_deref(),
     ).await;
 
     // Panel notification
@@ -1549,6 +1553,112 @@ pub async fn health_check(
 }
 
 // ──────────────────────────────────────────────────────────────
+// Composite Health Summary
+// ──────────────────────────────────────────────────────────────
+
+/// GET /api/sites/{id}/health-summary — Composite site health score.
+pub async fn health_summary(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = &state.db;
+
+    // Verify ownership
+    let site: Option<(String, bool, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+        "SELECT domain, ssl_enabled, ssl_expiry FROM sites WHERE id = $1 AND user_id = $2"
+    ).bind(id).bind(claims.sub).fetch_optional(db).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let (domain, ssl_enabled, ssl_expiry) = site.ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    let now = chrono::Utc::now();
+
+    // SSL status
+    let ssl_days_until_expiry = ssl_expiry.map(|exp| (exp - now).num_days());
+
+    // Backup freshness
+    let last_backup: Option<(chrono::DateTime<chrono::Utc>,)> = sqlx::query_as(
+        "SELECT created_at FROM backups WHERE site_id = $1 ORDER BY created_at DESC LIMIT 1"
+    ).bind(id).fetch_optional(db).await.ok().flatten();
+    let backup_hours_since = last_backup.map(|(t,)| (now - t).num_hours());
+
+    // Uptime: latest monitor status + response time
+    let monitor: Option<(String, Option<i32>, bool)> = sqlx::query_as(
+        "SELECT status, last_response_ms, enabled FROM monitors WHERE site_id = $1 ORDER BY created_at DESC LIMIT 1"
+    ).bind(id).fetch_optional(db).await.ok().flatten();
+    let (monitor_status, response_time, monitor_enabled) = monitor
+        .map(|(s, r, e)| (Some(s), r, e))
+        .unwrap_or((None, None, false));
+
+    // Compute score 0-100
+    let mut score: i32 = 100;
+
+    // No SSL: -25
+    if !ssl_enabled {
+        score -= 25;
+    } else if let Some(days) = ssl_days_until_expiry {
+        // SSL expiring in <7 days: -15, <30 days: -5
+        if days < 0 {
+            score -= 25; // expired
+        } else if days < 7 {
+            score -= 15;
+        } else if days < 30 {
+            score -= 5;
+        }
+    }
+
+    // Stale backup: no backup in 48h: -20, no backup at all: -30
+    match backup_hours_since {
+        None => score -= 30,
+        Some(h) if h > 48 => score -= 20,
+        Some(h) if h > 24 => score -= 10,
+        _ => {}
+    }
+
+    // Monitor down: -20, slow response (>2s): -10
+    if let Some(ref status) = monitor_status {
+        if status == "down" {
+            score -= 20;
+        }
+    }
+    if let Some(rt) = response_time {
+        if rt > 5000 {
+            score -= 15;
+        } else if rt > 2000 {
+            score -= 10;
+        } else if rt > 1000 {
+            score -= 5;
+        }
+    }
+
+    // No monitor at all or disabled: -5
+    if monitor_status.is_none() || !monitor_enabled {
+        score -= 5;
+    }
+
+    score = score.max(0);
+
+    Ok(Json(serde_json::json!({
+        "domain": domain,
+        "ssl_status": {
+            "enabled": ssl_enabled,
+            "days_until_expiry": ssl_days_until_expiry,
+        },
+        "backup_freshness": {
+            "last_backup": last_backup.map(|(t,)| t),
+            "hours_since": backup_hours_since,
+        },
+        "uptime": {
+            "status": monitor_status,
+            "response_time_ms": response_time,
+            "monitor_enabled": monitor_enabled,
+        },
+        "score": score,
+    })))
+}
+
+// ──────────────────────────────────────────────────────────────
 // Site Cloning
 // ──────────────────────────────────────────────────────────────
 
@@ -1625,6 +1735,66 @@ pub async fn clone_site(
 
     activity::log_activity(&state.db, claims.sub, &claims.email, "site.clone",
         Some("site"), Some(target_domain), Some(&source.domain), None).await;
+
+    fire_event(&state.db, "site.created", serde_json::json!({
+        "site_id": new_site.id, "domain": target_domain, "runtime": &source.runtime, "cloned_from": &source.domain,
+    }));
+
+    // Auto-create backup schedule for cloned site (daily 3 AM, 7 retention)
+    {
+        let backup_db = state.db.clone();
+        let backup_site_id = new_site.id;
+        tokio::spawn(async move {
+            let _ = sqlx::query(
+                "INSERT INTO backup_schedules (site_id, schedule, retention_count, enabled) \
+                 VALUES ($1, '0 3 * * *', 7, true) ON CONFLICT (site_id) DO NOTHING"
+            ).bind(backup_site_id).execute(&backup_db).await;
+            tracing::info!("Auto-backup: created daily schedule for cloned site");
+        });
+    }
+
+    // Auto-create secrets vault for the cloned site
+    {
+        let vault_db = state.db.clone();
+        let vault_site_id = new_site.id;
+        let vault_user_id = claims.sub;
+        let vault_domain = target_domain.to_string();
+        tokio::spawn(async move {
+            let _ = sqlx::query(
+                "INSERT INTO secret_vaults (user_id, name, description, site_id) \
+                 VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING"
+            )
+            .bind(vault_user_id)
+            .bind(format!("{vault_domain} secrets"))
+            .bind(format!("Auto-created vault for {vault_domain}"))
+            .bind(vault_site_id)
+            .execute(&vault_db).await;
+            tracing::info!("Auto-vault: created for cloned site {vault_domain}");
+        });
+    }
+
+    // Auto-create status page component if status page is enabled
+    {
+        let sp_db = state.db.clone();
+        let sp_user_id = claims.sub;
+        let sp_domain = target_domain.to_string();
+        tokio::spawn(async move {
+            let enabled: Option<(bool,)> = sqlx::query_as(
+                "SELECT enabled FROM status_page_config WHERE user_id = $1"
+            ).bind(sp_user_id).fetch_optional(&sp_db).await.ok().flatten();
+
+            if enabled.map(|(e,)| e).unwrap_or(false) {
+                let _ = sqlx::query(
+                    "INSERT INTO status_page_components (user_id, name, description, group_name) \
+                     VALUES ($1, $2, $3, 'Sites')"
+                )
+                .bind(sp_user_id).bind(&sp_domain)
+                .bind(format!("Auto-created for {sp_domain}"))
+                .execute(&sp_db).await;
+                tracing::info!("Auto-component: created status page component for cloned site {sp_domain}");
+            }
+        });
+    }
 
     Ok((StatusCode::CREATED, Json(serde_json::json!({ "ok": true, "site_id": new_site.id, "domain": target_domain }))))
 }

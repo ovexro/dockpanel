@@ -782,6 +782,25 @@ pub async fn apply_fix(fix_id: &str) -> Result<String, String> {
                 }
             }
 
+            // GAP 36: Also truncate any log file > 500MB anywhere in /var/log
+            if let Ok(output) = Command::new("find")
+                .args(["/var/log", "-name", "*.log", "-size", "+500M", "-type", "f"])
+                .output()
+                .await
+            {
+                let paths = String::from_utf8_lossy(&output.stdout);
+                for path in paths.lines() {
+                    let path = path.trim();
+                    if !path.is_empty() {
+                        if let Ok(meta) = tokio::fs::metadata(path).await {
+                            freed += meta.len();
+                            tokio::fs::write(path, "").await.ok();
+                            tracing::info!("Truncated oversized log: {path} ({:.0} MB)", meta.len() as f64 / 1024.0 / 1024.0);
+                        }
+                    }
+                }
+            }
+
             // Also clean up old journal entries
             let _ = tokio::time::timeout(
                 std::time::Duration::from_secs(10),
@@ -798,6 +817,85 @@ pub async fn apply_fix(fix_id: &str) -> Result<String, String> {
                 ))
             } else {
                 Ok("No oversized log files found. Ran journal vacuum.".into())
+            }
+        }
+        // GAP 35: Clean /tmp files older than 7 days
+        "clean-tmp" => {
+            let output = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                Command::new("find")
+                    .args(["/tmp", "-type", "f", "-mtime", "+7", "-delete"])
+                    .output(),
+            )
+            .await
+            .map_err(|_| "Tmp cleanup timed out".to_string())?
+            .map_err(|e| format!("Failed to clean /tmp: {e}"))?;
+
+            if output.status.success() {
+                Ok("Cleaned /tmp files older than 7 days".into())
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                Ok(format!("Tmp cleanup completed with warnings: {}", stderr.chars().take(200).collect::<String>()))
+            }
+        }
+        // GAP 35: Docker system prune (unused images, volumes, build cache)
+        "docker-prune" => {
+            let output = tokio::time::timeout(
+                std::time::Duration::from_secs(60),
+                Command::new("docker")
+                    .args(["system", "prune", "-af", "--volumes"])
+                    .output(),
+            )
+            .await
+            .map_err(|_| "Docker prune timed out".to_string())?
+            .map_err(|e| format!("Failed to run docker prune: {e}"))?;
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if output.status.success() {
+                let reclaimed = stdout.lines()
+                    .find(|l| l.contains("reclaimed"))
+                    .unwrap_or("Docker prune completed");
+                Ok(reclaimed.to_string())
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                Err(format!("Docker prune failed: {}", stderr.chars().take(200).collect::<String>()))
+            }
+        }
+        "clean-cache" => {
+            // Clear nginx fastcgi/proxy cache for a specific domain or all
+            if target.is_empty() {
+                return Err("No domain specified for cache purge".into());
+            }
+            // Validate target is a safe domain name (alphanumeric, dots, hyphens)
+            if !target.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+                return Err("Invalid domain name for cache purge".into());
+            }
+
+            let mut cleaned = 0u64;
+            // Common nginx cache directories
+            let cache_dirs = [
+                format!("/var/cache/nginx/{target}"),
+                format!("/var/cache/nginx/fastcgi/{target}"),
+                format!("/tmp/nginx-cache/{target}"),
+            ];
+            for dir in &cache_dirs {
+                if tokio::fs::metadata(dir).await.is_ok() {
+                    if let Ok(mut entries) = tokio::fs::read_dir(dir).await {
+                        while let Ok(Some(entry)) = entries.next_entry().await {
+                            if let Ok(meta) = entry.metadata().await {
+                                cleaned += meta.len();
+                            }
+                        }
+                    }
+                    let _ = tokio::fs::remove_dir_all(dir).await;
+                    let _ = tokio::fs::create_dir_all(dir).await;
+                }
+            }
+
+            if cleaned > 0 {
+                Ok(format!("Purged {:.0} KB of cache for {target}", cleaned as f64 / 1024.0))
+            } else {
+                Ok(format!("No cache found for {target} (directories checked: /var/cache/nginx/)"))
             }
         }
         _ => Err(format!("Unknown fix action: {action}")),

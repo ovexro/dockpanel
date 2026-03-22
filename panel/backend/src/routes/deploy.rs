@@ -434,6 +434,37 @@ async fn execute_deploy(
     let duration_ms = result.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0) as i32;
     let status = if success { "success" } else { "failed" };
 
+    // GAP 26: Auto-rollback on failed deploy — restore from most recent pre-deploy backup
+    if !success {
+        let latest_backup: Option<(String,)> = sqlx::query_as(
+            "SELECT filename FROM backups WHERE site_id = $1 ORDER BY created_at DESC LIMIT 1"
+        )
+        .bind(site_id)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten();
+
+        if let Some((filename,)) = latest_backup {
+            let restore_path = format!("/backups/{}/restore/{}", domain, filename);
+            match agent.post(&restore_path, None::<serde_json::Value>).await {
+                Ok(_) => tracing::info!("Auto-rollback: restored {filename} for {domain} after failed deploy"),
+                Err(e) => tracing::warn!("Auto-rollback failed for {domain}: {e}"),
+            }
+        } else {
+            tracing::warn!("Auto-rollback: no backup found for {domain}, skipping restore");
+        }
+    }
+
+    // GAP 37: Post-deploy cache invalidation — clear nginx fastcgi cache for the domain
+    if success {
+        let _ = agent.post(
+            "/diagnostics/fix",
+            Some(serde_json::json!({ "fix_id": format!("clean-cache:{domain}") })),
+        ).await;
+        tracing::info!("Post-deploy cache invalidation requested for {domain}");
+    }
+
     // GAP 5: Auto-inject secrets from linked vault after successful deploy
     if success {
         let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_default();

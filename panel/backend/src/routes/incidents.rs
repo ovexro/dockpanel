@@ -280,6 +280,45 @@ pub async fn update(
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
+    // GAP 34: Auto-populate postmortem template when transitioning to "postmortem"
+    if req.status.as_deref() == Some("postmortem") && req.postmortem.is_none() {
+        // Check if postmortem is currently empty
+        let current_pm: Option<(Option<String>,)> = sqlx::query_as(
+            "SELECT postmortem FROM managed_incidents WHERE id = $1"
+        ).bind(id).fetch_optional(&state.db).await.ok().flatten();
+
+        let pm_empty = current_pm
+            .as_ref()
+            .map(|(pm,)| pm.as_ref().map_or(true, |s| s.is_empty()))
+            .unwrap_or(true);
+
+        if pm_empty {
+            // Fetch timeline from incident updates
+            let updates: Vec<(String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+                "SELECT status, message, created_at FROM incident_updates WHERE incident_id = $1 ORDER BY created_at"
+            ).bind(id).fetch_all(&state.db).await.unwrap_or_default();
+
+            let timeline = updates.iter()
+                .map(|(s, m, t)| format!("- **{}** [{}]: {}", t.format("%H:%M UTC"), s, m))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            let template = format!(
+                "## Incident Postmortem\n\n\
+                 ### Summary\n[Describe the incident]\n\n\
+                 ### Timeline\n{}\n\n\
+                 ### Root Cause\n[What caused this?]\n\n\
+                 ### Resolution\n[How was it fixed?]\n\n\
+                 ### Action Items\n- [ ] \n",
+                timeline
+            );
+
+            let _ = sqlx::query(
+                "UPDATE managed_incidents SET postmortem = $1 WHERE id = $2 AND (postmortem IS NULL OR postmortem = '')"
+            ).bind(&template).bind(id).execute(&state.db).await;
+        }
+    }
+
     // If a status change message was provided, create an update
     if let Some(ref message) = req.message {
         let update_status = req.status.as_deref().unwrap_or(&incident.status);
@@ -292,6 +331,12 @@ pub async fn update(
         // Notify subscribers of update
         notify_subscribers(&state.db, &incident.title, update_status, message).await;
     }
+
+    // Re-fetch after postmortem auto-populate to return the complete record
+    let incident: ManagedIncident = sqlx::query_as(
+        "SELECT * FROM managed_incidents WHERE id = $1"
+    ).bind(id).fetch_one(&state.db).await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     Ok(Json(incident))
 }
@@ -848,6 +893,7 @@ async fn notify_subscribers(db: &sqlx::PgPool, title: &str, status: &str, messag
                 slack_url: None,
                 discord_url: None,
                 pagerduty_key: None,
+                webhook_url: None,
             },
             &subject,
             &body,

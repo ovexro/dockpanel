@@ -230,10 +230,9 @@ pub async fn test_webhook(
 /// Returns reseller branding if user belongs to one, otherwise global settings.
 pub async fn branding(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // For now, always return global settings (reseller-specific branding can be added later
-    // when the user is authenticated and has a reseller_id)
-
+    // Load global branding settings
     let rows: Vec<(String, String)> = sqlx::query_as(
         "SELECT key, value FROM settings WHERE key IN ('panel_name', 'logo_url', 'accent_color', 'hide_branding')"
     )
@@ -242,6 +241,78 @@ pub async fn branding(
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     let map: HashMap<String, String> = rows.into_iter().collect();
+
+    let global_name = map.get("panel_name").cloned().unwrap_or_else(|| "DockPanel".into());
+    let global_logo = map.get("logo_url").cloned().unwrap_or_default();
+    let global_accent = map.get("accent_color").cloned().unwrap_or_default();
+    let global_hide = map.get("hide_branding").map(|v| v == "true").unwrap_or(false);
+
+    // GAP 41: Check if authenticated user belongs to a reseller with custom branding
+    let token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .or_else(|| {
+            headers
+                .get(axum::http::header::COOKIE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|cookies| {
+                    cookies.split(';').find_map(|s| s.trim().strip_prefix("token="))
+                })
+        });
+
+    if let Some(token) = token {
+        // Try to decode JWT — ignore errors (unauthenticated users just get global branding)
+        let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+        validation.validate_exp = true;
+        validation.leeway = 0;
+        if let Ok(data) = jsonwebtoken::decode::<crate::auth::Claims>(
+            token,
+            &jsonwebtoken::DecodingKey::from_secret(state.config.jwt_secret.as_bytes()),
+            &validation,
+        ) {
+            // Look up user's reseller_id and reseller branding
+            let reseller_branding: Option<(Option<String>, Option<String>, Option<String>, bool)> = sqlx::query_as(
+                "SELECT rp.logo_url, rp.accent_color, rp.panel_name, rp.hide_branding \
+                 FROM reseller_profiles rp \
+                 JOIN users u ON u.reseller_id = rp.user_id \
+                 WHERE u.id = $1"
+            )
+            .bind(data.claims.sub)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+
+            if let Some((logo, accent, name, hide)) = reseller_branding {
+                if logo.is_some() || accent.is_some() || name.is_some() || hide {
+                    // Check which OAuth providers are configured
+                    let oauth_rows: Vec<(String, String)> = sqlx::query_as(
+                        "SELECT key, value FROM settings WHERE key LIKE 'oauth_%_client_id' AND value != ''"
+                    )
+                    .fetch_all(&state.db)
+                    .await
+                    .unwrap_or_default();
+
+                    let oauth_providers: Vec<String> = oauth_rows.iter()
+                        .filter_map(|(k, _)| {
+                            k.strip_prefix("oauth_")
+                                .and_then(|s| s.strip_suffix("_client_id"))
+                                .map(|s| s.to_string())
+                        })
+                        .collect();
+
+                    return Ok(Json(serde_json::json!({
+                        "panel_name": name.unwrap_or(global_name),
+                        "logo_url": logo.unwrap_or(global_logo),
+                        "accent_color": accent.unwrap_or(global_accent),
+                        "hide_branding": hide,
+                        "oauth_providers": oauth_providers,
+                    })));
+                }
+            }
+        }
+    }
 
     // Check which OAuth providers are configured
     let oauth_rows: Vec<(String, String)> = sqlx::query_as(
@@ -260,10 +331,10 @@ pub async fn branding(
         .collect();
 
     Ok(Json(serde_json::json!({
-        "panel_name": map.get("panel_name").cloned().unwrap_or_else(|| "DockPanel".into()),
-        "logo_url": map.get("logo_url").cloned().unwrap_or_default(),
-        "accent_color": map.get("accent_color").cloned().unwrap_or_default(),
-        "hide_branding": map.get("hide_branding").map(|v| v == "true").unwrap_or(false),
+        "panel_name": global_name,
+        "logo_url": global_logo,
+        "accent_color": global_accent,
+        "hide_branding": global_hide,
         "oauth_providers": oauth_providers,
     })))
 }

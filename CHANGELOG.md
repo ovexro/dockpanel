@@ -26,7 +26,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Security scanner auto-fix** — Auto-renews expiring SSL certificates detected by security scans (safe findings only, never auto-deletes)
 - **Fail2Ban auto-configuration** — New sites auto-get a Fail2Ban jail monitoring their access log; removed on site deletion
 - **Session management** — New `user_sessions` table, `GET /api/auth/sessions` (list with is_current flag), `DELETE /api/auth/sessions/{id}` (revoke), auto-cleanup of expired sessions
-- **Notification center** — Bell icon with unread badge in all 4 layouts. New `panel_notifications` table, 4 API endpoints (list, unread-count, mark-read, mark-all-read), `/notifications` page with severity colors. Alerts auto-insert into notification center. 30-day retention cleanup
+- **Notification center** — Bell icon with unread badge in all 4 layouts. New `panel_notifications` table, 4 API endpoints (list, unread-count, mark-read, mark-all-read), `/notifications` page with severity colors. Alerts auto-insert into notification center. 30-day retention cleanup. SSE real-time delivery. Wired into 18 event sources (deploys, incidents, backups, security, SSL, auto-healer, sites, auth)
+
+### Fixed (Automation Gap Audit — MEDIUM Priority, 25 gaps)
+- **Clone site auto-provisioning** — Clone now triggers auto-backup schedule, secrets vault, status page component, and site.created event
+- **Composite site health** — New `GET /api/sites/{id}/health-summary` combining SSL, backup freshness, uptime, and composite score
+- **"Backup Everything" preset** — New `POST /api/backup-orchestrator/policies/protect-all` one-click policy
+- **Backup creation retry** — Policy executor retries failed backups once with 5s delay
+- **Backup freshness alerting** — Proactive notification when sites have no backup in 48+ hours (throttled to once/hour)
+- **Volume restore endpoint** — New `POST /api/backup-orchestrator/volume-backups/{id}/restore`
+- **Deploy lock** — Concurrent deploys to same site blocked (checks for active building/deploying status)
+- **Response time alerting** — Monitors warn when response time exceeds 5000ms threshold
+- **Failed cron detection** — Manual cron execution fires alert on non-zero exit code
+- **Postmortem auto-populate** — Transitioning to postmortem status auto-generates timeline template
+- **/tmp cleanup + Docker prune** — Auto-healer now cleans /tmp (7d) and runs Docker system prune on disk pressure
+- **Oversized log rotation** — Truncates individual log files larger than 500MB during cleanup
+- **Welcome email** — New users receive welcome email with panel URL and credentials prompt
+- **Audit log IPs** — Security-sensitive actions (site create/delete, user create/delete, security fix) now log client IP
+- **Auto-rollback on deploy failure** — Failed site deploys auto-restore from pre-deploy backup
+- **Generic webhook notifications** — New `notify_webhook_url` in alert rules for custom integrations (Telegram, Teams, etc.)
+- **Weekly digest email** — Monday morning summary with 7-day alert/backup/incident/deploy counts to all admins
+- **Post-deploy cache invalidation** — Nginx cache purge after successful deploy (fastcgi + proxy cache)
+- **Reseller branding** — `GET /api/branding` now returns per-reseller logo/colors/name when applicable
+- **Unified event timeline** — New `GET /api/dashboard/timeline` merging deploys, backups, incidents, alerts, scans
 
 ## [2.5.2] - 2026-03-22
 

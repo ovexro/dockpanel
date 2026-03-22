@@ -1,3 +1,4 @@
+use chrono::Datelike;
 use sqlx::PgPool;
 use std::time::Duration;
 
@@ -377,6 +378,21 @@ async fn auto_clean_disk(pool: &PgPool, agent: &AgentClient) {
     )
     .await;
 
+    // GAP 35: Also clean /tmp and prune Docker when disk is critical
+    if success {
+        tracing::info!("Auto-heal: cleaning /tmp files older than 7 days");
+        let _ = agent.post(
+            "/diagnostics/fix",
+            Some(serde_json::json!({ "fix_id": "clean-tmp:all" })),
+        ).await;
+
+        tracing::info!("Auto-heal: running Docker system prune");
+        let _ = agent.post(
+            "/diagnostics/fix",
+            Some(serde_json::json!({ "fix_id": "docker-prune:all" })),
+        ).await;
+    }
+
     // If cleanup succeeded, reset the disk alert_state so the alert engine doesn't
     // re-fire immediately (let it re-evaluate on the next cycle with fresh metrics)
     if success {
@@ -391,7 +407,7 @@ async fn auto_clean_disk(pool: &PgPool, agent: &AgentClient) {
         tracing::info!("Auto-heal: disk cleanup succeeded, disk alert state reset");
 
         // Panel notification
-        notifications::notify_panel(pool, None, "Disk cleanup completed", "Automatic disk cleanup was performed to free space", "info", "auto_heal", None).await;
+        notifications::notify_panel(pool, None, "Disk cleanup completed", "Automatic disk cleanup was performed to free space (logs + /tmp + Docker prune)", "info", "auto_heal", None).await;
     }
 }
 
@@ -549,9 +565,100 @@ async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
     }
 }
 
+/// Weekly digest: sends a summary email to all admins on Mondays.
+async fn send_weekly_digest(pool: &PgPool) {
+    let today = chrono::Utc::now().weekday();
+    if today != chrono::Weekday::Mon {
+        return;
+    }
+
+    // Gather stats for last 7 days
+    let alerts_7d: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM alerts WHERE created_at > NOW() - INTERVAL '7 days'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or((0,));
+
+    let backups_7d: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM backups WHERE created_at > NOW() - INTERVAL '7 days'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or((0,));
+
+    let incidents_7d: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM managed_incidents WHERE created_at > NOW() - INTERVAL '7 days'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or((0,));
+
+    let deploys_7d: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM deploy_logs WHERE created_at > NOW() - INTERVAL '7 days'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or((0,));
+
+    let security_scans_7d: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM security_scans WHERE created_at > NOW() - INTERVAL '7 days'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or((0,));
+
+    let body_html = format!(
+        r#"<div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #4f46e5;">DockPanel Weekly Summary</h2>
+            <p>Here's what happened in the last 7 days:</p>
+            <table style="border-collapse: collapse; width: 100%; margin: 16px 0;">
+                <tr><td style="padding: 8px; border-bottom: 1px solid #e5e7eb; font-weight: 600;">Alerts</td><td style="padding: 8px; border-bottom: 1px solid #e5e7eb;">{}</td></tr>
+                <tr><td style="padding: 8px; border-bottom: 1px solid #e5e7eb; font-weight: 600;">Backups</td><td style="padding: 8px; border-bottom: 1px solid #e5e7eb;">{}</td></tr>
+                <tr><td style="padding: 8px; border-bottom: 1px solid #e5e7eb; font-weight: 600;">Incidents</td><td style="padding: 8px; border-bottom: 1px solid #e5e7eb;">{}</td></tr>
+                <tr><td style="padding: 8px; border-bottom: 1px solid #e5e7eb; font-weight: 600;">Deploys</td><td style="padding: 8px; border-bottom: 1px solid #e5e7eb;">{}</td></tr>
+                <tr><td style="padding: 8px; border-bottom: 1px solid #e5e7eb; font-weight: 600;">Security Scans</td><td style="padding: 8px; border-bottom: 1px solid #e5e7eb;">{}</td></tr>
+            </table>
+            <p style="color: #6b7280; font-size: 14px;">Log in to your DockPanel dashboard for full details.</p>
+        </div>"#,
+        alerts_7d.0, backups_7d.0, incidents_7d.0, deploys_7d.0, security_scans_7d.0,
+    );
+
+    // Send to all admin users
+    let admins: Vec<(String,)> = sqlx::query_as(
+        "SELECT email FROM users WHERE role = 'admin'",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    for (email,) in &admins {
+        if let Err(e) = crate::services::email::send_email(
+            pool,
+            email,
+            "DockPanel Weekly Summary",
+            &body_html,
+        )
+        .await
+        {
+            tracing::warn!("Weekly digest email to {email} failed: {e}");
+        }
+    }
+
+    if !admins.is_empty() {
+        tracing::info!(
+            "Weekly digest sent to {} admin(s): {} alerts, {} backups, {} incidents, {} deploys",
+            admins.len(), alerts_7d.0, backups_7d.0, incidents_7d.0, deploys_7d.0,
+        );
+    }
+}
+
 /// Periodic data retention cleanup: removes old records to keep the database lean.
 async fn run_retention_cleanup(pool: &PgPool) {
     tracing::info!("Running data retention cleanup...");
+
+    // GAP 33: Weekly digest — send summary email on Mondays during cleanup cycle
+    send_weekly_digest(pool).await;
 
     // Delete monitor_checks older than 7 days
     match sqlx::query("DELETE FROM monitor_checks WHERE checked_at < NOW() - INTERVAL '7 days'")

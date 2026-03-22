@@ -477,6 +477,14 @@ pub async fn deploy(
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
 
+    // Deploy lock: prevent concurrent deploys for the same project
+    let active: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM git_deploy_history WHERE git_deploy_id = $1 AND status IN ('building', 'deploying') AND created_at > NOW() - INTERVAL '1 hour'"
+    ).bind(id).fetch_one(&state.db).await.unwrap_or((0,));
+    if active.0 > 0 {
+        return Err(err(StatusCode::CONFLICT, "Deploy already in progress"));
+    }
+
     // Update status to building
     sqlx::query("UPDATE git_deploys SET status = 'building', updated_at = NOW() WHERE id = $1")
         .bind(id)
@@ -998,6 +1006,14 @@ pub async fn webhook(
             "ok": true,
             "message": format!("Preview deploy triggered for branch '{push_branch}'"),
         })));
+    }
+
+    // Deploy lock: prevent concurrent deploys for the same project
+    let active: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM git_deploy_history WHERE git_deploy_id = $1 AND status IN ('building', 'deploying') AND created_at > NOW() - INTERVAL '1 hour'"
+    ).bind(id).fetch_one(&state.db).await.unwrap_or((0,));
+    if active.0 > 0 {
+        return Ok(Json(serde_json::json!({ "ok": false, "message": "Deploy already in progress, skipping" })));
     }
 
     // Update status to building
@@ -1721,6 +1737,15 @@ pub async fn trigger_deploy_task(
 
     if active_incidents.0 > 0 {
         tracing::warn!("Scheduled deploy blocked for {git_deploy_id}: active incident in progress");
+        return;
+    }
+
+    // Deploy lock: prevent concurrent deploys for the same project
+    let active: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM git_deploy_history WHERE git_deploy_id = $1 AND status IN ('building', 'deploying') AND created_at > NOW() - INTERVAL '1 hour'"
+    ).bind(git_deploy_id).fetch_one(&db).await.unwrap_or((0,));
+    if active.0 > 0 {
+        tracing::warn!("Scheduled deploy skipped for {git_deploy_id}: deploy already in progress");
         return;
     }
 
