@@ -311,6 +311,37 @@ pub async fn run_now(
         Some("cron"), Some(&domain), Some(&cron.label), Some(status_str),
     ).await;
 
+    // GAP 30: Fire alert on cron job failure
+    if !success {
+        let exit_code = result.get("exit_code").and_then(|v| v.as_i64()).unwrap_or(-1);
+        let alert_subject = format!("Cron failed: {} (exit {})", cron.label, exit_code);
+        let alert_message = format!(
+            "Cron job '{}' on {} failed with exit code {}.\nCommand: {}\nOutput: {}",
+            cron.label, domain, exit_code, cron.command,
+            if output.len() > 500 { &output[..500] } else { output }
+        );
+
+        // Fire alert via the existing system
+        crate::services::notifications::fire_alert(
+            &state.db,
+            claims.sub,
+            None,
+            Some(id),
+            "cron_failure",
+            "warning",
+            &alert_subject,
+            &alert_message,
+        ).await;
+
+        crate::services::system_log::log_event(
+            &state.db,
+            "warning",
+            "cron",
+            &format!("Cron failed: {} on {}", cron.label, domain),
+            Some(&format!("exit_code={}, command={}", exit_code, cron.command)),
+        ).await;
+    }
+
     Ok(Json(serde_json::json!({
         "ok": success,
         "output": output,

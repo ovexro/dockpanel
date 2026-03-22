@@ -49,11 +49,21 @@ pub mod wordpress;
 pub mod ws_metrics;
 
 use axum::{
+    http::HeaderMap,
     routing::{delete, get, post, put},
     Router,
 };
 
 use crate::AppState;
+
+/// GAP 46: Extract client IP from request headers.
+/// Prefers x-real-ip (set by trusted reverse proxy), falls back to x-forwarded-for.
+pub fn client_ip(headers: &HeaderMap) -> Option<String> {
+    headers.get("x-real-ip")
+        .or_else(|| headers.get("x-forwarded-for"))
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(',').next().unwrap_or(s).trim().to_string())
+}
 
 /// Validate a domain name format.
 pub fn is_valid_domain(domain: &str) -> bool {
@@ -475,6 +485,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/sites/{id}/stats", get(sites::site_stats))
         .route("/api/sites/{id}/php-errors", get(sites::php_errors))
         .route("/api/sites/{id}/health", get(sites::health_check))
+        .route("/api/sites/{id}/health-summary", get(sites::health_summary))
         // Site Cloning
         .route("/api/sites/{id}/clone", post(sites::clone_site))
         // Custom SSL Upload
@@ -529,6 +540,7 @@ pub fn router() -> Router<AppState> {
         // Backup Orchestrator
         .route("/api/backup-orchestrator/health", get(backup_orchestrator::health))
         .route("/api/backup-orchestrator/policies", get(backup_orchestrator::list_policies).post(backup_orchestrator::create_policy))
+        .route("/api/backup-orchestrator/policies/protect-all", post(backup_orchestrator::protect_all))
         .route("/api/backup-orchestrator/policies/{id}", put(backup_orchestrator::update_policy).delete(backup_orchestrator::delete_policy))
         .route("/api/backup-orchestrator/db-backup", post(backup_orchestrator::create_db_backup))
         .route("/api/backup-orchestrator/db-backups", get(backup_orchestrator::list_db_backups))
@@ -536,6 +548,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/backup-orchestrator/db-backups/{id}/restore", post(backup_orchestrator::restore_db_backup))
         .route("/api/backup-orchestrator/volume-backup", post(backup_orchestrator::create_volume_backup))
         .route("/api/backup-orchestrator/volume-backups", get(backup_orchestrator::list_volume_backups))
+        .route("/api/backup-orchestrator/volume-backups/{id}/restore", post(backup_orchestrator::restore_volume_backup))
         .route("/api/backup-orchestrator/verify", post(backup_orchestrator::trigger_verify))
         .route("/api/backup-orchestrator/verifications", get(backup_orchestrator::list_verifications))
         // Webhook Gateway
@@ -568,6 +581,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/dashboard/intelligence", get(dashboard::intelligence))
         .route("/api/dashboard/metrics-history", get(dashboard::metrics_history))
         .route("/api/dashboard/docker", get(dashboard::docker_summary))
+        .route("/api/dashboard/timeline", get(dashboard::timeline))
         // Live metrics WebSocket
         .route("/api/ws/metrics", get(ws_metrics::handler))
         // SSH Keys

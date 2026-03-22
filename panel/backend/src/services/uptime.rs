@@ -152,6 +152,32 @@ async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &Pg
         tracing::error!("Failed to update monitor status for {}: {e}", monitor.name);
     }
 
+    // GAP 29: Response time degradation alerting
+    // If the site is technically up but very slow (>5s), fire a warning alert
+    if new_status == "up" && response_time > 5000 {
+        let _ = sqlx::query(
+            "INSERT INTO alerts (user_id, server_id, alert_type, subject, message, severity, status) \
+             SELECT $1, s.id, 'slow_response', $3, $4, 'warning', 'firing' \
+             FROM servers s ORDER BY s.created_at ASC LIMIT 1 \
+             ON CONFLICT DO NOTHING"
+        )
+        .bind(monitor.user_id)
+        .bind(monitor.id) // unused but keeps param numbering clean
+        .bind(format!("Slow response: {} ({}ms)", monitor.name, response_time))
+        .bind(format!("Response time {}ms exceeds 5000ms threshold for {}", response_time, monitor.url))
+        .execute(pool)
+        .await;
+
+        tracing::warn!("Monitor {} ({}) slow response: {}ms", monitor.name, monitor.url, response_time);
+        crate::services::system_log::log_event(
+            pool,
+            "warning",
+            "uptime",
+            &format!("Slow response: {} ({}ms)", monitor.name, response_time),
+            Some(&format!("URL: {}, threshold: 5000ms", monitor.url)),
+        ).await;
+    }
+
     // Handle status transitions
     if new_status == "down" && monitor.status != "down" {
         // Just went down — create incident and send alerts
@@ -376,15 +402,18 @@ async fn send_alerts(pool: &PgPool, monitor: &MonitorRow, message: &str) {
     };
 
     // Get PagerDuty key from alert_rules
-    let pagerduty_key: Option<String> = sqlx::query_scalar(
-        "SELECT notify_pagerduty_key FROM alert_rules WHERE user_id = $1 AND server_id IS NULL"
-    ).bind(monitor.user_id).fetch_optional(pool).await.ok().flatten().flatten();
+    let extra_channels: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT notify_pagerduty_key, notify_webhook_url FROM alert_rules WHERE user_id = $1 AND server_id IS NULL"
+    ).bind(monitor.user_id).fetch_optional(pool).await.ok().flatten();
+
+    let (pagerduty_key, webhook_url) = extra_channels.unwrap_or((None, None));
 
     let channels = crate::services::notifications::NotifyChannels {
         email,
         slack_url: monitor.alert_slack_url.clone(),
         discord_url: monitor.alert_discord_url.clone(),
         pagerduty_key,
+        webhook_url,
     };
 
     let subject = format!("DockPanel Alert: {}", monitor.name);
@@ -507,6 +536,7 @@ async fn notify_status_subscribers(pool: &PgPool, monitor_name: &str, status: &s
                 slack_url: None,
                 discord_url: None,
                 pagerduty_key: None,
+                webhook_url: None,
             },
             &subject,
             message,

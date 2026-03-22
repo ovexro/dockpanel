@@ -32,6 +32,7 @@ pub struct NotifyChannels {
     pub slack_url: Option<String>,
     pub discord_url: Option<String>,
     pub pagerduty_key: Option<String>,
+    pub webhook_url: Option<String>,
 }
 
 /// Send a notification via all configured channels.
@@ -109,6 +110,33 @@ pub async fn send_notification(
                 .await;
         }
     }
+
+    // Generic webhook (GAP 31)
+    if let Some(ref url) = channels.webhook_url {
+        if !url.is_empty() {
+            let severity = if subject.contains("FAIL") || subject.contains("down") || subject.contains("critical") {
+                "critical"
+            } else if subject.contains("warning") {
+                "warning"
+            } else if subject.contains("Resolved") || subject.contains("back up") {
+                "info"
+            } else {
+                "error"
+            };
+            let _ = client
+                .post(url)
+                .json(&serde_json::json!({
+                    "title": subject,
+                    "message": message,
+                    "severity": severity,
+                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                    "source": "dockpanel"
+                }))
+                .timeout(Duration::from_secs(10))
+                .send()
+                .await;
+        }
+    }
 }
 
 /// Get notification channels for a user from their alert_rules.
@@ -119,9 +147,9 @@ pub async fn get_user_channels(
     server_id: Option<Uuid>,
 ) -> Option<NotifyChannels> {
     // Try server-specific rules first, then global
-    let rule: Option<(bool, Option<String>, Option<String>, Option<String>)> = if let Some(sid) = server_id {
-        let specific: Option<(bool, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
-            "SELECT notify_email, notify_slack_url, notify_discord_url, notify_pagerduty_key \
+    let rule: Option<(bool, Option<String>, Option<String>, Option<String>, Option<String>)> = if let Some(sid) = server_id {
+        let specific: Option<(bool, Option<String>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT notify_email, notify_slack_url, notify_discord_url, notify_pagerduty_key, notify_webhook_url \
              FROM alert_rules WHERE user_id = $1 AND server_id = $2",
         )
         .bind(user_id)
@@ -135,7 +163,7 @@ pub async fn get_user_channels(
             specific
         } else {
             sqlx::query_as(
-                "SELECT notify_email, notify_slack_url, notify_discord_url, notify_pagerduty_key \
+                "SELECT notify_email, notify_slack_url, notify_discord_url, notify_pagerduty_key, notify_webhook_url \
                  FROM alert_rules WHERE user_id = $1 AND server_id IS NULL",
             )
             .bind(user_id)
@@ -146,7 +174,7 @@ pub async fn get_user_channels(
         }
     } else {
         sqlx::query_as(
-            "SELECT notify_email, notify_slack_url, notify_discord_url, notify_pagerduty_key \
+            "SELECT notify_email, notify_slack_url, notify_discord_url, notify_pagerduty_key, notify_webhook_url \
              FROM alert_rules WHERE user_id = $1 AND server_id IS NULL",
         )
         .bind(user_id)
@@ -156,7 +184,7 @@ pub async fn get_user_channels(
         .flatten()
     };
 
-    let (notify_email, slack_url, discord_url, pagerduty_key) = rule?;
+    let (notify_email, slack_url, discord_url, pagerduty_key, webhook_url) = rule?;
 
     // Look up user email if email notifications are enabled
     let email = if notify_email {
@@ -175,6 +203,7 @@ pub async fn get_user_channels(
         slack_url,
         discord_url,
         pagerduty_key,
+        webhook_url,
     })
 }
 

@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     Json,
 };
 use uuid::Uuid;
@@ -61,6 +61,7 @@ pub async fn list(
 pub async fn create(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    headers: HeaderMap,
     Json(body): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
 
@@ -108,10 +109,32 @@ pub async fn create(
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     tracing::info!("User created by {}: {} ({})", claims.email, user.email, role);
+    let ip = crate::routes::client_ip(&headers);
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "user.create",
-        Some("user"), Some(&user.email), Some(role), None,
+        Some("user"), Some(&user.email), Some(role), ip.as_deref(),
     ).await;
+
+    // GAP 42: Send welcome email (best-effort, skip silently if SMTP not configured)
+    {
+        let panel_url = &state.config.base_url;
+        let welcome_html = format!(
+            r#"<div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+                <h2 style="color: #4f46e5;">Welcome to DockPanel</h2>
+                <p>Your DockPanel account has been created by an administrator.</p>
+                <p><strong>Email:</strong> {}</p>
+                <p><strong>Panel URL:</strong> <a href="{}">{}</a></p>
+                <p>Please log in and change your password at your earliest convenience.</p>
+                <p style="color: #9ca3af; font-size: 12px;">If you did not expect this account, please contact your administrator.</p>
+            </div>"#,
+            user.email, panel_url, panel_url
+        );
+        if let Err(e) = crate::services::email::send_email(
+            &state.db, &user.email, "Welcome to DockPanel", &welcome_html
+        ).await {
+            tracing::debug!("Welcome email not sent to {}: {e}", user.email);
+        }
+    }
 
     Ok((
         StatusCode::CREATED,
@@ -184,6 +207,7 @@ pub async fn update(
 pub async fn remove(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
+    headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
 
@@ -205,9 +229,10 @@ pub async fn remove(
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     tracing::info!("User deleted by {}: {}", claims.email, user.email);
+    let ip = crate::routes::client_ip(&headers);
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "user.delete",
-        Some("user"), Some(&user.email), None, None,
+        Some("user"), Some(&user.email), None, ip.as_deref(),
     ).await;
 
     Ok(Json(serde_json::json!({ "ok": true, "email": user.email })))
