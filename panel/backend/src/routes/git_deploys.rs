@@ -1496,6 +1496,39 @@ fn spawn_deploy_task(
                     }
                 }
 
+                // Post-deploy health check: verify site is responding
+                if let Some(ref domain) = config.domain {
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    let check_url = format!("https://{}", domain); // Git deploys with domain typically have SSL
+                    if let Ok(client) = reqwest::Client::builder()
+                        .danger_accept_invalid_certs(true)
+                        .timeout(std::time::Duration::from_secs(10))
+                        .build()
+                    {
+                        match client.get(&check_url).send().await {
+                            Ok(resp) => {
+                                let status_code = resp.status().as_u16();
+                                if status_code >= 500 {
+                                    tracing::warn!("Post-deploy health check FAILED for {domain}: HTTP {status_code}");
+                                    notifications::notify_panel(&db, Some(user_id),
+                                        &format!("Deploy warning: {} returning HTTP {}", domain, status_code),
+                                        &format!("Deploy succeeded but the site is returning HTTP {}. Check your application logs.", status_code),
+                                        "warning", "deploy", Some("/git-deploys")).await;
+                                } else {
+                                    tracing::info!("Post-deploy health check OK for {domain}: HTTP {status_code}");
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("Post-deploy health check FAILED for {domain}: {e}");
+                                notifications::notify_panel(&db, Some(user_id),
+                                    &format!("Deploy warning: {} unreachable", domain),
+                                    &format!("Deploy succeeded but the site is not responding: {}", e),
+                                    "warning", "deploy", Some("/git-deploys")).await;
+                            }
+                        }
+                    }
+                }
+
                 // Auto-rollback monitor: watch container for 2 minutes after deploy
                 {
                     let monitor_db = db.clone();
@@ -1968,6 +2001,39 @@ pub async fn trigger_deploy_task(
 
             tracing::info!("Deploy success ({}): {} ({commit_hash})", triggered_by, config.name);
             crate::services::activity::log_activity(&db, user_id, &email, "git_deploy.deploy", Some("git_deploy"), Some(&config.name), Some(&commit_hash), Some(&triggered_by)).await;
+
+            // Post-deploy health check: verify site is responding
+            if let Some(ref domain) = config.domain {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                let check_url = format!("https://{}", domain);
+                if let Ok(client) = reqwest::Client::builder()
+                    .danger_accept_invalid_certs(true)
+                    .timeout(std::time::Duration::from_secs(10))
+                    .build()
+                {
+                    match client.get(&check_url).send().await {
+                        Ok(resp) => {
+                            let status_code = resp.status().as_u16();
+                            if status_code >= 500 {
+                                tracing::warn!("Post-deploy health check FAILED for {domain}: HTTP {status_code}");
+                                notifications::notify_panel(&db, Some(user_id),
+                                    &format!("Deploy warning: {} returning HTTP {}", domain, status_code),
+                                    &format!("Deploy succeeded but the site is returning HTTP {}. Check your application logs.", status_code),
+                                    "warning", "deploy", Some("/git-deploys")).await;
+                            } else {
+                                tracing::info!("Post-deploy health check OK for {domain}: HTTP {status_code}");
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("Post-deploy health check FAILED for {domain}: {e}");
+                            notifications::notify_panel(&db, Some(user_id),
+                                &format!("Deploy warning: {} unreachable", domain),
+                                &format!("Deploy succeeded but the site is not responding: {}", e),
+                                "warning", "deploy", Some("/git-deploys")).await;
+                        }
+                    }
+                }
+            }
         }
         Err(e) => {
             let _duration_ms = started.elapsed().as_millis() as i32;

@@ -494,6 +494,48 @@ async fn execute_deploy(
         tracing::info!("Post-deploy cache invalidation requested for {domain}");
     }
 
+    // Post-deploy health check: verify site is responding after successful deploy
+    if success {
+        let ssl_enabled: Option<(bool,)> = sqlx::query_as(
+            "SELECT ssl_enabled FROM sites WHERE id = $1"
+        ).bind(site_id).fetch_optional(db).await.ok().flatten();
+        let use_ssl = ssl_enabled.map(|(s,)| s).unwrap_or(false);
+
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        let check_url = if use_ssl { format!("https://{}", domain) } else { format!("http://{}", domain) };
+        if let Ok(client) = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+        {
+            match client.get(&check_url).send().await {
+                Ok(resp) => {
+                    let status_code = resp.status().as_u16();
+                    if status_code >= 500 {
+                        tracing::warn!("Post-deploy health check FAILED for {domain}: HTTP {status_code}");
+                        let user_id_opt: Option<uuid::Uuid> = sqlx::query_scalar("SELECT user_id FROM sites WHERE id = $1")
+                            .bind(site_id).fetch_optional(db).await.ok().flatten();
+                        notifications::notify_panel(db, user_id_opt,
+                            &format!("Deploy warning: {} returning HTTP {}", domain, status_code),
+                            &format!("Deploy succeeded but the site is returning HTTP {}. Check your application logs.", status_code),
+                            "warning", "deploy", None).await;
+                    } else {
+                        tracing::info!("Post-deploy health check OK for {domain}: HTTP {status_code}");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Post-deploy health check FAILED for {domain}: {e}");
+                    let user_id_opt: Option<uuid::Uuid> = sqlx::query_scalar("SELECT user_id FROM sites WHERE id = $1")
+                        .bind(site_id).fetch_optional(db).await.ok().flatten();
+                    notifications::notify_panel(db, user_id_opt,
+                        &format!("Deploy warning: {} unreachable", domain),
+                        &format!("Deploy succeeded but the site is not responding: {}", e),
+                        "warning", "deploy", None).await;
+                }
+            }
+        }
+    }
+
     // GAP 5: Auto-inject secrets from linked vault after successful deploy
     if success {
         let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_default();
