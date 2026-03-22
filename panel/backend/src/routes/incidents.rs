@@ -894,6 +894,7 @@ async fn notify_subscribers(db: &sqlx::PgPool, title: &str, status: &str, messag
                 discord_url: None,
                 pagerduty_key: None,
                 webhook_url: None,
+                muted_types: String::new(),
             },
             &subject,
             &body,

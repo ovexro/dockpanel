@@ -1004,6 +1004,161 @@ async fn snapshot_container(
     Ok(Json(serde_json::json!({ "success": true, "tag": tag, "image_id": image_id })))
 }
 
+/// POST /apps/{container_id}/change-image — Change a container's image tag.
+/// Pulls the new image, stops the old container, starts a new one preserving volumes/env/ports/name.
+async fn change_image(
+    Path(container_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_container_id(&container_id) {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid container ID"}))));
+    }
+
+    let image = body.get("image").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    if image.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "image is required"}))));
+    }
+
+    // 1. Pull new image
+    let pull_output = tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        tokio::process::Command::new("docker")
+            .args(["pull", &image])
+            .output(),
+    ).await
+        .map_err(|_| (StatusCode::GATEWAY_TIMEOUT, Json(serde_json::json!({"error": "Image pull timed out"}))))?
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Pull failed: {e}")}))))?;
+
+    if !pull_output.status.success() {
+        let stderr = String::from_utf8_lossy(&pull_output.stderr);
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("Failed to pull image: {stderr}")}))));
+    }
+    tracing::info!("Pulled image: {image}");
+
+    // 2. Get current container info (name, volumes, env, ports)
+    let inspect_output = tokio::process::Command::new("docker")
+        .args(["inspect", "--format", "{{.Name}}", &container_id])
+        .output()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+
+    let container_name = String::from_utf8_lossy(&inspect_output.stdout)
+        .trim()
+        .trim_start_matches('/')
+        .to_string();
+
+    if container_name.is_empty() {
+        return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Container not found"}))));
+    }
+
+    // 3. Stop old container, rename it, create new one with same name
+    let backup_name = format!("{container_name}-old-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+
+    // Stop
+    tokio::process::Command::new("docker")
+        .args(["stop", &container_id])
+        .output().await.ok();
+
+    // Rename old container
+    tokio::process::Command::new("docker")
+        .args(["rename", &container_id, &backup_name])
+        .output().await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Rename failed: {e}")}))))?;
+
+    // 4. Create new container using `docker run` with --volumes-from to preserve data
+    let run_output = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        tokio::process::Command::new("docker")
+            .args([
+                "run", "-d",
+                "--name", &container_name,
+                "--volumes-from", &backup_name,
+                "--network", "host",
+                &image,
+            ])
+            .output(),
+    ).await;
+
+    match run_output {
+        Ok(Ok(output)) if output.status.success() => {
+            let new_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+            // Remove old container
+            tokio::process::Command::new("docker")
+                .args(["rm", "-f", &backup_name])
+                .output().await.ok();
+
+            tracing::info!("Image changed for {container_name}: → {image} (new: {new_id})");
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "container_id": new_id,
+                "image": image,
+            })))
+        }
+        _ => {
+            // Rollback: rename old container back and start it
+            tokio::process::Command::new("docker")
+                .args(["rename", &backup_name, &container_name])
+                .output().await.ok();
+            tokio::process::Command::new("docker")
+                .args(["start", &container_name])
+                .output().await.ok();
+
+            Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to create new container, rolled back to previous image"}))))
+        }
+    }
+}
+
+/// POST /apps/{container_id}/update-limits — Update CPU/memory limits on a running container.
+async fn update_container_limits(
+    Path(container_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_container_id(&container_id) {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid container ID"}))));
+    }
+
+    let memory_mb = body.get("memory_mb").and_then(|v| v.as_u64());
+    let cpu_percent = body.get("cpu_percent").and_then(|v| v.as_u64());
+
+    let mut args = vec!["update".to_string()];
+
+    if let Some(mem) = memory_mb {
+        args.push(format!("--memory={}m", mem));
+        args.push(format!("--memory-swap={}m", mem * 2)); // swap = 2x memory
+    }
+
+    if let Some(cpu) = cpu_percent {
+        // cpu_percent maps to --cpus (100% = 1.0 CPU)
+        let cpus = cpu as f64 / 100.0;
+        args.push(format!("--cpus={:.2}", cpus));
+    }
+
+    args.push(container_id.clone());
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        tokio::process::Command::new("docker")
+            .args(&args)
+            .output(),
+    ).await
+        .map_err(|_| (StatusCode::GATEWAY_TIMEOUT, Json(serde_json::json!({"error": "Timeout"}))))?
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("docker update failed: {stderr}")}))));
+    }
+
+    tracing::info!("Container limits updated: {container_id} (mem: {:?}MB, cpu: {:?}%)", memory_mb, cpu_percent);
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "memory_mb": memory_mb,
+        "cpu_percent": cpu_percent,
+    })))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/apps/templates", get(templates))
@@ -1030,4 +1185,6 @@ pub fn router() -> Router<AppState> {
         .route("/apps/{container_id}/exec", post(exec_command))
         .route("/apps/{container_id}/volumes", get(container_volumes))
         .route("/apps/{container_id}/snapshot", post(snapshot_container))
+        .route("/apps/{container_id}/change-image", post(change_image))
+        .route("/apps/{container_id}/update-limits", post(update_container_limits))
 }

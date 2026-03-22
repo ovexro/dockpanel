@@ -801,6 +801,40 @@ pub async fn trigger_verify(
     Ok((StatusCode::ACCEPTED, Json(verification)))
 }
 
+/// GET /api/backup-orchestrator/storage-history — Backup storage growth over time (last 30 days).
+pub async fn storage_history(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    // Query system_logs for 'backup_storage' entries, aggregate daily totals over last 30 days
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT DATE(created_at)::TEXT as day, message \
+         FROM system_logs \
+         WHERE source = 'backup_storage' AND created_at > NOW() - INTERVAL '30 days' \
+         ORDER BY created_at ASC"
+    )
+    .fetch_all(&state.db).await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    // Group by day, keep the last reading per day
+    let mut daily: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+    for (day, message) in &rows {
+        if let Ok(bytes) = message.parse::<i64>() {
+            daily.insert(day.clone(), bytes);
+        }
+    }
+
+    let result: Vec<serde_json::Value> = daily.into_iter()
+        .map(|(day, bytes)| serde_json::json!({
+            "date": day,
+            "total_bytes": bytes,
+            "total_mb": (bytes as f64 / 1_048_576.0).round() as i64,
+        }))
+        .collect();
+
+    Ok(Json(result))
+}
+
 /// GET /api/backup-orchestrator/verifications — List verifications.
 pub async fn list_verifications(
     State(state): State<AppState>,

@@ -33,6 +33,45 @@ pub struct NotifyChannels {
     pub discord_url: Option<String>,
     pub pagerduty_key: Option<String>,
     pub webhook_url: Option<String>,
+    /// Comma-separated alert types to suppress from external channels (Gap #69)
+    pub muted_types: String,
+}
+
+/// Gap #70: Load a custom notification template from settings, or use default formatting.
+async fn format_message(pool: &PgPool, channel: &str, subject: &str, message: &str, severity: &str) -> String {
+    let key = format!("notif_template_{channel}");
+    let template: Option<(String,)> = sqlx::query_as(
+        "SELECT value FROM settings WHERE key = $1"
+    ).bind(&key).fetch_optional(pool).await.ok().flatten();
+
+    if let Some((tmpl,)) = template {
+        if !tmpl.is_empty() {
+            return tmpl.replace("{{title}}", subject)
+                .replace("{{message}}", message)
+                .replace("{{severity}}", severity)
+                .replace("{{timestamp}}", &chrono::Utc::now().to_rfc3339());
+        }
+    }
+
+    // Default format per channel
+    match channel {
+        "slack" => format!("*{subject}*\n{message}"),
+        "discord" => format!("**{subject}**\n{message}"),
+        _ => format!("{subject}\n\n{message}"),
+    }
+}
+
+/// Derive severity string from subject line (for webhook/pagerduty payloads).
+fn derive_severity(subject: &str) -> &'static str {
+    if subject.contains("FAIL") || subject.contains("down") || subject.contains("critical") {
+        "critical"
+    } else if subject.contains("warning") {
+        "warning"
+    } else if subject.contains("Resolved") || subject.contains("back up") {
+        "info"
+    } else {
+        "error"
+    }
 }
 
 /// Send a notification via all configured channels.
@@ -44,32 +83,52 @@ pub async fn send_notification(
     body_html: &str,
 ) {
     let client = http_client();
+    let severity = derive_severity(subject);
 
-    // Email
+    // Email — supports custom template via notif_template_email
     if let Some(ref email) = channels.email {
-        if let Err(e) = crate::services::email::send_email(pool, email, subject, body_html).await {
+        let email_template: Option<(String,)> = sqlx::query_as(
+            "SELECT value FROM settings WHERE key = 'notif_template_email'"
+        ).fetch_optional(pool).await.ok().flatten();
+
+        let html = if let Some((tmpl,)) = email_template {
+            if !tmpl.is_empty() {
+                tmpl.replace("{{title}}", subject)
+                    .replace("{{message}}", message)
+                    .replace("{{severity}}", severity)
+                    .replace("{{timestamp}}", &chrono::Utc::now().to_rfc3339())
+            } else {
+                body_html.to_string()
+            }
+        } else {
+            body_html.to_string()
+        };
+
+        if let Err(e) = crate::services::email::send_email(pool, email, subject, &html).await {
             tracing::warn!("Alert email failed: {e}");
         }
     }
 
-    // Slack webhook
+    // Slack webhook — supports custom template via notif_template_slack
     if let Some(ref url) = channels.slack_url {
         if !url.is_empty() {
+            let text = format_message(pool, "slack", subject, message, severity).await;
             let _ = client
                 .post(url)
-                .json(&serde_json::json!({ "text": format!("*{subject}*\n{message}") }))
+                .json(&serde_json::json!({ "text": text }))
                 .timeout(Duration::from_secs(10))
                 .send()
                 .await;
         }
     }
 
-    // Discord webhook
+    // Discord webhook — supports custom template via notif_template_discord
     if let Some(ref url) = channels.discord_url {
         if !url.is_empty() {
+            let content = format_message(pool, "discord", subject, message, severity).await;
             let _ = client
                 .post(url)
-                .json(&serde_json::json!({ "content": format!("**{subject}**\n{message}") }))
+                .json(&serde_json::json!({ "content": content }))
                 .timeout(Duration::from_secs(10))
                 .send()
                 .await;
@@ -79,15 +138,6 @@ pub async fn send_notification(
     // PagerDuty Events API v2
     if let Some(ref key) = channels.pagerduty_key {
         if !key.is_empty() {
-            let severity = if subject.contains("FAIL") || subject.contains("down") || subject.contains("critical") {
-                "critical"
-            } else if subject.contains("warning") {
-                "warning"
-            } else if subject.contains("Resolved") || subject.contains("back up") {
-                "info"
-            } else {
-                "error"
-            };
             let event_action = if subject.contains("Resolved") || subject.contains("back up") {
                 "resolve"
             } else {
@@ -111,23 +161,15 @@ pub async fn send_notification(
         }
     }
 
-    // Generic webhook (GAP 31)
+    // Generic webhook (GAP 31) — supports custom template via notif_template_webhook
     if let Some(ref url) = channels.webhook_url {
         if !url.is_empty() {
-            let severity = if subject.contains("FAIL") || subject.contains("down") || subject.contains("critical") {
-                "critical"
-            } else if subject.contains("warning") {
-                "warning"
-            } else if subject.contains("Resolved") || subject.contains("back up") {
-                "info"
-            } else {
-                "error"
-            };
+            let custom_message = format_message(pool, "webhook", subject, message, severity).await;
             let _ = client
                 .post(url)
                 .json(&serde_json::json!({
                     "title": subject,
-                    "message": message,
+                    "message": custom_message,
                     "severity": severity,
                     "timestamp": chrono::Utc::now().to_rfc3339(),
                     "source": "dockpanel"
@@ -147,9 +189,9 @@ pub async fn get_user_channels(
     server_id: Option<Uuid>,
 ) -> Option<NotifyChannels> {
     // Try server-specific rules first, then global
-    let rule: Option<(bool, Option<String>, Option<String>, Option<String>, Option<String>)> = if let Some(sid) = server_id {
-        let specific: Option<(bool, Option<String>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
-            "SELECT notify_email, notify_slack_url, notify_discord_url, notify_pagerduty_key, notify_webhook_url \
+    let rule: Option<(bool, Option<String>, Option<String>, Option<String>, Option<String>, String)> = if let Some(sid) = server_id {
+        let specific: Option<(bool, Option<String>, Option<String>, Option<String>, Option<String>, String)> = sqlx::query_as(
+            "SELECT notify_email, notify_slack_url, notify_discord_url, notify_pagerduty_key, notify_webhook_url, muted_types \
              FROM alert_rules WHERE user_id = $1 AND server_id = $2",
         )
         .bind(user_id)
@@ -163,7 +205,7 @@ pub async fn get_user_channels(
             specific
         } else {
             sqlx::query_as(
-                "SELECT notify_email, notify_slack_url, notify_discord_url, notify_pagerduty_key, notify_webhook_url \
+                "SELECT notify_email, notify_slack_url, notify_discord_url, notify_pagerduty_key, notify_webhook_url, muted_types \
                  FROM alert_rules WHERE user_id = $1 AND server_id IS NULL",
             )
             .bind(user_id)
@@ -174,7 +216,7 @@ pub async fn get_user_channels(
         }
     } else {
         sqlx::query_as(
-            "SELECT notify_email, notify_slack_url, notify_discord_url, notify_pagerduty_key, notify_webhook_url \
+            "SELECT notify_email, notify_slack_url, notify_discord_url, notify_pagerduty_key, notify_webhook_url, muted_types \
              FROM alert_rules WHERE user_id = $1 AND server_id IS NULL",
         )
         .bind(user_id)
@@ -184,7 +226,7 @@ pub async fn get_user_channels(
         .flatten()
     };
 
-    let (notify_email, slack_url, discord_url, pagerduty_key, webhook_url) = rule?;
+    let (notify_email, slack_url, discord_url, pagerduty_key, webhook_url, muted_types) = rule?;
 
     // Look up user email if email notifications are enabled
     let email = if notify_email {
@@ -204,6 +246,7 @@ pub async fn get_user_channels(
         discord_url,
         pagerduty_key,
         webhook_url,
+        muted_types,
     })
 }
 
@@ -364,21 +407,33 @@ pub async fn try_fire_alert(
 
     // Send notification
     if let Some(channels) = get_user_channels(pool, user_id, server_id).await {
-        let subject = format!("DockPanel Alert: {title}");
-        let html = format!(
-            "<div style=\"font-family:sans-serif;max-width:600px;margin:0 auto\">\
-             <h2 style=\"color:{}\">{title}</h2>\
-             <p>{message}</p>\
-             <p style=\"color:#6b7280;font-size:14px\">Time: {}</p>\
-             </div>",
-            match severity {
-                "critical" => "#ef4444",
-                "warning" => "#f59e0b",
-                _ => "#3b82f6",
-            },
-            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
-        );
-        send_notification(pool, &channels, &subject, message, &html).await;
+        // Gap #69: Check if this alert type is muted from external channels
+        let is_muted = if !channels.muted_types.is_empty() {
+            let muted: Vec<&str> = channels.muted_types.split(',').map(|s| s.trim()).collect();
+            muted.contains(&alert_type)
+        } else {
+            false
+        };
+
+        if !is_muted {
+            let subject = format!("DockPanel Alert: {title}");
+            let html = format!(
+                "<div style=\"font-family:sans-serif;max-width:600px;margin:0 auto\">\
+                 <h2 style=\"color:{}\">{title}</h2>\
+                 <p>{message}</p>\
+                 <p style=\"color:#6b7280;font-size:14px\">Time: {}</p>\
+                 </div>",
+                match severity {
+                    "critical" => "#ef4444",
+                    "warning" => "#f59e0b",
+                    _ => "#3b82f6",
+                },
+                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+            );
+            send_notification(pool, &channels, &subject, message, &html).await;
+        } else {
+            tracing::debug!("Alert type '{alert_type}' is muted — skipping external channels");
+        }
     }
 
     Ok(())

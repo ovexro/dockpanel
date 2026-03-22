@@ -57,6 +57,7 @@ pub struct GitDeploy {
     pub deploy_protected: bool,
     pub build_method: String,
     pub preview_ttl_hours: i32,
+    pub scheduled_deploy_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(serde::Serialize, sqlx::FromRow)]
@@ -476,6 +477,29 @@ pub async fn deploy(
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
+
+    // Protected deploy: require approval from another admin
+    if config.deploy_protected {
+        // Create pending approval instead of deploying immediately
+        sqlx::query(
+            "INSERT INTO deploy_approvals (deploy_id, requested_by) VALUES ($1, $2)"
+        )
+        .bind(id).bind(claims.sub)
+        .execute(&state.db).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+        notifications::notify_panel(
+            &state.db, None,
+            "Deploy approval needed",
+            &format!("Deploy to {} requires approval", config.name),
+            "warning", "deploy", Some("/git-deploys"),
+        ).await;
+
+        return Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
+            "status": "pending_approval",
+            "message": "Deploy requires approval from another admin",
+        }))));
+    }
 
     // Deploy lock: prevent concurrent deploys for the same project
     let active: (i64,) = sqlx::query_as(
@@ -2010,6 +2034,7 @@ async fn handle_preview_deploy(state: &AppState, agent: &AgentHandle, config: &G
     let env_vars = config.env_vars.clone();
     let deploy_id = config.id;
     let key_path = config.deploy_key_path.clone();
+    let ssl_email = config.ssl_email.clone();
     let branch = branch.to_string();
 
     tokio::spawn(async move {
@@ -2065,6 +2090,10 @@ async fn handle_preview_deploy(state: &AppState, agent: &AgentHandle, config: &G
         if let Some(ref pd) = preview_domain {
             deploy_body["domain"] = serde_json::json!(pd);
         }
+        // Pass SSL email so preview environments get HTTPS
+        if let Some(ref ssl_email) = ssl_email {
+            deploy_body["ssl_email"] = serde_json::json!(ssl_email);
+        }
 
         match agent.post_long("/git/deploy", Some(deploy_body), 120).await {
             Ok(result) => {
@@ -2116,4 +2145,235 @@ pub async fn delete_preview(
 
     sqlx::query("DELETE FROM git_previews WHERE id = $1").bind(preview_id).execute(&state.db).await.ok();
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// POST /api/git-deploys/{id}/schedule — Schedule a one-time deploy.
+pub async fn schedule_deploy(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+
+    // Verify ownership
+    let existing: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM git_deploys WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    if existing.is_none() {
+        return Err(err(StatusCode::NOT_FOUND, "Git deploy not found"));
+    }
+
+    let deploy_at = body.get("deploy_at")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "deploy_at is required (ISO 8601 timestamp)"))?;
+
+    let scheduled_at = chrono::DateTime::parse_from_rfc3339(deploy_at)
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid deploy_at format — use ISO 8601 (e.g., 2026-03-23T02:00:00Z)"))?;
+
+    if scheduled_at <= chrono::Utc::now() {
+        return Err(err(StatusCode::BAD_REQUEST, "deploy_at must be in the future"));
+    }
+
+    sqlx::query(
+        "UPDATE git_deploys SET scheduled_deploy_at = $1, updated_at = NOW() WHERE id = $2"
+    )
+    .bind(scheduled_at)
+    .bind(id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    tracing::info!("Scheduled one-time deploy for git deploy {id} at {scheduled_at}");
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "git_deploy.schedule",
+        Some("git_deploy"), Some(&id.to_string()), Some(deploy_at), None,
+    ).await;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "scheduled_deploy_at": scheduled_at,
+    })))
+}
+
+/// DELETE /api/git-deploys/{id}/schedule — Cancel a scheduled deploy.
+pub async fn cancel_scheduled_deploy(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+
+    let existing: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM git_deploys WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    if existing.is_none() {
+        return Err(err(StatusCode::NOT_FOUND, "Git deploy not found"));
+    }
+
+    sqlx::query(
+        "UPDATE git_deploys SET scheduled_deploy_at = NULL, updated_at = NOW() WHERE id = $1"
+    )
+    .bind(id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ── Deploy Approvals ────────────────────────────────────────────────────────
+
+/// GET /api/deploy-approvals — List pending deploy approvals.
+pub async fn list_approvals(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    require_admin(&claims.role)?;
+
+    let rows: Vec<(Uuid, Uuid, Uuid, String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT da.id, da.deploy_id, da.requested_by, da.status, g.name, da.created_at \
+         FROM deploy_approvals da \
+         JOIN git_deploys g ON g.id = da.deploy_id \
+         WHERE da.status = 'pending' \
+         ORDER BY da.created_at DESC"
+    )
+    .fetch_all(&state.db).await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let result: Vec<serde_json::Value> = rows.into_iter().map(|(id, deploy_id, requested_by, status, name, created_at)| {
+        serde_json::json!({
+            "id": id,
+            "deploy_id": deploy_id,
+            "requested_by": requested_by,
+            "status": status,
+            "deploy_name": name,
+            "created_at": created_at,
+        })
+    }).collect();
+
+    Ok(Json(result))
+}
+
+/// POST /api/deploy-approvals/{id}/approve — Approve a pending deploy.
+pub async fn approve_deploy(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(approval_id): Path<Uuid>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_admin(&claims.role)?;
+
+    // Fetch the pending approval
+    let row: Option<(Uuid, Uuid, String)> = sqlx::query_as(
+        "SELECT da.deploy_id, da.requested_by, da.status \
+         FROM deploy_approvals da WHERE da.id = $1"
+    )
+    .bind(approval_id)
+    .fetch_optional(&state.db).await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let (deploy_id, requested_by, status) = row
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Approval not found"))?;
+
+    if status != "pending" {
+        return Err(err(StatusCode::CONFLICT, &format!("Approval already {status}")));
+    }
+
+    // Cannot approve your own deploy
+    if requested_by == claims.sub {
+        return Err(err(StatusCode::FORBIDDEN, "Cannot approve your own deploy request"));
+    }
+
+    // Mark as approved
+    sqlx::query(
+        "UPDATE deploy_approvals SET status = 'approved', approved_by = $1, resolved_at = NOW() WHERE id = $2"
+    )
+    .bind(claims.sub).bind(approval_id)
+    .execute(&state.db).await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    // Load config and trigger the actual deploy
+    let config: GitDeploy = sqlx::query_as(
+        "SELECT * FROM git_deploys WHERE id = $1"
+    )
+    .bind(deploy_id)
+    .fetch_optional(&state.db).await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
+
+    // Update status to building
+    sqlx::query("UPDATE git_deploys SET status = 'building', updated_at = NOW() WHERE id = $1")
+        .bind(deploy_id)
+        .execute(&state.db).await.ok();
+
+    let new_deploy_id = Uuid::new_v4();
+    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
+    {
+        let mut logs = state.provision_logs.lock().unwrap();
+        logs.insert(new_deploy_id, (Vec::new(), tx, Instant::now()));
+    }
+
+    spawn_deploy_task(
+        state,
+        agent,
+        new_deploy_id,
+        config,
+        requested_by,
+        claims.email,
+        "approved",
+    );
+
+    Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
+        "status": "approved",
+        "deploy_id": new_deploy_id,
+        "message": "Deploy approved and started",
+    }))))
+}
+
+/// POST /api/deploy-approvals/{id}/reject — Reject a pending deploy.
+pub async fn reject_deploy(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(approval_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT status FROM deploy_approvals WHERE id = $1"
+    )
+    .bind(approval_id)
+    .fetch_optional(&state.db).await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let (status,) = row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Approval not found"))?;
+
+    if status != "pending" {
+        return Err(err(StatusCode::CONFLICT, &format!("Approval already {status}")));
+    }
+
+    sqlx::query(
+        "UPDATE deploy_approvals SET status = 'rejected', approved_by = $1, resolved_at = NOW() WHERE id = $2"
+    )
+    .bind(claims.sub).bind(approval_id)
+    .execute(&state.db).await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "status": "rejected",
+        "message": "Deploy request rejected",
+    })))
 }

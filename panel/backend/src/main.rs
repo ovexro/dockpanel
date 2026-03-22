@@ -172,13 +172,28 @@ async fn main() {
     // Register in the global OnceLock so notify_panel() can broadcast without AppState
     services::notifications::init_notif_broadcast(notif_tx.clone());
 
+    // GAP 66: Load persisted token blacklist from DB (survives restart)
+    let token_blacklist = {
+        let blacklisted: Vec<(String,)> = sqlx::query_as(
+            "SELECT jti FROM token_blacklist WHERE expires_at > NOW()"
+        ).fetch_all(&db).await.unwrap_or_default();
+        let mut bl = HashSet::new();
+        for (jti,) in blacklisted {
+            bl.insert(jti);
+        }
+        if !bl.is_empty() {
+            tracing::info!("Loaded {} blacklisted tokens from DB", bl.len());
+        }
+        Arc::new(RwLock::new(bl))
+    };
+
     let state = AppState {
         db,
         config,
         agent,
         agents,
         login_attempts: Arc::new(Mutex::new(HashMap::new())),
-        token_blacklist: Arc::new(RwLock::new(HashSet::new())),
+        token_blacklist,
         twofa_attempts: Arc::new(Mutex::new(HashMap::new())),
         webhook_attempts: Arc::new(Mutex::new(HashMap::new())),
         agent_rate_limits: Arc::new(Mutex::new(HashMap::new())),

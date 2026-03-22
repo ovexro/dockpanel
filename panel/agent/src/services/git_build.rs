@@ -1120,19 +1120,28 @@ pub async fn nixpacks_build(
     let image_tag = format!("dockpanel-git-{name}:{commit_hash}");
     let context_dir = format!("/var/lib/dockpanel/git/{name}/{build_context}");
 
+    // Set up persistent cache directory for faster rebuilds
+    let cache_dir = format!("/var/cache/dockpanel/nixpacks/{name}");
+    std::fs::create_dir_all(&cache_dir).ok();
+
     // Build nixpacks command
     let mut cmd = tokio::process::Command::new(&nixpacks_bin);
     cmd.arg("build")
         .arg(&context_dir)
         .arg("--name")
-        .arg(&image_tag);
+        .arg(&image_tag)
+        .arg("--cache-key")
+        .arg(name);
+
+    // Set cache directory via environment variable
+    cmd.env("NIXPACKS_CACHE_DIR", &cache_dir);
 
     // Pass environment variables
     for (key, value) in env_vars {
         cmd.arg("--env").arg(format!("{key}={value}"));
     }
 
-    tracing::info!("Nixpacks build: {image_tag} from {context_dir}");
+    tracing::info!("Nixpacks build: {image_tag} from {context_dir} (cache: {cache_dir})");
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(600),
