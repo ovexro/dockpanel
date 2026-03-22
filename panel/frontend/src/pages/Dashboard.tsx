@@ -464,6 +464,13 @@ export default function Dashboard() {
           </span>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {intel && (
+            <span className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium ${overallStatus.color}`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${overallStatus.dot} ${overallStatus.dot === "bg-rust-500" ? "animate-pulse" : ""}`} />
+              {overallStatus.label}
+            </span>
+          )}
+          <div className="h-4 w-px bg-dark-600 hidden sm:block" />
           <button onClick={() => setShowWidgetConfig(!showWidgetConfig)}
             className="px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs transition-colors">
             {showWidgetConfig ? "Done" : "Customize"}
