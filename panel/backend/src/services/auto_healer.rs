@@ -475,4 +475,18 @@ async fn run_retention_cleanup(pool: &PgPool) {
     if ext_events_deleted > 0 {
         tracing::info!("Retention: deleted {ext_events_deleted} extension events (>90 days)");
     }
+
+    // GAP 18: Webhook gateway deliveries: 7 days
+    let wh_deleted = sqlx::query("DELETE FROM webhook_deliveries WHERE received_at < NOW() - INTERVAL '7 days'")
+        .execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
+    if wh_deleted > 0 {
+        tracing::info!("Retention: deleted {wh_deleted} webhook deliveries (>7 days)");
+    }
+
+    // Backup verifications: 90 days
+    let bv_deleted = sqlx::query("DELETE FROM backup_verifications WHERE created_at < NOW() - INTERVAL '90 days'")
+        .execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
+    if bv_deleted > 0 {
+        tracing::info!("Retention: deleted {bv_deleted} backup verifications (>90 days)");
+    }
 }

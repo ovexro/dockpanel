@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::auth::{AdminUser, AuthUser};
 use crate::error::{err, paginate, ApiError};
 use crate::services::activity;
+use crate::services::extensions::fire_event;
 use crate::AppState;
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -168,6 +169,10 @@ pub async fn create(
         &state.db, claims.sub, &claims.email, "incident.create",
         Some("incident"), Some(&req.title), None, None,
     ).await;
+
+    fire_event(&state.db, "incident.created", serde_json::json!({
+        "incident_id": incident.id, "title": &req.title, "severity": &incident.severity, "status": &incident.status,
+    }));
 
     Ok((StatusCode::CREATED, Json(incident)))
 }

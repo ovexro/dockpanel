@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::auth::{AdminUser, AuthUser, ServerScope};
 use crate::error::{err, agent_error, paginate, ApiError};
 use crate::services::activity;
+use crate::services::extensions::fire_event;
 use crate::AppState;
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -260,6 +261,10 @@ pub async fn create_policy(
         Some("backup_policy"), Some(&req.name), None, None,
     ).await;
 
+    fire_event(&state.db, "backup_policy.created", serde_json::json!({
+        "policy_id": policy.id, "name": &req.name,
+    }));
+
     Ok((StatusCode::CREATED, Json(policy)))
 }
 
@@ -404,6 +409,10 @@ pub async fn create_db_backup(
         &state.db, claims.sub, &claims.email, "db_backup.create",
         Some("database"), Some(&db_name), Some(&filename), None,
     ).await;
+
+    fire_event(&state.db, "db_backup.created", serde_json::json!({
+        "database": &db_name, "filename": &filename, "size_bytes": size_bytes, "encrypted": encrypted,
+    }));
 
     Ok((StatusCode::CREATED, Json(serde_json::json!({
         "id": backup.id,

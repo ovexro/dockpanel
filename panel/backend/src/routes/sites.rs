@@ -308,24 +308,78 @@ pub async fn create(
             // new users. Users can create monitors manually when ready.
             // See: https://github.com/ovexro/dockpanel/issues/XX
 
-            // Auto-create backup schedule for first site
+            // Auto-create backup schedule for every new site (daily 3 AM, 7 retention)
             {
                 let backup_db = state.db.clone();
                 let backup_site_id = site.id;
-                let backup_user_id = claims.sub;
                 tokio::spawn(async move {
-                    // Check if user has any other sites
-                    let site_count: Option<(i64,)> = sqlx::query_as(
-                        "SELECT COUNT(*) FROM sites WHERE user_id = $1"
-                    ).bind(backup_user_id).fetch_optional(&backup_db).await.ok().flatten();
+                    let _ = sqlx::query(
+                        "INSERT INTO backup_schedules (site_id, schedule, retention_count, enabled) \
+                         VALUES ($1, '0 3 * * *', 7, true) ON CONFLICT (site_id) DO NOTHING"
+                    ).bind(backup_site_id).execute(&backup_db).await;
+                    tracing::info!("Auto-backup: created daily schedule for new site");
+                });
+            }
 
-                    if site_count.map(|(c,)| c).unwrap_or(0) <= 1 {
-                        // First site — create default backup schedule (daily 3 AM, 7 retention)
+            // GAP 6: Auto-create secrets vault for the site
+            {
+                let vault_db = state.db.clone();
+                let vault_site_id = site.id;
+                let vault_user_id = claims.sub;
+                let vault_domain = body.domain.clone();
+                tokio::spawn(async move {
+                    let _ = sqlx::query(
+                        "INSERT INTO secret_vaults (user_id, name, description, site_id) \
+                         VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING"
+                    )
+                    .bind(vault_user_id)
+                    .bind(format!("{vault_domain} secrets"))
+                    .bind(format!("Auto-created vault for {vault_domain}"))
+                    .bind(vault_site_id)
+                    .execute(&vault_db).await;
+                    tracing::info!("Auto-vault: created for {vault_domain}");
+                });
+            }
+
+            // GAP 15: Auto-create paused uptime monitor (activates after SSL provisioning)
+            {
+                let mon_db = state.db.clone();
+                let mon_site_id = site.id;
+                let mon_user_id = claims.sub;
+                let mon_domain = body.domain.clone();
+                tokio::spawn(async move {
+                    let url = format!("https://{mon_domain}");
+                    let _ = sqlx::query(
+                        "INSERT INTO monitors (user_id, site_id, url, name, check_interval, status, enabled, monitor_type) \
+                         VALUES ($1, $2, $3, $4, 60, 'pending', FALSE, 'http') ON CONFLICT DO NOTHING"
+                    )
+                    .bind(mon_user_id).bind(mon_site_id)
+                    .bind(&url).bind(&mon_domain)
+                    .execute(&mon_db).await;
+                    tracing::info!("Auto-monitor: created (paused) for {mon_domain}");
+                });
+            }
+
+            // GAP 4: Auto-create status page component if status page is enabled
+            {
+                let sp_db = state.db.clone();
+                let sp_site_id = site.id;
+                let sp_user_id = claims.sub;
+                let sp_domain = body.domain.clone();
+                tokio::spawn(async move {
+                    let enabled: Option<(bool,)> = sqlx::query_as(
+                        "SELECT enabled FROM status_page_config WHERE user_id = $1"
+                    ).bind(sp_user_id).fetch_optional(&sp_db).await.ok().flatten();
+
+                    if enabled.map(|(e,)| e).unwrap_or(false) {
                         let _ = sqlx::query(
-                            "INSERT INTO backup_schedules (site_id, schedule, retention_count, enabled) \
-                             VALUES ($1, '0 3 * * *', 7, true) ON CONFLICT (site_id) DO NOTHING"
-                        ).bind(backup_site_id).execute(&backup_db).await;
-                        tracing::info!("Auto-backup: created daily schedule for first site");
+                            "INSERT INTO status_page_components (user_id, name, description, group_name) \
+                             VALUES ($1, $2, $3, 'Sites')"
+                        )
+                        .bind(sp_user_id).bind(&sp_domain)
+                        .bind(format!("Auto-created for {sp_domain}"))
+                        .execute(&sp_db).await;
+                        tracing::info!("Auto-component: created status page component for {sp_domain}");
                     }
                 });
             }

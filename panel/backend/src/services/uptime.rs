@@ -175,6 +175,12 @@ async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &Pg
             Some(cause),
         ).await;
         send_alerts(pool, monitor, &format!("{} is down: {cause}", monitor.name)).await;
+
+        // GAP 3: Auto-create managed incident for status page
+        let _ = create_auto_incident(pool, monitor, cause).await;
+
+        // GAP 19: Notify status page subscribers
+        notify_status_subscribers(pool, &monitor.name, "investigating", &format!("{} is experiencing issues: {cause}", monitor.name)).await;
     } else if new_status == "up" && monitor.status == "down" {
         // Just recovered — resolve incident
         if let Err(e) = sqlx::query(
@@ -186,6 +192,12 @@ async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &Pg
         .await {
             tracing::error!("Failed to resolve incident for {}: {e}", monitor.name);
         }
+
+        // GAP 3: Auto-resolve managed incident
+        let _ = resolve_auto_incident(pool, monitor).await;
+
+        // GAP 19: Notify subscribers of recovery
+        notify_status_subscribers(pool, &monitor.name, "resolved", &format!("{} is back online", monitor.name)).await;
 
         tracing::info!("Monitor {} ({}) is back UP", monitor.name, monitor.url);
         send_alerts(pool, monitor, &format!("{} is back up ({}ms)", monitor.name, response_time)).await;
@@ -388,4 +400,117 @@ async fn send_alerts(pool: &PgPool, monitor: &MonitorRow, message: &str) {
 
     crate::services::notifications::send_notification(pool, &channels, &subject, message, &html)
         .await;
+}
+
+/// GAP 3: Auto-create a managed incident when a monitor goes down.
+async fn create_auto_incident(pool: &PgPool, monitor: &MonitorRow, cause: &str) -> Result<(), String> {
+    // Find admin user for the monitor
+    let user: Option<(uuid::Uuid,)> = sqlx::query_as(
+        "SELECT user_id FROM monitors WHERE id = $1"
+    )
+    .bind(monitor.id)
+    .fetch_optional(pool).await.ok().flatten();
+
+    let user_id = match user {
+        Some((id,)) => id,
+        None => return Ok(()),
+    };
+
+    // Create managed incident
+    let incident_id: uuid::Uuid = match sqlx::query_scalar(
+        "INSERT INTO managed_incidents (user_id, title, status, severity, description, visible_on_status_page) \
+         VALUES ($1, $2, 'investigating', 'major', $3, TRUE) RETURNING id"
+    )
+    .bind(user_id)
+    .bind(format!("{} is down", monitor.name))
+    .bind(cause)
+    .fetch_one(pool).await {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!("Failed to create managed incident: {e}");
+            return Err(e.to_string());
+        }
+    };
+
+    // Create initial update
+    let _ = sqlx::query(
+        "INSERT INTO incident_updates (incident_id, status, message, author_email) \
+         VALUES ($1, 'investigating', $2, 'system')"
+    )
+    .bind(incident_id)
+    .bind(format!("Auto-detected: {cause}"))
+    .execute(pool).await;
+
+    // Link to status page components via monitor
+    let _ = sqlx::query(
+        "INSERT INTO managed_incident_components (incident_id, component_id) \
+         SELECT $1, cm.component_id FROM status_page_component_monitors cm WHERE cm.monitor_id = $2 \
+         ON CONFLICT DO NOTHING"
+    )
+    .bind(incident_id).bind(monitor.id)
+    .execute(pool).await;
+
+    tracing::info!("Auto-incident created for monitor {} (incident {})", monitor.name, incident_id);
+    Ok(())
+}
+
+/// GAP 3: Auto-resolve managed incident when monitor recovers.
+async fn resolve_auto_incident(pool: &PgPool, monitor: &MonitorRow) -> Result<(), String> {
+    // Find unresolved managed incidents with matching title pattern
+    let incidents: Vec<(uuid::Uuid,)> = sqlx::query_as(
+        "SELECT id FROM managed_incidents WHERE title = $1 AND status != 'resolved' AND status != 'postmortem'"
+    )
+    .bind(format!("{} is down", monitor.name))
+    .fetch_all(pool).await.unwrap_or_default();
+
+    for (incident_id,) in &incidents {
+        // Post resolved update
+        let _ = sqlx::query(
+            "INSERT INTO incident_updates (incident_id, status, message, author_email) \
+             VALUES ($1, 'resolved', 'Monitor recovered automatically', 'system')"
+        )
+        .bind(incident_id)
+        .execute(pool).await;
+
+        // Resolve the incident
+        let _ = sqlx::query(
+            "UPDATE managed_incidents SET status = 'resolved', resolved_at = NOW(), updated_at = NOW() WHERE id = $1"
+        )
+        .bind(incident_id)
+        .execute(pool).await;
+    }
+
+    if !incidents.is_empty() {
+        tracing::info!("Auto-resolved {} managed incident(s) for monitor {}", incidents.len(), monitor.name);
+    }
+    Ok(())
+}
+
+/// GAP 19: Notify status page subscribers of monitor events.
+async fn notify_status_subscribers(pool: &PgPool, monitor_name: &str, status: &str, message: &str) {
+    let emails: Vec<(String,)> = sqlx::query_as(
+        "SELECT email FROM status_page_subscribers WHERE verified = TRUE AND notify_incidents = TRUE"
+    )
+    .fetch_all(pool).await.unwrap_or_default();
+
+    if emails.is_empty() {
+        return;
+    }
+
+    let subject = format!("[Status Update] {} — {}", monitor_name, status);
+
+    for (email,) in &emails {
+        crate::services::notifications::send_notification(
+            pool,
+            &crate::services::notifications::NotifyChannels {
+                email: Some(email.clone()),
+                slack_url: None,
+                discord_url: None,
+                pagerduty_key: None,
+            },
+            &subject,
+            message,
+            message,
+        ).await;
+    }
 }
