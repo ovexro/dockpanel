@@ -57,6 +57,7 @@ function ServerSelector() {
 export default function CommandLayout() {
   const state = useLayoutState();
   const branding = useBranding();
+  const isLight = state.theme === "clean" || state.theme === "arctic";
 
   if (state.loading) {
     return (
@@ -218,7 +219,7 @@ export default function CommandLayout() {
               <span className="text-[10px] text-dark-400">{state.apiHealthy === null ? "Checking..." : state.apiHealthy ? "Connected" : "Disconnected"}</span>
             </div>
             <div className="flex items-center gap-1">
-              <LayoutSwitcher variant="dark" />
+              <LayoutSwitcher variant={isLight ? "light" : "dark"} />
               <button
                 onClick={state.cycleTheme}
                 className="p-1.5 text-dark-400 hover:text-dark-200 transition-colors rounded"

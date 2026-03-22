@@ -289,12 +289,12 @@ body {
   /* Sans-serif typography */
   --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 
-  /* Rounded corners */
-  --radius-xs: 3px;
-  --radius-sm: 5px;
-  --radius: 6px;
+  /* Rounded corners (normalized to match other themes) */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius: 8px;
   --radius-md: 8px;
-  --radius-lg: 10px;
+  --radius-lg: 12px;
   --radius-xl: 14px;
   --radius-2xl: 18px;
   --radius-3xl: 24px;
@@ -906,6 +906,9 @@ body {
 }
 
 /* Midnight: clean SaaS typography */
+[data-theme="midnight"] .font-mono:not([class*="terminal"]):not(code):not(pre):not(kbd) {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
+}
 [data-theme="midnight"] .uppercase {
   text-transform: none !important;
 }
@@ -915,6 +918,9 @@ body {
 }
 
 /* Arctic: clean SaaS typography */
+[data-theme="arctic"] .font-mono:not([class*="terminal"]):not(code):not(pre):not(kbd) {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
+}
 [data-theme="arctic"] .uppercase {
   text-transform: none !important;
 }
@@ -924,6 +930,9 @@ body {
 }
 
 /* Ember: warm SaaS typography */
+[data-theme="ember"] .font-mono:not([class*="terminal"]):not(code):not(pre):not(kbd) {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
+}
 [data-theme="ember"] .uppercase {
   text-transform: none !important;
 }
