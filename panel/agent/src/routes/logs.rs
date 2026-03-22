@@ -275,6 +275,13 @@ async fn log_stats(
 ) -> Result<Json<serde_json::Value>, ApiErr> {
     let domain = params.get("domain").map(|s| s.as_str());
 
+    // Validate domain to prevent path traversal
+    if let Some(d) = domain {
+        if !d.is_empty() && !super::is_valid_domain(d) {
+            return Err(err(StatusCode::BAD_REQUEST, "Invalid domain"));
+        }
+    }
+
     let log_path = match domain {
         Some(d) if !d.is_empty() => format!("/var/log/nginx/{d}.access.log"),
         _ => "/var/log/nginx/access.log".to_string(),
@@ -566,6 +573,20 @@ async fn truncate_log(
     // Only allow truncating under /var/log/
     if path.is_empty() || !path.starts_with("/var/log/") || path.contains("..") {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid log path"));
+    }
+
+    // Canonicalize to resolve symlinks, then re-verify path is under /var/log/
+    let canonical = std::fs::canonicalize(path)
+        .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid path"))?;
+    if !canonical.starts_with("/var/log/") {
+        return Err(err(StatusCode::FORBIDDEN, "Path escapes /var/log/"));
+    }
+
+    // Verify it's a regular file, not a symlink
+    let meta = std::fs::symlink_metadata(path)
+        .map_err(|_| err(StatusCode::BAD_REQUEST, "Cannot stat file"))?;
+    if meta.file_type().is_symlink() {
+        return Err(err(StatusCode::FORBIDDEN, "Symlinks not allowed"));
     }
 
     tokio::fs::write(path, "")

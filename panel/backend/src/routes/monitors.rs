@@ -97,6 +97,10 @@ pub async fn create(
         if url.is_empty() || (!url.starts_with("http://") && !url.starts_with("https://")) {
             return Err(err(StatusCode::BAD_REQUEST, "URL must start with http:// or https://"));
         }
+        // SSRF protection: block internal URLs
+        if let Err(e) = crate::helpers::validate_url_not_internal(url).await {
+            return Err(err(StatusCode::BAD_REQUEST, &format!("Invalid monitor URL: {}", e)));
+        }
     } else if url.is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "Host/URL is required"));
     }
@@ -188,6 +192,16 @@ pub async fn update(
 
     if existing.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Monitor not found"));
+    }
+
+    // SSRF protection: validate URL if being updated
+    if let Some(ref new_url) = body.url {
+        let trimmed = new_url.trim();
+        if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+            if let Err(e) = crate::helpers::validate_url_not_internal(trimmed).await {
+                return Err(err(StatusCode::BAD_REQUEST, &format!("Invalid monitor URL: {}", e)));
+            }
+        }
     }
 
     let monitor: Monitor = sqlx::query_as(
