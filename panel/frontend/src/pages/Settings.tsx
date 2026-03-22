@@ -656,7 +656,7 @@ export default function Settings() {
             {/* Layout selector */}
             <div>
               <p className="text-sm text-dark-100 mb-3">Layout</p>
-              <div className="grid grid-cols-4 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 {([
                   { id: "command", name: "Command", desc: "Full sidebar, grouped nav",
                     preview: (c: { bg: string; bar: string; accent: string; text: string }) => (
@@ -700,21 +700,6 @@ export default function Settings() {
                         <div style={{ background: c.bar, flex: 1, borderRadius: "1px" }} />
                       </div>
                     )},
-                  { id: "nexus", name: "Nexus", desc: "Modern SaaS, flat nav",
-                    preview: () => (
-                      <div className="flex gap-1" style={{ height: "44px" }}>
-                        <div style={{ background: "#ffffff", width: "22%", borderRadius: "2px", border: "1px solid #e2e8f0" }} className="flex flex-col gap-0.5 p-1">
-                          <div style={{ background: "#2563eb", height: "2px", width: "80%", borderRadius: "1px" }} />
-                          <div style={{ background: "#94a3b8", height: "1.5px", opacity: 0.4 }} />
-                          <div style={{ background: "#94a3b8", height: "1.5px", width: "70%", opacity: 0.4 }} />
-                          <div style={{ background: "#94a3b8", height: "1.5px", width: "85%", opacity: 0.4 }} />
-                        </div>
-                        <div style={{ width: "78%" }} className="flex flex-col gap-0.5 p-0.5">
-                          <div style={{ background: "#ffffff", height: "14px", borderRadius: "2px", border: "1px solid #e2e8f0" }} />
-                          <div style={{ background: "#ffffff", flex: 1, borderRadius: "2px", border: "1px solid #e2e8f0" }} />
-                        </div>
-                      </div>
-                    )},
                 ] as const).map(l => {
                   const currentLayout = localStorage.getItem("dp-layout") || "command";
                   const isActive = currentLayout === l.id;
@@ -746,6 +731,30 @@ export default function Settings() {
                   );
                 })}
               </div>
+            </div>
+
+            {/* Layout options */}
+            <div className="flex gap-6 text-sm">
+              <label className="flex items-center gap-2 text-dark-100 cursor-pointer">
+                <input type="checkbox"
+                  checked={localStorage.getItem("dp-show-header") === "true"}
+                  onChange={e => {
+                    localStorage.setItem("dp-show-header", e.target.checked ? "true" : "false");
+                    window.dispatchEvent(new Event("dp-layout-options-change"));
+                  }}
+                />
+                Show top header bar
+              </label>
+              <label className="flex items-center gap-2 text-dark-100 cursor-pointer">
+                <input type="checkbox"
+                  checked={localStorage.getItem("dp-flat-nav") === "true"}
+                  onChange={e => {
+                    localStorage.setItem("dp-flat-nav", e.target.checked ? "true" : "false");
+                    window.dispatchEvent(new Event("dp-layout-options-change"));
+                  }}
+                />
+                Flat navigation (no groups)
+              </label>
             </div>
 
             {/* Theme selector */}
