@@ -2,8 +2,8 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 
 const layouts = [
-  { id: "command", label: "Terminal", desc: "Dark, CLI aesthetic" },
-  { id: "glass", label: "Glass", desc: "Collapsible sidebar" },
+  { id: "command", label: "Command", desc: "Full sidebar, grouped nav" },
+  { id: "glass", label: "Glass", desc: "Collapsible icon sidebar" },
   { id: "atlas", label: "Atlas", desc: "Top navbar, breadcrumbs" },
   { id: "nexus", label: "Nexus", desc: "Modern SaaS, flat nav" },
 ];
@@ -52,22 +52,7 @@ export default function LayoutSwitcher({ variant = "dark" }: Props) {
   }, [open]);
 
   const switchLayout = (id: string) => {
-    const prevLayout = localStorage.getItem("dp-layout") || "command";
-    const currentTheme = localStorage.getItem("dp-theme") || "terminal";
     localStorage.setItem("dp-layout", id);
-
-    // Smart theme transition: when leaving Nexus layout on a light theme,
-    // auto-switch to dark variant to avoid jarring white-on-dark-layout
-    if (prevLayout === "nexus" && id !== "nexus") {
-      if (currentTheme === "clean") {
-        localStorage.setItem("dp-theme", "clean-dark");
-        document.documentElement.setAttribute("data-theme", "clean-dark");
-      } else if (currentTheme === "arctic") {
-        localStorage.setItem("dp-theme", "midnight");
-        document.documentElement.setAttribute("data-theme", "midnight");
-      }
-    }
-
     document.documentElement.setAttribute("data-layout", id);
     window.dispatchEvent(new Event("dp-layout-change"));
     setOpen(false);
