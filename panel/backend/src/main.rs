@@ -41,6 +41,8 @@ pub struct AppState {
     pub provision_logs: Arc<Mutex<HashMap<uuid::Uuid, (Vec<routes::sites::ProvisionStep>, tokio::sync::broadcast::Sender<routes::sites::ProvisionStep>, Instant)>>>,
     /// OAuth CSRF state tokens: state_string -> (provider_name, created_at)
     pub oauth_states: Arc<Mutex<HashMap<String, (String, Instant)>>>,
+    /// Broadcast channel for real-time panel notification delivery (SSE)
+    pub notif_tx: tokio::sync::broadcast::Sender<(uuid::Uuid, String)>,
 }
 
 #[tokio::main]
@@ -165,6 +167,11 @@ async fn main() {
     let config = Arc::new(config);
     let listen_addr = config.listen_addr.clone();
 
+    // Broadcast channel for real-time notification delivery via SSE
+    let (notif_tx, _) = tokio::sync::broadcast::channel::<(uuid::Uuid, String)>(256);
+    // Register in the global OnceLock so notify_panel() can broadcast without AppState
+    services::notifications::init_notif_broadcast(notif_tx.clone());
+
     let state = AppState {
         db,
         config,
@@ -177,6 +184,7 @@ async fn main() {
         agent_rate_limits: Arc::new(Mutex::new(HashMap::new())),
         provision_logs: Arc::new(Mutex::new(HashMap::new())),
         oauth_states: Arc::new(Mutex::new(HashMap::new())),
+        notif_tx,
     };
 
     // Shutdown broadcast channel — all background services listen for this signal

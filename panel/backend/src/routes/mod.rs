@@ -523,6 +523,7 @@ pub fn router() -> Router<AppState> {
         // Notification Center
         .route("/api/notifications", get(notifications::list))
         .route("/api/notifications/unread-count", get(notifications::unread_count))
+        .route("/api/notifications/stream", get(notifications::stream))
         .route("/api/notifications/{id}/read", post(notifications::mark_read))
         .route("/api/notifications/read-all", post(notifications::mark_all_read))
         // Backup Orchestrator
