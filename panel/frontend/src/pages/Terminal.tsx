@@ -444,7 +444,7 @@ export default function Terminal() {
               <div className="flex items-center gap-2 mt-0.5">
                 <div
                   className={`w-2 h-2 rounded-full ${
-                    connected ? "bg-rust-500" : "bg-gray-300"
+                    connected ? "bg-rust-500" : "bg-dark-300"
                   }`}
                 />
                 <span className="text-xs text-dark-200">
@@ -757,7 +757,7 @@ export default function Terminal() {
         )}
 
         {error && (
-          <div className="px-6 py-2 bg-red-500/10 text-danger-400 text-sm border-b border-red-500/20 shrink-0">
+          <div className="px-6 py-2 bg-danger-500/10 text-danger-400 text-sm border-b border-danger-500/20 shrink-0">
             {error}
           </div>
         )}

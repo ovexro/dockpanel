@@ -68,7 +68,7 @@ export default function LayoutSwitcher({ variant = "dark" }: Props) {
         className={`flex items-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium transition-colors ${
           isDark
             ? "bg-dark-800 border border-dark-600/40 text-dark-300 hover:text-dark-50"
-            : "bg-white border border-zinc-200 text-zinc-600 hover:text-zinc-900"
+            : "bg-dark-950 border border-dark-700 text-dark-400 hover:text-dark-50"
         }`}
         title="Switch layout"
       >
@@ -87,7 +87,7 @@ export default function LayoutSwitcher({ variant = "dark" }: Props) {
         <div
           ref={dropdownRef}
           className={`fixed w-52 rounded-lg shadow-2xl overflow-hidden z-[9999] ${
-            isDark ? "bg-dark-900 border border-dark-600" : "bg-white border border-zinc-200 shadow-lg"
+            isDark ? "bg-dark-900 border border-dark-600" : "bg-dark-950 border border-dark-700 shadow-lg"
           }`}
           style={{
             top: pos.top,
@@ -101,12 +101,12 @@ export default function LayoutSwitcher({ variant = "dark" }: Props) {
               onClick={() => switchLayout(l.id)}
               className={`w-full text-left px-3 py-2.5 transition-colors ${
                 l.id === current
-                  ? isDark ? "bg-dark-800 text-dark-50" : "bg-blue-50 text-blue-700"
-                  : isDark ? "text-dark-300 hover:bg-dark-800 hover:text-dark-100" : "text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
+                  ? isDark ? "bg-dark-800 text-dark-50" : "bg-rust-500/10 text-rust-700"
+                  : isDark ? "text-dark-300 hover:bg-dark-800 hover:text-dark-100" : "text-dark-400 hover:bg-dark-800 hover:text-dark-50"
               }`}
             >
               <div className="text-sm font-medium">{l.label}</div>
-              <div className={`text-xs mt-0.5 ${isDark ? "text-dark-500" : "text-zinc-400"}`}>{l.desc}</div>
+              <div className={`text-xs mt-0.5 ${isDark ? "text-dark-500" : "text-dark-400"}`}>{l.desc}</div>
             </button>
           ))}
         </div>,

@@ -192,7 +192,7 @@ export default function NexusLayout() {
             <span className="flex-1 text-sm truncate text-dark-400">{state.user.email}</span>
             <button
               onClick={state.logout}
-              className="p-1 text-dark-400 hover:text-rose-400 transition-colors"
+              className="p-1 text-dark-400 hover:text-danger-400 transition-colors"
               title="Log out"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3-3l3-3m0 0l-3-3m3 3H9" /></svg>
@@ -271,8 +271,8 @@ export default function NexusLayout() {
 
         {/* 2FA enforcement banner */}
         {state.twoFaEnforced && !state.twoFaEnabled && (
-          <div className={`border-b px-6 py-2 text-sm flex items-center gap-2 ${isLight ? "bg-amber-50 border-amber-200 text-amber-800" : "bg-amber-500/10 border-amber-500/20 text-amber-300"}`}>
-            <svg className="w-4 h-4 text-amber-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z" /><path strokeLinecap="round" strokeLinejoin="round" d="M12 15.75h.007v.008H12v-.008z" /></svg>
+          <div className={`border-b px-6 py-2 text-sm flex items-center gap-2 ${isLight ? "bg-warn-500/5 border-warn-500/20 text-warn-600" : "bg-warn-500/10 border-warn-500/20 text-warn-400"}`}>
+            <svg className="w-4 h-4 text-warn-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z" /><path strokeLinecap="round" strokeLinejoin="round" d="M12 15.75h.007v.008H12v-.008z" /></svg>
             <span>Two-factor authentication is required.</span>
             <Link to="/settings" className="font-medium underline hover:no-underline ml-1">Set up 2FA</Link>
           </div>

@@ -86,7 +86,7 @@ export default function Settings() {
   const [hostname, setHostname] = useState("");
 
   // Theme
-  const [currentTheme, setCurrentTheme] = useState(() => localStorage.getItem("dp-theme") || "terminal");
+  const [currentTheme, setCurrentTheme] = useState(() => localStorage.getItem("dp-theme") || "midnight");
   const [showHeader, setShowHeader] = useState(() => localStorage.getItem("dp-show-header") === "true");
   const [flatNav, setFlatNav] = useState(() => localStorage.getItem("dp-flat-nav") === "true");
 
@@ -337,7 +337,7 @@ export default function Settings() {
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
               ? "bg-rust-500/10 text-rust-400 border-rust-500/20"
-              : "bg-red-500/10 text-danger-400 border-red-500/20"
+              : "bg-danger-500/10 text-danger-400 border-danger-500/20"
           }`}
         >
           {message.text}
@@ -780,6 +780,7 @@ export default function Settings() {
                     <button key={t.id} onClick={() => {
                       localStorage.setItem("dp-theme", t.id);
                       document.documentElement.setAttribute("data-theme", t.id);
+                      document.documentElement.setAttribute("data-color-scheme", (t.id === "arctic" || t.id === "clean") ? "light" : "dark");
                       setCurrentTheme(t.id);
                     }}
                       className="group text-left transition-all duration-150"
@@ -1125,7 +1126,7 @@ export default function Settings() {
                           }
                         }}
                         disabled={testingDest === d.id}
-                        className="px-2 py-1 bg-blue-500/10 text-blue-400 rounded text-xs font-medium hover:bg-blue-500/20 disabled:opacity-50"
+                        className="px-2 py-1 bg-accent-500/10 text-accent-400 rounded text-xs font-medium hover:bg-accent-500/20 disabled:opacity-50"
                       >
                         {testingDest === d.id ? "Testing..." : "Test"}
                       </button>
@@ -1139,7 +1140,7 @@ export default function Settings() {
                             setMessage({ text: e instanceof Error ? e.message : "Delete failed", type: "error" });
                           }
                         }}
-                        className="px-2 py-1 bg-red-500/10 text-danger-400 rounded text-xs font-medium hover:bg-red-500/20"
+                        className="px-2 py-1 bg-danger-500/10 text-danger-400 rounded text-xs font-medium hover:bg-danger-500/20"
                       >
                         Delete
                       </button>
@@ -1193,7 +1194,7 @@ export default function Settings() {
                         setTwoFaLoading(false);
                       }
                     }}
-                    className="px-4 py-2 bg-red-500/20 text-danger-400 rounded-lg text-sm font-medium hover:bg-red-500/30 disabled:opacity-50"
+                    className="px-4 py-2 bg-danger-500/20 text-danger-400 rounded-lg text-sm font-medium hover:bg-danger-500/30 disabled:opacity-50"
                   >
                     Disable 2FA
                   </button>
@@ -1363,7 +1364,7 @@ export default function Settings() {
                 setMessage({ text: "All sessions revoked", type: "success" });
                 setTimeout(() => { window.location.href = "/login"; }, 2000);
               } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-            }} className="px-3 py-1.5 bg-red-500/10 text-danger-400 rounded text-xs font-medium hover:bg-red-500/20">Revoke All Sessions</button>
+            }} className="px-3 py-1.5 bg-danger-500/10 text-danger-400 rounded text-xs font-medium hover:bg-danger-500/20">Revoke All Sessions</button>
           </div>
         </div>
 
@@ -1629,7 +1630,7 @@ export default function Settings() {
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className={`w-3 h-3 rounded-full ${health.database ? "bg-rust-500" : "bg-red-500"}`} />
+                    <div className={`w-3 h-3 rounded-full ${health.database ? "bg-rust-500" : "bg-danger-500"}`} />
                     <span className="text-sm text-dark-50">Database</span>
                   </div>
                   <span className={`text-sm font-medium ${health.database ? "text-rust-400" : "text-danger-400"}`}>
@@ -1638,7 +1639,7 @@ export default function Settings() {
                 </div>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className={`w-3 h-3 rounded-full ${health.agentOk ? "bg-rust-500" : "bg-red-500"}`} />
+                    <div className={`w-3 h-3 rounded-full ${health.agentOk ? "bg-rust-500" : "bg-danger-500"}`} />
                     <span className="text-sm text-dark-50">Agent</span>
                   </div>
                   <span className={`text-sm font-medium ${health.agentOk ? "text-rust-400" : "text-danger-400"}`}>
@@ -1647,7 +1648,7 @@ export default function Settings() {
                 </div>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="w-3 h-3 rounded-full bg-blue-500" />
+                    <div className="w-3 h-3 rounded-full bg-accent-500" />
                     <span className="text-sm text-dark-50">Uptime</span>
                   </div>
                   <span className="text-sm font-medium text-dark-200 font-mono">{health.uptime}</span>
@@ -1753,14 +1754,14 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
         )}
 
         {msg.text && (
-          <div className={`px-4 py-2 rounded-lg text-sm border ${msg.type === "success" ? "bg-rust-500/10 text-rust-400 border-rust-500/20" : "bg-red-500/10 text-danger-400 border-red-500/20"}`}>
+          <div className={`px-4 py-2 rounded-lg text-sm border ${msg.type === "success" ? "bg-rust-500/10 text-rust-400 border-rust-500/20" : "bg-danger-500/10 text-danger-400 border-danger-500/20"}`}>
             {msg.text}
           </div>
         )}
 
         <button
           onClick={() => setShowGuide(!showGuide)}
-          className="flex items-center gap-2 text-sm text-blue-400 hover:text-blue-300 transition-colors"
+          className="flex items-center gap-2 text-sm text-accent-400 hover:text-accent-300 transition-colors"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
@@ -1825,7 +1826,7 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
             <h4 className="text-xs font-medium text-dark-200 uppercase font-mono tracking-widest">PowerDNS API Configuration</h4>
             <button
               onClick={() => setShowPdnsGuide(!showPdnsGuide)}
-              className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+              className="flex items-center gap-1.5 text-xs text-accent-400 hover:text-accent-300 transition-colors"
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
@@ -1938,7 +1939,7 @@ function SSHKeys() {
         <p className="text-xs text-dark-200 mt-0.5">Manage authorized SSH keys for root access</p>
       </div>
       <div className="p-5 space-y-3">
-        {msg.text && <div className={`px-3 py-2 rounded text-xs ${msg.type === "success" ? "bg-rust-500/10 text-rust-400" : "bg-red-500/10 text-danger-400"}`}>{msg.text}</div>}
+        {msg.text && <div className={`px-3 py-2 rounded text-xs ${msg.type === "success" ? "bg-rust-500/10 text-rust-400" : "bg-danger-500/10 text-danger-400"}`}>{msg.text}</div>}
         {keys.map((k) => (
           <div key={k.fingerprint} className="flex items-center justify-between bg-dark-900 border border-dark-500 px-4 py-2">
             <div className="min-w-0">
@@ -2036,7 +2037,7 @@ function IPWhitelist() {
         <p className="text-xs text-dark-200 mt-0.5">Restrict panel access to specific IPs</p>
       </div>
       <div className="p-5 space-y-3">
-        {msg.text && <div className={`px-3 py-2 rounded text-xs ${msg.type === "success" ? "bg-rust-500/10 text-rust-400" : "bg-red-500/10 text-danger-400"}`}>{msg.text}</div>}
+        {msg.text && <div className={`px-3 py-2 rounded text-xs ${msg.type === "success" ? "bg-rust-500/10 text-rust-400" : "bg-danger-500/10 text-danger-400"}`}>{msg.text}</div>}
         {ips.map((ip, i) => (
           <div key={i} className="flex items-center justify-between bg-dark-900 border border-dark-500 px-3 py-1.5">
             <span className="text-xs text-dark-50 font-mono">{ip}</span>
