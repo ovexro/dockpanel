@@ -288,6 +288,20 @@ pub async fn create(
         Some("git_deploy"), Some(&body.name), None, None,
     ).await;
 
+    // GAP 13: Auto-create webhook gateway endpoint for this git deploy
+    {
+        let gw_token = uuid::Uuid::new_v4().to_string().replace('-', "");
+        let _ = sqlx::query(
+            "INSERT INTO webhook_endpoints (user_id, name, description, token, verify_mode) \
+             VALUES ($1, $2, $3, $4, 'none')"
+        )
+        .bind(claims.sub)
+        .bind(format!("Git: {}", &body.name))
+        .bind(format!("Auto-created for git deploy '{}'", &body.name))
+        .bind(&gw_token)
+        .execute(&state.db).await;
+    }
+
     Ok((StatusCode::CREATED, Json(deploy)))
 }
 

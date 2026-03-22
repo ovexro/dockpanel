@@ -4,6 +4,18 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.5.1] - 2026-03-22
+
+### Fixed (Remaining 7 Gaps — Phase D)
+- **GAP 7+21: Internal events bridge to webhook gateway** — `fire_event()` now also forwards events to webhook gateway routes with `filter_path=/event` and `filter_value={event_type}`. Users can subscribe gateway routes to any internal event.
+- **GAP 12: Docker apps auto-get monitor + status component** — Docker apps deployed with a domain now auto-create an HTTP monitor and a status page component under "Docker Apps" group.
+- **GAP 13: Git deploy auto-creates gateway endpoint** — New git deploys auto-create a webhook gateway endpoint for webhook inspection/replay capabilities.
+- **GAP 16: Incident resolve cleans up alerts + components** — Resolving a managed incident auto-resolves linked alerts and clears status_override on affected status page components.
+- **GAP 17: Vault export/import** — New `GET /api/secrets/vaults/{id}/export` and `POST /api/secrets/vaults/{id}/import` endpoints for encrypted vault backup and transfer between DockPanel instances.
+
+### Automation Audit: Complete
+All 21 identified gaps now addressed. Zero manual steps required for: backup scheduling, uptime monitoring, secret injection, incident creation, status page updates, or webhook delivery.
+
 ## [2.5.0] - 2026-03-22
 
 ### Fixed (21-Gap Automation Audit)

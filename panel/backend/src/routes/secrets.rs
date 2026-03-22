@@ -494,3 +494,79 @@ pub async fn pull(
 
     Ok(Json(entries))
 }
+
+// ── GAP 17: Vault Export (encrypted backup) ─────────────────────────────────
+
+/// GET /api/secrets/vaults/{vault_id}/export — Export vault as encrypted JSON (for backup/transfer).
+pub async fn export_vault(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(vault_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    verify_vault(&state, vault_id, claims.sub).await?;
+
+    let vault: SecretVault = sqlx::query_as("SELECT * FROM secret_vaults WHERE id = $1")
+        .bind(vault_id).fetch_one(&state.db).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let rows: Vec<SecretRow> = sqlx::query_as("SELECT * FROM secrets WHERE vault_id = $1 ORDER BY key")
+        .bind(vault_id).fetch_all(&state.db).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    // Export with encrypted values (portable — can be imported on another DockPanel with same key)
+    let secrets_export: Vec<serde_json::Value> = rows.into_iter().map(|r| {
+        serde_json::json!({
+            "key": r.key,
+            "encrypted_value": r.encrypted_value,
+            "description": r.description,
+            "secret_type": r.secret_type,
+            "auto_inject": r.auto_inject,
+            "version": r.version,
+        })
+    }).collect();
+
+    Ok(Json(serde_json::json!({
+        "vault_name": vault.name,
+        "vault_description": vault.description,
+        "exported_at": chrono::Utc::now(),
+        "secret_count": secrets_export.len(),
+        "secrets": secrets_export,
+    })))
+}
+
+/// POST /api/secrets/vaults/{vault_id}/import — Import secrets from exported JSON.
+pub async fn import_vault(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(vault_id): Path<Uuid>,
+    Json(data): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    verify_vault(&state, vault_id, claims.sub).await?;
+
+    let secrets_arr = data.get("secrets").and_then(|v| v.as_array())
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Missing 'secrets' array"))?;
+
+    let mut imported = 0;
+    for secret in secrets_arr {
+        let key = secret.get("key").and_then(|v| v.as_str()).unwrap_or("");
+        let encrypted_value = secret.get("encrypted_value").and_then(|v| v.as_str()).unwrap_or("");
+        let description = secret.get("description").and_then(|v| v.as_str());
+        let secret_type = secret.get("secret_type").and_then(|v| v.as_str()).unwrap_or("env");
+        let auto_inject = secret.get("auto_inject").and_then(|v| v.as_bool()).unwrap_or(false);
+
+        if key.is_empty() || encrypted_value.is_empty() { continue; }
+
+        let result = sqlx::query(
+            "INSERT INTO secrets (vault_id, key, encrypted_value, description, secret_type, auto_inject, updated_by) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (vault_id, key) DO UPDATE SET \
+             encrypted_value = EXCLUDED.encrypted_value, updated_at = NOW()"
+        )
+        .bind(vault_id).bind(key).bind(encrypted_value)
+        .bind(description).bind(secret_type).bind(auto_inject).bind(&claims.email)
+        .execute(&state.db).await;
+
+        if result.is_ok() { imported += 1; }
+    }
+
+    Ok(Json(serde_json::json!({ "ok": true, "imported": imported })))
+}

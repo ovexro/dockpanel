@@ -136,10 +136,75 @@ pub async fn emit_event(pool: &PgPool, event_type: &str, data: serde_json::Value
 }
 
 /// Helper: emit event from route handlers (fire-and-forget spawn).
+/// GAP 7+21: Also forwards events to webhook gateway endpoints that have
+/// routes with filter_path="/event" matching this event_type.
 pub fn fire_event(pool: &PgPool, event_type: &str, data: serde_json::Value) {
     let pool = pool.clone();
     let event_type = event_type.to_string();
     tokio::spawn(async move {
-        emit_event(&pool, &event_type, data).await;
+        emit_event(&pool, &event_type, data.clone()).await;
+
+        // Bridge to webhook gateway: find routes with filter_path="/event" and matching filter_value
+        let routes: Vec<(uuid::Uuid, String, serde_json::Value, i32, i32)> = sqlx::query_as(
+            "SELECT r.id, r.destination_url, r.extra_headers, r.retry_count, r.retry_delay_secs \
+             FROM webhook_routes r JOIN webhook_endpoints e ON e.id = r.endpoint_id AND e.enabled = TRUE \
+             WHERE r.enabled = TRUE AND r.filter_path = '/event' AND r.filter_value = $1"
+        )
+        .bind(&event_type)
+        .fetch_all(&pool).await.unwrap_or_default();
+
+        if routes.is_empty() { return; }
+
+        let payload = serde_json::json!({
+            "event": &event_type,
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "data": data,
+        });
+        let payload_str = serde_json::to_string(&payload).unwrap_or_default();
+
+        for (route_id, dest_url, extra_headers, retry_count, retry_delay) in routes {
+            let payload_clone = payload_str.clone();
+            let dest = dest_url.clone();
+            let headers = extra_headers.clone();
+            let pool_clone = pool.clone();
+
+            tokio::spawn(async move {
+                let mut last_status = 0i32;
+                for attempt in 0..=(retry_count.max(0).min(5)) {
+                    if attempt > 0 {
+                        tokio::time::sleep(std::time::Duration::from_secs(
+                            retry_delay as u64 * (1 << (attempt - 1).min(4))
+                        )).await;
+                    }
+
+                    let mut req = http_client()
+                        .post(&dest)
+                        .header("Content-Type", "application/json");
+
+                    if let Some(obj) = headers.as_object() {
+                        for (k, v) in obj {
+                            if let Some(val) = v.as_str() {
+                                req = req.header(k.as_str(), val);
+                            }
+                        }
+                    }
+
+                    match req.body(payload_clone.clone()).send().await {
+                        Ok(resp) => {
+                            last_status = resp.status().as_u16() as i32;
+                            if last_status >= 200 && last_status < 300 { break; }
+                        }
+                        Err(_) => { last_status = 0; }
+                    }
+                }
+
+                let _ = sqlx::query(
+                    "UPDATE webhook_routes SET total_forwarded = total_forwarded + 1, \
+                     last_forwarded_at = NOW(), last_status = $2 WHERE id = $1"
+                )
+                .bind(route_id).bind(last_status)
+                .execute(&pool_clone).await;
+            });
+        }
     });
 }

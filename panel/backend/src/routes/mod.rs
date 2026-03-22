@@ -542,6 +542,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/secrets/vaults/{vault_id}/secrets/{secret_id}/versions", get(secrets::list_versions))
         .route("/api/secrets/vaults/{vault_id}/inject/{site_id}", post(secrets::inject_to_site))
         .route("/api/secrets/vaults/{vault_id}/pull", get(secrets::pull))
+        .route("/api/secrets/vaults/{vault_id}/export", get(secrets::export_vault))
+        .route("/api/secrets/vaults/{vault_id}/import", post(secrets::import_vault))
         // Incident Management
         .route("/api/incidents", get(incidents::list).post(incidents::create))
         .route("/api/incidents/{id}", get(incidents::get_one).put(incidents::update).delete(incidents::remove))
