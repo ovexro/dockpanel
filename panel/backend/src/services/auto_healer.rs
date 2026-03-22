@@ -83,7 +83,87 @@ async fn auto_restart_services(pool: &PgPool, agent: &AgentClient) {
             continue;
         }
 
-        // Check if we already tried to heal this service recently (avoid restart loops)
+        // GAP 12: Check restart count in last 30 minutes — give up after 3 attempts
+        let restart_count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM activity_logs \
+             WHERE action = 'auto_heal.restart_service' \
+             AND target_name = $1 \
+             AND created_at > NOW() - INTERVAL '30 minutes'",
+        )
+        .bind(service_name)
+        .fetch_one(pool)
+        .await
+        .unwrap_or((0,));
+
+        if restart_count.0 >= 3 {
+            // Stop healing — service is in a crash loop. Create incident and notify.
+            tracing::warn!("Auto-healer gave up on {service_name} after 3 restarts in 30 minutes");
+
+            // Get user_id from the first server for the incident
+            let server: Option<(uuid::Uuid, uuid::Uuid, String)> = sqlx::query_as(
+                "SELECT id, user_id, name FROM servers ORDER BY created_at ASC LIMIT 1",
+            )
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+
+            if let Some((_server_id, user_id, server_name)) = server {
+                let incident_title = format!("Auto-healer exhausted: {} keeps crashing on {}", service_name, server_name);
+                let incident_msg = format!(
+                    "{} has been restarted 3 times in 30 minutes on {} without recovering. Manual intervention required.",
+                    service_name, server_name
+                );
+
+                // Create managed incident
+                let _ = sqlx::query(
+                    "INSERT INTO managed_incidents (user_id, title, status, severity, description, visible_on_status_page) \
+                     VALUES ($1, $2, 'investigating', 'critical', $3, TRUE)",
+                )
+                .bind(user_id)
+                .bind(&incident_title)
+                .bind(&incident_msg)
+                .execute(pool)
+                .await;
+
+                // Send critical notification
+                if let Some(channels) = notifications::get_user_channels(pool, user_id, None).await {
+                    let subject = format!("[CRITICAL] Auto-healer gave up on {}", service_name);
+                    let html = format!(
+                        "<div style=\"font-family:sans-serif;max-width:600px;margin:0 auto\">\
+                         <h2 style=\"color:#ef4444\">{subject}</h2>\
+                         <p>{incident_msg}</p>\
+                         <p style=\"color:#ef4444;font-weight:bold\">Automatic restarts have been exhausted. Manual intervention is required.</p>\
+                         <p style=\"color:#6b7280;font-size:14px\">Time: {}</p>\
+                         </div>",
+                        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+                    );
+                    notifications::send_notification(pool, &channels, &subject, &incident_msg, &html).await;
+                }
+
+                // Log the exhaustion event
+                crate::services::system_log::log_event(
+                    pool,
+                    "error",
+                    "auto_healer",
+                    &format!("Gave up on {service_name}: 3 restarts in 30 minutes without recovery"),
+                    Some(&incident_msg),
+                ).await;
+            }
+
+            // Clear the firing alert state so we don't keep trying
+            let _ = sqlx::query(
+                "UPDATE alert_state SET current_state = 'exhausted' \
+                 WHERE alert_type = 'service_down' AND state_key = $1 AND current_state = 'firing'",
+            )
+            .bind(service_name)
+            .execute(pool)
+            .await;
+
+            continue;
+        }
+
+        // Check if we already tried to heal this service recently (10-minute cooldown between attempts)
         let recent_heal: Option<(i64,)> = sqlx::query_as(
             "SELECT COUNT(*) FROM activity_logs \
              WHERE action = 'auto_heal.restart_service' \
@@ -101,7 +181,7 @@ async fn auto_restart_services(pool: &PgPool, agent: &AgentClient) {
             continue;
         }
 
-        tracing::info!("Auto-heal: restarting service {service_name}");
+        tracing::info!("Auto-heal: restarting service {service_name} (attempt {} of 3 in 30m window)", restart_count.0 + 1);
 
         let result = agent
             .post(

@@ -34,6 +34,9 @@ pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync:
                     check_service_health(&pool, &agent).await;
                 }
 
+                // GAP 9: Escalate unacknowledged firing alerts older than 15 minutes
+                check_escalations(&pool).await;
+
                 // Purge old resolved alerts (keep 30 days) — every hour
                 if tick_count % 60 == 0 {
                     let _ = sqlx::query(
@@ -71,22 +74,53 @@ async fn fire_alert_with_retry(
         .await
         {
             Ok(_) => {
-                // GAP 9: Auto-create managed incident for critical alerts
+                // Auto-create managed incident for critical alerts
+                // GAP 11: Check for existing active incident before creating a new one
                 if severity == "critical" || alert_type == "offline" || alert_type == "service_down" {
                     let incident_severity = if severity == "critical" { "critical" } else { "major" };
-                    let _ = sqlx::query(
-                        "INSERT INTO managed_incidents (user_id, title, status, severity, description, visible_on_status_page) \
-                         VALUES ($1, $2, 'investigating', $3, $4, TRUE)"
-                    )
-                    .bind(user_id).bind(title).bind(incident_severity).bind(message)
-                    .execute(pool).await;
 
-                    let _ = sqlx::query(
-                        "INSERT INTO incident_updates (incident_id, status, message, author_email) \
-                         SELECT id, 'investigating', $2, 'system' FROM managed_incidents WHERE title = $1 AND status = 'investigating' ORDER BY created_at DESC LIMIT 1"
+                    // Check if there's already an active incident for this user within the last 5 minutes
+                    let existing: Option<(Uuid,)> = sqlx::query_as(
+                        "SELECT id FROM managed_incidents \
+                         WHERE user_id = $1 \
+                         AND status NOT IN ('resolved', 'postmortem') \
+                         AND created_at > NOW() - INTERVAL '5 minutes' \
+                         LIMIT 1"
                     )
-                    .bind(title).bind(format!("Auto-created from {alert_type} alert: {message}"))
-                    .execute(pool).await;
+                    .bind(user_id)
+                    .fetch_optional(pool)
+                    .await
+                    .ok()
+                    .flatten();
+
+                    if let Some((incident_id,)) = existing {
+                        // Append as incident update instead of creating a duplicate incident
+                        let _ = sqlx::query(
+                            "INSERT INTO incident_updates (incident_id, status, message, author_email) \
+                             VALUES ($1, 'investigating', $2, 'system')"
+                        )
+                        .bind(incident_id)
+                        .bind(format!("Related {alert_type} alert: {message}"))
+                        .execute(pool).await;
+
+                        tracing::info!("Correlated alert to existing incident {incident_id}: {title}");
+                    } else {
+                        // No recent active incident — create a new one
+                        let _ = sqlx::query(
+                            "INSERT INTO managed_incidents (user_id, title, status, severity, description, visible_on_status_page) \
+                             VALUES ($1, $2, 'investigating', $3, $4, TRUE)"
+                        )
+                        .bind(user_id).bind(title).bind(incident_severity).bind(message)
+                        .execute(pool).await;
+
+                        let _ = sqlx::query(
+                            "INSERT INTO incident_updates (incident_id, status, message, author_email) \
+                             SELECT id, 'investigating', $2, 'system' FROM managed_incidents \
+                             WHERE title = $1 AND status = 'investigating' ORDER BY created_at DESC LIMIT 1"
+                        )
+                        .bind(title).bind(format!("Auto-created from {alert_type} alert: {message}"))
+                        .execute(pool).await;
+                    }
                 }
                 return;
             },
@@ -661,5 +695,55 @@ async fn check_service_health(pool: &PgPool, agent: &AgentClient) {
                 .await;
             }
         }
+    }
+}
+
+// ─── GAP 9: Alert Escalation ────────────────────────────────────────────
+
+/// Re-notify for unacknowledged firing alerts older than 15 minutes.
+/// Escalation repeats every 30 minutes until the alert is acknowledged or resolved.
+async fn check_escalations(pool: &PgPool) {
+    let escalated: Vec<(Uuid, Uuid, String, String)> = match sqlx::query_as(
+        "SELECT id, user_id, title, message FROM alerts \
+         WHERE status = 'firing' AND acknowledged_at IS NULL \
+         AND created_at < NOW() - INTERVAL '15 minutes' \
+         AND (escalated_at IS NULL OR escalated_at < NOW() - INTERVAL '30 minutes')",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::debug!("Escalation query skipped: {e}");
+            return;
+        }
+    };
+
+    for (alert_id, user_id, title, message) in &escalated {
+        let esc_subject = format!("[ESCALATED] {}", title);
+
+        // Send escalated notification via user's configured channels
+        if let Some(channels) = notifications::get_user_channels(pool, *user_id, None).await {
+            let html = format!(
+                "<div style=\"font-family:sans-serif;max-width:600px;margin:0 auto\">\
+                 <h2 style=\"color:#ef4444\">[ESCALATED] {}</h2>\
+                 <p>{}</p>\
+                 <p style=\"color:#ef4444;font-weight:bold\">This alert has not been acknowledged. Please investigate immediately.</p>\
+                 <p style=\"color:#6b7280;font-size:14px\">Time: {}</p>\
+                 </div>",
+                title,
+                message,
+                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+            );
+            notifications::send_notification(pool, &channels, &esc_subject, message, &html).await;
+        }
+
+        // Mark escalation timestamp so we don't re-escalate for another 30 minutes
+        let _ = sqlx::query("UPDATE alerts SET escalated_at = NOW() WHERE id = $1")
+            .bind(alert_id)
+            .execute(pool)
+            .await;
+
+        tracing::info!("Escalated unacknowledged alert: {}", title);
     }
 }
