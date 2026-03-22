@@ -646,3 +646,123 @@ Create a webhook integration.
 | GET | `/api/activity` | Activity audit log |
 | GET | `/api/system-logs` | System event log |
 | GET/POST | `/api/services/*` | Service installers (PHP, Certbot, UFW, Fail2Ban) |
+
+---
+
+## Backup Orchestrator
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/backup-orchestrator/health` | Health dashboard |
+| GET | `/api/backup-orchestrator/storage-history` | Storage growth (30 days) |
+| POST | `/api/backup-orchestrator/policies` | Create backup policy |
+| POST | `/api/backup-orchestrator/policies/protect-all` | One-click protect-all |
+| GET | `/api/backup-orchestrator/policies` | List policies |
+| PUT | `/api/backup-orchestrator/policies/{id}` | Update policy |
+| DELETE | `/api/backup-orchestrator/policies/{id}` | Delete policy |
+| POST | `/api/backup-orchestrator/db-backups/{db_name}` | Create DB backup |
+| GET | `/api/backup-orchestrator/db-backups` | List DB backups |
+| POST | `/api/backup-orchestrator/db-backups/{id}/restore` | Restore DB backup |
+| DELETE | `/api/backup-orchestrator/db-backups/{id}` | Delete DB backup |
+| POST | `/api/backup-orchestrator/vol-backups` | Create volume backup |
+| GET | `/api/backup-orchestrator/vol-backups` | List volume backups |
+| POST | `/api/backup-orchestrator/volume-backups/{id}/restore` | Restore volume backup |
+| DELETE | `/api/backup-orchestrator/vol-backups/{id}` | Delete volume backup |
+| GET | `/api/backup-orchestrator/verifications` | List verifications |
+| POST | `/api/backup-orchestrator/verify/{id}` | Verify a backup |
+
+---
+
+## Incident Management
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/incidents` | List incidents |
+| POST | `/api/incidents` | Create incident |
+| GET | `/api/incidents/{id}` | Get incident |
+| PUT | `/api/incidents/{id}` | Update incident |
+| POST | `/api/incidents/{id}/updates` | Post timeline update |
+| GET | `/api/incidents/{id}/updates` | Get timeline |
+| DELETE | `/api/incidents/{id}` | Delete incident |
+
+---
+
+## Status Page
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/status-page/config` | Get status page config |
+| PUT | `/api/status-page/config` | Update config |
+| GET | `/api/status-page/components` | List components |
+| POST | `/api/status-page/components` | Create component |
+| PUT | `/api/status-page/components/{id}` | Update component |
+| DELETE | `/api/status-page/components/{id}` | Delete component |
+| POST | `/api/status-page/subscribers` | Subscribe email |
+| DELETE | `/api/status-page/subscribers/{token}` | Unsubscribe |
+| GET | `/status` | Public status page (no auth) |
+
+---
+
+## Secrets Manager
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/secrets/vaults` | List vaults |
+| POST | `/api/secrets/vaults` | Create vault |
+| DELETE | `/api/secrets/vaults/{id}` | Delete vault |
+| GET | `/api/secrets/vaults/{id}/secrets` | List secrets |
+| POST | `/api/secrets/vaults/{id}/secrets` | Create secret |
+| PUT | `/api/secrets/vaults/{id}/secrets/{sid}` | Update secret |
+| DELETE | `/api/secrets/vaults/{id}/secrets/{sid}` | Delete secret |
+| GET | `/api/secrets/vaults/{id}/secrets/{sid}/versions` | Version history |
+| POST | `/api/secrets/vaults/{id}/inject` | Inject secrets to .env |
+| GET | `/api/secrets/vaults/{id}/pull` | Pull secrets (CLI) |
+| GET | `/api/secrets/vaults/{id}/export` | Export vault |
+| POST | `/api/secrets/vaults/{id}/import` | Import vault |
+
+---
+
+## Webhook Gateway
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/webhook-gateway/endpoints` | List endpoints |
+| POST | `/api/webhook-gateway/endpoints` | Create endpoint |
+| DELETE | `/api/webhook-gateway/endpoints/{id}` | Delete endpoint |
+| GET | `/api/webhook-gateway/endpoints/{id}/deliveries` | List deliveries |
+| POST | `/api/webhook-gateway/endpoints/{id}/replay/{did}` | Replay delivery |
+| GET | `/api/webhook-gateway/endpoints/{id}/routes` | List routes |
+| POST | `/api/webhook-gateway/endpoints/{id}/routes` | Create route |
+| DELETE | `/api/webhook-gateway/routes/{id}` | Delete route |
+
+---
+
+## Notifications
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/notifications` | List notifications |
+| GET | `/api/notifications/unread-count` | Unread badge count |
+| POST | `/api/notifications/{id}/read` | Mark as read |
+| POST | `/api/notifications/read-all` | Mark all read |
+| GET | `/api/notifications/stream` | SSE real-time stream |
+
+---
+
+## Sessions
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/auth/sessions` | List active sessions |
+| DELETE | `/api/auth/sessions/{id}` | Revoke session |
+| GET | `/api/auth/export-my-data` | GDPR data export |
+
+---
+
+## Deploy Approvals
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/deploy-approvals` | List pending approvals |
+| POST | `/api/deploy-approvals/{id}/approve` | Approve deploy |
+| POST | `/api/deploy-approvals/{id}/reject` | Reject deploy |
