@@ -586,7 +586,7 @@ export default function Dashboard() {
 
         if (isCollapsed) {
           return (
-            <div className="mb-6 bg-dark-800 border border-dark-500 px-5 py-3 animate-fade-up flex items-center justify-between">
+            <div className="mb-6 bg-dark-800 border border-dark-500 rounded-lg px-5 py-3 animate-fade-up flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <span className="text-xs font-medium text-dark-200">Setup: {completed}/{steps.length} complete</span>
                 <div className="flex gap-1">
@@ -604,7 +604,7 @@ export default function Dashboard() {
         }
 
         return (
-          <div className="mb-6 bg-dark-800 border border-dark-500 p-5 animate-fade-up">
+          <div className="mb-6 bg-dark-800 border border-dark-500 rounded-lg p-5 animate-fade-up">
             <div className="flex items-center justify-between mb-1">
               <h3 className="text-sm font-bold text-dark-50 typewriter inline-block">Welcome to DockPanel</h3>
               <div className="flex items-center gap-3">
@@ -668,7 +668,7 @@ export default function Dashboard() {
               { label: "Disk", pct: system.disk_usage_pct, type: "disk" as const, detail: `${system.disk_used_gb.toFixed(0)} / ${system.disk_total_gb.toFixed(0)} GB · ${(system.disk_total_gb - system.disk_used_gb).toFixed(0)} GB free${dockerDiskUsage ? ` · Images: ${dockerDiskUsage}` : ""}`,
                 icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 17.25v-.228a4.5 4.5 0 0 0-.12-1.03l-2.268-9.64a3.375 3.375 0 0 0-3.285-2.602H7.923a3.375 3.375 0 0 0-3.285 2.602l-2.268 9.64a4.5 4.5 0 0 0-.12 1.03v.228m19.5 0a3 3 0 0 1-3 3H5.25a3 3 0 0 1-3-3m19.5 0a3 3 0 0 0-3-3H5.25a3 3 0 0 0-3 3m16.5 0h.008v.008h-.008v-.008Zm-3 0h.008v.008h-.008v-.008Z" /></svg> },
             ].map(({ label, pct, type, detail, icon }) => (
-              <div key={label} className="border border-dark-600 bg-dark-800 p-5 relative overflow-hidden shadow-lg shadow-black/10 elevation-1">
+              <div key={label} className="border border-dark-600 bg-dark-800 rounded-lg p-5 relative overflow-hidden shadow-lg shadow-black/10 elevation-1">
                 <div className={`absolute inset-0 opacity-[0.03] ${pct < 60 ? "bg-dark-50" : pct < 85 ? "bg-warn-500" : "bg-danger-500"}`} />
                 <div className="relative text-center">
                   <div className="flex items-center justify-center gap-1.5 text-dark-200 mb-1">
@@ -715,7 +715,7 @@ export default function Dashboard() {
                 { label: "Memory", data: metricsHistory.map(p => p.mem), color: "var(--color-accent-500)" },
                 { label: "Disk", data: metricsHistory.map(p => p.disk), color: "var(--color-warn-500)" },
               ].map(({ label, data, color }) => (
-                <div key={label} className="border border-dark-500 bg-dark-800 p-4 elevation-1">
+                <div key={label} className="border border-dark-500 bg-dark-800 rounded-lg p-4 elevation-1">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-[10px] uppercase tracking-widest text-dark-300 font-medium">{label} (24h)</span>
                     <span className="text-xs text-dark-200 font-mono">{data[data.length - 1]?.toFixed(1)}%</span>
@@ -727,7 +727,7 @@ export default function Dashboard() {
           )}
 
           {/* Status Bar — grid of stat cells */}
-          {isVisible("status_bar") && <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-px bg-dark-600 border border-dark-600 mb-6 shadow-sm shadow-black/5 stagger-children">
+          {isVisible("status_bar") && <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-px bg-dark-600 border border-dark-600 rounded-lg overflow-hidden mb-6 shadow-sm shadow-black/5 stagger-children">
             <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
               <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Uptime</span>
               <span className="text-sm text-dark-50 font-medium">{formatUptime(system.uptime_secs)}</span>
@@ -858,7 +858,7 @@ export default function Dashboard() {
           {isVisible("issues") && intel && (intel.top_issues.length > 0 || intel.ssl_countdowns.length > 0) && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
               {intel.top_issues.length > 0 && (
-                <div className="border border-dark-500 bg-dark-800 p-4">
+                <div className="border border-dark-500 bg-dark-800 rounded-lg p-4">
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="text-xs text-dark-300 uppercase tracking-widest">Active Issues</h3>
                     <Link to="/monitors" className="text-xs text-rust-400 hover:text-rust-300">View all</Link>
@@ -877,7 +877,7 @@ export default function Dashboard() {
                 </div>
               )}
               {intel.ssl_countdowns.length > 0 && (
-                <div className="border border-dark-500 bg-dark-800 p-4">
+                <div className="border border-dark-500 bg-dark-800 rounded-lg p-4">
                   <h3 className="text-xs text-dark-300 uppercase tracking-widest mb-3">SSL Certificates</h3>
                   <div className="space-y-2">
                     {intel.ssl_countdowns.map((ssl, i) => (
@@ -897,7 +897,7 @@ export default function Dashboard() {
           )}
 
           {/* System Information */}
-          {isVisible("system_info") && <div className="hidden sm:grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-px bg-dark-600 border border-dark-500 mb-6">
+          {isVisible("system_info") && <div className="hidden sm:grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-px bg-dark-600 border border-dark-500 rounded-lg overflow-hidden mb-6">
             {[
               ["Hostname", system.hostname],
               ["OS", system.os],
