@@ -23,6 +23,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Login.tsx** — Google OAuth button uses theme-mapped text/hover colors
 - **Settings.tsx hardcoded colors** — 13 instances of `blue-500/red-500` replaced with `accent/danger` tokens
 - **Dashboard stat grid square corners** — Added `rounded-lg overflow-hidden` to stat bar and system info grids; added explicit `rounded-lg` to metric cards, sparkline cards, onboarding section, and issues panels
+- **Compact layout flat nav** — GlassLayout now respects `dp-flat-nav` setting (was only implemented in Sidebar layout)
+- **Compact layout footer spacing** — Removed nested padding wrapper, aligned `px-3` to match Sidebar layout spacing
 
 ## [2.5.1] - 2026-03-22
 
