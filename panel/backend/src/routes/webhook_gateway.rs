@@ -279,6 +279,11 @@ pub async fn create_route(
         return Err(err(StatusCode::BAD_REQUEST, "destination_url required"));
     }
 
+    // SSRF protection: block internal destination URLs
+    if let Err(e) = crate::helpers::validate_url_not_internal(&req.destination_url).await {
+        return Err(err(StatusCode::BAD_REQUEST, &format!("Invalid destination URL: {}", e)));
+    }
+
     let route: WebhookRoute = sqlx::query_as(
         "INSERT INTO webhook_routes (endpoint_id, name, destination_url, filter_path, filter_value, extra_headers, retry_count, retry_delay_secs) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *"

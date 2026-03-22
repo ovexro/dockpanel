@@ -37,10 +37,10 @@ pub async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     }
 }
 
-/// GET /api/system/info — Proxy to agent's system info (authenticated).
+/// GET /api/system/info — Proxy to agent's system info (admin only).
 pub async fn info(
     State(state): State<AppState>,
-    AuthUser(_claims): AuthUser,
+    AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let data = agent

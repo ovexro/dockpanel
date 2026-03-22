@@ -479,8 +479,32 @@ pub async fn import_config(
     let settings_obj = body.get("settings").and_then(|s| s.as_object())
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Invalid format: missing 'settings' object"))?;
 
+    // Filter imported settings through the same whitelist as update()
+    let allowed_keys = [
+        "panel_name", "smtp_host", "smtp_port", "smtp_username", "smtp_password",
+        "smtp_from", "smtp_from_name", "smtp_encryption",
+        "stripe_price_starter", "stripe_price_pro", "stripe_price_agency",
+        "agent_latest_version", "agent_download_url", "agent_checksum",
+        "pdns_api_url", "pdns_api_key",
+        "auto_heal_enabled", "status_page_enabled", "enforce_2fa",
+        "timezone", "logo_url", "accent_color",
+        "email_footer", "events_webhook_url",
+        "oauth_google_client_id", "oauth_google_client_secret",
+        "oauth_github_client_id", "oauth_github_client_secret",
+        "oauth_gitlab_client_id", "oauth_gitlab_client_secret",
+        "oauth_auto_create", "hide_branding",
+        "reverse_proxy",
+        "notif_template_email", "notif_template_slack",
+        "notif_template_discord", "notif_template_webhook",
+    ];
+
     let mut imported = 0;
+    let mut skipped = 0;
     for (key, value) in settings_obj {
+        if !allowed_keys.contains(&key.as_str()) {
+            skipped += 1;
+            continue; // Skip disallowed keys
+        }
         if let Some(val) = value.as_str() {
             sqlx::query(
                 "INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, NOW()) \
@@ -500,7 +524,7 @@ pub async fn import_config(
         Some("settings"), None, None, None,
     ).await;
 
-    Ok(Json(serde_json::json!({ "ok": true, "imported": imported })))
+    Ok(Json(serde_json::json!({ "ok": true, "imported": imported, "skipped": skipped })))
 }
 
 /// GET /api/settings/health — System health check (admin only).

@@ -264,6 +264,29 @@ async fn upsert_rules(
     server_id: Option<Uuid>,
     body: &UpdateRules,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // SSRF protection: validate notification webhook URLs
+    if let Some(ref url) = body.notify_webhook_url {
+        if !url.is_empty() {
+            if let Err(e) = crate::helpers::validate_url_not_internal(url).await {
+                return Err(err(StatusCode::BAD_REQUEST, &format!("Invalid webhook URL: {}", e)));
+            }
+        }
+    }
+    if let Some(ref url) = body.notify_slack_url {
+        if !url.is_empty() {
+            if let Err(e) = crate::helpers::validate_url_not_internal(url).await {
+                return Err(err(StatusCode::BAD_REQUEST, &format!("Invalid Slack URL: {}", e)));
+            }
+        }
+    }
+    if let Some(ref url) = body.notify_discord_url {
+        if !url.is_empty() {
+            if let Err(e) = crate::helpers::validate_url_not_internal(url).await {
+                return Err(err(StatusCode::BAD_REQUEST, &format!("Invalid Discord URL: {}", e)));
+            }
+        }
+    }
+
     // Check if rule exists (partial unique indexes don't work with ON CONFLICT)
     let existing: Option<(Uuid,)> = if server_id.is_some() {
         sqlx::query_as("SELECT id FROM alert_rules WHERE user_id = $1 AND server_id = $2")

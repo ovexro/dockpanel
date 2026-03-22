@@ -40,6 +40,12 @@ async fn dump(
     if !is_valid_name(&req.db_name) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid database name"));
     }
+    if !is_valid_name(&req.container_name) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container name"));
+    }
+    if !is_valid_name(&req.user) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid user name"));
+    }
 
     let mut info = match req.db_type.as_str() {
         "mysql" | "mariadb" => {
@@ -111,6 +117,12 @@ async fn restore(
 ) -> Result<Json<serde_json::Value>, ApiErr> {
     if !is_valid_name(&db_name) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid database name"));
+    }
+    if !is_valid_name(&req.container_name) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container name"));
+    }
+    if !is_valid_name(&req.user) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid user name"));
     }
 
     // Resolve and validate backup file path

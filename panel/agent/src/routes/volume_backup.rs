@@ -5,7 +5,7 @@ use axum::{
     Json, Router,
 };
 
-use super::AppState;
+use super::{is_valid_name, AppState};
 use crate::services::{backups::BackupInfo, volume_backup};
 
 type ApiErr = (StatusCode, Json<serde_json::Value>);
@@ -27,9 +27,12 @@ async fn create(
     if req.volume_name.is_empty() || req.container_name.is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "volume_name and container_name required"));
     }
-    // Validate names to prevent injection
-    if req.volume_name.contains("..") || req.container_name.contains("..") {
-        return Err(err(StatusCode::BAD_REQUEST, "Invalid name"));
+    // Validate names to prevent injection / path traversal
+    if !is_valid_name(&req.volume_name) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid volume name"));
+    }
+    if !is_valid_name(&req.container_name) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container name"));
     }
 
     let info = volume_backup::backup_volume(&req.volume_name, &req.container_name)
@@ -42,6 +45,9 @@ async fn create(
 async fn list(
     Path(container_name): Path<String>,
 ) -> Result<Json<Vec<BackupInfo>>, ApiErr> {
+    if !is_valid_name(&container_name) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container name"));
+    }
     let list = volume_backup::list_volume_backups(&container_name)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
     Ok(Json(list))
@@ -57,6 +63,12 @@ async fn restore(
     Path((container_name, filename)): Path<(String, String)>,
     Json(req): Json<VolumeRestoreRequest>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
+    if !is_valid_name(&container_name) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container name"));
+    }
+    if !is_valid_name(&req.volume_name) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid volume name"));
+    }
     volume_backup::restore_volume(&req.volume_name, &container_name, &filename)
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
@@ -67,6 +79,9 @@ async fn restore(
 async fn remove(
     Path((container_name, filename)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
+    if !is_valid_name(&container_name) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container name"));
+    }
     volume_backup::delete_volume_backup(&container_name, &filename)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
     Ok(Json(serde_json::json!({ "success": true })))
