@@ -441,8 +441,13 @@ export function Icon({
   name: string;
   className?: string;
 }): ReactNode {
-  const set = iconSets.command;
-  const icon = set[name];
+  // Select icon set based on active layout
+  const layout = typeof document !== "undefined"
+    ? document.documentElement.getAttribute("data-layout") || "command"
+    : "command";
+  const setName = layout === "glass" ? "glass" : layout === "atlas" ? "atlas" : "command";
+  const set = iconSets[setName] || iconSets.command;
+  const icon = set[name] || set["dashboard"];
   if (!icon) return null;
 
   if (icon.fill) {

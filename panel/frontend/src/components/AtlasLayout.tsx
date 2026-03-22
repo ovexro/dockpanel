@@ -20,6 +20,7 @@ export default function AtlasLayout() {
     setSidebarOpen,
     visibleGroups,
   } = useLayoutState();
+  const isLight = theme === "clean" || theme === "arctic";
 
   const location = useLocation();
 
@@ -193,7 +194,7 @@ export default function AtlasLayout() {
             />
 
             {/* Layout switcher */}
-            <LayoutSwitcher variant="dark" />
+            <LayoutSwitcher variant={isLight ? "light" : "dark"} />
 
             {/* Theme cycle */}
             <button
