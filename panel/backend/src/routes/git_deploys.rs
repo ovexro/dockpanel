@@ -18,6 +18,7 @@ use crate::routes::is_valid_name;
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
 use crate::services::agent::AgentHandle;
+use crate::services::notifications;
 use crate::AppState;
 
 #[derive(serde::Serialize, sqlx::FromRow)]
@@ -711,6 +712,9 @@ pub async fn rollback(
                     &db, user_id, &email, "git_deploy.rollback",
                     Some("git_deploy"), Some(&deploy_name), Some(&rollback_image), None,
                 ).await;
+
+                // Panel notification
+                notifications::notify_panel(&db, Some(user_id), &format!("Rollback complete: {}", deploy_name), &format!("Rolled back to {}", &rollback_commit[..7.min(rollback_commit.len())]), "info", "deploy", Some("/git-deploys")).await;
             }
             Err(e) => {
                 emit("deploy", "Rolling back container", "error", Some(format!("{e}")));
@@ -738,6 +742,9 @@ pub async fn rollback(
                     .ok();
 
                 tracing::error!("Git deploy rollback failed: {deploy_name}: {e}");
+
+                // Panel notification
+                notifications::notify_panel(&db, Some(user_id), &format!("Rollback failed: {}", deploy_name), &format!("{e}"), "critical", "deploy", Some("/git-deploys")).await;
             }
         }
 
@@ -1390,6 +1397,9 @@ fn spawn_deploy_task(
                     Some("git_deploy"), Some(&deploy_name), Some(&commit_hash), Some("success"),
                 ).await;
 
+                // Panel notification
+                notifications::notify_panel(&db, Some(user_id), &format!("Deploy complete: {}", deploy_name), &format!("Commit: {}", commit_hash), "info", "deploy", Some("/git-deploys")).await;
+
                 // Post-deploy hook
                 if let Some(ref cmd) = config.post_deploy_cmd {
                     if !cmd.trim().is_empty() {
@@ -1539,6 +1549,9 @@ fn spawn_deploy_task(
                                                 Some("git_deploy"), Some(&monitor_name), Some(&prev_commit), None,
                                             ).await;
 
+                                            // Panel notification
+                                            notifications::notify_panel(&monitor_db, Some(monitor_user), &format!("Auto-rollback: {}", monitor_name), "Deploy failed, rolled back to previous version", "warning", "deploy", Some("/git-deploys")).await;
+
                                             tracing::info!("Auto-rollback complete: {monitor_name} → {prev_image}");
                                         }
                                     }
@@ -1582,6 +1595,9 @@ fn spawn_deploy_task(
                     &db, user_id, &email, "git_deploy.deploy",
                     Some("git_deploy"), Some(&deploy_name), Some(&commit_hash), Some("failed"),
                 ).await;
+
+                // Panel notification
+                notifications::notify_panel(&db, Some(user_id), &format!("Deploy failed: {}", deploy_name), &format!("{e}"), "critical", "deploy", Some("/git-deploys")).await;
 
                 // GitHub commit status — failure
                 if let Some(ref gh_token) = config.github_token {

@@ -20,6 +20,7 @@ use crate::routes::is_valid_domain;
 use crate::routes::reseller_dashboard::check_reseller_quota;
 use crate::services::activity;
 use crate::services::extensions::fire_event;
+use crate::services::notifications;
 use crate::AppState;
 
 /// A single provisioning step event.
@@ -292,6 +293,9 @@ pub async fn create(
                 &state.db, claims.sub, &claims.email, "site.create",
                 Some("site"), Some(&body.domain), Some(runtime), None,
             ).await;
+
+            // Panel notification
+            notifications::notify_panel(&state.db, Some(claims.sub), &format!("Site created: {}", body.domain), &format!("New {} site is now active", runtime), "info", "site", None).await;
 
             fire_event(&state.db, "site.created", serde_json::json!({
                 "site_id": site.id, "domain": site.domain, "runtime": site.runtime,
@@ -1137,6 +1141,9 @@ pub async fn remove(
         &state.db, claims.sub, &claims.email, "site.delete",
         Some("site"), Some(&site.domain), None, None,
     ).await;
+
+    // Panel notification
+    notifications::notify_panel(&state.db, Some(claims.sub), &format!("Site deleted: {}", site.domain), "Site and all associated resources have been removed", "info", "site", None).await;
 
     fire_event(&state.db, "site.deleted", serde_json::json!({
         "domain": &site.domain,

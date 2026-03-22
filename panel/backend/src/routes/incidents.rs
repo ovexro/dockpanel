@@ -9,6 +9,7 @@ use crate::auth::{AdminUser, AuthUser};
 use crate::error::{err, paginate, ApiError};
 use crate::services::activity;
 use crate::services::extensions::fire_event;
+use crate::services::notifications;
 use crate::AppState;
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -173,6 +174,9 @@ pub async fn create(
     fire_event(&state.db, "incident.created", serde_json::json!({
         "incident_id": incident.id, "title": &req.title, "severity": &incident.severity, "status": &incident.status,
     }));
+
+    // Panel notification
+    notifications::notify_panel(&state.db, Some(claims.sub), &format!("Incident: {}", req.title), req.description.as_deref().unwrap_or("New incident created"), severity, "incident", Some("/incidents")).await;
 
     Ok((StatusCode::CREATED, Json(incident)))
 }
@@ -341,11 +345,11 @@ pub async fn post_update(
         // GAP 16: Auto-resolve linked alerts when incident is resolved
         let incident_title: Option<(String,)> = sqlx::query_as("SELECT title FROM managed_incidents WHERE id = $1")
             .bind(id).fetch_optional(&state.db).await.ok().flatten();
-        if let Some((title,)) = incident_title {
+        if let Some((ref title,)) = incident_title {
             let _ = sqlx::query(
                 "UPDATE alerts SET status = 'resolved', resolved_at = NOW() \
                  WHERE title = $1 AND status IN ('firing', 'acknowledged')"
-            ).bind(&title).execute(&state.db).await;
+            ).bind(title).execute(&state.db).await;
         }
 
         // Clear status_override on linked components
@@ -355,6 +359,11 @@ pub async fn post_update(
         ).bind(id).execute(&state.db).await;
 
         fire_event(&state.db, "incident.resolved", serde_json::json!({ "incident_id": id }));
+
+        // Panel notification for resolution
+        if let Some((ref title,)) = incident_title {
+            notifications::notify_panel(&state.db, Some(claims.sub), &format!("Resolved: {}", title), "Incident has been resolved", "info", "incident", Some("/incidents")).await;
+        }
     } else {
         let _ = sqlx::query("UPDATE managed_incidents SET status = $2, updated_at = NOW() WHERE id = $1")
             .bind(id).bind(&req.status).execute(&state.db).await;
