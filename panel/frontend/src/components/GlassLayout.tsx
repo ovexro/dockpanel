@@ -174,7 +174,7 @@ export default function GlassLayout() {
                     <div
                       title={!expanded && !sidebarOpen ? item.label : undefined}
                       className={[
-                        "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all",
+                        `flex items-center py-2.5 rounded-lg transition-all ${expanded || sidebarOpen ? "gap-3 px-3" : "justify-center px-0"}`,
                         isActive
                           ? "bg-rust-500/10 text-rust-400 border-l-2 border-rust-500 ml-0.5"
                           : "text-dark-300 hover:text-dark-100 hover:bg-dark-700/30",
@@ -183,9 +183,11 @@ export default function GlassLayout() {
                       <div className={`shrink-0 flex items-center justify-center transition-all duration-200 ${expanded || sidebarOpen ? "w-5 h-5" : "w-7 h-7"}`}>
                         <Icon name={item.iconName} className={`transition-all duration-200 ${expanded || sidebarOpen ? "w-[19px] h-[19px]" : "w-6 h-6"}`} />
                       </div>
-                      <span className="text-sm whitespace-nowrap overflow-hidden">
-                        {item.label}
-                      </span>
+                      {(expanded || sidebarOpen) && (
+                        <span className="text-sm whitespace-nowrap overflow-hidden">
+                          {item.label}
+                        </span>
+                      )}
                       {item.to === "/monitoring" && firingCount > 0 && (
                         <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-danger-500 text-white rounded-full min-w-[20px] text-center shrink-0">
                           {firingCount}
@@ -226,18 +228,20 @@ export default function GlassLayout() {
                         <div
                           title={!expanded && !sidebarOpen ? item.label : undefined}
                           className={[
-                            "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all",
+                            `flex items-center py-2.5 rounded-lg transition-all ${expanded || sidebarOpen ? "gap-3 px-3" : "justify-center px-0"}`,
                             isActive
                               ? "bg-rust-500/10 text-rust-400 border-l-2 border-rust-500 ml-0.5"
                               : "text-dark-300 hover:text-dark-100 hover:bg-dark-700/30",
                           ].join(" ")}
                         >
-                          <div className="w-5 h-5 shrink-0 flex items-center justify-center">
-                            <Icon name={item.iconName} className="w-[19px] h-[19px]" />
+                          <div className={`shrink-0 flex items-center justify-center transition-all duration-200 ${expanded || sidebarOpen ? "w-5 h-5" : "w-7 h-7"}`}>
+                            <Icon name={item.iconName} className={`transition-all duration-200 ${expanded || sidebarOpen ? "w-[19px] h-[19px]" : "w-6 h-6"}`} />
                           </div>
-                          <span className="text-sm whitespace-nowrap overflow-hidden">
-                            {item.label}
-                          </span>
+                          {(expanded || sidebarOpen) && (
+                            <span className="text-sm whitespace-nowrap overflow-hidden">
+                              {item.label}
+                            </span>
+                          )}
                           {item.to === "/monitoring" && firingCount > 0 && (
                             <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-danger-500 text-white rounded-full min-w-[20px] text-center shrink-0">
                               {firingCount}
