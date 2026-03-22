@@ -343,6 +343,21 @@ export default function CommandLayout() {
               </button>
             </div>
 
+            {/* System status */}
+            {(() => {
+              const s = state.firingCount > 0 || state.apiHealthy === false
+                ? { label: "Issues Detected", color: "bg-danger-500/10 border-danger-500/20 text-danger-400", dot: "bg-danger-400" }
+                : state.apiHealthy === null
+                ? { label: "Checking...", color: "bg-dark-600/20 border-dark-600 text-dark-400", dot: "bg-dark-400" }
+                : { label: "All Systems Operational", color: "bg-rust-500/10 border-rust-500/20 text-rust-400", dot: "bg-rust-500" };
+              return (
+                <span className={`hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-medium ${s.color}`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${s.dot} ${s.dot === "bg-rust-500" ? "animate-pulse" : ""}`} />
+                  {s.label}
+                </span>
+              );
+            })()}
+
             {/* Right side */}
             <div className="flex items-center gap-3">
               <Link to="/notifications" className="relative p-2 rounded-lg transition-colors text-dark-400 hover:text-dark-50 hover:bg-dark-800" title="Notifications" aria-label="Notifications">
