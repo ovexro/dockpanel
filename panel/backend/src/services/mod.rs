@@ -10,6 +10,7 @@ pub mod extensions;
 pub mod preview_cleanup;
 pub mod metrics_collector;
 pub mod notifications;
+pub mod secrets_crypto;
 pub mod security_scanner;
 pub mod server_monitor;
 pub mod system_log;
