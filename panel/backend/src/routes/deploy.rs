@@ -158,6 +158,18 @@ pub async fn trigger(
     ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    // Check for active critical/major incidents — block deploy during outage
+    let active_incidents: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM managed_incidents \
+         WHERE status NOT IN ('resolved', 'postmortem') \
+         AND severity IN ('critical', 'major')"
+    ).fetch_one(&state.db).await.unwrap_or((0,));
+
+    if active_incidents.0 > 0 {
+        return Err(err(StatusCode::CONFLICT,
+            "Deploy blocked: active critical/major incident in progress. Resolve the incident first."));
+    }
+
     let domain = get_site(&state, id, claims.sub).await?;
 
     let config: DeployConfig = sqlx::query_as(
@@ -360,6 +372,18 @@ pub async fn webhook(
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     let domain = domain.map(|(d,)| d).unwrap_or_default();
+
+    // Check for active critical/major incidents — skip webhook deploy during outage
+    let active_incidents: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM managed_incidents \
+         WHERE status NOT IN ('resolved', 'postmortem') \
+         AND severity IN ('critical', 'major')"
+    ).fetch_one(&state.db).await.unwrap_or((0,));
+
+    if active_incidents.0 > 0 {
+        tracing::warn!("Deploy blocked for {domain}: active incident in progress");
+        return Ok(Json(serde_json::json!({ "ok": false, "message": "Deploy skipped: active incident" })));
+    }
 
     // Resolve the agent for this webhook (use local agent for webhook-triggered deploys)
     let agent = crate::services::agent::AgentHandle::Local(state.agents.local().clone());

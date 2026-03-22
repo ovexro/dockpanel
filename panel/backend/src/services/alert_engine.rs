@@ -34,6 +34,11 @@ pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync:
                     check_service_health(&pool, &agent).await;
                 }
 
+                // GAP 8: Docker container health every 2 minutes (offset from service health)
+                if tick_count % 2 == 1 {
+                    check_container_health(&pool, &agent).await;
+                }
+
                 // GAP 9: Escalate unacknowledged firing alerts older than 15 minutes
                 check_escalations(&pool).await;
 
@@ -234,6 +239,80 @@ async fn check_resource_thresholds(pool: &PgPool) {
                 ),
             )
             .await;
+        }
+
+        // GAP 6: Disk-full forecast — check if disk will be full within 48 hours based on trend
+        let disk_trend: Vec<(f32, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+            "SELECT disk_pct, created_at FROM metrics_history \
+             WHERE server_id = $1 ORDER BY created_at DESC LIMIT 60",
+        )
+        .bind(server.id)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+        if disk_trend.len() >= 10 {
+            let newest = disk_trend.first().unwrap();
+            let oldest = disk_trend.last().unwrap();
+            let hours_diff = (newest.1 - oldest.1).num_seconds() as f64 / 3600.0;
+            if hours_diff > 0.5 {
+                let rate_per_hour = (newest.0 as f64 - oldest.0 as f64) / hours_diff;
+                if rate_per_hour > 0.0 {
+                    let remaining_pct = 100.0 - newest.0 as f64;
+                    let hours_to_full = remaining_pct / rate_per_hour;
+                    if hours_to_full < 48.0 && hours_to_full > 0.0 {
+                        let severity = if hours_to_full < 12.0 { "critical" } else { "warning" };
+                        fire_alert_with_retry(
+                            pool,
+                            server.user_id,
+                            Some(server.id),
+                            None,
+                            "disk_forecast",
+                            severity,
+                            &format!("Disk will be full in {:.0} hours on {}", hours_to_full, server.name),
+                            &format!(
+                                "At the current growth rate of {:.1}%/hour, disk will be full in approximately {:.0} hours. Current usage: {:.1}%",
+                                rate_per_hour, hours_to_full, newest.0
+                            ),
+                        )
+                        .await;
+                    }
+                }
+            }
+        }
+
+        // GAP 7: Memory leak detection — check for sustained upward trend in memory usage
+        let mem_trend: Vec<(f32,)> = sqlx::query_as(
+            "SELECT mem_pct FROM metrics_history \
+             WHERE server_id = $1 ORDER BY created_at DESC LIMIT 60",
+        )
+        .bind(server.id)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+        if mem_trend.len() >= 30 {
+            let recent_avg: f64 = mem_trend[..10].iter().map(|m| m.0 as f64).sum::<f64>() / 10.0;
+            let older_avg: f64 = mem_trend[20..30].iter().map(|m| m.0 as f64).sum::<f64>() / 10.0;
+            let increase = recent_avg - older_avg;
+            // If memory has risen >10% in the window and is above 60%, warn about leak
+            if increase > 10.0 && recent_avg > 60.0 {
+                fire_alert_with_retry(
+                    pool,
+                    server.user_id,
+                    Some(server.id),
+                    None,
+                    "memory_leak",
+                    "warning",
+                    &format!("Possible memory leak detected on {}", server.name),
+                    &format!(
+                        "Memory usage has risen {:.1}% in the last hour (from {:.1}% to {:.1}%). \
+                         This sustained increase suggests a memory leak.",
+                        increase, older_avg, recent_avg
+                    ),
+                )
+                .await;
+            }
         }
     }
 }
@@ -693,6 +772,201 @@ async fn check_service_health(pool: &PgPool, agent: &AgentClient) {
                     &format!("The {} service is running again on server {}.", name, server_name),
                 )
                 .await;
+            }
+        }
+    }
+}
+
+// ─── GAP 8: Docker Container Health ──────────────────────────────────────
+
+async fn check_container_health(pool: &PgPool, agent: &AgentClient) {
+    let containers: Vec<serde_json::Value> = match agent.get("/apps").await {
+        Ok(val) => {
+            if let Some(arr) = val.as_array() {
+                arr.clone()
+            } else {
+                return;
+            }
+        }
+        Err(e) => {
+            tracing::debug!("Container health check skipped: {e}");
+            return;
+        }
+    };
+
+    // Get the local server for alert association
+    let server: Option<(Uuid, Uuid, String)> = sqlx::query_as(
+        "SELECT id, user_id, name FROM servers ORDER BY created_at ASC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    let (server_id, user_id, _server_name) = match server {
+        Some(s) => s,
+        None => return,
+    };
+
+    for c in &containers {
+        let name = c.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let state = c.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        let health = c.get("health").and_then(|v| v.as_str());
+
+        if state == "exited" || state == "dead" {
+            // Check if already firing for this container
+            let existing: Option<(String,)> = sqlx::query_as(
+                "SELECT current_state FROM alert_state \
+                 WHERE server_id = $1 AND alert_type = 'container_down' AND state_key = $2",
+            )
+            .bind(server_id)
+            .bind(name)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+
+            if existing.as_ref().map(|s| s.0.as_str()) != Some("firing") {
+                let _ = sqlx::query(
+                    "INSERT INTO alert_state (server_id, alert_type, state_key, current_state, fired_at, last_notified_at) \
+                     VALUES ($1, 'container_down', $2, 'firing', NOW(), NOW()) \
+                     ON CONFLICT (server_id, alert_type, state_key) WHERE server_id IS NOT NULL \
+                     DO UPDATE SET current_state = 'firing', fired_at = NOW(), last_notified_at = NOW()",
+                )
+                .bind(server_id)
+                .bind(name)
+                .execute(pool)
+                .await;
+
+                fire_alert_with_retry(
+                    pool,
+                    user_id,
+                    Some(server_id),
+                    None,
+                    "container_down",
+                    "critical",
+                    &format!("Container '{}' is {}", name, state),
+                    &format!(
+                        "Docker container '{}' has stopped (state: {}). It may need to be restarted.",
+                        name, state
+                    ),
+                )
+                .await;
+            }
+        } else if state == "restarting" {
+            // Container in restart loop
+            let existing: Option<(String,)> = sqlx::query_as(
+                "SELECT current_state FROM alert_state \
+                 WHERE server_id = $1 AND alert_type = 'container_crashloop' AND state_key = $2",
+            )
+            .bind(server_id)
+            .bind(name)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+
+            if existing.as_ref().map(|s| s.0.as_str()) != Some("firing") {
+                let _ = sqlx::query(
+                    "INSERT INTO alert_state (server_id, alert_type, state_key, current_state, fired_at, last_notified_at) \
+                     VALUES ($1, 'container_crashloop', $2, 'firing', NOW(), NOW()) \
+                     ON CONFLICT (server_id, alert_type, state_key) WHERE server_id IS NOT NULL \
+                     DO UPDATE SET current_state = 'firing', fired_at = NOW(), last_notified_at = NOW()",
+                )
+                .bind(server_id)
+                .bind(name)
+                .execute(pool)
+                .await;
+
+                fire_alert_with_retry(
+                    pool,
+                    user_id,
+                    Some(server_id),
+                    None,
+                    "container_crashloop",
+                    "critical",
+                    &format!("Container '{}' is crash-looping", name),
+                    &format!(
+                        "Docker container '{}' is in a restart loop (state: restarting), indicating repeated crashes.",
+                        name
+                    ),
+                )
+                .await;
+            }
+        } else if health == Some("unhealthy") {
+            // Container running but health check failing
+            let existing: Option<(String,)> = sqlx::query_as(
+                "SELECT current_state FROM alert_state \
+                 WHERE server_id = $1 AND alert_type = 'container_unhealthy' AND state_key = $2",
+            )
+            .bind(server_id)
+            .bind(name)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+
+            if existing.as_ref().map(|s| s.0.as_str()) != Some("firing") {
+                let _ = sqlx::query(
+                    "INSERT INTO alert_state (server_id, alert_type, state_key, current_state, fired_at, last_notified_at) \
+                     VALUES ($1, 'container_unhealthy', $2, 'firing', NOW(), NOW()) \
+                     ON CONFLICT (server_id, alert_type, state_key) WHERE server_id IS NOT NULL \
+                     DO UPDATE SET current_state = 'firing', fired_at = NOW(), last_notified_at = NOW()",
+                )
+                .bind(server_id)
+                .bind(name)
+                .execute(pool)
+                .await;
+
+                fire_alert_with_retry(
+                    pool,
+                    user_id,
+                    Some(server_id),
+                    None,
+                    "container_unhealthy",
+                    "warning",
+                    &format!("Container '{}' is unhealthy", name),
+                    &format!("Docker container '{}' health check is failing.", name),
+                )
+                .await;
+            }
+        } else if state == "running" && health != Some("unhealthy") {
+            // Container is healthy — resolve any previous container alerts
+            for alert_type in &["container_down", "container_unhealthy", "container_crashloop"] {
+                let was_firing: Option<(String,)> = sqlx::query_as(
+                    "SELECT current_state FROM alert_state \
+                     WHERE server_id = $1 AND alert_type = $2 AND state_key = $3",
+                )
+                .bind(server_id)
+                .bind(*alert_type)
+                .bind(name)
+                .fetch_optional(pool)
+                .await
+                .ok()
+                .flatten();
+
+                if was_firing.as_ref().map(|s| s.0.as_str()) == Some("firing") {
+                    let _ = sqlx::query(
+                        "UPDATE alert_state SET current_state = 'ok', fired_at = NULL, last_notified_at = NULL \
+                         WHERE server_id = $1 AND alert_type = $2 AND state_key = $3",
+                    )
+                    .bind(server_id)
+                    .bind(*alert_type)
+                    .bind(name)
+                    .execute(pool)
+                    .await;
+
+                    notifications::resolve_alert(
+                        pool,
+                        user_id,
+                        Some(server_id),
+                        None,
+                        alert_type,
+                        &format!("Container '{}' recovered", name),
+                        &format!("Docker container '{}' is running and healthy again.", name),
+                    )
+                    .await;
+                }
             }
         }
     }

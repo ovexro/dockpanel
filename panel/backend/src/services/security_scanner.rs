@@ -178,6 +178,11 @@ async fn run_scan(pool: &PgPool, agent: &AgentClient) {
         "Security scan completed: {total} findings ({critical} critical, {warning} warning, {info} info)"
     );
 
+    // Auto-fix safe findings (non-destructive only)
+    if let Some(findings) = findings {
+        auto_fix_safe_findings(pool, agent, findings).await;
+    }
+
     // Keep only last 90 days of scans
     let _ = sqlx::query("DELETE FROM security_findings WHERE scan_id IN (SELECT id FROM security_scans WHERE created_at < NOW() - INTERVAL '90 days')")
         .execute(pool).await;
@@ -187,6 +192,110 @@ async fn run_scan(pool: &PgPool, agent: &AgentClient) {
     // Send alerts if critical or warning findings
     if critical > 0 || warning > 0 {
         send_scan_alerts(pool, critical, warning, total).await;
+    }
+}
+
+/// Auto-fix safe findings after a scan completes.
+/// Only fixes things that are SAFE to fix automatically (SSL renewal).
+/// Never auto-fixes malware, open ports, or config changes that could break things.
+async fn auto_fix_safe_findings(
+    pool: &PgPool,
+    agent: &AgentClient,
+    findings: &[serde_json::Value],
+) {
+    for f in findings {
+        let check_type = f["check_type"].as_str().unwrap_or("");
+        match check_type {
+            // Auto-renew expiring SSL certs
+            "ssl_expiry" => {
+                // Extract domain from the title: "SSL certificate expiring: example.com"
+                let title = f["title"].as_str().unwrap_or("");
+                let domain = title.strip_prefix("SSL certificate expiring: ").unwrap_or("");
+                if domain.is_empty() {
+                    continue;
+                }
+
+                // Look up site details from DB (same pattern as auto_healer)
+                let site: Option<(String, Option<i32>, Option<String>, Option<String>, uuid::Uuid)> =
+                    sqlx::query_as(
+                        "SELECT s.runtime, s.proxy_port, s.php_version, s.root_path, s.user_id \
+                         FROM sites s WHERE s.domain = $1 AND s.ssl_enabled = TRUE",
+                    )
+                    .bind(domain)
+                    .fetch_optional(pool)
+                    .await
+                    .unwrap_or(None);
+
+                let Some((runtime, proxy_port, php_version, root_path, user_id)) = site else {
+                    continue;
+                };
+
+                // Look up owner email for ACME registration
+                let email: Option<String> = sqlx::query_scalar(
+                    "SELECT email FROM users WHERE id = $1",
+                )
+                .bind(user_id)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
+
+                let Some(email) = email else {
+                    tracing::warn!("Auto-fix: cannot renew SSL for {domain} — owner email not found");
+                    continue;
+                };
+
+                tracing::info!("Auto-fix: renewing expiring SSL certificate for {domain}");
+
+                let mut agent_body = serde_json::json!({
+                    "email": email,
+                    "runtime": runtime,
+                });
+                if let Some(port) = proxy_port {
+                    agent_body["proxy_port"] = serde_json::json!(port);
+                }
+                if let Some(php) = &php_version {
+                    agent_body["php_socket"] =
+                        serde_json::json!(format!("/run/php/php{php}-fpm.sock"));
+                }
+                if let Some(root) = &root_path {
+                    agent_body["root"] = serde_json::json!(root);
+                }
+
+                match agent
+                    .post(
+                        &format!("/ssl/provision/{domain}"),
+                        Some(agent_body),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        tracing::info!("Auto-fix: SSL renewed successfully for {domain}");
+                        crate::services::system_log::log_event(
+                            pool,
+                            "info",
+                            "security_scanner",
+                            &format!("Auto-renewed SSL certificate for {domain}"),
+                            None,
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        tracing::warn!("Auto-fix: SSL renewal failed for {domain}: {e}");
+                    }
+                }
+            }
+            // Security headers — log as recommendation only
+            "security_headers" => {
+                tracing::info!(
+                    "Auto-fix: security headers — logged as recommendation for {}",
+                    f["title"].as_str().unwrap_or("unknown")
+                );
+                // Headers are already in nginx templates — this finding means custom config.
+                // Don't auto-fix, just log.
+            }
+            // Don't auto-fix: malware, open_port, container_vuln, file_integrity
+            _ => {}
+        }
     }
 }
 
