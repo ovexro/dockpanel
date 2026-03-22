@@ -4,6 +4,31 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.2.0] - 2026-03-22
+
+### Added
+- **Incident Management**: Full incident lifecycle with real-time status updates.
+  - **Managed incidents**: Create, track, and resolve incidents with status lifecycle (investigating → identified → monitoring → resolved → postmortem).
+  - **Incident severity**: Minor, major, critical, and maintenance classifications.
+  - **Incident timeline**: Post updates with status changes and messages. Full audit trail with author emails and timestamps.
+  - **Postmortem support**: Attach post-incident analysis with publish control.
+  - **Affected components**: Link incidents to status page components for targeted impact reporting.
+- **Enhanced Status Page**: Production-grade public status page replacing the basic monitor list.
+  - **Status page configuration**: Customizable title, description, logo URL, accent color, history display settings.
+  - **Component groups**: Organize monitors into logical service components (e.g., "API Server", "Website") with grouping.
+  - **Overall status indicator**: Automatically computed from component health (operational/degraded/major outage).
+  - **Incident history**: Shows active incidents with full timeline, plus resolved incidents within configurable history window.
+  - **Auto-detected downtime**: Legacy monitor-based incidents also displayed for complete visibility.
+  - **Email subscribers**: Public subscribe/unsubscribe for incident notifications. Verified subscribers receive updates on status changes.
+  - **Standalone public page**: Dark-themed, no-auth status page at `/status` with responsive layout.
+- **Admin UI**: New "Incidents" page in Operations nav with 3 tabs (Incidents, Components, Settings).
+- **11 new API endpoints**: Incidents CRUD + updates, status page config, components CRUD, subscribers, enhanced public endpoint.
+- **E2E test suite**: `tests/incident-management-e2e.sh` covering full incident lifecycle, components, public page, subscribers.
+
+### Infrastructure
+- New migration: `status_page_config`, `status_page_components`, `status_page_component_monitors`, `managed_incidents`, `managed_incident_components`, `incident_updates`, `status_page_subscribers` tables.
+- Frontend: `IncidentManagement.tsx` (admin), `PublicStatusPage.tsx` (public standalone).
+
 ## [2.1.0] - 2026-03-22
 
 ### Added

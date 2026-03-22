@@ -95,6 +95,8 @@ const ResellerDashboard = lazyRetry(() => import("./pages/ResellerDashboard"));
 const MigrationWizard = lazyRetry(() => import("./pages/Migration"));
 const ResellerUsers = lazyRetry(() => import("./pages/ResellerUsers"));
 const BackupOrchestrator = lazyRetry(() => import("./pages/BackupOrchestrator"));
+const IncidentManagement = lazyRetry(() => import("./pages/IncidentManagement"));
+const PublicStatusPage = lazyRetry(() => import("./pages/PublicStatusPage"));
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -141,10 +143,12 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/reseller/users" element={<ResellerUsers />} />
               <Route path="/users" element={<Navigate to="/settings" replace />} />
               <Route path="/backup-orchestrator" element={<BackupOrchestrator />} />
+              <Route path="/incidents" element={<IncidentManagement />} />
               <Route path="/monitoring" element={<Monitoring />} />
               <Route path="/monitors" element={<Navigate to="/monitoring" replace />} />
               <Route path="/alerts" element={<Navigate to="/monitoring" replace />} />
             </Route>
+            <Route path="/status" element={<PublicStatusPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>
