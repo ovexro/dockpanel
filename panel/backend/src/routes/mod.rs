@@ -25,6 +25,7 @@ pub mod logs;
 pub mod mail;
 pub mod metrics;
 pub mod monitors;
+pub mod notifications;
 pub mod security;
 pub mod security_scans;
 pub mod server_actions;
@@ -519,6 +520,11 @@ pub fn router() -> Router<AppState> {
         .route("/api/alerts/{id}/resolve", put(alerts::resolve))
         .route("/api/alert-rules", get(alerts::get_rules).put(alerts::update_rules))
         .route("/api/alert-rules/{server_id}", put(alerts::update_server_rules).delete(alerts::delete_server_rules))
+        // Notification Center
+        .route("/api/notifications", get(notifications::list))
+        .route("/api/notifications/unread-count", get(notifications::unread_count))
+        .route("/api/notifications/{id}/read", post(notifications::mark_read))
+        .route("/api/notifications/read-all", post(notifications::mark_all_read))
         // Backup Orchestrator
         .route("/api/backup-orchestrator/health", get(backup_orchestrator::health))
         .route("/api/backup-orchestrator/policies", get(backup_orchestrator::list_policies).post(backup_orchestrator::create_policy))

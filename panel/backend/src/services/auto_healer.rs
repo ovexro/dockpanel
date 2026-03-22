@@ -634,4 +634,11 @@ async fn run_retention_cleanup(pool: &PgPool) {
     if sess_deleted > 0 {
         tracing::info!("Retention: deleted {sess_deleted} expired user sessions (>24h)");
     }
+
+    // Panel notifications: 30 days
+    let notif_deleted = sqlx::query("DELETE FROM panel_notifications WHERE created_at < NOW() - INTERVAL '30 days'")
+        .execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
+    if notif_deleted > 0 {
+        tracing::info!("Retention: deleted {notif_deleted} panel notifications (>30 days)");
+    }
 }

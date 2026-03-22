@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Security scanner auto-fix** — Auto-renews expiring SSL certificates detected by security scans (safe findings only, never auto-deletes)
 - **Fail2Ban auto-configuration** — New sites auto-get a Fail2Ban jail monitoring their access log; removed on site deletion
 - **Session management** — New `user_sessions` table, `GET /api/auth/sessions` (list with is_current flag), `DELETE /api/auth/sessions/{id}` (revoke), auto-cleanup of expired sessions
+- **Notification center** — Bell icon with unread badge in all 4 layouts. New `panel_notifications` table, 4 API endpoints (list, unread-count, mark-read, mark-all-read), `/notifications` page with severity colors. Alerts auto-insert into notification center. 30-day retention cleanup
 
 ## [2.5.2] - 2026-03-22
 
