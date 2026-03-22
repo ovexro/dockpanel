@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>The most feature-packed free server panel ever built.</strong><br>
-  Self-hosted. Docker-native. Written in Rust. 60MB RAM. 371 API endpoints. Zero subscriptions.
+  Self-hosted. Docker-native. Written in Rust. ~57MB RAM. 371 API endpoints. 54 app templates. 116 E2E tests. ~35MB binaries. Zero subscriptions.
 </p>
 
 <p align="center">
@@ -38,7 +38,7 @@ Supports Ubuntu 20+, Debian 11+, CentOS 9+, Rocky 9+, Fedora 39+, Amazon Linux 2
 
 ## Why DockPanel?
 
-No other free panel gives you Git push-to-deploy with blue-green zero-downtime updates, 54 one-click Docker app templates, multi-server management, reseller accounts, a developer CLI, and Infrastructure as Code — all running on 60MB of RAM. DockPanel does.
+No other free panel gives you Git push-to-deploy with blue-green zero-downtime updates, 54 one-click Docker app templates, multi-server management, reseller accounts, a developer CLI, and Infrastructure as Code — all running on ~57MB of RAM. DockPanel does.
 
 | | DockPanel | HestiaCP | CloudPanel | RunCloud |
 |---|---|---|---|---|
@@ -49,16 +49,60 @@ No other free panel gives you Git push-to-deploy with blue-green zero-downtime u
 | **Multi-server** | **Unlimited** | No | No | Yes |
 | **Reseller + white-label** | **Yes** | No | No | No |
 | **CLI + IaC** | **Full CLI + YAML export** | Limited | No | No |
-| **RAM usage** | **~60MB** | ~200MB+ | ~150MB+ | SaaS |
+| **RAM usage** | **~57MB** | ~200MB+ | ~150MB+ | SaaS |
 | **ARM64 / Homelab** | **Yes** | Partial | No | No |
 | **Self-hosted** | **Yes** | Yes | Yes | No |
 
 ## Screenshots
 
+All screenshots use the **Clean** (light) theme.
+
+<details>
+<summary><strong>Sites</strong> — Static, PHP, Node.js, Python, reverse proxy with Nginx + SSL</summary>
+
+![Sites](.github/screenshots/dp-sites.png)
+</details>
+
 <details>
 <summary><strong>Docker Apps</strong> — 54 one-click templates across 10 categories</summary>
 
 ![Docker Apps](.github/screenshots/dp-apps.png)
+</details>
+
+<details>
+<summary><strong>Backup Orchestrator</strong> — DB/volume backups, AES-256 encryption, restore verification, policies</summary>
+
+![Backup Orchestrator](.github/screenshots/dp-backups.png)
+</details>
+
+<details>
+<summary><strong>Secrets Manager</strong> — AES-256-GCM encrypted vaults, version history, auto-inject to .env</summary>
+
+![Secrets Manager](.github/screenshots/dp-secrets.png)
+</details>
+
+<details>
+<summary><strong>Webhook Gateway</strong> — Inbound endpoints, HMAC verification, request inspector, route builder</summary>
+
+![Webhook Gateway](.github/screenshots/dp-webhooks.png)
+</details>
+
+<details>
+<summary><strong>Incident Management</strong> — Full lifecycle, severity levels, timeline, affected components</summary>
+
+![Incident Management](.github/screenshots/dp-incidents.png)
+</details>
+
+<details>
+<summary><strong>Public Status Page</strong> — Standalone dark-themed page, component groups, email subscribers</summary>
+
+![Public Status Page](.github/screenshots/dp-status-page.png)
+</details>
+
+<details>
+<summary><strong>Monitoring</strong> — HTTP/TCP/ping uptime checks, SLA tracking, PagerDuty integration</summary>
+
+![Monitoring](.github/screenshots/dp-monitoring.png)
 </details>
 
 <details>
@@ -101,12 +145,17 @@ No other free panel gives you Git push-to-deploy with blue-green zero-downtime u
 - **WordPress Toolkit** — Multi-site dashboard, vulnerability scanning, security hardening, bulk updates.
 - **CMS Install** — WordPress, Laravel, Drupal, Joomla, Symfony, CodeIgniter — one click.
 - **Backups** — Scheduled, S3/SFTP remote destinations, one-click restore.
+- **Backup Orchestrator** — DB/volume backups, AES-256 encryption, restore verification, cross-resource policies, S3/SFTP/B2/GCS destinations, health dashboard.
+- **Secrets Manager** — AES-256-GCM encrypted vaults, version history, auto-inject to .env, masked API, CLI pull endpoint.
+- **Webhook Gateway** — Inbound endpoints with unique URLs, HMAC-SHA256/SHA1 verification, request inspector, route builder, retry/replay.
 
 ### Operations
 - **Multi-Server** — Manage remote servers from one panel. Agent auto-registers.
 - **DNS** — Cloudflare + PowerDNS. Zone templates, propagation checker, DNSSEC.
 - **Mail** — Postfix + Dovecot + OpenDKIM. Webmail (Roundcube), spam filter (Rspamd), SMTP relay.
-- **Monitoring** — HTTP/TCP/ping uptime checks, SLA tracking, public status pages, PagerDuty.
+- **Monitoring** — HTTP/TCP/ping uptime checks, SLA tracking, PagerDuty integration.
+- **Incident Management** — Full lifecycle (investigating, identified, monitoring, resolved, postmortem), severity levels, timeline, affected components.
+- **Public Status Page** — Standalone dark-themed page at `/status`, component groups, email subscribers, overall status auto-computed from checks.
 - **Terminal** — Full SSH with tabs, themes, sharing, session recording.
 
 ### Security
@@ -123,6 +172,10 @@ No other free panel gives you Git push-to-deploy with blue-green zero-downtime u
 - **Smart Diagnostics** — 6 check categories with one-click fixes.
 - **File Manager** — Browse, edit, upload files from the browser.
 - **Command Palette** — Ctrl+K to navigate anywhere.
+
+### Themes & Layouts
+- **6 Themes** — Terminal (hacker green), Midnight (navy blue), Ember (warm amber), Arctic (light teal), Clean (light blue SaaS), Clean Dark (GitHub-dark).
+- **3 Layouts** — Sidebar (full sidebar nav), Compact (collapsible icon rail), Topbar (horizontal navbar).
 
 ### Business
 - **Reseller Accounts** — Admin → Reseller → User hierarchy with quotas.
@@ -143,14 +196,14 @@ Browser → React 19 SPA → Nginx
                            └── /*     → Frontend (static files)
 ```
 
-**3 Rust binaries**: Agent (~20MB), API (~14MB), CLI (~1.7MB). Total RAM: ~60MB.
+**3 Rust binaries**: Agent (~20MB), API (~14MB), CLI (~1.7MB). Total RAM: ~57MB. 11 background services.
 
 | Component | Tech | Role |
 |-----------|------|------|
 | Agent | Rust/Axum | Root-level host operations (Docker, Nginx, SSL, files) |
 | API | Rust/Axum + SQLx | Auth, business logic, multi-server dispatch, background tasks |
 | CLI | Rust/Clap | Command-line interface for automation |
-| Frontend | React 19 + Vite + Tailwind 4 | Browser UI with 3 layout themes |
+| Frontend | React 19 + Vite + Tailwind 4 | Browser UI with 6 themes + 3 layouts |
 
 ## Development
 
@@ -192,7 +245,7 @@ sudo bash /opt/dockpanel/scripts/uninstall.sh   # Remove
 ## Documentation
 
 - [Live Docs](https://docs.dockpanel.dev) — Getting started, guides, configuration
-- [FEATURES.md](FEATURES.md) — Complete feature manifest (41 features, ~166 capabilities)
+- [FEATURES.md](FEATURES.md) — Complete feature manifest (46 features, ~215 capabilities)
 - [CHANGELOG.md](CHANGELOG.md) — Version history
 - [SECURITY.md](SECURITY.md) — Security model and vulnerability reporting
 - [CONTRIBUTING.md](CONTRIBUTING.md) — Development setup and PR process
