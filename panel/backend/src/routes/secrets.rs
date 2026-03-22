@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::auth::{AuthUser, ServerScope};
 use crate::error::{err, paginate, agent_error, ApiError};
 use crate::services::activity;
+use crate::services::extensions::fire_event;
 use crate::services::secrets_crypto;
 use crate::AppState;
 
@@ -455,6 +456,10 @@ pub async fn inject_to_site(
         &state.db, claims.sub, &claims.email, "secrets.inject",
         Some("site"), Some(&domain.0), Some(&format!("{} secrets", rows.len())), None,
     ).await;
+
+    fire_event(&state.db, "secrets.injected", serde_json::json!({
+        "site_id": site_id, "domain": &domain.0, "count": rows.len(),
+    }));
 
     Ok(Json(serde_json::json!({
         "ok": true,

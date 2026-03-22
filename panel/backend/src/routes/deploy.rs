@@ -402,6 +402,34 @@ async fn execute_deploy(
     let duration_ms = result.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0) as i32;
     let status = if success { "success" } else { "failed" };
 
+    // GAP 5: Auto-inject secrets from linked vault after successful deploy
+    if success {
+        let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_default();
+        if !jwt_secret.is_empty() {
+            let inject_rows: Vec<(String, String)> = sqlx::query_as(
+                "SELECT s.key, s.encrypted_value FROM secrets s \
+                 JOIN secret_vaults v ON v.id = s.vault_id AND v.site_id = $1 \
+                 WHERE s.auto_inject = TRUE"
+            )
+            .bind(site_id)
+            .fetch_all(db).await.unwrap_or_default();
+
+            if !inject_rows.is_empty() {
+                let mut env_pairs = Vec::new();
+                for (key, encrypted_value) in &inject_rows {
+                    if let Ok(value) = crate::services::secrets_crypto::decrypt(encrypted_value, &jwt_secret) {
+                        env_pairs.push(serde_json::json!({ "key": key, "value": value }));
+                    }
+                }
+                if !env_pairs.is_empty() {
+                    let body = serde_json::json!({ "vars": env_pairs });
+                    let _ = agent.put(&format!("/nginx/env/{domain}"), body).await;
+                    tracing::info!("Auto-injected {} secrets into {domain} after deploy", env_pairs.len());
+                }
+            }
+        }
+    }
+
     // Record log
     let log: DeployLog = sqlx::query_as(
         "INSERT INTO deploy_logs (site_id, commit_hash, status, output, triggered_by, duration_ms) \
