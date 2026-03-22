@@ -669,6 +669,23 @@ export default function Dashboard() {
         </div>
       ) : (
         <>
+          {/* System Information */}
+          {isVisible("system_info") && <div className="hidden sm:grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-px bg-dark-600 border border-dark-500 rounded-lg overflow-hidden mb-6">
+            {[
+              ["Hostname", system.hostname],
+              ["OS", system.os],
+              ["Kernel", system.kernel],
+              ["Processor", system.cpu_model],
+              ["Temperature", system.cpu_temp != null ? `${system.cpu_temp.toFixed(0)}°C` : "N/A"],
+              ["Processes", system.process_count.toLocaleString()],
+            ].map(([label, value]) => (
+              <div key={label} className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
+                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">{label}</span>
+                <span title={String(value)} className={`text-sm text-dark-50 font-medium truncate ${label === "Temperature" && system.cpu_temp != null ? tempColor(system.cpu_temp) : ""}`}>{value}</span>
+              </div>
+            ))}
+          </div>}
+
           {/* Resource Metrics — 3 column */}
           {isVisible("metrics") && <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6 stagger-children">
             {[
@@ -954,22 +971,7 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* System Information */}
-          {isVisible("system_info") && <div className="hidden sm:grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-px bg-dark-600 border border-dark-500 rounded-lg overflow-hidden mb-6">
-            {[
-              ["Hostname", system.hostname],
-              ["OS", system.os],
-              ["Kernel", system.kernel],
-              ["Processor", system.cpu_model],
-              ["Temperature", system.cpu_temp != null ? `${system.cpu_temp.toFixed(0)}°C` : "N/A"],
-              ["Processes", system.process_count.toLocaleString()],
-            ].map(([label, value]) => (
-              <div key={label} className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
-                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">{label}</span>
-                <span title={String(value)} className={`text-sm text-dark-50 font-medium truncate ${label === "Temperature" && system.cpu_temp != null ? tempColor(system.cpu_temp) : ""}`}>{value}</span>
-              </div>
-            ))}
-          </div>}
+          {/* System Information — moved to above metrics */}
 
           {/* Feature #12: Quick Links / Bookmarks */}
           {(bookmarks.length > 0 || showAddBookmark) && isVisible("bookmarks") && (
