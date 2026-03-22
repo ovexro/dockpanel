@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Navigate, Outlet, NavLink, Link, useLocation } from "react-router-dom";
 import { useLayoutState } from "../hooks/useLayoutState";
+import { useServer } from "../context/ServerContext";
 import { Icon } from "../data/icons";
 import CommandPalette from "./CommandPalette";
 import LayoutSwitcher from "./LayoutSwitcher";
@@ -21,6 +22,7 @@ export default function AtlasLayout() {
     visibleGroups,
   } = useLayoutState();
   const isLight = theme === "clean" || theme === "arctic";
+  const { servers, activeServer, setActiveServerId } = useServer();
 
   const location = useLocation();
 
@@ -151,6 +153,16 @@ export default function AtlasLayout() {
 
           {/* Right actions */}
           <div className="flex items-center gap-2 shrink-0 ml-auto md:ml-4">
+            {/* Server selector */}
+            {servers.length > 1 && (
+              <select
+                value={activeServer?.id || ""}
+                onChange={e => { setActiveServerId(e.target.value); window.location.href = "/"; }}
+                className="hidden md:block px-2 py-1 rounded-md bg-dark-800 border border-dark-600 text-xs text-dark-200 outline-none"
+              >
+                {servers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            )}
             {/* Search */}
             <button
               onClick={() =>
@@ -278,7 +290,7 @@ export default function AtlasLayout() {
 
       {/* ── 2FA Warning ────────────────────────────────────────────────── */}
       {twoFaEnforced && !twoFaEnabled && (
-        <div className="bg-warn-500/10 border-b border-warn-500/20 px-4 py-3 flex items-center justify-between">
+        <div className={`border-b px-4 py-3 flex items-center justify-between ${isLight ? "bg-amber-50 border-amber-200" : "bg-warn-500/10 border-warn-500/20"}`}>
           <div className="flex items-center gap-2">
             <svg
               className="w-5 h-5 text-warn-400"

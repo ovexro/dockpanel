@@ -45,6 +45,7 @@ export function useLayoutState(): LayoutState {
     setThemeRaw(t);
     localStorage.setItem("dp-theme", t);
     document.documentElement.setAttribute("data-theme", t);
+    document.documentElement.setAttribute("data-color-scheme", (t === "clean" || t === "arctic") ? "light" : "dark");
   };
 
   const cycleTheme = () => {
