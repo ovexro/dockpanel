@@ -152,7 +152,7 @@ export default function Migration() {
   const inv = migration?.inventory;
 
   return (
-    <div className="p-6 space-y-6 max-w-4xl">
+    <div className="p-6 space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-dark-50 font-mono">Migration Wizard</h1>
         <p className="text-sm text-dark-300 mt-1">Import sites, databases, and email from cPanel, Plesk, or HestiaCP</p>
