@@ -4,8 +4,8 @@
 # Usage: curl -sL https://dockpanel.dev/install.sh | bash
 #
 # Modes:
-#   Default:              Clone repo, build from source
-#   INSTALL_FROM_RELEASE=1: Clone repo, download pre-built binaries (faster, no Rust needed)
+#   Default:              Clone repo, download pre-built binaries (fast, no Rust needed)
+#   BUILD_FROM_SOURCE=1:  Clone repo, build from source (requires Rust, ~3GB RAM)
 #
 set -euo pipefail
 
@@ -63,14 +63,9 @@ else
     git clone --depth 1 -b "$VERSION" https://github.com/ovexro/dockpanel.git "$INSTALL_DIR"
 fi
 
-# On ARM with <2GB RAM, auto-use pre-built binaries (compilation would OOM)
-ARCH=$(uname -m)
-if [ "$ARCH" = "aarch64" ]; then
-    TOTAL_MEM=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo "0")
-    if [ "$TOTAL_MEM" -lt 2000 ] && [ "${INSTALL_FROM_RELEASE:-0}" != "1" ]; then
-        echo -e "${GREEN}[+]${NC} ARM64 with ${TOTAL_MEM}MB RAM — using pre-built binaries for faster install"
-        export INSTALL_FROM_RELEASE=1
-    fi
+# Default to pre-built binaries unless BUILD_FROM_SOURCE=1
+if [ "${BUILD_FROM_SOURCE:-0}" != "1" ]; then
+    export INSTALL_FROM_RELEASE=1
 fi
 
 # Run setup
