@@ -31,14 +31,20 @@ pub async fn upload_s3(
 
     tracing::info!("Uploading {filename} to {url}");
 
+    // Write credentials to a temp file so they don't appear in process listing
+    let config_path = format!("/tmp/.dockpanel-s3-upload-{}", std::process::id());
+    let config_content = format!("user = \"{}:{}\"", access_key, secret_key);
+    std::fs::write(&config_path, &config_content)
+        .map_err(|e| format!("Failed to write S3 config: {e}"))?;
+
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(600),
         Command::new("curl")
             .args([
                 "--aws-sigv4",
                 &format!("aws:amz:{region}:s3"),
-                "--user",
-                &format!("{access_key}:{secret_key}"),
+                "-K",
+                &config_path,
                 "-X",
                 "PUT",
                 "-H",
@@ -53,8 +59,16 @@ pub async fn upload_s3(
             .output(),
     )
     .await
-    .map_err(|_| "Upload timed out (10 min limit)".to_string())?
-    .map_err(|e| format!("Failed to run curl: {e}"))?;
+    .map_err(|_| {
+        std::fs::remove_file(&config_path).ok();
+        "Upload timed out (10 min limit)".to_string()
+    })?
+    .map_err(|e| {
+        std::fs::remove_file(&config_path).ok();
+        format!("Failed to run curl: {e}")
+    })?;
+
+    std::fs::remove_file(&config_path).ok();
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -110,25 +124,29 @@ pub async fn upload_sftp(
     cmd_args.push(filepath.into());
     cmd_args.push(remote_dest.clone());
 
-    // If password auth, use sshpass
-    let (program, final_args) = if let Some(pw) = password {
+    // If password auth, use sshpass with -e flag (reads SSHPASS env var, not visible in ps)
+    let (program, final_args, sshpass_env) = if let Some(pw) = password {
         if key_path.is_some() {
             // Key takes priority
-            ("scp".to_string(), cmd_args)
+            ("scp".to_string(), cmd_args, None)
         } else {
-            let mut args = vec!["-p".into(), pw.into(), "scp".into()];
+            let mut args = vec!["-e".into(), "scp".into()];
             args.extend(cmd_args);
-            ("sshpass".to_string(), args)
+            ("sshpass".to_string(), args, Some(pw.to_string()))
         }
     } else {
-        ("scp".to_string(), cmd_args)
+        ("scp".to_string(), cmd_args, None)
     };
+
+    let mut cmd = Command::new(&program);
+    cmd.args(&final_args);
+    if let Some(ref pw) = sshpass_env {
+        cmd.env("SSHPASS", pw);
+    }
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(600),
-        Command::new(&program)
-            .args(&final_args)
-            .output(),
+        cmd.output(),
     )
     .await
     .map_err(|_| "Upload timed out (10 min limit)".to_string())?
@@ -153,14 +171,21 @@ pub async fn test_s3(
 ) -> Result<(), String> {
     // HEAD request on the bucket to check access
     let url = format!("{endpoint}/{bucket}/");
+
+    // Write credentials to a temp file so they don't appear in process listing
+    let config_path = format!("/tmp/.dockpanel-s3-test-{}", std::process::id());
+    let config_content = format!("user = \"{}:{}\"", access_key, secret_key);
+    std::fs::write(&config_path, &config_content)
+        .map_err(|e| format!("Failed to write S3 config: {e}"))?;
+
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(15),
         Command::new("curl")
             .args([
                 "--aws-sigv4",
                 &format!("aws:amz:{region}:s3"),
-                "--user",
-                &format!("{access_key}:{secret_key}"),
+                "-K",
+                &config_path,
                 "-I",
                 "--fail",
                 "--silent",
@@ -170,8 +195,16 @@ pub async fn test_s3(
             .output(),
     )
     .await
-    .map_err(|_| "Connection test timed out".to_string())?
-    .map_err(|e| format!("Connection test failed: {e}"))?;
+    .map_err(|_| {
+        std::fs::remove_file(&config_path).ok();
+        "Connection test timed out".to_string()
+    })?
+    .map_err(|e| {
+        std::fs::remove_file(&config_path).ok();
+        format!("Connection test failed: {e}")
+    })?;
+
+    std::fs::remove_file(&config_path).ok();
 
     if output.status.success() {
         Ok(())
@@ -202,27 +235,31 @@ pub async fn test_sftp(
         "exit".into(),
     ];
 
-    let (program, final_args) = if let Some(pw) = password {
+    let (program, final_args, sshpass_env) = if let Some(pw) = password {
         if key_path.is_some() {
-            ("ssh".to_string(), cmd_args)
+            ("ssh".to_string(), cmd_args, None)
         } else {
-            let mut args = vec!["-p".into(), pw.into(), "ssh".into()];
+            let mut args = vec!["-e".into(), "ssh".into()];
             args.extend(cmd_args);
-            ("sshpass".to_string(), args)
+            ("sshpass".to_string(), args, Some(pw.to_string()))
         }
     } else {
         if let Some(key) = key_path {
             cmd_args.insert(6, "-i".into());
             cmd_args.insert(7, key.into());
         }
-        ("ssh".to_string(), cmd_args)
+        ("ssh".to_string(), cmd_args, None)
     };
+
+    let mut cmd = Command::new(&program);
+    cmd.args(&final_args);
+    if let Some(ref pw) = sshpass_env {
+        cmd.env("SSHPASS", pw);
+    }
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(15),
-        Command::new(&program)
-            .args(&final_args)
-            .output(),
+        cmd.output(),
     )
     .await
     .map_err(|_| "Connection test timed out".to_string())?
@@ -252,14 +289,20 @@ pub async fn list_s3(
         format!("{endpoint}/{bucket}/?list-type=2&prefix={prefix_clean}/")
     };
 
+    // Write credentials to a temp file so they don't appear in process listing
+    let config_path = format!("/tmp/.dockpanel-s3-list-{}", std::process::id());
+    let config_content = format!("user = \"{}:{}\"", access_key, secret_key);
+    std::fs::write(&config_path, &config_content)
+        .map_err(|e| format!("Failed to write S3 config: {e}"))?;
+
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(30),
         Command::new("curl")
             .args([
                 "--aws-sigv4",
                 &format!("aws:amz:{region}:s3"),
-                "--user",
-                &format!("{access_key}:{secret_key}"),
+                "-K",
+                &config_path,
                 "--fail",
                 "--silent",
                 &url,
@@ -267,8 +310,16 @@ pub async fn list_s3(
             .output(),
     )
     .await
-    .map_err(|_| "List timed out".to_string())?
-    .map_err(|e| format!("List failed: {e}"))?;
+    .map_err(|_| {
+        std::fs::remove_file(&config_path).ok();
+        "List timed out".to_string()
+    })?
+    .map_err(|e| {
+        std::fs::remove_file(&config_path).ok();
+        format!("List failed: {e}")
+    })?;
+
+    std::fs::remove_file(&config_path).ok();
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -297,14 +348,20 @@ pub async fn delete_s3(
 ) -> Result<(), String> {
     let url = format!("{endpoint}/{bucket}/{key}");
 
+    // Write credentials to a temp file so they don't appear in process listing
+    let config_path = format!("/tmp/.dockpanel-s3-delete-{}", std::process::id());
+    let config_content = format!("user = \"{}:{}\"", access_key, secret_key);
+    std::fs::write(&config_path, &config_content)
+        .map_err(|e| format!("Failed to write S3 config: {e}"))?;
+
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(15),
         Command::new("curl")
             .args([
                 "--aws-sigv4",
                 &format!("aws:amz:{region}:s3"),
-                "--user",
-                &format!("{access_key}:{secret_key}"),
+                "-K",
+                &config_path,
                 "-X",
                 "DELETE",
                 "--fail",
@@ -315,8 +372,16 @@ pub async fn delete_s3(
             .output(),
     )
     .await
-    .map_err(|_| "Delete timed out".to_string())?
-    .map_err(|e| format!("Delete failed: {e}"))?;
+    .map_err(|_| {
+        std::fs::remove_file(&config_path).ok();
+        "Delete timed out".to_string()
+    })?
+    .map_err(|e| {
+        std::fs::remove_file(&config_path).ok();
+        format!("Delete failed: {e}")
+    })?;
+
+    std::fs::remove_file(&config_path).ok();
 
     if output.status.success() {
         Ok(())
