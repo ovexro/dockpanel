@@ -22,7 +22,7 @@ const features = [
   { icon: HardDriveDownload, title: 'Backup Orchestrator', desc: 'Database, volume & site backups with AES-256 encryption, automatic restore verification, and cross-resource policies. S3, B2, GCS, and SFTP destinations. Health dashboard with staleness alerts.' },
   { icon: Terminal, title: 'Web Terminal & File Manager', desc: 'Full SSH terminal in your browser with tabs, themes, sharing, and session recording. Built-in file manager — browse, edit, upload, and download files.' },
   { icon: ShieldCheck, title: 'Secrets Manager', desc: 'AES-256-GCM encrypted vaults for API keys, passwords, certificates. Version history, auto-inject into .env on deploy, masked API responses, CLI pull. No more plaintext secrets.' },
-  { icon: Cpu, title: 'ARM & Homelab Ready', desc: 'Runs on Raspberry Pi, Oracle Cloud free-tier ARM instances, and any ARM64 server. Same ~35MB binaries, same features, same performance.' },
+  { icon: Cpu, title: 'ARM & Homelab Ready', desc: 'Runs on Raspberry Pi, Oracle Cloud free-tier ARM instances, and any ARM64 server. Same ~41MB binaries, same features, same performance.' },
   { icon: KeyRound, title: '2FA / TOTP Authentication', desc: 'Two-factor authentication with QR code setup, TOTP verification, and 10 one-time recovery codes. Protect your panel with industry-standard 2FA.' },
   { icon: Wrench, title: 'Auto-Healing Engine', desc: 'Automatic remediation of crashed services, disk space recovery, and SSL renewal. Runs silently in the background with full audit trail and opt-in control.' },
   { icon: ClipboardList, title: 'Activity & Audit Log', desc: 'Full audit trail of every action — site creation, SSL changes, database operations, user logins. Filterable, searchable, with timestamps and actor tracking.' },
@@ -44,11 +44,11 @@ const faqs = [
   { q: 'Is DockPanel really free?', a: 'Yes. DockPanel is 100% free and open source under the MIT License. There are no artificial limits, no premium features hidden behind a paywall, and no subscriptions required. Every feature works on every installation.' },
   { q: 'How does Docker-native work? Are sites in containers?', a: 'Sites run on the host with Nginx, which keeps things fast and simple. Docker is used for databases (MySQL/PostgreSQL containers), 54 one-click app templates (Ghost, Grafana, Nextcloud, n8n, Roundcube, Rspamd, and more), and Docker Compose imports. Containers get health monitoring, CPU/memory limits, and auto reverse proxy with SSL.' },
   { q: 'What happens if DockPanel goes down?', a: 'Your sites continue running. DockPanel manages Nginx configs and Docker containers, but they operate independently. Even if the panel process stops, all your sites, databases, and SSL certificates keep working. The panel auto-restarts via systemd.' },
-  { q: 'Can I run DockPanel on a Raspberry Pi?', a: 'Yes. DockPanel compiles to ~35MB total binaries (agent, API, CLI) and uses about 57MB RAM. It runs great on Raspberry Pi 4/5, Oracle Cloud free-tier ARM instances, and any ARM64 server. Same features, same performance.' },
+  { q: 'Can I run DockPanel on a Raspberry Pi?', a: 'Yes. DockPanel compiles to ~41MB total binaries (agent, API, CLI) and uses about 57MB RAM. It runs great on Raspberry Pi 4/5, Oracle Cloud free-tier ARM instances, and any ARM64 server. Same features, same performance.' },
   { q: 'How is this different from CloudPanel, RunCloud, or cPanel?', a: 'Dramatically. cPanel uses 800MB of RAM, costs $15/month, and has no Docker support. CloudPanel is free but has no Git deploy, no Docker apps, no CLI, no multi-server, no reseller accounts. RunCloud charges $8/month for features DockPanel includes for free. DockPanel runs on 57MB of RAM, includes 54 Docker app templates, blue-green Git deploy, a full CLI, Infrastructure as Code, multi-server management, reseller accounts with white-label, and a WordPress toolkit. No other free panel has anything close to this feature set.' },
   { q: 'Can I manage multiple servers?', a: 'Yes, with no limits. Each server runs a lightweight agent that communicates with the central API. You can view per-server metrics, run commands, and manage sites across all your servers from a single dashboard.' },
   { q: 'Is there a demo I can try?', a: 'Yes. Visit demo.dockpanel.dev to explore the full panel interface with sample data — no signup required. You can also install DockPanel on your own server with one command.' },
-  { q: 'Why Rust instead of PHP/Node.js?', a: "Rust compiles to compact binaries (~35MB total for agent, API, and CLI) with no runtime dependencies. It uses ~57MB of RAM vs ~300-800MB for PHP-based panels. On a $5 VPS with 1GB RAM, that's the difference between running 2 sites and running 20. Rust also eliminates entire classes of security vulnerabilities (buffer overflows, use-after-free) at compile time." },
+  { q: 'Why Rust instead of PHP/Node.js?', a: "Rust compiles to compact binaries (~41MB total for agent, API, and CLI) with no runtime dependencies. It uses ~57MB of RAM vs ~300-800MB for PHP-based panels. On a $5 VPS with 1GB RAM, that's the difference between running 2 sites and running 20. Rust also eliminates entire classes of security vulnerabilities (buffer overflows, use-after-free) at compile time." },
   { q: 'Can DockPanel manage email?', a: "Yes. DockPanel has full email management — one-click install of Postfix + Dovecot + OpenDKIM, mail domains, mailboxes with quotas, aliases, forwarding, autoresponders, DKIM signing, DNS helper (generates MX/SPF/DKIM/DMARC records), and a mail queue viewer. Roundcube webmail and Rspamd spam filter are available as one-click Docker apps." },
   { q: 'What gets installed automatically?', a: 'The install script sets up everything: Docker, Nginx, PHP-FPM, Certbot (SSL), UFW (firewall), Fail2Ban (intrusion prevention), and the DockPanel agent + API + frontend. Mail server, webmail, and DNS server are optional one-click installs from the panel. Zero manual configuration needed.' },
   { q: 'Can I install WordPress / Laravel / Drupal with one click?', a: 'Yes. DockPanel supports one-click install for 6 frameworks: WordPress, Laravel, Drupal, Joomla, Symfony, and CodeIgniter. Select one, enter your domain, and DockPanel auto-creates the database, downloads the framework, configures everything, and provisions SSL — with real-time progress indicators showing each step as it completes.' },
@@ -159,7 +159,7 @@ export default function Landing() {
             className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-4 max-w-6xl mx-auto mt-20"
           >
             {[
-              { label: 'Total binaries', value: '~35MB' },
+              { label: 'Total binaries', value: '~41MB' },
               { label: 'RAM usage', value: '~57MB' },
               { label: 'Install time', value: '<60s' },
               { label: 'Homelab ready', value: 'ARM64' },
@@ -359,7 +359,7 @@ export default function Landing() {
                   { name: 'RunCloud', ram: 'N/A (SaaS)', time: '~5 min', disk: 'Agent', price: '$8/mo', built: 'PHP', docker: false, self: false },
                   { name: 'CloudPanel', ram: '~250 MB', time: '~10 min', disk: '~600 MB', price: 'Free', built: 'PHP', docker: false, self: true },
                   { name: 'HestiaCP', ram: '~512 MB', time: '~2 min', disk: '~2 GB', price: 'Free', built: 'PHP', docker: false, self: true },
-                  { name: 'DockPanel', ram: '~57 MB', time: '<60 sec', disk: '~35 MB', price: 'Free', built: 'Rust', docker: true, self: true, highlight: true },
+                  { name: 'DockPanel', ram: '~57 MB', time: '<60 sec', disk: '~41 MB', price: 'Free', built: 'Rust', docker: true, self: true, highlight: true },
                 ].map((row, i) => (
                   <tr key={i} className={row.highlight ? 'bg-emerald-500/5' : ''}>
                     <td className={`p-4 font-medium ${row.highlight ? 'text-emerald-400' : 'text-white'}`}>{row.name}</td>
