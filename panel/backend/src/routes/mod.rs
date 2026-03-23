@@ -526,7 +526,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/servers/{id}/test", post(servers::test_connection))
         .route("/api/servers/{id}/rotate-token", post(servers::rotate_token))
         .route("/api/servers/{id}/metrics", get(metrics::server_metrics))
-        .route("/api/servers/{id}/commands", post(server_actions::dispatch).get(server_actions::list_commands))
+        .route("/api/servers/{id}/commands", get(server_actions::list_commands))
+        .route("/api/servers/{id}/commands/dispatch", post(server_actions::dispatch))
         .route("/api/servers/{id}/commands/{cmd_id}", get(server_actions::command_status))
         // Teams
         .route("/api/teams", get(teams::list).post(teams::create))

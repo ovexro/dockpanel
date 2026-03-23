@@ -481,14 +481,8 @@ pub async fn register(
         }
     })?;
 
-    // Determine base URL from Host header only (never trust Origin — attacker-controlled)
-    let base_url = {
-        let host = headers
-            .get("host")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("localhost");
-        format!("https://{host}")
-    };
+    // Use the configured BASE_URL — never derive from request headers (attacker-controlled)
+    let base_url = state.config.base_url.clone();
 
     // Send verification email
     // Check if SMTP is configured — if not, auto-verify (self-hosted convenience)
@@ -625,17 +619,8 @@ pub async fn forgot_password(
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let base_url = headers
-        .get("origin")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            let host = headers
-                .get("host")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("localhost");
-            format!("https://{host}")
-        });
+    // Use the configured BASE_URL — never derive from request headers (attacker-controlled)
+    let base_url = state.config.base_url.clone();
 
     if let Err(e) = email::send_reset_email(&state.db, &body.email, &token, &base_url).await {
         tracing::warn!("Could not send reset email to {}: {e}", body.email);

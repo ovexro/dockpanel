@@ -7,6 +7,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::AppState;
+use crate::services::command_filter;
 
 type ApiErr = (StatusCode, Json<serde_json::Value>);
 
@@ -61,7 +62,7 @@ async fn sync_crons(
             return Err(err(StatusCode::BAD_REQUEST, "Command cannot be empty"));
         }
         // Sanitize: reject shell metacharacters and dangerous patterns
-        if !is_safe_command(&cron.command) {
+        if !command_filter::is_safe_cron_command(&cron.command) {
             return Err(err(StatusCode::BAD_REQUEST, "Command contains disallowed characters or patterns"));
         }
 
@@ -90,7 +91,7 @@ async fn run_cron(
     if body.command.is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "Command cannot be empty"));
     }
-    if !is_safe_command(&body.command) {
+    if !command_filter::is_safe_cron_command(&body.command) {
         return Err(err(StatusCode::BAD_REQUEST, "Command contains disallowed characters or patterns"));
     }
 
@@ -214,39 +215,6 @@ async fn write_crontab(content: &str) -> Result<(), String> {
             Err("crontab timed out after 10s".to_string())
         }
     }
-}
-
-/// Reject commands with shell injection vectors.
-fn is_safe_command(cmd: &str) -> bool {
-    // Hard length limit
-    if cmd.is_empty() || cmd.len() > 4096 || cmd.contains('\0') {
-        return false;
-    }
-
-    // Reject commands with shell metacharacters that enable chaining/substitution
-    if cmd.contains('`') || cmd.contains("$(") || cmd.contains("| ") || cmd.contains("|/") {
-        return false;
-    }
-
-    let blocked = [
-        "rm -rf /", "rm -rf /*", "mkfs", "dd if=", "> /dev/",
-        "chmod 777 /", "chown", "passwd", "shadow",
-        "|sh", "|bash", "| sh", "| bash",
-        ";sh", ";bash", "; sh", "; bash",
-        "`", "$(",  "eval ", "exec ",
-        "base64", "python", "perl", "ruby", "node -e", "php -r",
-        "nc ", "ncat ", "socat ", "telnet ",
-        "curl", "wget",
-        "/etc/passwd", "/etc/shadow", "/etc/sudoers",
-        "||", "&&", "; ",
-        "> /etc/", "> /root/", "> /var/",
-        "< /etc/", "< /root/",
-        "shutdown", "reboot", "init ",
-        "useradd", "userdel",
-        "\\x", "\\0",
-    ];
-    let lower = cmd.to_lowercase();
-    !blocked.iter().any(|b| lower.contains(b))
 }
 
 /// Basic cron schedule validation (5 fields).

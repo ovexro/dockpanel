@@ -205,6 +205,25 @@ async fn execute_command(
     action: &str,
     payload: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    // Strict allowlist of permitted actions
+    const ALLOWED_COMMANDS: &[&str] = &[
+        "site.create",
+        "site.delete",
+        "ssl.provision",
+        "nginx.reload",
+        "health",
+        "restart_agent",
+        "check_health",
+        "update_agent",
+        "sync_config",
+        "run_security_scan",
+        "run_backup",
+    ];
+
+    if !ALLOWED_COMMANDS.contains(&action) {
+        return Err(format!("Action not allowed: {action}"));
+    }
+
     // Map action names to HTTP method + path
     let (method, path): (&str, String) = match action {
         // Site operations
@@ -215,16 +234,13 @@ async fn execute_command(
         // Nginx
         "nginx.reload" => ("POST", "/nginx/reload".to_string()),
         // System
-        "health" => ("GET", "/health".to_string()),
-        // Generic passthrough: action = "METHOD /path"
-        other => {
-            let parts: Vec<&str> = other.splitn(2, ' ').collect();
-            if parts.len() == 2 {
-                (parts[0], parts[1].to_string())
-            } else {
-                return Err(format!("Unknown action: {other}"));
-            }
-        }
+        "health" | "check_health" => ("GET", "/health".to_string()),
+        "restart_agent" => ("POST", "/system/restart".to_string()),
+        "update_agent" => ("POST", "/system/update".to_string()),
+        "sync_config" => ("POST", "/system/sync-config".to_string()),
+        "run_security_scan" => ("POST", "/security/scan".to_string()),
+        "run_backup" => ("POST", "/backups/run".to_string()),
+        _ => return Err(format!("Unknown action: {action}")),
     };
 
     let url = format!("{agent_url}{path}");

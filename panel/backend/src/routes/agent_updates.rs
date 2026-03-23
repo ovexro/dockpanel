@@ -4,13 +4,15 @@ use axum::{
     Json,
 };
 
+use crate::auth::AuthUser;
 use crate::error::{err, ApiError};
 use crate::AppState;
 
 /// GET /api/agent/version — Returns the latest agent version info.
-/// Called by agents to check for updates.
+/// Requires authentication.
 pub async fn latest_version(
     State(state): State<AppState>,
+    AuthUser(_claims): AuthUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Read version from settings, or return current agent version
     let version: Option<(String,)> = sqlx::query_as(

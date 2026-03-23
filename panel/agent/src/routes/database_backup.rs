@@ -46,6 +46,9 @@ async fn dump(
     if !is_valid_name(&req.user) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid user name"));
     }
+    if req.password.contains('\0') || req.password.contains('\n') || req.password.contains('\r') || req.password.len() > 128 {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid password"));
+    }
 
     let mut info = match req.db_type.as_str() {
         "mysql" | "mariadb" => {
@@ -123,6 +126,9 @@ async fn restore(
     }
     if !is_valid_name(&req.user) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid user name"));
+    }
+    if req.password.contains('\0') || req.password.contains('\n') || req.password.contains('\r') || req.password.len() > 128 {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid password"));
     }
 
     // Resolve and validate backup file path

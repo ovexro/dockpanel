@@ -270,12 +270,28 @@ async fn install_powerdns() -> Result<Json<serde_json::Value>, ApiErr> {
         }
     }
 
-    // 3. Generate API key
+    // 3. Generate API key and read DB password from environment
     let api_key: String = {
         use rand::Rng;
         let mut rng = rand::thread_rng();
         (0..32).map(|_| rng.sample(rand::distributions::Alphanumeric) as char).collect()
     };
+    // Use the same DB password as the panel's postgres connection (never hardcode)
+    let pdns_db_password = std::env::var("PANEL_DB_PASSWORD")
+        .or_else(|_| {
+            // Fall back: extract password from DATABASE_URL if set
+            std::env::var("DATABASE_URL").map(|url| {
+                url.split("://").nth(1).unwrap_or("")
+                    .split('@').next().unwrap_or("")
+                    .split(':').nth(1).unwrap_or("").to_string()
+            })
+        })
+        .unwrap_or_else(|_| {
+            // Last resort: generate a random password
+            use rand::Rng;
+            let mut rng = rand::thread_rng();
+            (0..32).map(|_| rng.sample(rand::distributions::Alphanumeric) as char).collect()
+        });
 
     // 4. Write PowerDNS config
     let pdns_conf = format!(r#"# DockPanel PowerDNS configuration
@@ -284,7 +300,7 @@ gpgsql-host=127.0.0.1
 gpgsql-port=5450
 gpgsql-dbname=pdns
 gpgsql-user=dockpanel
-gpgsql-password=REDACTED_DB_PASSWORD
+gpgsql-password={pdns_db_password}
 
 # HTTP API
 api=yes

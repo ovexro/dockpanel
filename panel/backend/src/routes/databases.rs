@@ -382,18 +382,22 @@ pub async fn table_schema(
 
     let (name, engine, password, _port) = get_db_info(&state, id, claims.sub).await?;
 
-    let sql = match engine.as_str() {
-        "mysql" | "mariadb" => format!(
+    let (sql, params) = match engine.as_str() {
+        "mysql" | "mariadb" => (
             "SELECT column_name, column_type, is_nullable, column_default, column_key, extra \
              FROM information_schema.columns \
-             WHERE table_schema = DATABASE() AND table_name = '{table}' \
+             WHERE table_schema = DATABASE() AND table_name = ? \
              ORDER BY ordinal_position"
+                .to_string(),
+            vec![table.clone()],
         ),
-        _ => format!(
+        _ => (
             "SELECT column_name, data_type, character_maximum_length, is_nullable, column_default \
              FROM information_schema.columns \
-             WHERE table_schema = 'public' AND table_name = '{table}' \
+             WHERE table_schema = 'public' AND table_name = $1 \
              ORDER BY ordinal_position"
+                .to_string(),
+            vec![table.clone()],
         ),
     };
 
@@ -405,6 +409,7 @@ pub async fn table_schema(
         "password": password,
         "database": name,
         "sql": sql,
+        "params": params,
     });
 
     agent

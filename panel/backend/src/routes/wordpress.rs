@@ -162,6 +162,11 @@ pub async fn plugin_action(
     Path((id, action)): Path<(Uuid, String)>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    const ALLOWED_PLUGIN_ACTIONS: &[&str] = &["activate", "deactivate", "delete", "update"];
+    if !ALLOWED_PLUGIN_ACTIONS.contains(&action.as_str()) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid plugin action"));
+    }
+
     let domain = site_domain(&state, id, claims.sub).await?;
 
     let resp: serde_json::Value = agent
@@ -183,6 +188,11 @@ pub async fn theme_action(
     Path((id, action)): Path<(Uuid, String)>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    const ALLOWED_THEME_ACTIONS: &[&str] = &["activate", "delete", "update"];
+    if !ALLOWED_THEME_ACTIONS.contains(&action.as_str()) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid theme action"));
+    }
+
     let domain = site_domain(&state, id, claims.sub).await?;
 
     let resp: serde_json::Value = agent

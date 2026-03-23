@@ -114,6 +114,12 @@ async fn upload_cert(
     State(state): State<AppState>,
     Json(body): Json<CustomCertRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_domain(&body.domain) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid domain format" })),
+        ));
+    }
     if body.domain.is_empty() || body.certificate.is_empty() || body.private_key.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,

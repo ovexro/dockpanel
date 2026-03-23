@@ -99,7 +99,18 @@ pub async fn update(
     let mut tx = state.db.begin().await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
+    // Sensitive keys that are masked in the GET response — skip if value is the mask sentinel
+    const MASKED_KEYS: &[&str] = &["smtp_password", "pdns_api_key"];
+
     for (key, value) in &body {
+        // Don't overwrite real secrets with the mask placeholder
+        if MASKED_KEYS.contains(&key.as_str()) && value == "********" {
+            continue;
+        }
+        if key.ends_with("_client_secret") && value == "********" {
+            continue;
+        }
+
         sqlx::query(
             "INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, NOW()) \
              ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()",

@@ -5,7 +5,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::auth::{AdminUser, AuthUser};
 use crate::error::{err, ApiError};
 use crate::AppState;
 
@@ -15,13 +15,23 @@ pub struct DispatchRequest {
     pub payload: Option<serde_json::Value>,
 }
 
+const ALLOWED_ACTIONS: &[&str] = &[
+    "restart_nginx", "restart_php", "restart_mysql", "restart_postgres",
+    "reload_nginx", "reload_php", "check_services", "disk_cleanup",
+    "update_packages", "restart_agent",
+];
+
 /// POST /api/servers/{id}/command — Dispatch a command to a server's agent.
 pub async fn dispatch(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    AdminUser(claims): AdminUser,
     Path(server_id): Path<Uuid>,
     Json(body): Json<DispatchRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    if !ALLOWED_ACTIONS.contains(&body.action.as_str()) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid action"));
+    }
+
     // Verify server belongs to user
     let exists: Option<(Uuid,)> = sqlx::query_as(
         "SELECT id FROM servers WHERE id = $1 AND user_id = $2",

@@ -54,6 +54,15 @@ fn split_host_port(db_host: &str) -> (&str, &str) {
     }
 }
 
+fn validate_domain(domain: &str) -> Result<(), String> {
+    if domain.is_empty() || domain.contains("..") || domain.contains('/')
+        || domain.contains('\\') || domain.contains('\0')
+        || !domain.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+        return Err("Invalid domain format".to_string());
+    }
+    Ok(())
+}
+
 /// Fix ownership to www-data for a site directory.
 async fn chown_site(path: &str) {
     Command::new("chown")
@@ -99,6 +108,7 @@ pub async fn install_laravel(
     db_host: &str,
     title: &str,
 ) -> Result<String, String> {
+    validate_domain(domain)?;
     ensure_composer().await?;
 
     let site_dir = format!("{SITE_ROOT}/{domain}");
@@ -168,6 +178,7 @@ pub async fn install_drupal(
     admin_pass: &str,
     admin_email: &str,
 ) -> Result<String, String> {
+    validate_domain(domain)?;
     ensure_composer().await?;
 
     let site_dir = format!("{SITE_ROOT}/{domain}");
@@ -240,6 +251,7 @@ pub async fn install_joomla(
     admin_pass: &str,
     admin_email: &str,
 ) -> Result<String, String> {
+    validate_domain(domain)?;
     let public_dir = format!("{SITE_ROOT}/{domain}/public");
 
     // Create document root
@@ -304,6 +316,7 @@ pub async fn install_joomla(
 
 /// Install Symfony skeleton into /var/www/{domain}/.
 pub async fn install_symfony(domain: &str, title: &str) -> Result<String, String> {
+    validate_domain(domain)?;
     ensure_composer().await?;
 
     let site_dir = format!("{SITE_ROOT}/{domain}");
@@ -349,6 +362,7 @@ pub async fn install_codeigniter(
     db_host: &str,
     title: &str,
 ) -> Result<String, String> {
+    validate_domain(domain)?;
     ensure_composer().await?;
 
     let site_dir = format!("{SITE_ROOT}/{domain}");

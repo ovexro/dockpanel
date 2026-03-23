@@ -226,6 +226,10 @@ fn php_api_err(status: StatusCode, msg: &str) -> PhpApiErr {
 
 /// GET /php/extensions/{version} — List installed PHP extensions.
 async fn list_extensions(Path(version): Path<String>) -> Result<Json<serde_json::Value>, PhpApiErr> {
+    if !ALLOWED_VERSIONS.contains(&version.as_str()) {
+        return Err(php_api_err(StatusCode::BAD_REQUEST, &format!("Invalid PHP version. Allowed: {}", ALLOWED_VERSIONS.join(", "))));
+    }
+
     // List all installed extensions
     let output = Command::new("php")
         .args([&format!("-d"), "error_reporting=0", "-m"])
@@ -262,6 +266,10 @@ async fn list_extensions(Path(version): Path<String>) -> Result<Json<serde_json:
 async fn install_extension(Json(body): Json<serde_json::Value>) -> Result<Json<serde_json::Value>, PhpApiErr> {
     let version = body.get("version").and_then(|v| v.as_str()).unwrap_or("8.3");
     let extension = body.get("extension").and_then(|v| v.as_str()).unwrap_or("");
+
+    if !ALLOWED_VERSIONS.contains(&version) {
+        return Err(php_api_err(StatusCode::BAD_REQUEST, &format!("Invalid PHP version. Allowed: {}", ALLOWED_VERSIONS.join(", "))));
+    }
 
     if extension.is_empty() || !extension.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         return Err(php_api_err(StatusCode::BAD_REQUEST, "Invalid extension name"));

@@ -4,6 +4,8 @@
 
 use std::process::Command;
 
+use super::command_filter;
+
 const SERVICE_PREFIX: &str = "dockpanel-app-";
 
 /// Service unit name for a domain.
@@ -18,6 +20,9 @@ pub fn create_app_service(
     port: u16,
     runtime: &str,
 ) -> Result<(), String> {
+    // Validate the command before doing anything else
+    command_filter::is_safe_exec_start(command, runtime)?;
+
     let svc = service_name(domain);
     let working_dir = format!("/var/www/{domain}/public");
 
@@ -74,6 +79,24 @@ EnvironmentFile=-/var/www/{domain}/.env
 # Resource limits
 MemoryMax=512M
 CPUQuota=100%
+LimitNOFILE=65536
+TasksMax=512
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/var/www/{domain}
 
 # Logging
 StandardOutput=journal

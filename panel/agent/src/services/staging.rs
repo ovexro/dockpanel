@@ -3,9 +3,20 @@ use tokio::process::Command;
 
 const WEB_ROOT: &str = "/var/www";
 
+fn validate_domain(domain: &str) -> Result<(), String> {
+    if domain.is_empty() || domain.contains("..") || domain.contains('/')
+        || domain.contains('\\') || domain.contains('\0')
+        || !domain.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+        return Err("Invalid domain format".to_string());
+    }
+    Ok(())
+}
+
 /// Clone site files from source to target domain using rsync.
 /// Creates the target directory if it doesn't exist.
 pub async fn clone_files(source_domain: &str, target_domain: &str) -> Result<String, String> {
+    validate_domain(source_domain)?;
+    validate_domain(target_domain)?;
     let source = format!("{WEB_ROOT}/{source_domain}/");
     let target = format!("{WEB_ROOT}/{target_domain}/");
 
@@ -44,6 +55,8 @@ pub async fn clone_files(source_domain: &str, target_domain: &str) -> Result<Str
 /// Sync files between two site directories.
 /// direction: "prod_to_staging" or "staging_to_prod"
 pub async fn sync_files(source_domain: &str, target_domain: &str) -> Result<String, String> {
+    validate_domain(source_domain)?;
+    validate_domain(target_domain)?;
     let source = format!("{WEB_ROOT}/{source_domain}/");
     let target = format!("{WEB_ROOT}/{target_domain}/");
 
@@ -77,6 +90,7 @@ pub async fn sync_files(source_domain: &str, target_domain: &str) -> Result<Stri
 
 /// Get disk usage of a site directory in bytes.
 pub async fn site_disk_usage(domain: &str) -> Result<u64, String> {
+    validate_domain(domain)?;
     let path = format!("{WEB_ROOT}/{domain}");
     if !Path::new(&path).exists() {
         return Ok(0);
@@ -102,6 +116,7 @@ pub async fn site_disk_usage(domain: &str) -> Result<u64, String> {
 
 /// Delete a site's web directory.
 pub async fn delete_site_files(domain: &str) -> Result<(), String> {
+    validate_domain(domain)?;
     let path = format!("{WEB_ROOT}/{domain}");
     if Path::new(&path).exists() {
         tokio::fs::remove_dir_all(&path)

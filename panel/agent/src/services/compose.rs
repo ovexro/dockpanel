@@ -281,13 +281,57 @@ async fn deploy_service(
         exposed_ports.insert(container_port, HashMap::new());
     }
 
-    // Volume binds
-    let binds: Vec<String> = svc
-        .volumes
-        .iter()
-        .filter(|v| v.contains(':'))
-        .cloned()
-        .collect();
+    // Volume binds — validate that host paths are under the allowed prefix
+    // and block mounting the Docker socket.
+    let mut binds: Vec<String> = Vec::new();
+    const ALLOWED_BIND_PREFIX: &str = "/var/lib/dockpanel/compose/";
+    const BLOCKED_PATHS: &[&str] = &["/var/run/docker.sock", "/run/docker.sock"];
+
+    for vol in &svc.volumes {
+        if !vol.contains(':') {
+            continue;
+        }
+        // Extract host path (everything before the first ':')
+        let host_path = vol.split(':').next().unwrap_or("");
+
+        // Skip named volumes (no leading /) — they are safe
+        if !host_path.starts_with('/') && !host_path.starts_with('.') {
+            binds.push(vol.clone());
+            continue;
+        }
+
+        // Canonicalize as much as possible (resolve .. and .)
+        let resolved = std::path::Path::new(host_path);
+        let resolved_str = resolved.to_string_lossy();
+
+        // Block docker socket
+        for blocked in BLOCKED_PATHS {
+            if resolved_str == *blocked {
+                return Err(format!(
+                    "Blocked volume mount: {} is not allowed",
+                    host_path
+                ));
+            }
+        }
+
+        // Only allow paths under the sanctioned prefix
+        if !resolved_str.starts_with(ALLOWED_BIND_PREFIX) {
+            return Err(format!(
+                "Blocked volume mount: host path '{}' must be under {}",
+                host_path, ALLOWED_BIND_PREFIX
+            ));
+        }
+
+        // Reject path traversal attempts
+        if host_path.contains("..") {
+            return Err(format!(
+                "Blocked volume mount: path traversal not allowed in '{}'",
+                host_path
+            ));
+        }
+
+        binds.push(vol.clone());
+    }
 
     // Restart policy
     let restart_policy = match svc.restart.as_str() {

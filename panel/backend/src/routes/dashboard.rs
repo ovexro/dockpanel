@@ -292,7 +292,7 @@ pub async fn docker_summary(
 /// GET /api/dashboard/metrics-history — Historical CPU/memory/disk data for charts.
 /// Downsampled to ~96 points (one per 15-minute bucket) for efficient chart rendering.
 pub async fn metrics_history(
-    AuthUser(_claims): AuthUser,
+    AuthUser(claims): AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let rows: Vec<(f64, f64, f64, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
@@ -304,9 +304,11 @@ pub async fn metrics_history(
                 (EXTRACT(minute FROM created_at)::int / 15) * INTERVAL '15 minutes' AS bucket \
          FROM metrics_history \
          WHERE created_at > NOW() - INTERVAL '24 hours' \
+           AND server_id IN (SELECT id FROM servers WHERE user_id = $1) \
          GROUP BY bucket \
          ORDER BY bucket ASC",
     )
+    .bind(claims.sub)
     .fetch_all(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -329,18 +331,20 @@ pub async fn metrics_history(
 /// GET /api/dashboard/timeline — Unified chronological event feed.
 /// Merges recent events from deploys, backups, incidents, alerts, and security scans.
 pub async fn timeline(
-    AuthUser(_claims): AuthUser,
+    AuthUser(claims): AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
     let mut events: Vec<serde_json::Value> = Vec::new();
 
-    // Recent deploys (join sites for domain)
+    // Recent deploys (join sites for domain, filtered by user ownership)
     let deploys: Vec<(String, Option<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         "SELECT dl.status, s.domain, dl.created_at \
          FROM deploy_logs dl \
          JOIN sites s ON s.id = dl.site_id \
+         WHERE s.user_id = $1 \
          ORDER BY dl.created_at DESC LIMIT 10",
     )
+    .bind(claims.sub)
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();
@@ -354,13 +358,15 @@ pub async fn timeline(
         }));
     }
 
-    // Recent backups (join sites for domain)
+    // Recent backups (join sites for domain, filtered by user ownership)
     let backups: Vec<(String, Option<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         "SELECT b.filename, s.domain, b.created_at \
          FROM backups b \
          JOIN sites s ON s.id = b.site_id \
+         WHERE s.user_id = $1 \
          ORDER BY b.created_at DESC LIMIT 10",
     )
+    .bind(claims.sub)
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();
@@ -374,10 +380,11 @@ pub async fn timeline(
         }));
     }
 
-    // Recent incidents
+    // Recent incidents (filtered by user)
     let incidents: Vec<(String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT severity, title, created_at FROM managed_incidents ORDER BY created_at DESC LIMIT 10",
+        "SELECT severity, title, created_at FROM managed_incidents WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10",
     )
+    .bind(claims.sub)
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();
@@ -391,10 +398,13 @@ pub async fn timeline(
         }));
     }
 
-    // Recent alerts
+    // Recent alerts (filtered by user's servers)
     let alerts: Vec<(String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT severity, title, created_at FROM alerts ORDER BY created_at DESC LIMIT 10",
+        "SELECT severity, title, created_at FROM alerts \
+         WHERE server_id IN (SELECT id FROM servers WHERE user_id = $1) \
+         ORDER BY created_at DESC LIMIT 10",
     )
+    .bind(claims.sub)
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();
@@ -408,10 +418,13 @@ pub async fn timeline(
         }));
     }
 
-    // Recent security scans
+    // Recent security scans (filtered by user's servers)
     let scans: Vec<(i32, i32, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT critical_count, warning_count, created_at FROM security_scans ORDER BY created_at DESC LIMIT 5",
+        "SELECT critical_count, warning_count, created_at FROM security_scans \
+         WHERE server_id IN (SELECT id FROM servers WHERE user_id = $1) \
+         ORDER BY created_at DESC LIMIT 5",
     )
+    .bind(claims.sub)
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();

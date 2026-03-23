@@ -37,6 +37,20 @@ async fn run_deploy(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid domain"));
     }
 
+    // Validate repo_url
+    if body.repo_url.is_empty() || body.repo_url.starts_with('-') {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid repo_url"));
+    }
+    if !body.repo_url.starts_with("https://") && !body.repo_url.starts_with("http://")
+        && !body.repo_url.starts_with("git@") && !body.repo_url.starts_with("ssh://") {
+        return Err(err(StatusCode::BAD_REQUEST, "repo_url must use https://, http://, ssh://, or git@ protocol"));
+    }
+
+    // Validate branch
+    if body.branch.is_empty() || body.branch.starts_with('-') || body.branch.contains("..") {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid branch name"));
+    }
+
     tracing::info!("Deploying {} from {} ({})", body.domain, body.repo_url, body.branch);
 
     // 1. Clone or pull

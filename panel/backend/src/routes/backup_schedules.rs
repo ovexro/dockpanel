@@ -81,15 +81,19 @@ pub async fn set_schedule(
         return Err(err(StatusCode::BAD_REQUEST, "Schedule must have 5 fields (minute hour day month weekday)"));
     }
 
-    // Verify destination exists
-    let _dest: BackupDestination = sqlx::query_as(
-        "SELECT * FROM backup_destinations WHERE id = $1",
+    // Verify destination exists and belongs to the user's server
+    let dest_check: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT bd.id FROM backup_destinations bd JOIN servers s ON bd.server_id = s.id WHERE bd.id = $1 AND s.user_id = $2",
     )
-    .bind(body.destination_id)
+    .bind(&body.destination_id)
+    .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
-    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Destination not found"))?;
+    .ok()
+    .flatten();
+    if dest_check.is_none() {
+        return Err(err(StatusCode::FORBIDDEN, "Destination not found or not owned by you"));
+    }
 
     let retention = body.retention_count.unwrap_or(7).max(1).min(365);
     let enabled = body.enabled.unwrap_or(true);
