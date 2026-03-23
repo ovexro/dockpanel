@@ -28,6 +28,41 @@ async fn install(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid domain"));
     }
 
+    // Validate db_name and db_user if present
+    fn is_valid_db_identifier(s: &str) -> bool {
+        !s.is_empty() && s.len() <= 64
+            && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    }
+
+    if let Some(ref db_name) = body.db_name {
+        if !is_valid_db_identifier(db_name) {
+            return Err(err(StatusCode::BAD_REQUEST, "Invalid db_name"));
+        }
+    }
+    if let Some(ref db_user) = body.db_user {
+        if !is_valid_db_identifier(db_user) {
+            return Err(err(StatusCode::BAD_REQUEST, "Invalid db_user"));
+        }
+    }
+    // Validate admin_email contains exactly one @
+    if let Some(ref email) = body.admin_email {
+        if email.matches('@').count() != 1 {
+            return Err(err(StatusCode::BAD_REQUEST, "Invalid admin_email"));
+        }
+    }
+    // Validate db_pass: no newlines or null bytes
+    if let Some(ref db_pass) = body.db_pass {
+        if db_pass.is_empty() || db_pass.contains('\n') || db_pass.contains('\r') || db_pass.contains('\0') {
+            return Err(err(StatusCode::BAD_REQUEST, "Invalid db_pass"));
+        }
+    }
+    // Validate admin_pass: no newlines or null bytes
+    if let Some(ref admin_pass) = body.admin_pass {
+        if admin_pass.is_empty() || admin_pass.contains('\n') || admin_pass.contains('\r') || admin_pass.contains('\0') {
+            return Err(err(StatusCode::BAD_REQUEST, "Invalid admin_pass"));
+        }
+    }
+
     let title = body.title.as_deref().unwrap_or("My Site");
 
     let result = match body.cms.as_str() {

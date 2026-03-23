@@ -28,6 +28,12 @@ fn ensure_msmtp() -> Result<(), String> {
     Ok(())
 }
 
+/// Check that a config value does not contain newlines or control characters
+/// that could allow SMTP header injection or config file manipulation.
+fn is_safe_config_value(s: &str) -> bool {
+    !s.contains('\n') && !s.contains('\r') && !s.contains('\0')
+}
+
 /// Configure msmtp system-wide so PHP mail() and sendmail work.
 pub fn configure(
     host: &str,
@@ -38,6 +44,19 @@ pub fn configure(
     from_name: &str,
     encryption: &str,
 ) -> Result<(), String> {
+    // Validate all string inputs against newline/control character injection
+    for (name, value) in [
+        ("host", host),
+        ("username", username),
+        ("password", password),
+        ("from", from),
+        ("from_name", from_name),
+    ] {
+        if !is_safe_config_value(value) {
+            return Err(format!("Invalid {name}: contains newline or control characters"));
+        }
+    }
+
     ensure_msmtp()?;
 
     let tls = match encryption {

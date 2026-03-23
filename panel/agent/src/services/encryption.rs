@@ -1,9 +1,22 @@
 use std::path::Path;
 use tokio::process::Command;
 
+/// Validate that a filepath is within the allowed backup directory and contains no traversal.
+fn validate_backup_path(filepath: &str) -> Result<(), String> {
+    if !filepath.starts_with("/var/backups/dockpanel/") {
+        return Err("Path must be within /var/backups/dockpanel/".to_string());
+    }
+    if filepath.contains("..") {
+        return Err("Path must not contain '..'".to_string());
+    }
+    Ok(())
+}
+
 /// Encrypt a file using AES-256-CBC with PBKDF2 (openssl).
 /// Returns the path to the encrypted file (original path + ".enc").
 pub async fn encrypt_file(filepath: &str, key: &str) -> Result<String, String> {
+    validate_backup_path(filepath)?;
+
     let path = Path::new(filepath);
     if !path.exists() {
         return Err(format!("File not found: {filepath}"));
@@ -57,6 +70,8 @@ pub async fn encrypt_file(filepath: &str, key: &str) -> Result<String, String> {
 
 /// Decrypt an encrypted file. Returns the path to the decrypted file.
 pub async fn decrypt_file(enc_filepath: &str, key: &str) -> Result<String, String> {
+    validate_backup_path(enc_filepath)?;
+
     let path = Path::new(enc_filepath);
     if !path.exists() {
         return Err(format!("File not found: {enc_filepath}"));

@@ -4,8 +4,12 @@ use tokio::process::Command;
 const WP_CLI: &str = "/usr/local/bin/wp";
 const WP_ROOT: &str = "/var/www";
 
-fn site_path(domain: &str) -> String {
-    format!("{WP_ROOT}/{domain}/public")
+fn site_path(domain: &str) -> Result<String, String> {
+    if domain.is_empty() || domain.contains("..") || domain.contains('/')
+        || !domain.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+        return Err("Invalid domain".to_string());
+    }
+    Ok(format!("{WP_ROOT}/{domain}/public"))
 }
 
 /// Ensure wp-cli is installed at /usr/local/bin/wp.
@@ -38,7 +42,7 @@ pub async fn ensure_cli() -> Result<(), String> {
 /// Run a wp-cli command, return stdout on success.
 async fn wp(domain: &str, args: &[&str]) -> Result<String, String> {
     ensure_cli().await?;
-    let path = site_path(domain);
+    let path = site_path(domain)?;
     let out = Command::new(WP_CLI)
         .args(args)
         .arg("--allow-root")
@@ -58,8 +62,10 @@ async fn wp(domain: &str, args: &[&str]) -> Result<String, String> {
 
 /// Check if WordPress is installed at the site's document root.
 pub fn detect(domain: &str) -> bool {
-    let p = format!("{}/wp-config.php", site_path(domain));
-    std::path::Path::new(&p).exists()
+    match site_path(domain) {
+        Ok(path) => std::path::Path::new(&format!("{path}/wp-config.php")).exists(),
+        Err(_) => false,
+    }
 }
 
 /// Get WP version and update availability.
@@ -101,7 +107,7 @@ pub async fn update_core(domain: &str) -> Result<String, String> {
     let result = wp(domain, &["core", "update"]).await?;
     // Fix ownership after update
     Command::new("chown")
-        .args(["-R", "www-data:www-data", &site_path(domain)])
+        .args(["-R", "www-data:www-data", &site_path(domain)?])
         .output()
         .await
         .ok();
@@ -112,7 +118,7 @@ pub async fn update_core(domain: &str) -> Result<String, String> {
 pub async fn update_all_plugins(domain: &str) -> Result<String, String> {
     let result = wp(domain, &["plugin", "update", "--all"]).await?;
     Command::new("chown")
-        .args(["-R", "www-data:www-data", &site_path(domain)])
+        .args(["-R", "www-data:www-data", &site_path(domain)?])
         .output()
         .await
         .ok();
@@ -123,7 +129,7 @@ pub async fn update_all_plugins(domain: &str) -> Result<String, String> {
 pub async fn update_all_themes(domain: &str) -> Result<String, String> {
     let result = wp(domain, &["theme", "update", "--all"]).await?;
     Command::new("chown")
-        .args(["-R", "www-data:www-data", &site_path(domain)])
+        .args(["-R", "www-data:www-data", &site_path(domain)?])
         .output()
         .await
         .ok();
@@ -141,7 +147,7 @@ pub async fn plugin_action(domain: &str, name: &str, action: &str) -> Result<Str
     };
     if matches!(action, "install" | "update") {
         Command::new("chown")
-            .args(["-R", "www-data:www-data", &site_path(domain)])
+            .args(["-R", "www-data:www-data", &site_path(domain)?])
             .output()
             .await
             .ok();
@@ -158,7 +164,7 @@ pub async fn theme_action(domain: &str, name: &str, action: &str) -> Result<Stri
     };
     if matches!(action, "install" | "update") {
         Command::new("chown")
-            .args(["-R", "www-data:www-data", &site_path(domain)])
+            .args(["-R", "www-data:www-data", &site_path(domain)?])
             .output()
             .await
             .ok();
@@ -180,7 +186,7 @@ pub async fn install(
     db_host: &str,
 ) -> Result<String, String> {
     ensure_cli().await?;
-    let path = site_path(domain);
+    let path = site_path(domain)?;
 
     // Ensure document root exists before wp-cli tries to write
     tokio::fs::create_dir_all(&path)
@@ -253,7 +259,7 @@ pub async fn install(
 
 /// Set or remove auto-update cron.
 pub async fn set_auto_update(domain: &str, enabled: bool) -> Result<(), String> {
-    let path = site_path(domain);
+    let path = site_path(domain)?;
     let marker = format!("# wp-auto-update-{domain}");
     let cron_line = format!(
         "0 3 * * * {WP_CLI} core update --allow-root --path={path} > /dev/null 2>&1 && \

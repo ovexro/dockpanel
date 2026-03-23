@@ -129,6 +129,9 @@ pub async fn create(
     if body.command.trim().is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "Command is required"));
     }
+    if body.command.contains('\0') || body.command.len() > 4096 {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid command"));
+    }
     if body.schedule.trim().is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "Schedule is required"));
     }
@@ -183,6 +186,13 @@ pub async fn update(
 
     if existing.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Cron job not found"));
+    }
+
+    // Validate command if provided
+    if let Some(ref command) = body.command {
+        if command.contains('\0') || command.len() > 4096 {
+            return Err(err(StatusCode::BAD_REQUEST, "Invalid command"));
+        }
     }
 
     // Validate schedule if provided

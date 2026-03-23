@@ -188,12 +188,13 @@ async fn download_file(
         .file_name()
         .and_then(|f| f.to_str())
         .unwrap_or("download");
+    let safe_filename = filename.replace('"', "").replace(['\\', '\n', '\r'], "");
 
     Ok((
         [
             (
                 axum::http::header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{filename}\""),
+                format!("attachment; filename=\"{safe_filename}\""),
             ),
             (
                 axum::http::header::CONTENT_TYPE,

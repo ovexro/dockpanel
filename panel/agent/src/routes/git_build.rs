@@ -16,6 +16,53 @@ fn err(status: StatusCode, msg: &str) -> ApiErr {
     (status, Json(serde_json::json!({ "error": msg })))
 }
 
+/// Allowed commands for pre-build hooks (whitelist).
+const ALLOWED_PRE_BUILD: &[&str] = &[
+    "npm install",
+    "npm ci",
+    "yarn install",
+    "pnpm install",
+    "composer install",
+    "bundle install",
+    "pip install -r requirements.txt",
+    "pip3 install -r requirements.txt",
+    "cargo build --release",
+];
+
+/// Validate that a repo URL uses an allowed protocol and is not malicious.
+fn is_valid_repo_url(url: &str) -> bool {
+    if url.starts_with('-') {
+        return false;
+    }
+    if url.starts_with("file://") || url.starts_with("ext://") {
+        return false;
+    }
+    url.starts_with("https://")
+        || url.starts_with("http://")
+        || url.starts_with("ssh://")
+        || url.starts_with("git@")
+}
+
+/// Validate that a branch name is safe.
+fn is_valid_branch(branch: &str) -> bool {
+    !branch.starts_with('-') && !branch.contains("..")
+}
+
+/// Validate that a dockerfile path does not escape the build context.
+fn is_valid_dockerfile(dockerfile: &str) -> bool {
+    !dockerfile.contains("..") && !dockerfile.starts_with('/')
+}
+
+/// Validate that a build_context path does not escape the repo directory.
+fn is_valid_build_context(ctx: &str) -> bool {
+    !ctx.contains("..") && !ctx.starts_with('/')
+}
+
+/// Validate that an image_tag is a dockpanel-managed tag and has no path traversal.
+fn is_valid_image_tag(tag: &str) -> bool {
+    tag.starts_with("dockpanel-git-") && !tag.contains('/')
+}
+
 #[derive(Deserialize)]
 struct CloneRequest {
     name: String,
@@ -83,11 +130,17 @@ fn default_keep() -> usize {
 async fn clone(
     Json(body): Json<CloneRequest>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
-    if body.name.is_empty() || body.name.len() > 64 {
+    if !super::is_valid_name(&body.name) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid name"));
     }
     if body.repo_url.is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "Missing repo_url"));
+    }
+    if !is_valid_repo_url(&body.repo_url) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid repo_url: must use https://, http://, ssh://, or git@ protocol"));
+    }
+    if !is_valid_branch(&body.branch) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid branch name"));
     }
 
     tracing::info!("Git clone: {} from {} ({})", body.name, body.repo_url, body.branch);
@@ -111,8 +164,14 @@ async fn clone(
 async fn build(
     Json(body): Json<BuildRequest>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
-    if body.name.is_empty() || body.name.len() > 64 {
+    if !super::is_valid_name(&body.name) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid name"));
+    }
+    if !is_valid_dockerfile(&body.dockerfile) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid dockerfile path"));
+    }
+    if !is_valid_build_context(&body.build_context) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid build_context path"));
     }
 
     tracing::info!("Git build: {} (commit: {})", body.name, body.commit_hash);
@@ -138,8 +197,11 @@ async fn deploy_container(
     State(state): State<AppState>,
     Json(body): Json<DeployRequest>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
-    if body.name.is_empty() || body.name.len() > 64 {
+    if !super::is_valid_name(&body.name) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid name"));
+    }
+    if !is_valid_image_tag(&body.image_tag) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid image_tag: must start with dockpanel-git- and not contain /"));
     }
     if body.container_port == 0 || body.host_port == 0 {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid port"));
@@ -175,7 +237,7 @@ async fn deploy_container(
 async fn keygen(
     Json(body): Json<KeygenRequest>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
-    if body.name.is_empty() || body.name.len() > 64 {
+    if !super::is_valid_name(&body.name) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid name"));
     }
 
@@ -192,7 +254,7 @@ async fn keygen(
 async fn cleanup(
     Json(body): Json<CleanupRequest>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
-    if body.name.is_empty() || body.name.len() > 64 {
+    if !super::is_valid_name(&body.name) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid name"));
     }
 
@@ -207,7 +269,7 @@ async fn cleanup(
 async fn prune(
     Json(body): Json<PruneRequest>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
-    if body.name.is_empty() || body.name.len() > 64 {
+    if !super::is_valid_name(&body.name) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid name"));
     }
 
@@ -225,7 +287,7 @@ struct LifecycleRequest {
 
 /// POST /git/stop
 async fn stop_container(Json(body): Json<LifecycleRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
-    if body.name.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
+    if !super::is_valid_name(&body.name) { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
     let container_name = format!("dockpanel-git-{}", body.name);
     let docker = bollard::Docker::connect_with_local_defaults()
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
@@ -236,7 +298,7 @@ async fn stop_container(Json(body): Json<LifecycleRequest>) -> Result<Json<serde
 
 /// POST /git/start
 async fn start_container(Json(body): Json<LifecycleRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
-    if body.name.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
+    if !super::is_valid_name(&body.name) { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
     let container_name = format!("dockpanel-git-{}", body.name);
     let docker = bollard::Docker::connect_with_local_defaults()
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
@@ -247,7 +309,7 @@ async fn start_container(Json(body): Json<LifecycleRequest>) -> Result<Json<serd
 
 /// POST /git/restart
 async fn restart_container(Json(body): Json<LifecycleRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
-    if body.name.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
+    if !super::is_valid_name(&body.name) { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
     let container_name = format!("dockpanel-git-{}", body.name);
     let docker = bollard::Docker::connect_with_local_defaults()
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
@@ -266,7 +328,7 @@ fn default_log_lines() -> usize { 200 }
 
 /// POST /git/logs
 async fn container_logs(Json(body): Json<LogsRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
-    if body.name.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
+    if !super::is_valid_name(&body.name) { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
     let container_name = format!("dockpanel-git-{}", body.name);
     let docker = bollard::Docker::connect_with_local_defaults()
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
@@ -291,7 +353,7 @@ struct HookRequest {
 
 /// POST /git/hook — Run a command inside a git-deployed container (docker exec).
 async fn run_hook(Json(body): Json<HookRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
-    if body.name.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
+    if !super::is_valid_name(&body.name) { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
     if body.command.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Empty command")); }
     let container_name = format!("dockpanel-git-{}", body.name);
 
@@ -322,10 +384,16 @@ struct PreBuildHookRequest {
     command: String,
 }
 
-/// POST /git/pre-build-hook — Run a command on the host in the git repo directory.
+/// POST /git/pre-build-hook — Run a whitelisted command on the host in the git repo directory.
 async fn pre_build_hook(Json(body): Json<PreBuildHookRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
-    if body.name.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
+    if !super::is_valid_name(&body.name) { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
     if body.command.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Empty command")); }
+
+    // Only allow whitelisted commands — arbitrary shell execution is not permitted.
+    if !ALLOWED_PRE_BUILD.contains(&body.command.as_str()) {
+        return Err(err(StatusCode::BAD_REQUEST, "Command not allowed. Permitted commands: npm install, npm ci, yarn install, pnpm install, composer install, bundle install, pip install -r requirements.txt, pip3 install -r requirements.txt, cargo build --release"));
+    }
+
     let git_dir = format!("/var/lib/dockpanel/git/{}", body.name);
     if !std::path::Path::new(&git_dir).exists() {
         return Err(err(StatusCode::NOT_FOUND, "Git repo not found"));
@@ -365,7 +433,10 @@ struct AutoDetectRequest {
 
 /// POST /git/auto-detect — Auto-detect language and generate Dockerfile if missing.
 async fn auto_detect(Json(body): Json<AutoDetectRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
-    if body.name.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
+    if !super::is_valid_name(&body.name) { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
+    if !is_valid_build_context(&body.build_context) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid build_context path"));
+    }
 
     // Check if the original Dockerfile exists before calling auto-detect
     let deploy_dir = format!("/var/lib/dockpanel/git/{}", body.name);
@@ -393,7 +464,10 @@ struct ComposeCheckRequest {
 
 /// POST /git/compose-check — Check if repo has docker-compose.yml
 async fn compose_check(Json(body): Json<ComposeCheckRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
-    if body.name.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
+    if !super::is_valid_name(&body.name) { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
+    if !is_valid_build_context(&body.build_context) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid build_context path"));
+    }
     let deploy_dir = format!("/var/lib/dockpanel/git/{}", body.name);
     let context_dir = if body.build_context == "." { deploy_dir.clone() } else { format!("{deploy_dir}/{}", body.build_context) };
 
@@ -419,8 +493,14 @@ async fn nixpacks_build_handler(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let name = body["name"].as_str().ok_or((StatusCode::BAD_REQUEST, "name required".into()))?;
+    if !super::is_valid_name(name) {
+        return Err((StatusCode::BAD_REQUEST, "Invalid name".into()));
+    }
     let commit_hash = body["commit_hash"].as_str().unwrap_or("latest");
     let build_context = body["build_context"].as_str().unwrap_or(".");
+    if build_context.contains("..") || build_context.starts_with('/') {
+        return Err((StatusCode::BAD_REQUEST, "Invalid build_context path".into()));
+    }
     let env_vars: std::collections::HashMap<String, String> = body["env_vars"]
         .as_object()
         .map(|m| m.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect())

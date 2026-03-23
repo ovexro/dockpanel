@@ -215,6 +215,9 @@ pub async fn fail2ban_banned(
     Path(jail): Path<String>,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    if jail.is_empty() || !jail.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid jail name"));
+    }
     let result = agent.get(&format!("/security/fail2ban/{jail}/banned")).await
         .map_err(|e| agent_error("Fail2Ban", e))?;
     Ok(Json(result))

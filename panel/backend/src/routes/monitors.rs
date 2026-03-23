@@ -30,6 +30,7 @@ pub struct Monitor {
     pub keyword: Option<String>,
     pub keyword_must_contain: bool,
     pub custom_headers: Option<serde_json::Value>,
+    pub heartbeat_token: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -570,15 +571,18 @@ pub async fn delete_maintenance(
 /// POST /api/heartbeat/{monitor_id}/{token} — Receive heartbeat ping (no auth).
 pub async fn heartbeat(
     State(state): State<AppState>,
-    Path((monitor_id, _token)): Path<(uuid::Uuid, String)>,
+    Path((monitor_id, token)): Path<(uuid::Uuid, String)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Validate monitor exists and is a heartbeat type
-    let monitor: Option<(uuid::Uuid, String)> = sqlx::query_as(
-        "SELECT id, COALESCE(name, '') FROM monitors WHERE id = $1 AND monitor_type = 'heartbeat'"
+    let monitor: Option<(uuid::Uuid, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, COALESCE(name, ''), heartbeat_token FROM monitors WHERE id = $1 AND monitor_type = 'heartbeat'"
     ).bind(monitor_id).fetch_optional(&state.db).await.ok().flatten();
 
-    if monitor.is_none() {
-        return Err(err(StatusCode::NOT_FOUND, "Monitor not found"));
+    let monitor = monitor.ok_or_else(|| err(StatusCode::NOT_FOUND, "Monitor not found"))?;
+
+    // Verify heartbeat token
+    if monitor.2.as_deref() != Some(&token) {
+        return Err(err(StatusCode::UNAUTHORIZED, "Invalid heartbeat token"));
     }
 
     // Record successful check

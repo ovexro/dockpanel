@@ -282,6 +282,9 @@ pub async fn upload_file(
     ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<UploadBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    if body.path.contains("..") || body.path.starts_with('/') {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid path"));
+    }
     if !is_safe_relative_path(&body.filename) && body.filename != "." {
         // Filename can be anything valid (not a path traversal)
         if body.filename.contains("..") || body.filename.contains('/') {

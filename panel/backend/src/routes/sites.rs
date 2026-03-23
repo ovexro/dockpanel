@@ -145,6 +145,41 @@ pub async fn create(
         ));
     }
 
+    // Validate app_command: reject shell injection, newlines, and non-whitelisted prefixes
+    if let Some(ref cmd) = body.app_command {
+        if cmd.contains('\n') || cmd.contains('\r') || cmd.contains('\0') {
+            return Err(err(StatusCode::BAD_REQUEST, "app_command must not contain newlines or null bytes"));
+        }
+        let forbidden = ['`', '$', '|', ';', '&', '<', '>', '\\', '!', '{', '}'];
+        if cmd.chars().any(|c| forbidden.contains(&c)) {
+            return Err(err(StatusCode::BAD_REQUEST, "app_command contains forbidden characters"));
+        }
+        if cmd.contains("..") {
+            return Err(err(StatusCode::BAD_REQUEST, "app_command must not contain '..'"));
+        }
+        if cmd.len() > 1024 {
+            return Err(err(StatusCode::BAD_REQUEST, "app_command too long"));
+        }
+        // Whitelist allowed command prefixes per runtime
+        if runtime == "node" {
+            let valid = cmd.starts_with("node ") || cmd.starts_with("npm ")
+                || cmd.starts_with("npx ") || cmd.starts_with("yarn ")
+                || cmd.starts_with("pnpm ") || !cmd.contains(' ');
+            if !valid {
+                return Err(err(StatusCode::BAD_REQUEST,
+                    "app_command for node must start with node/npm/npx/yarn/pnpm or be a bare filename"));
+            }
+        } else if runtime == "python" {
+            let valid = cmd.starts_with("python") || cmd.starts_with("gunicorn ")
+                || cmd.starts_with("uvicorn ") || cmd.starts_with("flask ")
+                || cmd.starts_with("django") || !cmd.contains(' ');
+            if !valid {
+                return Err(err(StatusCode::BAD_REQUEST,
+                    "app_command for python must start with python/gunicorn/uvicorn/flask/django or be a bare filename"));
+            }
+        }
+    }
+
     if let Some(ref preset) = body.php_preset {
         if !["generic", "laravel", "wordpress", "drupal", "joomla", "symfony", "codeigniter", "magento"].contains(&preset.as_str()) {
             return Err(err(

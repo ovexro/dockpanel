@@ -98,6 +98,17 @@ async fn put_site(
         }
     }
 
+    // Validate php_socket path
+    if let Some(ref socket) = config.php_socket {
+        let socket_path = socket.strip_prefix("unix:").unwrap_or(socket);
+        if !socket_path.starts_with("/run/php/") || socket_path.contains("..") {
+            return Err((StatusCode::BAD_REQUEST, Json(NginxResponse {
+                success: false,
+                message: "PHP socket must be under /run/php/".into(),
+            })));
+        }
+    }
+
     // Check PHP-FPM socket exists before creating a PHP site
     if config.runtime == "php" {
         if let Some(ref socket) = config.php_socket {
@@ -168,6 +179,16 @@ async fn put_site(
     // Create document root with default index.html
     // Nginx templates use: root {{ root }}/{{ domain }}/public (for static/PHP)
     // So we need to create the /public subdirectory for non-proxy runtimes
+    // Validate document root
+    if let Some(ref root) = config.root {
+        if !root.starts_with("/var/www/") || root.contains("..") {
+            return Err((StatusCode::BAD_REQUEST, Json(NginxResponse {
+                success: false,
+                message: "Document root must be under /var/www/".into(),
+            })));
+        }
+    }
+
     let default_root = format!("/var/www/{domain}");
     let doc_root = config.root.as_deref().unwrap_or(&default_root);
     let actual_root = match config.runtime.as_str() {
@@ -626,6 +647,9 @@ async fn add_redirect(
     if body.domain.is_empty() || body.source.is_empty() || body.target.is_empty() {
         return Err(api_err(StatusCode::BAD_REQUEST, "Missing fields"));
     }
+    if !super::is_valid_domain(&body.domain) {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
     if body.redirect_type != "301" && body.redirect_type != "302" {
         return Err(api_err(StatusCode::BAD_REQUEST, "Type must be 301 or 302"));
     }
@@ -634,6 +658,12 @@ async fn add_redirect(
             StatusCode::BAD_REQUEST,
             "Source must start with /",
         ));
+    }
+    if body.source.contains(|c: char| c.is_whitespace() || c == ';' || c == '{' || c == '}' || c == '\n' || c == '\r') {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Invalid source path characters"));
+    }
+    if body.target.contains(|c: char| c == '\n' || c == '\r' || c == ';' || c == '{' || c == '}') {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Invalid target URL characters"));
     }
 
     let redirects_file = format!("/etc/nginx/redirects/{}.conf", body.domain);
@@ -691,7 +721,10 @@ async fn add_redirect(
 }
 
 /// GET /nginx/redirects/{domain} — List redirects for a domain.
-async fn list_redirects(Path(domain): Path<String>) -> Json<serde_json::Value> {
+async fn list_redirects(Path(domain): Path<String>) -> Result<Json<serde_json::Value>, ApiErr> {
+    if !super::is_valid_domain(&domain) {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
     let redirects_file = format!("/etc/nginx/redirects/{domain}.conf");
     let content = std::fs::read_to_string(&redirects_file).unwrap_or_default();
 
@@ -716,7 +749,7 @@ async fn list_redirects(Path(domain): Path<String>) -> Json<serde_json::Value> {
         })
         .collect();
 
-    Json(serde_json::json!({ "redirects": rules }))
+    Ok(Json(serde_json::json!({ "redirects": rules })))
 }
 
 /// POST /nginx/redirects/{domain}/remove — Remove a specific redirect.
@@ -724,6 +757,9 @@ async fn remove_redirect(
     Path(domain): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
+    if !super::is_valid_domain(&domain) {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
     let source = body
         .get("source")
         .and_then(|v| v.as_str())
@@ -771,6 +807,9 @@ async fn password_protect(
     if body.domain.is_empty() || body.username.is_empty() || body.password.is_empty() {
         return Err(api_err(StatusCode::BAD_REQUEST, "Missing fields"));
     }
+    if !super::is_valid_domain(&body.domain) {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
 
     let htpasswd_dir = "/etc/nginx/htpasswd";
     std::fs::create_dir_all(htpasswd_dir).ok();
@@ -808,6 +847,9 @@ async fn password_protect(
     let auth_file = format!("{auth_conf_dir}/{}.conf", body.domain);
 
     let path = if body.path.is_empty() { "/" } else { &body.path };
+    if !path.starts_with('/') || path.contains(|c: char| c.is_whitespace() || c == ';' || c == '{' || c == '}' || c == '\n' || c == '\r') {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Invalid path format"));
+    }
     let auth_block = format!(
         "location {} {{\n    auth_basic \"Restricted\";\n    auth_basic_user_file {};\n    try_files $uri $uri/ =404;\n}}\n",
         path, htpasswd_file
@@ -860,7 +902,10 @@ async fn password_protect(
 }
 
 /// GET /nginx/password-protect/{domain} — List protected paths and users.
-async fn list_protected(Path(domain): Path<String>) -> Json<serde_json::Value> {
+async fn list_protected(Path(domain): Path<String>) -> Result<Json<serde_json::Value>, ApiErr> {
+    if !super::is_valid_domain(&domain) {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
     let auth_file = format!("/etc/nginx/auth/{domain}.conf");
     let content = std::fs::read_to_string(&auth_file).unwrap_or_default();
     let htpasswd_file = format!("/etc/nginx/htpasswd/{domain}");
@@ -884,7 +929,7 @@ async fn list_protected(Path(domain): Path<String>) -> Json<serde_json::Value> {
         .filter_map(|l| l.split(':').next().map(|s| s.to_string()))
         .collect();
 
-    Json(serde_json::json!({ "paths": paths, "users": users }))
+    Ok(Json(serde_json::json!({ "paths": paths, "users": users })))
 }
 
 /// POST /nginx/password-protect/{domain}/remove — Remove password protection from a path.
@@ -892,6 +937,9 @@ async fn remove_protection(
     Path(domain): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
+    if !super::is_valid_domain(&domain) {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
     let path = body
         .get("path")
         .and_then(|v| v.as_str())
@@ -950,6 +998,12 @@ async fn add_alias(
     if body.domain.is_empty() || body.alias.is_empty() {
         return Err(api_err(StatusCode::BAD_REQUEST, "Missing fields"));
     }
+    if !super::is_valid_domain(&body.domain) {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
+    if !super::is_valid_domain(&body.alias) {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Invalid alias domain format"));
+    }
 
     let site_conf = format!("/etc/nginx/sites-enabled/{}.conf", body.domain);
     let content = std::fs::read_to_string(&site_conf)
@@ -996,7 +1050,10 @@ async fn add_alias(
 }
 
 /// GET /nginx/aliases/{domain} — List domain aliases.
-async fn list_aliases(Path(domain): Path<String>) -> Json<serde_json::Value> {
+async fn list_aliases(Path(domain): Path<String>) -> Result<Json<serde_json::Value>, ApiErr> {
+    if !super::is_valid_domain(&domain) {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
     let site_conf = format!("/etc/nginx/sites-enabled/{domain}.conf");
     let content = std::fs::read_to_string(&site_conf).unwrap_or_default();
 
@@ -1021,7 +1078,7 @@ async fn list_aliases(Path(domain): Path<String>) -> Json<serde_json::Value> {
     aliases.sort();
     aliases.dedup();
 
-    Json(serde_json::json!({ "aliases": aliases }))
+    Ok(Json(serde_json::json!({ "aliases": aliases })))
 }
 
 /// POST /nginx/aliases/{domain}/remove — Remove a domain alias.
@@ -1029,6 +1086,9 @@ async fn remove_alias(
     Path(domain): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
+    if !super::is_valid_domain(&domain) {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
     let alias = body
         .get("alias")
         .and_then(|v| v.as_str())
@@ -1077,6 +1137,9 @@ async fn site_logs(
     Path(domain): Path<String>,
     axum::extract::Query(params): axum::extract::Query<LogQuery>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
+    if !super::is_valid_domain(&domain) {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
     let lines = params.lines.unwrap_or(200).min(1000);
     let log_type = params.log_type.as_deref().unwrap_or("access");
 
@@ -1103,6 +1166,9 @@ async fn site_logs(
 
 /// GET /nginx/site-stats/{domain} — Basic traffic stats from access log.
 async fn site_stats(Path(domain): Path<String>) -> Result<Json<serde_json::Value>, ApiErr> {
+    if !super::is_valid_domain(&domain) {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
     let log_file = format!("/var/log/nginx/{domain}.access.log");
 
     if !std::path::Path::new(&log_file).exists() {

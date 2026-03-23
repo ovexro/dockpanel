@@ -28,7 +28,7 @@ echo "Target: ${HOST}:${PORT}"
 
 # Auth
 section "Authentication"
-LOGIN_RESP=$(curl -sf -X POST "${API}/auth/login" -H "Content-Type: application/json" -d '{"email":"admin@dockpanel.dev","password":"TestPass1234"}' 2>/dev/null)
+LOGIN_RESP=$(curl -sf -X POST "${API}/auth/login" -H "Content-Type: application/json" -d '{"email":"test@e2e-tests.local","password":"TestPass1234"}' 2>/dev/null)
 AUTH_TOKEN=$(echo "$LOGIN_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
 [ -n "$AUTH_TOKEN" ] && ok "Login successful" || { fail "Login failed"; exit 1; }
 

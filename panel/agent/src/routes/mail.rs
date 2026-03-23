@@ -327,6 +327,15 @@ async fn dkim_generate(
         return Err(err(StatusCode::BAD_REQUEST, "Domain and selector required"));
     }
 
+    if domain.contains('/') || domain.contains('\\') || domain.contains("..")
+        || !domain.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
+    if selector.contains('/') || selector.contains('\\') || selector.contains("..")
+        || !selector.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid selector format"));
+    }
+
     // Create DKIM directory
     let key_dir = format!("{DKIM_KEYS_DIR}/{domain}");
     tokio::fs::create_dir_all(&key_dir).await
@@ -383,6 +392,11 @@ async fn domain_configure(
 ) -> Result<Json<serde_json::Value>, ApiErr> {
     let domain = body.domain.trim();
 
+    if domain.contains('/') || domain.contains('\\') || domain.contains("..")
+        || !domain.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
+
     // Create vmail directory for domain
     let maildir = format!("{VMAIL_DIR}/{domain}");
     tokio::fs::create_dir_all(&maildir).await
@@ -400,6 +414,11 @@ async fn domain_remove(
 ) -> Result<Json<serde_json::Value>, ApiErr> {
     let domain = body.domain.trim();
 
+    if domain.contains('/') || domain.contains('\\') || domain.contains("..")
+        || !domain.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
+
     // Remove DKIM keys
     let key_dir = format!("{DKIM_KEYS_DIR}/{domain}");
     let _ = tokio::fs::remove_dir_all(&key_dir).await;
@@ -416,6 +435,23 @@ async fn domain_remove(
 async fn sync_config(
     Json(body): Json<SyncRequest>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
+    // Validate account and alias fields for injection attacks
+    for acc in &body.accounts {
+        if acc.email.contains('\n') || acc.email.contains('\r') || acc.email.contains('\t') || acc.email.contains('\0')
+            || acc.password_hash.contains('\n') || acc.password_hash.contains('\r') || acc.password_hash.contains('\0') {
+            return Err(err(StatusCode::BAD_REQUEST, "Invalid characters in account data"));
+        }
+        if !acc.email.contains('@') || acc.email.matches('@').count() != 1 {
+            return Err(err(StatusCode::BAD_REQUEST, "Invalid email format"));
+        }
+    }
+    for alias in &body.aliases {
+        if alias.source.contains('\n') || alias.source.contains('\0')
+            || alias.destination.contains('\n') || alias.destination.contains('\0') {
+            return Err(err(StatusCode::BAD_REQUEST, "Invalid characters in alias data"));
+        }
+    }
+
     // Ensure directories exist
     tokio::fs::create_dir_all(VMAIL_DIR).await.ok();
     tokio::fs::create_dir_all("/etc/postfix").await.ok();
@@ -609,8 +645,13 @@ async fn queue_flush() -> Result<Json<serde_json::Value>, ApiErr> {
 async fn queue_delete(
     Json(body): Json<QueueDeleteRequest>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
+    let id = body.id.trim();
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_hexdigit()) || id.len() > 20 {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid queue ID format"));
+    }
+
     let output = Command::new("postsuper")
-        .args(["-d", &body.id])
+        .args(["-d", id])
         .output()
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("postsuper -d failed: {e}")))?;
@@ -765,6 +806,12 @@ struct RelayConfig {
 /// POST /mail/relay/configure — Set up SMTP relay (smarthost).
 async fn relay_configure(Json(body): Json<RelayConfig>) -> Result<Json<serde_json::Value>, ApiErr> {
     if body.host.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Relay host required")); }
+
+    if body.host.contains('\n') || body.host.contains('\r') || body.host.contains('\0')
+        || body.username.contains('\n') || body.username.contains('\0')
+        || body.password.contains('\n') || body.password.contains('\0') {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid characters in relay config"));
+    }
 
     // Write SASL password file
     let sasl_content = format!("[{}]:{} {}:{}\n", body.host, body.port, body.username, body.password);
@@ -981,6 +1028,12 @@ async fn mailbox_backup(Json(body): Json<MailboxBackupRequest>) -> Result<Json<s
 
     let parts: Vec<&str> = email.splitn(2, '@').collect();
     let (user, domain) = (parts[0], parts[1]);
+
+    if user.contains('/') || user.contains('\\') || user.contains("..")
+        || domain.contains('/') || domain.contains('\\') || domain.contains("..") {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid email format"));
+    }
+
     let maildir = format!("/var/vmail/{domain}/{user}");
 
     if !Path::new(&maildir).exists() {

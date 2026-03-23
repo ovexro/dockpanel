@@ -275,6 +275,9 @@ pub async fn docker_log_view(
     ServerScope(_server_id, agent): ServerScope,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    if container.is_empty() || !container.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.') {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container name"));
+    }
     let lines = params
         .get("lines")
         .unwrap_or(&"200".to_string())
@@ -294,6 +297,9 @@ pub async fn service_logs(
     ServerScope(_server_id, agent): ServerScope,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    if service.is_empty() || !service.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.') {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid service name"));
+    }
     let lines = params
         .get("lines")
         .unwrap_or(&"100".to_string())

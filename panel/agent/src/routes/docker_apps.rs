@@ -541,6 +541,18 @@ async fn exec_command(
         ));
     }
 
+    // Block dangerous commands that could escape the container
+    const CONTAINER_BLOCKED: &[&str] = &["mount", "nsenter", "chroot", "/proc/1/", "/proc/sysrq", "docker", "kubectl"];
+    let cmd_lower = command.to_lowercase();
+    for pattern in CONTAINER_BLOCKED {
+        if cmd_lower.contains(pattern) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("Blocked command: contains '{pattern}'") })),
+            ));
+        }
+    }
+
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(30),
         tokio::process::Command::new("docker")
@@ -666,11 +678,29 @@ async fn registry_login(
         ));
     }
 
+    // Pass password via stdin to avoid leaking it in process args
+    use tokio::io::AsyncWriteExt;
+    let mut child = tokio::process::Command::new("docker")
+        .args(["login", &body.server, "-u", &body.username, "--password-stdin"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(body.password.as_bytes()).await;
+        drop(stdin);
+    }
+
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        tokio::process::Command::new("docker")
-            .args(["login", &body.server, "-u", &body.username, "-p", &body.password])
-            .output(),
+        child.wait_with_output(),
     )
     .await
     .map_err(|_| {
@@ -948,6 +978,14 @@ async fn prune_images_all() -> Result<Json<serde_json::Value>, (StatusCode, Json
 
 /// DELETE /apps/images/{id} — Remove a specific Docker image.
 async fn remove_image(Path(id): Path<String>) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // Validate image ID: alphanumeric + : / . - _ only
+    let is_valid = !id.is_empty()
+        && id.len() <= 256
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == ':' || c == '/' || c == '.' || c == '-' || c == '_');
+    if !is_valid {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid image ID"}))));
+    }
+
     // Strip sha256: prefix if present (docker images --no-trunc includes it)
     let image_ref = if id.starts_with("sha256:") { &id } else { &id };
     let output = tokio::process::Command::new("docker")
@@ -976,13 +1014,31 @@ async fn snapshot_container(
         return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Invalid container ID" }))));
     }
 
-    let tag = body.tag.unwrap_or_else(|| {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        format!("dockpanel-snapshot:{}", now)
-    });
+    let tag = {
+        let raw = body.tag.unwrap_or_else(|| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            now.to_string()
+        });
+        // Force-namespace with dockpanel-snapshot: prefix to prevent overwriting system images
+        let suffix = raw.strip_prefix("dockpanel-snapshot:").unwrap_or(&raw);
+        // Sanitise the suffix: only allow alphanumeric, -, _, .
+        let safe_suffix: String = suffix.chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
+            .take(128)
+            .collect();
+        if safe_suffix.is_empty() {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            format!("dockpanel-snapshot:{}", now)
+        } else {
+            format!("dockpanel-snapshot:{}", safe_suffix)
+        }
+    };
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(120),
@@ -1004,6 +1060,14 @@ async fn snapshot_container(
     Ok(Json(serde_json::json!({ "success": true, "tag": tag, "image_id": image_id })))
 }
 
+/// Validate that an image reference contains only safe characters.
+fn is_valid_image_ref(image: &str) -> bool {
+    !image.is_empty()
+        && image.len() <= 256
+        && image.chars().all(|c| c.is_ascii_alphanumeric() || c == '/' || c == ':' || c == '.' || c == '-' || c == '_' || c == '@')
+        && !image.starts_with('-')
+}
+
 /// POST /apps/{container_id}/change-image — Change a container's image tag.
 /// Pulls the new image, stops the old container, starts a new one preserving volumes/env/ports/name.
 async fn change_image(
@@ -1017,6 +1081,10 @@ async fn change_image(
     let image = body.get("image").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
     if image.is_empty() {
         return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "image is required"}))));
+    }
+
+    if !is_valid_image_ref(&image) {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid image reference: must be <= 256 chars, alphanumeric with / : . - _ @ only, and not start with -"}))));
     }
 
     // 1. Pull new image
@@ -1073,7 +1141,7 @@ async fn change_image(
                 "run", "-d",
                 "--name", &container_name,
                 "--volumes-from", &backup_name,
-                "--network", "host",
+                "--network", "bridge",
                 &image,
             ])
             .output(),

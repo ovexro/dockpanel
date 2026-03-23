@@ -70,6 +70,14 @@ async fn create(
         ));
     }
 
+    if body.password.is_empty() || body.password.len() > 128
+        || body.password.contains('\n') || body.password.contains('\r') || body.password.contains('\0') {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid password" })),
+        ));
+    }
+
     let port = match body.port {
         Some(p) => p,
         None => find_free_port(&body.engine).await.map_err(|e| {
@@ -164,6 +172,42 @@ async fn query_db(
         return Err((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "Invalid container name" })),
+        ));
+    }
+    let suffix = &body.container["dockpanel-db-".len()..];
+    if !is_valid_name(suffix) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid container name" })),
+        ));
+    }
+
+    // Validate engine
+    if !["mysql", "mariadb", "postgres"].contains(&body.engine.as_str()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Engine must be mysql, mariadb, or postgres" })),
+        ));
+    }
+    // Validate user and database names
+    if !is_valid_name(&body.user) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid username" })),
+        ));
+    }
+    if !is_valid_name(&body.database) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid database name" })),
+        ));
+    }
+    // Validate password
+    if body.password.is_empty() || body.password.len() > 128
+        || body.password.contains('\n') || body.password.contains('\r') || body.password.contains('\0') {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid password" })),
         ));
     }
 

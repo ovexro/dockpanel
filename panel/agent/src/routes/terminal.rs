@@ -15,6 +15,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::AppState;
+use crate::services::command_filter;
 
 static ACTIVE_TERMINALS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static LAST_CONNECT: AtomicU64 = AtomicU64::new(0);
@@ -193,12 +194,25 @@ fn open_pty_shell(cwd: &str, cols: u16, rows: u16, site_domain: Option<&str>) ->
                     libc::initgroups(username, gid);
                     libc::setuid(uid);
 
+                    // PR_SET_NO_NEW_PRIVS: prevent any privilege escalation
+                    // (blocks setuid binaries like su, sudo, pkexec, etc.)
+                    libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+
                     // Set HOME to site directory
                     let home = std::ffi::CString::new(format!("HOME={}", cwd)).unwrap();
                     libc::putenv(home.as_ptr() as *mut _);
 
                     let user_env = std::ffi::CString::new("USER=www-data").unwrap();
                     libc::putenv(user_env.as_ptr() as *mut _);
+
+                    // Restricted PATH: only standard user bins, no sbin
+                    let path_env = std::ffi::CString::new(
+                        "PATH=/usr/local/bin:/usr/bin:/bin"
+                    ).unwrap();
+                    libc::putenv(path_env.as_ptr() as *mut _);
+
+                    // Restrict umask so created files aren't world-readable
+                    libc::umask(0o077);
                 } else {
                     // www-data user not found — abort rather than run as root
                     libc::_exit(1);
@@ -209,16 +223,44 @@ fn open_pty_shell(cwd: &str, cols: u16, rows: u16, site_domain: Option<&str>) ->
                 libc::putenv(home.as_ptr() as *mut _);
             }
 
-            // Exec bash (or sh)
-            let shell_path = if std::path::Path::new("/bin/bash").exists() {
-                std::ffi::CString::new("/bin/bash").unwrap()
-            } else {
-                std::ffi::CString::new("/bin/sh").unwrap()
-            };
+            // Exec shell
+            if site_domain.is_some() {
+                // Site terminal: use bash --restricted (rbash) to prevent:
+                //   - changing directory with cd
+                //   - setting/unsetting PATH
+                //   - specifying commands with /
+                //   - redirecting output
+                let bash_path = std::ffi::CString::new("/bin/bash").unwrap();
+                let sh_path = std::ffi::CString::new("/bin/sh").unwrap();
+                let restricted_arg = std::ffi::CString::new("--restricted").unwrap();
+                let norc_arg = std::ffi::CString::new("--norc").unwrap();
+                let noprofile_arg = std::ffi::CString::new("--noprofile").unwrap();
 
-            let login_arg = std::ffi::CString::new("--login").unwrap();
-            let args = [shell_path.as_ptr(), login_arg.as_ptr(), std::ptr::null()];
-            libc::execv(shell_path.as_ptr(), args.as_ptr());
+                // Try restricted bash (--norc/--noprofile prevents .bashrc from
+                // overriding the restricted mode)
+                let args = [
+                    bash_path.as_ptr(),
+                    restricted_arg.as_ptr(),
+                    norc_arg.as_ptr(),
+                    noprofile_arg.as_ptr(),
+                    std::ptr::null(),
+                ];
+                libc::execv(bash_path.as_ptr(), args.as_ptr());
+
+                // Fallback: plain sh
+                let args = [sh_path.as_ptr(), std::ptr::null()];
+                libc::execv(sh_path.as_ptr(), args.as_ptr());
+            } else {
+                // Server terminal: full bash
+                let shell_path = if std::path::Path::new("/bin/bash").exists() {
+                    std::ffi::CString::new("/bin/bash").unwrap()
+                } else {
+                    std::ffi::CString::new("/bin/sh").unwrap()
+                };
+                let login_arg = std::ffi::CString::new("--login").unwrap();
+                let args = [shell_path.as_ptr(), login_arg.as_ptr(), std::ptr::null()];
+                libc::execv(shell_path.as_ptr(), args.as_ptr());
+            }
 
             // If exec fails
             libc::_exit(1);
@@ -300,8 +342,9 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: Stri
         }
     });
 
-    // Command buffer for audit logging (logs when Enter is pressed)
+    // Command buffer for audit logging and safety checks
     let mut cmd_buffer = String::new();
+    let is_site_terminal = !domain.is_empty();
     let domain_str = if domain.is_empty() { "server" } else { &domain };
 
     tracing::info!(target: "terminal_audit", user = %user_email, domain = %domain_str, "Terminal session started");
@@ -325,18 +368,40 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: Stri
                             match cmd.get("type").and_then(|t| t.as_str()) {
                                 Some("input") => {
                                     if let Some(data) = cmd.get("data").and_then(|d| d.as_str()) {
-                                        if writer.write_all(data.as_bytes()).await.is_err() {
-                                            break;
-                                        }
-                                        // Audit logging: buffer input and log when Enter is pressed
+                                        // For site terminals: buffer input and intercept
+                                        // dangerous commands BEFORE they reach the shell.
+                                        // Characters are forwarded immediately for echo,
+                                        // but Enter is held until the command is validated.
+                                        let mut blocked = false;
                                         for ch in data.chars() {
                                             if ch == '\r' || ch == '\n' {
-                                                if !cmd_buffer.trim().is_empty() {
+                                                let trimmed = cmd_buffer.trim().to_string();
+                                                if !trimmed.is_empty() && is_site_terminal
+                                                    && !command_filter::is_safe_terminal_command(&trimmed)
+                                                {
+                                                    tracing::warn!(
+                                                        target: "terminal_audit",
+                                                        user = %user_email,
+                                                        domain = %domain_str,
+                                                        command = %trimmed,
+                                                        "Blocked dangerous terminal command"
+                                                    );
+                                                    // Send Ctrl+U (kill line) + Ctrl+C to cancel
+                                                    let _ = writer.write_all(b"\x15\x03").await;
+                                                    let warning = format!(
+                                                        "\r\n\x1b[1;31mBlocked:\x1b[0m command not allowed in site terminal\r\n",
+                                                    );
+                                                    let _ = socket.send(Message::Text(warning.into())).await;
+                                                    cmd_buffer.clear();
+                                                    blocked = true;
+                                                    break;
+                                                }
+                                                if !trimmed.is_empty() {
                                                     tracing::info!(
                                                         target: "terminal_audit",
                                                         user = %user_email,
                                                         domain = %domain_str,
-                                                        command = %cmd_buffer.trim(),
+                                                        command = %trimmed,
                                                         "Terminal command"
                                                     );
                                                 }
@@ -345,6 +410,12 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: Stri
                                                 cmd_buffer.pop();
                                             } else if !ch.is_control() {
                                                 cmd_buffer.push(ch);
+                                            }
+                                        }
+                                        // Only forward input to PTY if command was not blocked
+                                        if !blocked {
+                                            if writer.write_all(data.as_bytes()).await.is_err() {
+                                                break;
                                             }
                                         }
                                     }
@@ -365,9 +436,41 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: Stri
                                 _ => {}
                             }
                         } else {
-                            // Raw text input
-                            if writer.write_all(text.as_bytes()).await.is_err() {
-                                break;
+                            // Raw text input — apply same command filtering
+                            let mut blocked = false;
+                            if is_site_terminal {
+                                for ch in text.chars() {
+                                    if ch == '\r' || ch == '\n' {
+                                        let trimmed = cmd_buffer.trim().to_string();
+                                        if !trimmed.is_empty()
+                                            && !command_filter::is_safe_terminal_command(&trimmed)
+                                        {
+                                            tracing::warn!(
+                                                target: "terminal_audit",
+                                                user = %user_email,
+                                                domain = %domain_str,
+                                                command = %trimmed,
+                                                "Blocked dangerous terminal command (raw)"
+                                            );
+                                            let _ = writer.write_all(b"\x15\x03").await;
+                                            let warning = "\r\n\x1b[1;31mBlocked:\x1b[0m command not allowed in site terminal\r\n";
+                                            let _ = socket.send(Message::Text(warning.into())).await;
+                                            cmd_buffer.clear();
+                                            blocked = true;
+                                            break;
+                                        }
+                                        cmd_buffer.clear();
+                                    } else if ch == '\x7f' || ch == '\x08' {
+                                        cmd_buffer.pop();
+                                    } else if !ch.is_control() {
+                                        cmd_buffer.push(ch);
+                                    }
+                                }
+                            }
+                            if !blocked {
+                                if writer.write_all(text.as_bytes()).await.is_err() {
+                                    break;
+                                }
                             }
                         }
                     }
