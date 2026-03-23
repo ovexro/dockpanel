@@ -118,9 +118,9 @@
 
 | Metric | Value | Verified |
 |--------|-------|----------|
-| Agent binary | 20 MB | 2026-03-19 |
-| API binary | 14 MB | 2026-03-19 |
-| CLI binary | 1.7 MB | 2026-03-19 |
+| Agent binary | 20 MB | 2026-03-23 |
+| API binary | 19 MB | 2026-03-23 |
+| CLI binary | 1.8 MB | 2026-03-23 |
 | Agent RAM (RSS) | ~30 MB | 2026-03-19 |
 | API RAM (RSS) | ~27 MB | 2026-03-19 |
 | Total RAM | ~57 MB | 2026-03-19 |

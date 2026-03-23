@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>The most feature-packed free server panel ever built.</strong><br>
-  Self-hosted. Docker-native. Written in Rust. ~57MB RAM. 371 API endpoints. 54 app templates. 116 E2E tests. ~35MB binaries. Zero subscriptions.
+  Self-hosted. Docker-native. Written in Rust. ~57MB RAM. 371 API endpoints. 54 app templates. 116 E2E tests. ~41MB binaries. Zero subscriptions.
 </p>
 
 <p align="center">
@@ -196,7 +196,7 @@ Browser → React 19 SPA → Nginx
                            └── /*     → Frontend (static files)
 ```
 
-**3 Rust binaries**: Agent (~20MB), API (~14MB), CLI (~1.7MB). Total RAM: ~57MB. 11 background services.
+**3 Rust binaries**: Agent (~20MB), API (~19MB), CLI (~1.8MB). Total RAM: ~57MB. 11 background services.
 
 | Component | Tech | Role |
 |-----------|------|------|
