@@ -403,6 +403,19 @@ pub async fn register(
     headers: HeaderMap,
     Json(body): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    // Check if self-registration is enabled (default: disabled)
+    let reg_enabled: Option<(String,)> =
+        sqlx::query_as("SELECT value FROM settings WHERE key = 'self_registration_enabled'")
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    let allowed = reg_enabled
+        .map(|r| r.0 == "true")
+        .unwrap_or(false);
+    if !allowed {
+        return Err(err(StatusCode::FORBIDDEN, "Registration is disabled"));
+    }
+
     // Rate limit: 3 registrations per IP per hour
     let ip = headers
         .get("x-real-ip")
@@ -468,18 +481,14 @@ pub async fn register(
         }
     })?;
 
-    // Determine base URL from request headers
-    let base_url = headers
-        .get("origin")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            let host = headers
-                .get("host")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("localhost");
-            format!("https://{host}")
-        });
+    // Determine base URL from Host header only (never trust Origin — attacker-controlled)
+    let base_url = {
+        let host = headers
+            .get("host")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("localhost");
+        format!("https://{host}")
+    };
 
     // Send verification email
     // Check if SMTP is configured — if not, auto-verify (self-hosted convenience)

@@ -37,6 +37,18 @@ pub async fn ws_token(
         ));
     }
 
+    // Block server terminal when disabled via settings (e.g., demo mode)
+    if q.site_id.is_none() {
+        let disabled: Option<(String,)> =
+            sqlx::query_as("SELECT value FROM settings WHERE key = 'server_terminal_disabled'")
+                .fetch_optional(&state.db)
+                .await
+                .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        if disabled.map(|r| r.0 == "true").unwrap_or(false) {
+            return Err(err(StatusCode::FORBIDDEN, "Server terminal is disabled"));
+        }
+    }
+
     // Optionally resolve domain from site_id
     let domain = if let Some(ref sid) = q.site_id {
         let site_id: uuid::Uuid = sid

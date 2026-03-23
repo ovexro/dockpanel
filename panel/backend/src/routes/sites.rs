@@ -115,6 +115,13 @@ pub async fn create(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
     }
 
+    // Block reserved panel domains
+    let reserved = ["dockpanel.dev", "panel.example.com", "docs.dockpanel.dev"];
+    let domain_lower = body.domain.to_lowercase();
+    if reserved.iter().any(|r| domain_lower == *r || domain_lower.ends_with(&format!(".{r}"))) {
+        return Err(err(StatusCode::FORBIDDEN, "This domain is reserved and cannot be used"));
+    }
+
     let runtime = body.runtime.as_deref().unwrap_or("static");
     if !["static", "php", "proxy", "node", "python"].contains(&runtime) {
         return Err(err(
