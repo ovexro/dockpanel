@@ -98,6 +98,18 @@ pub struct PaginationQuery {
 
 const VALID_TYPES: &[&str] = &["env", "api_key", "password", "certificate", "custom"];
 
+/// Derive a dedicated encryption key separate from the JWT secret.
+/// Uses SECRETS_ENCRYPTION_KEY env var if set, otherwise derives one via SHA-256.
+fn get_encryption_key(jwt_secret: &str) -> String {
+    std::env::var("SECRETS_ENCRYPTION_KEY").unwrap_or_else(|_| {
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(b"dockpanel-secrets-encryption:");
+        hasher.update(jwt_secret.as_bytes());
+        hex::encode(hasher.finalize())
+    })
+}
+
 fn mask_value(value: &str) -> String {
     if value.len() <= 4 {
         "••••••••".to_string()
@@ -192,7 +204,7 @@ pub async fn list_secrets(
 ) -> Result<Json<Vec<SecretEntry>>, ApiError> {
     verify_vault(&state, vault_id, claims.sub).await?;
 
-    let jwt_secret = &state.config.jwt_secret;
+    let encryption_key = get_encryption_key(&state.config.jwt_secret);
     let reveal = params.reveal.unwrap_or(false);
 
     let rows: Vec<SecretRow> = sqlx::query_as(
@@ -204,9 +216,9 @@ pub async fn list_secrets(
 
     let entries: Vec<SecretEntry> = rows.into_iter().map(|r| {
         let value = if reveal {
-            secrets_crypto::decrypt(&r.encrypted_value, jwt_secret).unwrap_or_else(|_| "••••••••".into())
+            secrets_crypto::decrypt(&r.encrypted_value, &encryption_key).unwrap_or_else(|_| "••••••••".into())
         } else {
-            let decrypted = secrets_crypto::decrypt(&r.encrypted_value, jwt_secret).unwrap_or_default();
+            let decrypted = secrets_crypto::decrypt(&r.encrypted_value, &encryption_key).unwrap_or_default();
             mask_value(&decrypted)
         };
 
@@ -249,8 +261,8 @@ pub async fn create_secret(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid secret_type"));
     }
 
-    let jwt_secret = &state.config.jwt_secret;
-    let encrypted = secrets_crypto::encrypt(&req.value, jwt_secret)
+    let encryption_key = get_encryption_key(&state.config.jwt_secret);
+    let encrypted = secrets_crypto::encrypt(&req.value, &encryption_key)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
 
     let row: SecretRow = sqlx::query_as(
@@ -303,7 +315,7 @@ pub async fn update_secret(
 ) -> Result<Json<SecretEntry>, ApiError> {
     verify_vault(&state, vault_id, claims.sub).await?;
 
-    let jwt_secret = &state.config.jwt_secret;
+    let encryption_key = get_encryption_key(&state.config.jwt_secret);
 
     // Get current secret
     let current: SecretRow = sqlx::query_as(
@@ -318,7 +330,7 @@ pub async fn update_secret(
 
     if let Some(ref new_value) = req.value {
         // Encrypt new value
-        let encrypted = secrets_crypto::encrypt(new_value, jwt_secret)
+        let encrypted = secrets_crypto::encrypt(new_value, &encryption_key)
             .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
 
         // Save old version
@@ -355,7 +367,7 @@ pub async fn update_secret(
         .bind(secret_id).fetch_one(&state.db).await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let decrypted = secrets_crypto::decrypt(&row.encrypted_value, jwt_secret).unwrap_or_default();
+    let decrypted = secrets_crypto::decrypt(&row.encrypted_value, &encryption_key).unwrap_or_default();
 
     Ok(Json(SecretEntry {
         id: row.id, vault_id: row.vault_id, key: row.key,
@@ -418,7 +430,7 @@ pub async fn inject_to_site(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     verify_vault(&state, vault_id, claims.sub).await?;
 
-    let jwt_secret = &state.config.jwt_secret;
+    let encryption_key = get_encryption_key(&state.config.jwt_secret);
 
     // Get domain for site
     let domain: (String,) = sqlx::query_as("SELECT domain FROM sites WHERE id = $1 AND user_id = $2")
@@ -442,7 +454,7 @@ pub async fn inject_to_site(
     // Decrypt and build env content
     let mut env_pairs = Vec::new();
     for row in &rows {
-        let value = secrets_crypto::decrypt(&row.encrypted_value, jwt_secret)
+        let value = secrets_crypto::decrypt(&row.encrypted_value, &encryption_key)
             .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
         env_pairs.push(serde_json::json!({ "key": row.key, "value": value }));
     }
@@ -478,7 +490,7 @@ pub async fn pull(
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
     verify_vault(&state, vault_id, claims.sub).await?;
 
-    let jwt_secret = &state.config.jwt_secret;
+    let encryption_key = get_encryption_key(&state.config.jwt_secret);
 
     let rows: Vec<SecretRow> = sqlx::query_as(
         "SELECT * FROM secrets WHERE vault_id = $1 ORDER BY key"
@@ -488,7 +500,7 @@ pub async fn pull(
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     let entries: Vec<serde_json::Value> = rows.into_iter().map(|r| {
-        let value = secrets_crypto::decrypt(&r.encrypted_value, jwt_secret).unwrap_or_default();
+        let value = secrets_crypto::decrypt(&r.encrypted_value, &encryption_key).unwrap_or_default();
         serde_json::json!({ "key": r.key, "value": value, "type": r.secret_type })
     }).collect();
 

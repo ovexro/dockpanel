@@ -1,4 +1,5 @@
 use std::path::Path;
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 /// Validate that a filepath is within the allowed backup directory and contains no traversal.
@@ -24,24 +25,37 @@ pub async fn encrypt_file(filepath: &str, key: &str) -> Result<String, String> {
 
     let enc_path = format!("{filepath}.enc");
 
+    // Pass the key via stdin instead of command line to avoid exposure in process listing
+    let mut child = Command::new("openssl")
+        .args([
+            "enc",
+            "-aes-256-cbc",
+            "-salt",
+            "-pbkdf2",
+            "-iter",
+            "100000",
+            "-in",
+            filepath,
+            "-out",
+            &enc_path,
+            "-pass",
+            "stdin",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to run openssl: {e}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(key.as_bytes()).await
+            .map_err(|e| format!("Failed to write key to openssl stdin: {e}"))?;
+        drop(stdin);
+    }
+
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(600),
-        Command::new("openssl")
-            .args([
-                "enc",
-                "-aes-256-cbc",
-                "-salt",
-                "-pbkdf2",
-                "-iter",
-                "100000",
-                "-in",
-                filepath,
-                "-out",
-                &enc_path,
-                "-pass",
-                &format!("pass:{key}"),
-            ])
-            .output(),
+        child.wait_with_output(),
     )
     .await
     .map_err(|_| "Encryption timed out (10 minutes)".to_string())?
@@ -84,24 +98,37 @@ pub async fn decrypt_file(enc_filepath: &str, key: &str) -> Result<String, Strin
         format!("{enc_filepath}.dec")
     };
 
+    // Pass the key via stdin instead of command line to avoid exposure in process listing
+    let mut child = Command::new("openssl")
+        .args([
+            "enc",
+            "-d",
+            "-aes-256-cbc",
+            "-pbkdf2",
+            "-iter",
+            "100000",
+            "-in",
+            enc_filepath,
+            "-out",
+            &dec_path,
+            "-pass",
+            "stdin",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to run openssl: {e}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(key.as_bytes()).await
+            .map_err(|e| format!("Failed to write key to openssl stdin: {e}"))?;
+        drop(stdin);
+    }
+
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(600),
-        Command::new("openssl")
-            .args([
-                "enc",
-                "-d",
-                "-aes-256-cbc",
-                "-pbkdf2",
-                "-iter",
-                "100000",
-                "-in",
-                enc_filepath,
-                "-out",
-                &dec_path,
-                "-pass",
-                &format!("pass:{key}"),
-            ])
-            .output(),
+        child.wait_with_output(),
     )
     .await
     .map_err(|_| "Decryption timed out (10 minutes)".to_string())?
