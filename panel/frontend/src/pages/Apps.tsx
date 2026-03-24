@@ -1,3 +1,5 @@
+import { useAuth } from "../context/AuthContext";
+import { Navigate } from "react-router-dom";
 import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
 import { api } from "../api";
 import ProvisionLog from "../components/ProvisionLog";
@@ -270,6 +272,8 @@ const statusColors: Record<string, string> = {
 };
 
 export default function Apps() {
+  const { user } = useAuth();
+  if (!user || user.role !== "admin") return <Navigate to="/" replace />;
   const [templates, setTemplates] = useState<AppTemplate[]>([]);
   const [apps, setApps] = useState<DeployedApp[]>([]);
   const [loading, setLoading] = useState(true);

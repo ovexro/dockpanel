@@ -1,3 +1,5 @@
+import { useAuth } from "../context/AuthContext";
+import { Navigate } from "react-router-dom";
 import { useState, useEffect, useCallback } from "react";
 import { api, ApiError } from "../api";
 import { Link } from "react-router-dom";
@@ -21,6 +23,8 @@ interface SecurityItem {
 }
 
 export default function WordPressToolkit() {
+  const { user } = useAuth();
+  if (!user || user.role !== "admin") return <Navigate to="/" replace />;
   const [tab, setTab] = useState<"overview" | "security">("overview");
   const [sites, setSites] = useState<WPSite[]>([]);
   const [loading, setLoading] = useState(true);

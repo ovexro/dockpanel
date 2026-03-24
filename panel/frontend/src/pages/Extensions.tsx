@@ -1,3 +1,5 @@
+import { useAuth } from "../context/AuthContext";
+import { Navigate } from "react-router-dom";
 import { useState, useEffect, useCallback } from "react";
 import { api, ApiError } from "../api";
 
@@ -38,6 +40,8 @@ const EVENT_TYPES = [
 const API_SCOPES = ["sites:read", "metrics:read", "monitors:read"];
 
 export default function Extensions() {
+  const { user } = useAuth();
+  if (!user || user.role !== "admin") return <Navigate to="/" replace />;
   const [extensions, setExtensions] = useState<Extension[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");

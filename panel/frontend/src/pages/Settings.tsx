@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 import ProvisionLog from "../components/ProvisionLog";
 import UpdatesContent from "./Updates";
@@ -21,6 +22,7 @@ interface BackupDestination {
 }
 
 export default function Settings() {
+  const { user } = useAuth();
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
@@ -1428,6 +1430,142 @@ export default function Settings() {
             {apiKeys.length === 0 && <p className="px-5 py-3 text-xs text-dark-300">No API keys created</p>}
           </div>
         </div>
+
+        {/* Security Hardening Settings (admin only) */}
+        {user?.role === "admin" && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-4">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Security Hardening</h3>
+            <p className="text-xs text-dark-200 mt-0.5">Post-incident security features</p>
+          </div>
+          <div className="divide-y divide-dark-700">
+            {/* Self-Registration */}
+            <div className="px-5 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">Self-Registration</p>
+                <p className="text-xs text-dark-400">Allow new users to register accounts</p>
+              </div>
+              <button onClick={async () => {
+                const current = settings.self_registration_enabled === "true";
+                const newVal = !current;
+                try {
+                  await api.put("/settings", { self_registration_enabled: newVal ? "true" : "false" });
+                  setSettings(prev => ({ ...prev, self_registration_enabled: newVal ? "true" : "false" }));
+                  setMessage({ text: `Registration ${newVal ? "enabled" : "disabled"}`, type: "success" });
+                } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+              }} className={`relative w-11 h-6 rounded-full transition-colors ${settings.self_registration_enabled === "true" ? "bg-rust-500" : "bg-dark-600"}`}>
+                <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-transform ${settings.self_registration_enabled === "true" ? "translate-x-5.5 left-0.5" : "left-0.5"}`} />
+              </button>
+            </div>
+            {/* Registration Approval */}
+            <div className="px-5 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">Require Approval for New Users</p>
+                <p className="text-xs text-dark-400">New registrations need admin approval before login</p>
+              </div>
+              <button onClick={async () => {
+                const current = settings.security_approval_required === "true";
+                const newVal = !current;
+                try {
+                  await api.put("/settings", { security_approval_required: newVal ? "true" : "false" });
+                  setSettings(prev => ({ ...prev, security_approval_required: newVal ? "true" : "false" }));
+                  setMessage({ text: `Approval mode ${newVal ? "enabled" : "disabled"}`, type: "success" });
+                } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+              }} className={`relative w-11 h-6 rounded-full transition-colors ${settings.security_approval_required === "true" ? "bg-rust-500" : "bg-dark-600"}`}>
+                <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-transform ${settings.security_approval_required === "true" ? "translate-x-5.5 left-0.5" : "left-0.5"}`} />
+              </button>
+            </div>
+            {/* Geo-IP Alerts */}
+            <div className="px-5 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">Geo-IP Login Alerts</p>
+                <p className="text-xs text-dark-400">Alert on login from new IPs, VPNs, or datacenters</p>
+              </div>
+              <button onClick={async () => {
+                const current = settings.security_geo_alert_enabled !== "false";
+                const newVal = !current;
+                try {
+                  await api.put("/settings", { security_geo_alert_enabled: newVal ? "true" : "false" });
+                  setSettings(prev => ({ ...prev, security_geo_alert_enabled: newVal ? "true" : "false" }));
+                  setMessage({ text: `Geo-IP alerts ${newVal ? "enabled" : "disabled"}`, type: "success" });
+                } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+              }} className={`relative w-11 h-6 rounded-full transition-colors ${settings.security_geo_alert_enabled !== "false" ? "bg-rust-500" : "bg-dark-600"}`}>
+                <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-transform ${settings.security_geo_alert_enabled !== "false" ? "translate-x-5.5 left-0.5" : "left-0.5"}`} />
+              </button>
+            </div>
+            {/* Session Recording */}
+            <div className="px-5 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">Terminal Session Recording</p>
+                <p className="text-xs text-dark-400">Record all terminal sessions for forensic replay</p>
+              </div>
+              <button onClick={async () => {
+                const current = settings.security_session_recording !== "false";
+                const newVal = !current;
+                try {
+                  await api.put("/settings", { security_session_recording: newVal ? "true" : "false" });
+                  setSettings(prev => ({ ...prev, security_session_recording: newVal ? "true" : "false" }));
+                  setMessage({ text: `Session recording ${newVal ? "enabled" : "disabled"}`, type: "success" });
+                } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+              }} className={`relative w-11 h-6 rounded-full transition-colors ${settings.security_session_recording !== "false" ? "bg-rust-500" : "bg-dark-600"}`}>
+                <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-transform ${settings.security_session_recording !== "false" ? "translate-x-5.5 left-0.5" : "left-0.5"}`} />
+              </button>
+            </div>
+            {/* DB Auto-Backup */}
+            <div className="px-5 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">Panel Database Auto-Backup</p>
+                <p className="text-xs text-dark-400">Daily PostgreSQL backup with 7-day retention</p>
+              </div>
+              <button onClick={async () => {
+                const current = settings.security_db_backup_enabled !== "false";
+                const newVal = !current;
+                try {
+                  await api.put("/settings", { security_db_backup_enabled: newVal ? "true" : "false" });
+                  setSettings(prev => ({ ...prev, security_db_backup_enabled: newVal ? "true" : "false" }));
+                  setMessage({ text: `DB auto-backup ${newVal ? "enabled" : "disabled"}`, type: "success" });
+                } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+              }} className={`relative w-11 h-6 rounded-full transition-colors ${settings.security_db_backup_enabled !== "false" ? "bg-rust-500" : "bg-dark-600"}`}>
+                <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-transform ${settings.security_db_backup_enabled !== "false" ? "translate-x-5.5 left-0.5" : "left-0.5"}`} />
+              </button>
+            </div>
+            {/* Canary Files */}
+            <div className="px-5 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">Canary File Monitoring</p>
+                <p className="text-xs text-dark-400">Detect unauthorized filesystem exploration</p>
+              </div>
+              <button onClick={async () => {
+                const current = settings.security_canary_enabled !== "false";
+                const newVal = !current;
+                try {
+                  await api.put("/settings", { security_canary_enabled: newVal ? "true" : "false" });
+                  setSettings(prev => ({ ...prev, security_canary_enabled: newVal ? "true" : "false" }));
+                  setMessage({ text: `Canary monitoring ${newVal ? "enabled" : "disabled"}`, type: "success" });
+                } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+              }} className={`relative w-11 h-6 rounded-full transition-colors ${settings.security_canary_enabled !== "false" ? "bg-rust-500" : "bg-dark-600"}`}>
+                <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-transform ${settings.security_canary_enabled !== "false" ? "translate-x-5.5 left-0.5" : "left-0.5"}`} />
+              </button>
+            </div>
+            {/* Lockdown Threshold */}
+            <div className="px-5 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">Auto-Lockdown Threshold</p>
+                <p className="text-xs text-dark-400">Suspicious events before auto-lockdown triggers (default: 5 in 10 min)</p>
+              </div>
+              <input type="number" min="2" max="50" value={settings.security_lockdown_threshold || "5"}
+                onChange={async (e) => {
+                  try {
+                    await api.put("/settings", { security_lockdown_threshold: e.target.value });
+                    setSettings(prev => ({ ...prev, security_lockdown_threshold: e.target.value }));
+                  } catch {}
+                }}
+                className="w-16 px-2 py-1 border border-dark-500 rounded text-sm text-center focus:ring-2 focus:ring-accent-500 outline-none bg-dark-700"
+              />
+            </div>
+          </div>
+        </div>
+        )}
         </>)}
 
         {/* Notification Channels */}
