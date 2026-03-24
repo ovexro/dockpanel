@@ -131,15 +131,16 @@ pub async fn updates_list(
 
 /// POST /api/system/updates/apply — Apply package updates (admin only).
 /// Returns install_id for SSE progress tracking via /api/services/install/{id}/log.
+/// Streams apt output line-by-line for live terminal experience.
 pub async fn updates_apply(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(_server_id, _agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let install_id = uuid::Uuid::new_v4();
 
-    let (tx, _) = tokio::sync::broadcast::channel::<crate::routes::sites::ProvisionStep>(32);
+    let (tx, _) = tokio::sync::broadcast::channel::<crate::routes::sites::ProvisionStep>(256);
     {
         let mut logs = state.provision_logs.lock().unwrap();
         logs.insert(install_id, (Vec::new(), tx, std::time::Instant::now()));
@@ -165,24 +166,79 @@ pub async fn updates_apply(
 
         emit("update", "Applying system updates", "in_progress", None);
 
-        match agent.post("/system/updates/apply", Some(body)).await {
-            Ok(data) => {
-                let success = data.get("success").and_then(|v| v.as_bool()).unwrap_or(true);
-                let output = data.get("output").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        // Build apt command with validated package names
+        let packages: Vec<String> = body.get("packages")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+
+        // Validate package names
+        for pkg in &packages {
+            if pkg.is_empty() || !pkg.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '+' || c == ':') {
+                emit("line", &format!("ERROR: Invalid package name: {pkg}"), "error", None);
+                emit("complete", "Update failed", "error", Some(format!("Invalid package name: {pkg}")));
+                return;
+            }
+        }
+
+        let mut cmd = tokio::process::Command::new("apt-get");
+        cmd.env("DEBIAN_FRONTEND", "noninteractive");
+        if packages.is_empty() {
+            cmd.args(["upgrade", "-y"]);
+        } else {
+            cmd.arg("install").arg("-y");
+            for pkg in &packages {
+                cmd.arg(pkg);
+            }
+        }
+
+        // Spawn and stream stdout/stderr line by line
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+
+        match cmd.spawn() {
+            Ok(mut child) => {
+                use tokio::io::{AsyncBufReadExt, BufReader};
+
+                let stdout = child.stdout.take();
+                let stderr = child.stderr.take();
+                let mut all_output = Vec::new();
+
+                // Read stdout line by line
+                if let Some(stdout) = stdout {
+                    let mut reader = BufReader::new(stdout).lines();
+                    while let Ok(Some(line)) = reader.next_line().await {
+                        emit("line", &line, "in_progress", None);
+                        all_output.push(line);
+                    }
+                }
+
+                // Read remaining stderr
+                if let Some(stderr) = stderr {
+                    let mut reader = BufReader::new(stderr).lines();
+                    while let Ok(Some(line)) = reader.next_line().await {
+                        emit("line", &line, "in_progress", None);
+                        all_output.push(line);
+                    }
+                }
+
+                let status = child.wait().await;
+                let success = status.map(|s| s.success()).unwrap_or(false);
+                let full_output = all_output.join("\n");
 
                 if success {
                     emit("update", "Applying system updates", "done", None);
-                    emit("complete", "Updates applied", "done", Some(output));
+                    emit("complete", "Updates applied", "done", Some(full_output));
                 } else {
                     emit("update", "Applying system updates", "error", None);
-                    emit("complete", "Updates finished with errors", "error", Some(output));
+                    emit("complete", "Updates finished with errors", "error", Some(full_output));
                 }
 
                 activity::log_activity(&db, user_id, &email, "system.updates.apply",
                     Some("system"), Some("packages"), None, None).await;
             }
             Err(e) => {
-                emit("update", "Applying system updates", "error", Some(format!("{e}")));
+                emit("update", "Failed to start apt", "error", Some(format!("{e}")));
                 emit("complete", "Update failed", "error", None);
             }
         }
