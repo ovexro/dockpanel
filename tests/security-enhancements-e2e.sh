@@ -30,7 +30,7 @@ echo ""
 echo "Setting up..."
 TOKEN=$(curl -s -X POST "$API/api/auth/login" \
     -H "Content-Type: application/json" \
-    -d '{"email":"admin@dockpanel.dev","password":"xwpzMuan9irpXP5K"}' \
+    -d '{"email":"admin@dockpanel.dev","password":"${DOCKPANEL_TEST_PASSWORD:-testpassword}"}' \
     -D - 2>/dev/null | grep -oP 'token=\K[^;]+' || true)
 
 if [ -z "$TOKEN" ]; then
