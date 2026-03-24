@@ -57,6 +57,7 @@ export const navGroups: NavGroup[] = [
       { to: "/extensions", label: "Extensions", iconName: "extensions", adminOnly: true },
       { to: "/secrets", label: "Secrets", iconName: "secrets", adminOnly: true },
       { to: "/security", label: "Security", iconName: "security", adminOnly: true },
+      { to: "/security-hardening", label: "Hardening", iconName: "security", adminOnly: true },
       { to: "/settings", label: "Settings", iconName: "settings", adminOnly: true },
     ],
   },
