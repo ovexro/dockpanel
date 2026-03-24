@@ -94,17 +94,22 @@ export default function Updates() {
         es.onmessage = (event) => {
           try {
             const step = JSON.parse(event.data);
+            if (step.step === "line") {
+              // Live streaming: append each apt output line as it arrives
+              setAptOutput(prev => [...(prev || []), step.label]);
+              // Auto-scroll the output container
+              requestAnimationFrame(() => {
+                const el = document.getElementById("apt-output");
+                if (el) el.scrollTop = el.scrollHeight;
+              });
+            }
             if (step.step === "update") {
               if (step.status === "in_progress") {
-                setAptOutput(prev => [...(prev || []), "> Updating packages..."]);
+                setAptOutput(prev => [...(prev || []), "> Starting package update..."]);
               }
             }
             if (step.step === "complete") {
               es.close();
-              // The message field contains the full apt output
-              if (step.message) {
-                setAptOutput(step.message.split("\n"));
-              }
               setMessage({
                 text: step.status === "done"
                   ? selected.size > 0
@@ -113,7 +118,7 @@ export default function Updates() {
                   : "Update completed with errors — check the output below",
                 type: step.status === "done" ? "success" : "error",
               });
-              // Refresh
+              // Refresh package list
               api.get<PackageUpdate[]>("/system/updates")
                 .then(data => { setPackages(Array.isArray(data) ? data : []); setSelected(new Set()); })
                 .catch(() => {});
@@ -280,8 +285,9 @@ export default function Updates() {
           </div>
           {/* Terminal body */}
           <div
+            id="apt-output"
             ref={termRef}
-            className="border border-dark-500 bg-dark-950 p-4 h-64 overflow-y-auto font-mono text-[11px] leading-relaxed"
+            className="border border-dark-500 bg-dark-950 p-4 h-80 overflow-y-auto font-mono text-[11px] leading-relaxed"
           >
             {applying && !aptOutput && (
               <div className="text-rust-400">
