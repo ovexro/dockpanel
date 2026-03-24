@@ -827,13 +827,14 @@ export default function Terminal() {
         </div>
 
         {/* Mobile action bar — touch-friendly buttons for keys that are hard to type on phone keyboards */}
-        <div className="flex items-center gap-1 px-2 py-1.5 bg-dark-800 border-t border-dark-500 shrink-0 overflow-x-auto md:hidden">
+        <div className="grid grid-cols-4 gap-1 px-1.5 py-1.5 bg-dark-800 border-t border-dark-500 shrink-0 md:hidden">
           {[
             { label: "Tab", key: "\t" },
             { label: "↑", key: "\x1b[A" },
             { label: "↓", key: "\x1b[B" },
             { label: "←", key: "\x1b[D" },
             { label: "→", key: "\x1b[C" },
+            { label: "Enter", key: "\r" },
             { label: "Ctrl+C", key: "\x03" },
             { label: "Ctrl+D", key: "\x04" },
             { label: "Ctrl+Z", key: "\x1a" },
@@ -857,7 +858,7 @@ export default function Terminal() {
                 }
                 xtermRef.current?.focus();
               }}
-              className="px-2.5 py-1.5 bg-dark-700 text-dark-200 rounded text-[11px] font-mono hover:bg-dark-600 active:bg-dark-500 whitespace-nowrap touch-manipulation"
+              className="py-2.5 bg-dark-700 text-dark-200 rounded text-[11px] font-mono font-medium hover:bg-dark-600 active:bg-dark-500 touch-manipulation text-center"
             >
               {btn.label}
             </button>
