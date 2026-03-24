@@ -155,7 +155,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/webhooks" element={<WebhookGateway />} />
               <Route path="/notifications" element={<Notifications />} />
               <Route path="/monitoring" element={<Monitoring />} />
-              <Route path="/security-hardening" element={<SecurityHardening />} />
+              <Route path="/security-hardening" element={<Navigate to="/security" replace />} />
               <Route path="/monitors" element={<Navigate to="/monitoring" replace />} />
               <Route path="/alerts" element={<Navigate to="/monitoring" replace />} />
             </Route>
