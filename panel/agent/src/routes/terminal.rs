@@ -392,20 +392,19 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: Stri
 
     // Feature: Terminal session timeout (30 minutes default)
     let session_timeout = Duration::from_secs(30 * 60);
-    let session_start = std::time::Instant::now();
+    let session_deadline = tokio::time::Instant::now() + session_timeout;
 
     // Main loop: multiplex PTY output and WebSocket input
     loop {
-        // Check session timeout
-        if session_start.elapsed() > session_timeout {
-            let _ = socket.send(Message::Text(
-                "\r\n\x1b[1;33mSession timed out (30 minutes). Reconnect to continue.\x1b[0m\r\n".into()
-            )).await;
-            tracing::info!(target: "terminal_audit", user = %user_email, domain = %domain_str, "Terminal session timed out");
-            break;
-        }
-
         tokio::select! {
+            // Timeout branch — fires even on idle sessions
+            _ = tokio::time::sleep_until(session_deadline) => {
+                let _ = socket.send(Message::Text(
+                    "\r\n\x1b[1;33mSession timed out (30 minutes). Reconnect to continue.\x1b[0m\r\n".into()
+                )).await;
+                tracing::info!(target: "terminal_audit", user = %user_email, domain = %domain_str, "Terminal session timed out");
+                break;
+            }
             // PTY output → WebSocket
             Some(data) = rx.recv() => {
                 let text = String::from_utf8_lossy(&data).to_string();
@@ -470,6 +469,8 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: Stri
                                                             command = %trimmed,
                                                             "SUSPICIOUS terminal command detected"
                                                         );
+                                                        // Write to suspicious events file for backend ingestion
+                                                        write_suspicious_event(&user_email, domain_str, &trimmed);
                                                     } else {
                                                         tracing::info!(
                                                             target: "terminal_audit",
@@ -575,6 +576,22 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: Stri
 
     // Release terminal session slot
     let _ = ACTIVE_TERMINALS.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| Some(v.saturating_sub(1)));
+}
+
+/// Write a suspicious event to the shared JSONL file for backend ingestion.
+fn write_suspicious_event(user_email: &str, domain: &str, command: &str) {
+    use std::io::Write;
+    let path = "/var/lib/dockpanel/suspicious-events.jsonl";
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let event = serde_json::json!({
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "event_type": "terminal.suspicious_command",
+            "actor_email": user_email,
+            "domain": domain,
+            "command": command,
+        });
+        let _ = writeln!(f, "{}", event);
+    }
 }
 
 /// The terminal WebSocket route bypasses standard auth middleware

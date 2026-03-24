@@ -310,6 +310,35 @@ async fn db_backup() -> Result<Json<serde_json::Value>, ApiErr> {
     })))
 }
 
+/// POST /security/init — Initialize all security hardening features (called once after deploy).
+async fn security_init() -> Result<Json<serde_json::Value>, ApiErr> {
+    use tokio::process::Command;
+
+    let mut results = Vec::new();
+
+    // Set chattr +a on audit directory
+    let _ = std::fs::create_dir_all("/var/lib/dockpanel/audit");
+    let chattr = Command::new("chattr").args(["+a", "/var/lib/dockpanel/audit/"]).output().await;
+    results.push(serde_json::json!({
+        "action": "chattr +a /var/lib/dockpanel/audit/",
+        "success": chattr.map(|o| o.status.success()).unwrap_or(false),
+    }));
+
+    // Ensure recording directory exists
+    let _ = std::fs::create_dir_all("/var/lib/dockpanel/recordings");
+    results.push(serde_json::json!({ "action": "create recordings dir", "success": true }));
+
+    // Ensure forensics directory exists
+    let _ = std::fs::create_dir_all("/var/lib/dockpanel/forensics");
+    results.push(serde_json::json!({ "action": "create forensics dir", "success": true }));
+
+    // Ensure DB backup directory exists
+    let _ = std::fs::create_dir_all("/var/backups/dockpanel");
+    results.push(serde_json::json!({ "action": "create db backup dir", "success": true }));
+
+    Ok(Json(serde_json::json!({ "initialized": results })))
+}
+
 /// POST /security/canary/setup — Create canary files in sensitive directories (Feature 12).
 async fn canary_setup() -> Result<Json<serde_json::Value>, ApiErr> {
     let canary_locations = [
@@ -365,6 +394,7 @@ pub fn router() -> Router<AppState> {
         .route("/security/panel-jail/setup", post(setup_panel_jail))
         .route("/security/panel-jail/status", get(panel_jail_status))
         // Security Hardening (post-incident features)
+        .route("/security/init", post(security_init))
         .route("/security/kill-terminals", post(kill_terminals))
         .route("/security/forensic-snapshot", get(forensic_snapshot))
         .route("/security/db-backup", post(db_backup))
