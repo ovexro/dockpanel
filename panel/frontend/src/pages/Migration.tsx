@@ -1,3 +1,5 @@
+import { useAuth } from "../context/AuthContext";
+import { Navigate } from "react-router-dom";
 import { useState, useEffect, useRef } from "react";
 import { api, ApiError } from "../api";
 
@@ -55,6 +57,8 @@ const fmtSize = (b: number) => {
 };
 
 export default function Migration() {
+  const { user } = useAuth();
+  if (!user || user.role !== "admin") return <Navigate to="/" replace />;
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [source, setSource] = useState("cpanel");
   const [backupPath, setBackupPath] = useState("");

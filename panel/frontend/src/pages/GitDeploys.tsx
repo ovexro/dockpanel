@@ -1,3 +1,5 @@
+import { useAuth } from "../context/AuthContext";
+import { Navigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api";
@@ -75,6 +77,8 @@ function statusBadge(status: string) {
 }
 
 export default function GitDeploys() {
+  const { user } = useAuth();
+  if (!user || user.role !== "admin") return <Navigate to="/" replace />;
   const [deploys, setDeploys] = useState<GitDeploy[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<GitDeploy | null>(null);

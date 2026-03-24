@@ -1,3 +1,5 @@
+import { useAuth } from "../context/AuthContext";
+import { Navigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { api } from "../api";
 import { formatSize, formatDate, timeAgo } from "../utils/format";
@@ -82,6 +84,8 @@ interface Database {
 type Tab = "overview" | "policies" | "databases" | "volumes" | "verifications";
 
 export default function BackupOrchestrator() {
+  const { user } = useAuth();
+  if (!user || user.role !== "admin") return <Navigate to="/" replace />;
   const [tab, setTab] = useState<Tab>("overview");
   const [health, setHealth] = useState<BackupHealth | null>(null);
   const [policies, setPolicies] = useState<BackupPolicy[]>([]);

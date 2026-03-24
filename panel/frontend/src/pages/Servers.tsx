@@ -1,3 +1,5 @@
+import { useAuth } from "../context/AuthContext";
+import { Navigate } from "react-router-dom";
 import { useState, useEffect, useCallback } from "react";
 import { api, ApiError } from "../api";
 import { useServer, type Server } from "../context/ServerContext";
@@ -8,6 +10,8 @@ interface CreateForm {
 }
 
 export default function Servers() {
+  const { user } = useAuth();
+  if (!user || user.role !== "admin") return <Navigate to="/" replace />;
   const { servers, refreshServers } = useServer();
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState<CreateForm>({ name: "", ip_address: "" });

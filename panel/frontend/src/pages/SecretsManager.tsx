@@ -1,3 +1,5 @@
+import { useAuth } from "../context/AuthContext";
+import { Navigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { api } from "../api";
 import { formatDate } from "../utils/format";
@@ -42,6 +44,8 @@ const typeColors: Record<string, string> = {
 };
 
 export default function SecretsManager() {
+  const { user } = useAuth();
+  if (!user || user.role !== "admin") return <Navigate to="/" replace />;
   const [vaults, setVaults] = useState<Vault[]>([]);
   const [selectedVault, setSelectedVault] = useState<string | null>(null);
   const [secrets, setSecrets] = useState<Secret[]>([]);

@@ -1,3 +1,5 @@
+import { useAuth } from "../context/AuthContext";
+import { Navigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { api } from "../api";
 import { formatDate, timeAgo } from "../utils/format";
@@ -74,6 +76,8 @@ const severityColors: Record<string, string> = {
 };
 
 export default function IncidentManagement() {
+  const { user } = useAuth();
+  if (!user || user.role !== "admin") return <Navigate to="/" replace />;
   const [tab, setTab] = useState<Tab>("incidents");
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [components, setComponents] = useState<Component[]>([]);

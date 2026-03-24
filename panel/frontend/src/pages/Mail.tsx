@@ -1,3 +1,5 @@
+import { useAuth } from "../context/AuthContext";
+import { Navigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { api } from "../api";
 import ProvisionLog from "../components/ProvisionLog";
@@ -50,6 +52,8 @@ interface QueueItem {
 }
 
 export default function Mail() {
+  const { user } = useAuth();
+  if (!user || user.role !== "admin") return <Navigate to="/" replace />;
   const [domains, setDomains] = useState<MailDomain[]>([]);
   const [selectedDomain, setSelectedDomain] = useState<MailDomain | null>(null);
   const [tab, setTab] = useState<"accounts" | "aliases" | "dns" | "queue" | "logs">("accounts");

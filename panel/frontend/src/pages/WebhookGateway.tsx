@@ -1,3 +1,5 @@
+import { useAuth } from "../context/AuthContext";
+import { Navigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { api } from "../api";
 import { formatDate } from "../utils/format";
@@ -27,6 +29,8 @@ interface Route {
 type Tab = "endpoints" | "inspector" | "routes";
 
 export default function WebhookGateway() {
+  const { user } = useAuth();
+  if (!user || user.role !== "admin") return <Navigate to="/" replace />;
   const [tab, setTab] = useState<Tab>("endpoints");
   const [endpoints, setEndpoints] = useState<Endpoint[]>([]);
   const [selectedEndpoint, setSelectedEndpoint] = useState<string | null>(null);
