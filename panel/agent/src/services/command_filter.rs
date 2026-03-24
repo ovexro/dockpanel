@@ -99,6 +99,33 @@ pub fn is_safe_terminal_command(cmd: &str) -> bool {
     true
 }
 
+/// Suspicious patterns that should trigger real-time alerting (Feature 4).
+/// These are commands that indicate potential attack activity, even on server terminals
+/// where they aren't blocked (e.g., admin running su, useradd).
+const SUSPICIOUS_PATTERNS: &[&str] = &[
+    "useradd", "adduser", "usermod", "chpasswd", "passwd",
+    "su ", "su\t", "sudo ",
+    "rm -rf /", "rm -rf /*",
+    "curl|bash", "curl | bash", "wget|bash", "wget | bash",
+    "curl -s|sh", "curl -sL|bash", "| sh", "| bash",
+    "chmod 777", "chmod 4",  // setuid
+    "/etc/shadow", "/etc/sudoers",
+    "ssh-keygen", "authorized_keys",
+    "nc -l", "ncat -l",  // listeners
+    "python -m http.server", "python3 -m http.server",
+    "base64 -d", "base64 --decode",
+    "crontab -e", "crontab -r",
+];
+
+/// Check if a command is suspicious (should trigger alert, even if allowed on server terminals).
+pub fn is_suspicious_command(cmd: &str) -> bool {
+    if cmd.trim().is_empty() {
+        return false;
+    }
+    let lower = cmd.to_lowercase();
+    SUSPICIOUS_PATTERNS.iter().any(|p| lower.contains(p))
+}
+
 /// Validate a command for use in a systemd ExecStart directive.
 /// Only allows whitelisted prefixes and rejects injection characters.
 pub fn is_safe_exec_start(command: &str, runtime: &str) -> Result<(), String> {

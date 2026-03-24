@@ -179,6 +179,172 @@ async fn panel_jail_status() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "active": active }))
 }
 
+/// POST /security/kill-terminals — Kill all active terminal sessions (Feature 11: Panic).
+async fn kill_terminals() -> Json<serde_json::Value> {
+    // Reset the active terminal counter (sessions will close when PTY dies)
+    let killed = super::terminal::ACTIVE_TERMINALS.swap(0, std::sync::atomic::Ordering::SeqCst);
+
+    // Kill all PTY child processes owned by www-data (site terminals)
+    let _ = tokio::process::Command::new("pkill")
+        .args(["-u", "www-data", "-f", "bash"])
+        .output().await;
+
+    tracing::warn!("PANIC: Killed {} terminal sessions", killed);
+    Json(serde_json::json!({ "killed": killed }))
+}
+
+/// GET /security/forensic-snapshot — Capture system state for forensics (Feature 10).
+async fn forensic_snapshot() -> Result<Json<serde_json::Value>, ApiErr> {
+    use tokio::process::Command;
+
+    let ts = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let dir = format!("/var/lib/dockpanel/forensics/snapshot-{ts}");
+    let _ = std::fs::create_dir_all(&dir);
+
+    // Capture running processes
+    let ps = Command::new("ps").args(["auxf"]).output().await.ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+    let _ = std::fs::write(format!("{dir}/processes.txt"), &ps);
+
+    // Capture network connections
+    let ss = Command::new("ss").args(["-tulnp"]).output().await.ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+    let _ = std::fs::write(format!("{dir}/network.txt"), &ss);
+
+    // Capture established connections
+    let ss_est = Command::new("ss").args(["-tnp"]).output().await.ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+    let _ = std::fs::write(format!("{dir}/connections.txt"), &ss_est);
+
+    // Capture open files
+    let lsof = Command::new("lsof").args(["-nP", "+L1"]).output().await.ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+    let _ = std::fs::write(format!("{dir}/open_files.txt"), &lsof);
+
+    // Capture recent journal
+    let journal = Command::new("journalctl")
+        .args(["--since", "1 hour ago", "--no-pager", "-q"])
+        .output().await.ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+    let _ = std::fs::write(format!("{dir}/journal.txt"), &journal);
+
+    // Capture who is logged in
+    let who = Command::new("who").output().await.ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+    let _ = std::fs::write(format!("{dir}/who.txt"), &who);
+
+    // Capture last logins
+    let last = Command::new("last").args(["-20"]).output().await.ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+    let _ = std::fs::write(format!("{dir}/last.txt"), &last);
+
+    // Capture /etc/passwd current state
+    let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
+    let _ = std::fs::write(format!("{dir}/etc_passwd.txt"), &passwd);
+
+    // Capture active terminal recordings
+    let recordings = std::fs::read_dir("/var/lib/dockpanel/recordings")
+        .map(|d| d.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let _ = std::fs::write(format!("{dir}/active_recordings.txt"), recordings.join("\n"));
+
+    tracing::info!("Forensic snapshot captured at {dir}");
+
+    Ok(Json(serde_json::json!({
+        "snapshot_dir": dir,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "files": ["processes.txt", "network.txt", "connections.txt", "open_files.txt", "journal.txt", "who.txt", "last.txt", "etc_passwd.txt", "active_recordings.txt"],
+    })))
+}
+
+/// POST /security/db-backup — Backup DockPanel's own PostgreSQL database (Feature 2).
+async fn db_backup() -> Result<Json<serde_json::Value>, ApiErr> {
+    use tokio::process::Command;
+
+    let backup_dir = "/var/backups/dockpanel";
+    let _ = std::fs::create_dir_all(backup_dir);
+
+    let ts = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let filename = format!("{backup_dir}/dockpanel-db-{ts}.sql.gz");
+
+    // pg_dump via Docker exec, piped to gzip
+    let output = Command::new("sh")
+        .args(["-c", &format!(
+            "docker exec dockpanel-postgres pg_dump -U dockpanel dockpanel | gzip > {filename}"
+        )])
+        .output()
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("pg_dump failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("pg_dump failed: {stderr}")));
+    }
+
+    // Cleanup old backups (keep last 7 days)
+    if let Ok(entries) = std::fs::read_dir(backup_dir) {
+        let mut files: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with("dockpanel-db-"))
+            .collect();
+        files.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
+        for old in files.iter().skip(7) {
+            let _ = std::fs::remove_file(old.path());
+        }
+    }
+
+    let size = std::fs::metadata(&filename).map(|m| m.len()).unwrap_or(0);
+    tracing::info!("DockPanel DB backup created: {filename} ({size} bytes)");
+
+    Ok(Json(serde_json::json!({
+        "filename": filename,
+        "size_bytes": size,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    })))
+}
+
+/// POST /security/canary/setup — Create canary files in sensitive directories (Feature 12).
+async fn canary_setup() -> Result<Json<serde_json::Value>, ApiErr> {
+    let canary_locations = [
+        ("/etc/.dockpanel-canary", "System config directory canary"),
+        ("/root/.dockpanel-canary", "Root home directory canary"),
+        ("/home/.dockpanel-canary", "Home directories canary"),
+        ("/var/www/.dockpanel-canary", "Web root canary"),
+    ];
+
+    let mut created = Vec::new();
+    for (path, desc) in &canary_locations {
+        let content = format!(
+            "DOCKPANEL CANARY FILE — DO NOT TOUCH\n\
+             Created: {}\n\
+             Purpose: Intrusion detection tripwire\n\
+             If you are reading this, security has been alerted.\n",
+            chrono::Utc::now().to_rfc3339()
+        );
+
+        if std::fs::write(path, &content).is_ok() {
+            // Set permissions: readable by all (so attackers trigger it), but hidden
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o444));
+            created.push(serde_json::json!({ "path": path, "description": desc }));
+            tracing::info!("Canary file created: {path}");
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "canaries": created,
+        "monitoring": "inotify-based monitoring recommended"
+    })))
+}
+
+use std::os::unix::fs::PermissionsExt;
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/security/overview", get(overview))
@@ -198,4 +364,9 @@ pub fn router() -> Router<AppState> {
         .route("/security/login-audit", get(login_audit))
         .route("/security/panel-jail/setup", post(setup_panel_jail))
         .route("/security/panel-jail/status", get(panel_jail_status))
+        // Security Hardening (post-incident features)
+        .route("/security/kill-terminals", post(kill_terminals))
+        .route("/security/forensic-snapshot", get(forensic_snapshot))
+        .route("/security/db-backup", post(db_backup))
+        .route("/security/canary/setup", post(canary_setup))
 }
