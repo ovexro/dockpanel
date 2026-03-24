@@ -318,7 +318,7 @@ export default function CommandLayout() {
       </aside>
 
       {/* Main content */}
-      <div className={`flex-1 flex flex-col ${showHeader ? "h-screen overflow-hidden" : ""}`}>
+      <div className={`flex-1 min-w-0 flex flex-col ${showHeader ? "h-screen overflow-hidden" : "overflow-hidden"}`}>
         {/* Top header bar (optional, replaces controls from sidebar footer) */}
         {showHeader && (
           <header className="h-16 border-b flex items-center justify-between px-6 shrink-0 bg-dark-900 border-dark-700">

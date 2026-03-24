@@ -826,43 +826,48 @@ export default function Terminal() {
           <div ref={termRef} className="h-full" />
         </div>
 
-        {/* Mobile action bar — touch-friendly buttons for keys that are hard to type on phone keyboards */}
-        <div className="grid grid-cols-4 gap-1 px-1.5 py-1.5 bg-dark-800 border-t border-dark-500 shrink-0 md:hidden">
-          {[
-            { label: "Tab", key: "\t" },
-            { label: "↑", key: "\x1b[A" },
-            { label: "↓", key: "\x1b[B" },
-            { label: "←", key: "\x1b[D" },
-            { label: "→", key: "\x1b[C" },
-            { label: "Enter", key: "\r" },
-            { label: "Ctrl+C", key: "\x03" },
-            { label: "Ctrl+D", key: "\x04" },
-            { label: "Ctrl+Z", key: "\x1a" },
-            { label: "Ctrl+L", key: "\x0c" },
-            { label: "Esc", key: "\x1b" },
-            { label: "Paste", key: "__paste__" },
-          ].map((btn) => (
-            <button
-              key={btn.label}
-              onClick={async () => {
+        {/* Mobile action bar — keyboard-like layout */}
+        <div className="bg-dark-800 border-t border-dark-500 shrink-0 md:hidden px-1.5 py-1.5 space-y-1">
+          {/* Row 1: Esc, Tab, arrows cluster, Paste */}
+          <div className="grid grid-cols-7 gap-1">
+            {[
+              { label: "Esc", key: "\x1b" },
+              { label: "Tab", key: "\t" },
+              { label: "←", key: "\x1b[D" },
+              { label: "↑", key: "\x1b[A" },
+              { label: "↓", key: "\x1b[B" },
+              { label: "→", key: "\x1b[C" },
+              { label: "Paste", key: "__paste__" },
+            ].map((btn) => (
+              <button key={btn.label} onClick={async () => {
                 if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
                 if (btn.key === "__paste__") {
-                  try {
-                    const text = await navigator.clipboard.readText();
-                    wsRef.current.send(JSON.stringify({ type: "input", data: text }));
-                  } catch {
-                    setError("Clipboard access denied");
-                  }
-                } else {
-                  wsRef.current.send(JSON.stringify({ type: "input", data: btn.key }));
-                }
+                  try { const text = await navigator.clipboard.readText(); wsRef.current.send(JSON.stringify({ type: "input", data: text })); } catch { setError("Clipboard access denied"); }
+                } else { wsRef.current.send(JSON.stringify({ type: "input", data: btn.key })); }
                 xtermRef.current?.focus();
-              }}
-              className="py-2.5 bg-dark-700 text-dark-200 rounded text-[11px] font-mono font-medium hover:bg-dark-600 active:bg-dark-500 touch-manipulation text-center"
-            >
-              {btn.label}
-            </button>
-          ))}
+              }} className="py-2 bg-dark-700 text-dark-200 rounded text-[11px] font-mono font-medium active:bg-dark-500 touch-manipulation text-center">{btn.label}</button>
+            ))}
+          </div>
+          {/* Row 2: Ctrl combos + Enter (wider) */}
+          <div className="grid grid-cols-5 gap-1">
+            {[
+              { label: "Ctrl+C", key: "\x03" },
+              { label: "Ctrl+D", key: "\x04" },
+              { label: "Ctrl+Z", key: "\x1a" },
+              { label: "Ctrl+L", key: "\x0c" },
+            ].map((btn) => (
+              <button key={btn.label} onClick={() => {
+                if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+                wsRef.current.send(JSON.stringify({ type: "input", data: btn.key }));
+                xtermRef.current?.focus();
+              }} className="py-2 bg-dark-700 text-dark-200 rounded text-[11px] font-mono font-medium active:bg-dark-500 touch-manipulation text-center">{btn.label}</button>
+            ))}
+            <button onClick={() => {
+              if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+              wsRef.current.send(JSON.stringify({ type: "input", data: "\r" }));
+              xtermRef.current?.focus();
+            }} className="py-2 bg-rust-600 text-white rounded text-[11px] font-mono font-bold active:bg-rust-700 touch-manipulation text-center">Enter</button>
+          </div>
         </div>
       </div>
     </div>
