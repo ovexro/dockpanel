@@ -75,7 +75,8 @@ pub async fn dump_mysql(
         filename,
         size_bytes: meta.len(),
         created_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-    })
+            sha256: None,
+        })
 }
 
 /// Dump a PostgreSQL database from its Docker container.
@@ -132,7 +133,8 @@ pub async fn dump_postgres(
         filename,
         size_bytes: meta.len(),
         created_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-    })
+            sha256: None,
+        })
 }
 
 /// Dump a MongoDB database from its Docker container.
@@ -185,7 +187,8 @@ pub async fn dump_mongo(
         filename,
         size_bytes: meta.len(),
         created_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-    })
+            sha256: None,
+        })
 }
 
 /// Restore a MySQL/MariaDB database from a backup file.
@@ -323,6 +326,7 @@ pub fn list_db_backups(db_name: &str) -> Result<Vec<BackupInfo>, String> {
             filename: name,
             size_bytes: size,
             created_at: created,
+            sha256: None,
         });
     }
 

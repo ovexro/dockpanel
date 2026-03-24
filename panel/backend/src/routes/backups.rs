@@ -87,12 +87,20 @@ pub async fn create(
                 let filename = result.get("filename").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let size_bytes = result.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0) as i64;
 
+                // Feature 13: Backup integrity chain — compute hash and link to previous
+                let sha256_hash = result.get("sha256").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let previous_hash: Option<String> = sqlx::query_scalar(
+                    "SELECT sha256_hash FROM backups WHERE site_id = $1 ORDER BY created_at DESC LIMIT 1"
+                ).bind(id).fetch_optional(&db).await.ok().flatten();
+
                 let _ = sqlx::query(
-                    "INSERT INTO backups (site_id, filename, size_bytes) VALUES ($1, $2, $3)",
+                    "INSERT INTO backups (site_id, filename, size_bytes, sha256_hash, previous_hash, chain_valid) VALUES ($1, $2, $3, $4, $5, TRUE)",
                 )
                 .bind(id)
                 .bind(&filename)
                 .bind(size_bytes)
+                .bind(if sha256_hash.is_empty() { None } else { Some(&sha256_hash) })
+                .bind(previous_hash.as_deref())
                 .execute(&db)
                 .await;
 

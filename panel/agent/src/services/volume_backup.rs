@@ -73,7 +73,8 @@ pub async fn backup_volume(
         filename,
         size_bytes: meta.len(),
         created_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-    })
+            sha256: None,
+        })
 }
 
 /// Restore a Docker volume from a backup.
@@ -153,6 +154,7 @@ pub fn list_volume_backups(container_name: &str) -> Result<Vec<BackupInfo>, Stri
             filename: name,
             size_bytes: size,
             created_at: created,
+            sha256: None,
         });
     }
 

@@ -49,6 +49,11 @@ pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync:
         auto_restart_services(&pool, &agent).await;
         auto_clean_disk(&pool, &agent).await;
         auto_renew_ssl(&pool, &agent).await;
+
+        // Security hardening tasks (run every 2 minutes with auto-healer)
+        security_ingest_suspicious_events(&pool).await;
+        security_check_lockdown_expiry(&pool).await;
+        security_check_canary_files(&pool).await;
     }
 }
 
@@ -832,5 +837,249 @@ async fn run_retention_cleanup(pool: &PgPool) {
     ).execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
     if ts_deleted > 0 {
         tracing::info!("Retention: deleted {ts_deleted} expired terminal shares (>1 hour)");
+    }
+
+    // ── Security Enhancement Retention ─────────────────────────────────
+
+    // Clean suspicious_events older than 90 days
+    let sus_deleted = sqlx::query(
+        "DELETE FROM suspicious_events WHERE created_at < NOW() - INTERVAL '90 days'"
+    ).execute(pool).await.ok().map(|r| r.rows_affected()).unwrap_or(0);
+    if sus_deleted > 0 {
+        tracing::info!("Retention: deleted {sus_deleted} old suspicious_events (>90 days)");
+    }
+
+    // Clean old session recordings (>30 days)
+    let rec_dir = "/var/lib/dockpanel/recordings";
+    if let Ok(entries) = std::fs::read_dir(rec_dir) {
+        let mut rec_deleted = 0u64;
+        let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 86400);
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                if let Ok(created) = meta.created() {
+                    if created < cutoff {
+                        let _ = std::fs::remove_file(entry.path());
+                        rec_deleted += 1;
+                    }
+                }
+            }
+        }
+        if rec_deleted > 0 {
+            tracing::info!("Retention: deleted {rec_deleted} old session recordings (>30 days)");
+        }
+    }
+
+    // Clean old audit log files (>365 days)
+    let audit_dir = "/var/lib/dockpanel/audit";
+    if let Ok(entries) = std::fs::read_dir(audit_dir) {
+        let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(365 * 86400);
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                if let Ok(created) = meta.created() {
+                    if created < cutoff {
+                        let _ = std::fs::remove_file(entry.path());
+                    }
+                }
+            }
+        }
+    }
+
+    // DB auto-backup: done via direct pg_dump (doesn't need agent client)
+    if super::security_hardening::get_setting_bool(pool, "security_db_backup_enabled", true).await {
+        tracing::info!("Triggering DockPanel DB auto-backup...");
+        match tokio::process::Command::new("sh")
+            .args(["-c", &format!(
+                "docker exec dockpanel-postgres pg_dump -U dockpanel dockpanel | gzip > /var/backups/dockpanel/dockpanel-db-{}.sql.gz",
+                chrono::Utc::now().format("%Y%m%d_%H%M%S")
+            )])
+            .output().await
+        {
+            Ok(o) if o.status.success() => {
+                tracing::info!("DockPanel DB auto-backup completed");
+                // Cleanup old backups (keep 7)
+                if let Ok(mut entries) = std::fs::read_dir("/var/backups/dockpanel") {
+                    let mut files: Vec<_> = entries
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.file_name().to_string_lossy().starts_with("dockpanel-db-"))
+                        .collect();
+                    files.sort_by_key(|e| std::cmp::Reverse(e.file_name().to_string_lossy().to_string()));
+                    for old in files.iter().skip(7) {
+                        let _ = std::fs::remove_file(old.path());
+                    }
+                }
+            }
+            Ok(o) => tracing::warn!("DB auto-backup failed: {}", String::from_utf8_lossy(&o.stderr)),
+            Err(e) => tracing::warn!("DB auto-backup failed: {e}"),
+        }
+    }
+}
+
+// ── Security Hardening Background Tasks ─────────────────────────────
+
+/// Ingest suspicious events written by the agent (from JSONL file).
+/// Reads /var/lib/dockpanel/suspicious-events.jsonl, records each event,
+/// then truncates the file. Runs every 2 minutes with auto-healer.
+async fn security_ingest_suspicious_events(pool: &PgPool) {
+    let path = "/var/lib/dockpanel/suspicious-events.jsonl";
+
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) if !c.is_empty() => c,
+        _ => return,
+    };
+
+    // Truncate the file immediately to avoid re-processing
+    let _ = std::fs::write(path, "");
+
+    let mut count = 0u32;
+    for line in content.lines() {
+        if line.trim().is_empty() { continue; }
+        if let Ok(event) = serde_json::from_str::<serde_json::Value>(line) {
+            let event_type = event["event_type"].as_str().unwrap_or("unknown");
+            let actor_email = event["actor_email"].as_str();
+            let command = event["command"].as_str();
+            let domain = event["domain"].as_str().unwrap_or("");
+
+            let details = format!("domain={}, command={}", domain, command.unwrap_or("-"));
+
+            // Record suspicious event (may trigger auto-lockdown)
+            let locked = super::security_hardening::record_suspicious_event(
+                pool, event_type, actor_email, None, Some(&details),
+            ).await;
+
+            // Audit log
+            super::security_hardening::audit_log(
+                pool, event_type, actor_email, None,
+                Some("terminal"), Some(domain),
+                Some(&details), None, "warning",
+            ).await;
+
+            // If lockdown was triggered, send alert
+            if locked {
+                super::security_hardening::alert_lockdown(
+                    pool,
+                    &format!("Suspicious terminal command by {} on {}: {}", actor_email.unwrap_or("?"), domain, command.unwrap_or("?")),
+                    "auto",
+                ).await;
+            }
+
+            count += 1;
+        }
+    }
+
+    if count > 0 {
+        tracing::warn!("Ingested {count} suspicious terminal events from agent");
+    }
+}
+
+/// Check canary files for access (Feature 12).
+/// Compares atime (last access) against a stored baseline.
+/// If atime changed, someone accessed the file — trigger alert.
+async fn security_check_canary_files(pool: &PgPool) {
+    use std::os::unix::fs::MetadataExt;
+
+    let canary_paths = [
+        "/etc/.dockpanel-canary",
+        "/root/.dockpanel-canary",
+        "/home/.dockpanel-canary",
+        "/var/www/.dockpanel-canary",
+    ];
+
+    for path in &canary_paths {
+        let meta = match std::fs::metadata(path) {
+            Ok(m) => m,
+            Err(_) => continue, // File doesn't exist (not set up yet)
+        };
+
+        let atime = meta.atime();
+        let mtime = meta.mtime();
+
+        // If accessed more recently than modified, someone read it
+        // (mtime is set when we create it; atime changes on read)
+        // Use a settings key to store the last known atime
+        let key = format!("canary_atime_{}", path.replace('/', "_"));
+        let stored: Option<(String,)> = sqlx::query_as(
+            "SELECT value FROM settings WHERE key = $1"
+        ).bind(&key).fetch_optional(pool).await.ok().flatten();
+
+        let stored_atime: i64 = stored
+            .and_then(|(v,)| v.parse().ok())
+            .unwrap_or(0);
+
+        if stored_atime == 0 {
+            // First run: store current atime as baseline
+            let _ = sqlx::query(
+                "INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2"
+            ).bind(&key).bind(atime.to_string()).execute(pool).await;
+            continue;
+        }
+
+        if atime > stored_atime {
+            // Canary was accessed! Alert immediately
+            tracing::error!("CANARY TRIGGERED: {path} was accessed (atime changed from {stored_atime} to {atime})");
+
+            super::security_hardening::audit_log(
+                pool, "canary.triggered", None, None,
+                Some("canary"), Some(path),
+                Some(&format!("Canary file accessed at {}", chrono::DateTime::from_timestamp(atime, 0).map(|d| d.to_rfc3339()).unwrap_or_default())),
+                None, "critical",
+            ).await;
+
+            // Record as suspicious event (may trigger auto-lockdown)
+            super::security_hardening::record_suspicious_event(
+                pool, "canary.triggered", None, None,
+                Some(&format!("Canary file {path} was accessed")),
+            ).await;
+
+            // Send alert to all admins
+            let admins: Vec<(uuid::Uuid,)> = sqlx::query_as(
+                "SELECT id FROM users WHERE role = 'admin'"
+            ).fetch_all(pool).await.unwrap_or_default();
+
+            let subject = format!("🚨 CANARY TRIGGERED: {path}");
+            let message = format!(
+                "A canary file was accessed on the server!\n\
+                 File: {path}\n\
+                 This indicates unauthorized filesystem exploration.\n\
+                 Check forensic snapshot and audit log immediately."
+            );
+            let html = format!(
+                "<h2 style='color:red'>Canary File Triggered</h2>\
+                 <p><strong>File:</strong> {path}</p>\
+                 <p>This indicates unauthorized filesystem exploration.</p>\
+                 <p>Check forensic snapshot and audit log immediately.</p>"
+            );
+
+            for (admin_id,) in &admins {
+                if let Some(channels) = super::notifications::get_user_channels(pool, *admin_id, None).await {
+                    super::notifications::send_notification(pool, &channels, &subject, &message, &html).await;
+                }
+            }
+
+            // Update stored atime
+            let _ = sqlx::query(
+                "UPDATE settings SET value = $1 WHERE key = $2"
+            ).bind(atime.to_string()).bind(&key).execute(pool).await;
+        }
+    }
+}
+
+/// Check if lockdown should auto-expire (24h max by default).
+async fn security_check_lockdown_expiry(pool: &PgPool) {
+    let row: Option<(bool, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+        "SELECT active, triggered_at FROM lockdown_state WHERE id = 1"
+    ).fetch_optional(pool).await.ok().flatten();
+
+    if let Some((true, Some(triggered_at))) = row {
+        let hours_locked = (chrono::Utc::now() - triggered_at).num_hours();
+        if hours_locked >= 24 {
+            super::security_hardening::deactivate_lockdown(pool, "auto-expire (24h)").await;
+            super::security_hardening::audit_log(
+                pool, "lockdown.auto_expire", None, None,
+                Some("system"), None,
+                Some(&format!("Lockdown auto-expired after {}h", hours_locked)),
+                None, "info",
+            ).await;
+            tracing::info!("Lockdown auto-expired after {hours_locked}h");
+        }
     }
 }

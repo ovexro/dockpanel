@@ -4,11 +4,19 @@ use tokio::process::Command;
 const BACKUP_DIR: &str = "/var/backups/dockpanel";
 const WEBROOT: &str = "/var/www";
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Default)]
 pub struct BackupInfo {
     pub filename: String,
     pub size_bytes: u64,
     pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+}
+
+impl BackupInfo {
+    fn new(filename: String, size_bytes: u64, created_at: String) -> Self {
+        Self { filename, size_bytes, created_at, sha256: None }
+    }
 }
 
 /// Validate backup filename (prevent path traversal).
@@ -73,13 +81,32 @@ pub async fn create_backup(domain: &str) -> Result<BackupInfo, String> {
         );
     }
 
-    tracing::info!("Backup created: {filename} ({} bytes)", meta.len());
+    // Feature 13: Compute SHA256 hash of the backup file for integrity chain
+    let sha256 = compute_file_sha256(filepath_str).await;
+
+    tracing::info!("Backup created: {filename} ({} bytes, hash: {})", meta.len(), sha256.as_deref().unwrap_or("N/A"));
 
     Ok(BackupInfo {
         filename,
         size_bytes: meta.len(),
         created_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        sha256,
     })
+}
+
+/// Compute SHA256 hash of a file (for backup integrity chain).
+async fn compute_file_sha256(path: &str) -> Option<String> {
+    let output = Command::new("sha256sum")
+        .arg(path)
+        .output()
+        .await
+        .ok()?;
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Some(stdout.split_whitespace().next()?.to_string())
+    } else {
+        None
+    }
 }
 
 /// List backups for a domain.
@@ -111,6 +138,7 @@ pub fn list_backups(domain: &str) -> Result<Vec<BackupInfo>, String> {
             filename: name,
             size_bytes: size,
             created_at: created,
+            sha256: None,
         });
     }
 
