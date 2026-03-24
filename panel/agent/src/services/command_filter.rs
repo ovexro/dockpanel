@@ -21,8 +21,8 @@ const BLOCKED_PATTERNS: &[&str] = &[
     "curl", "wget",
     // Sensitive files
     "/etc/passwd", "/etc/shadow", "/etc/sudoers",
-    // Shell operators
-    "||", "&&", "; ",
+    // Shell operators ("; " blocks chaining, but && and || are allowed in cron for legitimate use)
+    "; ",
     // Write to system paths
     "> /etc/", "> /root/", "> /var/",
     "< /etc/", "< /root/",
@@ -55,6 +55,8 @@ const TERMINAL_BLOCKED_PATTERNS: &[&str] = &[
     "crontab",
     // Process signals to other processes
     "kill ", "killall ", "pkill ",
+    // Shell operators (blocked in terminal but allowed in cron)
+    "||", "&&",
     // Network config
     "iptables", "ip6tables", "nft ", "ufw ",
     // Reading other sites
