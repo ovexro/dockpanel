@@ -104,6 +104,8 @@ const SecretsManager = lazyRetry(() => import("./pages/SecretsManager"));
 const WebhookGateway = lazyRetry(() => import("./pages/WebhookGateway"));
 const Notifications = lazyRetry(() => import("./pages/Notifications"));
 const SecurityHardening = lazyRetry(() => import("./pages/SecurityHardening"));
+const Integrations = lazyRetry(() => import("./pages/Integrations"));
+const Users = lazyRetry(() => import("./pages/Users"));
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -136,7 +138,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/logs" element={<Logs />} />
               <Route path="/apps" element={<Apps />} />
               <Route path="/git-deploys" element={<GitDeploys />} />
-              <Route path="/extensions" element={<Extensions />} />
+              <Route path="/extensions" element={<Navigate to="/integrations" replace />} />
               <Route path="/security" element={<Security />} />
               <Route path="/diagnostics" element={<Navigate to="/security" replace />} />
               <Route path="/settings" element={<Settings />} />
@@ -148,11 +150,12 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/migration" element={<MigrationWizard />} />
               <Route path="/reseller" element={<ResellerDashboard />} />
               <Route path="/reseller/users" element={<ResellerUsers />} />
-              <Route path="/users" element={<Navigate to="/settings" replace />} />
+              <Route path="/users" element={<Users />} />
               <Route path="/backup-orchestrator" element={<BackupOrchestrator />} />
-              <Route path="/incidents" element={<IncidentManagement />} />
+              <Route path="/incidents" element={<Navigate to="/monitoring" replace />} />
               <Route path="/secrets" element={<SecretsManager />} />
-              <Route path="/webhooks" element={<WebhookGateway />} />
+              <Route path="/integrations" element={<Integrations />} />
+              <Route path="/webhooks" element={<Navigate to="/integrations" replace />} />
               <Route path="/notifications" element={<Notifications />} />
               <Route path="/monitoring" element={<Monitoring />} />
               <Route path="/security-hardening" element={<Navigate to="/security" replace />} />

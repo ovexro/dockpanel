@@ -42,7 +42,6 @@ export const navGroups: NavGroup[] = [
       { to: "/dns", label: "DNS", iconName: "dns" },
       { to: "/mail", label: "Mail", iconName: "mail", adminOnly: true },
       { to: "/backup-orchestrator", label: "Backup Manager", iconName: "backups", adminOnly: true },
-      { to: "/incidents", label: "Status Page", iconName: "incidents", adminOnly: true },
       { to: "/monitoring", label: "Monitoring", iconName: "monitoring" },
       { to: "/notifications", label: "Notifications", iconName: "notifications" },
       { to: "/logs", label: "Logs", iconName: "logs", adminOnly: true },
@@ -54,8 +53,8 @@ export const navGroups: NavGroup[] = [
     label: "Admin",
     items: [
       { to: "/servers", label: "Servers", iconName: "servers", adminOnly: true },
-      { to: "/webhooks", label: "Webhooks", iconName: "webhooks", adminOnly: true },
-      { to: "/extensions", label: "Extensions", iconName: "extensions", adminOnly: true },
+      { to: "/users", label: "Users", iconName: "users", adminOnly: true },
+      { to: "/integrations", label: "Integrations", iconName: "extensions", adminOnly: true },
       { to: "/secrets", label: "Secrets", iconName: "secrets", adminOnly: true },
       { to: "/security", label: "Security", iconName: "security", adminOnly: true },
       { to: "/settings", label: "Settings", iconName: "settings", adminOnly: true },

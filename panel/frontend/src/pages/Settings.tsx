@@ -3,7 +3,6 @@ import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 import ProvisionLog from "../components/ProvisionLog";
 import UpdatesContent from "./Updates";
-import UsersContent from "./Users";
 
 interface HealthStatus {
   db: string;
@@ -318,7 +317,6 @@ export default function Settings() {
           { id: "destinations", label: "Backup Destinations" },
           { id: "services", label: "Services" },
           { id: "updates", label: "Updates" },
-          { id: "users", label: "Users" },
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
             className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-t-lg transition-colors whitespace-nowrap shrink-0 ${
@@ -1801,9 +1799,6 @@ export default function Settings() {
           <UpdatesContent />
         )}
 
-        {tab === "users" && (
-          <UsersContent />
-        )}
       </div>
       </div>
     </div>
