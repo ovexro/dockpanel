@@ -124,10 +124,15 @@ export default function Terminal() {
   // Snippets
   const [showSnippets, setShowSnippets] = useState(false);
 
-  // Font size (persisted)
-  const [fontSize, setFontSize] = useState(() =>
-    parseInt(localStorage.getItem("dp-terminal-font") || "14")
-  );
+  // Font size (persisted, smaller default on mobile)
+  const [fontSize, setFontSize] = useState(() => {
+    const stored = localStorage.getItem("dp-terminal-font");
+    if (stored) return parseInt(stored);
+    return window.innerWidth < 768 ? 11 : 14;
+  });
+
+  // Mobile toolbar toggle
+  const [showMoreTools, setShowMoreTools] = useState(false);
 
   // Theme (persisted)
   const [themeName, setThemeName] = useState(
@@ -442,28 +447,56 @@ export default function Terminal() {
   const currentThemeBg = (themes[themeName] || themes.mocha).background;
 
   return (
-    <div className="flex flex-col h-full p-4">
+    <div className="flex flex-col h-full p-2 sm:p-4">
       <div className="flex flex-col flex-1 border border-dark-500 min-h-0">
         {/* Header */}
-        <div className="px-5 py-3 border-b border-dark-500 bg-dark-800 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-4">
-            <div>
-              <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">
-                {headerLabel}
-              </h1>
-              <div className="flex items-center gap-2 mt-0.5">
-                <div
-                  className={`w-2 h-2 rounded-full ${
-                    connected ? "bg-rust-500" : "bg-dark-300"
-                  }`}
-                />
-                <span className="text-xs text-dark-200">
-                  {status || (connected ? "Connected" : "Disconnected")}
-                </span>
+        <div className="px-3 sm:px-5 py-2 sm:py-3 border-b border-dark-500 bg-dark-800 shrink-0">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="min-w-0">
+                <h1 className="text-xs sm:text-sm font-medium text-dark-300 uppercase font-mono tracking-widest truncate">
+                  {headerLabel}
+                </h1>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <div
+                    className={`w-2 h-2 rounded-full shrink-0 ${
+                      connected ? "bg-rust-500" : "bg-dark-300"
+                    }`}
+                  />
+                  <span className="text-xs text-dark-200 truncate">
+                    {status || (connected ? "Connected" : "Disconnected")}
+                  </span>
+                </div>
               </div>
             </div>
+            {/* Primary controls (always visible) */}
+            <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+              {/* Site selector */}
+              <select
+                value={selectedSite}
+                onChange={(e) => handleSiteChange(e.target.value)}
+                className="text-xs sm:text-sm border border-dark-500 rounded-lg px-2 sm:px-3 py-1 sm:py-1.5 bg-dark-800 max-w-[120px] sm:max-w-none"
+              >
+                <option value="">Server root</option>
+                {sites.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.domain}
+                  </option>
+                ))}
+              </select>
+
+              {/* More tools toggle (mobile) */}
+              <button
+                onClick={() => setShowMoreTools(!showMoreTools)}
+                className="px-2 py-1 bg-dark-700 text-dark-200 rounded text-xs hover:bg-dark-600 md:hidden"
+              >
+                {showMoreTools ? "Less" : "More"}
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-3">
+
+          {/* Secondary controls (hidden on mobile unless toggled) */}
+          <div className={`flex flex-wrap items-center gap-2 mt-2 ${showMoreTools ? "" : "hidden md:flex"}`}>
             {/* Font size controls */}
             <div className="flex items-center gap-1">
               <button
@@ -492,20 +525,6 @@ export default function Terminal() {
               <option value="mocha">Mocha</option>
               <option value="dracula">Dracula</option>
               <option value="light">Light</option>
-            </select>
-
-            {/* Site selector */}
-            <select
-              value={selectedSite}
-              onChange={(e) => handleSiteChange(e.target.value)}
-              className="text-sm border border-dark-500 rounded-lg px-3 py-1.5 bg-dark-800 focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
-            >
-              <option value="">Server root</option>
-              {sites.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.domain}
-                </option>
-              ))}
             </select>
 
             {/* Snippets toggle */}
