@@ -312,22 +312,14 @@ export default function Settings() {
         {[
           { id: "general", label: "General" },
           { id: "email", label: "Email" },
-          { id: "security", label: "Security" },
-          { id: "notifications", label: "Notifications" },
-          { id: "destinations", label: "Backup Destinations" },
-          { id: "services", label: "Services" },
-          { id: "updates", label: "Updates" },
+          { id: "account", label: "Account" },
+          { id: "channels", label: "Alert Channels" },
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
             className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-t-lg transition-colors whitespace-nowrap shrink-0 ${
               tab === t.id ? "text-rust-400 border-b-2 border-rust-400" : "text-dark-300 hover:text-dark-100"
             }`}>
             {t.label}
-            {t.id === "updates" && updateCount > 0 && (
-              <span className="px-1.5 py-0.5 text-[10px] font-bold bg-danger-500 text-white rounded-full min-w-[18px] text-center leading-none">
-                {updateCount}
-              </span>
-            )}
           </button>
         ))}
       </div>
@@ -974,10 +966,10 @@ export default function Settings() {
 
         )}
 
-        {/* Backup Destinations */}
-        {tab === "destinations" && (
-        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
-          <div className="px-5 py-3 border-b border-dark-600 flex items-center justify-between">
+        {/* Backup Destinations — moved to Backup Manager page */}
+        {false && (
+        <div className="hidden">
+          <div>
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Backup Destinations</h3>
             {showDestForm ? (
               <button
@@ -1155,7 +1147,7 @@ export default function Settings() {
         )}
 
         {/* Two-Factor Authentication */}
-        {tab === "security" && (<>
+        {tab === "account" && (<>
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600">
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Two-Factor Authentication</h3>
@@ -1567,7 +1559,7 @@ export default function Settings() {
         </>)}
 
         {/* Notification Channels */}
-        {tab === "notifications" && (<>
+        {tab === "channels" && (<>
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600">
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Notification Channels</h3>
@@ -1794,10 +1786,6 @@ export default function Settings() {
           </div>
         </div>
         </>)}
-
-        {tab === "updates" && (
-          <UpdatesContent />
-        )}
 
       </div>
       </div>

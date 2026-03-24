@@ -106,6 +106,7 @@ const Notifications = lazyRetry(() => import("./pages/Notifications"));
 const SecurityHardening = lazyRetry(() => import("./pages/SecurityHardening"));
 const Integrations = lazyRetry(() => import("./pages/Integrations"));
 const Users = lazyRetry(() => import("./pages/Users"));
+const System = lazyRetry(() => import("./pages/System"));
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -142,7 +143,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/security" element={<Security />} />
               <Route path="/diagnostics" element={<Navigate to="/security" replace />} />
               <Route path="/settings" element={<Settings />} />
-              <Route path="/updates" element={<Navigate to="/settings" replace />} />
+              <Route path="/updates" element={<Navigate to="/system" replace />} />
               <Route path="/activity" element={<Navigate to="/logs" replace />} />
               <Route path="/system-logs" element={<Navigate to="/logs" replace />} />
               <Route path="/mail" element={<Mail />} />
@@ -158,6 +159,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/webhooks" element={<Navigate to="/integrations" replace />} />
               <Route path="/notifications" element={<Notifications />} />
               <Route path="/monitoring" element={<Monitoring />} />
+              <Route path="/system" element={<System />} />
               <Route path="/security-hardening" element={<Navigate to="/security" replace />} />
               <Route path="/monitors" element={<Navigate to="/monitoring" replace />} />
               <Route path="/alerts" element={<Navigate to="/monitoring" replace />} />

@@ -81,7 +81,7 @@ interface Database {
   engine: string;
 }
 
-type Tab = "overview" | "policies" | "databases" | "volumes" | "verifications";
+type Tab = "overview" | "policies" | "databases" | "volumes" | "verifications" | "destinations";
 
 export default function BackupOrchestrator() {
   const { user } = useAuth();
@@ -182,6 +182,7 @@ export default function BackupOrchestrator() {
     { key: "databases", label: "DB Backups" },
     { key: "volumes", label: "Volume Backups" },
     { key: "verifications", label: "Verifications" },
+    { key: "destinations", label: "Destinations" },
   ];
 
   if (loading) {
@@ -231,6 +232,36 @@ export default function BackupOrchestrator() {
       )}
       {tab === "volumes" && <VolumesTab backups={volBackups} onVerify={triggerVerify} />}
       {tab === "verifications" && <VerificationsTab verifications={verifications} />}
+      {tab === "destinations" && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Backup Destinations</h3>
+            <p className="text-xs text-dark-200 mt-0.5">S3, SFTP, and other remote storage for backups</p>
+          </div>
+          <div className="p-5">
+            {destinations.length === 0 ? (
+              <p className="text-sm text-dark-300 text-center py-4">No backup destinations configured. Add one via Settings &rarr; or the API.</p>
+            ) : (
+              <div className="space-y-3">
+                {destinations.map(d => (
+                  <div key={d.id} className="flex items-center justify-between p-3 bg-dark-700 rounded-lg">
+                    <div>
+                      <span className="text-sm font-medium text-dark-50">{d.name}</span>
+                      <span className="ml-2 px-2 py-0.5 text-[10px] font-mono uppercase bg-dark-600 text-dark-300 rounded">{d.dtype}</span>
+                    </div>
+                    <button onClick={async () => {
+                      try {
+                        await api.post(`/backup-destinations/${d.id}/test`);
+                        setMessage({ text: `Connection to "${d.name}" successful`, type: "success" });
+                      } catch (e: any) { setMessage({ text: e.message || "Connection failed", type: "error" }); }
+                    }} className="px-3 py-1 text-xs font-mono bg-dark-600 hover:bg-dark-500 text-dark-200 rounded">Test</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
