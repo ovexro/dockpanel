@@ -825,6 +825,44 @@ export default function Terminal() {
           )}
           <div ref={termRef} className="h-full" />
         </div>
+
+        {/* Mobile action bar — touch-friendly buttons for keys that are hard to type on phone keyboards */}
+        <div className="flex items-center gap-1 px-2 py-1.5 bg-dark-800 border-t border-dark-500 shrink-0 overflow-x-auto md:hidden">
+          {[
+            { label: "Tab", key: "\t" },
+            { label: "↑", key: "\x1b[A" },
+            { label: "↓", key: "\x1b[B" },
+            { label: "←", key: "\x1b[D" },
+            { label: "→", key: "\x1b[C" },
+            { label: "Ctrl+C", key: "\x03" },
+            { label: "Ctrl+D", key: "\x04" },
+            { label: "Ctrl+Z", key: "\x1a" },
+            { label: "Ctrl+L", key: "\x0c" },
+            { label: "Esc", key: "\x1b" },
+            { label: "Paste", key: "__paste__" },
+          ].map((btn) => (
+            <button
+              key={btn.label}
+              onClick={async () => {
+                if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+                if (btn.key === "__paste__") {
+                  try {
+                    const text = await navigator.clipboard.readText();
+                    wsRef.current.send(JSON.stringify({ type: "input", data: text }));
+                  } catch {
+                    setError("Clipboard access denied");
+                  }
+                } else {
+                  wsRef.current.send(JSON.stringify({ type: "input", data: btn.key }));
+                }
+                xtermRef.current?.focus();
+              }}
+              className="px-2.5 py-1.5 bg-dark-700 text-dark-200 rounded text-[11px] font-mono hover:bg-dark-600 active:bg-dark-500 whitespace-nowrap touch-manipulation"
+            >
+              {btn.label}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
