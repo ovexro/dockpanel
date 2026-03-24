@@ -286,11 +286,27 @@ pub async fn upload_file(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid path"));
     }
     if !is_safe_relative_path(&body.filename) && body.filename != "." {
-        // Filename can be anything valid (not a path traversal)
         if body.filename.contains("..") || body.filename.contains('/') {
             return Err(err(StatusCode::BAD_REQUEST, "Invalid filename"));
         }
     }
+
+    // File upload size limit (100MB default)
+    let content_size = body.content.len();
+    let max_upload_bytes: usize = 100 * 1024 * 1024; // 100MB
+    if content_size > max_upload_bytes {
+        return Err(err(StatusCode::PAYLOAD_TOO_LARGE,
+            &format!("File too large: {}MB (max 100MB)", content_size / (1024 * 1024))));
+    }
+
+    // Block dangerous file extensions that could enable code execution
+    let lower_name = body.filename.to_lowercase();
+    let dangerous_exts = [".phar", ".pht", ".phtml", ".shtml", ".htaccess"];
+    if dangerous_exts.iter().any(|ext| lower_name.ends_with(ext)) {
+        return Err(err(StatusCode::BAD_REQUEST,
+            "File type not allowed (dangerous extension)"));
+    }
+
     let domain = get_site_domain(&state, id, claims.sub).await?;
 
     let agent_path = format!("/files/{}/upload", domain);

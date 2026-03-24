@@ -109,6 +109,121 @@ pub fn is_safe_relative_path(path: &str) -> bool {
         && !path.starts_with('/')
 }
 
+/// Validate a shell command string for safety (used for cron, pre_build, post_deploy).
+/// Rejects dangerous shell metacharacters and patterns while allowing legitimate commands.
+pub fn is_safe_shell_command(cmd: &str) -> Result<(), &'static str> {
+    if cmd.trim().is_empty() {
+        return Err("Command cannot be empty");
+    }
+    if cmd.len() > 4096 {
+        return Err("Command too long (max 4096 chars)");
+    }
+    if cmd.contains('\0') {
+        return Err("Command must not contain null bytes");
+    }
+    if cmd.contains('\n') || cmd.contains('\r') {
+        return Err("Command must not contain newlines");
+    }
+
+    let lower = cmd.to_lowercase();
+
+    // Block injection patterns
+    let dangerous = [
+        "`", "$(", "eval ", "exec ",
+        "|sh", "|bash", "| sh", "| bash",
+        ";sh", ";bash", "; sh", "; bash",
+    ];
+    for d in &dangerous {
+        if lower.contains(d) {
+            return Err("Command contains dangerous shell injection pattern");
+        }
+    }
+
+    // Block system destruction
+    let destructive = [
+        "rm -rf /", "rm -rf /*", "mkfs", "dd if=", "> /dev/",
+        "chmod 777 /", "shutdown", "reboot", "init 0", "init 6",
+    ];
+    for d in &destructive {
+        if lower.contains(d) {
+            return Err("Command contains destructive operation");
+        }
+    }
+
+    // Block privilege escalation
+    let escalation = [
+        "useradd", "userdel", "usermod", "adduser", "chpasswd",
+        "passwd", "/etc/shadow", "/etc/sudoers",
+        "visudo", "chown root", "chmod +s", "chmod 4",
+    ];
+    for e in &escalation {
+        if lower.contains(e) {
+            return Err("Command contains privilege escalation attempt");
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate a Docker Compose YAML for dangerous directives.
+pub fn validate_compose_yaml(yaml: &str) -> Result<(), &'static str> {
+    let lower = yaml.to_lowercase();
+
+    // Block container escape vectors
+    let dangerous = [
+        "privileged: true", "privileged:true",
+        "network_mode: host", "network_mode:host", "network_mode: \"host\"",
+        "pid: host", "pid:host", "pid: \"host\"",
+        "ipc: host", "ipc:host",
+        "cap_add:", "- sys_admin", "- sys_ptrace", "- net_admin",
+        "- all",  // cap_add ALL
+        "- /:/",  // mount host root
+        ":/:/", ":/:rw",  // host root volume mounts
+        "- /etc/shadow", "- /etc/passwd",
+        "- /root/", "- /home/",
+        "security_opt:", "apparmor:unconfined", "seccomp:unconfined",
+    ];
+    for d in &dangerous {
+        if lower.contains(d) {
+            return Err("Compose YAML contains dangerous directive (privileged, host access, or capability escalation)");
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate custom nginx config blocks.
+pub fn is_safe_nginx_config(config: &str) -> Result<(), &'static str> {
+    if config.len() > 10240 {
+        return Err("Custom nginx directives must be under 10KB");
+    }
+    if config.contains('\0') {
+        return Err("Config contains null bytes");
+    }
+
+    let lower = config.to_lowercase();
+
+    let dangerous = [
+        "lua_", "content_by_lua", "access_by_lua", "rewrite_by_lua",
+        "set_by_lua", "header_filter_by_lua", "body_filter_by_lua",
+        "proxy_pass http://127.0.0.1", "proxy_pass http://localhost",
+        "proxy_pass http://0.0.0.0", "proxy_pass http://[::1]",
+        "proxy_pass http://169.254",  // AWS metadata
+        "proxy_pass http://metadata",
+        "load_module", "include /etc/", "include /root/",
+        "ssl_certificate /etc/shadow",
+        "alias /etc/", "alias /root/", "alias /home/",
+        "root /etc/", "root /root/", "root /home/",
+    ];
+    for d in &dangerous {
+        if lower.contains(d) {
+            return Err("Custom nginx config contains dangerous directive");
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
