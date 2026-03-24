@@ -496,12 +496,14 @@ export default function Terminal() {
           </div>
 
           {/* Secondary controls (hidden on mobile unless toggled) */}
-          <div className={`flex flex-wrap items-center gap-2 mt-2 ${showMoreTools ? "" : "hidden md:flex"}`}>
+          <div className={`mt-2 ${showMoreTools ? "" : "hidden md:block"}`}>
+            {/* Mobile: grid layout. Desktop: flex row */}
+            <div className="grid grid-cols-4 gap-1 md:flex md:flex-wrap md:items-center md:gap-2">
             {/* Font size controls */}
-            <div className="flex items-center gap-1">
+            <div className="flex items-center justify-center gap-1 col-span-2 md:col-span-1">
               <button
                 onClick={() => changeFontSize(-1)}
-                className="px-1.5 py-0.5 bg-dark-700 text-dark-200 rounded text-xs hover:bg-dark-600 transition-colors"
+                className="px-2 py-1.5 bg-dark-700 text-dark-200 rounded text-xs hover:bg-dark-600 active:bg-dark-500 touch-manipulation"
               >
                 A-
               </button>
@@ -510,7 +512,7 @@ export default function Terminal() {
               </span>
               <button
                 onClick={() => changeFontSize(1)}
-                className="px-1.5 py-0.5 bg-dark-700 text-dark-200 rounded text-xs hover:bg-dark-600 transition-colors"
+                className="px-2 py-1.5 bg-dark-700 text-dark-200 rounded text-xs hover:bg-dark-600 active:bg-dark-500 touch-manipulation"
               >
                 A+
               </button>
@@ -520,7 +522,7 @@ export default function Terminal() {
             <select
               value={themeName}
               onChange={(e) => changeTheme(e.target.value)}
-              className="px-2 py-1 bg-dark-700 text-dark-200 rounded text-xs border border-dark-600"
+              className="px-2 py-1.5 bg-dark-700 text-dark-200 rounded text-xs border border-dark-600 col-span-2 md:col-span-1"
             >
               <option value="mocha">Mocha</option>
               <option value="dracula">Dracula</option>
@@ -530,10 +532,10 @@ export default function Terminal() {
             {/* Snippets toggle */}
             <button
               onClick={() => setShowSnippets(!showSnippets)}
-              className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
+              className={`py-1.5 rounded text-xs font-mono text-center touch-manipulation ${
                 showSnippets
                   ? "bg-rust-500/20 text-rust-400 border border-rust-500/30"
-                  : "bg-dark-700 text-dark-100 hover:bg-dark-600"
+                  : "bg-dark-700 text-dark-200 hover:bg-dark-600 active:bg-dark-500"
               }`}
             >
               Snippets
@@ -541,7 +543,7 @@ export default function Terminal() {
 
             {/* File upload (site terminals only) */}
             {selectedSite && (
-              <label className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-sm cursor-pointer hover:bg-dark-600 transition-colors">
+              <label className="py-1.5 bg-dark-700 text-dark-200 rounded text-xs font-mono cursor-pointer hover:bg-dark-600 active:bg-dark-500 touch-manipulation text-center">
                 Upload
                 <input
                   type="file"
@@ -602,7 +604,7 @@ export default function Terminal() {
                     });
                 }
               }}
-              className="px-2 py-1 bg-dark-700 text-dark-200 rounded text-xs hover:bg-dark-600 transition-colors"
+              className="py-1.5 bg-dark-700 text-dark-200 rounded text-xs font-mono hover:bg-dark-600 active:bg-dark-500 touch-manipulation text-center"
               title="Copy all terminal output"
             >
               Copy Output
@@ -638,7 +640,7 @@ export default function Terminal() {
                   setError("Failed to create share link");
                 }
               }}
-              className="px-2 py-1 bg-dark-700 text-dark-200 rounded text-xs hover:bg-dark-600 transition-colors"
+              className="py-1.5 bg-dark-700 text-dark-200 rounded text-xs font-mono hover:bg-dark-600 active:bg-dark-500 touch-manipulation text-center"
               title="Share terminal output (1hr link)"
             >
               Share
@@ -672,10 +674,11 @@ export default function Terminal() {
             {/* Reconnect */}
             <button
               onClick={handleReconnect}
-              className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-sm hover:bg-dark-600 transition-colors"
+              className="py-1.5 bg-dark-700 text-dark-200 rounded text-xs font-mono hover:bg-dark-600 active:bg-dark-500 touch-manipulation text-center"
             >
               Reconnect
             </button>
+            </div>
           </div>
         </div>
 

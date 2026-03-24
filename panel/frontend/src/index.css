@@ -1430,8 +1430,10 @@ tr.table-row-hover:hover {
 /* Page header bar */
 .page-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
+  gap: 0.75rem;
   padding: 1.25rem 1.5rem;
   border-bottom: 1px solid var(--color-dark-600);
   background-color: var(--color-dark-900);
