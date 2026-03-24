@@ -216,3 +216,65 @@ See the [Session Management guide](sessions.md) for details on viewing, revoking
 | `POST` | `/api/security/ssh/enable-password` | Enable SSH password auth |
 | `POST` | `/api/security/ssh/disable-root` | Disable SSH root login |
 | `POST` | `/api/security/ssh/change-port` | Change SSH port |
+| `GET` | `/api/security/lockdown` | Get lockdown status |
+| `POST` | `/api/security/lockdown/activate` | Activate system lockdown |
+| `POST` | `/api/security/lockdown/deactivate` | Deactivate lockdown |
+| `POST` | `/api/security/panic` | Emergency panic button |
+| `POST` | `/api/security/forensic-snapshot` | Capture forensic system state |
+| `GET` | `/api/security/audit-log` | Query immutable audit log |
+| `GET` | `/api/security/recordings` | List terminal recordings |
+| `GET` | `/api/security/pending-users` | List users awaiting approval |
+| `POST` | `/api/security/users/{id}/approve` | Approve a pending user |
+
+## Advanced Security Features
+
+### System Lockdown
+
+Lockdown mode blocks all non-admin access. When active:
+- Terminal sessions are disabled
+- Registration is blocked
+- Non-admin users cannot login
+
+Activate from **Security** > **Lockdown** tab, or via the API. Lockdown auto-expires after 24 hours.
+
+### Panic Button
+
+The panic button performs an emergency lockdown: kills all active terminal sessions, blocks non-admin access, and disables registration. Available in **Security** > **Lockdown** tab.
+
+### Immutable Audit Log
+
+All security events are written to a tamper-proof audit log. The database uses a PostgreSQL trigger that prevents UPDATE and DELETE operations. Events are also written to append-only files on disk at `/var/lib/dockpanel/audit/`.
+
+View the log in **Security** > **Lockdown** tab (Audit Log section).
+
+### Terminal Session Recording
+
+All terminal sessions are recorded in asciicast v2 format. Recordings are stored at `/var/lib/dockpanel/recordings/` and listed in **Security** > **Recordings** tab. Retention: 30 days.
+
+### Geo-IP Login Alerts
+
+When enabled, DockPanel alerts admins when a login or registration occurs from a new IP address, especially from VPN, proxy, or datacenter IPs. Configure in **Settings** > **Account** > **Security Hardening** section.
+
+### Registration Approval Mode
+
+When enabled, new user registrations require admin approval before the user can login. Pending users appear in **Security** > **Approvals** tab. Enable in **Settings** > **Account** > **Security Hardening**.
+
+### Auto-Lockdown
+
+If the system detects a configurable number of suspicious events within a time window (default: 5 events in 10 minutes), lockdown activates automatically. Configure the threshold in **Settings** > **Account** > **Security Hardening**.
+
+### Canary Files
+
+DockPanel places hidden canary files in sensitive directories (`/etc/`, `/root/`, `/home/`, `/var/www/`). If these files are accessed, an alert is triggered. The system checks canary file access times every 2 minutes.
+
+### Backup Integrity Chain
+
+Each backup includes a SHA-256 hash of its contents and a reference to the previous backup's hash, forming an integrity chain. If an attacker tampers with backup files, the chain breaks and alerts fire.
+
+### Suspicious Command Detection
+
+Terminal commands matching dangerous patterns (useradd, chpasswd, su, curl|bash, etc.) are flagged and reported to the admin. These events feed into the auto-lockdown threshold.
+
+### Panel Database Auto-Backup
+
+DockPanel's own PostgreSQL database is automatically backed up daily to `/var/backups/dockpanel/` with 7-day retention. Enable/disable in **Settings** > **Account** > **Security Hardening**.
