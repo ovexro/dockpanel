@@ -21,6 +21,7 @@ use crate::routes::reseller_dashboard::check_reseller_quota;
 use crate::services::activity;
 use crate::services::extensions::fire_event;
 use crate::services::notifications;
+use crate::services::security_hardening;
 use crate::AppState;
 
 /// A single provisioning step event.
@@ -110,6 +111,35 @@ pub async fn create(
     headers: HeaderMap,
     Json(body): Json<CreateSiteRequest>,
 ) -> Result<(StatusCode, Json<Site>), ApiError> {
+    // Feature 9: Block site creation during lockdown
+    if security_hardening::is_locked_down(&state.db).await {
+        return Err(err(StatusCode::SERVICE_UNAVAILABLE, "System is in lockdown mode"));
+    }
+
+    // Feature 3: Rate limit site creation (max N per user per hour)
+    {
+        let max_sites: i64 = security_hardening::get_setting_bool(&state.db, "security_site_rate_limit", true)
+            .await
+            .then(|| 3i64)
+            .unwrap_or(999);
+        let recent: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sites WHERE user_id = $1 AND created_at > NOW() - INTERVAL '1 hour'"
+        )
+        .bind(claims.sub)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or((0,));
+        if recent.0 >= max_sites {
+            // Feature 4: Record as suspicious event
+            let _ = security_hardening::record_suspicious_event(
+                &state.db, "site.rate_limit_hit", Some(&claims.email), None,
+                Some(&format!("User tried to create site #{} in 1 hour", recent.0 + 1)),
+            ).await;
+            return Err(err(StatusCode::TOO_MANY_REQUESTS,
+                &format!("Site creation rate limit: max {max_sites} sites per hour")));
+        }
+    }
+
     // Validate domain format
     if !is_valid_domain(&body.domain) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));

@@ -16,3 +16,4 @@ pub mod security_scanner;
 pub mod server_monitor;
 pub mod system_log;
 pub mod uptime;
+pub mod security_hardening;

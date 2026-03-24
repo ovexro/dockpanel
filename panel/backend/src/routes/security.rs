@@ -5,9 +5,9 @@ use axum::{
     Json,
 };
 
-use crate::auth::{AdminUser, ServerScope};
+use crate::auth::{AdminUser, AuthUser, ServerScope};
 use crate::error::{err, agent_error, ApiError};
-use crate::services::activity;
+use crate::services::{activity, security_hardening};
 use crate::AppState;
 
 /// GET /api/security/overview — Security overview.
@@ -441,4 +441,212 @@ th {{ text-align: left; padding: 8px; background: #111; color: #737373; font-siz
     );
 
     Ok(Html(html))
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Security Hardening Endpoints (Features 9, 10, 11, 8)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// GET /api/security/lockdown — Get lockdown state.
+pub async fn lockdown_status(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let lockdown = security_hardening::get_lockdown_state(&state.db).await;
+    Ok(Json(lockdown))
+}
+
+/// POST /api/security/lockdown/activate — Manual lockdown (admin only).
+pub async fn lockdown_activate(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let reason = body.get("reason").and_then(|r| r.as_str()).unwrap_or("Manual admin lockdown");
+
+    security_hardening::activate_lockdown(&state.db, "admin", reason).await;
+    security_hardening::audit_log(
+        &state.db, "lockdown.manual", Some(&claims.email), None,
+        Some("system"), None, Some(reason), None, "critical",
+    ).await;
+    security_hardening::alert_lockdown(&state.db, reason, &format!("admin:{}", claims.email)).await;
+
+    Ok(Json(serde_json::json!({ "status": "locked", "reason": reason })))
+}
+
+/// POST /api/security/lockdown/deactivate — Unlock (admin only).
+pub async fn lockdown_deactivate(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    security_hardening::deactivate_lockdown(&state.db, &claims.email).await;
+    security_hardening::audit_log(
+        &state.db, "lockdown.deactivate", Some(&claims.email), None,
+        Some("system"), None, None, None, "info",
+    ).await;
+
+    Ok(Json(serde_json::json!({ "status": "unlocked" })))
+}
+
+/// POST /api/security/panic — Emergency panic button (Feature 11).
+/// Kills all terminal sessions, blocks non-admins, disables registration.
+pub async fn panic_button(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let reason = "PANIC BUTTON pressed by admin";
+
+    // Activate lockdown
+    security_hardening::activate_lockdown(&state.db, "panic", reason).await;
+
+    // Tell agent to kill all terminal sessions
+    let _ = agent.post("/security/kill-terminals", Some(serde_json::json!({}))).await;
+
+    // Disable self-registration at DB level
+    let _ = sqlx::query("INSERT INTO settings (key, value) VALUES ('self_registration_enabled', 'false') ON CONFLICT (key) DO UPDATE SET value = 'false'")
+        .execute(&state.db).await;
+
+    // Audit + alert
+    security_hardening::audit_log(
+        &state.db, "panic", Some(&claims.email), None,
+        Some("system"), None, Some(reason), None, "critical",
+    ).await;
+    security_hardening::alert_lockdown(&state.db, reason, &format!("panic:{}", claims.email)).await;
+
+    Ok(Json(serde_json::json!({
+        "status": "panic_activated",
+        "terminals_killed": true,
+        "registration_disabled": true,
+        "lockdown_active": true,
+    })))
+}
+
+/// POST /api/security/forensic-snapshot — Capture forensic state (Feature 10).
+pub async fn forensic_snapshot(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = agent
+        .get("/security/forensic-snapshot")
+        .await
+        .map_err(|e| agent_error("Forensic snapshot", e))?;
+
+    security_hardening::audit_log(
+        &state.db, "forensic.snapshot", Some(&claims.email), None,
+        Some("system"), None, Some("Forensic snapshot captured"), None, "info",
+    ).await;
+
+    Ok(Json(result))
+}
+
+/// GET /api/security/audit-log — Query immutable audit log.
+pub async fn audit_log_list(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    let limit: i64 = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(100).min(500);
+    let offset: i64 = params.get("offset").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let severity = params.get("severity").map(|s| s.as_str());
+
+    let rows: Vec<(uuid::Uuid, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, String, chrono::DateTime<chrono::Utc>)> = if let Some(sev) = severity {
+        sqlx::query_as(
+            "SELECT id, event_type, actor_email, actor_ip, target_type, target_name, details, geo_country, geo_city, geo_isp, severity, created_at \
+             FROM security_audit_log WHERE severity = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
+        )
+        .bind(sev).bind(limit).bind(offset)
+        .fetch_all(&state.db).await
+    } else {
+        sqlx::query_as(
+            "SELECT id, event_type, actor_email, actor_ip, target_type, target_name, details, geo_country, geo_city, geo_isp, severity, created_at \
+             FROM security_audit_log ORDER BY created_at DESC LIMIT $1 OFFSET $2"
+        )
+        .bind(limit).bind(offset)
+        .fetch_all(&state.db).await
+    }.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let result: Vec<serde_json::Value> = rows.iter().map(|r| {
+        serde_json::json!({
+            "id": r.0, "event_type": r.1, "actor_email": r.2, "actor_ip": r.3,
+            "target_type": r.4, "target_name": r.5, "details": r.6,
+            "geo_country": r.7, "geo_city": r.8, "geo_isp": r.9,
+            "severity": r.10, "created_at": r.11,
+        })
+    }).collect();
+
+    Ok(Json(result))
+}
+
+/// GET /api/security/recordings — List terminal session recordings (Feature 5).
+pub async fn recordings_list(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let dir = "/var/lib/dockpanel/recordings";
+    let mut recordings = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                recordings.push(serde_json::json!({
+                    "filename": entry.file_name().to_string_lossy(),
+                    "size_bytes": meta.len(),
+                    "created": meta.created().ok().map(|t| {
+                        chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
+                    }),
+                }));
+            }
+        }
+    }
+
+    recordings.sort_by(|a, b| b["created"].as_str().cmp(&a["created"].as_str()));
+    Ok(Json(serde_json::json!({ "recordings": recordings })))
+}
+
+/// POST /api/security/users/{id}/approve — Approve a pending user (Feature 8).
+pub async fn approve_user(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Path(user_id): Path<uuid::Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = sqlx::query(
+        "UPDATE users SET approved = TRUE, approved_at = NOW(), approved_by = $1 WHERE id = $2"
+    )
+    .bind(claims.sub)
+    .bind(user_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    if result.rows_affected() == 0 {
+        return Err(err(StatusCode::NOT_FOUND, "User not found"));
+    }
+
+    security_hardening::audit_log(
+        &state.db, "user.approve", Some(&claims.email), None,
+        Some("user"), Some(&user_id.to_string()), None, None, "info",
+    ).await;
+
+    Ok(Json(serde_json::json!({ "status": "approved" })))
+}
+
+/// GET /api/security/pending-users — List users awaiting approval (Feature 8).
+pub async fn pending_users(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    let users: Vec<(uuid::Uuid, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT id, email, created_at FROM users WHERE approved = FALSE ORDER BY created_at DESC"
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let result: Vec<serde_json::Value> = users.iter().map(|(id, email, created)| {
+        serde_json::json!({ "id": id, "email": email, "created_at": created })
+    }).collect();
+
+    Ok(Json(result))
 }

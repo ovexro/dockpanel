@@ -17,7 +17,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use super::AppState;
 use crate::services::command_filter;
 
-static ACTIVE_TERMINALS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub static ACTIVE_TERMINALS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static LAST_CONNECT: AtomicU64 = AtomicU64::new(0);
 const MAX_TERMINAL_SESSIONS: u32 = 20;
 
@@ -347,6 +347,47 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: Stri
     let is_site_terminal = !domain.is_empty();
     let domain_str = if domain.is_empty() { "server" } else { &domain };
 
+    // Feature 5: Open session recording file
+    let recording_dir = "/var/lib/dockpanel/recordings";
+    let _ = std::fs::create_dir_all(recording_dir);
+    let session_id = uuid::Uuid::new_v4();
+    let recording_path = format!("{recording_dir}/{session_id}.cast");
+    let recording_start = std::time::Instant::now();
+    let mut recording_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&recording_path)
+        .ok();
+
+    // Write asciicast v2 header
+    if let Some(ref mut f) = recording_file {
+        use std::io::Write;
+        let header = serde_json::json!({
+            "version": 2,
+            "width": cols,
+            "height": rows,
+            "timestamp": chrono::Utc::now().timestamp(),
+            "env": {
+                "TERM": "xterm-256color",
+                "SHELL": "/bin/bash"
+            },
+            "title": format!("{}@{}", user_email, domain_str)
+        });
+        let _ = writeln!(f, "{}", header);
+    }
+
+    // Feature 6: Write session start to tamper-resistant audit file
+    {
+        let dir = "/var/lib/dockpanel/audit";
+        let _ = std::fs::create_dir_all(dir);
+        let date = chrono::Utc::now().format("%Y-%m-%d");
+        let path = format!("{dir}/audit-{date}.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            use std::io::Write;
+            let _ = writeln!(f, "{}\tinfo\tterminal.start\t{}\t-\tdomain={}", chrono::Utc::now().to_rfc3339(), user_email, domain_str);
+        }
+    }
+
     tracing::info!(target: "terminal_audit", user = %user_email, domain = %domain_str, "Terminal session started");
 
     // Main loop: multiplex PTY output and WebSocket input
@@ -355,6 +396,16 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: Stri
             // PTY output → WebSocket
             Some(data) = rx.recv() => {
                 let text = String::from_utf8_lossy(&data).to_string();
+
+                // Feature 5: Record output to asciicast file
+                if let Some(ref mut f) = recording_file {
+                    use std::io::Write;
+                    let elapsed = recording_start.elapsed().as_secs_f64();
+                    // asciicast v2 format: [time, "o", "data"]
+                    let escaped = text.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r");
+                    let _ = writeln!(f, "[{:.6}, \"o\", \"{}\"]", elapsed, escaped);
+                }
+
                 if socket.send(Message::Text(text.into())).await.is_err() {
                     break;
                 }
@@ -397,13 +448,24 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: Stri
                                                     break;
                                                 }
                                                 if !trimmed.is_empty() {
-                                                    tracing::info!(
-                                                        target: "terminal_audit",
-                                                        user = %user_email,
-                                                        domain = %domain_str,
-                                                        command = %trimmed,
-                                                        "Terminal command"
-                                                    );
+                                                    // Feature 4: Check for suspicious commands (alert even if allowed)
+                                                    if command_filter::is_suspicious_command(&trimmed) {
+                                                        tracing::warn!(
+                                                            target: "terminal_audit",
+                                                            user = %user_email,
+                                                            domain = %domain_str,
+                                                            command = %trimmed,
+                                                            "SUSPICIOUS terminal command detected"
+                                                        );
+                                                    } else {
+                                                        tracing::info!(
+                                                            target: "terminal_audit",
+                                                            user = %user_email,
+                                                            domain = %domain_str,
+                                                            command = %trimmed,
+                                                            "Terminal command"
+                                                        );
+                                                    }
                                                 }
                                                 cmd_buffer.clear();
                                             } else if ch == '\x7f' || ch == '\x08' {

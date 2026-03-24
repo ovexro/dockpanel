@@ -381,6 +381,16 @@ pub fn router() -> Router<AppState> {
         .route("/api/security/panel-jail/status", get(security::panel_jail_status))
         // Security Compliance Report
         .route("/api/security/report", get(security::compliance_report))
+        // Security Hardening (post-incident features)
+        .route("/api/security/lockdown", get(security::lockdown_status))
+        .route("/api/security/lockdown/activate", post(security::lockdown_activate))
+        .route("/api/security/lockdown/deactivate", post(security::lockdown_deactivate))
+        .route("/api/security/panic", post(security::panic_button))
+        .route("/api/security/forensic-snapshot", post(security::forensic_snapshot))
+        .route("/api/security/audit-log", get(security::audit_log_list))
+        .route("/api/security/recordings", get(security::recordings_list))
+        .route("/api/security/pending-users", get(security::pending_users))
+        .route("/api/security/users/{id}/approve", post(security::approve_user))
         // Security Scanning
         .route("/api/security/scan", post(security_scans::trigger_scan))
         .route("/api/security/scans", get(security_scans::list_scans))

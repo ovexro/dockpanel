@@ -17,7 +17,7 @@ use totp_rs::{Algorithm, TOTP, Secret};
 use crate::auth::{AuthUser, Claims};
 use crate::error::{err, ApiError};
 use crate::models::User;
-use crate::services::{activity, email, notifications};
+use crate::services::{activity, email, notifications, security_hardening};
 use crate::AppState;
 
 /// A zero-valued UUID used for activity logging when there is no authenticated user.
@@ -226,6 +226,20 @@ pub async fn login(
         attempts.remove(&ip);
     }
 
+    // Feature 9: Block non-admin logins during lockdown
+    if user.role != "admin" && security_hardening::is_locked_down(&state.db).await {
+        return Err(err(StatusCode::SERVICE_UNAVAILABLE, "System is in lockdown mode. Only admins can login."));
+    }
+
+    // Feature 8: Block login if user is not approved
+    if let Ok(Some((approved,))) = sqlx::query_as::<_, (bool,)>(
+        "SELECT COALESCE(approved, TRUE) FROM users WHERE id = $1"
+    ).bind(user.id).fetch_optional(&state.db).await {
+        if !approved {
+            return Err(err(StatusCode::FORBIDDEN, "Account pending admin approval"));
+        }
+    }
+
     // If 2FA is enabled, return a temporary token instead of a full session
     if user.totp_enabled {
         let now = chrono::Utc::now();
@@ -268,6 +282,54 @@ pub async fn login(
     .bind(&user_agent)
     .execute(&state.db)
     .await;
+
+    // Feature 1: Geo-IP alert on login from new/suspicious IP
+    // Feature 7: Write to immutable audit log
+    {
+        let ip_clone = ip.clone();
+        let email_clone = user.email.clone();
+        let pool = state.db.clone();
+        tokio::spawn(async move {
+            // Check if lockdown is active (Feature 9)
+            if security_hardening::is_locked_down(&pool).await {
+                // During lockdown, log but don't block admin logins
+                security_hardening::audit_log(
+                    &pool, "login.during_lockdown", Some(&email_clone), Some(&ip_clone),
+                    None, None, None, None, "warning",
+                ).await;
+            }
+
+            let geo = security_hardening::lookup_geo_ip(&ip_clone).await;
+
+            // Write immutable audit log
+            security_hardening::audit_log(
+                &pool, "login", Some(&email_clone), Some(&ip_clone),
+                Some("user"), None, None, geo.as_ref(), "info",
+            ).await;
+
+            // Check if this IP is new for this user
+            if security_hardening::get_setting_bool(&pool, "security_geo_alert_enabled", true).await {
+                let known: Option<(i64,)> = sqlx::query_as(
+                    "SELECT COUNT(*) FROM user_sessions WHERE user_id = (SELECT id FROM users WHERE email = $1) AND ip_address = $2"
+                )
+                .bind(&email_clone)
+                .bind(&ip_clone)
+                .fetch_optional(&pool)
+                .await
+                .ok()
+                .flatten();
+
+                let is_new_ip = known.map(|(c,)| c <= 1).unwrap_or(true); // <=1 because we just inserted
+                if let Some(ref geo) = geo {
+                    if is_new_ip || geo.proxy || geo.hosting {
+                        security_hardening::alert_suspicious_ip(
+                            &pool, "Login", &email_clone, &ip_clone, geo,
+                        ).await;
+                    }
+                }
+            }
+        });
+    }
 
     // Check if 2FA is enforced
     let enforce_2fa: bool = sqlx::query_scalar::<_, String>(
@@ -403,6 +465,11 @@ pub async fn register(
     headers: HeaderMap,
     Json(body): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    // Feature 9/11: Block registration during lockdown
+    if security_hardening::is_locked_down(&state.db).await {
+        return Err(err(StatusCode::SERVICE_UNAVAILABLE, "System is in lockdown mode. Registration disabled."));
+    }
+
     // Check if self-registration is enabled (default: disabled)
     let reg_enabled: Option<(String,)> =
         sqlx::query_as("SELECT value FROM settings WHERE key = 'self_registration_enabled'")
@@ -521,8 +588,61 @@ pub async fn register(
 
     activity::log_activity(
         &state.db, user.id, &user.email, "auth.register",
-        None, None, None, None,
+        None, None, None, Some(&ip),
     ).await;
+
+    // Feature 1/7: Geo-IP alert and immutable audit log on registration
+    {
+        let ip_clone = ip.clone();
+        let email_clone = user.email.clone();
+        let pool = state.db.clone();
+        tokio::spawn(async move {
+            let geo = security_hardening::lookup_geo_ip(&ip_clone).await;
+
+            // Immutable audit log
+            security_hardening::audit_log(
+                &pool, "register", Some(&email_clone), Some(&ip_clone),
+                Some("user"), None, None, geo.as_ref(), "info",
+            ).await;
+
+            // Alert admins about new registration (especially from proxy/datacenter IPs)
+            if security_hardening::get_setting_bool(&pool, "security_geo_alert_enabled", true).await {
+                if let Some(ref geo) = geo {
+                    security_hardening::alert_suspicious_ip(
+                        &pool, "Registration", &email_clone, &ip_clone, geo,
+                    ).await;
+                }
+            }
+
+            // Feature 4: Record as suspicious if from proxy/datacenter
+            if let Some(ref geo) = geo {
+                if geo.proxy || geo.hosting {
+                    security_hardening::record_suspicious_event(
+                        &pool, "register.proxy_ip", Some(&email_clone), Some(&ip_clone),
+                        Some(&format!("Registration from {}/{} ({})", geo.country, geo.city, geo.isp)),
+                    ).await;
+                }
+            }
+        });
+    }
+
+    // Feature 8: If approval mode is on, set user as unapproved
+    if security_hardening::get_setting_bool(&state.db, "security_approval_required", false).await {
+        let _ = sqlx::query("UPDATE users SET approved = FALSE WHERE id = $1")
+            .bind(user.id)
+            .execute(&state.db)
+            .await;
+
+        return Ok((
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "id": user.id,
+                "email": user.email,
+                "message": "Account created. Awaiting admin approval.",
+                "pending_approval": true,
+            })),
+        ));
+    }
 
     Ok((
         StatusCode::CREATED,
