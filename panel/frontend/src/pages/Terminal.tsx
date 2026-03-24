@@ -447,8 +447,8 @@ export default function Terminal() {
   const currentThemeBg = (themes[themeName] || themes.mocha).background;
 
   return (
-    <div className="flex flex-col h-full p-2 sm:p-4">
-      <div className="flex flex-col flex-1 border border-dark-500 min-h-0">
+    <div className="flex flex-col h-full p-2 sm:p-4 max-w-full overflow-hidden">
+      <div className="flex flex-col flex-1 border border-dark-500 min-h-0 overflow-hidden">
         {/* Header */}
         <div className="px-3 sm:px-5 py-2 sm:py-3 border-b border-dark-500 bg-dark-800 shrink-0">
           <div className="flex items-center justify-between">
@@ -777,7 +777,7 @@ export default function Terminal() {
         )}
 
         {/* Terminal */}
-        <div className="flex-1 p-2 min-h-0 relative" style={{ backgroundColor: currentThemeBg }}>
+        <div className="flex-1 p-2 min-h-0 relative overflow-hidden" style={{ backgroundColor: currentThemeBg }}>
           {/* Search overlay */}
           {showSearch && (
             <div className="absolute top-0 right-0 m-2 flex items-center gap-1 bg-dark-800 border border-dark-500 rounded-lg p-1.5 shadow-lg z-10">

@@ -1470,6 +1470,15 @@ tr.table-row-hover:hover {
   border-color: var(--color-dark-700);
 }
 
+/* Prevent xterm.js from overflowing viewport on mobile */
+.xterm {
+  max-width: 100% !important;
+  overflow: hidden !important;
+}
+.xterm-viewport, .xterm-screen {
+  max-width: 100% !important;
+}
+
 /* Reduce motion for users who prefer it */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
