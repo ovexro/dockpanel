@@ -216,6 +216,25 @@ pub async fn create(
 
     let preview_ttl = body.preview_ttl_hours.unwrap_or(24);
 
+    // Validate pre_build_cmd and post_deploy_cmd for command injection
+    if let Some(ref cmd) = body.pre_build_cmd {
+        if !cmd.trim().is_empty() {
+            super::is_safe_shell_command(cmd)
+                .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("pre_build_cmd: {e}")))?;
+        }
+    }
+    if let Some(ref cmd) = body.post_deploy_cmd {
+        if !cmd.trim().is_empty() {
+            super::is_safe_shell_command(cmd)
+                .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("post_deploy_cmd: {e}")))?;
+        }
+    }
+
+    // Validate build_context (prevent path traversal)
+    if build_context.contains("..") || build_context.starts_with('/') {
+        return Err(err(StatusCode::BAD_REQUEST, "build_context must not contain '..' or start with '/'"));
+    }
+
     // Cross-table domain uniqueness: check sites table
     if let Some(ref domain) = body.domain {
         if !domain.is_empty() {
@@ -350,6 +369,20 @@ pub async fn update(
 
     if existing.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Git deploy not found"));
+    }
+
+    // Validate commands for injection (same as create)
+    if let Some(ref cmd) = body.pre_build_cmd {
+        if !cmd.trim().is_empty() {
+            super::is_safe_shell_command(cmd)
+                .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("pre_build_cmd: {e}")))?;
+        }
+    }
+    if let Some(ref cmd) = body.post_deploy_cmd {
+        if !cmd.trim().is_empty() {
+            super::is_safe_shell_command(cmd)
+                .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("post_deploy_cmd: {e}")))?;
+        }
     }
 
     let env_vars = body.env_vars.as_ref().map(|e| serde_json::to_value(e).unwrap_or_default());

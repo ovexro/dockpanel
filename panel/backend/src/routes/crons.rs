@@ -125,13 +125,12 @@ pub async fn create(
 ) -> Result<(StatusCode, Json<Cron>), ApiError> {
     let domain = get_site_domain(&state, id, claims.sub).await?;
 
-    // Validate
+    // Validate command for injection
     if body.command.trim().is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "Command is required"));
     }
-    if body.command.contains('\0') || body.command.len() > 4096 {
-        return Err(err(StatusCode::BAD_REQUEST, "Invalid command"));
-    }
+    super::is_safe_shell_command(&body.command)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Cron command: {e}")))?;
     if body.schedule.trim().is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "Schedule is required"));
     }
@@ -188,10 +187,11 @@ pub async fn update(
         return Err(err(StatusCode::NOT_FOUND, "Cron job not found"));
     }
 
-    // Validate command if provided
+    // Validate command for injection if provided
     if let Some(ref command) = body.command {
-        if command.contains('\0') || command.len() > 4096 {
-            return Err(err(StatusCode::BAD_REQUEST, "Invalid command"));
+        if !command.trim().is_empty() {
+            super::is_safe_shell_command(command)
+                .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Cron command: {e}")))?;
         }
     }
 

@@ -1066,11 +1066,9 @@ pub async fn update_limits(
     }
 
     if let Some(ref custom) = body.custom_nginx {
-        if custom.len() > 10240 {
-            return Err(err(StatusCode::BAD_REQUEST, "Custom nginx directives must be under 10KB"));
-        }
-        if custom.contains('\0') {
-            return Err(err(StatusCode::BAD_REQUEST, "Custom nginx directives contain invalid characters"));
+        if !custom.is_empty() {
+            super::is_safe_nginx_config(custom)
+                .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
         }
     }
 

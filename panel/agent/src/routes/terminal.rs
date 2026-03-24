@@ -390,8 +390,21 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: Stri
 
     tracing::info!(target: "terminal_audit", user = %user_email, domain = %domain_str, "Terminal session started");
 
+    // Feature: Terminal session timeout (30 minutes default)
+    let session_timeout = Duration::from_secs(30 * 60);
+    let session_start = std::time::Instant::now();
+
     // Main loop: multiplex PTY output and WebSocket input
     loop {
+        // Check session timeout
+        if session_start.elapsed() > session_timeout {
+            let _ = socket.send(Message::Text(
+                "\r\n\x1b[1;33mSession timed out (30 minutes). Reconnect to continue.\x1b[0m\r\n".into()
+            )).await;
+            tracing::info!(target: "terminal_audit", user = %user_email, domain = %domain_str, "Terminal session timed out");
+            break;
+        }
+
         tokio::select! {
             // PTY output → WebSocket
             Some(data) = rx.recv() => {

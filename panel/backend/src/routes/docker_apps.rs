@@ -969,6 +969,10 @@ pub async fn compose_deploy(
         return Err(err(StatusCode::BAD_REQUEST, "YAML too large (max 64KB)"));
     }
 
+    // Validate Compose YAML for container escape vectors
+    super::validate_compose_yaml(yaml)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+
     let result = agent
         .post("/apps/compose/deploy", Some(serde_json::json!({ "yaml": yaml })))
         .await
