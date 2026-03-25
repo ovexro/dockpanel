@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://github.com/ovexro/dockpanel/releases"><img src="https://img.shields.io/github/v/release/ovexro/dockpanel" alt="Release"></a>
   <a href="https://github.com/ovexro/dockpanel/actions"><img src="https://img.shields.io/github/actions/workflow/status/ovexro/dockpanel/ci.yml?label=CI" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-BSL_1.1-blue.svg" alt="License: BSL 1.1"></a>
   <a href="https://demo.dockpanel.dev"><img src="https://img.shields.io/badge/demo-live-brightgreen" alt="Live Demo"></a>
 </p>
 
@@ -252,4 +252,4 @@ sudo bash /opt/dockpanel/scripts/uninstall.sh   # Remove
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Business Source License 1.1. Free to use on your own servers. See [LICENSE](LICENSE) for details.
