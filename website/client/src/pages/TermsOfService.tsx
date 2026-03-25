@@ -87,13 +87,6 @@ export default function TermsOfService() {
           </section>
 
           <section>
-            <h2 className="text-lg font-semibold text-white">Demo Service</h2>
-            <p className="mt-2">
-              A demo may be available upon request for evaluation purposes.
-            </p>
-          </section>
-
-          <section>
             <h2 className="text-lg font-semibold text-white">Support</h2>
             <p className="mt-2">
               Community support is available through{' '}
