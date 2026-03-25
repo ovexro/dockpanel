@@ -4,7 +4,7 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
-use tokio::process::Command;
+use crate::safe_cmd::safe_command;
 use std::path::Path;
 
 use super::AppState;
@@ -151,7 +151,7 @@ async fn mail_install() -> Result<Json<serde_json::Value>, ApiErr> {
     tracing::info!("Starting mail server installation...");
 
     // 1. Install packages
-    let output = Command::new("apt-get")
+    let output = safe_command("apt-get")
         .args(["-o", "Dpkg::Options::=--force-confnew", "install", "-y",
                "postfix", "dovecot-imapd", "dovecot-pop3d", "dovecot-lmtpd", "opendkim", "opendkim-tools"])
         .env("DEBIAN_FRONTEND", "noninteractive")
@@ -165,10 +165,10 @@ async fn mail_install() -> Result<Json<serde_json::Value>, ApiErr> {
     }
 
     // 2. Create vmail user (uid/gid 5000)
-    let _ = Command::new("groupadd").args(["-g", "5000", "vmail"]).output().await;
-    let _ = Command::new("useradd").args(["-g", "5000", "-u", "5000", "-d", VMAIL_DIR, "-s", "/usr/sbin/nologin", "-m", "vmail"]).output().await;
+    let _ = safe_command("groupadd").args(["-g", "5000", "vmail"]).output().await;
+    let _ = safe_command("useradd").args(["-g", "5000", "-u", "5000", "-d", VMAIL_DIR, "-s", "/usr/sbin/nologin", "-m", "vmail"]).output().await;
     tokio::fs::create_dir_all(VMAIL_DIR).await.ok();
-    let _ = Command::new("chown").args(["-R", "vmail:vmail", VMAIL_DIR]).output().await;
+    let _ = safe_command("chown").args(["-R", "vmail:vmail", VMAIL_DIR]).output().await;
 
     // 3. Create config directories
     tokio::fs::create_dir_all(DKIM_KEYS_DIR).await.ok();
@@ -270,8 +270,8 @@ ssl = required
     write_file_atomic(POSTFIX_VIRTUAL_MAILBOX, "").await.ok();
     write_file_atomic(POSTFIX_VIRTUAL_ALIAS, "").await.ok();
     write_file_atomic(DOVECOT_USERS, "").await.ok();
-    let _ = Command::new("postmap").arg(POSTFIX_VIRTUAL_MAILBOX).output().await;
-    let _ = Command::new("postmap").arg(POSTFIX_VIRTUAL_ALIAS).output().await;
+    let _ = safe_command("postmap").arg(POSTFIX_VIRTUAL_MAILBOX).output().await;
+    let _ = safe_command("postmap").arg(POSTFIX_VIRTUAL_ALIAS).output().await;
 
     // 8. Configure OpenDKIM
     let opendkim_conf = "Syslog yes\nUMask 007\nSocket local:/var/spool/postfix/opendkim/opendkim.sock\nPidFile /run/opendkim/opendkim.pid\nOversignHeaders From\nTrustAnchorFile /usr/share/dns/root.key\nKeyTable /etc/dockpanel/dkim/key.table\nSigningTable refile:/etc/dockpanel/dkim/signing.table\nExternalIgnoreList /etc/dockpanel/dkim/trusted.hosts\nInternalHosts /etc/dockpanel/dkim/trusted.hosts\n";
@@ -284,13 +284,13 @@ ssl = required
 
     // Create opendkim socket directory in Postfix chroot
     tokio::fs::create_dir_all("/var/spool/postfix/opendkim").await.ok();
-    let _ = Command::new("chown").args(["opendkim:postfix", "/var/spool/postfix/opendkim"]).output().await;
+    let _ = safe_command("chown").args(["opendkim:postfix", "/var/spool/postfix/opendkim"]).output().await;
 
     // 9. Enable and start services
-    let _ = Command::new("systemctl").args(["enable", "postfix", "dovecot", "opendkim"]).output().await;
-    let _ = Command::new("systemctl").args(["restart", "postfix"]).output().await;
-    let _ = Command::new("systemctl").args(["restart", "dovecot"]).output().await;
-    let _ = Command::new("systemctl").args(["restart", "opendkim"]).output().await;
+    let _ = safe_command("systemctl").args(["enable", "postfix", "dovecot", "opendkim"]).output().await;
+    let _ = safe_command("systemctl").args(["restart", "postfix"]).output().await;
+    let _ = safe_command("systemctl").args(["restart", "dovecot"]).output().await;
+    let _ = safe_command("systemctl").args(["restart", "opendkim"]).output().await;
 
     tracing::info!("Mail server installation complete");
 
@@ -298,7 +298,7 @@ ssl = required
 }
 
 async fn is_service_active(name: &str) -> bool {
-    Command::new("systemctl")
+    safe_command("systemctl")
         .args(["is-active", "--quiet", name])
         .output()
         .await
@@ -307,7 +307,7 @@ async fn is_service_active(name: &str) -> bool {
 }
 
 async fn is_installed(package: &str) -> bool {
-    Command::new("dpkg")
+    safe_command("dpkg")
         .args(["-l", package])
         .output()
         .await
@@ -345,7 +345,7 @@ async fn dkim_generate(
     let public_path = format!("{key_dir}/{selector}.public");
 
     // Generate RSA key pair
-    let output = Command::new("openssl")
+    let output = safe_command("openssl")
         .args(["genrsa", "-out", &private_path, "2048"])
         .output()
         .await
@@ -356,7 +356,7 @@ async fn dkim_generate(
     }
 
     // Extract public key
-    let output = Command::new("openssl")
+    let output = safe_command("openssl")
         .args(["rsa", "-in", &private_path, "-pubout", "-out", &public_path])
         .output()
         .await
@@ -373,8 +373,8 @@ async fn dkim_generate(
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to read public key: {e}")))?;
 
     // Set permissions
-    let _ = Command::new("chmod").args(["600", &private_path]).output().await;
-    let _ = Command::new("chown").args(["opendkim:opendkim", &private_path]).output().await;
+    let _ = safe_command("chmod").args(["600", &private_path]).output().await;
+    let _ = safe_command("chown").args(["opendkim:opendkim", &private_path]).output().await;
 
     tracing::info!("DKIM keys generated for {domain} (selector: {selector})");
 
@@ -403,7 +403,7 @@ async fn domain_configure(
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to create maildir: {e}")))?;
 
     // Set ownership to vmail user
-    let _ = Command::new("chown").args(["-R", "vmail:vmail", &maildir]).output().await;
+    let _ = safe_command("chown").args(["-R", "vmail:vmail", &maildir]).output().await;
 
     tracing::info!("Mail domain configured: {domain}");
     Ok(ok(&format!("Domain {domain} configured")))
@@ -518,12 +518,12 @@ async fn sync_config(
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write dovecot users: {e}")))?;
 
     // 5. Run postmap to rebuild hash tables
-    let _ = Command::new("postmap").arg(POSTFIX_VIRTUAL_MAILBOX).output().await;
-    let _ = Command::new("postmap").arg(POSTFIX_VIRTUAL_ALIAS).output().await;
+    let _ = safe_command("postmap").arg(POSTFIX_VIRTUAL_MAILBOX).output().await;
+    let _ = safe_command("postmap").arg(POSTFIX_VIRTUAL_ALIAS).output().await;
 
     // 6. Reload Postfix and Dovecot
-    let _ = Command::new("systemctl").args(["reload", "postfix"]).output().await;
-    let _ = Command::new("systemctl").args(["reload", "dovecot"]).output().await;
+    let _ = safe_command("systemctl").args(["reload", "postfix"]).output().await;
+    let _ = safe_command("systemctl").args(["reload", "dovecot"]).output().await;
 
     // 7. Create maildir directories for each account
     for acc in &body.accounts {
@@ -532,7 +532,7 @@ async fn sync_config(
         if parts.len() == 2 {
             let maildir = format!("{VMAIL_DIR}/{}/{}", parts[1], parts[0]);
             tokio::fs::create_dir_all(&maildir).await.ok();
-            let _ = Command::new("chown").args(["-R", "vmail:vmail", &maildir]).output().await;
+            let _ = safe_command("chown").args(["-R", "vmail:vmail", &maildir]).output().await;
         }
     }
 
@@ -545,7 +545,7 @@ async fn sync_config(
 // ── Mail queue management ───────────────────────────────────────────────
 
 async fn queue_list() -> Result<Json<serde_json::Value>, ApiErr> {
-    let output = Command::new("mailq")
+    let output = safe_command("mailq")
         .output()
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("mailq failed: {e}")))?;
@@ -627,7 +627,7 @@ async fn queue_list() -> Result<Json<serde_json::Value>, ApiErr> {
 }
 
 async fn queue_flush() -> Result<Json<serde_json::Value>, ApiErr> {
-    let output = Command::new("postqueue")
+    let output = safe_command("postqueue")
         .arg("-f")
         .output()
         .await
@@ -650,7 +650,7 @@ async fn queue_delete(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid queue ID format"));
     }
 
-    let output = Command::new("postsuper")
+    let output = safe_command("postsuper")
         .args(["-d", id])
         .output()
         .await
@@ -672,7 +672,7 @@ async fn rspamd_install() -> Result<Json<serde_json::Value>, ApiErr> {
     tracing::info!("Installing Rspamd spam filter...");
 
     // Install rspamd
-    let output = Command::new("apt-get")
+    let output = safe_command("apt-get")
         .args(["-o", "Dpkg::Options::=--force-confnew", "install", "-y", "rspamd", "redis-server"])
         .env("DEBIAN_FRONTEND", "noninteractive")
         .output().await
@@ -699,10 +699,10 @@ async fn rspamd_install() -> Result<Json<serde_json::Value>, ApiErr> {
     }
 
     // Enable and start
-    let _ = Command::new("systemctl").args(["enable", "rspamd", "redis-server"]).output().await;
-    let _ = Command::new("systemctl").args(["restart", "redis-server"]).output().await;
-    let _ = Command::new("systemctl").args(["restart", "rspamd"]).output().await;
-    let _ = Command::new("systemctl").args(["reload", "postfix"]).output().await;
+    let _ = safe_command("systemctl").args(["enable", "rspamd", "redis-server"]).output().await;
+    let _ = safe_command("systemctl").args(["restart", "redis-server"]).output().await;
+    let _ = safe_command("systemctl").args(["restart", "rspamd"]).output().await;
+    let _ = safe_command("systemctl").args(["reload", "postfix"]).output().await;
 
     tracing::info!("Rspamd installed and configured");
     Ok(ok("Rspamd spam filter installed"))
@@ -720,11 +720,11 @@ async fn rspamd_status() -> Json<serde_json::Value> {
 async fn rspamd_toggle(Json(body): Json<serde_json::Value>) -> Result<Json<serde_json::Value>, ApiErr> {
     let enable = body.get("enable").and_then(|v| v.as_bool()).unwrap_or(true);
     if enable {
-        let _ = Command::new("systemctl").args(["start", "rspamd"]).output().await;
-        let _ = Command::new("systemctl").args(["enable", "rspamd"]).output().await;
+        let _ = safe_command("systemctl").args(["start", "rspamd"]).output().await;
+        let _ = safe_command("systemctl").args(["enable", "rspamd"]).output().await;
     } else {
-        let _ = Command::new("systemctl").args(["stop", "rspamd"]).output().await;
-        let _ = Command::new("systemctl").args(["disable", "rspamd"]).output().await;
+        let _ = safe_command("systemctl").args(["stop", "rspamd"]).output().await;
+        let _ = safe_command("systemctl").args(["disable", "rspamd"]).output().await;
     }
     Ok(ok(if enable { "Rspamd enabled" } else { "Rspamd disabled" }))
 }
@@ -739,7 +739,7 @@ async fn webmail_install(Json(body): Json<serde_json::Value>) -> Result<Json<ser
     tracing::info!("Installing Roundcube webmail on port {port}...");
 
     // Run Roundcube as Docker container
-    let output = Command::new("docker")
+    let output = safe_command("docker")
         .args([
             "run", "-d",
             "--name", "dockpanel-roundcube",
@@ -761,7 +761,7 @@ async fn webmail_install(Json(body): Json<serde_json::Value>) -> Result<Json<ser
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         if stderr.contains("already in use") {
-            let _ = Command::new("docker").args(["rm", "-f", "dockpanel-roundcube"]).output().await;
+            let _ = safe_command("docker").args(["rm", "-f", "dockpanel-roundcube"]).output().await;
             return Err(err(StatusCode::CONFLICT, "Roundcube container already exists. Remove it first or restart."));
         }
         return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Roundcube deploy failed: {}", &stderr[..200.min(stderr.len())])));
@@ -773,13 +773,13 @@ async fn webmail_install(Json(body): Json<serde_json::Value>) -> Result<Json<ser
 
 /// GET /mail/webmail/status — Check if Roundcube is running.
 async fn webmail_status() -> Json<serde_json::Value> {
-    let output = Command::new("docker")
+    let output = safe_command("docker")
         .args(["inspect", "--format", "{{.State.Running}}", "dockpanel-roundcube"])
         .output().await;
     let running = output.map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true").unwrap_or(false);
 
     // Get port
-    let port_output = Command::new("docker")
+    let port_output = safe_command("docker")
         .args(["inspect", "--format", "{{range .NetworkSettings.Ports}}{{range .}}{{.HostPort}}{{end}}{{end}}", "dockpanel-roundcube"])
         .output().await;
     let port = port_output.ok().and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u16>().ok()).unwrap_or(0);
@@ -789,7 +789,7 @@ async fn webmail_status() -> Json<serde_json::Value> {
 
 /// POST /mail/webmail/remove — Remove Roundcube container.
 async fn webmail_remove() -> Result<Json<serde_json::Value>, ApiErr> {
-    let _ = Command::new("docker").args(["rm", "-f", "dockpanel-roundcube"]).output().await;
+    let _ = safe_command("docker").args(["rm", "-f", "dockpanel-roundcube"]).output().await;
     Ok(ok("Roundcube removed"))
 }
 
@@ -819,8 +819,8 @@ async fn relay_configure(Json(body): Json<RelayConfig>) -> Result<Json<serde_jso
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write sasl_passwd: {e}")))?;
 
     // Set permissions
-    let _ = Command::new("chmod").args(["600", "/etc/postfix/sasl_passwd"]).output().await;
-    let _ = Command::new("postmap").arg("/etc/postfix/sasl_passwd").output().await;
+    let _ = safe_command("chmod").args(["600", "/etc/postfix/sasl_passwd"]).output().await;
+    let _ = safe_command("postmap").arg("/etc/postfix/sasl_passwd").output().await;
 
     // Update Postfix main.cf
     let main_cf = tokio::fs::read_to_string("/etc/postfix/main.cf").await.unwrap_or_default();
@@ -838,7 +838,7 @@ async fn relay_configure(Json(body): Json<RelayConfig>) -> Result<Json<serde_jso
     write_file_atomic("/etc/postfix/main.cf", &format!("{cleaned}{relay_config}")).await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Config write failed: {e}")))?;
 
-    let _ = Command::new("systemctl").args(["reload", "postfix"]).output().await;
+    let _ = safe_command("systemctl").args(["reload", "postfix"]).output().await;
 
     tracing::info!("SMTP relay configured: [{}]:{}", body.host, body.port);
     Ok(ok("SMTP relay configured"))
@@ -869,7 +869,7 @@ async fn relay_remove() -> Result<Json<serde_json::Value>, ApiErr> {
 
     let _ = tokio::fs::remove_file("/etc/postfix/sasl_passwd").await;
     let _ = tokio::fs::remove_file("/etc/postfix/sasl_passwd.db").await;
-    let _ = Command::new("systemctl").args(["reload", "postfix"]).output().await;
+    let _ = safe_command("systemctl").args(["reload", "postfix"]).output().await;
 
     Ok(ok("SMTP relay removed"))
 }
@@ -879,7 +879,7 @@ async fn relay_remove() -> Result<Json<serde_json::Value>, ApiErr> {
 /// GET /mail/logs — Parse mail.log for recent activity and stats.
 async fn mail_logs() -> Result<Json<serde_json::Value>, ApiErr> {
     // Read last portion of mail.log (tail -5000 to avoid reading huge files)
-    let output = Command::new("tail")
+    let output = safe_command("tail")
         .args(["-n", "5000", "/var/log/mail.log"])
         .output().await;
     let content = output.ok()
@@ -942,7 +942,7 @@ async fn storage_usage() -> Result<Json<serde_json::Value>, ApiErr> {
             let user = user_entry.file_name().to_string_lossy().to_string();
 
             // Get directory size using du
-            let output = Command::new("du")
+            let output = safe_command("du")
                 .args(["-sb", &user_entry.path().to_string_lossy()])
                 .output().await;
 
@@ -992,7 +992,7 @@ async fn rate_limit_set(Json(body): Json<RateLimitRequest>) -> Result<Json<serde
     write_file_atomic("/etc/postfix/main.cf", &format!("{cleaned}{rate_config}")).await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Config write failed: {e}")))?;
 
-    let _ = Command::new("systemctl").args(["reload", "postfix"]).output().await;
+    let _ = safe_command("systemctl").args(["reload", "postfix"]).output().await;
 
     tracing::info!("Mail rate limit set: {} (delay: {}s)", body.rate, delay);
     Ok(ok(&format!("Rate limit set: {}", body.rate)))
@@ -1015,7 +1015,7 @@ async fn rate_limit_remove() -> Result<Json<serde_json::Value>, ApiErr> {
         .collect::<Vec<_>>().join("\n");
     write_file_atomic("/etc/postfix/main.cf", &cleaned).await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Config write failed: {e}")))?;
-    let _ = Command::new("systemctl").args(["reload", "postfix"]).output().await;
+    let _ = safe_command("systemctl").args(["reload", "postfix"]).output().await;
     Ok(ok("Rate limit removed"))
 }
 
@@ -1048,7 +1048,7 @@ async fn mailbox_backup(Json(body): Json<MailboxBackupRequest>) -> Result<Json<s
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(300),
-        Command::new("tar").args(["czf", &backup_file, "-C", &format!("/var/vmail/{domain}"), user]).output()
+        safe_command("tar").args(["czf", &backup_file, "-C", &format!("/var/vmail/{domain}"), user]).output()
     ).await
         .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Backup timed out"))?
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Backup failed: {e}")))?;
@@ -1084,7 +1084,7 @@ async fn mailbox_restore(Json(body): Json<serde_json::Value>) -> Result<Json<ser
     // Restore
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(300),
-        Command::new("tar").args(["xzf", backup_file, "-C", &maildir]).output()
+        safe_command("tar").args(["xzf", backup_file, "-C", &maildir]).output()
     ).await
         .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Restore timed out"))?
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Restore failed: {e}")))?;
@@ -1095,7 +1095,7 @@ async fn mailbox_restore(Json(body): Json<serde_json::Value>) -> Result<Json<ser
     }
 
     // Fix permissions
-    let _ = Command::new("chown").args(["-R", "vmail:vmail", &format!("{maildir}/{user}")]).output().await;
+    let _ = safe_command("chown").args(["-R", "vmail:vmail", &format!("{maildir}/{user}")]).output().await;
 
     tracing::info!("Mailbox restored: {email} from {backup_file}");
     Ok(ok(&format!("Mailbox {email} restored")))
@@ -1184,7 +1184,7 @@ async fn tls_enforce(Json(body): Json<serde_json::Value>) -> Result<Json<serde_j
     write_file_atomic("/etc/postfix/main.cf", &format!("{cleaned}{tls_config}")).await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Config write failed: {e}")))?;
 
-    let _ = Command::new("systemctl").args(["reload", "postfix"]).output().await;
+    let _ = safe_command("systemctl").args(["reload", "postfix"]).output().await;
 
     tracing::info!("TLS enforcement: inbound={inbound}, outbound={outbound}");
     Ok(ok(&format!("TLS: inbound={inbound}, outbound={outbound}")))

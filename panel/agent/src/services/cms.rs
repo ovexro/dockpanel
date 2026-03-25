@@ -1,12 +1,12 @@
 use std::process::Stdio;
-use tokio::process::Command;
+use crate::safe_cmd::safe_command;
 
 const COMPOSER: &str = "/usr/local/bin/composer";
 const SITE_ROOT: &str = "/var/www";
 
 /// Run a shell command, return stdout on success or stderr on failure.
 async fn run_cmd(program: &str, args: &[&str]) -> Result<String, String> {
-    let out = Command::new(program)
+    let out = safe_command(program)
         .args(args)
         .env("HOME", "/root")
         .env("COMPOSER_HOME", "/root/.composer")
@@ -27,7 +27,7 @@ async fn run_cmd(program: &str, args: &[&str]) -> Result<String, String> {
 
 /// Run a shell command in a specific working directory.
 async fn run_cmd_in(dir: &str, program: &str, args: &[&str]) -> Result<String, String> {
-    let out = Command::new(program)
+    let out = safe_command(program)
         .args(args)
         .current_dir(dir)
         .env("HOME", "/root")
@@ -65,7 +65,7 @@ fn validate_domain(domain: &str) -> Result<(), String> {
 
 /// Fix ownership to www-data for a site directory.
 async fn chown_site(path: &str) {
-    Command::new("chown")
+    safe_command("chown")
         .args(["-R", "www-data:www-data", path])
         .output()
         .await
@@ -77,7 +77,7 @@ pub async fn ensure_composer() -> Result<(), String> {
     if std::path::Path::new(COMPOSER).exists() {
         return Ok(());
     }
-    let out = Command::new("curl")
+    let out = safe_command("curl")
         .args([
             "-sS",
             "-L",
@@ -91,7 +91,7 @@ pub async fn ensure_composer() -> Result<(), String> {
     if !out.status.success() {
         return Err("Failed to download Composer".into());
     }
-    Command::new("chmod")
+    safe_command("chmod")
         .args(["+x", COMPOSER])
         .output()
         .await

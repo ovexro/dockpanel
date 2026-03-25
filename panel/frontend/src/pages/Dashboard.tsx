@@ -999,7 +999,7 @@ export default function Dashboard() {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-dark-600">
                 {bookmarks.map((bm, i) => (
                   <div key={i} className="bg-dark-800 px-3 py-2.5 flex items-center justify-between group">
-                    <a href={bm.url} className="text-xs text-dark-100 hover:text-rust-400 truncate">{bm.label}</a>
+                    <a href={/^(https?:\/\/|\/)/i.test(bm.url) ? bm.url : "#"} rel="noopener noreferrer" className="text-xs text-dark-100 hover:text-rust-400 truncate">{bm.label}</a>
                     <button onClick={() => {
                       const next = bookmarks.filter((_, j) => j !== i);
                       setBookmarks(next);

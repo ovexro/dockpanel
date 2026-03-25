@@ -1,3 +1,4 @@
+use crate::safe_cmd::safe_command;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -10,7 +11,7 @@ use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
-use crate::auth::{AdminUser, AuthUser, ServerScope};
+use crate::auth::{AdminUser, ServerScope};
 use crate::error::{err, agent_error, ApiError};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
@@ -50,10 +51,10 @@ pub async fn info(
     Ok(Json(data))
 }
 
-/// GET /api/agent/diagnostics — Proxy to agent's diagnostics (authenticated).
+/// GET /api/agent/diagnostics — Proxy to agent's diagnostics (admin only).
 pub async fn diagnostics(
     State(state): State<AppState>,
-    AuthUser(_claims): AuthUser,
+    AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let data = agent
@@ -181,7 +182,7 @@ pub async fn updates_apply(
             }
         }
 
-        let mut cmd = tokio::process::Command::new("apt-get");
+        let mut cmd = safe_command("apt-get");
         cmd.env("DEBIAN_FRONTEND", "noninteractive");
         if packages.is_empty() {
             cmd.args(["upgrade", "-y"]);
@@ -253,10 +254,10 @@ pub async fn updates_apply(
     }))))
 }
 
-/// GET /api/system/updates/count — Get count of available updates (any authenticated user).
+/// GET /api/system/updates/count — Get count of available updates (admin only).
 pub async fn updates_count(
     State(state): State<AppState>,
-    AuthUser(_claims): AuthUser,
+    AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let data = agent
@@ -592,10 +593,10 @@ pub async fn install_powerdns(
     }))))
 }
 
-/// GET /api/system/disk-io — Proxy to agent's disk I/O stats (authenticated).
+/// GET /api/system/disk-io — Proxy to agent's disk I/O stats (admin only).
 pub async fn disk_io(
     State(state): State<AppState>,
-    AuthUser(_claims): AuthUser,
+    AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let data = agent

@@ -1,4 +1,5 @@
 mod routes;
+pub mod safe_cmd;
 mod services;
 
 use axum::{middleware, Router};

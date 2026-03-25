@@ -1,7 +1,7 @@
 use axum::{routing::{get, post}, Json, Router};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tokio::process::Command;
+use crate::safe_cmd::safe_command;
 
 use super::AppState;
 
@@ -79,7 +79,7 @@ async fn list_updates() -> Json<Vec<PackageUpdate>> {
     // Run apt update first (suppress output, 60s timeout)
     let _ = tokio::time::timeout(
         Duration::from_secs(60),
-        Command::new("apt-get")
+        safe_command("apt-get")
             .args(["update", "-qq"])
             .env("DEBIAN_FRONTEND", "noninteractive")
             .output(),
@@ -89,7 +89,7 @@ async fn list_updates() -> Json<Vec<PackageUpdate>> {
     // Get upgradable list
     let output = tokio::time::timeout(
         Duration::from_secs(60),
-        Command::new("apt")
+        safe_command("apt")
             .args(["list", "--upgradable"])
             .stderr(std::process::Stdio::null())
             .output(),
@@ -147,7 +147,7 @@ async fn apply_updates(Json(body): Json<ApplyRequest>) -> Json<ApplyResult> {
 
         tokio::time::timeout(
             Duration::from_secs(300),
-            Command::new("apt-get")
+            safe_command("apt-get")
                 .args(&args)
                 .env("DEBIAN_FRONTEND", "noninteractive")
                 .output(),
@@ -156,7 +156,7 @@ async fn apply_updates(Json(body): Json<ApplyRequest>) -> Json<ApplyResult> {
     } else {
         tokio::time::timeout(
             Duration::from_secs(300),
-            Command::new("apt-get")
+            safe_command("apt-get")
                 .args(["upgrade", "-y"])
                 .env("DEBIAN_FRONTEND", "noninteractive")
                 .output(),
@@ -208,7 +208,7 @@ async fn apply_updates(Json(body): Json<ApplyRequest>) -> Json<ApplyResult> {
 
 /// GET /system/updates/count — quick count of available updates (no apt update).
 async fn update_count() -> Json<UpdateCount> {
-    let output = Command::new("apt")
+    let output = safe_command("apt")
         .args(["list", "--upgradable"])
         .stderr(std::process::Stdio::null())
         .output()
@@ -240,7 +240,7 @@ async fn update_count() -> Json<UpdateCount> {
 
 /// POST /system/reboot — schedule a system reboot in 1 minute.
 async fn system_reboot() -> Json<RebootResult> {
-    let result = Command::new("shutdown")
+    let result = safe_command("shutdown")
         .args(["-r", "+1", "DockPanel initiated reboot"])
         .output()
         .await;

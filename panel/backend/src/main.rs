@@ -4,9 +4,11 @@ pub mod error;
 pub mod helpers;
 mod models;
 mod routes;
+pub mod safe_cmd;
 mod services;
 
 use axum::{http::Method, Router};
+use chrono;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
@@ -43,6 +45,12 @@ pub struct AppState {
     pub oauth_states: Arc<Mutex<HashMap<String, (String, Instant)>>>,
     /// Broadcast channel for real-time panel notification delivery (SSE)
     pub notif_tx: tokio::sync::broadcast::Sender<(uuid::Uuid, String)>,
+    /// Cached `sessions_revoked_at` timestamp (epoch seconds).
+    /// Auth middleware rejects tokens with `iat` before this value.
+    /// Updated when admin calls revoke-all; avoids a DB query per request.
+    pub sessions_revoked_at: Arc<RwLock<Option<i64>>>,
+    /// Deploy ownership map: deploy_id -> user_id (for SSE log access control).
+    pub deploy_owners: Arc<Mutex<HashMap<uuid::Uuid, uuid::Uuid>>>,
 }
 
 #[tokio::main]
@@ -187,6 +195,20 @@ async fn main() {
         Arc::new(RwLock::new(bl))
     };
 
+    // Load sessions_revoked_at from settings table (survives restart)
+    let sessions_revoked_at = {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT value FROM settings WHERE key = 'sessions_revoked_at'"
+        ).fetch_optional(&db).await.ok().flatten();
+        let ts = row.and_then(|r| {
+            chrono::DateTime::parse_from_rfc3339(&r.0).ok().map(|dt| dt.timestamp())
+        });
+        if ts.is_some() {
+            tracing::info!("Loaded sessions_revoked_at from DB");
+        }
+        Arc::new(RwLock::new(ts))
+    };
+
     let state = AppState {
         db,
         config,
@@ -200,6 +222,8 @@ async fn main() {
         provision_logs: Arc::new(Mutex::new(HashMap::new())),
         oauth_states: Arc::new(Mutex::new(HashMap::new())),
         notif_tx,
+        sessions_revoked_at,
+        deploy_owners: Arc::new(Mutex::new(HashMap::new())),
     };
 
     // Shutdown broadcast channel — all background services listen for this signal
@@ -302,6 +326,7 @@ async fn main() {
     let cleanup_webhook = state.webhook_attempts.clone();
     let cleanup_agent_rl = state.agent_rate_limits.clone();
     let cleanup_provision = state.provision_logs.clone();
+    let cleanup_deploy_owners = state.deploy_owners.clone();
     let cleanup_oauth = state.oauth_states.clone();
     let mut cleanup_shutdown_rx = shutdown_tx.subscribe();
     tokio::spawn(async move {
@@ -349,7 +374,14 @@ async fn main() {
             }
             // Clean stale provisioning logs (older than 5 minutes)
             if let Ok(mut map) = cleanup_provision.lock() {
+                let before = map.len();
                 map.retain(|_, (_, _, created)| now.duration_since(*created) < Duration::from_secs(300));
+                // Also clean deploy_owners for removed entries
+                if map.len() < before {
+                    if let Ok(mut owners) = cleanup_deploy_owners.lock() {
+                        owners.retain(|id, _| map.contains_key(id));
+                    }
+                }
             }
             // Clean expired OAuth CSRF states (older than 10 minutes)
             if let Ok(mut map) = cleanup_oauth.lock() {

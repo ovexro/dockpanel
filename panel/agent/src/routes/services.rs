@@ -1,6 +1,6 @@
 use axum::{routing::get, Json, Router};
 use serde::Serialize;
-use tokio::process::Command;
+use crate::safe_cmd::safe_command;
 
 use super::AppState;
 
@@ -29,7 +29,7 @@ async fn check_services() -> Json<Vec<ServiceStatus>> {
     }
 
     // Also check for PHP-FPM version-specific services (php8.x-fpm)
-    if let Ok(output) = Command::new("sh")
+    if let Ok(output) = safe_command("sh")
         .args(["-c", "systemctl list-units --type=service --no-pager --plain 2>/dev/null | grep 'php.*fpm' | awk '{print $1}'"])
         .output()
         .await
@@ -48,7 +48,7 @@ async fn check_services() -> Json<Vec<ServiceStatus>> {
 
 async fn check_systemd_service(name: &str) -> ServiceStatus {
     // First check if the unit is enabled/loaded
-    let enabled = Command::new("systemctl")
+    let enabled = safe_command("systemctl")
         .args(["is-enabled", name])
         .output()
         .await;
@@ -84,7 +84,7 @@ async fn check_systemd_service(name: &str) -> ServiceStatus {
     }
 
     // Now check active status for enabled/static services
-    let output = Command::new("systemctl")
+    let output = safe_command("systemctl")
         .args(["is-active", name])
         .output()
         .await;

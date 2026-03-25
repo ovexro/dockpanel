@@ -1,5 +1,5 @@
 use std::path::Path;
-use tokio::process::Command;
+use crate::safe_cmd::safe_command;
 
 const WEB_ROOT: &str = "/var/www";
 
@@ -31,7 +31,7 @@ pub async fn clone_files(source_domain: &str, target_domain: &str) -> Result<Str
 
     // rsync -a preserves permissions, ownership, timestamps
     // --delete ensures target is an exact copy
-    let output = Command::new("rsync")
+    let output = safe_command("rsync")
         .args(["-a", "--delete", &source, &target])
         .output()
         .await
@@ -43,7 +43,7 @@ pub async fn clone_files(source_domain: &str, target_domain: &str) -> Result<Str
     }
 
     // Fix ownership to www-data
-    Command::new("chown")
+    safe_command("chown")
         .args(["-R", "www-data:www-data", &target])
         .output()
         .await
@@ -67,7 +67,7 @@ pub async fn sync_files(source_domain: &str, target_domain: &str) -> Result<Stri
         return Err(format!("Target directory not found: {target}"));
     }
 
-    let output = Command::new("rsync")
+    let output = safe_command("rsync")
         .args(["-a", "--delete", &source, &target])
         .output()
         .await
@@ -79,7 +79,7 @@ pub async fn sync_files(source_domain: &str, target_domain: &str) -> Result<Stri
     }
 
     // Fix ownership
-    Command::new("chown")
+    safe_command("chown")
         .args(["-R", "www-data:www-data", &target])
         .output()
         .await
@@ -96,7 +96,7 @@ pub async fn site_disk_usage(domain: &str) -> Result<u64, String> {
         return Ok(0);
     }
 
-    let output = Command::new("du")
+    let output = safe_command("du")
         .args(["-sb", &path])
         .output()
         .await

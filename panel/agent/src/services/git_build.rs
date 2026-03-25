@@ -7,7 +7,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use tera::Tera;
-use tokio::process::Command;
+use crate::safe_cmd::safe_command;
 
 const GIT_BASE_DIR: &str = "/var/lib/dockpanel/git";
 
@@ -47,7 +47,7 @@ pub async fn clone_or_pull(
 
     if std::path::Path::new(&git_dir).exists() {
         // Fetch from remote
-        let mut cmd = Command::new("git");
+        let mut cmd = safe_command("git");
         cmd.args(["-C", &repo_dir, "fetch", "origin", branch])
             .env("GIT_TERMINAL_PROMPT", "0");
         if let Some(ref ssh) = env_ssh {
@@ -68,7 +68,7 @@ pub async fn clone_or_pull(
         }
 
         // Reset to remote branch head
-        let reset = Command::new("git")
+        let reset = safe_command("git")
             .args(["-C", &repo_dir, "reset", "--hard", &format!("origin/{branch}")])
             .output()
             .await
@@ -85,7 +85,7 @@ pub async fn clone_or_pull(
         std::fs::create_dir_all(&repo_dir)
             .map_err(|e| format!("Failed to create repo dir: {e}"))?;
 
-        let mut cmd = Command::new("git");
+        let mut cmd = safe_command("git");
         cmd.args([
             "clone", "--branch", branch, "--single-branch", "--depth", "50",
             repo_url, &repo_dir,
@@ -114,7 +114,7 @@ pub async fn clone_or_pull(
     }
 
     // Get current commit hash
-    let hash_output = Command::new("git")
+    let hash_output = safe_command("git")
         .args(["-C", &repo_dir, "rev-parse", "--short", "HEAD"])
         .output()
         .await
@@ -127,7 +127,7 @@ pub async fn clone_or_pull(
     };
 
     // Get commit message
-    let msg_output = Command::new("git")
+    let msg_output = safe_command("git")
         .args(["-C", &repo_dir, "log", "-1", "--format=%s"])
         .output()
         .await
@@ -198,7 +198,7 @@ pub async fn build_image(
 
     let build = tokio::time::timeout(
         std::time::Duration::from_secs(600),
-        Command::new("docker")
+        safe_command("docker")
             .args(&cmd_args)
             .env("DOCKER_BUILDKIT", "1")
             .current_dir(&deploy_dir)
@@ -517,7 +517,7 @@ pub async fn prune_images(name: &str, keep: usize) -> Result<Vec<String>, String
     let image_prefix = format!("dockpanel-git-{name}");
 
     // List all images via CLI to get tags and creation times
-    let output = Command::new("docker")
+    let output = safe_command("docker")
         .args([
             "images",
             "--format", "{{.Repository}}:{{.Tag}} {{.CreatedAt}}",
@@ -566,7 +566,7 @@ pub async fn prune_images(name: &str, keep: usize) -> Result<Vec<String>, String
 
     if images.len() > keep {
         for (image_ref, _) in &images[keep..] {
-            let rm = Command::new("docker")
+            let rm = safe_command("docker")
                 .args(["rmi", image_ref])
                 .output()
                 .await;
@@ -1040,7 +1040,7 @@ pub async fn ensure_nixpacks() -> Option<String> {
     }
 
     // Check if already installed
-    let check = tokio::process::Command::new("which")
+    let check = safe_command("which")
         .arg("nixpacks")
         .output()
         .await;
@@ -1057,7 +1057,7 @@ pub async fn ensure_nixpacks() -> Option<String> {
     let arch = if cfg!(target_arch = "aarch64") { "aarch64" } else { "x86_64" };
 
     // Get latest release tag from GitHub API (no hardcoded version)
-    let tag_cmd = tokio::process::Command::new("sh")
+    let tag_cmd = safe_command("sh")
         .arg("-c")
         .arg("curl -sI https://github.com/railwayapp/nixpacks/releases/latest | grep -i '^location:' | sed 's|.*/tag/||' | tr -d '\\r\\n'")
         .output()
@@ -1075,7 +1075,7 @@ pub async fn ensure_nixpacks() -> Option<String> {
     );
     tracing::info!("Downloading nixpacks {version} from {url}");
 
-    let download = tokio::process::Command::new("sh")
+    let download = safe_command("sh")
         .arg("-c")
         .arg(format!(
             "curl -fsSL '{url}' | tar xz -C /tmp && mv /tmp/nixpacks /usr/local/bin/nixpacks && chmod +x /usr/local/bin/nixpacks"
@@ -1125,7 +1125,7 @@ pub async fn nixpacks_build(
     std::fs::create_dir_all(&cache_dir).ok();
 
     // Build nixpacks command
-    let mut cmd = tokio::process::Command::new(&nixpacks_bin);
+    let mut cmd = safe_command(&nixpacks_bin);
     cmd.arg("build")
         .arg(&context_dir)
         .arg("--name")
@@ -1160,7 +1160,7 @@ pub async fn nixpacks_build(
     }
 
     // Also tag as :latest
-    let _ = tokio::process::Command::new("docker")
+    let _ = safe_command("docker")
         .args(["tag", &image_tag, &format!("dockpanel-git-{name}:latest")])
         .output()
         .await;

@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use tokio::process::Command;
+use crate::safe_cmd::safe_command;
 
 use super::backups::BackupInfo;
 
@@ -36,7 +36,7 @@ pub async fn backup_volume(
     // Use a minimal alpine container to tar the volume contents
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(600),
-        Command::new("docker")
+        safe_command("docker")
             .args([
                 "run",
                 "--rm",
@@ -97,7 +97,7 @@ pub async fn restore_volume(
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(600),
-        Command::new("docker")
+        safe_command("docker")
             .args([
                 "run",
                 "--rm",

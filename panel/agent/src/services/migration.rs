@@ -1,6 +1,6 @@
 use serde::Serialize;
 use std::path::Path;
-use tokio::process::Command;
+use crate::safe_cmd::safe_command;
 
 const MIGRATION_DIR: &str = "/tmp/dockpanel-migration";
 
@@ -47,7 +47,7 @@ pub async fn analyze(backup_path: &str, source: &str) -> Result<MigrationInvento
 
     // Extract the backup
     tracing::info!("Extracting backup {backup_path} to {extract_dir}");
-    let output = Command::new("tar")
+    let output = safe_command("tar")
         .args(["xzf", backup_path, "-C", &extract_dir, "--no-same-owner"])
         .output()
         .await
@@ -56,7 +56,7 @@ pub async fn analyze(backup_path: &str, source: &str) -> Result<MigrationInvento
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         // Try without gzip (plain tar)
-        let output2 = Command::new("tar")
+        let output2 = safe_command("tar")
             .args(["xf", backup_path, "-C", &extract_dir, "--no-same-owner"])
             .output()
             .await
@@ -350,7 +350,7 @@ fn detect_runtime(dir: &Path) -> String {
 
 /// Get total size and file count of a directory
 async fn dir_stats(dir: &Path) -> (u64, u64) {
-    let output = Command::new("du")
+    let output = safe_command("du")
         .args(["-sb", &dir.to_string_lossy()])
         .output()
         .await
@@ -359,7 +359,7 @@ async fn dir_stats(dir: &Path) -> (u64, u64) {
         .and_then(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().next().map(|s| s.parse::<u64>().unwrap_or(0)))
         .unwrap_or(0);
 
-    let count_output = Command::new("find")
+    let count_output = safe_command("find")
         .args([&dir.to_string_lossy().to_string(), "-type", "f"])
         .output()
         .await
@@ -396,7 +396,7 @@ pub async fn import_site_files(migration_id: &str, domain: &str, source_dir: &st
     std::fs::create_dir_all(&dest).map_err(|e| format!("Failed to create {dest}: {e}"))?;
 
     // Copy files with rsync
-    let output = Command::new("rsync")
+    let output = safe_command("rsync")
         .args(["-a", "--delete", &format!("{source}/"), &format!("{dest}/")])
         .output()
         .await
@@ -404,7 +404,7 @@ pub async fn import_site_files(migration_id: &str, domain: &str, source_dir: &st
 
     if !output.status.success() {
         // Fall back to cp -a
-        let output2 = Command::new("cp")
+        let output2 = safe_command("cp")
             .args(["-a", &format!("{source}/."), &dest])
             .output()
             .await
@@ -415,7 +415,7 @@ pub async fn import_site_files(migration_id: &str, domain: &str, source_dir: &st
     }
 
     // Fix ownership
-    let _ = Command::new("chown")
+    let _ = safe_command("chown")
         .args(["-R", "www-data:www-data", &dest])
         .output()
         .await;
@@ -440,7 +440,7 @@ pub async fn import_database(migration_id: &str, sql_file: &str, container_name:
     // Decompress if .gz
     let actual_path = if sql_path.ends_with(".gz") {
         let decompressed = sql_path.trim_end_matches(".gz").to_string();
-        let output = Command::new("gunzip")
+        let output = safe_command("gunzip")
             .args(["-k", &sql_path])
             .output()
             .await
@@ -458,7 +458,7 @@ pub async fn import_database(migration_id: &str, sql_file: &str, container_name:
         .map_err(|e| format!("Failed to open SQL file: {e}"))?;
 
     let password_arg = format!("-p{}", password);
-    let mut cmd = Command::new("docker");
+    let mut cmd = safe_command("docker");
     cmd.arg("exec").arg("-i").arg(container_name);
 
     if engine == "mysql" || engine == "mariadb" {

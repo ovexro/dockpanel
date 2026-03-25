@@ -556,6 +556,11 @@ pub async fn deploy(
         let mut logs = state.provision_logs.lock().unwrap();
         logs.insert(deploy_id, (Vec::new(), tx, Instant::now()));
     }
+    // Record deploy ownership for SSE log access control
+    {
+        let mut owners = state.deploy_owners.lock().unwrap();
+        owners.insert(deploy_id, claims.sub);
+    }
 
     spawn_deploy_task(
         state,
@@ -576,9 +581,20 @@ pub async fn deploy(
 /// GET /api/git-deploys/deploy/{deploy_id}/log — SSE stream of deploy progress.
 pub async fn deploy_log(
     State(state): State<AppState>,
-    AuthUser(_claims): AuthUser,
+    AuthUser(claims): AuthUser,
     Path(deploy_id): Path<Uuid>,
 ) -> Result<Sse<impl futures::Stream<Item = Result<Event, axum::BoxError>>>, ApiError> {
+    // Verify the caller owns this deploy (or is admin)
+    {
+        let owners = state.deploy_owners.lock().unwrap();
+        if let Some(&owner_id) = owners.get(&deploy_id) {
+            if claims.sub != owner_id && claims.role != "admin" {
+                return Err(err(StatusCode::FORBIDDEN, "Access denied"));
+            }
+        }
+        // If not in owners map, fall through — the NOT_FOUND below handles missing deploys
+    }
+
     let (snapshot, rx) = {
         let logs = state.provision_logs.lock().unwrap();
         match logs.get(&deploy_id) {

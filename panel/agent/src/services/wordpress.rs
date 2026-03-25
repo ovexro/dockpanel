@@ -1,5 +1,5 @@
 use std::process::Stdio;
-use tokio::process::Command;
+use crate::safe_cmd::{safe_command, safe_command_sync};
 
 const WP_CLI: &str = "/usr/local/bin/wp";
 const WP_ROOT: &str = "/var/www";
@@ -17,7 +17,7 @@ pub async fn ensure_cli() -> Result<(), String> {
     if std::path::Path::new(WP_CLI).exists() {
         return Ok(());
     }
-    let out = Command::new("curl")
+    let out = safe_command("curl")
         .args([
             "-sS",
             "-L",
@@ -31,7 +31,7 @@ pub async fn ensure_cli() -> Result<(), String> {
     if !out.status.success() {
         return Err("Failed to download wp-cli".into());
     }
-    Command::new("chmod")
+    safe_command("chmod")
         .args(["+x", WP_CLI])
         .output()
         .await
@@ -43,7 +43,7 @@ pub async fn ensure_cli() -> Result<(), String> {
 async fn wp(domain: &str, args: &[&str]) -> Result<String, String> {
     ensure_cli().await?;
     let path = site_path(domain)?;
-    let out = Command::new(WP_CLI)
+    let out = safe_command(WP_CLI)
         .args(args)
         .arg("--allow-root")
         .arg(format!("--path={path}"))
@@ -106,7 +106,7 @@ pub async fn themes(domain: &str) -> Result<serde_json::Value, String> {
 pub async fn update_core(domain: &str) -> Result<String, String> {
     let result = wp(domain, &["core", "update"]).await?;
     // Fix ownership after update
-    Command::new("chown")
+    safe_command("chown")
         .args(["-R", "www-data:www-data", &site_path(domain)?])
         .output()
         .await
@@ -117,7 +117,7 @@ pub async fn update_core(domain: &str) -> Result<String, String> {
 /// Update all plugins.
 pub async fn update_all_plugins(domain: &str) -> Result<String, String> {
     let result = wp(domain, &["plugin", "update", "--all"]).await?;
-    Command::new("chown")
+    safe_command("chown")
         .args(["-R", "www-data:www-data", &site_path(domain)?])
         .output()
         .await
@@ -128,7 +128,7 @@ pub async fn update_all_plugins(domain: &str) -> Result<String, String> {
 /// Update all themes.
 pub async fn update_all_themes(domain: &str) -> Result<String, String> {
     let result = wp(domain, &["theme", "update", "--all"]).await?;
-    Command::new("chown")
+    safe_command("chown")
         .args(["-R", "www-data:www-data", &site_path(domain)?])
         .output()
         .await
@@ -146,7 +146,7 @@ pub async fn plugin_action(domain: &str, name: &str, action: &str) -> Result<Str
         _ => return Err(format!("Unknown action: {action}")),
     };
     if matches!(action, "install" | "update") {
-        Command::new("chown")
+        safe_command("chown")
             .args(["-R", "www-data:www-data", &site_path(domain)?])
             .output()
             .await
@@ -163,7 +163,7 @@ pub async fn theme_action(domain: &str, name: &str, action: &str) -> Result<Stri
         _ => return Err(format!("Unknown action: {action}")),
     };
     if matches!(action, "install" | "update") {
-        Command::new("chown")
+        safe_command("chown")
             .args(["-R", "www-data:www-data", &site_path(domain)?])
             .output()
             .await
@@ -197,7 +197,7 @@ pub async fn install(
     wp(domain, &["core", "download", "--force"]).await?;
 
     // Create wp-config.php
-    let out = Command::new(WP_CLI)
+    let out = safe_command(WP_CLI)
         .args([
             "config",
             "create",
@@ -222,7 +222,7 @@ pub async fn install(
     }
 
     // Install WordPress
-    let out = Command::new(WP_CLI)
+    let out = safe_command(WP_CLI)
         .args([
             "core",
             "install",
@@ -248,7 +248,7 @@ pub async fn install(
     }
 
     // Fix ownership
-    Command::new("chown")
+    safe_command("chown")
         .args(["-R", "www-data:www-data", &path])
         .output()
         .await
@@ -269,7 +269,7 @@ pub async fn set_auto_update(domain: &str, enabled: bool) -> Result<(), String> 
     );
 
     // Get current crontab
-    let current = Command::new("crontab")
+    let current = safe_command("crontab")
         .args(["-l", "-u", "root"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -295,7 +295,7 @@ pub async fn set_auto_update(domain: &str, enabled: bool) -> Result<(), String> 
     }
 
     // Write crontab via stdin pipe
-    let mut child = Command::new("crontab")
+    let mut child = safe_command("crontab")
         .args(["-u", "root", "-"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -328,7 +328,7 @@ pub async fn set_auto_update(domain: &str, enabled: bool) -> Result<(), String> 
 /// Check if auto-update cron is enabled for a domain.
 pub fn is_auto_update_enabled(domain: &str) -> bool {
     let marker = format!("wp-auto-update-{domain}");
-    std::process::Command::new("crontab")
+    safe_command_sync("crontab")
         .args(["-l", "-u", "root"])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).contains(&marker))

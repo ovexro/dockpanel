@@ -2,7 +2,7 @@
 //!
 //! Creates a per-site systemd service that runs the app, proxied by nginx.
 
-use std::process::Command;
+use crate::safe_cmd::safe_command_sync;
 
 use super::command_filter;
 
@@ -115,18 +115,18 @@ WantedBy=multi-user.target
     // Create working directory if it doesn't exist
     std::fs::create_dir_all(&working_dir).ok();
     // Set ownership
-    Command::new("chown")
+    safe_command_sync("chown")
         .args(["-R", "www-data:www-data", &format!("/var/www/{domain}")])
         .output()
         .ok();
 
     // Reload systemd and enable+start the service
-    Command::new("systemctl")
+    safe_command_sync("systemctl")
         .args(["daemon-reload"])
         .output()
         .map_err(|e| format!("daemon-reload failed: {e}"))?;
 
-    Command::new("systemctl")
+    safe_command_sync("systemctl")
         .args(["enable", "--now", &svc])
         .output()
         .map_err(|e| format!("Failed to start service: {e}"))?;
@@ -145,11 +145,11 @@ pub fn remove_app_service(domain: &str) -> Result<(), String> {
     }
 
     // Stop and disable
-    Command::new("systemctl")
+    safe_command_sync("systemctl")
         .args(["stop", &svc])
         .output()
         .ok();
-    Command::new("systemctl")
+    safe_command_sync("systemctl")
         .args(["disable", &svc])
         .output()
         .ok();
@@ -158,7 +158,7 @@ pub fn remove_app_service(domain: &str) -> Result<(), String> {
     std::fs::remove_file(&unit_path).ok();
 
     // Reload systemd
-    Command::new("systemctl")
+    safe_command_sync("systemctl")
         .args(["daemon-reload"])
         .output()
         .ok();
@@ -170,7 +170,7 @@ pub fn remove_app_service(domain: &str) -> Result<(), String> {
 /// Restart the app service.
 pub fn restart_app_service(domain: &str) -> Result<(), String> {
     let svc = service_name(domain);
-    let output = Command::new("systemctl")
+    let output = safe_command_sync("systemctl")
         .args(["restart", &svc])
         .output()
         .map_err(|e| format!("Failed to restart {svc}: {e}"))?;
@@ -186,7 +186,7 @@ pub fn restart_app_service(domain: &str) -> Result<(), String> {
 /// Get the status of an app service.
 pub fn app_service_status(domain: &str) -> String {
     let svc = service_name(domain);
-    let output = Command::new("systemctl")
+    let output = safe_command_sync("systemctl")
         .args(["is-active", &svc])
         .output();
 

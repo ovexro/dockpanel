@@ -193,16 +193,17 @@ export default function Settings() {
     return () => clearInterval(healthTimer.current);
   }, []);
 
-  // Safely render QR SVG without dangerouslySetInnerHTML
+  // Render QR SVG safely as a data URI image (sandboxes any embedded scripts)
   useEffect(() => {
     if (qrRef.current && twoFaSetup?.qr_svg) {
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(twoFaSetup.qr_svg, "image/svg+xml");
-      const svg = doc.querySelector("svg");
-      if (svg) {
-        qrRef.current.innerHTML = "";
-        qrRef.current.appendChild(svg);
-      }
+      const encoded = btoa(unescape(encodeURIComponent(twoFaSetup.qr_svg)));
+      qrRef.current.innerHTML = "";
+      const img = document.createElement("img");
+      img.src = `data:image/svg+xml;base64,${encoded}`;
+      img.alt = "2FA QR Code";
+      img.width = 200;
+      img.height = 200;
+      qrRef.current.appendChild(img);
     }
   }, [twoFaSetup?.qr_svg]);
 

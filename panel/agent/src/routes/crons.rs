@@ -1,3 +1,4 @@
+use crate::safe_cmd::safe_command;
 use axum::{
     extract::{Path, Json as AxumJson},
     http::StatusCode,
@@ -95,7 +96,7 @@ async fn run_cron(
         return Err(err(StatusCode::BAD_REQUEST, "Command contains disallowed characters or patterns"));
     }
 
-    let output = tokio::process::Command::new("bash")
+    let output = safe_command("bash")
         .arg("-c")
         .arg(&body.command)
         .output()
@@ -172,7 +173,7 @@ async fn remove_cron(
 
 /// Read the current root crontab.
 async fn read_crontab() -> String {
-    let output = tokio::process::Command::new("crontab")
+    let output = safe_command("crontab")
         .arg("-l")
         .output()
         .await;
@@ -188,7 +189,7 @@ async fn write_crontab(content: &str) -> Result<(), String> {
     use tokio::io::AsyncWriteExt;
     use std::time::Duration;
 
-    let mut child = tokio::process::Command::new("crontab")
+    let mut child = safe_command("crontab")
         .arg("-")
         .stdin(std::process::Stdio::piped())
         .spawn()

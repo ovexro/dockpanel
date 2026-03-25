@@ -1,3 +1,4 @@
+use crate::safe_cmd::safe_command;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -1233,7 +1234,7 @@ pub async fn dns_check(
     let mut checks = Vec::new();
 
     // MX record
-    let mx_result = tokio::process::Command::new("dig")
+    let mx_result = safe_command("dig")
         .args(["+short", "MX", &domain])
         .output().await;
     let mx_value = mx_result.ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
@@ -1244,7 +1245,7 @@ pub async fn dns_check(
     }));
 
     // SPF (TXT record containing v=spf1)
-    let spf_result = tokio::process::Command::new("dig")
+    let spf_result = safe_command("dig")
         .args(["+short", "TXT", &domain])
         .output().await;
     let spf_raw = spf_result.ok().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
@@ -1257,7 +1258,7 @@ pub async fn dns_check(
 
     // DKIM (TXT record at selector._domainkey.domain)
     let dkim_host = format!("{selector}._domainkey.{domain}");
-    let dkim_result = tokio::process::Command::new("dig")
+    let dkim_result = safe_command("dig")
         .args(["+short", "TXT", &dkim_host])
         .output().await;
     let dkim_raw = dkim_result.ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
@@ -1271,7 +1272,7 @@ pub async fn dns_check(
 
     // DMARC (TXT record at _dmarc.domain)
     let dmarc_host = format!("_dmarc.{domain}");
-    let dmarc_result = tokio::process::Command::new("dig")
+    let dmarc_result = safe_command("dig")
         .args(["+short", "TXT", &dmarc_host])
         .output().await;
     let dmarc_raw = dmarc_result.ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();

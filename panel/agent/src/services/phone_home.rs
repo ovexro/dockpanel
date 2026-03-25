@@ -1,3 +1,4 @@
+use crate::safe_cmd::safe_command;
 use sysinfo::System;
 use std::time::Duration;
 
@@ -284,7 +285,7 @@ async fn auto_update_loop(config: PhoneHomeConfig) {
             Ok(true) => {
                 tracing::info!("Agent updated, restarting via systemd...");
                 // Restart self via systemd
-                let _ = tokio::process::Command::new("systemctl")
+                let _ = safe_command("systemctl")
                     .args(["restart", "dockpanel-agent"])
                     .status()
                     .await;

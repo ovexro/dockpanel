@@ -1,3 +1,4 @@
+use crate::safe_cmd::safe_command;
 use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
     StartContainerOptions, StopContainerOptions,
@@ -253,7 +254,7 @@ pub async fn execute_query(
         "mysql" | "mariadb" => {
             tokio::time::timeout(
                 std::time::Duration::from_secs(QUERY_TIMEOUT_SECS),
-                tokio::process::Command::new("docker")
+                safe_command("docker")
                     .arg("exec")
                     .arg("-e")
                     .arg(format!("MYSQL_PWD={password}"))
@@ -273,7 +274,7 @@ pub async fn execute_query(
         _ => {
             tokio::time::timeout(
                 std::time::Duration::from_secs(QUERY_TIMEOUT_SECS),
-                tokio::process::Command::new("docker")
+                safe_command("docker")
                     .arg("exec")
                     .arg("-e")
                     .arg(format!("PGPASSWORD={password}"))

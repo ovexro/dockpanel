@@ -1,7 +1,7 @@
 use crate::routes::nginx::SiteConfig;
 use std::sync::Arc;
 use tera::{Context, Tera};
-use tokio::process::Command;
+use crate::safe_cmd::safe_command;
 
 pub struct CmdOutput {
     pub success: bool,
@@ -310,7 +310,7 @@ php_admin_value[max_execution_time] = 300
 /// Reload PHP-FPM for a given version.
 pub async fn reload_php_fpm(php_version: &str) -> Result<(), String> {
     let service = format!("php{php_version}-fpm");
-    let output = Command::new("systemctl")
+    let output = safe_command("systemctl")
         .args(["reload", &service])
         .output()
         .await
@@ -331,7 +331,7 @@ pub async fn reload_php_fpm(php_version: &str) -> Result<(), String> {
 pub async fn test_config() -> Result<CmdOutput, std::io::Error> {
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        Command::new("nginx").arg("-t").output(),
+        safe_command("nginx").arg("-t").output(),
     )
     .await
     .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "nginx -t timed out"))??;
@@ -347,7 +347,7 @@ pub async fn test_config() -> Result<CmdOutput, std::io::Error> {
 pub async fn reload() -> Result<(), String> {
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        Command::new("nginx").args(["-s", "reload"]).output(),
+        safe_command("nginx").args(["-s", "reload"]).output(),
     )
     .await
     .map_err(|_| "Nginx reload timed out".to_string())?

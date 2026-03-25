@@ -1,6 +1,6 @@
 use std::path::Path;
 use std::time::Instant;
-use tokio::process::Command;
+use crate::safe_cmd::{safe_command, safe_command_sync};
 
 const WEBROOT: &str = "/var/www";
 const DEPLOY_KEYS_DIR: &str = "/etc/dockpanel/deploy-keys";
@@ -65,7 +65,7 @@ pub async fn clone_or_pull(
 
     if Path::new(&git_dir).exists() {
         // Git pull (fetch + reset to match remote)
-        let mut cmd = Command::new("git");
+        let mut cmd = safe_command("git");
         cmd.args(["-C", &site_dir, "fetch", "origin", branch])
             .env("GIT_TERMINAL_PROMPT", "0");
         if let Some(ref ssh) = env_ssh {
@@ -93,7 +93,7 @@ pub async fn clone_or_pull(
         }
 
         // Reset to remote branch
-        let reset = Command::new("git")
+        let reset = safe_command("git")
             .args(["-C", &site_dir, "reset", "--hard", &format!("origin/{branch}")])
             .output()
             .await
@@ -106,7 +106,7 @@ pub async fn clone_or_pull(
         std::fs::create_dir_all(&site_dir)
             .map_err(|e| format!("Failed to create site dir: {e}"))?;
 
-        let mut cmd = Command::new("git");
+        let mut cmd = safe_command("git");
         cmd.args(["clone", "--branch", branch, "--single-branch", "--depth", "50", repo_url, &site_dir])
             .env("GIT_TERMINAL_PROMPT", "0");
         if let Some(ref ssh) = env_ssh {
@@ -135,7 +135,7 @@ pub async fn clone_or_pull(
     }
 
     // Get current commit hash
-    let hash = Command::new("git")
+    let hash = safe_command("git")
         .args(["-C", &site_dir, "rev-parse", "--short", "HEAD"])
         .output()
         .await
@@ -198,7 +198,7 @@ pub async fn run_script(domain: &str, script: &str) -> Result<(bool, String), St
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(300),
-        Command::new("bash")
+        safe_command("bash")
             .arg(&script_str)
             .current_dir(&site_dir)
             .env("HOME", &site_dir)
@@ -238,7 +238,7 @@ pub fn generate_deploy_key(domain: &str) -> Result<(String, String), String> {
     let _ = std::fs::remove_file(&pub_path);
 
     // Generate key
-    let output = std::process::Command::new("ssh-keygen")
+    let output = safe_command_sync("ssh-keygen")
         .args([
             "-t", "ed25519",
             "-f", &key_path,

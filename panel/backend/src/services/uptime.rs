@@ -1,3 +1,4 @@
+use crate::safe_cmd::safe_command;
 use sqlx::PgPool;
 use std::time::{Duration, Instant};
 
@@ -257,7 +258,7 @@ async fn check_ping(monitor: &MonitorRow) -> (Option<i32>, Option<String>, &'sta
 
     let output = tokio::time::timeout(
         Duration::from_secs(10),
-        tokio::process::Command::new("ping")
+        safe_command("ping")
             .args(["-c", "1", "-W", "5", host])
             .output()
     ).await;

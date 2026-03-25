@@ -1,3 +1,4 @@
+use crate::safe_cmd::safe_command;
 use axum::{
     extract::Path,
     http::StatusCode,
@@ -185,7 +186,7 @@ async fn kill_terminals() -> Json<serde_json::Value> {
     let killed = super::terminal::ACTIVE_TERMINALS.swap(0, std::sync::atomic::Ordering::SeqCst);
 
     // Kill all PTY child processes owned by www-data (site terminals)
-    let _ = tokio::process::Command::new("pkill")
+    let _ = safe_command("pkill")
         .args(["-u", "www-data", "-f", "bash"])
         .output().await;
 
@@ -195,38 +196,38 @@ async fn kill_terminals() -> Json<serde_json::Value> {
 
 /// GET /security/forensic-snapshot — Capture system state for forensics (Feature 10).
 async fn forensic_snapshot() -> Result<Json<serde_json::Value>, ApiErr> {
-    use tokio::process::Command;
+    use crate::safe_cmd::safe_command;
 
     let ts = chrono::Utc::now().format("%Y%m%d_%H%M%S");
     let dir = format!("/var/lib/dockpanel/forensics/snapshot-{ts}");
     let _ = std::fs::create_dir_all(&dir);
 
     // Capture running processes
-    let ps = Command::new("ps").args(["auxf"]).output().await.ok()
+    let ps = safe_command("ps").args(["auxf"]).output().await.ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
     let _ = std::fs::write(format!("{dir}/processes.txt"), &ps);
 
     // Capture network connections
-    let ss = Command::new("ss").args(["-tulnp"]).output().await.ok()
+    let ss = safe_command("ss").args(["-tulnp"]).output().await.ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
     let _ = std::fs::write(format!("{dir}/network.txt"), &ss);
 
     // Capture established connections
-    let ss_est = Command::new("ss").args(["-tnp"]).output().await.ok()
+    let ss_est = safe_command("ss").args(["-tnp"]).output().await.ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
     let _ = std::fs::write(format!("{dir}/connections.txt"), &ss_est);
 
     // Capture open files
-    let lsof = Command::new("lsof").args(["-nP", "+L1"]).output().await.ok()
+    let lsof = safe_command("lsof").args(["-nP", "+L1"]).output().await.ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
     let _ = std::fs::write(format!("{dir}/open_files.txt"), &lsof);
 
     // Capture recent journal
-    let journal = Command::new("journalctl")
+    let journal = safe_command("journalctl")
         .args(["--since", "1 hour ago", "--no-pager", "-q"])
         .output().await.ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
@@ -234,13 +235,13 @@ async fn forensic_snapshot() -> Result<Json<serde_json::Value>, ApiErr> {
     let _ = std::fs::write(format!("{dir}/journal.txt"), &journal);
 
     // Capture who is logged in
-    let who = Command::new("who").output().await.ok()
+    let who = safe_command("who").output().await.ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
     let _ = std::fs::write(format!("{dir}/who.txt"), &who);
 
     // Capture last logins
-    let last = Command::new("last").args(["-20"]).output().await.ok()
+    let last = safe_command("last").args(["-20"]).output().await.ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
     let _ = std::fs::write(format!("{dir}/last.txt"), &last);
@@ -266,7 +267,7 @@ async fn forensic_snapshot() -> Result<Json<serde_json::Value>, ApiErr> {
 
 /// POST /security/db-backup — Backup DockPanel's own PostgreSQL database (Feature 2).
 async fn db_backup() -> Result<Json<serde_json::Value>, ApiErr> {
-    use tokio::process::Command;
+    use crate::safe_cmd::safe_command;
 
     let backup_dir = "/var/backups/dockpanel";
     let _ = std::fs::create_dir_all(backup_dir);
@@ -275,7 +276,7 @@ async fn db_backup() -> Result<Json<serde_json::Value>, ApiErr> {
     let filename = format!("{backup_dir}/dockpanel-db-{ts}.sql.gz");
 
     // pg_dump via Docker exec, piped to gzip
-    let output = Command::new("sh")
+    let output = safe_command("sh")
         .args(["-c", &format!(
             "docker exec dockpanel-postgres pg_dump -U dockpanel dockpanel | gzip > {filename}"
         )])
@@ -312,13 +313,13 @@ async fn db_backup() -> Result<Json<serde_json::Value>, ApiErr> {
 
 /// POST /security/init — Initialize all security hardening features (called once after deploy).
 async fn security_init() -> Result<Json<serde_json::Value>, ApiErr> {
-    use tokio::process::Command;
+    use crate::safe_cmd::safe_command;
 
     let mut results = Vec::new();
 
     // Set chattr +a on audit directory
     let _ = std::fs::create_dir_all("/var/lib/dockpanel/audit");
-    let chattr = Command::new("chattr").args(["+a", "/var/lib/dockpanel/audit/"]).output().await;
+    let chattr = safe_command("chattr").args(["+a", "/var/lib/dockpanel/audit/"]).output().await;
     results.push(serde_json::json!({
         "action": "chattr +a /var/lib/dockpanel/audit/",
         "success": chattr.map(|o| o.status.success()).unwrap_or(false),

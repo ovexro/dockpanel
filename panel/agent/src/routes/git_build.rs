@@ -1,3 +1,4 @@
+use crate::safe_cmd::safe_command;
 use axum::{
     extract::State,
     http::StatusCode,
@@ -359,7 +360,7 @@ async fn run_hook(Json(body): Json<HookRequest>) -> Result<Json<serde_json::Valu
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(300),
-        tokio::process::Command::new("docker")
+        safe_command("docker")
             .args(["exec", &container_name, "sh", "-c", &body.command])
             .output()
     ).await
@@ -401,7 +402,7 @@ async fn pre_build_hook(Json(body): Json<PreBuildHookRequest>) -> Result<Json<se
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(300),
-        tokio::process::Command::new("sh")
+        safe_command("sh")
             .args(["-c", &body.command])
             .current_dir(&git_dir)
             .env("HOME", &git_dir)

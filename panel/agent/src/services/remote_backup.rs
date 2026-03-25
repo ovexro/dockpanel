@@ -1,5 +1,5 @@
 use std::path::Path;
-use tokio::process::Command;
+use crate::safe_cmd::safe_command;
 
 /// Upload a backup file to S3-compatible storage using curl --aws-sigv4.
 pub async fn upload_s3(
@@ -39,7 +39,7 @@ pub async fn upload_s3(
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(600),
-        Command::new("curl")
+        safe_command("curl")
             .args([
                 "--aws-sigv4",
                 &format!("aws:amz:{region}:s3"),
@@ -138,7 +138,7 @@ pub async fn upload_sftp(
         ("scp".to_string(), cmd_args, None)
     };
 
-    let mut cmd = Command::new(&program);
+    let mut cmd = safe_command(&program);
     cmd.args(&final_args);
     if let Some(ref pw) = sshpass_env {
         cmd.env("SSHPASS", pw);
@@ -180,7 +180,7 @@ pub async fn test_s3(
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(15),
-        Command::new("curl")
+        safe_command("curl")
             .args([
                 "--aws-sigv4",
                 &format!("aws:amz:{region}:s3"),
@@ -251,7 +251,7 @@ pub async fn test_sftp(
         ("ssh".to_string(), cmd_args, None)
     };
 
-    let mut cmd = Command::new(&program);
+    let mut cmd = safe_command(&program);
     cmd.args(&final_args);
     if let Some(ref pw) = sshpass_env {
         cmd.env("SSHPASS", pw);
@@ -297,7 +297,7 @@ pub async fn list_s3(
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        Command::new("curl")
+        safe_command("curl")
             .args([
                 "--aws-sigv4",
                 &format!("aws:amz:{region}:s3"),
@@ -356,7 +356,7 @@ pub async fn delete_s3(
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(15),
-        Command::new("curl")
+        safe_command("curl")
             .args([
                 "--aws-sigv4",
                 &format!("aws:amz:{region}:s3"),

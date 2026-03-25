@@ -1,3 +1,4 @@
+use crate::safe_cmd::safe_command;
 use chrono::Datelike;
 use sqlx::PgPool;
 use std::time::Duration;
@@ -887,7 +888,7 @@ async fn run_retention_cleanup(pool: &PgPool) {
     // DB auto-backup: done via direct pg_dump (doesn't need agent client)
     if super::security_hardening::get_setting_bool(pool, "security_db_backup_enabled", true).await {
         tracing::info!("Triggering DockPanel DB auto-backup...");
-        match tokio::process::Command::new("sh")
+        match safe_command("sh")
             .args(["-c", &format!(
                 "docker exec dockpanel-postgres pg_dump -U dockpanel dockpanel | gzip > /var/backups/dockpanel/dockpanel-db-{}.sql.gz",
                 chrono::Utc::now().format("%Y%m%d_%H%M%S")

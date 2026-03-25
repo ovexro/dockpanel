@@ -1,5 +1,5 @@
 use std::path::Path;
-use tokio::process::Command;
+use crate::safe_cmd::safe_command;
 
 /// Resolve a log type string to the corresponding file path.
 /// Validates domain names to prevent path traversal.
@@ -77,7 +77,7 @@ pub async fn read_log(
     // Use tail to read last N lines
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        Command::new("tail")
+        safe_command("tail")
             .args(["-n", &lines.to_string(), &path])
             .output(),
     )
@@ -137,7 +137,7 @@ pub async fn search_log(
     // Fixed-string matching eliminates ReDoS risk from user-supplied patterns.
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(15),
-        Command::new("grep")
+        safe_command("grep")
             .args([
                 "-iF",
                 pattern,

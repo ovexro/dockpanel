@@ -1,3 +1,4 @@
+use crate::safe_cmd::safe_command;
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
@@ -695,7 +696,7 @@ pub async fn create(
                         // Wait for MariaDB to be fully ready (TCP connects before MySQL is ready)
                         for _attempt in 1..=20 {
                             tokio::time::sleep(Duration::from_secs(2)).await;
-                            let php_check = tokio::process::Command::new("php")
+                            let php_check = safe_command("php")
                                 .args(["-r", &format!(
                                     "try {{ new PDO('mysql:host={db_host};dbname={db_name}', '{db_user_name}', '{db_password}'); echo 'OK'; }} catch(Exception $e) {{ echo 'FAIL'; }}"
                                 )])

@@ -1,3 +1,4 @@
+use crate::safe_cmd::safe_command;
 use axum::{extract::State, routing::get, Json, Router};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -253,27 +254,27 @@ async fn disk_cleanup() -> Json<serde_json::Value> {
     let mut freed = Vec::new();
 
     // 1. apt cache
-    if tokio::process::Command::new("apt-get").args(["clean"]).output().await.is_ok() {
+    if safe_command("apt-get").args(["clean"]).output().await.is_ok() {
         freed.push("apt cache");
     }
 
     // 2. journal logs older than 3 days
-    if tokio::process::Command::new("journalctl").args(["--vacuum-time=3d"]).output().await.is_ok() {
+    if safe_command("journalctl").args(["--vacuum-time=3d"]).output().await.is_ok() {
         freed.push("old journal logs");
     }
 
     // 3. tmp files older than 7 days
-    if tokio::process::Command::new("find").args(["/tmp", "-type", "f", "-mtime", "+7", "-delete"]).output().await.is_ok() {
+    if safe_command("find").args(["/tmp", "-type", "f", "-mtime", "+7", "-delete"]).output().await.is_ok() {
         freed.push("old temp files");
     }
 
     // 4. Docker dangling images
-    if tokio::process::Command::new("docker").args(["image", "prune", "-f"]).output().await.is_ok() {
+    if safe_command("docker").args(["image", "prune", "-f"]).output().await.is_ok() {
         freed.push("dangling Docker images");
     }
 
     // Get disk usage after cleanup
-    let df = tokio::process::Command::new("df").args(["-h", "/"]).output().await;
+    let df = safe_command("df").args(["-h", "/"]).output().await;
     let disk_info = df.ok().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
 
     Json(serde_json::json!({
@@ -289,7 +290,7 @@ async fn change_hostname(Json(body): Json<serde_json::Value>) -> Result<Json<ser
         return Err((axum::http::StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid hostname"}))));
     }
 
-    let _ = tokio::process::Command::new("hostnamectl").args(["set-hostname", hostname]).output().await;
+    let _ = safe_command("hostnamectl").args(["set-hostname", hostname]).output().await;
     Ok(Json(serde_json::json!({ "ok": true, "hostname": hostname })))
 }
 

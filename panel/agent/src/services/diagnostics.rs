@@ -1,5 +1,5 @@
 use serde::Serialize;
-use tokio::process::Command;
+use crate::safe_cmd::safe_command;
 
 #[derive(Serialize, Clone)]
 pub struct DiagnosticFinding {
@@ -68,7 +68,7 @@ async fn check_nginx() -> Vec<DiagnosticFinding> {
     // 1. nginx -t  (config validation)
     let test_output = match tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        Command::new("nginx").arg("-t").output(),
+        safe_command("nginx").arg("-t").output(),
     )
     .await
     {
@@ -200,7 +200,7 @@ async fn check_resources() -> Vec<DiagnosticFinding> {
     // Disk usage
     if let Ok(Ok(output)) = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        Command::new("df").args(["--output=pcent", "/"]).output(),
+        safe_command("df").args(["--output=pcent", "/"]).output(),
     )
     .await
     {
@@ -235,7 +235,7 @@ async fn check_resources() -> Vec<DiagnosticFinding> {
     // Memory usage
     if let Ok(Ok(output)) = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        Command::new("free").args(["-m"]).output(),
+        safe_command("free").args(["-m"]).output(),
     )
     .await
     {
@@ -274,7 +274,7 @@ async fn check_resources() -> Vec<DiagnosticFinding> {
     // Swap usage
     if let Ok(Ok(output)) = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        Command::new("free").args(["-m"]).output(),
+        safe_command("free").args(["-m"]).output(),
     )
     .await
     {
@@ -350,7 +350,7 @@ async fn check_services() -> Vec<DiagnosticFinding> {
     for (service, label) in &critical_services {
         let active = match tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            Command::new("systemctl")
+            safe_command("systemctl")
                 .args(["is-active", "--quiet", service])
                 .status(),
         )
@@ -382,7 +382,7 @@ async fn check_services() -> Vec<DiagnosticFinding> {
     for (service, label) in &optional_services {
         let active = match tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            Command::new("systemctl")
+            safe_command("systemctl")
                 .args(["is-active", "--quiet", service])
                 .status(),
         )
@@ -430,7 +430,7 @@ async fn check_ssl_expiry() -> Vec<DiagnosticFinding> {
         // Check if cert expires within 7 days
         let check_7d = match tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            Command::new("openssl")
+            safe_command("openssl")
                 .args(["x509", "-checkend", "604800", "-noout", "-in", &cert_path])
                 .output(),
         )
@@ -458,7 +458,7 @@ async fn check_ssl_expiry() -> Vec<DiagnosticFinding> {
         // Check if cert expires within 30 days
         let check_30d = match tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            Command::new("openssl")
+            safe_command("openssl")
                 .args(["x509", "-checkend", "2592000", "-noout", "-in", &cert_path])
                 .output(),
         )
@@ -488,7 +488,7 @@ async fn check_ssl_expiry() -> Vec<DiagnosticFinding> {
 async fn get_cert_expiry(cert_path: &str) -> Option<String> {
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        Command::new("openssl")
+        safe_command("openssl")
             .args(["x509", "-enddate", "-noout", "-in", cert_path])
             .output(),
     )
@@ -511,7 +511,7 @@ async fn check_log_patterns() -> Vec<DiagnosticFinding> {
     // Check nginx error log for repeated errors (last 200 lines)
     if let Ok(Ok(output)) = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        Command::new("tail")
+        safe_command("tail")
             .args(["-n", "200", "/var/log/nginx/error.log"])
             .output(),
     )
@@ -552,7 +552,7 @@ async fn check_log_patterns() -> Vec<DiagnosticFinding> {
     // Check auth.log for brute force patterns (last 500 lines)
     if let Ok(Ok(output)) = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        Command::new("tail")
+        safe_command("tail")
             .args(["-n", "500", "/var/log/auth.log"])
             .output(),
     )
@@ -590,7 +590,7 @@ async fn check_log_patterns() -> Vec<DiagnosticFinding> {
     // Check syslog for OOM killer activity
     if let Ok(Ok(output)) = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        Command::new("tail")
+        safe_command("tail")
             .args(["-n", "500", "/var/log/syslog"])
             .output(),
     )
@@ -665,7 +665,7 @@ async fn check_security() -> Vec<DiagnosticFinding> {
     // Firewall active?
     if let Ok(Ok(output)) = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        Command::new("ufw").args(["status"]).output(),
+        safe_command("ufw").args(["status"]).output(),
     )
     .await
     {
@@ -721,7 +721,7 @@ pub async fn apply_fix(fix_id: &str) -> Result<String, String> {
             }
             let output = tokio::time::timeout(
                 std::time::Duration::from_secs(30),
-                Command::new("systemctl")
+                safe_command("systemctl")
                     .args(["restart", target])
                     .output(),
             )
@@ -757,7 +757,7 @@ pub async fn apply_fix(fix_id: &str) -> Result<String, String> {
             }
 
             // Set ownership to www-data
-            let _ = Command::new("chown")
+            let _ = safe_command("chown")
                 .args(["-R", "www-data:www-data", target])
                 .output()
                 .await;
@@ -783,7 +783,7 @@ pub async fn apply_fix(fix_id: &str) -> Result<String, String> {
             }
 
             // GAP 36: Also truncate any log file > 500MB anywhere in /var/log
-            if let Ok(output) = Command::new("find")
+            if let Ok(output) = safe_command("find")
                 .args(["/var/log", "-name", "*.log", "-size", "+500M", "-type", "f"])
                 .output()
                 .await
@@ -804,7 +804,7 @@ pub async fn apply_fix(fix_id: &str) -> Result<String, String> {
             // Also clean up old journal entries
             let _ = tokio::time::timeout(
                 std::time::Duration::from_secs(10),
-                Command::new("journalctl")
+                safe_command("journalctl")
                     .args(["--vacuum-size=100M"])
                     .output(),
             )
@@ -823,7 +823,7 @@ pub async fn apply_fix(fix_id: &str) -> Result<String, String> {
         "clean-tmp" => {
             let output = tokio::time::timeout(
                 std::time::Duration::from_secs(30),
-                Command::new("find")
+                safe_command("find")
                     .args(["/tmp", "-type", "f", "-mtime", "+7", "-delete"])
                     .output(),
             )
@@ -842,7 +842,7 @@ pub async fn apply_fix(fix_id: &str) -> Result<String, String> {
         "docker-prune" => {
             let output = tokio::time::timeout(
                 std::time::Duration::from_secs(60),
-                Command::new("docker")
+                safe_command("docker")
                     .args(["system", "prune", "-af", "--volumes"])
                     .output(),
             )

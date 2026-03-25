@@ -1,3 +1,4 @@
+use crate::safe_cmd::safe_command;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -449,7 +450,7 @@ async fn container_stats(
     // Use docker stats --no-stream for a single snapshot
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        tokio::process::Command::new("docker")
+        safe_command("docker")
             .args(["stats", "--no-stream", "--format", "{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.BlockIO}}|{{.PIDs}}", &container_id])
             .output(),
     )
@@ -485,7 +486,7 @@ async fn shell_info(
         ));
     }
 
-    let name_output = tokio::process::Command::new("docker")
+    let name_output = safe_command("docker")
         .args(["inspect", "--format", "{{.Name}}", &container_id])
         .output()
         .await;
@@ -499,13 +500,13 @@ async fn shell_info(
         })
         .unwrap_or_default();
 
-    let bash = tokio::process::Command::new("docker")
+    let bash = safe_command("docker")
         .args(["exec", &container_id, "which", "bash"])
         .output()
         .await;
     let has_bash = bash.map(|o| o.status.success()).unwrap_or(false);
 
-    let sh = tokio::process::Command::new("docker")
+    let sh = safe_command("docker")
         .args(["exec", &container_id, "which", "sh"])
         .output()
         .await;
@@ -555,7 +556,7 @@ async fn exec_command(
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        tokio::process::Command::new("docker")
+        safe_command("docker")
             .args(["exec", &container_id, "sh", "-c", command])
             .output(),
     )
@@ -595,7 +596,7 @@ async fn container_volumes(
         ));
     }
 
-    let output = tokio::process::Command::new("docker")
+    let output = safe_command("docker")
         .args([
             "inspect",
             "--format",
@@ -621,7 +622,7 @@ async fn container_volumes(
             let dest = parts[1];
             let mount_type = parts[2];
 
-            let du = tokio::process::Command::new("du")
+            let du = safe_command("du")
                 .args(["-sb", source])
                 .output()
                 .await;
@@ -637,7 +638,7 @@ async fn container_volumes(
                 })
                 .unwrap_or(0);
 
-            let ls = tokio::process::Command::new("ls")
+            let ls = safe_command("ls")
                 .args(["-la", source])
                 .output()
                 .await;
@@ -680,7 +681,7 @@ async fn registry_login(
 
     // Pass password via stdin to avoid leaking it in process args
     use tokio::io::AsyncWriteExt;
-    let mut child = tokio::process::Command::new("docker")
+    let mut child = safe_command("docker")
         .args(["login", &body.server, "-u", &body.username, "--password-stdin"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -758,7 +759,7 @@ async fn registry_logout(
         ));
     }
 
-    let _ = tokio::process::Command::new("docker")
+    let _ = safe_command("docker")
         .args(["logout", server])
         .output()
         .await;
@@ -945,7 +946,7 @@ async fn stack_action(
 
 /// GET /apps/images — List Docker images.
 async fn list_images() -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let output = tokio::process::Command::new("docker")
+    let output = safe_command("docker")
         .args(["images", "--format", "{{.Repository}}|{{.Tag}}|{{.ID}}|{{.Size}}|{{.CreatedSince}}", "--no-trunc"])
         .output().await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
@@ -967,7 +968,7 @@ async fn list_images() -> Result<Json<serde_json::Value>, (StatusCode, Json<serd
 
 /// POST /apps/images/prune — Remove unused Docker images.
 async fn prune_images_all() -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let output = tokio::process::Command::new("docker")
+    let output = safe_command("docker")
         .args(["image", "prune", "-af"])
         .output().await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
@@ -988,7 +989,7 @@ async fn remove_image(Path(id): Path<String>) -> Result<Json<serde_json::Value>,
 
     // Strip sha256: prefix if present (docker images --no-trunc includes it)
     let image_ref = if id.starts_with("sha256:") { &id } else { &id };
-    let output = tokio::process::Command::new("docker")
+    let output = safe_command("docker")
         .args(["rmi", image_ref])
         .output().await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
@@ -1042,7 +1043,7 @@ async fn snapshot_container(
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(120),
-        tokio::process::Command::new("docker")
+        safe_command("docker")
             .args(["commit", &container_id, &tag])
             .output()
     ).await
@@ -1090,7 +1091,7 @@ async fn change_image(
     // 1. Pull new image
     let pull_output = tokio::time::timeout(
         std::time::Duration::from_secs(300),
-        tokio::process::Command::new("docker")
+        safe_command("docker")
             .args(["pull", &image])
             .output(),
     ).await
@@ -1104,7 +1105,7 @@ async fn change_image(
     tracing::info!("Pulled image: {image}");
 
     // 2. Get current container info (name, volumes, env, ports)
-    let inspect_output = tokio::process::Command::new("docker")
+    let inspect_output = safe_command("docker")
         .args(["inspect", "--format", "{{.Name}}", &container_id])
         .output()
         .await
@@ -1123,12 +1124,12 @@ async fn change_image(
     let backup_name = format!("{container_name}-old-{}", &uuid::Uuid::new_v4().to_string()[..8]);
 
     // Stop
-    tokio::process::Command::new("docker")
+    safe_command("docker")
         .args(["stop", &container_id])
         .output().await.ok();
 
     // Rename old container
-    tokio::process::Command::new("docker")
+    safe_command("docker")
         .args(["rename", &container_id, &backup_name])
         .output().await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Rename failed: {e}")}))))?;
@@ -1136,7 +1137,7 @@ async fn change_image(
     // 4. Create new container using `docker run` with --volumes-from to preserve data
     let run_output = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        tokio::process::Command::new("docker")
+        safe_command("docker")
             .args([
                 "run", "-d",
                 "--name", &container_name,
@@ -1152,7 +1153,7 @@ async fn change_image(
             let new_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
             // Remove old container
-            tokio::process::Command::new("docker")
+            safe_command("docker")
                 .args(["rm", "-f", &backup_name])
                 .output().await.ok();
 
@@ -1165,10 +1166,10 @@ async fn change_image(
         }
         _ => {
             // Rollback: rename old container back and start it
-            tokio::process::Command::new("docker")
+            safe_command("docker")
                 .args(["rename", &backup_name, &container_name])
                 .output().await.ok();
-            tokio::process::Command::new("docker")
+            safe_command("docker")
                 .args(["start", &container_name])
                 .output().await.ok();
 
@@ -1206,7 +1207,7 @@ async fn update_container_limits(
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(15),
-        tokio::process::Command::new("docker")
+        safe_command("docker")
             .args(&args)
             .output(),
     ).await

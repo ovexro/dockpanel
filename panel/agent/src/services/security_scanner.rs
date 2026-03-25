@@ -1,7 +1,7 @@
 use serde::Serialize;
 use sha2::Digest;
 use std::collections::HashMap;
-use tokio::process::Command;
+use crate::safe_cmd::safe_command;
 
 #[derive(Serialize)]
 pub struct ScanResult {
@@ -116,7 +116,7 @@ async fn scan_malware() -> Vec<Finding> {
     for root in &web_roots {
         if let Ok(output) = tokio::time::timeout(
             std::time::Duration::from_secs(60),
-            Command::new("find")
+            safe_command("find")
                 .args([root, "-maxdepth", "5", "-type", "f", "-name", "*.php"])
                 .output(),
         )
@@ -148,7 +148,7 @@ async fn scan_malware() -> Vec<Finding> {
         for (pattern, desc) in MALWARE_PATTERNS {
             if let Ok(output) = tokio::time::timeout(
                 std::time::Duration::from_secs(30),
-                Command::new("grep")
+                safe_command("grep")
                     .args(["-rlE", pattern, "--include=*.php", root])
                     .output(),
             )
@@ -187,7 +187,7 @@ async fn scan_open_ports() -> Vec<Finding> {
 
     let output = match tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        Command::new("ss").args(["-tlnp"]).output(),
+        safe_command("ss").args(["-tlnp"]).output(),
     )
     .await
     {
@@ -266,7 +266,7 @@ async fn scan_ssl_expiry() -> Vec<Finding> {
         // Use openssl to check expiry
         let output = match tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            Command::new("openssl")
+            safe_command("openssl")
                 .args(["x509", "-enddate", "-noout", "-in", &cert_path])
                 .output(),
         )
@@ -286,7 +286,7 @@ async fn scan_ssl_expiry() -> Vec<Finding> {
         // Parse expiry date and check if within 30 days
         let check_output = match tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            Command::new("openssl")
+            safe_command("openssl")
                 .args([
                     "x509", "-checkend", "2592000", // 30 days in seconds
                     "-noout", "-in", &cert_path,
@@ -303,7 +303,7 @@ async fn scan_ssl_expiry() -> Vec<Finding> {
             // Certificate will expire within 30 days
             let check_7d = match tokio::time::timeout(
                 std::time::Duration::from_secs(5),
-                Command::new("openssl")
+                safe_command("openssl")
                     .args([
                         "x509", "-checkend", "604800", // 7 days
                         "-noout", "-in", &cert_path,
@@ -378,7 +378,7 @@ async fn scan_container_vulnerabilities() -> Vec<Finding> {
         // Try grype first
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(120),
-            Command::new("grype")
+            safe_command("grype")
                 .args([&image, "-o", "json", "--only-fixed"])
                 .output(),
         )
@@ -442,7 +442,7 @@ async fn scan_container_vulnerabilities() -> Vec<Finding> {
         // Fallback: docker scout (simpler output)
         let scout_result = tokio::time::timeout(
             std::time::Duration::from_secs(120),
-            Command::new("docker")
+            safe_command("docker")
                 .args(["scout", "quickview", &image])
                 .output(),
         )

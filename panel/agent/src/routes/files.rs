@@ -1,3 +1,4 @@
+use crate::safe_cmd::safe_command;
 use axum::{
     extract::{Path, Query},
     http::StatusCode,
@@ -251,7 +252,7 @@ async fn upload_file(
 
     // Fix ownership
     let path_str = full_path.to_string_lossy().to_string();
-    let _ = tokio::process::Command::new("chown")
+    let _ = safe_command("chown")
         .args(["www-data:www-data", &path_str])
         .output()
         .await;

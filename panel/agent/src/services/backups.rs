@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use tokio::process::Command;
+use crate::safe_cmd::safe_command;
 
 const BACKUP_DIR: &str = "/var/backups/dockpanel";
 const WEBROOT: &str = "/var/www";
@@ -56,8 +56,8 @@ pub async fn create_backup(domain: &str) -> Result<BackupInfo, String> {
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(300),
-        Command::new("tar")
-            .args(["czf", filepath_str, "-h", "-C", site_root_str, "."])
+        safe_command("tar")
+            .args(["czf", filepath_str, "--no-dereference", "-C", site_root_str, "."])
             .output(),
     )
     .await
@@ -96,7 +96,7 @@ pub async fn create_backup(domain: &str) -> Result<BackupInfo, String> {
 
 /// Compute SHA256 hash of a file (for backup integrity chain).
 async fn compute_file_sha256(path: &str) -> Option<String> {
-    let output = Command::new("sha256sum")
+    let output = safe_command("sha256sum")
         .arg(path)
         .output()
         .await
@@ -168,11 +168,11 @@ pub async fn restore_backup(domain: &str, filename: &str) -> Result<(), String> 
         .to_str()
         .ok_or_else(|| "Invalid site root path encoding".to_string())?;
 
-    // Full overwrite (no --no-overwrite-dir) ensures a clean restore without leftover files
+    // Full overwrite ensures a clean restore; --no-same-owner prevents uid/gid hijacking
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(300),
-        Command::new("tar")
-            .args(["xzf", filepath_str, "-C", site_root_str])
+        safe_command("tar")
+            .args(["xzf", filepath_str, "--no-same-owner", "--no-same-permissions", "-C", site_root_str])
             .output(),
     )
     .await
@@ -211,7 +211,7 @@ pub async fn list_backup_files(domain: &str, filename: &str) -> Result<Vec<Strin
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        Command::new("tar")
+        safe_command("tar")
             .args(["tzf", filepath_str])
             .output(),
     )
@@ -270,8 +270,8 @@ pub async fn restore_single_file(domain: &str, filename: &str, file_path: &str) 
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(60),
-        Command::new("tar")
-            .args(["xzf", backup_str, "-C", &target, &extract_path])
+        safe_command("tar")
+            .args(["xzf", backup_str, "--no-same-owner", "--no-same-permissions", "-C", &target, &extract_path])
             .output(),
     )
     .await

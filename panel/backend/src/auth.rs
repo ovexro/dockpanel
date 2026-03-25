@@ -73,6 +73,16 @@ impl FromRequestParts<AppState> for AuthUser {
             }
         }
 
+        // Check global session revocation (revoke_all_sessions)
+        {
+            let revoked_at = state.sessions_revoked_at.read().await;
+            if let Some(ts) = *revoked_at {
+                if (claims.iat as i64) < ts {
+                    return Err(err(StatusCode::UNAUTHORIZED, "Session revoked. Please log in again."));
+                }
+            }
+        }
+
         Ok(AuthUser(claims))
     }
 }

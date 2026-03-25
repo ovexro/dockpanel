@@ -1,3 +1,4 @@
+use crate::safe_cmd::safe_command;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -157,7 +158,7 @@ async fn upload_cert(
         ))?;
 
     // Set permissions
-    let _ = tokio::process::Command::new("chmod").args(["600", &key_path]).output().await;
+    let _ = safe_command("chmod").args(["600", &key_path]).output().await;
 
     // Enable SSL in nginx — read existing config to determine runtime
     let site_conf = format!("/etc/nginx/sites-enabled/{}.conf", body.domain);

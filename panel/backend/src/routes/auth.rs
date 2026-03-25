@@ -226,6 +226,23 @@ pub async fn login(
         attempts.remove(&ip);
     }
 
+    // Block login if email not verified and SMTP is configured
+    if !user.email_verified {
+        let smtp_configured = {
+            let row: Option<(String,)> = sqlx::query_as(
+                "SELECT value FROM settings WHERE key = 'smtp_host'",
+            )
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+            row.map(|r| !r.0.is_empty()).unwrap_or(false)
+        };
+        if smtp_configured {
+            return Err(err(StatusCode::FORBIDDEN, "Email not verified. Check your inbox."));
+        }
+    }
+
     // Feature 9: Block non-admin logins during lockdown
     if user.role != "admin" && security_hardening::is_locked_down(&state.db).await {
         return Err(err(StatusCode::SERVICE_UNAVAILABLE, "System is in lockdown mode. Only admins can login."));
@@ -511,7 +528,7 @@ pub async fn register(
         return Err(err(StatusCode::BAD_REQUEST, "Password must be at least 8 characters"));
     }
 
-    // Check email uniqueness
+    // Check email uniqueness — return generic success to prevent account enumeration
     let existing: Option<(uuid::Uuid,)> =
         sqlx::query_as("SELECT id FROM users WHERE email = $1")
             .bind(&body.email)
@@ -520,7 +537,13 @@ pub async fn register(
             .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     if existing.is_some() {
-        return Err(err(StatusCode::CONFLICT, "Email already registered"));
+        // Return same success response to prevent account enumeration
+        return Ok((
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "message": "Account created. Check your email to verify.",
+            })),
+        ));
     }
 
     let salt = SaltString::generate(&mut OsRng);
@@ -542,7 +565,8 @@ pub async fn register(
     .await
     .map_err(|e| {
         if e.to_string().contains("unique") {
-            err(StatusCode::CONFLICT, "Email already registered")
+            // Return generic error to prevent account enumeration (race condition path)
+            err(StatusCode::INTERNAL_SERVER_ERROR, "Registration failed. Please try again.")
         } else {
             err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
         }
@@ -985,11 +1009,14 @@ pub async fn twofa_verify(
     headers: HeaderMap,
     Json(body): Json<TwoFaLoginRequest>,
 ) -> Result<(StatusCode, [(header::HeaderName, String); 1], Json<serde_json::Value>), ApiError> {
-    // Decode temp token
+    // Decode temp token with explicit HS256 validation (consistent with main auth flow)
+    let mut twofa_validation = Validation::new(jsonwebtoken::Algorithm::HS256);
+    twofa_validation.validate_exp = true;
+    twofa_validation.leeway = 0;
     let token_data = decode::<TwoFaClaims>(
         &body.temp_token,
         &DecodingKey::from_secret(state.config.jwt_secret.as_bytes()),
-        &Validation::default(),
+        &twofa_validation,
     )
     .map_err(|_| err(StatusCode::UNAUTHORIZED, "Invalid or expired 2FA token"))?;
 
@@ -1261,15 +1288,22 @@ pub async fn revoke_all_sessions(
     State(state): State<AppState>,
     crate::auth::AdminUser(claims): crate::auth::AdminUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // Store a timestamp marker — auth middleware can check this to invalidate older tokens
+    let now = chrono::Utc::now();
+    // Store a timestamp marker — auth middleware checks this to invalidate older tokens
     sqlx::query(
         "INSERT INTO settings (key, value, updated_at) VALUES ('sessions_revoked_at', $1, NOW()) \
          ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()",
     )
-    .bind(chrono::Utc::now().to_rfc3339())
+    .bind(now.to_rfc3339())
     .execute(&state.db)
     .await
     .ok();
+
+    // Update the in-memory cache so the auth middleware enforces immediately
+    {
+        let mut cached = state.sessions_revoked_at.write().await;
+        *cached = Some(now.timestamp());
+    }
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "auth.revoke_all",

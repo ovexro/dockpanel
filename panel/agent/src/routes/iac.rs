@@ -1,3 +1,4 @@
+use crate::safe_cmd::safe_command;
 use axum::{http::StatusCode, routing::get, Json, Router};
 use serde::Serialize;
 
@@ -267,7 +268,7 @@ fn scan_nginx_sites() -> Vec<SiteExport> {
 
 /// Read dockpanel cron entries from system crontab.
 async fn read_crontab_entries() -> Vec<CronExport> {
-    let output = tokio::process::Command::new("crontab")
+    let output = safe_command("crontab")
         .arg("-l")
         .output()
         .await;
@@ -316,7 +317,7 @@ async fn check_php_versions() -> Vec<PhpExport> {
     let mut results = Vec::new();
 
     for v in &versions {
-        let installed = tokio::process::Command::new("dpkg")
+        let installed = safe_command("dpkg")
             .args(["-s", &format!("php{v}-fpm")])
             .output()
             .await
@@ -324,7 +325,7 @@ async fn check_php_versions() -> Vec<PhpExport> {
             .unwrap_or(false);
 
         let fpm_running = if installed {
-            tokio::process::Command::new("systemctl")
+            safe_command("systemctl")
                 .args(["is-active", "--quiet", &format!("php{v}-fpm")])
                 .output()
                 .await

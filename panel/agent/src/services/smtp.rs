@@ -1,18 +1,17 @@
-use std::process::Command;
-use tokio::process::Command as AsyncCommand;
+use crate::safe_cmd::{safe_command, safe_command_sync};
 
 const MSMTP_CONFIG: &str = "/etc/msmtprc";
 
 /// Install msmtp if not already present.
 fn ensure_msmtp() -> Result<(), String> {
-    let status = Command::new("which")
+    let status = safe_command_sync("which")
         .arg("msmtp")
         .output()
         .map_err(|e| format!("Failed to check msmtp: {e}"))?;
 
     if !status.status.success() {
         tracing::info!("Installing msmtp...");
-        let install = Command::new("apt-get")
+        let install = safe_command_sync("apt-get")
             .args(["install", "-y", "msmtp", "msmtp-mta"])
             .env("DEBIAN_FRONTEND", "noninteractive")
             .output()
@@ -144,7 +143,7 @@ pub async fn send_test(to: &str, from: &str, from_name: &str) -> Result<String, 
          If you received this, your SMTP configuration is working correctly.\r\n"
     );
 
-    let mut child = AsyncCommand::new("msmtp")
+    let mut child = safe_command("msmtp")
         .args(["--read-envelope-from", to])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

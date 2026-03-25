@@ -1,6 +1,6 @@
 use std::path::Path;
 use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
+use crate::safe_cmd::safe_command;
 
 /// Validate that a filepath is within the allowed backup directory and contains no traversal.
 fn validate_backup_path(filepath: &str) -> Result<(), String> {
@@ -26,7 +26,7 @@ pub async fn encrypt_file(filepath: &str, key: &str) -> Result<String, String> {
     let enc_path = format!("{filepath}.enc");
 
     // Pass the key via stdin instead of command line to avoid exposure in process listing
-    let mut child = Command::new("openssl")
+    let mut child = safe_command("openssl")
         .args([
             "enc",
             "-aes-256-cbc",
@@ -99,7 +99,7 @@ pub async fn decrypt_file(enc_filepath: &str, key: &str) -> Result<String, Strin
     };
 
     // Pass the key via stdin instead of command line to avoid exposure in process listing
-    let mut child = Command::new("openssl")
+    let mut child = safe_command("openssl")
         .args([
             "enc",
             "-d",

@@ -1,3 +1,4 @@
+use crate::safe_cmd::{safe_command, safe_command_sync};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -237,7 +238,7 @@ async fn put_site(
             let jail_path = format!("/etc/fail2ban/jail.d/{jail_name}.conf");
             if let Ok(()) = std::fs::write(&jail_path, &jail_config) {
                 // Reload fail2ban (best-effort)
-                let _ = std::process::Command::new("systemctl")
+                let _ = safe_command_sync("systemctl")
                     .args(["reload", "fail2ban"])
                     .output();
                 tracing::info!("Auto-configured Fail2Ban jail for {domain}");
@@ -373,7 +374,7 @@ async fn delete_site(
     let jail_path = format!("/etc/fail2ban/jail.d/{jail_name}.conf");
     if std::path::Path::new(&jail_path).exists() {
         let _ = std::fs::remove_file(&jail_path);
-        let _ = std::process::Command::new("systemctl")
+        let _ = safe_command_sync("systemctl")
             .args(["reload", "fail2ban"])
             .output();
         tracing::info!("Removed Fail2Ban jail for {domain}");
@@ -561,7 +562,7 @@ async fn rename_site(
                 .replace(&old_domain, new_domain);
             std::fs::write(&new_jail_path, updated).ok();
             std::fs::remove_file(&old_jail_path).ok();
-            let _ = std::process::Command::new("systemctl")
+            let _ = safe_command_sync("systemctl")
                 .args(["reload", "fail2ban"])
                 .output();
         }
@@ -816,7 +817,7 @@ async fn password_protect(
     let htpasswd_file = format!("{htpasswd_dir}/{}", body.domain);
 
     // Generate htpasswd entry using openssl
-    let output = tokio::process::Command::new("openssl")
+    let output = safe_command("openssl")
         .args(["passwd", "-apr1", &body.password])
         .output()
         .await
@@ -1152,7 +1153,7 @@ async fn site_logs(
         return Ok(Json(serde_json::json!({ "logs": "", "lines": 0, "file": log_file })));
     }
 
-    let output = tokio::process::Command::new("tail")
+    let output = safe_command("tail")
         .args(["-n", &lines.to_string(), &log_file])
         .output()
         .await
@@ -1176,7 +1177,7 @@ async fn site_stats(Path(domain): Path<String>) -> Result<Json<serde_json::Value
     }
 
     // Read last 10000 lines for stats
-    let output = tokio::process::Command::new("tail")
+    let output = safe_command("tail")
         .args(["-n", "10000", &log_file])
         .output()
         .await
@@ -1268,7 +1269,7 @@ async fn php_errors(
 
     for candidate in &log_candidates {
         if std::path::Path::new(candidate).exists() {
-            let output = tokio::process::Command::new("tail")
+            let output = safe_command("tail")
                 .args(["-n", &lines.to_string(), candidate])
                 .output()
                 .await;
@@ -1316,7 +1317,7 @@ async fn clone_site(Json(body): Json<CloneRequest>) -> Result<Json<serde_json::V
     // Copy files using rsync (preserves permissions, faster than cp -r)
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(300),
-        tokio::process::Command::new("rsync")
+        safe_command("rsync")
             .args(["-a", "--delete", &format!("{source_dir}/"), &format!("{target_dir}/")])
             .output()
     ).await
@@ -1329,10 +1330,10 @@ async fn clone_site(Json(body): Json<CloneRequest>) -> Result<Json<serde_json::V
     }
 
     // Fix ownership
-    let _ = tokio::process::Command::new("chown").args(["-R", "www-data:www-data", &target_dir]).output().await;
+    let _ = safe_command("chown").args(["-R", "www-data:www-data", &target_dir]).output().await;
 
     // Get size
-    let du_output = tokio::process::Command::new("du").args(["-sb", &target_dir]).output().await;
+    let du_output = safe_command("du").args(["-sb", &target_dir]).output().await;
     let size: u64 = du_output.ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().next().unwrap_or("0").parse().unwrap_or(0))
         .unwrap_or(0);
@@ -1389,11 +1390,11 @@ async fn set_env(Path(domain): Path<String>, Json(body): Json<serde_json::Value>
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
 
     // Fix ownership
-    let _ = tokio::process::Command::new("chown").args(["www-data:www-data", &env_path]).output().await;
+    let _ = safe_command("chown").args(["www-data:www-data", &env_path]).output().await;
 
     // Restart the app service if it's a Node/Python site
     let service_name = format!("dockpanel-app-{}", domain.replace('.', "-"));
-    let _ = tokio::process::Command::new("systemctl").args(["restart", &service_name]).output().await;
+    let _ = safe_command("systemctl").args(["restart", &service_name]).output().await;
 
     tracing::info!("Environment variables updated for {domain}");
     Ok(Json(serde_json::json!({ "ok": true })))

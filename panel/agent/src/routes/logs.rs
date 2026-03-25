@@ -12,7 +12,7 @@ use serde::Deserialize;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::io::AsyncBufReadExt;
-use tokio::process::Command;
+use crate::safe_cmd::safe_command;
 
 use super::AppState;
 use crate::services::logs;
@@ -219,7 +219,7 @@ async fn handle_stream(mut socket: WebSocket, path: String) {
     ACTIVE_STREAMS.fetch_add(1, Ordering::Relaxed);
 
     // Start tail -f with last 50 lines so the user sees recent context
-    let child = Command::new("tail")
+    let child = safe_command("tail")
         .args(["-f", "-n", "50", &path])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -298,7 +298,7 @@ async fn log_stats(
     }
 
     // Read last 50000 lines
-    let output = Command::new("tail")
+    let output = safe_command("tail")
         .args(["-n", "50000", &log_path])
         .output()
         .await
@@ -374,7 +374,7 @@ async fn log_stats(
 
 /// GET /logs/docker — List Docker containers with dockpanel.managed label.
 async fn docker_containers() -> Json<serde_json::Value> {
-    let output = Command::new("docker")
+    let output = safe_command("docker")
         .args([
             "ps",
             "--filter",
@@ -421,7 +421,7 @@ async fn docker_logs(
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        Command::new("docker")
+        safe_command("docker")
             .args(["logs", "--tail", &lines.to_string(), &container])
             .output(),
     )
@@ -475,7 +475,7 @@ async fn service_logs(
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        Command::new("journalctl")
+        safe_command("journalctl")
             .args([
                 "-u",
                 &service,

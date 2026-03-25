@@ -1,4 +1,4 @@
-use tokio::process::Command;
+use crate::safe_cmd::safe_command;
 
 #[derive(serde::Serialize)]
 pub struct VerificationResult {
@@ -41,7 +41,7 @@ pub async fn verify_site_backup(domain: &str, filename: &str) -> Result<Verifica
 
     let extract_ok = tokio::time::timeout(
         std::time::Duration::from_secs(120),
-        Command::new("tar")
+        safe_command("tar")
             .args(["xzf", &backup_path, "-C", &temp_dir])
             .output(),
     )
@@ -57,7 +57,7 @@ pub async fn verify_site_backup(domain: &str, filename: &str) -> Result<Verifica
 
     // Check 3: Count files in extracted directory
     if extract_ok {
-        let count_output = Command::new("find")
+        let count_output = safe_command("find")
             .args([&temp_dir, "-type", "f"])
             .output()
             .await;
@@ -155,7 +155,7 @@ pub async fn verify_db_backup(
     };
 
     // Cleanup: remove temporary container
-    Command::new("docker")
+    safe_command("docker")
         .args(["rm", "-f", &container_name])
         .output()
         .await
@@ -181,7 +181,7 @@ async fn verify_mysql_restore(
     checks: &mut Vec<VerificationCheck>,
 ) -> bool {
     // Start temp MySQL container
-    let start_ok = Command::new("docker")
+    let start_ok = safe_command("docker")
         .args([
             "run", "-d", "--name", container_name,
             "-e", &format!("MYSQL_DATABASE={db_name}"),
@@ -207,7 +207,7 @@ async fn verify_mysql_restore(
     let mut ready = false;
     for _ in 0..40 {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        let check = Command::new("docker")
+        let check = safe_command("docker")
             .args([
                 "exec", "-e", &format!("MYSQL_PWD={password}"),
                 container_name, "mariadb", "-u", "root", "-e", "SELECT 1",
@@ -242,7 +242,7 @@ async fn verify_mysql_restore(
 
     let restore_ok = tokio::time::timeout(
         std::time::Duration::from_secs(120),
-        Command::new("bash").args(["-c", &restore_cmd]).output(),
+        safe_command("bash").args(["-c", &restore_cmd]).output(),
     )
     .await
     .map(|r| r.map(|o| o.status.success()).unwrap_or(false))
@@ -259,7 +259,7 @@ async fn verify_mysql_restore(
     }
 
     // Verify: count tables
-    let table_count = Command::new("docker")
+    let table_count = safe_command("docker")
         .args([
             "exec", "-e", &format!("MYSQL_PWD={password}"),
             container_name, "mariadb", "-u", "root", db_name,
@@ -290,7 +290,7 @@ async fn verify_postgres_restore(
     checks: &mut Vec<VerificationCheck>,
 ) -> bool {
     // Start temp PostgreSQL container
-    let start_ok = Command::new("docker")
+    let start_ok = safe_command("docker")
         .args([
             "run", "-d", "--name", container_name,
             "-e", &format!("POSTGRES_DB={db_name}"),
@@ -317,7 +317,7 @@ async fn verify_postgres_restore(
     let mut ready = false;
     for _ in 0..30 {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        let check = Command::new("docker")
+        let check = safe_command("docker")
             .args([
                 "exec", "-e", &format!("PGPASSWORD={password}"),
                 container_name, "psql", "-U", "verify", "-d", db_name, "-c", "SELECT 1",
@@ -352,7 +352,7 @@ async fn verify_postgres_restore(
 
     let restore_ok = tokio::time::timeout(
         std::time::Duration::from_secs(120),
-        Command::new("bash").args(["-c", &restore_cmd]).output(),
+        safe_command("bash").args(["-c", &restore_cmd]).output(),
     )
     .await
     .map(|r| r.map(|o| o.status.success()).unwrap_or(false))
@@ -369,7 +369,7 @@ async fn verify_postgres_restore(
     }
 
     // Verify: count tables
-    let table_count = Command::new("docker")
+    let table_count = safe_command("docker")
         .args([
             "exec", "-e", &format!("PGPASSWORD={password}"),
             container_name, "psql", "-U", "verify", "-d", db_name,
@@ -426,7 +426,7 @@ pub async fn verify_volume_backup(
 
     let extract_ok = tokio::time::timeout(
         std::time::Duration::from_secs(120),
-        Command::new("tar")
+        safe_command("tar")
             .args(["xzf", &backup_path, "-C", &temp_dir])
             .output(),
     )
@@ -442,7 +442,7 @@ pub async fn verify_volume_backup(
 
     // Check 3: Count files
     if extract_ok {
-        let count_output = Command::new("find")
+        let count_output = safe_command("find")
             .args([&temp_dir, "-type", "f"])
             .output()
             .await;

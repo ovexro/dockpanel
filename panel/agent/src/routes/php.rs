@@ -5,7 +5,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
+use crate::safe_cmd::safe_command;
 
 use super::AppState;
 
@@ -45,7 +45,7 @@ struct InstallResponse {
 
 /// Check if a PHP-FPM version is installed via dpkg.
 async fn is_installed(version: &str) -> bool {
-    Command::new("dpkg")
+    safe_command("dpkg")
         .args(["-s", &format!("php{version}-fpm")])
         .output()
         .await
@@ -60,7 +60,7 @@ fn socket_exists(version: &str) -> bool {
 
 /// Check if PHP-FPM service is active.
 async fn is_fpm_running(version: &str) -> bool {
-    Command::new("systemctl")
+    safe_command("systemctl")
         .args(["is-active", "--quiet", &format!("php{version}-fpm")])
         .output()
         .await
@@ -118,7 +118,7 @@ async fn install_version(
     }
 
     // Ensure ondrej/php PPA is added
-    let ppa_check = Command::new("bash")
+    let ppa_check = safe_command("bash")
         .args(["-c", "apt-cache policy php8.4-fpm 2>/dev/null | grep -q ondrej || true"])
         .output()
         .await;
@@ -126,7 +126,7 @@ async fn install_version(
     if ppa_check.is_err() {
         // Try adding PPA
         tracing::info!("Adding ondrej/php PPA...");
-        let ppa_result = Command::new("bash")
+        let ppa_result = safe_command("bash")
             .args(["-c", "apt-get update -qq && apt-get install -y -qq software-properties-common && add-apt-repository -y ppa:ondrej/php && apt-get update -qq"])
             .output()
             .await;
@@ -154,7 +154,7 @@ async fn install_version(
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(300),
-        Command::new("bash")
+        safe_command("bash")
             .args(["-c", &format!(
                 "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq {pkg_str} 2>&1"
             )])
@@ -200,7 +200,7 @@ async fn install_version(
     }
 
     // Enable and start FPM service
-    let _ = Command::new("systemctl")
+    let _ = safe_command("systemctl")
         .args(["enable", "--now", &format!("php{version}-fpm")])
         .output()
         .await;
@@ -231,7 +231,7 @@ async fn list_extensions(Path(version): Path<String>) -> Result<Json<serde_json:
     }
 
     // List all installed extensions
-    let output = Command::new("php")
+    let output = safe_command("php")
         .args([&format!("-d"), "error_reporting=0", "-m"])
         .env("PATH", "/usr/bin:/usr/sbin:/bin")
         .output().await
@@ -244,7 +244,7 @@ async fn list_extensions(Path(version): Path<String>) -> Result<Json<serde_json:
         .collect();
 
     // List available (installable) extensions
-    let avail_output = Command::new("apt-cache")
+    let avail_output = safe_command("apt-cache")
         .args(["search", &format!("php{version}-")])
         .output().await;
 
@@ -280,7 +280,7 @@ async fn install_extension(Json(body): Json<serde_json::Value>) -> Result<Json<s
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(120),
-        Command::new("apt-get")
+        safe_command("apt-get")
             .args(["install", "-y", &package])
             .env("DEBIAN_FRONTEND", "noninteractive")
             .output()
@@ -295,7 +295,7 @@ async fn install_extension(Json(body): Json<serde_json::Value>) -> Result<Json<s
     }
 
     // Restart PHP-FPM
-    let _ = Command::new("systemctl")
+    let _ = safe_command("systemctl")
         .args(["restart", &format!("php{version}-fpm")])
         .output().await;
 

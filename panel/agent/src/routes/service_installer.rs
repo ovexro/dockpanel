@@ -4,7 +4,7 @@ use axum::{
     Json, Router,
 };
 use std::time::Duration;
-use tokio::process::Command;
+use crate::safe_cmd::safe_command;
 
 use super::AppState;
 
@@ -83,7 +83,7 @@ async fn install_php() -> Result<Json<serde_json::Value>, ApiErr> {
 
     let output = tokio::time::timeout(
         Duration::from_secs(300),
-        Command::new("sh")
+        safe_command("sh")
             .args(["-c", &format!("DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confnew install -y {packages}")])
             .output()
     ).await
@@ -96,8 +96,8 @@ async fn install_php() -> Result<Json<serde_json::Value>, ApiErr> {
     }
 
     // Enable and start PHP-FPM
-    let _ = tokio::time::timeout(Duration::from_secs(120), Command::new("systemctl").args(["enable", &format!("php{version}-fpm")]).output()).await;
-    let _ = tokio::time::timeout(Duration::from_secs(120), Command::new("systemctl").args(["start", &format!("php{version}-fpm")]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["enable", &format!("php{version}-fpm")]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["start", &format!("php{version}-fpm")]).output()).await;
 
     tracing::info!("PHP {version} installed");
     Ok(ok(&format!("PHP {version} with FPM installed and started")))
@@ -110,7 +110,7 @@ async fn install_certbot() -> Result<Json<serde_json::Value>, ApiErr> {
 
     let output = tokio::time::timeout(
         Duration::from_secs(300),
-        Command::new("sh")
+        safe_command("sh")
             .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confnew install -y certbot python3-certbot-nginx"])
             .output()
     ).await
@@ -123,8 +123,8 @@ async fn install_certbot() -> Result<Json<serde_json::Value>, ApiErr> {
     }
 
     // Set up auto-renewal timer
-    let _ = tokio::time::timeout(Duration::from_secs(120), Command::new("systemctl").args(["enable", "certbot.timer"]).output()).await;
-    let _ = tokio::time::timeout(Duration::from_secs(120), Command::new("systemctl").args(["start", "certbot.timer"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["enable", "certbot.timer"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["start", "certbot.timer"]).output()).await;
 
     tracing::info!("Certbot installed with auto-renewal");
     Ok(ok("Certbot installed with nginx plugin and auto-renewal timer"))
@@ -137,7 +137,7 @@ async fn install_ufw() -> Result<Json<serde_json::Value>, ApiErr> {
 
     let output = tokio::time::timeout(
         Duration::from_secs(300),
-        Command::new("sh")
+        safe_command("sh")
             .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confnew install -y ufw"])
             .output()
     ).await
@@ -150,18 +150,18 @@ async fn install_ufw() -> Result<Json<serde_json::Value>, ApiErr> {
     }
 
     // Configure default rules
-    let _ = tokio::time::timeout(Duration::from_secs(120), Command::new("ufw").args(["default", "deny", "incoming"]).output()).await;
-    let _ = tokio::time::timeout(Duration::from_secs(120), Command::new("ufw").args(["default", "allow", "outgoing"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("ufw").args(["default", "deny", "incoming"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("ufw").args(["default", "allow", "outgoing"]).output()).await;
 
     // Open essential ports
-    let _ = tokio::time::timeout(Duration::from_secs(120), Command::new("ufw").args(["allow", "22/tcp"]).output()).await;   // SSH
-    let _ = tokio::time::timeout(Duration::from_secs(120), Command::new("ufw").args(["allow", "80/tcp"]).output()).await;   // HTTP
-    let _ = tokio::time::timeout(Duration::from_secs(120), Command::new("ufw").args(["allow", "443/tcp"]).output()).await;  // HTTPS
-    let _ = tokio::time::timeout(Duration::from_secs(120), Command::new("ufw").args(["allow", "587/tcp"]).output()).await;  // SMTP submission
-    let _ = tokio::time::timeout(Duration::from_secs(120), Command::new("ufw").args(["allow", "993/tcp"]).output()).await;  // IMAPS
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("ufw").args(["allow", "22/tcp"]).output()).await;   // SSH
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("ufw").args(["allow", "80/tcp"]).output()).await;   // HTTP
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("ufw").args(["allow", "443/tcp"]).output()).await;  // HTTPS
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("ufw").args(["allow", "587/tcp"]).output()).await;  // SMTP submission
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("ufw").args(["allow", "993/tcp"]).output()).await;  // IMAPS
 
     // Enable (--force to skip interactive prompt)
-    let _ = tokio::time::timeout(Duration::from_secs(120), Command::new("ufw").args(["--force", "enable"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("ufw").args(["--force", "enable"]).output()).await;
 
     tracing::info!("UFW installed and enabled with default rules");
     Ok(ok("UFW installed — SSH, HTTP, HTTPS, SMTP, IMAPS ports opened"))
@@ -174,7 +174,7 @@ async fn install_fail2ban() -> Result<Json<serde_json::Value>, ApiErr> {
 
     let output = tokio::time::timeout(
         Duration::from_secs(300),
-        Command::new("sh")
+        safe_command("sh")
             .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confnew install -y fail2ban"])
             .output()
     ).await
@@ -210,8 +210,8 @@ enabled = true
 
     let _ = tokio::fs::write("/etc/fail2ban/jail.local", jail_config).await;
 
-    let _ = tokio::time::timeout(Duration::from_secs(120), Command::new("systemctl").args(["enable", "fail2ban"]).output()).await;
-    let _ = tokio::time::timeout(Duration::from_secs(120), Command::new("systemctl").args(["restart", "fail2ban"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["enable", "fail2ban"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["restart", "fail2ban"]).output()).await;
 
     tracing::info!("Fail2Ban installed with default jails");
     Ok(ok("Fail2Ban installed with SSH, Nginx, Postfix, Dovecot jails"))
@@ -225,7 +225,7 @@ async fn install_powerdns() -> Result<Json<serde_json::Value>, ApiErr> {
     // 1. Install packages
     let output = tokio::time::timeout(
         Duration::from_secs(300),
-        Command::new("sh")
+        safe_command("sh")
             .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confnew install -y pdns-server pdns-backend-pgsql"])
             .output()
     ).await
@@ -240,7 +240,7 @@ async fn install_powerdns() -> Result<Json<serde_json::Value>, ApiErr> {
     // 2. Create a PostgreSQL database for PowerDNS using the existing panel DB container
     let db_exists = tokio::time::timeout(
         Duration::from_secs(120),
-        Command::new("docker")
+        safe_command("docker")
             .args(["exec", "dockpanel-postgres", "psql", "-U", "dockpanel", "-lqt"])
             .output()
     ).await
@@ -252,7 +252,7 @@ async fn install_powerdns() -> Result<Json<serde_json::Value>, ApiErr> {
     if !db_exists {
         let _ = tokio::time::timeout(
             Duration::from_secs(120),
-            Command::new("docker")
+            safe_command("docker")
                 .args(["exec", "dockpanel-postgres", "psql", "-U", "dockpanel", "-c", "CREATE DATABASE pdns;"])
                 .output()
         ).await;
@@ -263,7 +263,7 @@ async fn install_powerdns() -> Result<Json<serde_json::Value>, ApiErr> {
             // Use shell pipe to feed schema to psql
             let _ = tokio::time::timeout(
                 Duration::from_secs(120),
-                Command::new("sh")
+                safe_command("sh")
                     .args(["-c", &format!("cat {} | docker exec -i dockpanel-postgres psql -U dockpanel -d pdns", schema_path)])
                     .output()
             ).await;
@@ -318,8 +318,8 @@ default-soa-content=ns1.@ hostmaster.@ 0 10800 3600 604800 3600
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write pdns.conf: {e}")))?;
 
     // 5. Enable and start
-    let _ = tokio::time::timeout(Duration::from_secs(120), Command::new("systemctl").args(["enable", "pdns"]).output()).await;
-    let _ = tokio::time::timeout(Duration::from_secs(120), Command::new("systemctl").args(["restart", "pdns"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["enable", "pdns"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["restart", "pdns"]).output()).await;
 
     tracing::info!("PowerDNS installed with API key");
 
@@ -338,7 +338,7 @@ async fn install_redis() -> Result<Json<serde_json::Value>, ApiErr> {
 
     let output = tokio::time::timeout(
         Duration::from_secs(300),
-        Command::new("sh")
+        safe_command("sh")
             .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confnew install -y redis-server"])
             .output()
     ).await
@@ -351,13 +351,13 @@ async fn install_redis() -> Result<Json<serde_json::Value>, ApiErr> {
     }
 
     // Enable and start Redis
-    let _ = tokio::time::timeout(Duration::from_secs(120), Command::new("systemctl").args(["enable", "redis-server"]).output()).await;
-    let _ = tokio::time::timeout(Duration::from_secs(120), Command::new("systemctl").args(["start", "redis-server"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["enable", "redis-server"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["start", "redis-server"]).output()).await;
 
     // Verify Redis is responding
     let verify = tokio::time::timeout(
         Duration::from_secs(10),
-        Command::new("redis-cli").arg("ping").output()
+        safe_command("redis-cli").arg("ping").output()
     ).await;
     let verified = verify
         .ok()
@@ -376,7 +376,7 @@ async fn install_nodejs() -> Result<Json<serde_json::Value>, ApiErr> {
 
     let output = tokio::time::timeout(
         Duration::from_secs(300),
-        Command::new("sh")
+        safe_command("sh")
             .args(["-c", "curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confnew install -y nodejs"])
             .output()
     ).await
@@ -391,7 +391,7 @@ async fn install_nodejs() -> Result<Json<serde_json::Value>, ApiErr> {
     // Verify
     let ver = tokio::time::timeout(
         Duration::from_secs(10),
-        Command::new("node").arg("--version").output()
+        safe_command("node").arg("--version").output()
     ).await
         .ok()
         .and_then(|r| r.ok())
@@ -409,7 +409,7 @@ async fn install_composer() -> Result<Json<serde_json::Value>, ApiErr> {
 
     let output = tokio::time::timeout(
         Duration::from_secs(300),
-        Command::new("sh")
+        safe_command("sh")
             .args(["-c", "curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer"])
             .output()
     ).await
@@ -424,7 +424,7 @@ async fn install_composer() -> Result<Json<serde_json::Value>, ApiErr> {
     // Verify
     let ver = tokio::time::timeout(
         Duration::from_secs(10),
-        Command::new("composer").arg("--version").output()
+        safe_command("composer").arg("--version").output()
     ).await
         .ok()
         .and_then(|r| r.ok())
@@ -440,7 +440,7 @@ async fn install_composer() -> Result<Json<serde_json::Value>, ApiErr> {
 async fn is_installed(package: &str) -> bool {
     tokio::time::timeout(
         Duration::from_secs(120),
-        Command::new("dpkg").args(["-l", package]).output()
+        safe_command("dpkg").args(["-l", package]).output()
     ).await
         .ok()
         .and_then(|r| r.ok())
@@ -451,7 +451,7 @@ async fn is_installed(package: &str) -> bool {
 async fn is_active(service: &str) -> bool {
     tokio::time::timeout(
         Duration::from_secs(120),
-        Command::new("systemctl").args(["is-active", "--quiet", service]).output()
+        safe_command("systemctl").args(["is-active", "--quiet", service]).output()
     ).await
         .ok()
         .and_then(|r| r.ok())
@@ -462,7 +462,7 @@ async fn is_active(service: &str) -> bool {
 async fn which(cmd: &str) -> bool {
     tokio::time::timeout(
         Duration::from_secs(120),
-        Command::new("which").arg(cmd).output()
+        safe_command("which").arg(cmd).output()
     ).await
         .ok()
         .and_then(|r| r.ok())
@@ -473,7 +473,7 @@ async fn which(cmd: &str) -> bool {
 async fn is_ufw_active() -> bool {
     tokio::time::timeout(
         Duration::from_secs(120),
-        Command::new("ufw").arg("status").output()
+        safe_command("ufw").arg("status").output()
     ).await
         .ok()
         .and_then(|r| r.ok())
@@ -484,7 +484,7 @@ async fn is_ufw_active() -> bool {
 async fn detect_php_version() -> Option<String> {
     let output = tokio::time::timeout(
         Duration::from_secs(120),
-        Command::new("php").args(["-r", "echo PHP_MAJOR_VERSION.'.'.PHP_MINOR_VERSION;"]).output()
+        safe_command("php").args(["-r", "echo PHP_MAJOR_VERSION.'.'.PHP_MINOR_VERSION;"]).output()
     ).await.ok()?.ok()?;
     if output.status.success() {
         Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -497,7 +497,7 @@ async fn detect_available_php() -> Option<String> {
     for v in ["8.3", "8.2", "8.1"] {
         let output = tokio::time::timeout(
             Duration::from_secs(120),
-            Command::new("apt-cache").args(["show", &format!("php{v}-fpm")]).output()
+            safe_command("apt-cache").args(["show", &format!("php{v}-fpm")]).output()
         ).await;
         if output.ok().and_then(|r| r.ok()).map(|o| o.status.success()).unwrap_or(false) {
             return Some(v.to_string());

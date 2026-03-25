@@ -1,5 +1,5 @@
 use serde::Serialize;
-use tokio::process::Command;
+use crate::safe_cmd::safe_command;
 
 #[derive(Serialize)]
 pub struct LoginEntry {
@@ -53,7 +53,7 @@ pub struct SecurityOverview {
 pub async fn get_firewall_status() -> Result<FirewallStatus, String> {
     let output = match tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        Command::new("ufw").args(["status", "verbose"]).output(),
+        safe_command("ufw").args(["status", "verbose"]).output(),
     )
     .await
     {
@@ -198,7 +198,7 @@ pub async fn add_firewall_rule(
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        Command::new("ufw").args(&args).output(),
+        safe_command("ufw").args(&args).output(),
     )
     .await
     .map_err(|_| "ufw command timed out".to_string())?
@@ -221,7 +221,7 @@ pub async fn remove_firewall_rule(rule_num: usize) -> Result<(), String> {
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        Command::new("ufw")
+        safe_command("ufw")
             .args(["--force", "delete", &rule_num.to_string()])
             .output(),
     )
@@ -242,7 +242,7 @@ pub async fn remove_firewall_rule(rule_num: usize) -> Result<(), String> {
 pub async fn get_fail2ban_status() -> Result<Fail2banStatus, String> {
     let output = match tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        Command::new("fail2ban-client").arg("status").output(),
+        safe_command("fail2ban-client").arg("status").output(),
     )
     .await
     {
@@ -280,7 +280,7 @@ pub async fn get_fail2ban_status() -> Result<Fail2banStatus, String> {
     for name in &jail_names {
         let jail_output = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            Command::new("fail2ban-client")
+            safe_command("fail2ban-client")
                 .args(["status", name])
                 .output(),
         )
@@ -434,7 +434,7 @@ pub async fn change_ssh_port(port: u16) -> Result<(), String> {
     }
     modify_sshd_config("Port", &port.to_string()).await?;
     // Add firewall rule for new port before restarting
-    let _ = Command::new("ufw").args(["allow", &format!("{port}/tcp")]).output().await;
+    let _ = safe_command("ufw").args(["allow", &format!("{port}/tcp")]).output().await;
     restart_sshd().await
 }
 
@@ -480,7 +480,7 @@ async fn modify_sshd_config(key: &str, value: &str) -> Result<(), String> {
 async fn restart_sshd() -> Result<(), String> {
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        Command::new("systemctl").args(["restart", "sshd"]).output(),
+        safe_command("systemctl").args(["restart", "sshd"]).output(),
     ).await
         .map_err(|_| "sshd restart timed out".to_string())?
         .map_err(|e| format!("Failed to restart sshd: {e}"))?;
@@ -506,7 +506,7 @@ pub async fn fail2ban_unban(jail: &str, ip: &str) -> Result<(), String> {
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        Command::new("fail2ban-client").args(["set", jail, "unbanip", ip]).output(),
+        safe_command("fail2ban-client").args(["set", jail, "unbanip", ip]).output(),
     ).await
         .map_err(|_| "fail2ban-client timed out".to_string())?
         .map_err(|e| format!("fail2ban-client failed: {e}"))?;
@@ -530,7 +530,7 @@ pub async fn fail2ban_ban(jail: &str, ip: &str) -> Result<(), String> {
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        Command::new("fail2ban-client").args(["set", jail, "banip", ip]).output(),
+        safe_command("fail2ban-client").args(["set", jail, "banip", ip]).output(),
     ).await
         .map_err(|_| "fail2ban-client timed out".to_string())?
         .map_err(|e| format!("fail2ban-client failed: {e}"))?;
@@ -551,7 +551,7 @@ pub async fn fail2ban_banned_ips(jail: &str) -> Result<Vec<String>, String> {
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        Command::new("fail2ban-client").args(["status", jail]).output(),
+        safe_command("fail2ban-client").args(["status", jail]).output(),
     ).await
         .map_err(|_| "fail2ban-client timed out".to_string())?
         .map_err(|e| format!("fail2ban-client failed: {e}"))?;
@@ -682,7 +682,7 @@ bantime = 3600
     // 3. Restart fail2ban
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        Command::new("systemctl").args(["restart", "fail2ban"]).output(),
+        safe_command("systemctl").args(["restart", "fail2ban"]).output(),
     ).await
         .map_err(|_| "fail2ban restart timed out".to_string())?
         .map_err(|e| format!("Failed to restart fail2ban: {e}"))?;

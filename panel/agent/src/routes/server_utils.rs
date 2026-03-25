@@ -5,7 +5,7 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
-use tokio::process::Command;
+use crate::safe_cmd::safe_command;
 
 use super::AppState;
 use base64::Engine as _;
@@ -153,7 +153,7 @@ async fn add_ssh_key(
 
     tokio::fs::write(path, &content).await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write: {e}")))?;
-    let _ = Command::new("chmod").args(["600", path]).output().await;
+    let _ = safe_command("chmod").args(["600", path]).output().await;
 
     tracing::info!("SSH key added");
     Ok(ok("SSH key added"))
@@ -194,7 +194,7 @@ async fn remove_ssh_key(
 // ── Auto-Updates ────────────────────────────────────────────────────────
 
 async fn auto_updates_status() -> Result<Json<serde_json::Value>, ApiErr> {
-    let installed = Command::new("dpkg")
+    let installed = safe_command("dpkg")
         .args(["-l", "unattended-upgrades"])
         .output()
         .await
@@ -215,7 +215,7 @@ async fn auto_updates_status() -> Result<Json<serde_json::Value>, ApiErr> {
 
 async fn enable_auto_updates() -> Result<Json<serde_json::Value>, ApiErr> {
     // Install unattended-upgrades if not present
-    let _ = Command::new("sh")
+    let _ = safe_command("sh")
         .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades"])
         .output()
         .await;

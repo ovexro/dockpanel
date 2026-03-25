@@ -1,3 +1,4 @@
+use crate::safe_cmd::safe_command;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -1016,7 +1017,7 @@ pub async fn check_propagation(
     let mut results = Vec::new();
 
     for (ip, label) in resolvers {
-        let output = tokio::process::Command::new("dig")
+        let output = safe_command("dig")
             .args([
                 &format!("@{ip}"),
                 "+short",
@@ -1059,7 +1060,7 @@ pub async fn check_propagation(
 // ── DNS Health Check ────────────────────────────────────────────────────
 
 async fn run_dig(domain: &str, rtype: &str) -> String {
-    tokio::process::Command::new("dig")
+    safe_command("dig")
         .args(["+short", "+time=3", "+tries=1", rtype, domain])
         .output()
         .await
@@ -1135,7 +1136,7 @@ pub async fn dns_health_check(
     }));
 
     // 6. DNSSEC
-    let dnssec_output = tokio::process::Command::new("dig")
+    let dnssec_output = safe_command("dig")
         .args(["+dnssec", "+short", "DNSKEY", domain])
         .output()
         .await;
