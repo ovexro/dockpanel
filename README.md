@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/screenshots/dp-dashboard.png" alt="DockPanel Dashboard" width="800">
+  <img src=".github/screenshots/dp-apps.png" alt="DockPanel Docker Apps" width="800">
 </p>
 
 <h1 align="center">DockPanel</h1>
@@ -108,25 +108,25 @@ All screenshots use the **Clean** (light) theme.
 <details>
 <summary><strong>Security</strong> — Firewall, Fail2Ban, SSH hardening, vulnerability scanning</summary>
 
-![Security](.github/screenshots/dp-security.png)
+*Screenshot will be updated from the demo environment.*
 </details>
 
 <details>
 <summary><strong>DNS Management</strong> — Cloudflare + PowerDNS, zone templates, propagation checker</summary>
 
-![DNS](.github/screenshots/dp-dns.png)
+*Screenshot will be updated from the demo environment.*
 </details>
 
 <details>
 <summary><strong>Mail</strong> — Postfix + Dovecot + DKIM, Roundcube webmail, Rspamd spam filter</summary>
 
-![Mail](.github/screenshots/dp-mail.png)
+*Screenshot will be updated from the demo environment.*
 </details>
 
 <details>
 <summary><strong>Terminal</strong> — Full SSH in the browser with tabs, themes, session recording</summary>
 
-![Terminal](.github/screenshots/dp-terminal.png)
+*Screenshot will be updated from the demo environment.*
 </details>
 
 <details>
