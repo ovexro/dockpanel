@@ -88,6 +88,11 @@ pub async fn deploy(
         let mut logs = state.provision_logs.lock().unwrap();
         logs.insert(deploy_id, (Vec::new(), tx, Instant::now()));
     }
+    // Track deploy ownership for SSE log access control
+    {
+        let mut owners = state.deploy_owners.lock().unwrap();
+        owners.insert(deploy_id, claims.sub);
+    }
 
     let logs = state.provision_logs.clone();
     let agent = agent.clone();
@@ -357,9 +362,17 @@ pub async fn deploy(
 /// GET /api/apps/deploy/{deploy_id}/log — SSE stream of deploy progress.
 pub async fn deploy_log(
     State(state): State<AppState>,
-    AuthUser(_claims): AuthUser,
+    AuthUser(claims): AuthUser,
     Path(deploy_id): Path<Uuid>,
 ) -> Result<Sse<impl futures::Stream<Item = Result<Event, axum::BoxError>>>, ApiError> {
+    // Verify the requesting user owns this deploy (or is admin)
+    if claims.role != "admin" {
+        let owners = state.deploy_owners.lock().unwrap();
+        if owners.get(&deploy_id) != Some(&claims.sub) {
+            return Err(err(StatusCode::FORBIDDEN, "Not your deploy"));
+        }
+    }
+
     let (snapshot, rx) = {
         let logs = state.provision_logs.lock().unwrap();
         match logs.get(&deploy_id) {
@@ -511,6 +524,10 @@ pub async fn update_app(
     {
         let mut logs = state.provision_logs.lock().unwrap();
         logs.insert(deploy_id, (Vec::new(), tx, Instant::now()));
+    }
+    {
+        let mut owners = state.deploy_owners.lock().unwrap();
+        owners.insert(deploy_id, claims.sub);
     }
 
     let logs = state.provision_logs.clone();

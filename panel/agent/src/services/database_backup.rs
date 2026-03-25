@@ -56,7 +56,7 @@ pub async fn dump_mysql(
     let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     let filename = format!("{db_name}-{timestamp}.sql.gz");
     let filepath = dest_dir.join(&filename);
-    let filepath_str = filepath.to_str().ok_or("Invalid path encoding")?;
+    let _filepath_str = filepath.to_str().ok_or("Invalid path encoding")?;
 
     // docker exec outputs to stdout → pipe to gzip → write to file
     let mut docker_child = safe_command("docker")
@@ -162,7 +162,7 @@ pub async fn dump_postgres(
     let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     let filename = format!("{db_name}-{timestamp}.sql.gz");
     let filepath = dest_dir.join(&filename);
-    let filepath_str = filepath.to_str().ok_or("Invalid path encoding")?;
+    let _filepath_str = filepath.to_str().ok_or("Invalid path encoding")?;
 
     let mut docker_child = safe_command("docker")
         .args([
@@ -260,7 +260,7 @@ pub async fn dump_mongo(
     let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     let filename = format!("{db_name}-{timestamp}.archive.gz");
     let filepath = dest_dir.join(&filename);
-    let filepath_str = filepath.to_str().ok_or("Invalid path encoding")?;
+    let _filepath_str = filepath.to_str().ok_or("Invalid path encoding")?;
 
     // mongodump --archive --gzip outputs directly, no need for separate gzip
     let output = tokio::time::timeout(
