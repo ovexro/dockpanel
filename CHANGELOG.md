@@ -4,6 +4,26 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.6.5] - 2026-03-25
+
+### Security
+- **Research-driven security audit**: Studied CVEs from CyberPanel, HestiaCP, CloudPanel, VestaCP, Webmin, cPanel — then audited DockPanel against those attack patterns. 55 findings (12 HIGH, 28 MEDIUM, 15 LOW).
+- **Command execution safety**: Added `safe_command()` module — `env_clear()` on all 341 `Command::new()` calls across 44 files. Prevents LD_PRELOAD/PATH hijacking.
+- **Credential encryption at rest**: All stored credentials (DB passwords, SMTP, S3/SFTP, OAuth, TOTP, DKIM) encrypted with AES-256-GCM using dedicated key derivation.
+- **Shell injection fix**: Rewrote database_backup.rs — piped `docker exec` + `gzip` instead of `bash -c` with interpolated strings.
+- **Tar symlink attacks**: `--no-dereference` on backup creation, `--no-same-owner` on restore.
+- **Session revocation**: `revoke_all_sessions` now actually works — auth middleware checks cached timestamp.
+- **Deploy log IDOR**: Ownership verification on both git_deploys and docker_apps SSE streams.
+- **Content Security Policy**: Added CSP header to frontend nginx config.
+- **Docker exec denylist**: Added 7 escape-relevant commands (unshare, pivot_root, setns, capsh, mknod, debugfs, kexec).
+- **Compose volume symlinks**: `canonicalize()` resolves symlinks before path validation.
+- **nginx header inheritance**: Security headers re-declared in static asset location blocks.
+- **WebSocket security**: Conditional upgrade (prevents h2c smuggling), `access_log off` on token-bearing WS locations.
+- **S3 temp files**: RAII TempFileGuard with random names + 0600 permissions.
+- **2FA validation**: Explicit HS256 + leeway=0 (was Validation::default()).
+- **Account enumeration**: Registration returns generic response.
+- **Git history scrubbed**: Removed all passwords, IPs, hostnames, sensitive screenshots from history via git-filter-repo.
+
 ## [2.6.1] - 2026-03-22
 
 ### Added (LOW Priority Gap Fixes)

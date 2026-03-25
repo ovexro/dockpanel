@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>The most feature-packed free server panel ever built.</strong><br>
-  Self-hosted. Docker-native. Written in Rust. ~57MB RAM. 371 API endpoints. 54 app templates. 116 E2E tests. ~41MB binaries. Zero subscriptions.
+  Self-hosted. Docker-native. Written in Rust. ~57MB RAM. 604 API endpoints. 51 app templates. 291 E2E tests. ~41MB binaries. Zero subscriptions.
 </p>
 
 <p align="center">
@@ -36,13 +36,13 @@ Supports Ubuntu 20+, Debian 11+, CentOS 9+, Rocky 9+, Fedora 39+, Amazon Linux 2
 
 ## Why DockPanel?
 
-No other free panel gives you Git push-to-deploy with blue-green zero-downtime updates, 54 one-click Docker app templates, multi-server management, reseller accounts, a developer CLI, and Infrastructure as Code — all running on ~57MB of RAM. DockPanel does.
+No other free panel gives you Git push-to-deploy with blue-green zero-downtime updates, 51 one-click Docker app templates, multi-server management, reseller accounts, a developer CLI, and Infrastructure as Code — all running on ~57MB of RAM. DockPanel does.
 
 | | DockPanel | HestiaCP | CloudPanel | RunCloud |
 |---|---|---|---|---|
 | **Price** | **Free** | Free | Free | $8/mo+ |
 | **Stack** | **Rust + React** | PHP | PHP | PHP (SaaS) |
-| **Docker native** | **54 templates** | No | No | No |
+| **Docker native** | **51 templates** | No | No | No |
 | **Git deploy** | **Blue-green, zero-downtime** | No | No | Basic |
 | **Multi-server** | **Unlimited** | No | No | Yes |
 | **Reseller + white-label** | **Yes** | No | No | No |
@@ -62,7 +62,7 @@ All screenshots use the **Clean** (light) theme.
 </details>
 
 <details>
-<summary><strong>Docker Apps</strong> — 54 one-click templates across 10 categories</summary>
+<summary><strong>Docker Apps</strong> — 51 one-click templates across 10 categories</summary>
 
 ![Docker Apps](.github/screenshots/dp-apps.png)
 </details>
@@ -138,7 +138,7 @@ All screenshots use the **Clean** (light) theme.
 ### Hosting
 - **Sites** — Static, PHP (8.1-8.4), Node.js, Python, reverse proxy. Automatic Nginx config, SSL, PHP-FPM pools.
 - **Databases** — MySQL/PostgreSQL in Docker. Built-in SQL browser. Auto-cleanup on site delete.
-- **Docker Apps** — 54 templates (WordPress, Redis, PostgreSQL, Grafana, n8n, Gitea...). Compose stacks. Resource limits.
+- **Docker Apps** — 51 templates (WordPress, Redis, PostgreSQL, Grafana, n8n, Gitea...). Compose stacks. Resource limits.
 - **Git Deploy** — Push-to-deploy. Blue-green zero-downtime updates. Nixpacks (30+ languages). Preview environments.
 - **WordPress Toolkit** — Multi-site dashboard, vulnerability scanning, security hardening, bulk updates.
 - **CMS Install** — WordPress, Laravel, Drupal, Joomla, Symfony, CodeIgniter — one click.
@@ -202,6 +202,10 @@ Browser → React 19 SPA → Nginx
 | API | Rust/Axum + SQLx | Auth, business logic, multi-server dispatch, background tasks |
 | CLI | Rust/Clap | Command-line interface for automation |
 | Frontend | React 19 + Vite + Tailwind 4 | Browser UI with 6 themes + 3 layouts |
+
+## Security
+
+DockPanel has undergone three rounds of security auditing (180+ vulnerabilities found and fixed). Credentials are encrypted at rest with AES-256-GCM. All child processes run with sanitized environments. See [SECURITY.md](SECURITY.md) for details.
 
 ## Development
 

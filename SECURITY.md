@@ -67,13 +67,33 @@ DockPanel is designed with defense in depth. Key security properties include:
 - **Unix socket communication** — The agent communicates via a Unix domain socket and is not exposed to the network.
 - **JWT authentication** — All API endpoints require valid JWT tokens for access.
 - **Argon2 password hashing** — User passwords are hashed using Argon2, a memory-hard algorithm resistant to brute-force and GPU-based attacks.
-- **Input validation** — All user-supplied data is validated and sanitized before processing.
+- **Credential encryption at rest** — All stored credentials (DB passwords, SMTP, S3/SFTP, OAuth, TOTP, DKIM) are encrypted with AES-256-GCM using dedicated key derivation.
+- **Content Security Policy** — CSP headers are set on the frontend nginx configuration to mitigate XSS and data injection attacks.
+- **Safe command execution** — All child processes are spawned with `env_clear()` to prevent LD_PRELOAD, PATH hijacking, and other environment-based attacks.
+- **Rate limiting** — All authentication endpoints are rate-limited to prevent brute-force attacks.
+- **IDOR protection** — All resource endpoints verify ownership before granting access.
+- **Input sanitization** — All user-supplied data is validated and sanitized before being passed to system commands.
 - **Systemd hardening** — Generated service units apply systemd security directives to limit the blast radius of any compromise.
 - **Terminal sandboxing** — Terminal sessions run with `PR_SET_NO_NEW_PRIVS`, restricted bash shells, and a command blocklist to prevent privilege escalation and dangerous operations.
 
 ## Past Security Work
 
-A comprehensive security audit was completed in March 2026. The audit identified and resolved **117 vulnerabilities** across **45 files**, spanning the following categories:
+### Audit Round 3: Research-Driven Audit (March 2026)
+
+A research-driven security audit studied real-world CVEs from CyberPanel, HestiaCP, CloudPanel, VestaCP, Webmin, and cPanel, then audited DockPanel against those attack patterns. This round identified **55 findings** (12 HIGH, 28 MEDIUM, 15 LOW), including:
+
+- **Command execution safety** — Added `safe_command()` with `env_clear()` on all 341 `Command::new()` calls across 44 files to prevent LD_PRELOAD/PATH hijacking.
+- **Credential encryption at rest** — All stored credentials encrypted with AES-256-GCM using dedicated key derivation.
+- **Shell injection** — Rewrote database_backup.rs to pipe `docker exec` + `gzip` instead of `bash -c` with interpolated strings.
+- **Tar symlink attacks** — `--no-dereference` on backup creation, `--no-same-owner` on restore.
+- **Deploy log IDOR** — Ownership verification on SSE streams.
+- **Content Security Policy** — CSP header added to frontend nginx config.
+- **Docker exec denylist** — 7 escape-relevant commands blocked (unshare, pivot_root, setns, capsh, mknod, debugfs, kexec).
+- **WebSocket security** — Conditional upgrade to prevent h2c smuggling, `access_log off` on token-bearing WS locations.
+
+### Audit Rounds 1-2: Comprehensive Audit (March 2026)
+
+The initial comprehensive security audit identified and resolved **117 vulnerabilities** across **45 files**, spanning the following categories:
 
 - Command injection
 - Path traversal
@@ -82,7 +102,7 @@ A comprehensive security audit was completed in March 2026. The audit identified
 - Privilege escalation
 - Input validation gaps
 
-All identified issues have been fixed. The audit informed many of the architectural decisions described above.
+All identified issues across all three audit rounds have been fixed. Combined total: **180+ vulnerabilities** found and resolved.
 
 ## Contact
 
