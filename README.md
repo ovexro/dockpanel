@@ -106,25 +106,25 @@ All screenshots use the **Clean** (light) theme.
 <details>
 <summary><strong>Security</strong> — Firewall, Fail2Ban, SSH hardening, vulnerability scanning</summary>
 
-*Screenshot will be updated from the demo environment.*
+*Screenshot coming soon.*
 </details>
 
 <details>
 <summary><strong>DNS Management</strong> — Cloudflare + PowerDNS, zone templates, propagation checker</summary>
 
-*Screenshot will be updated from the demo environment.*
+*Screenshot coming soon.*
 </details>
 
 <details>
 <summary><strong>Mail</strong> — Postfix + Dovecot + DKIM, Roundcube webmail, Rspamd spam filter</summary>
 
-*Screenshot will be updated from the demo environment.*
+*Screenshot coming soon.*
 </details>
 
 <details>
 <summary><strong>Terminal</strong> — Full SSH in the browser with tabs, themes, session recording</summary>
 
-*Screenshot will be updated from the demo environment.*
+*Screenshot coming soon.*
 </details>
 
 <details>
