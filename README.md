@@ -13,11 +13,9 @@
   <a href="https://github.com/ovexro/dockpanel/releases"><img src="https://img.shields.io/github/v/release/ovexro/dockpanel" alt="Release"></a>
   <a href="https://github.com/ovexro/dockpanel/actions"><img src="https://img.shields.io/github/actions/workflow/status/ovexro/dockpanel/ci.yml?label=CI" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-BSL_1.1-blue.svg" alt="License: BSL 1.1"></a>
-  <a href="https://panel.example.com"><img src="https://img.shields.io/badge/demo-live-brightgreen" alt="Live Demo"></a>
 </p>
 
 <p align="center">
-  <a href="https://panel.example.com">Live Demo</a> &bull;
   <a href="https://dockpanel.dev">Website</a> &bull;
   <a href="https://docs.dockpanel.dev">Docs</a> &bull;
   <a href="CHANGELOG.md">Changelog</a> &bull;

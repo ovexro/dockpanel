@@ -89,9 +89,7 @@ export default function TermsOfService() {
           <section>
             <h2 className="text-lg font-semibold text-white">Demo Service</h2>
             <p className="mt-2">
-              We provide a demo instance at panel.example.com for evaluation purposes. This demo is
-              provided as-is with no uptime guarantees. Do not enter real credentials or sensitive data into
-              the demo.
+              A demo may be available upon request for evaluation purposes.
             </p>
           </section>
 

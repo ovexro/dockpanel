@@ -47,7 +47,7 @@ const faqs = [
   { q: 'Can I run DockPanel on a Raspberry Pi?', a: 'Yes. DockPanel compiles to ~41MB total binaries (agent, API, CLI) and uses about 57MB RAM. It runs great on Raspberry Pi 4/5, Oracle Cloud free-tier ARM instances, and any ARM64 server. Same features, same performance.' },
   { q: 'How is this different from CloudPanel, RunCloud, or cPanel?', a: 'Dramatically. cPanel uses 800MB of RAM, costs $15/month, and has no Docker support. CloudPanel is free but has no Git deploy, no Docker apps, no CLI, no multi-server, no reseller accounts. RunCloud charges $8/month for features DockPanel includes for free. DockPanel runs on 57MB of RAM, includes 54 Docker app templates, blue-green Git deploy, a full CLI, Infrastructure as Code, multi-server management, reseller accounts with white-label, and a WordPress toolkit. No other free panel has anything close to this feature set.' },
   { q: 'Can I manage multiple servers?', a: 'Yes, with no limits. Each server runs a lightweight agent that communicates with the central API. You can view per-server metrics, run commands, and manage sites across all your servers from a single dashboard.' },
-  { q: 'Is there a demo I can try?', a: 'Yes. Visit panel.example.com to explore the full panel interface with sample data — no signup required. You can also install DockPanel on your own server with one command.' },
+  { q: 'Is there a demo I can try?', a: 'Install DockPanel on your own server with one command to explore the full panel interface.' },
   { q: 'Why Rust instead of PHP/Node.js?', a: "Rust compiles to compact binaries (~41MB total for agent, API, and CLI) with no runtime dependencies. It uses ~57MB of RAM vs ~300-800MB for PHP-based panels. On a $5 VPS with 1GB RAM, that's the difference between running 2 sites and running 20. Rust also eliminates entire classes of security vulnerabilities (buffer overflows, use-after-free) at compile time." },
   { q: 'Can DockPanel manage email?', a: "Yes. DockPanel has full email management — one-click install of Postfix + Dovecot + OpenDKIM, mail domains, mailboxes with quotas, aliases, forwarding, autoresponders, DKIM signing, DNS helper (generates MX/SPF/DKIM/DMARC records), and a mail queue viewer. Roundcube webmail and Rspamd spam filter are available as one-click Docker apps." },
   { q: 'What gets installed automatically?', a: 'The install script sets up everything: Docker, Nginx, PHP-FPM, Certbot (SSL), UFW (firewall), Fail2Ban (intrusion prevention), and the DockPanel agent + API + frontend. Mail server, webmail, and DNS server are optional one-click installs from the panel. Zero manual configuration needed.' },
@@ -87,8 +87,8 @@ export default function Landing() {
               <Github className="w-4 h-4" />
               GitHub
             </a>
-            <a href="https://panel.example.com" className="bg-white text-zinc-950 px-4 py-2 rounded-md text-sm font-semibold hover:bg-zinc-200 transition-colors">
-              Demo
+            <a href="https://docs.dockpanel.dev" className="bg-white text-zinc-950 px-4 py-2 rounded-md text-sm font-semibold hover:bg-zinc-200 transition-colors">
+              Docs
             </a>
           </div>
         </div>
@@ -140,9 +140,9 @@ export default function Landing() {
             </div>
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-              <a href="https://panel.example.com" className="w-full sm:w-auto flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-zinc-950 px-6 py-3 rounded-lg font-semibold transition-colors">
+              <a href="https://docs.dockpanel.dev" className="w-full sm:w-auto flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-zinc-950 px-6 py-3 rounded-lg font-semibold transition-colors">
                 <Play className="w-4 h-4 fill-current" />
-                Live Demo
+                Get Started
               </a>
               <a href="https://github.com/ovexro/dockpanel" className="w-full sm:w-auto flex items-center justify-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-white px-6 py-3 rounded-lg font-semibold transition-colors">
                 <Github className="w-4 h-4" />
@@ -415,9 +415,9 @@ export default function Landing() {
                       <Github className="w-5 h-5" />
                       View on GitHub
                     </a>
-                    <a href="https://panel.example.com" className="w-full flex items-center justify-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-white px-6 py-4 rounded-xl font-bold text-lg transition-colors">
+                    <a href="https://docs.dockpanel.dev" className="w-full flex items-center justify-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-white px-6 py-4 rounded-xl font-bold text-lg transition-colors">
                       <Play className="w-5 h-5 fill-current" />
-                      Try Live Demo
+                      Get Started
                     </a>
                   </div>
                 </div>
@@ -524,7 +524,7 @@ export default function Landing() {
                 <li><a href="#features" className="hover:text-white transition-colors">Features</a></li>
                 <li><a href="#pricing" className="hover:text-white transition-colors">Pricing</a></li>
                 <li><a href="#faq" className="hover:text-white transition-colors">FAQ</a></li>
-                <li><a href="https://panel.example.com" className="hover:text-white transition-colors">Demo</a></li>
+                <li><a href="https://docs.dockpanel.dev" className="hover:text-white transition-colors">Docs</a></li>
               </ul>
             </div>
 
