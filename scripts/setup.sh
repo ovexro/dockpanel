@@ -471,6 +471,28 @@ download_binaries() {
     log "Frontend extracted to $FRONTEND_DIST"
 }
 
+# ── Cargo Build with Progress ────────────────────────────────────────────
+cargo_build_with_progress() {
+    local src_dir="$1"
+    local label="$2"
+    local count=0
+    local start_time
+    start_time=$(date +%s)
+
+    (cd "$src_dir" && $CARGO_CMD build --release 2>&1) | while IFS= read -r line; do
+        if echo "$line" | grep -qE '^\s*Compiling '; then
+            count=$((count + 1))
+            local crate_name
+            crate_name=$(echo "$line" | sed 's/.*Compiling \([^ ]*\).*/\1/')
+            local elapsed=$(( $(date +%s) - start_time ))
+            printf "\r    ${DIM}%s: %d crates (%ds) → %s${NC}                    " "$label" "$count" "$elapsed" "$crate_name" >&2
+        elif echo "$line" | grep -qE '^\s*Finished '; then
+            local elapsed=$(( $(date +%s) - start_time ))
+            printf "\r    ${DIM}%s: %d crates compiled in %ds${NC}                              \n" "$label" "$count" "$elapsed" >&2
+        fi
+    done
+}
+
 # ── Build Binaries ───────────────────────────────────────────────────────
 build_binaries() {
     header "Building Binaries"
@@ -487,22 +509,22 @@ build_binaries() {
     fi
 
     # Build agent
-    log "Building agent (this may take a few minutes)..."
-    (cd "$AGENT_SRC" && $CARGO_CMD build --release 2>&1 | tail -1)
+    log "Building agent..."
+    cargo_build_with_progress "$AGENT_SRC" "Agent"
     cp "$AGENT_SRC/target/release/dockpanel-agent" "$AGENT_BIN"
     chmod +x "$AGENT_BIN"
     log "Agent built ($(du -h "$AGENT_BIN" | cut -f1))"
 
     # Build API
-    log "Building API (this may take a few minutes)..."
-    (cd "$API_SRC" && $CARGO_CMD build --release 2>&1 | tail -1)
+    log "Building API..."
+    cargo_build_with_progress "$API_SRC" "API"
     cp "$API_SRC/target/release/dockpanel-api" "$API_BIN"
     chmod +x "$API_BIN"
     log "API built ($(du -h "$API_BIN" | cut -f1))"
 
     # Build CLI
     log "Building CLI..."
-    (cd "$CLI_SRC" && $CARGO_CMD build --release 2>&1 | tail -1)
+    cargo_build_with_progress "$CLI_SRC" "CLI"
     cp "$CLI_SRC/target/release/dockpanel" "$CLI_BIN"
     chmod +x "$CLI_BIN"
     log "CLI built ($(du -h "$CLI_BIN" | cut -f1))"
@@ -758,9 +780,9 @@ server {
 }
 NGINXEOF
 
-    # Test and reload
+    # Test and restart (full restart needed to release port bindings from removed default site)
     if nginx -t > /dev/null 2>&1; then
-        nginx -s reload 2>/dev/null || systemctl reload nginx
+        systemctl restart nginx
         log "Nginx configured — panel on port $PANEL_PORT"
     else
         error "Nginx config test failed"
