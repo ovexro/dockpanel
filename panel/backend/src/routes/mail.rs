@@ -209,12 +209,20 @@ pub async fn create_domain(
         }
     };
 
+    // Encrypt the DKIM private key before storing
+    let encrypted_private_key = if let Some(ref pk) = private_key {
+        Some(crate::services::secrets_crypto::encrypt_credential(pk, &state.config.jwt_secret)
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Encryption failed: {e}")))?)
+    } else {
+        None
+    };
+
     let mail_domain: MailDomain = sqlx::query_as(
         "INSERT INTO mail_domains (domain, dkim_private_key, dkim_public_key) \
          VALUES ($1, $2, $3) RETURNING id, domain, dkim_selector, dkim_public_key, catch_all, enabled, created_at",
     )
     .bind(&domain)
-    .bind(&private_key)
+    .bind(&encrypted_private_key)
     .bind(&public_key)
     .fetch_one(&state.db)
     .await
@@ -920,10 +928,10 @@ async fn auto_create_mail_dns(
             "SELECT key, value FROM settings WHERE key IN ('pdns_api_url', 'pdns_api_key')"
         ).fetch_all(db).await.unwrap_or_default();
         let pdns_url = pdns.iter().find(|(k,_)| k == "pdns_api_url").map(|(_,v)| v.clone());
-        let pdns_key = pdns.iter().find(|(k,_)| k == "pdns_api_key").map(|(_,v)| v.clone());
+        let pdns_key_enc = pdns.iter().find(|(k,_)| k == "pdns_api_key").map(|(_,v)| v.clone());
 
-        let (url, key) = match (pdns_url, pdns_key) {
-            (Some(u), Some(k)) => (u, k),
+        let (url, key) = match (pdns_url, pdns_key_enc) {
+            (Some(u), Some(k)) => (u, crate::services::secrets_crypto::decrypt_credential_from_env(&k)),
             _ => return Err("PowerDNS not configured".into()),
         };
 
@@ -1070,9 +1078,10 @@ async fn auto_delete_mail_dns(
             "SELECT key, value FROM settings WHERE key IN ('pdns_api_url', 'pdns_api_key')"
         ).fetch_all(db).await.unwrap_or_default();
         let pdns_url = pdns.iter().find(|(k,_)| k == "pdns_api_url").map(|(_,v)| v.clone());
-        let pdns_key = pdns.iter().find(|(k,_)| k == "pdns_api_key").map(|(_,v)| v.clone());
+        let pdns_key_enc = pdns.iter().find(|(k,_)| k == "pdns_api_key").map(|(_,v)| v.clone());
 
-        if let (Some(url), Some(key)) = (pdns_url, pdns_key) {
+        if let (Some(url), Some(key_enc)) = (pdns_url, pdns_key_enc) {
+            let key = crate::services::secrets_crypto::decrypt_credential_from_env(&key_enc);
             let zone_fqdn = if parent.ends_with('.') { parent.clone() } else { format!("{parent}.") };
             let domain_fqdn = format!("{domain}.");
             let dmarc_fqdn = format!("_dmarc.{domain}.");

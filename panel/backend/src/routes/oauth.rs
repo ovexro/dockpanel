@@ -137,11 +137,16 @@ pub async fn callback(
 
     let cred_map: HashMap<String, String> = creds.into_iter().collect();
     let client_id = cred_map.get(&client_id_key).cloned().unwrap_or_default();
-    let client_secret = cred_map.get(&client_secret_key).cloned().unwrap_or_default();
+    let client_secret_enc = cred_map.get(&client_secret_key).cloned().unwrap_or_default();
 
-    if client_id.is_empty() || client_secret.is_empty() {
+    if client_id.is_empty() || client_secret_enc.is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "OAuth not fully configured"));
     }
+
+    // Decrypt the client secret (with legacy plaintext fallback)
+    let client_secret = crate::services::secrets_crypto::decrypt_credential_or_legacy(
+        &client_secret_enc, &state.config.jwt_secret,
+    );
 
     let redirect_uri = format!("{}/api/auth/oauth/{provider_name}/callback", state.config.base_url);
 

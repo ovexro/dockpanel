@@ -140,6 +140,10 @@ pub async fn create(
     let password = uuid::Uuid::new_v4().to_string().replace('-', "");
     let port = find_available_port(&state, engine).await?;
 
+    // Encrypt the password before storing in the database
+    let encrypted_password = crate::services::secrets_crypto::encrypt_credential(&password, &state.config.jwt_secret)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Encryption failed: {e}")))?;
+
     // Insert DB record first to atomically claim the port (unique index prevents races).
     // container_id is empty until the agent creates it.
     let db_record: Database = sqlx::query_as(
@@ -151,7 +155,7 @@ pub async fn create(
     .bind(&body.name)
     .bind(engine)
     .bind(&body.name)
-    .bind(&password)
+    .bind(&encrypted_password)
     .bind(port)
     .fetch_one(&state.db)
     .await
@@ -225,8 +229,11 @@ pub async fn credentials(
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let (name, engine, password, port, container_id) =
+    let (name, engine, password_enc, port, container_id) =
         row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Database not found"))?;
+
+    // Decrypt password (with legacy plaintext fallback for pre-encryption records)
+    let password = crate::services::secrets_crypto::decrypt_credential_or_legacy(&password_enc, &state.config.jwt_secret);
 
     let host = container_id
         .as_deref()
@@ -314,9 +321,11 @@ async fn get_db_info(
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let (name, engine, password, port) =
+    let (name, engine, password_enc, port) =
         row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Database not found"))?;
     let port = port.unwrap_or(5432);
+    // Decrypt password for agent use (with legacy plaintext fallback)
+    let password = crate::services::secrets_crypto::decrypt_credential_or_legacy(&password_enc, &state.config.jwt_secret);
     Ok((name, engine, password, port))
 }
 

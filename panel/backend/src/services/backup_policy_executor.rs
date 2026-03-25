@@ -28,7 +28,7 @@ struct PolicyRow {
 }
 
 /// Run the backup policy executor loop — checks every 60 seconds for due policies.
-pub async fn run(db: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
+pub async fn run(db: PgPool, agent: AgentClient, jwt_secret: String, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
     tracing::info!("Backup policy executor started");
 
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -36,7 +36,7 @@ pub async fn run(db: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync::b
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                if let Err(e) = tick(&db, &agent).await {
+                if let Err(e) = tick(&db, &agent, &jwt_secret).await {
                     tracing::error!("Backup policy executor error: {e}");
                 }
             }
@@ -51,7 +51,7 @@ pub async fn run(db: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync::b
 /// Track last stale-backup check to avoid spamming (once per hour).
 static LAST_STALE_CHECK: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
-async fn tick(db: &PgPool, agent: &AgentClient) -> Result<(), String> {
+async fn tick(db: &PgPool, agent: &AgentClient, jwt_secret: &str) -> Result<(), String> {
     let now = chrono::Utc::now();
 
     // Fetch all enabled policies
@@ -76,7 +76,7 @@ async fn tick(db: &PgPool, agent: &AgentClient) -> Result<(), String> {
         }
 
         tracing::info!("Executing backup policy '{}' ({})", policy.name, policy.id);
-        execute_policy(db, agent, policy).await;
+        execute_policy(db, agent, policy, jwt_secret).await;
     }
 
     // Record backup storage metric for growth tracking
@@ -118,7 +118,7 @@ async fn tick(db: &PgPool, agent: &AgentClient) -> Result<(), String> {
     Ok(())
 }
 
-async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow) {
+async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow, jwt_secret: &str) {
     let mut successes = 0;
     let mut failures = 0;
 
@@ -177,7 +177,8 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow) {
         .bind(policy.user_id)
         .fetch_all(db).await.unwrap_or_default();
 
-        for (db_id, db_name, engine, user, password) in &databases {
+        for (db_id, db_name, engine, user, password_enc) in &databases {
+            let password = crate::services::secrets_crypto::decrypt_credential_or_legacy(password_enc, jwt_secret);
             let container_name = format!("dockpanel-db-{db_name}");
             let body = serde_json::json!({
                 "container_name": container_name,

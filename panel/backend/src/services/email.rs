@@ -36,7 +36,9 @@ pub async fn send_email(
         .parse()
         .unwrap_or(587);
     let username = get("smtp_username").ok_or("SMTP username not configured")?;
-    let password = get("smtp_password").ok_or("SMTP password not configured")?;
+    let password_raw = get("smtp_password").ok_or("SMTP password not configured")?;
+    // Decrypt the password (handles legacy plaintext values gracefully)
+    let password = crate::services::secrets_crypto::decrypt_credential_from_env(&password_raw);
     let from_email = get("smtp_from").ok_or("SMTP from address not configured")?;
     let from_name = get("smtp_from_name").unwrap_or_else(|| "DockPanel".to_string());
     let encryption = get("smtp_encryption").unwrap_or_else(|| "starttls".to_string());

@@ -419,8 +419,11 @@ pub async fn create_db_backup(
     .fetch_optional(&state.db).await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let (db_id, db_name, engine, user, password, server_id) =
+    let (db_id, db_name, engine, user, password_enc, server_id) =
         row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Database not found"))?;
+
+    // Decrypt the database password (handles both encrypted and legacy plaintext)
+    let password = crate::services::secrets_crypto::decrypt_credential_or_legacy(&password_enc, &state.config.jwt_secret);
 
     // Container name follows convention: dockpanel-db-{name}
     let container_name = format!("dockpanel-db-{db_name}");
@@ -552,8 +555,11 @@ pub async fn restore_db_backup(
     .fetch_optional(&state.db).await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let (_engine, user, password) =
+    let (_engine, user, password_enc) =
         creds.ok_or_else(|| err(StatusCode::NOT_FOUND, "Database not found"))?;
+
+    // Decrypt the database password (handles both encrypted and legacy plaintext)
+    let password = crate::services::secrets_crypto::decrypt_credential_or_legacy(&password_enc, &state.config.jwt_secret);
 
     let container_name = format!("dockpanel-db-{}", backup.db_name);
 

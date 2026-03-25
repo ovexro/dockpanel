@@ -80,12 +80,15 @@ pub async fn create(
         return Err(err(StatusCode::BAD_REQUEST, "Name is required"));
     }
 
+    // Encrypt sensitive fields in config before storing
+    let encrypted_config = encrypt_config_secrets(&body.config, &state.config.jwt_secret)?;
+
     let dest: BackupDestination = sqlx::query_as(
         "INSERT INTO backup_destinations (name, dtype, config) VALUES ($1, $2, $3) RETURNING *",
     )
     .bind(body.name.trim())
     .bind(&body.dtype)
-    .bind(&body.config)
+    .bind(&encrypted_config)
     .fetch_one(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -103,13 +106,13 @@ pub async fn update(
 ) -> Result<Json<BackupDestination>, ApiError> {
 
 
-    // If config has masked secrets, merge with existing
+    // If config has masked secrets, merge with existing (already-encrypted) values
     let mut new_config = body.config.clone();
     if let Some(ref cfg) = new_config {
         if let Some(obj) = cfg.as_object() {
             let has_masked = obj.values().any(|v| v.as_str() == Some("********"));
             if has_masked {
-                // Load existing config and merge
+                // Load existing config (already encrypted) and merge
                 let existing: Option<(serde_json::Value,)> =
                     sqlx::query_as("SELECT config FROM backup_destinations WHERE id = $1")
                         .bind(id)
@@ -123,6 +126,7 @@ pub async fn update(
                             if v.as_str() != Some("********") {
                                 merged_obj.insert(k.clone(), v.clone());
                             }
+                            // If masked ("********"), keep the existing encrypted value
                         }
                     }
                     new_config = Some(merged);
@@ -130,6 +134,13 @@ pub async fn update(
             }
         }
     }
+
+    // Encrypt sensitive fields in the new config before storing
+    let encrypted_config = if let Some(cfg) = new_config {
+        Some(encrypt_config_secrets(&cfg, &state.config.jwt_secret)?)
+    } else {
+        None
+    };
 
     let dest: BackupDestination = sqlx::query_as(
         "UPDATE backup_destinations SET \
@@ -139,7 +150,7 @@ pub async fn update(
          WHERE id = $3 RETURNING *",
     )
     .bind(body.name.as_deref())
-    .bind(&new_config)
+    .bind(&encrypted_config)
     .bind(id)
     .fetch_optional(&state.db)
     .await
@@ -220,12 +231,54 @@ pub async fn test_connection(
 }
 
 /// Build the agent destination config from a DB record.
+/// Decrypts sensitive fields before sending to the agent.
 pub fn build_agent_destination(dest: &BackupDestination) -> serde_json::Value {
-    let mut d = dest.config.clone();
+    let mut d = decrypt_config_secrets(&dest.config);
     if let Some(obj) = d.as_object_mut() {
         obj.insert("type".to_string(), serde_json::json!(&dest.dtype));
     } else {
         d = serde_json::json!({ "type": &dest.dtype });
     }
     d
+}
+
+/// Sensitive keys within the backup destination config JSON.
+const CONFIG_SENSITIVE_KEYS: &[&str] = &["secret_key", "password"];
+
+/// Encrypt sensitive fields within a backup destination config JSON.
+fn encrypt_config_secrets(config: &serde_json::Value, jwt_secret: &str) -> Result<serde_json::Value, ApiError> {
+    let mut cfg = config.clone();
+    if let Some(obj) = cfg.as_object_mut() {
+        for key in CONFIG_SENSITIVE_KEYS {
+            if let Some(v) = obj.get(*key) {
+                if let Some(s) = v.as_str() {
+                    if !s.is_empty() && s != "********" {
+                        let encrypted = crate::services::secrets_crypto::encrypt_credential(s, jwt_secret)
+                            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Encryption failed: {e}")))?;
+                        obj.insert(key.to_string(), serde_json::json!(encrypted));
+                    }
+                }
+            }
+        }
+    }
+    Ok(cfg)
+}
+
+/// Decrypt sensitive fields within a backup destination config JSON.
+/// Falls back to plaintext for legacy unencrypted values.
+fn decrypt_config_secrets(config: &serde_json::Value) -> serde_json::Value {
+    let mut cfg = config.clone();
+    if let Some(obj) = cfg.as_object_mut() {
+        for key in CONFIG_SENSITIVE_KEYS {
+            if let Some(v) = obj.get(*key) {
+                if let Some(s) = v.as_str() {
+                    if !s.is_empty() {
+                        let decrypted = crate::services::secrets_crypto::decrypt_credential_from_env(s);
+                        obj.insert(key.to_string(), serde_json::json!(decrypted));
+                    }
+                }
+            }
+        }
+    }
+    cfg
 }

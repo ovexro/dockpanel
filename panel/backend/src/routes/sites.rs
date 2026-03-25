@@ -512,8 +512,9 @@ pub async fn create(
                                 "SELECT key, value FROM settings WHERE key IN ('pdns_api_url', 'pdns_api_key')"
                             ).fetch_all(&dns_db).await.unwrap_or_default();
                             let purl = pdns.iter().find(|(k,_)| k == "pdns_api_url").map(|(_,v)| v.clone());
-                            let pkey = pdns.iter().find(|(k,_)| k == "pdns_api_key").map(|(_,v)| v.clone());
-                            if let (Some(url), Some(key)) = (purl, pkey) {
+                            let pkey_enc = pdns.iter().find(|(k,_)| k == "pdns_api_key").map(|(_,v)| v.clone());
+                            if let (Some(url), Some(key_enc)) = (purl, pkey_enc) {
+                                let key = crate::services::secrets_crypto::decrypt_credential_from_env(&key_enc);
                                 let zfqdn = if parent.ends_with('.') { parent.clone() } else { format!("{parent}.") };
                                 let _ = reqwest::Client::new()
                                     .patch(&format!("{url}/api/v1/servers/localhost/zones/{zfqdn}"))
@@ -638,6 +639,7 @@ pub async fn create(
                     (0..16).map(|_| rng.sample(rand::distributions::Alphanumeric) as char).collect()
                 });
                 let cms_logs = logs.clone();
+                let cms_jwt_secret = state.config.jwt_secret.clone();
 
                 tokio::spawn(async move {
                     let db_name = cms_domain.replace('.', "_").replace('-', "_");
@@ -678,6 +680,8 @@ pub async fn create(
                         };
                         db_host = host;
 
+                        let encrypted_db_password = crate::services::secrets_crypto::encrypt_credential(&db_password, &cms_jwt_secret)
+                            .unwrap_or_else(|_| db_password.clone());
                         let _ = sqlx::query(
                             "INSERT INTO databases (site_id, engine, name, db_user, db_password_enc, container_id, port) \
                              VALUES ((SELECT id FROM sites WHERE domain = $1), 'mysql', $2, $3, $4, $5, $6) \
@@ -686,7 +690,7 @@ pub async fn create(
                         .bind(&cms_domain)
                         .bind(&db_name)
                         .bind(&db_user_name)
-                        .bind(&db_password)
+                        .bind(&encrypted_db_password)
                         .bind(&db_container_id)
                         .bind(db_port)
                         .execute(&cms_db)
@@ -1302,8 +1306,9 @@ pub async fn remove(
                         "SELECT key, value FROM settings WHERE key IN ('pdns_api_url', 'pdns_api_key')"
                     ).fetch_all(&dns_db).await.unwrap_or_default();
                     let purl = pdns.iter().find(|(k,_)| k == "pdns_api_url").map(|(_,v)| v.clone());
-                    let pkey = pdns.iter().find(|(k,_)| k == "pdns_api_key").map(|(_,v)| v.clone());
-                    if let (Some(url), Some(key)) = (purl, pkey) {
+                    let pkey_enc = pdns.iter().find(|(k,_)| k == "pdns_api_key").map(|(_,v)| v.clone());
+                    if let (Some(url), Some(key_enc)) = (purl, pkey_enc) {
+                        let key = crate::services::secrets_crypto::decrypt_credential_from_env(&key_enc);
                         let zfqdn = if parent.ends_with('.') { parent } else { format!("{parent}.") };
                         let _ = reqwest::Client::new()
                             .patch(&format!("{url}/api/v1/servers/localhost/zones/{zfqdn}"))

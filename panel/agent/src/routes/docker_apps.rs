@@ -543,7 +543,10 @@ async fn exec_command(
     }
 
     // Block dangerous commands that could escape the container
-    const CONTAINER_BLOCKED: &[&str] = &["mount", "nsenter", "chroot", "/proc/1/", "/proc/sysrq", "docker", "kubectl"];
+    const CONTAINER_BLOCKED: &[&str] = &[
+        "mount", "nsenter", "chroot", "/proc/1/", "/proc/sysrq", "docker", "kubectl",
+        "unshare", "pivot_root", "setns", "capsh", "mknod", "debugfs", "kexec",
+    ];
     let cmd_lower = command.to_lowercase();
     for pattern in CONTAINER_BLOCKED {
         if cmd_lower.contains(pattern) {

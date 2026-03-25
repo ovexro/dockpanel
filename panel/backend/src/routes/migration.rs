@@ -292,6 +292,7 @@ pub async fn import(
     // Clone everything needed for the spawned task
     let logs = state.provision_logs.clone();
     let db = state.db.clone();
+    let jwt_secret = state.config.jwt_secret.clone();
     let user_id = claims.sub;
     let email = claims.email.clone();
     let agent_migration_id = agent_migration_id.clone();
@@ -503,6 +504,8 @@ pub async fn import(
             };
 
             // Insert DB record (not linked to a specific site — migration imports are standalone)
+            let encrypted_password = crate::services::secrets_crypto::encrypt_credential(&password, &jwt_secret)
+                .unwrap_or_else(|_| password.clone());
             let _ = sqlx::query(
                 "INSERT INTO databases (engine, name, db_user, db_password_enc, container_id, port) \
                  VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
@@ -510,7 +513,7 @@ pub async fn import(
             .bind(engine)
             .bind(db_name)
             .bind(db_name)
-            .bind(&password)
+            .bind(&encrypted_password)
             .bind(&container_id)
             .bind(port)
             .execute(&db)

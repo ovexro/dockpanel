@@ -316,8 +316,8 @@ async fn main() {
     let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
     spawn_supervised("backup_verifier", &shutdown_tx, move |rx| services::backup_verifier::run(s_db.clone(), s_agent.clone(), rx));
 
-    let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
-    spawn_supervised("backup_policy_executor", &shutdown_tx, move |rx| services::backup_policy_executor::run(s_db.clone(), s_agent.clone(), rx));
+    let (s_db, s_agent, s_jwt) = (state.db.clone(), state.agent.clone(), state.config.jwt_secret.clone());
+    spawn_supervised("backup_policy_executor", &shutdown_tx, move |rx| services::backup_policy_executor::run(s_db.clone(), s_agent.clone(), s_jwt.clone(), rx));
 
     // Periodic cleanup of token blacklist and rate limiters (every 15 minutes)
     let cleanup_blacklist = state.token_blacklist.clone();

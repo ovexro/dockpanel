@@ -1,6 +1,32 @@
 use std::path::Path;
 use crate::safe_cmd::safe_command;
 
+/// RAII guard that deletes a temp file on drop, ensuring cleanup on all code paths.
+struct TempFileGuard {
+    path: String,
+}
+
+impl TempFileGuard {
+    fn create(label: &str, content: &str) -> Result<Self, String> {
+        let random_suffix: u64 = rand::random();
+        let path = format!("/tmp/.dockpanel-s3-{}-{:016x}", label, random_suffix);
+        std::fs::write(&path, content)
+            .map_err(|e| format!("Failed to write S3 config: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).ok();
+        }
+        Ok(Self { path })
+    }
+}
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        std::fs::remove_file(&self.path).ok();
+    }
+}
+
 /// Upload a backup file to S3-compatible storage using curl --aws-sigv4.
 pub async fn upload_s3(
     filepath: &str,
@@ -32,10 +58,8 @@ pub async fn upload_s3(
     tracing::info!("Uploading {filename} to {url}");
 
     // Write credentials to a temp file so they don't appear in process listing
-    let config_path = format!("/tmp/.dockpanel-s3-upload-{}", std::process::id());
     let config_content = format!("user = \"{}:{}\"", access_key, secret_key);
-    std::fs::write(&config_path, &config_content)
-        .map_err(|e| format!("Failed to write S3 config: {e}"))?;
+    let config_guard = TempFileGuard::create("upload", &config_content)?;
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(600),
@@ -44,7 +68,7 @@ pub async fn upload_s3(
                 "--aws-sigv4",
                 &format!("aws:amz:{region}:s3"),
                 "-K",
-                &config_path,
+                &config_guard.path,
                 "-X",
                 "PUT",
                 "-H",
@@ -59,16 +83,10 @@ pub async fn upload_s3(
             .output(),
     )
     .await
-    .map_err(|_| {
-        std::fs::remove_file(&config_path).ok();
-        "Upload timed out (10 min limit)".to_string()
-    })?
-    .map_err(|e| {
-        std::fs::remove_file(&config_path).ok();
-        format!("Failed to run curl: {e}")
-    })?;
+    .map_err(|_| "Upload timed out (10 min limit)".to_string())?
+    .map_err(|e| format!("Failed to run curl: {e}"))?;
 
-    std::fs::remove_file(&config_path).ok();
+    drop(config_guard);
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -173,10 +191,8 @@ pub async fn test_s3(
     let url = format!("{endpoint}/{bucket}/");
 
     // Write credentials to a temp file so they don't appear in process listing
-    let config_path = format!("/tmp/.dockpanel-s3-test-{}", std::process::id());
     let config_content = format!("user = \"{}:{}\"", access_key, secret_key);
-    std::fs::write(&config_path, &config_content)
-        .map_err(|e| format!("Failed to write S3 config: {e}"))?;
+    let config_guard = TempFileGuard::create("test", &config_content)?;
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(15),
@@ -185,7 +201,7 @@ pub async fn test_s3(
                 "--aws-sigv4",
                 &format!("aws:amz:{region}:s3"),
                 "-K",
-                &config_path,
+                &config_guard.path,
                 "-I",
                 "--fail",
                 "--silent",
@@ -195,16 +211,10 @@ pub async fn test_s3(
             .output(),
     )
     .await
-    .map_err(|_| {
-        std::fs::remove_file(&config_path).ok();
-        "Connection test timed out".to_string()
-    })?
-    .map_err(|e| {
-        std::fs::remove_file(&config_path).ok();
-        format!("Connection test failed: {e}")
-    })?;
+    .map_err(|_| "Connection test timed out".to_string())?
+    .map_err(|e| format!("Connection test failed: {e}"))?;
 
-    std::fs::remove_file(&config_path).ok();
+    drop(config_guard);
 
     if output.status.success() {
         Ok(())
@@ -290,10 +300,8 @@ pub async fn list_s3(
     };
 
     // Write credentials to a temp file so they don't appear in process listing
-    let config_path = format!("/tmp/.dockpanel-s3-list-{}", std::process::id());
     let config_content = format!("user = \"{}:{}\"", access_key, secret_key);
-    std::fs::write(&config_path, &config_content)
-        .map_err(|e| format!("Failed to write S3 config: {e}"))?;
+    let config_guard = TempFileGuard::create("list", &config_content)?;
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(30),
@@ -302,7 +310,7 @@ pub async fn list_s3(
                 "--aws-sigv4",
                 &format!("aws:amz:{region}:s3"),
                 "-K",
-                &config_path,
+                &config_guard.path,
                 "--fail",
                 "--silent",
                 &url,
@@ -310,16 +318,10 @@ pub async fn list_s3(
             .output(),
     )
     .await
-    .map_err(|_| {
-        std::fs::remove_file(&config_path).ok();
-        "List timed out".to_string()
-    })?
-    .map_err(|e| {
-        std::fs::remove_file(&config_path).ok();
-        format!("List failed: {e}")
-    })?;
+    .map_err(|_| "List timed out".to_string())?
+    .map_err(|e| format!("List failed: {e}"))?;
 
-    std::fs::remove_file(&config_path).ok();
+    drop(config_guard);
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -349,10 +351,8 @@ pub async fn delete_s3(
     let url = format!("{endpoint}/{bucket}/{key}");
 
     // Write credentials to a temp file so they don't appear in process listing
-    let config_path = format!("/tmp/.dockpanel-s3-delete-{}", std::process::id());
     let config_content = format!("user = \"{}:{}\"", access_key, secret_key);
-    std::fs::write(&config_path, &config_content)
-        .map_err(|e| format!("Failed to write S3 config: {e}"))?;
+    let config_guard = TempFileGuard::create("delete", &config_content)?;
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(15),
@@ -361,7 +361,7 @@ pub async fn delete_s3(
                 "--aws-sigv4",
                 &format!("aws:amz:{region}:s3"),
                 "-K",
-                &config_path,
+                &config_guard.path,
                 "-X",
                 "DELETE",
                 "--fail",
@@ -372,16 +372,10 @@ pub async fn delete_s3(
             .output(),
     )
     .await
-    .map_err(|_| {
-        std::fs::remove_file(&config_path).ok();
-        "Delete timed out".to_string()
-    })?
-    .map_err(|e| {
-        std::fs::remove_file(&config_path).ok();
-        format!("Delete failed: {e}")
-    })?;
+    .map_err(|_| "Delete timed out".to_string())?
+    .map_err(|e| format!("Delete failed: {e}"))?;
 
-    std::fs::remove_file(&config_path).ok();
+    drop(config_guard);
 
     if output.status.success() {
         Ok(())

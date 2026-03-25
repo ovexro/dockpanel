@@ -99,21 +99,24 @@ async fn pdns_settings(state: &AppState) -> Result<(String, String), ApiError> {
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     let mut url = String::new();
-    let mut key = String::new();
+    let mut key_enc = String::new();
     for (k, v) in rows {
         match k.as_str() {
             "pdns_api_url" => url = v,
-            "pdns_api_key" => key = v,
+            "pdns_api_key" => key_enc = v,
             _ => {}
         }
     }
 
-    if url.is_empty() || key.is_empty() {
+    if url.is_empty() || key_enc.is_empty() {
         return Err(err(
             StatusCode::BAD_REQUEST,
             "PowerDNS not configured. Set API URL and API Key in Settings.",
         ));
     }
+
+    // Decrypt the API key (with legacy plaintext fallback)
+    let key = crate::services::secrets_crypto::decrypt_credential_or_legacy(&key_enc, &state.config.jwt_secret);
 
     Ok((url, key))
 }

@@ -913,11 +913,13 @@ pub async fn twofa_setup(
         .min_dimensions(200, 200)
         .build();
 
-    // Store secret in DB (not yet enabled)
+    // Encrypt and store secret in DB (not yet enabled)
+    let encrypted_secret = crate::services::secrets_crypto::encrypt_credential(&secret_base32, &state.config.jwt_secret)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Encryption failed: {e}")))?;
     sqlx::query(
         "UPDATE users SET totp_secret = $1, updated_at = NOW() WHERE id = $2",
     )
-    .bind(&secret_base32)
+    .bind(&encrypted_secret)
     .bind(claims.sub)
     .execute(&state.db)
     .await
@@ -951,9 +953,12 @@ pub async fn twofa_enable(
         return Err(err(StatusCode::BAD_REQUEST, "2FA is already enabled"));
     }
 
-    let secret_b32 = user.totp_secret.ok_or_else(|| {
+    let secret_b32_enc = user.totp_secret.ok_or_else(|| {
         err(StatusCode::BAD_REQUEST, "Call /api/auth/2fa/setup first")
     })?;
+
+    // Decrypt TOTP secret (with legacy plaintext fallback)
+    let secret_b32 = crate::services::secrets_crypto::decrypt_credential_or_legacy(&secret_b32_enc, &state.config.jwt_secret);
 
     let secret = Secret::Encoded(secret_b32)
         .to_bytes()
@@ -971,7 +976,7 @@ pub async fn twofa_enable(
     let codes_json = serde_json::to_string(&codes)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    // Hash each code for storage
+    // Hash each code for storage (hashing is one-way, no need for reversible encryption)
     let hashed_codes: Vec<String> = codes.iter().map(|c| hash_token(c)).collect();
     let hashed_json = serde_json::to_string(&hashed_codes)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -1048,11 +1053,14 @@ pub async fn twofa_verify(
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let secret_b32 = user.totp_secret.as_ref().ok_or_else(|| {
+    let secret_b32_enc = user.totp_secret.as_ref().ok_or_else(|| {
         err(StatusCode::INTERNAL_SERVER_ERROR, "2FA secret missing")
     })?;
 
-    let secret = Secret::Encoded(secret_b32.clone())
+    // Decrypt TOTP secret (with legacy plaintext fallback)
+    let secret_b32 = crate::services::secrets_crypto::decrypt_credential_or_legacy(secret_b32_enc, &state.config.jwt_secret);
+
+    let secret = Secret::Encoded(secret_b32)
         .to_bytes()
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
@@ -1178,11 +1186,14 @@ pub async fn twofa_disable(
         return Err(err(StatusCode::BAD_REQUEST, "2FA is not enabled"));
     }
 
-    let secret_b32 = user.totp_secret.as_ref().ok_or_else(|| {
+    let secret_b32_enc = user.totp_secret.as_ref().ok_or_else(|| {
         err(StatusCode::INTERNAL_SERVER_ERROR, "2FA secret missing")
     })?;
 
-    let secret = Secret::Encoded(secret_b32.clone())
+    // Decrypt TOTP secret (with legacy plaintext fallback)
+    let secret_b32 = crate::services::secrets_crypto::decrypt_credential_or_legacy(secret_b32_enc, &state.config.jwt_secret);
+
+    let secret = Secret::Encoded(secret_b32)
         .to_bytes()
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 

@@ -300,8 +300,9 @@ async fn deploy_service(
             continue;
         }
 
-        // Canonicalize as much as possible (resolve .. and .)
-        let resolved = std::path::Path::new(host_path);
+        // Resolve symlinks and canonicalize the path to prevent symlink-based escapes
+        let resolved = std::fs::canonicalize(host_path)
+            .map_err(|_| format!("Volume mount path does not exist or is inaccessible: {}", host_path))?;
         let resolved_str = resolved.to_string_lossy();
 
         // Block docker socket

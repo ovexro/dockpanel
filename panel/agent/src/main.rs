@@ -163,6 +163,10 @@ async fn main() {
     // Multi-server: start TCP listener for remote panel connections
     // Set AGENT_LISTEN_TCP=0.0.0.0:9443 to enable (used by remote agent install)
     if let Ok(tcp_addr) = std::env::var("AGENT_LISTEN_TCP") {
+        tracing::warn!("AGENT_LISTEN_TCP is enabled WITHOUT TLS — agent token is transmitted in plaintext. Use a VPN or reverse proxy with TLS for remote connections.");
+        if tcp_addr.starts_with("0.0.0.0") {
+            tracing::warn!("Agent TCP is bound to 0.0.0.0 — accessible from ALL network interfaces. Consider binding to 127.0.0.1 or a specific IP.");
+        }
         let tcp_app = app.clone();
         tokio::spawn(async move {
             let tcp_listener = tokio::net::TcpListener::bind(&tcp_addr)

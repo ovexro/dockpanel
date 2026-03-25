@@ -38,7 +38,7 @@ echo "════════════════════════�
 
 # Auth
 TOKEN=$(curl -s -X POST "$API/api/auth/login" -H "Content-Type: application/json" \
-    -d '{"email":"admin@dockpanel.dev","password":"${DOCKPANEL_TEST_PASSWORD:-testpassword}"}' -D - 2>/dev/null | grep -oP 'token=\K[^;]+')
+    -d "{\"email\":\"admin@dockpanel.dev\",\"password\":\"${DOCKPANEL_TEST_PASSWORD:-testpassword}\"}" -D - 2>/dev/null | grep -oP 'token=\K[^;]+')
 [ -z "$TOKEN" ] && echo "FATAL: Login failed" && exit 1
 AUTH="Cookie: token=$TOKEN"
 echo "  Authenticated as admin@dockpanel.dev"

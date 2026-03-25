@@ -100,23 +100,35 @@ pub async fn update(
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     // Sensitive keys that are masked in the GET response — skip if value is the mask sentinel
-    const MASKED_KEYS: &[&str] = &["smtp_password", "pdns_api_key"];
+    const SENSITIVE_KEYS: &[&str] = &["smtp_password", "pdns_api_key"];
 
     for (key, value) in &body {
         // Don't overwrite real secrets with the mask placeholder
-        if MASKED_KEYS.contains(&key.as_str()) && value == "********" {
+        if SENSITIVE_KEYS.contains(&key.as_str()) && value == "********" {
             continue;
         }
         if key.ends_with("_client_secret") && value == "********" {
             continue;
         }
 
+        // Encrypt sensitive values before storing
+        let store_value = if SENSITIVE_KEYS.contains(&key.as_str()) || key.ends_with("_client_secret") {
+            if value.is_empty() {
+                value.clone()
+            } else {
+                crate::services::secrets_crypto::encrypt_credential(value, &state.config.jwt_secret)
+                    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Encryption failed: {e}")))?
+            }
+        } else {
+            value.clone()
+        };
+
         sqlx::query(
             "INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, NOW()) \
              ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()",
         )
         .bind(key)
-        .bind(value)
+        .bind(&store_value)
         .execute(&mut *tx)
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -143,11 +155,17 @@ pub async fn update(
             let port_str = map.get("smtp_port").cloned().unwrap_or_else(|| "587".to_string());
             let port: u16 = port_str.parse().unwrap_or(587);
 
+            // Decrypt smtp_password before sending to agent
+            let smtp_password_raw = map.get("smtp_password").cloned().unwrap_or_default();
+            let smtp_password = crate::services::secrets_crypto::decrypt_credential_or_legacy(
+                &smtp_password_raw, &state.config.jwt_secret,
+            );
+
             let agent_body = serde_json::json!({
                 "host": host,
                 "port": port,
                 "username": map.get("smtp_username").cloned().unwrap_or_default(),
-                "password": map.get("smtp_password").cloned().unwrap_or_default(),
+                "password": smtp_password,
                 "from": map.get("smtp_from").cloned().unwrap_or_default(),
                 "from_name": map.get("smtp_from_name").cloned().unwrap_or_else(|| "DockPanel".to_string()),
                 "encryption": map.get("smtp_encryption").cloned().unwrap_or_else(|| "starttls".to_string()),
@@ -509,6 +527,8 @@ pub async fn import_config(
         "notif_template_discord", "notif_template_webhook",
     ];
 
+    const SENSITIVE_KEYS: &[&str] = &["smtp_password", "pdns_api_key"];
+
     let mut imported = 0;
     let mut skipped = 0;
     for (key, value) in settings_obj {
@@ -517,12 +537,24 @@ pub async fn import_config(
             continue; // Skip disallowed keys
         }
         if let Some(val) = value.as_str() {
+            // Encrypt sensitive values before storing (same logic as update())
+            let store_value = if SENSITIVE_KEYS.contains(&key.as_str()) || key.ends_with("_client_secret") {
+                if val.is_empty() {
+                    val.to_string()
+                } else {
+                    crate::services::secrets_crypto::encrypt_credential(val, &state.config.jwt_secret)
+                        .unwrap_or_else(|_| val.to_string())
+                }
+            } else {
+                val.to_string()
+            };
+
             sqlx::query(
                 "INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, NOW()) \
                  ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()",
             )
             .bind(key)
-            .bind(val)
+            .bind(&store_value)
             .execute(&state.db)
             .await
             .ok();

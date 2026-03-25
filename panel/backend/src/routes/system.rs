@@ -530,6 +530,7 @@ pub async fn install_powerdns(
 
     let logs = state.provision_logs.clone();
     let db = state.db.clone();
+    let jwt_secret = state.config.jwt_secret.clone();
     let user_id = claims.sub;
     let email = claims.email.clone();
 
@@ -562,8 +563,10 @@ pub async fn install_powerdns(
                         .bind(url)
                         .execute(&db)
                         .await;
+                    let encrypted_key = crate::services::secrets_crypto::encrypt_credential(key, &jwt_secret)
+                        .unwrap_or_else(|_| key.to_string());
                     let _ = sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES ('pdns_api_key', $1, NOW()) ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()")
-                        .bind(key)
+                        .bind(&encrypted_key)
                         .execute(&db)
                         .await;
                 }
