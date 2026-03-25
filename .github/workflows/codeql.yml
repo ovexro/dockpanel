@@ -1,9 +1,12 @@
 name: CodeQL Security Analysis
 
-# Disabled: CodeQL requires GitHub Advanced Security for private repos.
-# Re-enable when the repo is made public.
 on:
-  workflow_dispatch:  # manual trigger only
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly Monday 6am UTC
 
 jobs:
   analyze-javascript:
