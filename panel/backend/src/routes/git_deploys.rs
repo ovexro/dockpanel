@@ -13,7 +13,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
-use crate::error::{err, agent_error, require_admin, ApiError};
+use crate::error::{internal_error, err, agent_error, require_admin, ApiError};
 use crate::routes::is_valid_name;
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
@@ -148,7 +148,7 @@ pub async fn list(
     .bind(server_id)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list git_deploys", e))?;
 
     // Mask github_token in responses
     for d in &mut deploys {
@@ -182,7 +182,7 @@ pub async fn create(
     .bind(server_id)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create git_deploys", e))?;
 
     let used: Vec<i32> = used_ports.into_iter().map(|(p,)| p).collect();
     let host_port = (7000..=7999)
@@ -245,7 +245,7 @@ pub async fn create(
             .bind(server_id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("create git_deploys", e))?;
 
             if site_conflict.is_some() {
                 return Err(err(StatusCode::CONFLICT, "Domain already in use by a site"));
@@ -258,7 +258,7 @@ pub async fn create(
             .bind(server_id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("create git_deploys", e))?;
 
             if git_conflict.is_some() {
                 return Err(err(StatusCode::CONFLICT, "Domain already in use by another git deployment"));
@@ -300,7 +300,7 @@ pub async fn create(
         if e.to_string().contains("duplicate key") {
             err(StatusCode::CONFLICT, "A deploy with this name already exists")
         } else {
-            err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+            internal_error("create git_deploys", e)
         }
     })?;
 
@@ -341,7 +341,7 @@ pub async fn get_one(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("get_one git_deploys", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
 
     mask_github_token(&mut deploy);
@@ -365,7 +365,7 @@ pub async fn update(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("update git_deploys", e))?;
 
     if existing.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Git deploy not found"));
@@ -434,7 +434,7 @@ pub async fn update(
     .bind(claims.sub)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("update git_deploys", e))?;
 
     Ok(Json(deploy))
 }
@@ -455,7 +455,7 @@ pub async fn remove(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("remove git_deploys", e))?;
 
     let (name, _domain) = deploy.ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
 
@@ -470,7 +470,7 @@ pub async fn remove(
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove git_deploys", e))?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "git_deploy.remove",
@@ -508,7 +508,7 @@ pub async fn deploy(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("deploy", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
 
     // Protected deploy: require approval from another admin
@@ -519,7 +519,7 @@ pub async fn deploy(
         )
         .bind(id).bind(claims.sub)
         .execute(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("deploy", e))?;
 
         notifications::notify_panel(
             &state.db, None,
@@ -553,12 +553,12 @@ pub async fn deploy(
 
     let (tx, _) = broadcast::channel::<ProvisionStep>(32);
     {
-        let mut logs = state.provision_logs.lock().unwrap();
+        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
         logs.insert(deploy_id, (Vec::new(), tx, Instant::now()));
     }
     // Record deploy ownership for SSE log access control
     {
-        let mut owners = state.deploy_owners.lock().unwrap();
+        let mut owners = state.deploy_owners.lock().unwrap_or_else(|e| e.into_inner());
         owners.insert(deploy_id, claims.sub);
     }
 
@@ -586,7 +586,7 @@ pub async fn deploy_log(
 ) -> Result<Sse<impl futures::Stream<Item = Result<Event, axum::BoxError>>>, ApiError> {
     // Verify the caller owns this deploy (or is admin)
     {
-        let owners = state.deploy_owners.lock().unwrap();
+        let owners = state.deploy_owners.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(&owner_id) = owners.get(&deploy_id) {
             if claims.sub != owner_id && claims.role != "admin" {
                 return Err(err(StatusCode::FORBIDDEN, "Access denied"));
@@ -596,7 +596,7 @@ pub async fn deploy_log(
     }
 
     let (snapshot, rx) = {
-        let logs = state.provision_logs.lock().unwrap();
+        let logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
         match logs.get(&deploy_id) {
             Some((history, tx, _)) => (history.clone(), Some(tx.subscribe())),
             None => (Vec::new(), None),
@@ -644,7 +644,7 @@ pub async fn history(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("history", e))?;
 
     if exists.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Git deploy not found"));
@@ -656,7 +656,7 @@ pub async fn history(
     .bind(id)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("history", e))?;
 
     Ok(Json(entries))
 }
@@ -677,7 +677,7 @@ pub async fn rollback(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("rollback", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
 
     let hist: GitDeployHistory = sqlx::query_as(
@@ -687,7 +687,7 @@ pub async fn rollback(
     .bind(id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("rollback", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "History entry not found"))?;
 
     // Update status to building
@@ -701,7 +701,7 @@ pub async fn rollback(
 
     let (tx, _) = broadcast::channel::<ProvisionStep>(32);
     {
-        let mut logs = state.provision_logs.lock().unwrap();
+        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
         logs.insert(deploy_id, (Vec::new(), tx, Instant::now()));
     }
 
@@ -830,7 +830,7 @@ pub async fn rollback(
         }
 
         tokio::time::sleep(Duration::from_secs(60)).await;
-        logs.lock().unwrap().remove(&deploy_id);
+        logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&deploy_id);
     });
 
     Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
@@ -855,7 +855,7 @@ pub async fn keygen(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("keygen", e))?;
 
     let (name,) = deploy.ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
 
@@ -875,7 +875,7 @@ pub async fn keygen(
     .bind(id)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("keygen", e))?;
 
     Ok(Json(serde_json::json!({
         "public_key": public_key,
@@ -892,7 +892,7 @@ pub async fn stop(
     require_admin(&claims.role)?;
     let config: GitDeploy = sqlx::query_as("SELECT * FROM git_deploys WHERE id = $1 AND user_id = $2")
         .bind(id).bind(claims.sub).fetch_optional(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("stop", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
     agent.post("/git/stop", Some(serde_json::json!({ "name": config.name }))).await
         .map_err(|e| agent_error("Stop container", e))?;
@@ -911,7 +911,7 @@ pub async fn start(
     require_admin(&claims.role)?;
     let config: GitDeploy = sqlx::query_as("SELECT * FROM git_deploys WHERE id = $1 AND user_id = $2")
         .bind(id).bind(claims.sub).fetch_optional(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("start", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
     agent.post("/git/start", Some(serde_json::json!({ "name": config.name }))).await
         .map_err(|e| agent_error("Start container", e))?;
@@ -930,7 +930,7 @@ pub async fn restart(
     require_admin(&claims.role)?;
     let config: GitDeploy = sqlx::query_as("SELECT * FROM git_deploys WHERE id = $1 AND user_id = $2")
         .bind(id).bind(claims.sub).fetch_optional(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("restart", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
     agent.post("/git/restart", Some(serde_json::json!({ "name": config.name }))).await
         .map_err(|e| agent_error("Restart container", e))?;
@@ -949,7 +949,7 @@ pub async fn container_logs(
     require_admin(&claims.role)?;
     let config: GitDeploy = sqlx::query_as("SELECT * FROM git_deploys WHERE id = $1 AND user_id = $2")
         .bind(id).bind(claims.sub).fetch_optional(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("container logs", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
     let result = agent.post("/git/logs", Some(serde_json::json!({ "name": config.name }))).await
         .map_err(|e| agent_error("Container logs", e))?;
@@ -992,7 +992,7 @@ pub async fn webhook(
     .bind(id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("webhook", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Invalid webhook"))?;
 
     // Constant-time secret comparison via SHA256 hash
@@ -1100,7 +1100,7 @@ pub async fn webhook(
 
     let (tx, _) = broadcast::channel::<ProvisionStep>(32);
     {
-        let mut logs = state.provision_logs.lock().unwrap();
+        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
         logs.insert(deploy_id, (Vec::new(), tx, Instant::now()));
     }
 
@@ -1232,7 +1232,7 @@ fn spawn_deploy_task(
 
                 tracing::error!("Git deploy clone failed: {deploy_name}: {e}");
                 tokio::time::sleep(Duration::from_secs(60)).await;
-                logs.lock().unwrap().remove(&deploy_id);
+                logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&deploy_id);
                 return;
             }
         };
@@ -1287,7 +1287,7 @@ fn spawn_deploy_task(
             }
 
             tokio::time::sleep(Duration::from_secs(60)).await;
-            logs.lock().unwrap().remove(&deploy_id);
+            logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&deploy_id);
             return; // Skip single-container deployment path
         }
 
@@ -1334,7 +1334,7 @@ fn spawn_deploy_task(
                         sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
                             .bind(git_deploy_id).execute(&db).await.ok();
                         tokio::time::sleep(Duration::from_secs(60)).await;
-                        logs.lock().unwrap().remove(&deploy_id);
+                        logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&deploy_id);
                         return;
                     }
                 }
@@ -1410,7 +1410,7 @@ fn spawn_deploy_task(
 
                 tracing::error!("Git deploy build failed: {deploy_name}: {e}");
                 tokio::time::sleep(Duration::from_secs(60)).await;
-                logs.lock().unwrap().remove(&deploy_id);
+                logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&deploy_id);
                 return;
             }
         }
@@ -1761,7 +1761,7 @@ fn spawn_deploy_task(
         }
 
         tokio::time::sleep(Duration::from_secs(60)).await;
-        logs.lock().unwrap().remove(&deploy_id);
+        logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&deploy_id);
     });
 }
 
@@ -2236,7 +2236,7 @@ pub async fn list_previews(
     let previews: Vec<GitPreview> = sqlx::query_as(
         "SELECT p.* FROM git_previews p JOIN git_deploys g ON p.git_deploy_id = g.id WHERE g.id = $1 AND g.user_id = $2 ORDER BY p.created_at DESC"
     ).bind(id).bind(claims.sub).fetch_all(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("list previews", e))?;
     Ok(Json(previews))
 }
 
@@ -2251,7 +2251,7 @@ pub async fn delete_preview(
     let preview: GitPreview = sqlx::query_as(
         "SELECT p.* FROM git_previews p JOIN git_deploys g ON p.git_deploy_id = g.id WHERE p.id = $1 AND g.id = $2 AND g.user_id = $3"
     ).bind(preview_id).bind(id).bind(claims.sub).fetch_optional(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("delete preview", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Preview not found"))?;
 
     // Clean up container — strip "dockpanel-git-" prefix since the agent adds it
@@ -2279,7 +2279,7 @@ pub async fn schedule_deploy(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("schedule deploy", e))?;
 
     if existing.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Git deploy not found"));
@@ -2304,7 +2304,7 @@ pub async fn schedule_deploy(
     .bind(id)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("schedule deploy", e))?;
 
     tracing::info!("Scheduled one-time deploy for git deploy {id} at {scheduled_at}");
     activity::log_activity(
@@ -2333,7 +2333,7 @@ pub async fn cancel_scheduled_deploy(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("cancel scheduled deploy", e))?;
 
     if existing.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Git deploy not found"));
@@ -2345,7 +2345,7 @@ pub async fn cancel_scheduled_deploy(
     .bind(id)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("cancel scheduled deploy", e))?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -2367,7 +2367,7 @@ pub async fn list_approvals(
          ORDER BY da.created_at DESC"
     )
     .fetch_all(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list approvals", e))?;
 
     let result: Vec<serde_json::Value> = rows.into_iter().map(|(id, deploy_id, requested_by, status, name, created_at)| {
         serde_json::json!({
@@ -2399,7 +2399,7 @@ pub async fn approve_deploy(
     )
     .bind(approval_id)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("approve deploy", e))?;
 
     let (deploy_id, requested_by, status) = row
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Approval not found"))?;
@@ -2419,7 +2419,7 @@ pub async fn approve_deploy(
     )
     .bind(claims.sub).bind(approval_id)
     .execute(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("approve deploy", e))?;
 
     // Load config and trigger the actual deploy
     let config: GitDeploy = sqlx::query_as(
@@ -2427,7 +2427,7 @@ pub async fn approve_deploy(
     )
     .bind(deploy_id)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("approve deploy", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
 
     // Update status to building
@@ -2438,7 +2438,7 @@ pub async fn approve_deploy(
     let new_deploy_id = Uuid::new_v4();
     let (tx, _) = broadcast::channel::<ProvisionStep>(32);
     {
-        let mut logs = state.provision_logs.lock().unwrap();
+        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
         logs.insert(new_deploy_id, (Vec::new(), tx, Instant::now()));
     }
 
@@ -2472,7 +2472,7 @@ pub async fn reject_deploy(
     )
     .bind(approval_id)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("reject deploy", e))?;
 
     let (status,) = row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Approval not found"))?;
 
@@ -2485,7 +2485,7 @@ pub async fn reject_deploy(
     )
     .bind(claims.sub).bind(approval_id)
     .execute(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("reject deploy", e))?;
 
     Ok(Json(serde_json::json!({
         "status": "rejected",

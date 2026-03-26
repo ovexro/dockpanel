@@ -195,6 +195,9 @@ smtpd_recipient_restrictions = permit_sasl_authenticated, permit_mynetworks, rej
 smtpd_tls_security_level = may
 smtpd_tls_auth_only = yes
 
+# SMTP smuggling prevention (CVE-2023-51764)
+smtpd_forbid_bare_newline = yes
+
 # OpenDKIM milter
 milter_protocol = 6
 milter_default_action = accept
@@ -437,18 +440,38 @@ async fn sync_config(
 ) -> Result<Json<serde_json::Value>, ApiErr> {
     // Validate account and alias fields for injection attacks
     for acc in &body.accounts {
-        if acc.email.contains('\n') || acc.email.contains('\r') || acc.email.contains('\t') || acc.email.contains('\0')
-            || acc.password_hash.contains('\n') || acc.password_hash.contains('\r') || acc.password_hash.contains('\0') {
-            return Err(err(StatusCode::BAD_REQUEST, "Invalid characters in account data"));
+        // Strict email character set: only safe chars for Postfix maps
+        if !acc.email.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '@' | '.' | '_' | '-' | '+')) {
+            return Err(err(StatusCode::BAD_REQUEST, "Invalid characters in email address"));
         }
         if !acc.email.contains('@') || acc.email.matches('@').count() != 1 {
             return Err(err(StatusCode::BAD_REQUEST, "Invalid email format"));
         }
+        // Dovecot users file uses ':' as field separator — reject in password hash
+        if acc.password_hash.contains(':') || acc.password_hash.contains('\n')
+            || acc.password_hash.contains('\r') || acc.password_hash.contains('\0')
+            || acc.password_hash.contains('\t') {
+            return Err(err(StatusCode::BAD_REQUEST, "Invalid characters in password hash"));
+        }
+        // Validate forward_to if present
+        if let Some(fwd) = &acc.forward_to {
+            if !fwd.is_empty() && !fwd.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '@' | '.' | '_' | '-' | '+')) {
+                return Err(err(StatusCode::BAD_REQUEST, "Invalid characters in forward_to address"));
+            }
+        }
     }
     for alias in &body.aliases {
-        if alias.source.contains('\n') || alias.source.contains('\0')
-            || alias.destination.contains('\n') || alias.destination.contains('\0') {
+        if !alias.source.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '@' | '.' | '_' | '-' | '+'))
+            || !alias.destination.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '@' | '.' | '_' | '-' | '+' | ',')) {
             return Err(err(StatusCode::BAD_REQUEST, "Invalid characters in alias data"));
+        }
+    }
+    // Validate catch-all entries
+    for domain in &body.domains {
+        if let Some(catch_all) = &domain.catch_all {
+            if !catch_all.is_empty() && !catch_all.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '@' | '.' | '_' | '-' | '+' | '/')) {
+                return Err(err(StatusCode::BAD_REQUEST, "Invalid characters in catch-all address"));
+            }
         }
     }
 

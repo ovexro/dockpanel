@@ -8,7 +8,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
-use crate::error::{err, agent_error, paginate, ApiError};
+use crate::error::{internal_error, err, agent_error, paginate, ApiError};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
 use crate::services::extensions::fire_event;
@@ -37,7 +37,7 @@ async fn get_site_domain(state: &AppState, site_id: Uuid, user_id: Uuid) -> Resu
             .bind(user_id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("unknown", e))?;
 
     row.map(|(d,)| d)
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))
@@ -56,7 +56,7 @@ pub async fn create(
 
     let (tx, _) = broadcast::channel::<ProvisionStep>(32);
     {
-        let mut logs = state.provision_logs.lock().unwrap();
+        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
         logs.insert(backup_id, (Vec::new(), tx, Instant::now()));
     }
 
@@ -124,7 +124,7 @@ pub async fn create(
         }
 
         tokio::time::sleep(Duration::from_secs(60)).await;
-        logs.lock().unwrap().remove(&backup_id);
+        logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&backup_id);
     });
 
     Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
@@ -153,7 +153,7 @@ pub async fn list(
     .bind(offset)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list backups", e))?;
 
     Ok(Json(backups))
 }
@@ -174,14 +174,14 @@ pub async fn restore(
     .bind(id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("restore", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Backup not found"))?;
 
     let restore_id = Uuid::new_v4();
 
     let (tx, _) = broadcast::channel::<ProvisionStep>(32);
     {
-        let mut logs = state.provision_logs.lock().unwrap();
+        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
         logs.insert(restore_id, (Vec::new(), tx, Instant::now()));
     }
 
@@ -258,7 +258,7 @@ pub async fn restore(
         }
 
         tokio::time::sleep(Duration::from_secs(60)).await;
-        logs.lock().unwrap().remove(&restore_id);
+        logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&restore_id);
     });
 
     Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
@@ -283,7 +283,7 @@ pub async fn remove(
     .bind(id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("remove backups", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Backup not found"))?;
 
     // Delete from agent (must succeed before DB deletion)
@@ -296,7 +296,7 @@ pub async fn remove(
         .bind(backup_id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove backups", e))?;
 
     tracing::info!("Backup deleted: {} for {domain}", backup.filename);
 

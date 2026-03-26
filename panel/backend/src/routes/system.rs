@@ -143,7 +143,7 @@ pub async fn updates_apply(
 
     let (tx, _) = tokio::sync::broadcast::channel::<crate::routes::sites::ProvisionStep>(256);
     {
-        let mut logs = state.provision_logs.lock().unwrap();
+        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
         logs.insert(install_id, (Vec::new(), tx, std::time::Instant::now()));
     }
 
@@ -245,7 +245,7 @@ pub async fn updates_apply(
         }
 
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-        logs.lock().unwrap().remove(&install_id);
+        logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&install_id);
     });
 
     Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
@@ -311,7 +311,7 @@ async fn install_service_with_log(
 
     let (tx, _) = broadcast::channel::<ProvisionStep>(32);
     {
-        let mut logs = state.provision_logs.lock().unwrap();
+        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
         logs.insert(install_id, (Vec::new(), tx, Instant::now()));
     }
 
@@ -357,7 +357,7 @@ async fn install_service_with_log(
         }
 
         tokio::time::sleep(Duration::from_secs(30)).await;
-        logs.lock().unwrap().remove(&install_id);
+        logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&install_id);
     });
 
     Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
@@ -397,7 +397,7 @@ pub async fn install_log(
     Path(install_id): Path<Uuid>,
 ) -> Result<Sse<impl futures::Stream<Item = Result<Event, axum::BoxError>>>, ApiError> {
     let (snapshot, rx) = {
-        let logs = state.provision_logs.lock().unwrap();
+        let logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
         match logs.get(&install_id) {
             Some((history, tx, _)) => (history.clone(), Some(tx.subscribe())),
             None => (Vec::new(), None),
@@ -524,7 +524,7 @@ pub async fn install_powerdns(
 
     let (tx, _) = broadcast::channel::<ProvisionStep>(32);
     {
-        let mut logs = state.provision_logs.lock().unwrap();
+        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
         logs.insert(install_id, (Vec::new(), tx, Instant::now()));
     }
 
@@ -587,7 +587,7 @@ pub async fn install_powerdns(
         }
 
         tokio::time::sleep(Duration::from_secs(30)).await;
-        logs.lock().unwrap().remove(&install_id);
+        logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&install_id);
     });
 
     Ok((StatusCode::ACCEPTED, Json(serde_json::json!({

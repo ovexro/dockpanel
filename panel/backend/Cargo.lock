@@ -500,6 +500,7 @@ dependencies = [
  "sha1",
  "sha2",
  "sqlx",
+ "subtle",
  "tokio",
  "tokio-stream",
  "totp-rs",

@@ -4,8 +4,9 @@ use axum::{
     Json,
 };
 use std::time::Instant;
+use subtle::ConstantTimeEq;
 
-use crate::error::{err, ApiError};
+use crate::error::{internal_error, err, ApiError};
 use crate::AppState;
 
 #[derive(serde::Deserialize)]
@@ -52,14 +53,15 @@ pub async fn checkin(
             .bind(server_id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("checkin", e))?;
 
     let (stored_hash, stored_token) =
         existing.ok_or_else(|| err(StatusCode::NOT_FOUND, "Server not found"))?;
 
-    let token_valid = match stored_hash {
-        Some(ref hash) => hash == &token_hash,
-        None => stored_token == token, // fallback for pre-migration rows
+    // Constant-time comparison to prevent timing-based token brute force
+    let token_valid: bool = match stored_hash {
+        Some(ref hash) => hash.as_bytes().ct_eq(token_hash.as_bytes()).into(),
+        None => stored_token.as_bytes().ct_eq(token.as_bytes()).into(),
     };
     if !token_valid {
         return Err(err(StatusCode::UNAUTHORIZED, "Invalid token"));
@@ -135,7 +137,7 @@ pub async fn checkin(
     .bind(mem_usage_pct)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("checkin", e))?;
 
     // Store performance metrics time-series data
     if let Some(cpu) = body.cpu_usage {

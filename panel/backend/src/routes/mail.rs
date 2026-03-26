@@ -9,7 +9,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::auth::{AdminUser, ServerScope};
-use crate::error::{err, agent_error, ApiError};
+use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
 use crate::services::agent::AgentHandle;
@@ -112,7 +112,7 @@ pub async fn mail_install(
 
     let (tx, _) = broadcast::channel::<ProvisionStep>(32);
     {
-        let mut logs = state.provision_logs.lock().unwrap();
+        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
         logs.insert(install_id, (Vec::new(), tx, Instant::now()));
     }
 
@@ -154,7 +154,7 @@ pub async fn mail_install(
         }
 
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-        logs.lock().unwrap().remove(&install_id);
+        logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&install_id);
     });
 
     Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
@@ -176,7 +176,7 @@ pub async fn list_domains(
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list domains", e))?;
 
     Ok(Json(domains))
 }
@@ -189,7 +189,7 @@ pub async fn create_domain(
     Json(body): Json<CreateDomainRequest>,
 ) -> Result<(StatusCode, Json<MailDomain>), ApiError> {
     let domain = body.domain.trim().to_lowercase();
-    if domain.is_empty() || !domain.contains('.') {
+    if !crate::routes::is_valid_domain(&domain) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid domain name"));
     }
 
@@ -230,7 +230,7 @@ pub async fn create_domain(
         if e.to_string().contains("duplicate") {
             err(StatusCode::CONFLICT, "Domain already exists")
         } else {
-            err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+            internal_error("create domain", e)
         }
     })?;
 
@@ -274,7 +274,7 @@ pub async fn update_domain(
         .bind(id)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("update domain", e))?;
 
     let domain = domain.ok_or_else(|| err(StatusCode::NOT_FOUND, "Domain not found"))?;
 
@@ -284,7 +284,7 @@ pub async fn update_domain(
             .bind(id)
             .execute(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("update domain", e))?;
     }
 
     if let Some(enabled) = body.enabled {
@@ -293,7 +293,7 @@ pub async fn update_domain(
             .bind(id)
             .execute(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("update domain", e))?;
     }
 
     activity::log_activity(
@@ -315,7 +315,7 @@ pub async fn delete_domain(
         .bind(id)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("delete domain", e))?;
 
     let domain = domain.ok_or_else(|| err(StatusCode::NOT_FOUND, "Domain not found"))?;
 
@@ -339,7 +339,7 @@ pub async fn delete_domain(
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("delete domain", e))?;
 
     // ── Auto-DNS cleanup: delete MX, A, SPF, DMARC, DKIM records ─────────
     let dns_domain = domain.0.clone();
@@ -374,7 +374,7 @@ pub async fn domain_dns(
     .bind(id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("domain dns", e))?;
 
     let (domain, selector, dkim_pub) = domain.ok_or_else(|| err(StatusCode::NOT_FOUND, "Domain not found"))?;
 
@@ -449,7 +449,7 @@ pub async fn list_accounts(
     .bind(domain_id)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list accounts", e))?;
 
     Ok(Json(accounts))
 }
@@ -467,7 +467,7 @@ pub async fn create_account(
         .bind(domain_id)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("create account", e))?;
     let domain = domain.ok_or_else(|| err(StatusCode::NOT_FOUND, "Domain not found"))?;
 
     let email = body.email.trim().to_lowercase();
@@ -501,7 +501,7 @@ pub async fn create_account(
         if e.to_string().contains("duplicate") {
             err(StatusCode::CONFLICT, "Email account already exists")
         } else {
-            err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+            internal_error("create account", e)
         }
     })?;
 
@@ -531,7 +531,7 @@ pub async fn update_account(
     .bind(domain_id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("update account", e))?;
 
     let account = account.ok_or_else(|| err(StatusCode::NOT_FOUND, "Account not found"))?;
 
@@ -545,7 +545,7 @@ pub async fn update_account(
             .bind(account_id)
             .execute(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("update account", e))?;
     }
 
     if let Some(name) = &body.display_name {
@@ -554,7 +554,7 @@ pub async fn update_account(
             .bind(account_id)
             .execute(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("update account", e))?;
     }
 
     if let Some(quota) = body.quota_mb {
@@ -563,7 +563,7 @@ pub async fn update_account(
             .bind(account_id)
             .execute(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("update account", e))?;
     }
 
     if let Some(enabled) = body.enabled {
@@ -572,7 +572,7 @@ pub async fn update_account(
             .bind(account_id)
             .execute(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("update account", e))?;
     }
 
     if let Some(forward) = &body.forward_to {
@@ -581,7 +581,7 @@ pub async fn update_account(
             .bind(account_id)
             .execute(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("update account", e))?;
     }
 
     if let Some(ar_enabled) = body.autoresponder_enabled {
@@ -590,7 +590,7 @@ pub async fn update_account(
             .bind(account_id)
             .execute(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("update account", e))?;
     }
 
     if let Some(subject) = &body.autoresponder_subject {
@@ -599,7 +599,7 @@ pub async fn update_account(
             .bind(account_id)
             .execute(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("update account", e))?;
     }
 
     if let Some(ar_body) = &body.autoresponder_body {
@@ -608,7 +608,7 @@ pub async fn update_account(
             .bind(account_id)
             .execute(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("update account", e))?;
     }
 
     let _ = sync_mail_config(&state, &agent).await;
@@ -635,7 +635,7 @@ pub async fn delete_account(
     .bind(domain_id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("delete account", e))?;
 
     let account = account.ok_or_else(|| err(StatusCode::NOT_FOUND, "Account not found"))?;
 
@@ -643,7 +643,7 @@ pub async fn delete_account(
         .bind(account_id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("delete account", e))?;
 
     let _ = sync_mail_config(&state, &agent).await;
 
@@ -670,7 +670,7 @@ pub async fn list_aliases(
     .bind(domain_id)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list aliases", e))?;
 
     Ok(Json(aliases))
 }
@@ -696,7 +696,7 @@ pub async fn create_alias(
         if e.to_string().contains("duplicate") {
             err(StatusCode::CONFLICT, "Alias already exists")
         } else {
-            err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+            internal_error("create alias", e)
         }
     })?;
 
@@ -721,13 +721,13 @@ pub async fn delete_alias(
         .bind(alias_id)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("delete alias", e))?;
 
     sqlx::query("DELETE FROM mail_aliases WHERE id = $1")
         .bind(alias_id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("delete alias", e))?;
 
     let _ = sync_mail_config(&state, &agent).await;
 
@@ -1235,7 +1235,7 @@ pub async fn dns_check(
     let domain: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT domain, dkim_selector, dkim_public_key FROM mail_domains WHERE id = $1"
     ).bind(id).fetch_optional(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("dns check", e))?;
 
     let (domain, selector, _dkim_pub) = domain.ok_or_else(|| err(StatusCode::NOT_FOUND, "Domain not found"))?;
     let selector = selector.unwrap_or_else(|| "dockpanel".to_string());

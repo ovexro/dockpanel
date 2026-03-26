@@ -7,6 +7,7 @@ use std::time::Instant;
 use jsonwebtoken::{encode, decode, EncodingKey, DecodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use sha2::{Sha256, Digest};
+use subtle::ConstantTimeEq;
 
 use argon2::{
     password_hash::{rand_core::OsRng, SaltString},
@@ -15,7 +16,7 @@ use argon2::{
 use totp_rs::{Algorithm, TOTP, Secret};
 
 use crate::auth::{AuthUser, Claims};
-use crate::error::{err, ApiError};
+use crate::error::{internal_error, err, ApiError};
 use crate::models::User;
 use crate::services::{activity, email, notifications, security_hardening};
 use crate::AppState;
@@ -60,7 +61,7 @@ pub async fn setup_status(
     let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
         .fetch_one(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("check setup status", e))?;
 
     Ok(Json(serde_json::json!({ "needs_setup": count.0 == 0 })))
 }
@@ -74,7 +75,7 @@ pub async fn setup(
     let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
         .fetch_one(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("initial setup", e))?;
 
     if count.0 > 0 {
         return Err(err(StatusCode::FORBIDDEN, "Setup already completed"));
@@ -95,7 +96,7 @@ pub async fn setup(
     let salt = SaltString::generate(&mut OsRng);
     let hash = Argon2::default()
         .hash_password(body.password.as_bytes(), &salt)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("initial setup", e))?
         .to_string();
 
     // Atomic check-and-insert to prevent TOCTOU race
@@ -109,7 +110,7 @@ pub async fn setup(
     .bind(&hash)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("initial setup", e))?;
 
     let user = user.ok_or_else(|| err(StatusCode::FORBIDDEN, "Setup already completed"))?;
 
@@ -185,7 +186,7 @@ pub async fn login(
         .bind(&body.email)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("login", e))?;
 
     // Constant-time: always run Argon2 verify, even for non-existent users (prevents timing attack)
     let dummy_hash = "$argon2id$v=19$m=19456,t=2,p=1$ZHVtbXlzYWx0MTIzNA$K1PqGlDJpiBFSguVJXKDBIuXQ5baiAOXSgWAGkuJYxk";
@@ -270,7 +271,7 @@ pub async fn login(
             &temp_claims,
             &EncodingKey::from_secret(state.config.jwt_secret.as_bytes()),
         )
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("login", e))?;
 
         // Return empty cookie header (no session yet)
         return Ok((
@@ -400,7 +401,7 @@ fn issue_session(state: &AppState, user: &User) -> Result<(String, String, Strin
         &claims,
         &EncodingKey::from_secret(state.config.jwt_secret.as_bytes()),
     )
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("login", e))?;
 
     // Default to Secure when BASE_URL is not set (most deployments use HTTPS)
     let secure_flag = if state.config.base_url.is_empty() || state.config.base_url.starts_with("https") {
@@ -492,7 +493,7 @@ pub async fn register(
         sqlx::query_as("SELECT value FROM settings WHERE key = 'self_registration_enabled'")
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("register user", e))?;
     let allowed = reg_enabled
         .map(|r| r.0 == "true")
         .unwrap_or(false);
@@ -534,7 +535,7 @@ pub async fn register(
             .bind(&body.email)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("register user", e))?;
 
     if existing.is_some() {
         // Return same success response to prevent account enumeration
@@ -549,7 +550,7 @@ pub async fn register(
     let salt = SaltString::generate(&mut OsRng);
     let hash = Argon2::default()
         .hash_password(body.password.as_bytes(), &salt)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("register user", e))?
         .to_string();
 
     let (token, token_hash) = generate_token();
@@ -568,7 +569,7 @@ pub async fn register(
             // Return generic error to prevent account enumeration (race condition path)
             err(StatusCode::INTERNAL_SERVER_ERROR, "Registration failed. Please try again.")
         } else {
-            err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+            internal_error("register user", e)
         }
     })?;
 
@@ -697,7 +698,7 @@ pub async fn verify_email(
     .bind(&token_hash)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("verify email", e))?;
 
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid or expired verification token"));
@@ -743,7 +744,7 @@ pub async fn forgot_password(
         .bind(&body.email)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("forgot password", e))?;
 
     let user = match user {
         Some(u) => u,
@@ -761,7 +762,7 @@ pub async fn forgot_password(
     .bind(user.id)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("forgot password", e))?;
 
     // Use the configured BASE_URL — never derive from request headers (attacker-controlled)
     let base_url = state.config.base_url.clone();
@@ -820,14 +821,14 @@ pub async fn reset_password(
     .bind(now)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("reset password", e))?;
 
     let user = user.ok_or_else(|| err(StatusCode::BAD_REQUEST, "Invalid or expired reset token"))?;
 
     let salt = SaltString::generate(&mut OsRng);
     let hash = Argon2::default()
         .hash_password(body.password.as_bytes(), &salt)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("reset password", e))?
         .to_string();
 
     sqlx::query(
@@ -838,7 +839,29 @@ pub async fn reset_password(
     .bind(user.id)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("reset password", e))?;
+
+    // Invalidate ALL sessions for this user (no current session to preserve)
+    let all_sessions: Vec<(String,)> = sqlx::query_as(
+        "DELETE FROM user_sessions WHERE user_id = $1 RETURNING jti"
+    )
+    .bind(user.id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    if !all_sessions.is_empty() {
+        let mut blacklist = state.token_blacklist.write().await;
+        for (jti,) in &all_sessions {
+            blacklist.insert(jti.clone());
+        }
+        drop(blacklist);
+        // Persist to DB so blacklist survives restart
+        for (jti,) in &all_sessions {
+            let _ = sqlx::query("INSERT INTO token_blacklist (jti, expires_at) VALUES ($1, NOW() + INTERVAL '2 hours') ON CONFLICT DO NOTHING")
+                .bind(jti).execute(&state.db).await;
+        }
+    }
 
     activity::log_activity(
         &state.db, user.id, &user.email, "auth.password_reset",
@@ -883,7 +906,7 @@ pub async fn twofa_setup(
         .bind(claims.sub)
         .fetch_one(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("2FA setup", e))?;
 
     if user.totp_enabled {
         return Err(err(StatusCode::BAD_REQUEST, "2FA is already enabled"));
@@ -898,17 +921,17 @@ pub async fn twofa_setup(
         6,
         1,
         30,
-        secret.to_bytes().map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?,
+        secret.to_bytes().map_err(|e| internal_error("2FA setup", e))?,
         Some("DockPanel".to_string()),
         user.email.clone(),
     )
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("2FA setup", e))?;
 
     let otpauth_url = totp.get_url();
 
     // Generate QR code as SVG
     let qr = qrcode::QrCode::new(otpauth_url.as_bytes())
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("2FA setup", e))?;
     let svg = qr.render::<qrcode::render::svg::Color>()
         .min_dimensions(200, 200)
         .build();
@@ -923,7 +946,7 @@ pub async fn twofa_setup(
     .bind(claims.sub)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("2FA setup", e))?;
 
     Ok(Json(serde_json::json!({
         "secret": secret_base32,
@@ -947,7 +970,7 @@ pub async fn twofa_enable(
         .bind(claims.sub)
         .fetch_one(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("2FA enable", e))?;
 
     if user.totp_enabled {
         return Err(err(StatusCode::BAD_REQUEST, "2FA is already enabled"));
@@ -962,24 +985,24 @@ pub async fn twofa_enable(
 
     let secret = Secret::Encoded(secret_b32)
         .to_bytes()
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("2FA enable", e))?;
 
     let totp = TOTP::new(Algorithm::SHA1, 6, 1, 30, secret, Some("DockPanel".to_string()), user.email.clone())
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("2FA enable", e))?;
 
-    if !totp.check_current(&body.code).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))? {
+    if !totp.check_current(&body.code).map_err(|e| internal_error("2FA enable", e))? {
         return Err(err(StatusCode::UNAUTHORIZED, "Invalid 2FA code"));
     }
 
     // Generate recovery codes
     let codes = generate_recovery_codes();
     let codes_json = serde_json::to_string(&codes)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("2FA enable", e))?;
 
     // Hash each code for storage (hashing is one-way, no need for reversible encryption)
     let hashed_codes: Vec<String> = codes.iter().map(|c| hash_token(c)).collect();
     let hashed_json = serde_json::to_string(&hashed_codes)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("2FA enable", e))?;
 
     sqlx::query(
         "UPDATE users SET totp_enabled = TRUE, recovery_codes = $1, updated_at = NOW() WHERE id = $2",
@@ -988,7 +1011,7 @@ pub async fn twofa_enable(
     .bind(claims.sub)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("2FA enable", e))?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "auth.2fa_enabled",
@@ -1051,7 +1074,7 @@ pub async fn twofa_verify(
         .bind(user_id)
         .fetch_one(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("2FA verify", e))?;
 
     let secret_b32_enc = user.totp_secret.as_ref().ok_or_else(|| {
         err(StatusCode::INTERNAL_SERVER_ERROR, "2FA secret missing")
@@ -1062,13 +1085,13 @@ pub async fn twofa_verify(
 
     let secret = Secret::Encoded(secret_b32)
         .to_bytes()
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("2FA verify", e))?;
 
     let totp = TOTP::new(Algorithm::SHA1, 6, 1, 30, secret, Some("DockPanel".to_string()), user.email.clone())
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("2FA verify", e))?;
 
     let code_valid = totp.check_current(&body.code)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("2FA verify", e))?;
 
     if !code_valid {
         // Try recovery codes
@@ -1146,18 +1169,25 @@ async fn try_recovery_code(
         .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Recovery codes corrupted"))?;
 
     let code_hash = hash_token(code);
-    if let Some(idx) = hashed_codes.iter().position(|h| h == &code_hash) {
+    // Constant-time scan of all codes to prevent timing-based brute force
+    let mut matched_idx: Option<usize> = None;
+    for (idx, stored_hash) in hashed_codes.iter().enumerate() {
+        if stored_hash.as_bytes().ct_eq(code_hash.as_bytes()).into() {
+            matched_idx = Some(idx);
+        }
+    }
+    if let Some(idx) = matched_idx {
         let mut remaining = hashed_codes;
         remaining.remove(idx);
         let updated = serde_json::to_string(&remaining)
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("2FA verify", e))?;
 
         sqlx::query("UPDATE users SET recovery_codes = $1, updated_at = NOW() WHERE id = $2")
             .bind(&updated)
             .bind(user.id)
             .execute(db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("2FA verify", e))?;
 
         Ok(true)
     } else {
@@ -1180,7 +1210,7 @@ pub async fn twofa_disable(
         .bind(claims.sub)
         .fetch_one(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("2FA disable", e))?;
 
     if !user.totp_enabled {
         return Err(err(StatusCode::BAD_REQUEST, "2FA is not enabled"));
@@ -1195,12 +1225,12 @@ pub async fn twofa_disable(
 
     let secret = Secret::Encoded(secret_b32)
         .to_bytes()
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("2FA disable", e))?;
 
     let totp = TOTP::new(Algorithm::SHA1, 6, 1, 30, secret, Some("DockPanel".to_string()), user.email.clone())
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("2FA disable", e))?;
 
-    if !totp.check_current(&body.code).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))? {
+    if !totp.check_current(&body.code).map_err(|e| internal_error("2FA disable", e))? {
         return Err(err(StatusCode::UNAUTHORIZED, "Invalid 2FA code"));
     }
 
@@ -1210,7 +1240,7 @@ pub async fn twofa_disable(
     .bind(claims.sub)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("2FA disable", e))?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "auth.2fa_disabled",
@@ -1229,7 +1259,7 @@ pub async fn twofa_status(
         .bind(claims.sub)
         .fetch_one(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("2FA status", e))?;
 
     Ok(Json(serde_json::json!({ "enabled": row.0 })))
 }
@@ -1256,7 +1286,7 @@ pub async fn change_password(
         .bind(claims.sub)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("change password", e))?;
 
     let hash = user.ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?.0;
 
@@ -1275,7 +1305,7 @@ pub async fn change_password(
     let salt = SaltString::generate(&mut OsRng);
     let new_hash = Argon2::default()
         .hash_password(new_pass.as_bytes(), &salt)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("change password", e))?
         .to_string();
 
     sqlx::query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2")
@@ -1283,7 +1313,32 @@ pub async fn change_password(
         .bind(claims.sub)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("change password", e))?;
+
+    // Invalidate all other sessions for this user (keep current session)
+    if let Some(ref current_jti) = claims.jti {
+        let other_sessions: Vec<(String,)> = sqlx::query_as(
+            "DELETE FROM user_sessions WHERE user_id = $1 AND jti != $2 RETURNING jti"
+        )
+        .bind(claims.sub)
+        .bind(current_jti)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+
+        if !other_sessions.is_empty() {
+            let mut blacklist = state.token_blacklist.write().await;
+            for (jti,) in &other_sessions {
+                blacklist.insert(jti.clone());
+            }
+            drop(blacklist);
+            // Persist to DB so blacklist survives restart
+            for (jti,) in &other_sessions {
+                let _ = sqlx::query("INSERT INTO token_blacklist (jti, expires_at) VALUES ($1, NOW() + INTERVAL '2 hours') ON CONFLICT DO NOTHING")
+                    .bind(jti).execute(&state.db).await;
+            }
+        }
+    }
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "auth.password_change",
@@ -1345,7 +1400,7 @@ pub async fn list_sessions(
     .bind(claims.sub)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list sessions", e))?;
 
     let current_jti = claims.jti.unwrap_or_default();
     let result: Vec<serde_json::Value> = sessions
@@ -1379,7 +1434,7 @@ pub async fn revoke_session(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("revoke session", e))?;
 
     if let Some((jti,)) = session {
         // Add to token blacklist so the JWT is immediately invalid
@@ -1412,7 +1467,7 @@ pub async fn export_my_data(
     let user = sqlx::query_as::<_, (String, String, Option<String>, bool, chrono::DateTime<chrono::Utc>)>(
         "SELECT email, role, oauth_provider, totp_enabled, created_at FROM users WHERE id = $1"
     ).bind(claims.sub).fetch_one(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("export user data", e))?;
 
     let sites: Vec<(String, String)> = sqlx::query_as(
         "SELECT domain, runtime FROM sites WHERE user_id = $1"

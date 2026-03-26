@@ -6,7 +6,7 @@ use axum::{
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::error::{err, ApiError};
+use crate::error::{internal_error, err, ApiError};
 use crate::AppState;
 
 #[derive(serde::Deserialize)]
@@ -67,7 +67,7 @@ pub async fn authorize(
     .bind(&key)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("authorize", e))?;
 
     let client_id = client_id
         .map(|(v,)| v)
@@ -77,7 +77,7 @@ pub async fn authorize(
     // Generate CSRF state token
     let csrf_state = Uuid::new_v4().to_string();
     {
-        let mut states = state.oauth_states.lock().unwrap();
+        let mut states = state.oauth_states.lock().unwrap_or_else(|e| e.into_inner());
         states.insert(csrf_state.clone(), (provider_name.clone(), std::time::Instant::now()));
     }
 
@@ -114,7 +114,7 @@ pub async fn callback(
 
     // Validate CSRF state
     {
-        let mut states = state.oauth_states.lock().unwrap();
+        let mut states = state.oauth_states.lock().unwrap_or_else(|e| e.into_inner());
         let entry = states.remove(&query.state);
         match entry {
             Some((name, created)) if name == provider_name && created.elapsed().as_secs() < 600 => {}
@@ -133,7 +133,7 @@ pub async fn callback(
     .bind(&client_secret_key)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("callback", e))?;
 
     let cred_map: HashMap<String, String> = creds.into_iter().collect();
     let client_id = cred_map.get(&client_id_key).cloned().unwrap_or_default();
@@ -225,7 +225,7 @@ pub async fn callback(
     .bind(&email)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("callback", e))?;
 
     let user = match user {
         Some(mut u) => {
@@ -271,7 +271,7 @@ pub async fn callback(
                 if e.to_string().contains("duplicate key") {
                     err(StatusCode::CONFLICT, "Email already registered")
                 } else {
-                    err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+                    internal_error("callback", e)
                 }
             })?;
 

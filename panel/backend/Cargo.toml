@@ -39,3 +39,4 @@ totp-rs = { version = "5", features = ["otpauth", "gen_secret"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+subtle = "2"

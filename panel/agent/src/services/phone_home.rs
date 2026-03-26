@@ -331,8 +331,10 @@ async fn check_and_update(
 
     tracing::info!("New agent version available: {current_version} -> {latest}");
 
-    // Download new binary to temp file
-    let tmp_path = "/tmp/dockpanel-agent-new";
+    // Download new binary to temp file with random suffix to prevent symlink attacks
+    let random_suffix: u64 = rand::random();
+    let tmp_path_owned = format!("/tmp/dockpanel-agent-new-{:016x}", random_suffix);
+    let tmp_path = tmp_path_owned.as_str();
     let resp = client
         .get(download_url)
         .timeout(Duration::from_secs(300))
@@ -342,16 +344,23 @@ async fn check_and_update(
 
     let bytes = resp.bytes().await.map_err(|e| format!("Read failed: {e}"))?;
 
-    // Verify checksum if provided
-    if let Some(expected) = expected_checksum {
-        use sha2::Digest;
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(&bytes);
-        let actual = hex::encode(hasher.finalize());
-        if actual != expected {
-            return Err(format!("Checksum mismatch: expected {expected}, got {actual}"));
+    // Verify checksum — MANDATORY for supply chain security
+    match expected_checksum {
+        Some(expected) => {
+            use sha2::Digest;
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(&bytes);
+            let actual = hex::encode(hasher.finalize());
+            if actual != expected {
+                let _ = tokio::fs::remove_file(tmp_path).await;
+                return Err(format!("Checksum mismatch: expected {expected}, got {actual}"));
+            }
+            tracing::info!("Checksum verified for agent update");
         }
-        tracing::info!("Checksum verified");
+        None => {
+            tracing::error!("Agent update rejected: no checksum provided (supply chain risk)");
+            return Err("Update rejected: server did not provide a checksum".into());
+        }
     }
 
     // Write to temp file

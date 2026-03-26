@@ -171,8 +171,23 @@ fn open_pty_shell(cwd: &str, cols: u16, rows: u16, site_domain: Option<&str>) ->
                 libc::close(slave_fd);
             }
 
-            // Close master in child
-            // (master_fd is dropped when parent returns, but we should close the raw fd)
+            // Close master FD in child to prevent FD leak to shell process.
+            // Without this, child inherits the PTY master and could manipulate it.
+            libc::close(master_fd.as_raw_fd());
+
+            // Close all inherited FDs > 2 (DB connections, TLS sockets, etc.)
+            if let Ok(entries) = std::fs::read_dir("/proc/self/fd") {
+                for entry in entries.flatten() {
+                    if let Ok(fd) = entry.file_name().to_string_lossy().parse::<i32>() {
+                        if fd > 2 && fd != slave_fd {
+                            libc::close(fd);
+                        }
+                    }
+                }
+            }
+
+            // Clear inherited environment to prevent leaking agent secrets
+            libc::clearenv();
 
             // Set env vars
             let term = std::ffi::CString::new("TERM=xterm-256color").unwrap();

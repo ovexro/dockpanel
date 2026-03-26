@@ -11,7 +11,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
-use crate::error::{err, agent_error, ApiError};
+use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
 use crate::AppState;
@@ -122,7 +122,7 @@ pub async fn analyze(
     .bind(path)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("analyze", e))?;
 
     // Call agent to analyze the backup (long timeout for large archives)
     let agent_body = serde_json::json!({
@@ -157,7 +157,7 @@ pub async fn analyze(
     .bind(migration.id)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("analyze", e))?;
 
     tracing::info!("Migration analyzed: {} (source: {})", path, source);
     activity::log_activity(
@@ -192,7 +192,7 @@ pub async fn get_one(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("get_one migration", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Migration not found"))?;
 
     Ok(Json(migration))
@@ -213,7 +213,7 @@ pub async fn list(
     .bind(claims.sub)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list migration", e))?;
 
     Ok(Json(migrations))
 }
@@ -238,7 +238,7 @@ pub async fn import(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("import", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Migration not found"))?;
 
     if migration.status != "analyzed" {
@@ -271,12 +271,12 @@ pub async fn import(
     .bind(id)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("import", e))?;
 
     // Create broadcast channel for SSE progress
     let (tx, _) = broadcast::channel::<ProvisionStep>(64);
     {
-        let mut logs = state.provision_logs.lock().unwrap();
+        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
         logs.insert(id, (Vec::new(), tx, Instant::now()));
     }
 
@@ -606,7 +606,7 @@ pub async fn import(
 
         // Keep the log channel alive for 60s so the frontend can catch up
         tokio::time::sleep(Duration::from_secs(60)).await;
-        logs.lock().unwrap().remove(&id);
+        logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
     });
 
     Ok((
@@ -633,7 +633,7 @@ pub async fn progress(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("progress", e))?;
 
     if exists.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Migration not found"));
@@ -641,7 +641,7 @@ pub async fn progress(
 
     // Get broadcast receiver + snapshot of existing steps
     let (snapshot, rx) = {
-        let logs = state.provision_logs.lock().unwrap();
+        let logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
         match logs.get(&id) {
             Some((history, tx, _)) => (history.clone(), Some(tx.subscribe())),
             None => (Vec::new(), None),
@@ -693,7 +693,7 @@ pub async fn remove(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("remove migration", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Migration not found"))?;
 
     // Ask agent to clean up extracted temp files (best-effort)
@@ -718,10 +718,10 @@ pub async fn remove(
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove migration", e))?;
 
     // Remove any lingering provision log channel
-    state.provision_logs.lock().unwrap().remove(&id);
+    state.provision_logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
 
     tracing::info!("Migration deleted: {id}");
     activity::log_activity(

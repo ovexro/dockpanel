@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::auth::ServerScope;
-use crate::error::{err, agent_error, paginate, ApiError};
+use crate::error::{internal_error, err, agent_error, paginate, ApiError};
 use crate::models::Site;
 use crate::routes::is_valid_domain;
 use crate::routes::reseller_dashboard::check_reseller_quota;
@@ -99,7 +99,7 @@ pub async fn list(
     .bind(offset)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list sites", e))?;
 
     Ok(Json(sites))
 }
@@ -226,7 +226,7 @@ pub async fn create(
             .bind(&body.domain)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("create sites", e))?;
 
     if existing.is_some() {
         return Err(err(StatusCode::CONFLICT, "Domain already exists"));
@@ -240,7 +240,7 @@ pub async fn create(
     .bind(server_id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create sites", e))?;
 
     if git_conflict.is_some() {
         return Err(err(StatusCode::CONFLICT, "Domain already in use by a git deployment"));
@@ -277,7 +277,7 @@ pub async fn create(
         .bind(server_id)
         .fetch_optional(&mut *tx)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("create sites", e))?;
         row.map(|(p,)| p)
     } else {
         body.proxy_port
@@ -309,7 +309,7 @@ pub async fn create(
     // Create provisioning log channel
     let (broadcast_tx, _) = broadcast::channel::<ProvisionStep>(64);
     {
-        let mut logs = state.provision_logs.lock().unwrap();
+        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
         logs.insert(site.id, (Vec::new(), broadcast_tx, Instant::now()));
     }
     let logs = state.provision_logs.clone();
@@ -354,13 +354,13 @@ pub async fn create(
                 .bind(site.id)
                 .execute(&state.db)
                 .await
-                .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+                .map_err(|e| internal_error("create sites", e))?;
 
             let updated: Site = sqlx::query_as("SELECT * FROM sites WHERE id = $1")
                 .bind(site.id)
                 .fetch_one(&state.db)
                 .await
-                .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+                .map_err(|e| internal_error("create sites", e))?;
 
             // GAP 50: Block direct external access to proxy port (only allow localhost via nginx)
             if let Some(port) = effective_proxy_port {
@@ -674,7 +674,7 @@ pub async fn create(
                                     Some(format!("Database creation failed: {e}")));
                                 emit_step(&cms_logs, site_id, "complete", "Provisioning failed", "error", None);
                                 tokio::time::sleep(Duration::from_secs(30)).await;
-                                cms_logs.lock().unwrap().remove(&site_id);
+                                cms_logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&site_id);
                                 return;
                             }
                         };
@@ -701,9 +701,10 @@ pub async fn create(
                         for _attempt in 1..=20 {
                             tokio::time::sleep(Duration::from_secs(2)).await;
                             let php_check = safe_command("php")
-                                .args(["-r", &format!(
-                                    "try {{ new PDO('mysql:host={db_host};dbname={db_name}', '{db_user_name}', '{db_password}'); echo 'OK'; }} catch(Exception $e) {{ echo 'FAIL'; }}"
-                                )])
+                                .args(["-r", "try { new PDO(getenv('DSN'), getenv('DB_USER'), getenv('DB_PASS')); echo 'OK'; } catch(Exception $e) { echo 'FAIL'; }"])
+                                .env("DSN", format!("mysql:host={db_host};dbname={db_name}"))
+                                .env("DB_USER", &db_user_name)
+                                .env("DB_PASS", &db_password)
                                 .output()
                                 .await;
                             if let Ok(out) = php_check {
@@ -777,7 +778,7 @@ pub async fn create(
 
                     emit_step(&cms_logs, site_id, "complete", "Site ready", "done", None);
                     tokio::time::sleep(Duration::from_secs(30)).await;
-                    cms_logs.lock().unwrap().remove(&site_id);
+                    cms_logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&site_id);
                 });
             } else {
                 // Non-CMS site: emit complete after SSL (spawned separately)
@@ -787,7 +788,7 @@ pub async fn create(
                     tokio::time::sleep(Duration::from_secs(12)).await;
                     emit_step(&final_logs, site_id, "complete", "Site ready", "done", None);
                     tokio::time::sleep(Duration::from_secs(30)).await;
-                    final_logs.lock().unwrap().remove(&site_id);
+                    final_logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&site_id);
                 });
             }
 
@@ -816,7 +817,7 @@ pub async fn create(
             let cleanup_logs = logs.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_secs(30)).await;
-                cleanup_logs.lock().unwrap().remove(&site_id);
+                cleanup_logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&site_id);
             });
 
             Err(agent_error("Site configuration", e))
@@ -836,7 +837,7 @@ pub async fn provision_log(
     )
     .bind(id).bind(claims.sub)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("provision log", e))?;
 
     if exists.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Site not found"));
@@ -844,7 +845,7 @@ pub async fn provision_log(
 
     // Get broadcast receiver + snapshot of existing steps
     let (snapshot, rx) = {
-        let logs = state.provision_logs.lock().unwrap();
+        let logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
         match logs.get(&id) {
             Some((history, tx, _)) => (history.clone(), Some(tx.subscribe())),
             None => (Vec::new(), None),
@@ -894,7 +895,7 @@ pub async fn get_one(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("get_one sites", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
     Ok(Json(site))
@@ -929,7 +930,7 @@ pub async fn switch_php(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("switch php", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
     if site.runtime != "php" {
@@ -973,7 +974,7 @@ pub async fn switch_php(
     .bind(id)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("switch php", e))?;
 
     tracing::info!("PHP version switched to {} for {}", version, site.domain);
     activity::log_activity(
@@ -1049,7 +1050,7 @@ pub async fn update_limits(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("update limits", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
     if let Some(rl) = body.rate_limit {
@@ -1090,7 +1091,7 @@ pub async fn update_limits(
     .bind(id)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("update limits", e))?;
 
     let mut agent_body = serde_json::json!({
         "runtime": site.runtime,
@@ -1154,7 +1155,7 @@ pub async fn remove(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("remove sites", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
     // Remove database containers before CASCADE deletes the records
@@ -1236,7 +1237,7 @@ pub async fn remove(
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove sites", e))?;
 
     // Decrement reseller site counter
     let _ = sqlx::query(
@@ -1337,7 +1338,7 @@ async fn site_domain(state: &AppState, site_id: Uuid, user_id: Uuid) -> Result<S
             .bind(user_id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("remove sites", e))?;
 
     row.map(|(d,)| d)
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))
@@ -1378,6 +1379,18 @@ pub async fn add_redirect(
     Path(id): Path<Uuid>,
     Json(body): Json<AddRedirectBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Validate source: must start with / and contain no shell metacharacters
+    if !body.source.starts_with('/') || body.source.contains(|c: char| matches!(c, ';' | '|' | '&' | '$' | '`' | '\'' | '"' | '\\' | '\n' | '\r' | '\0')) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid redirect source: must start with / and contain no shell metacharacters"));
+    }
+    // Validate target: must be a valid URL (http/https) or a valid path (starts with /)
+    if !(body.target.starts_with("http://") || body.target.starts_with("https://") || body.target.starts_with('/')) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid redirect target: must be a URL (http/https) or path (starts with /)"));
+    }
+    if body.target.contains(|c: char| matches!(c, ';' | '|' | '&' | '$' | '`' | '\'' | '"' | '\\' | '\n' | '\r' | '\0')) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid redirect target: contains shell metacharacters"));
+    }
+
     let domain = site_domain(&state, id, claims.sub).await?;
     let result = agent
         .post(
@@ -1447,6 +1460,15 @@ pub async fn add_password_protect(
     Path(id): Path<Uuid>,
     Json(body): Json<PasswordProtectBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Validate path: no directory traversal, no shell metacharacters
+    if body.path.contains("..") || body.path.contains(|c: char| matches!(c, ';' | '|' | '&' | '$' | '`' | '\'' | '"' | '\\' | '\n' | '\r' | '\0')) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid path: must not contain '..' or shell metacharacters"));
+    }
+    // Validate username: alphanumeric + underscore/hyphen only
+    if body.username.is_empty() || !body.username.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid username: must be alphanumeric (underscores and hyphens allowed)"));
+    }
+
     let domain = site_domain(&state, id, claims.sub).await?;
     let result = agent
         .post(
@@ -1514,6 +1536,10 @@ pub async fn add_alias(
     Path(id): Path<Uuid>,
     Json(body): Json<AddAliasBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    if !is_valid_domain(&body.alias) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid alias: must be a valid domain name"));
+    }
+
     let domain = site_domain(&state, id, claims.sub).await?;
     let result = agent
         .post(
@@ -1674,7 +1700,7 @@ pub async fn health_summary(
     let site: Option<(String, bool, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
         "SELECT domain, ssl_enabled, ssl_expiry FROM sites WHERE id = $1 AND user_id = $2"
     ).bind(id).bind(claims.sub).fetch_optional(db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("health summary", e))?;
 
     let (domain, ssl_enabled, ssl_expiry) = site.ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
@@ -1786,7 +1812,7 @@ pub async fn clone_site(
     // Get source site
     let source: Option<Site> = sqlx::query_as("SELECT * FROM sites WHERE id = $1 AND user_id = $2")
         .bind(id).bind(claims.sub).fetch_optional(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("clone site", e))?;
     let source = source.ok_or_else(|| err(StatusCode::NOT_FOUND, "Source site not found"))?;
 
     // Create new site record
@@ -1811,7 +1837,7 @@ pub async fn clone_site(
         if e.to_string().contains("duplicate") || e.to_string().contains("unique") {
             err(StatusCode::CONFLICT, "A site with this domain already exists")
         } else {
-            err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+            internal_error("clone site", e)
         }
     })?;
 
@@ -2010,7 +2036,7 @@ pub async fn rename_domain(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("rename domain", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
     let new_domain = body.get("new_domain")
@@ -2033,7 +2059,7 @@ pub async fn rename_domain(
             .bind(&new_domain)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("rename domain", e))?;
 
     if existing.is_some() {
         return Err(err(StatusCode::CONFLICT, "Domain already exists"));
@@ -2045,7 +2071,7 @@ pub async fn rename_domain(
     .bind(&new_domain)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("rename domain", e))?;
 
     if git_conflict.is_some() {
         return Err(err(StatusCode::CONFLICT, "Domain already in use by a git deployment"));
@@ -2064,7 +2090,7 @@ pub async fn rename_domain(
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("rename domain", e))?;
 
     // Update monitors linked to this site
     let new_url = format!("https://{new_domain}");

@@ -843,19 +843,24 @@ pub async fn deploy_app(
     let docker =
         Docker::connect_with_local_defaults().map_err(|e| format!("Docker connect failed: {e}"))?;
 
-    // Pull image
-    let mut pull = docker.create_image(
-        Some(CreateImageOptions {
-            from_image: template.image,
-            ..Default::default()
-        }),
-        None,
-        None,
-    );
-    while let Some(result) = pull.next().await {
-        if let Err(e) = result {
-            tracing::warn!("Image pull warning: {e}");
+    // Pull image (with timeout to prevent hanging on Docker daemon issues)
+    let pull_result = tokio::time::timeout(std::time::Duration::from_secs(300), async {
+        let mut pull = docker.create_image(
+            Some(CreateImageOptions {
+                from_image: template.image,
+                ..Default::default()
+            }),
+            None,
+            None,
+        );
+        while let Some(result) = pull.next().await {
+            if let Err(e) = result {
+                tracing::warn!("Image pull warning: {e}");
+            }
         }
+    }).await;
+    if pull_result.is_err() {
+        return Err(format!("Image pull timed out for {}", template.image));
     }
 
     let container_name = format!("dockpanel-app-{name}");
@@ -888,11 +893,20 @@ pub async fn deploy_app(
         }]),
     );
 
-    // Volume binds
+    // Volume binds — create dirs and canonicalize to prevent symlink TOCTOU
     let mut binds: Vec<String> = Vec::new();
     for vol in template.volumes {
         let host_dir = format!("/var/lib/dockpanel/apps/{name}{vol}");
-        binds.push(format!("{host_dir}:{vol}"));
+        // Create directory before canonicalize (it must exist)
+        std::fs::create_dir_all(&host_dir).ok();
+        // Canonicalize to resolve any symlinks, then verify it's still under the allowed prefix
+        let resolved = std::fs::canonicalize(&host_dir)
+            .map_err(|e| format!("Volume path {host_dir} inaccessible: {e}"))?;
+        let resolved_str = resolved.to_string_lossy();
+        if !resolved_str.starts_with("/var/lib/dockpanel/apps/") {
+            return Err(format!("Volume path {host_dir} escapes allowed prefix after canonicalization"));
+        }
+        binds.push(format!("{resolved_str}:{vol}"));
     }
 
     // NOTE: Portainer Docker socket auto-mount was removed for security.
@@ -906,6 +920,17 @@ pub async fn deploy_app(
             name: Some(bollard::service::RestartPolicyNameEnum::UNLESS_STOPPED),
             ..Default::default()
         }),
+        security_opt: Some(vec!["no-new-privileges:true".to_string()]),
+        cap_drop: Some(vec!["ALL".to_string()]),
+        cap_add: Some(vec![
+            "CHOWN".to_string(),
+            "SETUID".to_string(),
+            "SETGID".to_string(),
+            "NET_BIND_SERVICE".to_string(),
+            "DAC_OVERRIDE".to_string(),
+            "FOWNER".to_string(),
+            "SETFCAP".to_string(),
+        ]),
         ..Default::default()
     };
 

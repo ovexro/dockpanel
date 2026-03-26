@@ -119,6 +119,35 @@ const SUSPICIOUS_PATTERNS: &[&str] = &[
     "crontab -e", "crontab -r",
 ];
 
+/// Validate a command for use in docker exec hooks (git deploy post-deploy commands).
+/// Rejects shell metacharacters and dangerous patterns but allows general commands.
+pub fn is_safe_hook_command(command: &str) -> bool {
+    if command.trim().is_empty() {
+        return false;
+    }
+    // Reject newlines
+    if command.contains('\n') || command.contains('\r') || command.contains('\0') {
+        return false;
+    }
+    // Reject shell metacharacters that enable injection
+    let forbidden_chars = ['`', '$', '|', ';', '&', '<', '>', '\\', '!', '{', '}'];
+    for ch in &forbidden_chars {
+        if command.contains(*ch) {
+            return false;
+        }
+    }
+    // Reject known dangerous patterns
+    let lower = command.to_lowercase();
+    let dangerous = ["rm -rf /", "mkfs", "dd if=", "> /dev/", "eval ", "exec ",
+                      "/etc/shadow", "/etc/passwd", "shutdown", "reboot"];
+    for pattern in &dangerous {
+        if lower.contains(pattern) {
+            return false;
+        }
+    }
+    true
+}
+
 /// Check if a command is suspicious (should trigger alert, even if allowed on server terminals).
 pub fn is_suspicious_command(cmd: &str) -> bool {
     if cmd.trim().is_empty() {
@@ -146,8 +175,9 @@ pub fn is_safe_exec_start(command: &str, runtime: &str) -> Result<(), String> {
         return Err("Command must not contain null bytes".into());
     }
 
-    // Reject shell metacharacters
-    let forbidden_chars = ['`', '$', '|', ';', '&', '<', '>', '\\', '!', '{', '}'];
+    // Reject shell metacharacters and systemd specifiers
+    // '%' blocks systemd specifier injection (%h=home, %u=user, %t=runtime dir)
+    let forbidden_chars = ['`', '$', '|', ';', '&', '<', '>', '\\', '!', '{', '}', '%'];
     for ch in &forbidden_chars {
         if command.contains(*ch) {
             return Err(format!("Command must not contain '{ch}'"));
@@ -225,5 +255,10 @@ mod tests {
         assert!(is_safe_exec_start("node server.js; rm -rf /", "node").is_err());
         assert!(is_safe_exec_start("$(whoami)", "node").is_err());
         assert!(is_safe_exec_start("bash -c 'reverse shell'", "node").is_err());
+
+        // Systemd specifier injection
+        assert!(is_safe_exec_start("npm start%h", "node").is_err());
+        assert!(is_safe_exec_start("node %u", "node").is_err());
+        assert!(is_safe_exec_start("node server.js %t", "node").is_err());
     }
 }

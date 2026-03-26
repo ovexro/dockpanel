@@ -9,7 +9,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
-use crate::error::{err, agent_error, paginate, ApiError};
+use crate::error::{internal_error, err, agent_error, paginate, ApiError};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
 use crate::services::agent::AgentHandle;
@@ -67,7 +67,7 @@ async fn get_site(state: &AppState, site_id: Uuid, user_id: Uuid) -> Result<Stri
             .bind(user_id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("unknown", e))?;
     row.map(|(d,)| d)
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))
 }
@@ -86,7 +86,7 @@ pub async fn get_config(
     .bind(id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("get config", e))?;
 
     Ok(Json(config))
 }
@@ -124,7 +124,7 @@ pub async fn set_config(
     .bind(&webhook_secret)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("set config", e))?;
 
     tracing::info!("Deploy config set for {domain}: {}", body.repo_url);
     activity::log_activity(
@@ -147,7 +147,7 @@ pub async fn remove_config(
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove config", e))?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -179,14 +179,14 @@ pub async fn trigger(
     .bind(id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("trigger", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "No deploy config found"))?;
 
     let deploy_id = Uuid::new_v4();
 
     let (tx, _) = broadcast::channel::<ProvisionStep>(32);
     {
-        let mut logs = state.provision_logs.lock().unwrap();
+        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
         logs.insert(deploy_id, (Vec::new(), tx, Instant::now()));
     }
 
@@ -234,7 +234,7 @@ pub async fn trigger(
         }
 
         tokio::time::sleep(Duration::from_secs(60)).await;
-        logs.lock().unwrap().remove(&deploy_id);
+        logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&deploy_id);
     });
 
     Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
@@ -269,7 +269,7 @@ pub async fn keygen(
     .bind(id)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("keygen", e))?;
 
     Ok(Json(serde_json::json!({
         "public_key": public_key,
@@ -295,7 +295,7 @@ pub async fn logs(
     .bind(offset)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("logs", e))?;
 
     Ok(Json(logs))
 }
@@ -336,7 +336,7 @@ pub async fn webhook(
     .bind(site_id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("webhook", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Invalid webhook"))?;
 
     // Constant-time secret comparison: hash both and compare the hashes
@@ -370,7 +370,7 @@ pub async fn webhook(
         .bind(site_id)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("webhook", e))?;
 
     let domain = domain.map(|(d,)| d).unwrap_or_default();
 
@@ -577,7 +577,7 @@ async fn execute_deploy(
     .bind(duration_ms)
     .fetch_one(db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("webhook", e))?;
 
     // Update deploy config status
     sqlx::query(

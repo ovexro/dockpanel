@@ -385,9 +385,19 @@ pub struct RemoteAgentClient {
 
 impl RemoteAgentClient {
     pub fn new(base_url: String, token: String) -> Self {
+        // TODO: Replace danger_accept_invalid_certs with certificate pinning or CA bundle.
+        // Currently agents use self-signed certs, so we must accept them.
+        // This makes the connection vulnerable to MITM attacks on remote agent communication.
+        // Mitigation: agents should generate a self-signed CA on enrollment and pin it here.
+        let accept_invalid = std::env::var("AGENT_TLS_VERIFY")
+            .map(|v| v != "strict")
+            .unwrap_or(true);
+        if accept_invalid {
+            tracing::warn!("Remote agent TLS: accepting invalid certificates (set AGENT_TLS_VERIFY=strict to enforce)");
+        }
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(60))
-            .danger_accept_invalid_certs(true) // Agent uses self-signed certs
+            .danger_accept_invalid_certs(accept_invalid)
             .pool_max_idle_per_host(5)
             .build()
             .unwrap_or_default();

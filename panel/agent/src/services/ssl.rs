@@ -68,6 +68,18 @@ pub async fn load_or_create_account(email: &str) -> Result<Account, String> {
             .await
             .map_err(|e| format!("Failed to save ACME account: {e}"))?;
 
+        // Restrict ACME account key permissions to owner-only (0o600)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Err(e) = tokio::fs::set_permissions(
+                ACME_ACCOUNT_PATH,
+                std::fs::Permissions::from_mode(0o600),
+            ).await {
+                tracing::error!("Failed to set ACME account key permissions: {e}");
+            }
+        }
+
         tracing::info!("Created new ACME account for {email}");
         Ok(account)
     }

@@ -51,6 +51,14 @@ struct ServiceDef {
     volumes: Option<Vec<String>>,
     restart: Option<String>,
     container_name: Option<String>,
+    // Dangerous fields — parsed so we can explicitly reject them
+    privileged: Option<bool>,
+    network_mode: Option<String>,
+    pid: Option<String>,
+    ipc: Option<String>,
+    cap_add: Option<Vec<String>>,
+    devices: Option<Vec<String>>,
+    security_opt: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -78,6 +86,37 @@ pub fn parse_compose(yaml: &str) -> Result<Vec<ComposeService>, String> {
     let mut result = Vec::new();
 
     for (name, def) in &services {
+        // Reject dangerous Docker options that could escape container isolation
+        if def.privileged == Some(true) {
+            return Err(format!("Service '{name}': privileged mode is not allowed"));
+        }
+        if let Some(ref mode) = def.network_mode {
+            if mode == "host" || mode.starts_with("container:") {
+                return Err(format!("Service '{name}': network_mode '{mode}' is not allowed"));
+            }
+        }
+        if let Some(ref pid) = def.pid {
+            if pid == "host" {
+                return Err(format!("Service '{name}': pid mode 'host' is not allowed"));
+            }
+        }
+        if let Some(ref ipc) = def.ipc {
+            if ipc == "host" {
+                return Err(format!("Service '{name}': ipc mode 'host' is not allowed"));
+            }
+        }
+        if let Some(ref caps) = def.cap_add {
+            let dangerous = ["SYS_ADMIN", "SYS_PTRACE", "SYS_RAWIO", "NET_ADMIN", "ALL"];
+            for cap in caps {
+                if dangerous.iter().any(|d| cap.to_uppercase() == *d) {
+                    return Err(format!("Service '{name}': capability '{cap}' is not allowed"));
+                }
+            }
+        }
+        if def.devices.is_some() {
+            return Err(format!("Service '{name}': device mounts are not allowed"));
+        }
+
         let image = match &def.image {
             Some(img) => img.clone(),
             None => {
@@ -244,19 +283,24 @@ async fn deploy_service(
     svc: &ComposeService,
     stack_id: Option<&str>,
 ) -> Result<String, String> {
-    // Pull image
-    let mut pull = docker.create_image(
-        Some(CreateImageOptions {
-            from_image: svc.image.as_str(),
-            ..Default::default()
-        }),
-        None,
-        None,
-    );
-    while let Some(result) = pull.next().await {
-        if let Err(e) = result {
-            tracing::warn!("Image pull warning for {}: {e}", svc.image);
+    // Pull image (with timeout to prevent hanging on Docker daemon issues)
+    let pull_result = tokio::time::timeout(std::time::Duration::from_secs(300), async {
+        let mut pull = docker.create_image(
+            Some(CreateImageOptions {
+                from_image: svc.image.as_str(),
+                ..Default::default()
+            }),
+            None,
+            None,
+        );
+        while let Some(result) = pull.next().await {
+            if let Err(e) = result {
+                tracing::warn!("Image pull warning for {}: {e}", svc.image);
+            }
         }
+    }).await;
+    if pull_result.is_err() {
+        return Err(format!("Image pull timed out for {}", svc.image));
     }
 
     // Build env vars
@@ -274,7 +318,7 @@ async fn deploy_service(
         port_bindings.insert(
             container_port.clone(),
             Some(vec![bollard::service::PortBinding {
-                host_ip: Some("0.0.0.0".to_string()),
+                host_ip: Some("127.0.0.1".to_string()),
                 host_port: Some(pm.host.to_string()),
             }]),
         );
@@ -331,7 +375,15 @@ async fn deploy_service(
             ));
         }
 
-        binds.push(vol.clone());
+        // TOCTOU fix: use the resolved (canonicalized) path in the actual mount,
+        // not the original user-supplied path which could be a symlink.
+        let container_path = vol.split(':').nth(1).unwrap_or("");
+        let options = vol.split(':').nth(2);
+        let mut bind = format!("{}:{}", resolved_str, container_path);
+        if let Some(opts) = options {
+            bind = format!("{}:{}", bind, opts);
+        }
+        binds.push(bind);
     }
 
     // Restart policy
@@ -353,6 +405,17 @@ async fn deploy_service(
             name: Some(restart_policy),
             ..Default::default()
         }),
+        security_opt: Some(vec!["no-new-privileges:true".to_string()]),
+        cap_drop: Some(vec!["ALL".to_string()]),
+        cap_add: Some(vec![
+            "CHOWN".to_string(),
+            "SETUID".to_string(),
+            "SETGID".to_string(),
+            "NET_BIND_SERVICE".to_string(),
+            "DAC_OVERRIDE".to_string(),
+            "FOWNER".to_string(),
+            "SETFCAP".to_string(),
+        ]),
         ..Default::default()
     };
 
@@ -383,21 +446,27 @@ async fn deploy_service(
         ..Default::default()
     };
 
-    let container = docker
-        .create_container(
+    let container = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        docker.create_container(
             Some(CreateContainerOptions {
                 name: svc.name.as_str(),
                 platform: None,
             }),
             config,
-        )
-        .await
-        .map_err(|e| format!("Failed to create container {}: {e}", svc.name))?;
+        ),
+    )
+    .await
+    .map_err(|_| format!("Create container timed out for {}", svc.name))?
+    .map_err(|e| format!("Failed to create container {}: {e}", svc.name))?;
 
-    docker
-        .start_container(&container.id, None::<StartContainerOptions<String>>)
-        .await
-        .map_err(|e| format!("Failed to start container {}: {e}", svc.name))?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        docker.start_container(&container.id, None::<StartContainerOptions<String>>),
+    )
+    .await
+    .map_err(|_| format!("Start container timed out for {}", svc.name))?
+    .map_err(|e| format!("Failed to start container {}: {e}", svc.name))?;
 
     tracing::info!("Compose service deployed: {} (image={})", svc.name, svc.image);
 

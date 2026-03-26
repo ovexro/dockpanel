@@ -85,12 +85,12 @@ pub async fn deploy(
     // Create provisioning channel (reuse the same provision_logs map from AppState)
     let (tx, _) = broadcast::channel::<ProvisionStep>(32);
     {
-        let mut logs = state.provision_logs.lock().unwrap();
+        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
         logs.insert(deploy_id, (Vec::new(), tx, Instant::now()));
     }
     // Track deploy ownership for SSE log access control
     {
-        let mut owners = state.deploy_owners.lock().unwrap();
+        let mut owners = state.deploy_owners.lock().unwrap_or_else(|e| e.into_inner());
         owners.insert(deploy_id, claims.sub);
     }
 
@@ -351,7 +351,7 @@ pub async fn deploy(
         }
 
         tokio::time::sleep(Duration::from_secs(30)).await;
-        logs.lock().unwrap().remove(&deploy_id);
+        logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&deploy_id);
     });
 
     Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
@@ -368,14 +368,14 @@ pub async fn deploy_log(
 ) -> Result<Sse<impl futures::Stream<Item = Result<Event, axum::BoxError>>>, ApiError> {
     // Verify the requesting user owns this deploy (or is admin)
     if claims.role != "admin" {
-        let owners = state.deploy_owners.lock().unwrap();
+        let owners = state.deploy_owners.lock().unwrap_or_else(|e| e.into_inner());
         if owners.get(&deploy_id) != Some(&claims.sub) {
             return Err(err(StatusCode::FORBIDDEN, "Not your deploy"));
         }
     }
 
     let (snapshot, rx) = {
-        let logs = state.provision_logs.lock().unwrap();
+        let logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
         match logs.get(&deploy_id) {
             Some((history, tx, _)) => (history.clone(), Some(tx.subscribe())),
             None => (Vec::new(), None),
@@ -523,11 +523,11 @@ pub async fn update_app(
 
     let (tx, _) = broadcast::channel::<ProvisionStep>(32);
     {
-        let mut logs = state.provision_logs.lock().unwrap();
+        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
         logs.insert(deploy_id, (Vec::new(), tx, Instant::now()));
     }
     {
-        let mut owners = state.deploy_owners.lock().unwrap();
+        let mut owners = state.deploy_owners.lock().unwrap_or_else(|e| e.into_inner());
         owners.insert(deploy_id, claims.sub);
     }
 
@@ -587,7 +587,7 @@ pub async fn update_app(
         }
 
         tokio::time::sleep(Duration::from_secs(60)).await;
-        logs.lock().unwrap().remove(&deploy_id);
+        logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&deploy_id);
     });
 
     Ok((StatusCode::ACCEPTED, Json(serde_json::json!({

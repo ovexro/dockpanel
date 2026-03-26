@@ -40,13 +40,29 @@ pub async fn ensure_cli() -> Result<(), String> {
 }
 
 /// Run a wp-cli command, return stdout on success.
+/// Uses --skip-plugins --skip-themes by default to prevent RCE from compromised
+/// plugins loading PHP during admin operations. Pass skip_safety=false only for
+/// commands that explicitly need to interact with plugins/themes (list, activate).
 async fn wp(domain: &str, args: &[&str]) -> Result<String, String> {
+    wp_inner(domain, args, true).await
+}
+
+/// Run a wp-cli command that needs plugin/theme loading (e.g., plugin list, theme list).
+async fn wp_with_plugins(domain: &str, args: &[&str]) -> Result<String, String> {
+    wp_inner(domain, args, false).await
+}
+
+async fn wp_inner(domain: &str, args: &[&str], skip_plugins: bool) -> Result<String, String> {
     ensure_cli().await?;
     let path = site_path(domain)?;
-    let out = safe_command(WP_CLI)
-        .args(args)
+    let mut cmd = safe_command(WP_CLI);
+    cmd.args(args)
         .arg("--allow-root")
-        .arg(format!("--path={path}"))
+        .arg(format!("--path={path}"));
+    if skip_plugins {
+        cmd.arg("--skip-plugins").arg("--skip-themes");
+    }
+    let out = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -91,14 +107,16 @@ pub async fn info(domain: &str) -> Result<serde_json::Value, String> {
 }
 
 /// List plugins with status and update info.
+/// Note: plugin list requires loading plugins to get accurate status.
 pub async fn plugins(domain: &str) -> Result<serde_json::Value, String> {
-    let out = wp(domain, &["plugin", "list", "--format=json"]).await?;
+    let out = wp_with_plugins(domain, &["plugin", "list", "--format=json"]).await?;
     serde_json::from_str(&out).map_err(|e| format!("Parse error: {e}"))
 }
 
 /// List themes with status and update info.
+/// Note: theme list requires loading themes to get accurate status.
 pub async fn themes(domain: &str) -> Result<serde_json::Value, String> {
-    let out = wp(domain, &["theme", "list", "--format=json"]).await?;
+    let out = wp_with_plugins(domain, &["theme", "list", "--format=json"]).await?;
     serde_json::from_str(&out).map_err(|e| format!("Parse error: {e}"))
 }
 
@@ -196,7 +214,7 @@ pub async fn install(
     // Download WordPress core files
     wp(domain, &["core", "download", "--force"]).await?;
 
-    // Create wp-config.php
+    // Create wp-config.php (--skip-plugins --skip-themes for safety)
     let out = safe_command(WP_CLI)
         .args([
             "config",
@@ -205,6 +223,8 @@ pub async fn install(
             &format!("--dbuser={db_user}"),
             &format!("--dbpass={db_pass}"),
             &format!("--dbhost={db_host}"),
+            "--skip-plugins",
+            "--skip-themes",
             "--allow-root",
             &format!("--path={path}"),
         ])
@@ -221,7 +241,7 @@ pub async fn install(
         ));
     }
 
-    // Install WordPress
+    // Install WordPress (--skip-plugins --skip-themes for safety)
     let out = safe_command(WP_CLI)
         .args([
             "core",
@@ -231,6 +251,8 @@ pub async fn install(
             &format!("--admin_user={admin_user}"),
             &format!("--admin_password={admin_pass}"),
             &format!("--admin_email={admin_email}"),
+            "--skip-plugins",
+            "--skip-themes",
             "--allow-root",
             &format!("--path={path}"),
         ])
@@ -262,9 +284,9 @@ pub async fn set_auto_update(domain: &str, enabled: bool) -> Result<(), String> 
     let path = site_path(domain)?;
     let marker = format!("# wp-auto-update-{domain}");
     let cron_line = format!(
-        "0 3 * * * {WP_CLI} core update --allow-root --path={path} > /dev/null 2>&1 && \
-         {WP_CLI} plugin update --all --allow-root --path={path} > /dev/null 2>&1 && \
-         {WP_CLI} theme update --all --allow-root --path={path} > /dev/null 2>&1 \
+        "0 3 * * * {WP_CLI} core update --skip-plugins --skip-themes --allow-root --path={path} > /dev/null 2>&1 && \
+         {WP_CLI} plugin update --all --skip-plugins --skip-themes --allow-root --path={path} > /dev/null 2>&1 && \
+         {WP_CLI} theme update --all --skip-plugins --skip-themes --allow-root --path={path} > /dev/null 2>&1 \
          {marker}"
     );
 
