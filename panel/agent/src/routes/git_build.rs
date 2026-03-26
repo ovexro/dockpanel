@@ -356,6 +356,12 @@ struct HookRequest {
 async fn run_hook(Json(body): Json<HookRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
     if !super::is_valid_name(&body.name) { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
     if body.command.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Empty command")); }
+
+    // Validate command does not contain shell injection characters
+    if !crate::services::command_filter::is_safe_hook_command(&body.command) {
+        return Err(err(StatusCode::BAD_REQUEST, "Command contains disallowed characters or patterns"));
+    }
+
     let container_name = format!("dockpanel-git-{}", body.name);
 
     let output = tokio::time::timeout(

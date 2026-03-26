@@ -64,6 +64,18 @@ async fn main() {
         }
     };
 
+    // Ensure token file permissions are restrictive
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&token_path) {
+            let perms = meta.permissions();
+            if perms.mode() & 0o777 != 0o600 {
+                std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600)).ok();
+            }
+        }
+    }
+
     // Initialize Tera templates
     let templates = services::nginx::init_templates();
 

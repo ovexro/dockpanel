@@ -6,7 +6,7 @@ use axum::{
 };
 
 use crate::auth::AuthUser;
-use crate::error::{err, agent_error, ApiError};
+use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -38,7 +38,7 @@ pub async fn current_plan(
     .bind(claims.sub)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("current plan", e))?;
 
     let has_stripe = state.config.stripe_secret_key.is_some();
 
@@ -77,7 +77,7 @@ pub async fn create_checkout(
     .bind(claims.sub)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create checkout", e))?;
 
     let customer_id = if let Some(cid) = user.0 {
         cid
@@ -104,7 +104,7 @@ pub async fn create_checkout(
             .bind(claims.sub)
             .execute(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("create checkout", e))?;
 
         cid
     };
@@ -117,7 +117,7 @@ pub async fn create_checkout(
     .bind(&price_key)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create checkout", e))?;
 
     let price_id = price_row
         .map(|r| r.0)
@@ -172,7 +172,7 @@ pub async fn customer_portal(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("customer portal", e))?;
 
     let cid = customer_id
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "No billing account found"))?
@@ -279,7 +279,7 @@ pub async fn webhook(
                 .bind(user_id)
                 .execute(&state.db)
                 .await
-                .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+                .map_err(|e| internal_error("webhook", e))?;
 
                 tracing::info!("User {user_id} subscribed to {plan} plan ({})", pd.name);
             }
@@ -308,7 +308,7 @@ pub async fn webhook(
             .bind(sub_id)
             .execute(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("webhook", e))?;
 
             tracing::info!("Subscription {sub_id} updated: {plan} / {plan_status}");
         }
@@ -324,7 +324,7 @@ pub async fn webhook(
             .bind(sub_id)
             .execute(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("webhook", e))?;
 
             tracing::info!("Subscription {sub_id} deleted — user downgraded to free");
         }
@@ -338,7 +338,7 @@ pub async fn webhook(
             .bind(sub_id)
             .execute(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("webhook", e))?;
 
             tracing::warn!("Payment failed for subscription {sub_id} — set to grace period");
         }

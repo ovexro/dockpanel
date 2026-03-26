@@ -4,6 +4,11 @@ use crate::safe_cmd::safe_command;
 
 const MIGRATION_DIR: &str = "/tmp/dockpanel-migration";
 
+/// Validate migration ID format (UUID: alphanumeric + hyphens, max 36 chars).
+fn is_valid_migration_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 36 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
 #[derive(Serialize, Clone)]
 pub struct MigrationInventory {
     pub id: String,
@@ -48,7 +53,7 @@ pub async fn analyze(backup_path: &str, source: &str) -> Result<MigrationInvento
     // Extract the backup
     tracing::info!("Extracting backup {backup_path} to {extract_dir}");
     let output = safe_command("tar")
-        .args(["xzf", backup_path, "-C", &extract_dir, "--no-same-owner"])
+        .args(["xzf", backup_path, "-C", &extract_dir, "--no-same-owner", "--no-same-permissions"])
         .output()
         .await
         .map_err(|e| format!("Failed to extract: {e}"))?;
@@ -57,7 +62,7 @@ pub async fn analyze(backup_path: &str, source: &str) -> Result<MigrationInvento
         let stderr = String::from_utf8_lossy(&output.stderr);
         // Try without gzip (plain tar)
         let output2 = safe_command("tar")
-            .args(["xf", backup_path, "-C", &extract_dir, "--no-same-owner"])
+            .args(["xf", backup_path, "-C", &extract_dir, "--no-same-owner", "--no-same-permissions"])
             .output()
             .await
             .map_err(|e| format!("Extraction failed: {e}"))?;
@@ -373,6 +378,11 @@ async fn dir_stats(dir: &Path) -> (u64, u64) {
 
 /// Import site files from extracted backup to /var/www/{domain}/
 pub async fn import_site_files(migration_id: &str, domain: &str, source_dir: &str) -> Result<String, String> {
+    // Validate migration_id format
+    if !is_valid_migration_id(migration_id) {
+        return Err("Invalid migration ID format".into());
+    }
+
     // Validate no path traversal in source_dir
     if source_dir.contains("..") || source_dir.starts_with('/') {
         return Err("Invalid source directory path".into());
@@ -425,6 +435,11 @@ pub async fn import_site_files(migration_id: &str, domain: &str, source_dir: &st
 
 /// Import a SQL dump into a database container
 pub async fn import_database(migration_id: &str, sql_file: &str, container_name: &str, db_name: &str, engine: &str, user: &str, password: &str) -> Result<String, String> {
+    // Validate migration_id format
+    if !is_valid_migration_id(migration_id) {
+        return Err("Invalid migration ID format".into());
+    }
+
     // Validate no path traversal in sql_file
     if sql_file.contains("..") || sql_file.starts_with('/') {
         return Err("Invalid SQL file path".into());
@@ -488,6 +503,11 @@ pub async fn import_database(migration_id: &str, sql_file: &str, container_name:
 
 /// Clean up a migration's temp directory
 pub async fn cleanup(migration_id: &str) -> Result<(), String> {
+    // Validate migration_id format
+    if !is_valid_migration_id(migration_id) {
+        return Err("Invalid migration ID format".into());
+    }
+
     let dir = format!("{MIGRATION_DIR}-{migration_id}");
     if Path::new(&dir).exists() {
         std::fs::remove_dir_all(&dir).map_err(|e| format!("Cleanup failed: {e}"))?;

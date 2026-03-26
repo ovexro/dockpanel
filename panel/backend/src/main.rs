@@ -321,6 +321,7 @@ async fn main() {
 
     // Periodic cleanup of token blacklist and rate limiters (every 15 minutes)
     let cleanup_blacklist = state.token_blacklist.clone();
+    let cleanup_bl_db = state.db.clone();
     let cleanup_login = state.login_attempts.clone();
     let cleanup_twofa = state.twofa_attempts.clone();
     let cleanup_webhook = state.webhook_attempts.clone();
@@ -339,19 +340,22 @@ async fn main() {
                     break;
                 }
             }
-            // Clear all blacklisted tokens (JWT expiry is 2h, cleanup runs every 15m)
-            let removed = {
+            // Clean token blacklist: if over 10000 entries, purge expired from DB and reload
+            let bl_count = cleanup_blacklist.read().await.len();
+            if bl_count > 10000 {
+                // Remove expired entries from DB
+                let _ = sqlx::query("DELETE FROM token_blacklist WHERE expires_at <= NOW()")
+                    .execute(&cleanup_bl_db).await;
+                // Reload active blacklist from DB
+                let active: Vec<(String,)> = sqlx::query_as(
+                    "SELECT jti FROM token_blacklist WHERE expires_at > NOW()"
+                ).fetch_all(&cleanup_bl_db).await.unwrap_or_default();
                 let mut bl = cleanup_blacklist.write().await;
-                let count = bl.len();
-                if count > 10000 {
-                    bl.clear();
-                    count
-                } else {
-                    0
+                bl.clear();
+                for (jti,) in &active {
+                    bl.insert(jti.clone());
                 }
-            };
-            if removed > 0 {
-                tracing::info!("Cleaned {removed} entries from token blacklist");
+                tracing::info!("Token blacklist cleaned: {} -> {} entries (reloaded from DB)", bl_count, bl.len());
             }
             // Clean expired rate limit entries
             let now = Instant::now();

@@ -7,7 +7,7 @@ use sha2::{Sha256, Digest};
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{err, ApiError};
+use crate::error::{internal_error, err, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -37,7 +37,7 @@ pub async fn list(
     .bind(claims.sub)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list api_keys", e))?;
 
     Ok(Json(keys))
 }
@@ -58,7 +58,7 @@ pub async fn create(
         .bind(claims.sub)
         .fetch_one(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("create api_keys", e))?;
 
     if count.0 >= 10 {
         return Err(err(StatusCode::BAD_REQUEST, "Maximum 10 API keys per account"));
@@ -83,7 +83,7 @@ pub async fn create(
     .bind(prefix)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create api_keys", e))?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "api_key.created",
@@ -114,7 +114,7 @@ pub async fn revoke(
             .bind(claims.sub)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("revoke", e))?;
 
     let key_name = key_info
         .map(|(n,)| n)
@@ -125,7 +125,7 @@ pub async fn revoke(
         .bind(claims.sub)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("revoke", e))?;
 
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "API key not found"));
@@ -152,7 +152,7 @@ pub async fn rotate(
             .bind(claims.sub)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("rotate", e))?;
 
     let name = key_info
         .map(|(n,)| n)
@@ -178,7 +178,7 @@ pub async fn rotate(
     .bind(claims.sub)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("rotate", e))?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "api_key.rotated",

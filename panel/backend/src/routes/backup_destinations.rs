@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{AdminUser, AuthUser};
-use crate::error::{err, agent_error, ApiError};
+use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::AppState;
 
 #[derive(serde::Serialize, serde::Deserialize, sqlx::FromRow, Clone)]
@@ -43,7 +43,7 @@ pub async fn list(
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list backup_destinations", e))?;
 
     // Mask secret keys in response
     let masked: Vec<BackupDestination> = dests
@@ -91,7 +91,7 @@ pub async fn create(
     .bind(&encrypted_config)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create backup_destinations", e))?;
 
     tracing::info!("Backup destination created: {} ({})", dest.name, dest.dtype);
     Ok((StatusCode::CREATED, Json(dest)))
@@ -118,7 +118,7 @@ pub async fn update(
                         .bind(id)
                         .fetch_optional(&state.db)
                         .await
-                        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+                        .map_err(|e| internal_error("update backup_destinations", e))?;
                 if let Some((existing_cfg,)) = existing {
                     let mut merged = existing_cfg;
                     if let Some(merged_obj) = merged.as_object_mut() {
@@ -154,7 +154,7 @@ pub async fn update(
     .bind(id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("update backup_destinations", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Destination not found"))?;
 
     Ok(Json(dest))
@@ -175,13 +175,13 @@ pub async fn remove(
     .bind(id)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("remove backup_destinations", e))?;
 
     let deleted = sqlx::query("DELETE FROM backup_destinations WHERE id = $1")
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove backup_destinations", e))?;
 
     if deleted.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "Destination not found"));
@@ -213,7 +213,7 @@ pub async fn test_connection(
     .bind(id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("test connection", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Destination not found"))?;
 
     // Build agent request

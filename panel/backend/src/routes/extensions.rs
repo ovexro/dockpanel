@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::auth::AdminUser;
-use crate::error::{err, ApiError};
+use crate::error::{internal_error, err, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -165,7 +165,7 @@ pub async fn list(
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list extensions", e))?;
 
     Ok(Json(rows))
 }
@@ -230,7 +230,7 @@ pub async fn create(
     .bind(&body.api_scopes)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create extensions", e))?;
 
     activity::log_activity(
         &state.db,
@@ -273,7 +273,7 @@ pub async fn update(
             .bind(id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("update extensions", e))?;
 
     if existing.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Extension not found"));
@@ -353,7 +353,7 @@ pub async fn update(
 
     q.execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("update extensions", e))?;
 
     let updated_name = body
         .name
@@ -390,7 +390,7 @@ pub async fn remove(
             .bind(id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("remove extensions", e))?;
 
     let ext_name = ext_info
         .map(|(n,)| n)
@@ -406,7 +406,7 @@ pub async fn remove(
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove extensions", e))?;
 
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "Extension not found"));
@@ -442,7 +442,7 @@ pub async fn test_webhook(
     .bind(id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("test webhook", e))?;
 
     let (name, webhook_url, webhook_secret) =
         ext.ok_or_else(|| err(StatusCode::NOT_FOUND, "Extension not found"))?;
@@ -552,7 +552,7 @@ pub async fn rotate_secret(
             .bind(id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("rotate secret", e))?;
 
     let ext_name = ext
         .map(|(n,)| n)
@@ -565,7 +565,7 @@ pub async fn rotate_secret(
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("rotate secret", e))?;
 
     activity::log_activity(
         &state.db,
@@ -597,7 +597,7 @@ pub async fn events(
             .bind(id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("events", e))?;
 
     if exists.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Extension not found"));
@@ -612,7 +612,7 @@ pub async fn events(
     .bind(id)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("events", e))?;
 
     Ok(Json(rows))
 }

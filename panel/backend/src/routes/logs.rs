@@ -6,7 +6,7 @@ use axum::{
 use jsonwebtoken::{encode, EncodingKey, Header};
 
 use crate::auth::{AuthUser, AdminUser, ServerScope};
-use crate::error::{err, agent_error, ApiError};
+use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::AppState;
 
 #[derive(serde::Deserialize)]
@@ -78,7 +78,7 @@ pub async fn site_logs(
             .bind(claims.sub)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("site logs", e))?;
 
     let (domain,) = row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
@@ -147,7 +147,7 @@ pub async fn search_site_logs(
             .bind(claims.sub)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("search site logs", e))?;
 
     let (domain,) = row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
@@ -208,7 +208,7 @@ pub async fn stream_token(
                 .bind(claims.sub)
                 .fetch_optional(&state.db)
                 .await
-                .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+                .map_err(|e| internal_error("stream token", e))?;
 
         domain = row.map(|(d,)| d);
         if domain.is_none() {
@@ -227,7 +227,7 @@ pub async fn stream_token(
         &ticket,
         &EncodingKey::from_secret(agent.token().await.as_bytes()),
     )
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("stream token", e))?;
 
     Ok(Json(serde_json::json!({
         "token": token,

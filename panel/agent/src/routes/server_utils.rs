@@ -60,13 +60,31 @@ async fn file_upload(
         .decode(&body.content_base64)
         .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid base64 content"))?;
 
+    // Enforce 50MB size limit for all uploads
+    if bytes.len() > 50 * 1024 * 1024 {
+        return Err(err(StatusCode::PAYLOAD_TOO_LARGE, "File too large (max 50MB)"));
+    }
+
     let full_path = if domain == "_server" {
         // Server-level upload: validate no traversal manually
         let p = format!("/{}", body.path.trim_start_matches('/'));
         if p.contains("..") {
             return Err(err(StatusCode::BAD_REQUEST, "Path traversal not allowed"));
         }
-        std::path::PathBuf::from(p)
+        // Only allow uploads to specific directories
+        const ALLOWED_SERVER_PATHS: &[&str] = &[
+            "/var/www/",
+            "/etc/nginx/",
+            "/etc/dockpanel/",
+            "/var/backups/dockpanel/",
+            "/home/",
+            "/opt/",
+        ];
+        let allowed = ALLOWED_SERVER_PATHS.iter().any(|prefix| p.starts_with(prefix));
+        if !allowed {
+            return Err(err(StatusCode::BAD_REQUEST, "Upload path not in allowed directories"));
+        }
+        std::path::PathBuf::from(&p)
     } else {
         // Site upload: use resolve_safe_path to prevent TOCTOU race
         file_svc::resolve_safe_path(&domain, &body.path)

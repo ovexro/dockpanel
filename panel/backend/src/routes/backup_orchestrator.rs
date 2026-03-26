@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{AdminUser, AuthUser, ServerScope};
-use crate::error::{err, agent_error, paginate, ApiError};
+use crate::error::{internal_error, err, agent_error, paginate, ApiError};
 use crate::services::activity;
 use crate::services::extensions::fire_event;
 use crate::AppState;
@@ -134,38 +134,38 @@ pub async fn health(
     let db = &state.db;
 
     let (total_site,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM backups")
-        .fetch_one(db).await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .fetch_one(db).await.map_err(|e| internal_error("health", e))?;
     let (total_db,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM database_backups")
-        .fetch_one(db).await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .fetch_one(db).await.map_err(|e| internal_error("health", e))?;
     let (total_vol,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM volume_backups")
-        .fetch_one(db).await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .fetch_one(db).await.map_err(|e| internal_error("health", e))?;
 
     let (site_storage,): (Option<i64>,) = sqlx::query_as("SELECT SUM(size_bytes) FROM backups")
-        .fetch_one(db).await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .fetch_one(db).await.map_err(|e| internal_error("health", e))?;
     let (db_storage,): (Option<i64>,) = sqlx::query_as("SELECT SUM(size_bytes) FROM database_backups")
-        .fetch_one(db).await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .fetch_one(db).await.map_err(|e| internal_error("health", e))?;
     let (vol_storage,): (Option<i64>,) = sqlx::query_as("SELECT SUM(size_bytes) FROM volume_backups")
-        .fetch_one(db).await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .fetch_one(db).await.map_err(|e| internal_error("health", e))?;
 
     let total_storage = site_storage.unwrap_or(0) + db_storage.unwrap_or(0) + vol_storage.unwrap_or(0);
 
     // Count successful schedules in last 24h
     let (success_24h,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM backup_schedules WHERE last_status = 'success' AND last_run > NOW() - INTERVAL '24 hours'"
-    ).fetch_one(db).await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    ).fetch_one(db).await.map_err(|e| internal_error("health", e))?;
     let (failed_24h,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM backup_schedules WHERE last_status = 'failed' AND last_run > NOW() - INTERVAL '24 hours'"
-    ).fetch_one(db).await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    ).fetch_one(db).await.map_err(|e| internal_error("health", e))?;
 
     let (policies_active,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM backup_policies WHERE enabled = TRUE")
-        .fetch_one(db).await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .fetch_one(db).await.map_err(|e| internal_error("health", e))?;
     let (policies_total,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM backup_policies")
-        .fetch_one(db).await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .fetch_one(db).await.map_err(|e| internal_error("health", e))?;
 
     let (verif_passed,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM backup_verifications WHERE status = 'passed'")
-        .fetch_one(db).await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .fetch_one(db).await.map_err(|e| internal_error("health", e))?;
     let (verif_failed,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM backup_verifications WHERE status = 'failed'")
-        .fetch_one(db).await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .fetch_one(db).await.map_err(|e| internal_error("health", e))?;
 
     // Find stale sites (no backup in > 7 days)
     let stale_sites: Vec<(String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
@@ -216,7 +216,7 @@ pub async fn list_policies(
     .bind(claims.sub)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list policies", e))?;
 
     Ok(Json(policies))
 }
@@ -254,7 +254,7 @@ pub async fn create_policy(
     .bind(req.enabled.unwrap_or(true))
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create policy", e))?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "backup_policy.create",
@@ -281,7 +281,7 @@ pub async fn update_policy(
     )
     .bind(id).bind(claims.sub)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("update policy", e))?;
 
     if existing.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Policy not found"));
@@ -319,7 +319,7 @@ pub async fn update_policy(
     .bind(req.enabled)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("update policy", e))?;
 
     Ok(Json(policy))
 }
@@ -333,7 +333,7 @@ pub async fn delete_policy(
     let result = sqlx::query("DELETE FROM backup_policies WHERE id = $1 AND user_id = $2")
         .bind(id).bind(claims.sub)
         .execute(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("delete policy", e))?;
 
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "Policy not found"));
@@ -356,7 +356,7 @@ pub async fn protect_all(
     )
     .bind(claims.sub).bind(policy_name)
     .fetch_optional(db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("protect all", e))?;
 
     if let Some((existing_id,)) = existing {
         return Err(err(StatusCode::CONFLICT,
@@ -372,7 +372,7 @@ pub async fn protect_all(
     .bind(claims.sub)
     .bind(policy_name)
     .fetch_one(db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("protect all", e))?;
 
     activity::log_activity(
         db, claims.sub, &claims.email, "backup_policy.protect_all",
@@ -417,7 +417,7 @@ pub async fn create_db_backup(
     )
     .bind(req.database_id).bind(claims.sub)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create db backup", e))?;
 
     let (db_id, db_name, engine, user, password_enc, server_id) =
         row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Database not found"))?;
@@ -459,7 +459,7 @@ pub async fn create_db_backup(
     .bind(db_id).bind(server_id).bind(&filename).bind(size_bytes)
     .bind(&engine).bind(&db_name).bind(encrypted)
     .fetch_one(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create db backup", e))?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "db_backup.create",
@@ -493,7 +493,7 @@ pub async fn list_db_backups(
     )
     .bind(claims.sub).bind(limit).bind(offset)
     .fetch_all(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list db backups", e))?;
 
     Ok(Json(backups))
 }
@@ -512,7 +512,7 @@ pub async fn delete_db_backup(
     )
     .bind(claims.sub).bind(id)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("delete db backup", e))?;
 
     let backup = backup.ok_or_else(|| err(StatusCode::NOT_FOUND, "Backup not found"))?;
 
@@ -523,7 +523,7 @@ pub async fn delete_db_backup(
 
     sqlx::query("DELETE FROM database_backups WHERE id = $1")
         .bind(id).execute(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("delete db backup", e))?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -543,7 +543,7 @@ pub async fn restore_db_backup(
     )
     .bind(claims.sub).bind(id)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("restore db backup", e))?;
 
     let backup = backup.ok_or_else(|| err(StatusCode::NOT_FOUND, "Backup not found"))?;
 
@@ -553,7 +553,7 @@ pub async fn restore_db_backup(
     )
     .bind(backup.database_id)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("restore db backup", e))?;
 
     let (_engine, user, password_enc) =
         creds.ok_or_else(|| err(StatusCode::NOT_FOUND, "Database not found"))?;
@@ -638,7 +638,7 @@ pub async fn create_volume_backup(
     .bind(&req.container_id).bind(&req.container_name).bind(server_id)
     .bind(&req.volume_name).bind(&filename).bind(size_bytes)
     .fetch_one(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create volume backup", e))?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "volume_backup.create",
@@ -665,7 +665,7 @@ pub async fn list_volume_backups(
     )
     .bind(limit).bind(offset)
     .fetch_all(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list volume backups", e))?;
 
     Ok(Json(backups))
 }
@@ -683,7 +683,7 @@ pub async fn restore_volume_backup(
     )
     .bind(id)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("restore volume backup", e))?;
 
     let backup = backup.ok_or_else(|| err(StatusCode::NOT_FOUND, "Volume backup not found"))?;
 
@@ -727,7 +727,7 @@ pub async fn trigger_verify(
     )
     .bind(&req.backup_type).bind(req.backup_id)
     .fetch_one(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("trigger verify", e))?;
 
     let verif_id = verification.id;
     let db = state.db.clone();
@@ -820,7 +820,7 @@ pub async fn storage_history(
          ORDER BY created_at ASC"
     )
     .fetch_all(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("storage history", e))?;
 
     // Group by day, keep the last reading per day
     let mut daily: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
@@ -854,7 +854,7 @@ pub async fn list_verifications(
     )
     .bind(limit).bind(offset)
     .fetch_all(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list verifications", e))?;
 
     Ok(Json(verifications))
 }

@@ -6,7 +6,7 @@ use axum::{
 };
 
 use crate::auth::{AdminUser, AuthUser, ServerScope};
-use crate::error::{err, agent_error, ApiError};
+use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::services::{activity, security_hardening};
 use crate::AppState;
 
@@ -565,7 +565,7 @@ pub async fn audit_log_list(
         )
         .bind(limit).bind(offset)
         .fetch_all(&state.db).await
-    }.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    }.map_err(|e| internal_error("audit log list", e))?;
 
     let result: Vec<serde_json::Value> = rows.iter().map(|r| {
         serde_json::json!({
@@ -618,7 +618,7 @@ pub async fn approve_user(
     .bind(user_id)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("approve user", e))?;
 
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "User not found"));
@@ -642,7 +642,7 @@ pub async fn pending_users(
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("pending users", e))?;
 
     let result: Vec<serde_json::Value> = users.iter().map(|(id, email, created)| {
         serde_json::json!({ "id": id, "email": email, "created_at": created })

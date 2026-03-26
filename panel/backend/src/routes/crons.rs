@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
-use crate::error::{err, agent_error, paginate, ApiError};
+use crate::error::{internal_error, err, agent_error, paginate, ApiError};
 use crate::services::activity;
 use crate::services::agent::AgentHandle;
 use crate::AppState;
@@ -55,7 +55,7 @@ async fn get_site_domain(state: &AppState, site_id: Uuid, user_id: Uuid) -> Resu
             .bind(user_id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("unknown", e))?;
 
     row.map(|(d,)| d)
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))
@@ -69,7 +69,7 @@ async fn sync_crons_to_agent(state: &AppState, agent: &AgentHandle, site_id: Uui
     .bind(site_id)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("unknown", e))?;
 
     let agent_crons: Vec<serde_json::Value> = crons
         .iter()
@@ -110,7 +110,7 @@ pub async fn list(
     .bind(offset)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list crons", e))?;
 
     Ok(Json(crons))
 }
@@ -150,7 +150,7 @@ pub async fn create(
     .bind(body.schedule.trim())
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create crons", e))?;
 
     // Sync to agent
     sync_crons_to_agent(&state, &agent, id).await?;
@@ -181,7 +181,7 @@ pub async fn update(
             .bind(id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("update crons", e))?;
 
     if existing.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Cron job not found"));
@@ -219,7 +219,7 @@ pub async fn update(
     .bind(cron_id)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("update crons", e))?;
 
     // Sync to agent (re-syncs all enabled crons)
     sync_crons_to_agent(&state, &agent, id).await?;
@@ -247,7 +247,7 @@ pub async fn remove(
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove crons", e))?;
 
     if deleted.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "Cron job not found"));
@@ -284,7 +284,7 @@ pub async fn run_now(
     .bind(id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("run now", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Cron job not found"))?;
 
     // Execute via agent
@@ -313,7 +313,7 @@ pub async fn run_now(
     .bind(cron_id)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("run now", e))?;
 
     tracing::info!("Cron executed manually: {cron_id} for {domain} — {status_str}");
     activity::log_activity(

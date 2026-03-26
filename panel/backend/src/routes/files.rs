@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
-use crate::error::{err, agent_error, ApiError};
+use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::routes::is_safe_relative_path;
 use crate::AppState;
 
@@ -44,7 +44,7 @@ async fn get_site_domain(state: &AppState, site_id: Uuid, user_id: Uuid) -> Resu
             .bind(user_id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("unknown", e))?;
 
     row.map(|(d,)| d)
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))

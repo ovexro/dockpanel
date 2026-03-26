@@ -24,6 +24,11 @@ async fn analyze(
     let path = body["path"].as_str().ok_or((StatusCode::BAD_REQUEST, "path required".into()))?;
     let source = body["source"].as_str().unwrap_or("cpanel");
 
+    // Restrict path to allowed directories
+    if !path.starts_with("/var/backups/") && !path.starts_with("/tmp/") {
+        return Err((StatusCode::BAD_REQUEST, "Path must be within /var/backups/ or /tmp/".into()));
+    }
+
     // Validate path exists
     if !std::path::Path::new(path).exists() {
         return Err((StatusCode::BAD_REQUEST, format!("File not found: {path}")));

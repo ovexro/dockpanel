@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{err, ApiError};
+use crate::error::{internal_error, err, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -42,7 +42,7 @@ async fn get_site_domain(state: &AppState, site_id: Uuid, user_id: Uuid) -> Resu
             .bind(user_id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("unknown", e))?;
     row.map(|(d,)| d)
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))
 }
@@ -61,7 +61,7 @@ pub async fn get_schedule(
     .bind(id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("get schedule", e))?;
 
     Ok(Json(schedule))
 }
@@ -113,7 +113,7 @@ pub async fn set_schedule(
     .bind(enabled)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("set schedule", e))?;
 
     tracing::info!("Backup schedule set for {domain}: {}", schedule.schedule);
     activity::log_activity(
@@ -136,7 +136,7 @@ pub async fn remove_schedule(
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove schedule", e))?;
 
     if deleted.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "No schedule found"));

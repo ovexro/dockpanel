@@ -1,11 +1,10 @@
 use axum::{
     extract::State,
-    http::StatusCode,
     Json,
 };
 
 use crate::auth::AuthUser;
-use crate::error::{err, ApiError};
+use crate::error::{internal_error, ApiError};
 use crate::AppState;
 
 /// GET /api/agent/version — Returns the latest agent version info.
@@ -20,21 +19,21 @@ pub async fn latest_version(
     )
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("latest version", e))?;
 
     let download_url: Option<(String,)> = sqlx::query_as(
         "SELECT value FROM settings WHERE key = 'agent_download_url'",
     )
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("latest version", e))?;
 
     let checksum: Option<(String,)> = sqlx::query_as(
         "SELECT value FROM settings WHERE key = 'agent_checksum'",
     )
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("latest version", e))?;
 
     Ok(Json(serde_json::json!({
         "version": version.map(|v| v.0).unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),

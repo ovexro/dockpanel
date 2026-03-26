@@ -1065,7 +1065,12 @@ pub async fn ensure_nixpacks() -> Option<String> {
 
     let version = if let Ok(ref out) = tag_cmd {
         let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if v.starts_with('v') { v } else { "v1.30.0".to_string() }
+        // Validate version format strictly
+        if v.starts_with('v') && v[1..].chars().all(|c| c.is_ascii_digit() || c == '.') && v.contains('.') {
+            v
+        } else {
+            "v1.30.0".to_string()
+        }
     } else {
         "v1.30.0".to_string()
     };

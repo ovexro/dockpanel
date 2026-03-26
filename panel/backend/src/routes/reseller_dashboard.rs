@@ -10,7 +10,7 @@ use argon2::{
 };
 
 use crate::auth::ResellerUser;
-use crate::error::{err, ApiError};
+use crate::error::{internal_error, err, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -75,7 +75,7 @@ pub async fn dashboard(
         .bind(claims.sub)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("dashboard", e))?;
 
     let profile = profile.ok_or_else(|| err(StatusCode::NOT_FOUND, "Reseller profile not found"))?;
 
@@ -85,7 +85,7 @@ pub async fn dashboard(
     .bind(claims.sub)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("dashboard", e))?;
 
     Ok(Json(ResellerDashboardData {
         panel_name: profile.0,
@@ -113,7 +113,7 @@ pub async fn list_users(
         )
         .fetch_all(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("list users", e))?
     } else {
         sqlx::query_as(
             "SELECT u.id, u.email, u.role, u.created_at, \
@@ -124,7 +124,7 @@ pub async fn list_users(
         .bind(claims.sub)
         .fetch_all(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("list users", e))?
     };
 
     Ok(Json(users))
@@ -150,7 +150,7 @@ pub async fn create_user(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create user", e))?;
 
     let quota = quota.ok_or_else(|| err(StatusCode::NOT_FOUND, "Reseller profile not found"))?;
 
@@ -182,7 +182,7 @@ pub async fn create_user(
             .bind(&body.email)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("create user", e))?;
 
     if existing.is_some() {
         return Err(err(StatusCode::CONFLICT, "Email already registered"));
@@ -192,7 +192,7 @@ pub async fn create_user(
     let salt = SaltString::generate(&mut OsRng);
     let hash = Argon2::default()
         .hash_password(body.password.as_bytes(), &salt)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("create user", e))?
         .to_string();
 
     // Create user
@@ -205,7 +205,7 @@ pub async fn create_user(
     .bind(claims.sub)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create user", e))?;
 
     // Increment used_users counter
     sqlx::query(
@@ -214,7 +214,7 @@ pub async fn create_user(
     .bind(claims.sub)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create user", e))?;
 
     tracing::info!(
         "Reseller {} created user: {}",
@@ -256,7 +256,7 @@ pub async fn update_user(
             .bind(id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+            .map_err(|e| internal_error("update user", e))?
     } else {
         sqlx::query_as(
             "SELECT id, email FROM users WHERE id = $1 AND reseller_id = $2",
@@ -265,7 +265,7 @@ pub async fn update_user(
         .bind(claims.sub)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("update user", e))?
     };
 
     let user = user.ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
@@ -281,7 +281,7 @@ pub async fn update_user(
         let salt = SaltString::generate(&mut OsRng);
         let hash = Argon2::default()
             .hash_password(password.as_bytes(), &salt)
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+            .map_err(|e| internal_error("update user", e))?
             .to_string();
 
         sqlx::query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2")
@@ -289,7 +289,7 @@ pub async fn update_user(
             .bind(id)
             .execute(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("update user", e))?;
     }
 
     activity::log_activity(
@@ -326,7 +326,7 @@ pub async fn delete_user(
             .bind(id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+            .map_err(|e| internal_error("delete user", e))?
     } else {
         sqlx::query_as(
             "SELECT id, email FROM users WHERE id = $1 AND reseller_id = $2",
@@ -335,7 +335,7 @@ pub async fn delete_user(
         .bind(claims.sub)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("delete user", e))?
     };
 
     let user = user.ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
@@ -344,7 +344,7 @@ pub async fn delete_user(
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("delete user", e))?;
 
     // Decrement used_users counter (floor at 0)
     if claims.role == "reseller" {
@@ -354,7 +354,7 @@ pub async fn delete_user(
         .bind(claims.sub)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("delete user", e))?;
     }
 
     tracing::info!(
@@ -394,7 +394,7 @@ pub async fn list_servers(
     .bind(claims.sub)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list servers", e))?;
 
     Ok(Json(servers))
 }
@@ -430,7 +430,7 @@ pub async fn check_reseller_quota(
     .bind(rid)
     .fetch_optional(db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("check reseller quota", e))?;
 
     let profile = match profile {
         Some(p) => p,

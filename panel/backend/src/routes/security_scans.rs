@@ -5,7 +5,7 @@ use axum::{
 };
 
 use crate::auth::{AuthUser, ServerScope};
-use crate::error::{err, agent_error, require_admin, ApiError};
+use crate::error::{internal_error, err, agent_error, require_admin, ApiError};
 use crate::services::activity;
 use crate::services::notifications;
 use crate::AppState;
@@ -49,7 +49,7 @@ pub async fn trigger_scan(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("trigger scan", e))?;
 
     // Call agent directly
     let result = agent
@@ -243,7 +243,7 @@ pub async fn list_scans(
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list scans", e))?;
 
     Ok(Json(scans))
 }
@@ -263,7 +263,7 @@ pub async fn get_scan(
     .bind(scan_id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("get scan", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Scan not found"))?;
 
     let findings: Vec<FindingRow> = sqlx::query_as(
@@ -274,7 +274,7 @@ pub async fn get_scan(
     .bind(scan_id)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("get scan", e))?;
 
     Ok(Json(serde_json::json!({
         "scan": scan,
@@ -298,7 +298,7 @@ pub async fn posture(
     )
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("posture", e))?;
 
     // Get total scans count
     let (total_scans,): (i64,) = sqlx::query_as(
@@ -306,7 +306,7 @@ pub async fn posture(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("posture", e))?;
 
     // Calculate score: 100 base, -20 per critical, -5 per warning
     let score = if let Some(ref scan) = latest {

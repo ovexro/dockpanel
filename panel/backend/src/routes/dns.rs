@@ -7,7 +7,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{err, agent_error, require_admin, ApiError};
+use crate::error::{internal_error, err, agent_error, require_admin, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -68,7 +68,7 @@ async fn get_zone(state: &AppState, zone_id: Uuid, user_id: Uuid) -> Result<DnsZ
     .bind(user_id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("unknown", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "DNS zone not found"))
 }
 
@@ -96,7 +96,7 @@ async fn pdns_settings(state: &AppState) -> Result<(String, String), ApiError> {
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("unknown", e))?;
 
     let mut url = String::new();
     let mut key_enc = String::new();
@@ -229,7 +229,7 @@ pub async fn list_zones(
     .bind(claims.sub)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list zones", e))?;
 
     let result: Vec<serde_json::Value> = zones
         .iter()
@@ -304,7 +304,7 @@ pub async fn create_zone(
                 if e.to_string().contains("duplicate") {
                     err(StatusCode::CONFLICT, "Zone already exists")
                 } else {
-                    err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+                    internal_error("create zone", e)
                 }
             })?;
 
@@ -364,7 +364,7 @@ pub async fn create_zone(
                 if e.to_string().contains("duplicate") {
                     err(StatusCode::CONFLICT, "Zone already exists")
                 } else {
-                    err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+                    internal_error("create zone", e)
                 }
             })?;
 
@@ -410,7 +410,7 @@ pub async fn delete_zone(
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("delete zone", e))?;
 
     tracing::info!("DNS zone removed: {}", zone.domain);
 

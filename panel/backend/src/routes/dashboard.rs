@@ -1,14 +1,8 @@
-use axum::{extract::State, http::StatusCode, Json};
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use axum::{extract::State, Json};
 
 use crate::auth::{AdminUser, AuthUser, ServerScope};
-use crate::error::{err, ApiError};
+use crate::error::{internal_error, ApiError};
 use crate::AppState;
-
-static INTELLIGENCE_CACHE: std::sync::LazyLock<Mutex<Option<(serde_json::Value, Instant)>>> =
-    std::sync::LazyLock::new(|| Mutex::new(None));
-const CACHE_TTL: Duration = Duration::from_secs(30);
 
 /// GET /api/dashboard/intelligence — Server health score + top issues + SSL countdowns.
 pub async fn intelligence(
@@ -16,14 +10,6 @@ pub async fn intelligence(
     State(state): State<AppState>,
     ServerScope(server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // Check cache first
-    if let Ok(guard) = INTELLIGENCE_CACHE.lock() {
-        if let Some((ref cached, ref stored_at)) = *guard {
-            if stored_at.elapsed() < CACHE_TTL {
-                return Ok(Json(cached.clone()));
-            }
-        }
-    }
 
     // 1. Get firing alerts count
     let (firing_count,): (i64,) = sqlx::query_as(
@@ -32,7 +18,7 @@ pub async fn intelligence(
     .bind(server_id)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("intelligence", e))?;
 
     // 2. Get acknowledged alerts count
     let (ack_count,): (i64,) = sqlx::query_as(
@@ -41,7 +27,7 @@ pub async fn intelligence(
     .bind(server_id)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("intelligence", e))?;
 
     // 3. Get SSL expiry data
     let ssl_sites: Vec<(String, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
@@ -50,7 +36,7 @@ pub async fn intelligence(
     .bind(server_id)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("intelligence", e))?;
 
     let now = chrono::Utc::now();
     let ssl_countdowns: Vec<serde_json::Value> = ssl_sites
@@ -84,7 +70,7 @@ pub async fn intelligence(
     .bind(server_id)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("intelligence", e))?;
 
     let issues: Vec<serde_json::Value> = top_issues
         .iter()
@@ -258,11 +244,6 @@ pub async fn intelligence(
         "diagnostics": diagnostics_summary,
     });
 
-    // Store in cache
-    if let Ok(mut guard) = INTELLIGENCE_CACHE.lock() {
-        *guard = Some((result.clone(), Instant::now()));
-    }
-
     Ok(Json(result))
 }
 
@@ -311,7 +292,7 @@ pub async fn metrics_history(
     .bind(claims.sub)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("metrics history", e))?;
 
     let points: Vec<serde_json::Value> = rows
         .iter()
@@ -462,7 +443,7 @@ pub async fn fleet_overview(
     .bind(claims.sub)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("fleet overview", e))?;
 
     let mut fleet = Vec::new();
     for (id, name, hostname, ip) in &servers {

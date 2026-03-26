@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, Claims, ServerScope};
-use crate::error::{err, agent_error, require_admin, ApiError};
+use crate::error::{internal_error, err, agent_error, require_admin, ApiError};
 use crate::services::activity;
 use crate::services::agent::AgentHandle;
 use crate::AppState;
@@ -49,7 +49,7 @@ pub async fn list(
     .bind(server_id)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list stacks", e))?;
 
     // Get live container status from agent
     let apps = agent
@@ -109,7 +109,7 @@ pub async fn get_one(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("get_one stacks", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Stack not found"))?;
 
     let apps = agent
@@ -188,7 +188,7 @@ pub async fn create(
     .bind(service_count)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create stacks", e))?;
 
     // Deploy with stack_id label
     let deploy_result = agent
@@ -281,7 +281,7 @@ pub async fn remove(
             .bind(claims.sub)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("remove stacks", e))?;
 
     let (_, name) = stack.ok_or_else(|| err(StatusCode::NOT_FOUND, "Stack not found"))?;
 
@@ -301,7 +301,7 @@ pub async fn remove(
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove stacks", e))?;
 
     activity::log_activity(
         &state.db,
@@ -343,7 +343,7 @@ pub async fn update(
             .bind(claims.sub)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("update stacks", e))?;
 
     if exists.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Stack not found"));
@@ -392,7 +392,7 @@ pub async fn update(
     .bind(id)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("update stacks", e))?;
 
     Ok(Json(serde_json::json!({
         "ok": true,
@@ -418,7 +418,7 @@ async fn stack_action(
             .bind(claims.sub)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("update stacks", e))?;
 
     if exists.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Stack not found"));

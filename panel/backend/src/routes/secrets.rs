@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
-use crate::error::{err, paginate, agent_error, ApiError};
+use crate::error::{internal_error, err, paginate, agent_error, ApiError};
 use crate::services::activity;
 use crate::services::extensions::fire_event;
 use crate::services::secrets_crypto;
@@ -130,7 +130,7 @@ pub async fn list_vaults(
     )
     .bind(claims.sub)
     .fetch_all(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list vaults", e))?;
 
     Ok(Json(vaults))
 }
@@ -153,7 +153,7 @@ pub async fn create_vault(
     .bind(&req.description)
     .bind(req.site_id)
     .fetch_one(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create vault", e))?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "vault.create",
@@ -172,7 +172,7 @@ pub async fn delete_vault(
     let result = sqlx::query("DELETE FROM secret_vaults WHERE id = $1 AND user_id = $2")
         .bind(id).bind(claims.sub)
         .execute(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("delete vault", e))?;
 
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "Vault not found"));
@@ -190,7 +190,7 @@ async fn verify_vault(state: &AppState, vault_id: Uuid, user_id: Uuid) -> Result
     )
     .bind(vault_id).bind(user_id)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("delete vault", e))?;
 
     exists.map(|_| ()).ok_or_else(|| err(StatusCode::NOT_FOUND, "Vault not found"))
 }
@@ -212,7 +212,7 @@ pub async fn list_secrets(
     )
     .bind(vault_id)
     .fetch_all(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list secrets", e))?;
 
     let entries: Vec<SecretEntry> = rows.into_iter().map(|r| {
         let value = if reveal {
@@ -277,7 +277,7 @@ pub async fn create_secret(
     .bind(req.auto_inject.unwrap_or(false))
     .bind(&claims.email)
     .fetch_one(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create secret", e))?;
 
     // Record initial version
     let _ = sqlx::query(
@@ -323,7 +323,7 @@ pub async fn update_secret(
     )
     .bind(secret_id).bind(vault_id)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("update secret", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Secret not found"))?;
 
     let new_version = current.version + 1;
@@ -350,7 +350,7 @@ pub async fn update_secret(
         .bind(secret_id).bind(&encrypted).bind(new_version).bind(&claims.email)
         .bind(&req.description).bind(req.auto_inject)
         .execute(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("update secret", e))?;
     } else {
         // Update metadata only
         let _ = sqlx::query(
@@ -359,13 +359,13 @@ pub async fn update_secret(
         )
         .bind(secret_id).bind(&req.description).bind(req.auto_inject)
         .execute(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("update secret", e))?;
     }
 
     // Re-fetch
     let row: SecretRow = sqlx::query_as("SELECT * FROM secrets WHERE id = $1")
         .bind(secret_id).fetch_one(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("update secret", e))?;
 
     let decrypted = secrets_crypto::decrypt(&row.encrypted_value, &encryption_key).unwrap_or_default();
 
@@ -389,7 +389,7 @@ pub async fn delete_secret(
     let result = sqlx::query("DELETE FROM secrets WHERE id = $1 AND vault_id = $2")
         .bind(secret_id).bind(vault_id)
         .execute(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("delete secret", e))?;
 
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "Secret not found"));
@@ -414,7 +414,7 @@ pub async fn list_versions(
     )
     .bind(secret_id)
     .fetch_all(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list versions", e))?;
 
     Ok(Json(versions))
 }
@@ -436,7 +436,7 @@ pub async fn inject_to_site(
     let domain: (String,) = sqlx::query_as("SELECT domain FROM sites WHERE id = $1 AND user_id = $2")
         .bind(site_id).bind(claims.sub)
         .fetch_optional(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("inject to site", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
     // Get all auto-inject secrets
@@ -445,7 +445,7 @@ pub async fn inject_to_site(
     )
     .bind(vault_id)
     .fetch_all(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("inject to site", e))?;
 
     if rows.is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "No auto-inject secrets in this vault"));
@@ -497,7 +497,7 @@ pub async fn pull(
     )
     .bind(vault_id)
     .fetch_all(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("pull", e))?;
 
     let entries: Vec<serde_json::Value> = rows.into_iter().map(|r| {
         let value = secrets_crypto::decrypt(&r.encrypted_value, &encryption_key).unwrap_or_default();
@@ -519,11 +519,11 @@ pub async fn export_vault(
 
     let vault: SecretVault = sqlx::query_as("SELECT * FROM secret_vaults WHERE id = $1")
         .bind(vault_id).fetch_one(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("export vault", e))?;
 
     let rows: Vec<SecretRow> = sqlx::query_as("SELECT * FROM secrets WHERE vault_id = $1 ORDER BY key")
         .bind(vault_id).fetch_all(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("export vault", e))?;
 
     // Export with encrypted values (portable — can be imported on another DockPanel with same key)
     let secrets_export: Vec<serde_json::Value> = rows.into_iter().map(|r| {

@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
-use crate::error::{agent_error, err, require_admin, ApiError};
+use crate::error::{internal_error, agent_error, err, require_admin, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -19,7 +19,7 @@ async fn site_domain(state: &AppState, id: Uuid, user_id: Uuid) -> Result<String
     .bind(user_id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("unknown", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
     Ok(site.domain)
@@ -244,7 +244,7 @@ pub async fn all_wp_sites(
     .bind(server_id)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("all wp sites", e))?;
 
     let mut wp_sites = Vec::new();
 
@@ -369,7 +369,7 @@ pub async fn vuln_scan(
         .bind(claims.sub)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("vuln scan", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
     let result = agent
@@ -425,7 +425,7 @@ pub async fn security_check(
         .bind(claims.sub)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("security check", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
     let result = agent
@@ -449,7 +449,7 @@ pub async fn wp_harden(
         .bind(claims.sub)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("wp harden", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
     let result = agent

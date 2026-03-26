@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
-use crate::error::{err, agent_error, ApiError};
+use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::models::Site;
 use crate::AppState;
 
@@ -22,7 +22,7 @@ pub async fn provision(
         .bind(claims.sub)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("provision", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
     if site.status != "active" {
@@ -42,7 +42,7 @@ pub async fn provision(
             .bind(claims.sub)
             .fetch_one(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("provision", e))?;
 
     // Build agent request
     let mut agent_body = serde_json::json!({
@@ -103,7 +103,7 @@ pub async fn provision(
     .bind(id)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("provision", e))?;
 
     tracing::info!("SSL provisioned for {}", site.domain);
 
@@ -136,7 +136,7 @@ pub async fn status(
         .bind(claims.sub)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("status", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
     // Also fetch live status from agent

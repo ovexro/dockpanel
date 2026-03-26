@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{AdminUser, AuthUser};
-use crate::error::{err, ApiError};
+use crate::error::{internal_error, err, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -49,7 +49,7 @@ pub async fn list(
             .bind(claims.sub)
             .fetch_all(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("list servers", e))?;
 
     Ok(Json(servers))
 }
@@ -94,7 +94,7 @@ pub async fn create(
     .bind(if agent_url.is_empty() { None } else { Some(&agent_url) })
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create servers", e))?;
 
     // Generate install script with panel URL and token
     let panel_url = &state.config.base_url;
@@ -139,7 +139,7 @@ pub async fn get_one(
             .bind(claims.sub)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+            .map_err(|e| internal_error("get_one servers", e))?
             .ok_or_else(|| err(StatusCode::NOT_FOUND, "Server not found"))?;
 
     Ok(Json(server))
@@ -157,7 +157,7 @@ pub async fn remove(
             .bind(claims.sub)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+            .map_err(|e| internal_error("remove servers", e))?
             .ok_or_else(|| err(StatusCode::NOT_FOUND, "Server not found"))?;
 
     if server.is_local {
@@ -169,7 +169,7 @@ pub async fn remove(
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove servers", e))?;
 
     // Invalidate remote agent cache
     state.agents.invalidate(id).await;
@@ -201,7 +201,7 @@ pub async fn test_connection(
             .bind(claims.sub)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+            .map_err(|e| internal_error("test connection", e))?
             .ok_or_else(|| err(StatusCode::NOT_FOUND, "Server not found"))?;
 
     // Try to reach the agent
@@ -260,7 +260,7 @@ pub async fn update(
             .bind(claims.sub)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+            .map_err(|e| internal_error("update servers", e))?
             .ok_or_else(|| err(StatusCode::NOT_FOUND, "Server not found"))?;
 
     let name = body
@@ -285,7 +285,7 @@ pub async fn update(
     .bind(id)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("update servers", e))?;
 
     // Invalidate remote agent cache so it picks up new URL/token
     state.agents.invalidate(id).await;
@@ -318,7 +318,7 @@ pub async fn rotate_token(
         .bind(claims.sub)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("rotate token", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Server not found"))?;
 
     // Get agent handle for this server
@@ -349,7 +349,7 @@ pub async fn rotate_token(
     .bind(id)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("rotate token", e))?;
 
     // Invalidate cached remote agent client so it picks up the new token
     state.agents.invalidate(id).await;

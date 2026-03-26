@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
-use crate::error::{err, agent_error, paginate, ApiError};
+use crate::error::{internal_error, err, agent_error, paginate, ApiError};
 use crate::routes::reseller_dashboard::check_reseller_quota;
 use crate::services::agent::AgentError;
 use crate::AppState;
@@ -72,7 +72,7 @@ pub async fn list(
     .bind(offset)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list databases", e))?;
 
     Ok(Json(dbs))
 }
@@ -91,7 +91,7 @@ pub async fn create(
             .bind(claims.sub)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("create databases", e))?;
 
     if site_exists.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Site not found"));
@@ -119,7 +119,7 @@ pub async fn create(
             .bind(&body.name)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("create databases", e))?;
 
     if existing.is_some() {
         return Err(err(StatusCode::CONFLICT, "Database name already exists for this site"));
@@ -163,7 +163,7 @@ pub async fn create(
         if e.to_string().contains("unique") || e.to_string().contains("duplicate") {
             err(StatusCode::CONFLICT, "Port or database name conflict, please retry")
         } else {
-            err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+            internal_error("create databases", e)
         }
     })?;
 
@@ -199,7 +199,7 @@ pub async fn create(
         .bind(db_record.id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("create databases", e))?;
 
     // Increment reseller database counter
     let _ = sqlx::query(
@@ -227,7 +227,7 @@ pub async fn credentials(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("credentials", e))?;
 
     let (name, engine, password_enc, port, container_id) =
         row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Database not found"))?;
@@ -275,7 +275,7 @@ pub async fn remove(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("remove databases", e))?;
 
     let (_, name, container_id) = db.ok_or_else(|| err(StatusCode::NOT_FOUND, "Database not found"))?;
 
@@ -291,7 +291,7 @@ pub async fn remove(
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove databases", e))?;
 
     // Decrement reseller database counter
     let _ = sqlx::query(
@@ -319,7 +319,7 @@ async fn get_db_info(
     .bind(user_id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("remove databases", e))?;
 
     let (name, engine, password_enc, port) =
         row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Database not found"))?;
@@ -488,7 +488,7 @@ async fn find_available_port(state: &AppState, engine: &str) -> Result<i32, ApiE
     .bind(range_end)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("query", e))?;
 
     row.map(|(p,)| p).ok_or_else(|| err(
         StatusCode::INTERNAL_SERVER_ERROR,

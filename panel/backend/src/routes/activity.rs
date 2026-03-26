@@ -1,12 +1,11 @@
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
     Json,
 };
 use uuid::Uuid;
 
 use crate::auth::AdminUser;
-use crate::error::{err, ApiError};
+use crate::error::{internal_error, ApiError};
 use crate::AppState;
 
 #[derive(serde::Deserialize)]
@@ -50,7 +49,7 @@ pub async fn list(
         .bind(offset)
         .fetch_all(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("list activity", e))?
     } else {
         sqlx::query_as(
             "SELECT * FROM activity_logs ORDER BY created_at DESC LIMIT $1 OFFSET $2",
@@ -59,7 +58,7 @@ pub async fn list(
         .bind(offset)
         .fetch_all(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("list activity", e))?
     };
 
     Ok(Json(logs))

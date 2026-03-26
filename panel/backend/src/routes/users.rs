@@ -11,7 +11,7 @@ use argon2::{
 };
 
 use crate::auth::AdminUser;
-use crate::error::{err, ApiError};
+use crate::error::{internal_error, err, ApiError};
 use crate::models::User;
 use crate::services::activity;
 use crate::AppState;
@@ -52,7 +52,7 @@ pub async fn list(
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list users", e))?;
 
     Ok(Json(users))
 }
@@ -86,7 +86,7 @@ pub async fn create(
             .bind(&body.email)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("create users", e))?;
 
     if existing.is_some() {
         return Err(err(StatusCode::CONFLICT, "Email already registered"));
@@ -95,7 +95,7 @@ pub async fn create(
     let salt = SaltString::generate(&mut OsRng);
     let hash = Argon2::default()
         .hash_password(body.password.as_bytes(), &salt)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("create users", e))?
         .to_string();
 
     let user: User = sqlx::query_as(
@@ -106,7 +106,7 @@ pub async fn create(
     .bind(role)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create users", e))?;
 
     tracing::info!("User created by {}: {} ({})", claims.email, user.email, role);
     let ip = crate::routes::client_ip(&headers);
@@ -159,7 +159,7 @@ pub async fn update(
         .bind(id)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("update users", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
 
     if let Some(ref role) = body.role {
@@ -171,7 +171,7 @@ pub async fn update(
             .bind(id)
             .execute(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("update users", e))?;
     }
 
     if let Some(ref password) = body.password {
@@ -184,7 +184,7 @@ pub async fn update(
         let salt = SaltString::generate(&mut OsRng);
         let hash = Argon2::default()
             .hash_password(password.as_bytes(), &salt)
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+            .map_err(|e| internal_error("update users", e))?
             .to_string();
 
         sqlx::query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2")
@@ -192,7 +192,7 @@ pub async fn update(
             .bind(id)
             .execute(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("update users", e))?;
     }
 
     activity::log_activity(
@@ -219,14 +219,14 @@ pub async fn remove(
         .bind(id)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("remove users", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
 
     sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove users", e))?;
 
     tracing::info!("User deleted by {}: {}", claims.email, user.email);
     let ip = crate::routes::client_ip(&headers);

@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{AdminUser, AuthUser};
-use crate::error::{err, ApiError};
+use crate::error::{internal_error, err, ApiError};
 use crate::AppState;
 
 #[derive(serde::Deserialize)]
@@ -40,7 +40,7 @@ pub async fn dispatch(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("dispatch", e))?;
 
     if exists.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Server not found"));
@@ -57,7 +57,7 @@ pub async fn dispatch(
     .bind(&payload)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("dispatch", e))?;
 
     Ok((
         StatusCode::CREATED,
@@ -82,7 +82,7 @@ pub async fn list_commands(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list commands", e))?;
 
     if exists.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Server not found"));
@@ -94,7 +94,7 @@ pub async fn list_commands(
     .bind(server_id)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list commands", e))?;
 
     let commands: Vec<serde_json::Value> = rows
         .into_iter()
@@ -130,7 +130,7 @@ pub async fn command_status(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("command status", e))?;
 
     let cmd = row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Command not found"))?;
 

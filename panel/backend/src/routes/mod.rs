@@ -181,6 +181,7 @@ pub fn validate_compose_yaml(yaml: &str) -> Result<(), &'static str> {
         ":/:/", ":/:rw",  // host root volume mounts
         "- /etc/shadow", "- /etc/passwd",
         "- /root/", "- /home/",
+        "docker.sock", "/var/run/docker.sock",
         "security_opt:", "apparmor:unconfined", "seccomp:unconfined",
     ];
     for d in &dangerous {

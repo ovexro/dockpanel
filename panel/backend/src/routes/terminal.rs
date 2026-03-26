@@ -6,7 +6,7 @@ use axum::{
 use jsonwebtoken::{encode, EncodingKey, Header};
 
 use crate::auth::{AuthUser, ServerScope};
-use crate::error::{err, require_admin, ApiError};
+use crate::error::{internal_error, err, require_admin, ApiError};
 use crate::AppState;
 
 #[derive(serde::Deserialize)]
@@ -43,7 +43,7 @@ pub async fn ws_token(
             sqlx::query_as("SELECT value FROM settings WHERE key = 'server_terminal_disabled'")
                 .fetch_optional(&state.db)
                 .await
-                .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+                .map_err(|e| internal_error("ws token", e))?;
         if disabled.map(|r| r.0 == "true").unwrap_or(false) {
             return Err(err(StatusCode::FORBIDDEN, "Server terminal is disabled"));
         }
@@ -61,7 +61,7 @@ pub async fn ws_token(
                 .bind(claims.sub)
                 .fetch_optional(&state.db)
                 .await
-                .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+                .map_err(|e| internal_error("ws token", e))?;
 
         match row {
             Some((d,)) => Some(d),
@@ -83,7 +83,7 @@ pub async fn ws_token(
         &ticket,
         &EncodingKey::from_secret(agent.token().await.as_bytes()),
     )
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("ws token", e))?;
 
     Ok(Json(serde_json::json!({
         "token": token,

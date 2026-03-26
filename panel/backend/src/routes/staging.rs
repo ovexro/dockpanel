@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
-use crate::error::{err, agent_error, ApiError};
+use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::models::Site;
 use crate::routes::is_valid_domain;
 use crate::services::activity;
@@ -26,7 +26,7 @@ async fn get_site(state: &AppState, id: Uuid, user_id: Uuid) -> Result<Site, Api
         .bind(user_id)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("unknown", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))
 }
 
@@ -62,7 +62,7 @@ pub async fn create(
             .bind(id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("create staging", e))?;
 
     if existing.is_some() {
         return Err(err(
@@ -87,7 +87,7 @@ pub async fn create(
         .bind(&staging_domain)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("create staging", e))?;
 
     if dup.is_some() {
         return Err(err(StatusCode::CONFLICT, "Staging domain already in use"));
@@ -107,7 +107,7 @@ pub async fn create(
     .bind(id)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create staging", e))?;
 
     // Build agent request to create nginx config (same as regular site creation)
     let mut agent_body = serde_json::json!({
@@ -161,7 +161,7 @@ pub async fn create(
         .bind(staging.id)
         .fetch_one(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("create staging", e))?;
 
     tracing::info!(
         "Staging created: {} → {} ({})",
@@ -199,7 +199,7 @@ pub async fn get_staging(
             .bind(id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("get staging", e))?;
 
     match staging {
         Some(s) => {
@@ -238,7 +238,7 @@ pub async fn sync_to_staging(
             .bind(id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+            .map_err(|e| internal_error("sync to staging", e))?
             .ok_or_else(|| err(StatusCode::NOT_FOUND, "No staging environment found"))?;
 
     agent
@@ -257,7 +257,7 @@ pub async fn sync_to_staging(
         .bind(staging.id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("sync to staging", e))?;
 
     tracing::info!("Synced {} → {}", parent.domain, staging.domain);
     activity::log_activity(
@@ -289,7 +289,7 @@ pub async fn push_to_prod(
             .bind(id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+            .map_err(|e| internal_error("push to prod", e))?
             .ok_or_else(|| err(StatusCode::NOT_FOUND, "No staging environment found"))?;
 
     agent
@@ -333,7 +333,7 @@ pub async fn destroy(
             .bind(id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+            .map_err(|e| internal_error("destroy", e))?
             .ok_or_else(|| err(StatusCode::NOT_FOUND, "No staging environment found"))?;
 
     // Remove nginx config
@@ -357,7 +357,7 @@ pub async fn destroy(
         .bind(staging.id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("destroy", e))?;
 
     tracing::info!("Staging deleted: {}", staging.domain);
     activity::log_activity(

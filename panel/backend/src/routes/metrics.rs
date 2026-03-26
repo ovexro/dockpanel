@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{err, ApiError};
+use crate::error::{internal_error, err, ApiError};
 use crate::AppState;
 
 #[derive(serde::Deserialize)]
@@ -36,7 +36,7 @@ pub async fn server_metrics(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("server metrics", e))?;
 
     if exists.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Server not found"));
@@ -56,7 +56,7 @@ pub async fn server_metrics(
     .bind(hours.to_string())
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("server metrics", e))?;
 
     // Also compute summary stats
     let stats: Option<(f64, f64, f64)> = sqlx::query_as(
@@ -69,7 +69,7 @@ pub async fn server_metrics(
     .bind(hours.to_string())
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("server metrics", e))?;
 
     let (avg, min, max) = stats.unwrap_or((0.0, 0.0, 0.0));
 

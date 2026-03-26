@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{err, ApiError};
+use crate::error::{internal_error, err, ApiError};
 use crate::services::{activity, email};
 use crate::AppState;
 
@@ -75,7 +75,7 @@ pub async fn list(
     .bind(claims.sub)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list teams", e))?;
 
     // Batch fetch all members for all teams in one query
     let team_ids: Vec<Uuid> = teams.iter().map(|t| t.id).collect();
@@ -90,7 +90,7 @@ pub async fn list(
         .bind(&team_ids)
         .fetch_all(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| internal_error("list teams", e))?
     };
 
     // Group members by team_id
@@ -134,14 +134,14 @@ pub async fn create(
         .bind(claims.sub)
         .fetch_one(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("create teams", e))?;
 
     if count.0 >= 10 {
         return Err(err(StatusCode::BAD_REQUEST, "Team limit reached (10)"));
     }
 
     let mut tx = state.db.begin().await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("create teams", e))?;
 
     let team: Team = sqlx::query_as(
         "INSERT INTO teams (name, owner_id) VALUES ($1, $2) RETURNING *",
@@ -150,7 +150,7 @@ pub async fn create(
     .bind(claims.sub)
     .fetch_one(&mut *tx)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create teams", e))?;
 
     // Add owner as member with 'owner' role
     sqlx::query(
@@ -160,10 +160,10 @@ pub async fn create(
     .bind(claims.sub)
     .execute(&mut *tx)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create teams", e))?;
 
     tx.commit().await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("create teams", e))?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "team.create",
@@ -186,7 +186,7 @@ pub async fn remove(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("remove teams", e))?;
 
     let team = team.ok_or_else(|| err(StatusCode::NOT_FOUND, "Team not found or not owner"))?;
 
@@ -194,7 +194,7 @@ pub async fn remove(
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove teams", e))?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "team.delete",
@@ -236,7 +236,7 @@ pub async fn invite(
     .bind(&email_addr)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("invite", e))?;
 
     if existing.is_some() {
         return Err(err(StatusCode::CONFLICT, "User is already a member"));
@@ -260,14 +260,14 @@ pub async fn invite(
     .bind(&token_hash)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("invite", e))?;
 
     // Get team name for email
     let team_name: (String,) = sqlx::query_as("SELECT name FROM teams WHERE id = $1")
         .bind(team_id)
         .fetch_one(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("invite", e))?;
 
     // Send invite email
     let base_url = &state.config.base_url;
@@ -304,14 +304,14 @@ pub async fn accept_invite(
     .bind(&token_hash)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("accept invite", e))?;
 
     let (invite_id, team_id, _email, role) = invite
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Invalid or expired invitation"))?;
 
     // Add user as team member + delete invite atomically
     let mut tx = state.db.begin().await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("accept invite", e))?;
 
     sqlx::query(
         "INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, $3) \
@@ -322,22 +322,22 @@ pub async fn accept_invite(
     .bind(&role)
     .execute(&mut *tx)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("accept invite", e))?;
 
     sqlx::query("DELETE FROM team_invites WHERE id = $1")
         .bind(invite_id)
         .execute(&mut *tx)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("accept invite", e))?;
 
     tx.commit().await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("accept invite", e))?;
 
     let team_name: (String,) = sqlx::query_as("SELECT name FROM teams WHERE id = $1")
         .bind(team_id)
         .fetch_one(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("accept invite", e))?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "team.join",
@@ -371,7 +371,7 @@ pub async fn update_member(
     .bind(team_id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("update member", e))?;
 
     let target_role = target.ok_or_else(|| err(StatusCode::NOT_FOUND, "Member not found"))?.0;
     if target_role == "owner" {
@@ -383,7 +383,7 @@ pub async fn update_member(
         .bind(member_id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("update member", e))?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -407,7 +407,7 @@ pub async fn remove_member(
     .bind(team_id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("remove member", e))?;
 
     let target_role = target.ok_or_else(|| err(StatusCode::NOT_FOUND, "Member not found"))?.0;
     if target_role == "owner" {
@@ -418,7 +418,7 @@ pub async fn remove_member(
         .bind(member_id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove member", e))?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -431,7 +431,7 @@ async fn get_member_role(state: &AppState, team_id: Uuid, user_id: Uuid) -> Resu
     .bind(user_id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("remove member", e))?;
 
     row.map(|r| r.0)
         .ok_or_else(|| err(StatusCode::FORBIDDEN, "Not a member of this team"))

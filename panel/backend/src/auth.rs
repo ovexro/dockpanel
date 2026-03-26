@@ -192,19 +192,21 @@ impl FromRequestParts<AppState> for ServerScope {
         match server_id {
             Some(sid) => {
                 // Verify server belongs to the authenticated user
-                if let Some(uid) = user_id {
-                    let owns: Option<(Uuid,)> = sqlx::query_as(
-                        "SELECT id FROM servers WHERE id = $1 AND user_id = $2",
-                    )
-                    .bind(sid)
-                    .bind(uid)
-                    .fetch_optional(&state.db)
-                    .await
-                    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Server lookup failed"))?;
+                let uid = user_id.ok_or_else(|| {
+                    err(StatusCode::UNAUTHORIZED, "Authentication required when X-Server-Id is provided")
+                })?;
 
-                    if owns.is_none() {
-                        return Err(err(StatusCode::FORBIDDEN, "Server not found or access denied"));
-                    }
+                let owns: Option<(Uuid,)> = sqlx::query_as(
+                    "SELECT id FROM servers WHERE id = $1 AND user_id = $2",
+                )
+                .bind(sid)
+                .bind(uid)
+                .fetch_optional(&state.db)
+                .await
+                .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Server lookup failed"))?;
+
+                if owns.is_none() {
+                    return Err(err(StatusCode::FORBIDDEN, "Server not found or access denied"));
                 }
 
                 // Resolve agent for this server

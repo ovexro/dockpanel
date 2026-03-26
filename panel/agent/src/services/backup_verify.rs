@@ -42,7 +42,7 @@ pub async fn verify_site_backup(domain: &str, filename: &str) -> Result<Verifica
     let extract_ok = tokio::time::timeout(
         std::time::Duration::from_secs(120),
         safe_command("tar")
-            .args(["xzf", &backup_path, "-C", &temp_dir])
+            .args(["xzf", &backup_path, "-C", &temp_dir, "--no-same-owner", "--no-same-permissions"])
             .output(),
     )
     .await
@@ -230,23 +230,40 @@ async fn verify_mysql_restore(
         return false;
     }
 
-    // Restore the dump
-    let safe_password = password.replace('\'', "'\\''");
-    let restore_cmd = format!(
-        "zcat '{}' | docker exec -i -e MYSQL_PWD='{}' {} mariadb -u root {}",
-        backup_path.replace('\'', "'\\''"),
-        safe_password,
-        container_name,
-        db_name,
-    );
+    // Restore the dump using direct process piping (no shell interpolation)
+    let zcat_child = safe_command("zcat")
+        .arg(backup_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 
-    let restore_ok = tokio::time::timeout(
-        std::time::Duration::from_secs(120),
-        safe_command("bash").args(["-c", &restore_cmd]).output(),
-    )
-    .await
-    .map(|r| r.map(|o| o.status.success()).unwrap_or(false))
-    .unwrap_or(false);
+    let restore_ok = match zcat_child {
+        Ok(mut zcat) => {
+            let zcat_stdout = zcat.stdout.take();
+            match zcat_stdout {
+                Some(stdout) => {
+                    let docker_result = tokio::time::timeout(
+                        std::time::Duration::from_secs(120),
+                        safe_command("docker")
+                            .args([
+                                "exec", "-i",
+                                "-e", &format!("MYSQL_PWD={password}"),
+                                container_name,
+                                "mariadb", "-u", "root", db_name,
+                            ])
+                            .stdin(stdout.into_owned_fd().unwrap())
+                            .output(),
+                    )
+                    .await;
+                    docker_result
+                        .map(|r| r.map(|o| o.status.success()).unwrap_or(false))
+                        .unwrap_or(false)
+                }
+                None => false,
+            }
+        }
+        Err(_) => false,
+    };
 
     checks.push(VerificationCheck {
         name: "restore_dump".into(),
@@ -340,23 +357,40 @@ async fn verify_postgres_restore(
         return false;
     }
 
-    // Restore the dump
-    let safe_password = password.replace('\'', "'\\''");
-    let restore_cmd = format!(
-        "zcat '{}' | docker exec -i -e PGPASSWORD='{}' {} psql -U verify -d {} --quiet",
-        backup_path.replace('\'', "'\\''"),
-        safe_password,
-        container_name,
-        db_name,
-    );
+    // Restore the dump using direct process piping (no shell interpolation)
+    let zcat_child = safe_command("zcat")
+        .arg(backup_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 
-    let restore_ok = tokio::time::timeout(
-        std::time::Duration::from_secs(120),
-        safe_command("bash").args(["-c", &restore_cmd]).output(),
-    )
-    .await
-    .map(|r| r.map(|o| o.status.success()).unwrap_or(false))
-    .unwrap_or(false);
+    let restore_ok = match zcat_child {
+        Ok(mut zcat) => {
+            let zcat_stdout = zcat.stdout.take();
+            match zcat_stdout {
+                Some(stdout) => {
+                    let docker_result = tokio::time::timeout(
+                        std::time::Duration::from_secs(120),
+                        safe_command("docker")
+                            .args([
+                                "exec", "-i",
+                                "-e", &format!("PGPASSWORD={password}"),
+                                container_name,
+                                "psql", "-U", "verify", "-d", db_name, "--quiet",
+                            ])
+                            .stdin(stdout.into_owned_fd().unwrap())
+                            .output(),
+                    )
+                    .await;
+                    docker_result
+                        .map(|r| r.map(|o| o.status.success()).unwrap_or(false))
+                        .unwrap_or(false)
+                }
+                None => false,
+            }
+        }
+        Err(_) => false,
+    };
 
     checks.push(VerificationCheck {
         name: "restore_dump".into(),
@@ -427,7 +461,7 @@ pub async fn verify_volume_backup(
     let extract_ok = tokio::time::timeout(
         std::time::Duration::from_secs(120),
         safe_command("tar")
-            .args(["xzf", &backup_path, "-C", &temp_dir])
+            .args(["xzf", &backup_path, "-C", &temp_dir, "--no-same-owner", "--no-same-permissions"])
             .output(),
     )
     .await

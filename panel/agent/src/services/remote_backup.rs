@@ -127,7 +127,7 @@ pub async fn upload_sftp(
 
     let mut cmd_args: Vec<String> = vec![
         "-o".into(),
-        "StrictHostKeyChecking=no".into(),
+        "StrictHostKeyChecking=accept-new".into(),
         "-o".into(),
         "BatchMode=yes".into(),
         "-P".into(),
@@ -234,7 +234,7 @@ pub async fn test_sftp(
 ) -> Result<(), String> {
     let mut cmd_args: Vec<String> = vec![
         "-o".into(),
-        "StrictHostKeyChecking=no".into(),
+        "StrictHostKeyChecking=accept-new".into(),
         "-o".into(),
         "BatchMode=yes".into(),
         "-o".into(),

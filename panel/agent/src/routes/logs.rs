@@ -589,11 +589,11 @@ async fn truncate_log(
         return Err(err(StatusCode::FORBIDDEN, "Symlinks not allowed"));
     }
 
-    tokio::fs::write(path, "")
+    tokio::fs::write(&canonical, "")
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    tracing::info!("Log file truncated: {path}");
+    tracing::info!("Log file truncated: {}", canonical.display());
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

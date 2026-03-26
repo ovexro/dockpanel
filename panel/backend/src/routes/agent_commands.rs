@@ -6,7 +6,7 @@ use axum::{
 use std::time::Instant;
 use uuid::Uuid;
 
-use crate::error::{err, ApiError};
+use crate::error::{internal_error, err, ApiError};
 use crate::AppState;
 
 #[derive(serde::Serialize, sqlx::FromRow)]
@@ -41,7 +41,7 @@ async fn auth_agent(
             .bind(&token_hash)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("unknown", e))?;
 
     if let Some(r) = row {
         return Ok(r.0);
@@ -53,7 +53,7 @@ async fn auth_agent(
             .bind(token)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("unknown", e))?;
 
     row.map(|r| r.0)
         .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "Invalid token"))
@@ -95,7 +95,7 @@ pub async fn poll(
     .bind(server_id)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("poll", e))?;
 
     Ok(Json(commands))
 }
@@ -145,7 +145,7 @@ pub async fn report_result(
     .bind(server_id)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("report result", e))?;
 
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "Command not found or not running"));

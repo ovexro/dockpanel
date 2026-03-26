@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{err, require_admin, ApiError};
+use crate::error::{internal_error, err, require_admin, ApiError};
 use crate::AppState;
 
 #[derive(serde::Serialize, sqlx::FromRow)]
@@ -77,7 +77,7 @@ pub async fn list(
     .bind(claims.sub)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list monitors", e))?;
 
     Ok(Json(monitors))
 }
@@ -144,7 +144,7 @@ pub async fn create(
         .bind(claims.sub)
         .fetch_one(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("create monitors", e))?;
 
     if count.0 >= 50 {
         return Err(err(StatusCode::BAD_REQUEST, "Monitor limit reached (50)"));
@@ -169,7 +169,7 @@ pub async fn create(
     .bind(&body.custom_headers)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create monitors", e))?;
 
     Ok((StatusCode::CREATED, Json(monitor)))
 }
@@ -189,7 +189,7 @@ pub async fn update(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("update monitors", e))?;
 
     if existing.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Monitor not found"));
@@ -236,7 +236,7 @@ pub async fn update(
     .bind(&body.custom_headers)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("update monitors", e))?;
 
     Ok(Json(monitor))
 }
@@ -252,7 +252,7 @@ pub async fn remove(
         .bind(claims.sub)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove monitors", e))?;
 
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "Monitor not found"));
@@ -284,7 +284,7 @@ pub async fn checks(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("checks", e))?;
 
     if exists.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Monitor not found"));
@@ -297,7 +297,7 @@ pub async fn checks(
     .bind(id)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("checks", e))?;
 
     Ok(Json(records))
 }
@@ -324,7 +324,7 @@ pub async fn incidents(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("incidents", e))?;
 
     if exists.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Monitor not found"));
@@ -337,7 +337,7 @@ pub async fn incidents(
     .bind(id)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("incidents", e))?;
 
     Ok(Json(records))
 }
@@ -356,7 +356,7 @@ pub async fn uptime_stats(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("uptime stats", e))?;
 
     if exists.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Monitor not found"));
@@ -415,7 +415,7 @@ pub async fn response_chart(
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("response chart", e))?;
 
     if exists.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Monitor not found"));
@@ -448,7 +448,7 @@ pub async fn force_check(
     .bind(claims.sub)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("force check", e))?;
 
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "Monitor not found"));
@@ -533,7 +533,7 @@ pub async fn create_maintenance(
         "INSERT INTO maintenance_windows (user_id, name, starts_at, ends_at) VALUES ($1, $2, $3::timestamptz, $4::timestamptz) RETURNING id"
     ).bind(claims.sub).bind(name).bind(starts_at).bind(ends_at)
     .fetch_one(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create maintenance", e))?;
 
     Ok(Json(serde_json::json!({ "ok": true, "id": id.0 })))
 }

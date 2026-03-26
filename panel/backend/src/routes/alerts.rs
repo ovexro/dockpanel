@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
-use crate::error::{err, ApiError};
+use crate::error::{internal_error, err, ApiError};
 use crate::AppState;
 
 #[derive(serde::Deserialize)]
@@ -75,7 +75,7 @@ pub async fn list(
     let alerts = query
         .fetch_all(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("list alerts", e))?;
 
     Ok(Json(alerts))
 }
@@ -95,7 +95,7 @@ pub async fn summary(
     .bind(server_id)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("summary", e))?;
 
     let firing = counts
         .iter()
@@ -134,7 +134,7 @@ pub async fn acknowledge(
     .bind(claims.sub)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("acknowledge", e))?;
 
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "Alert not found or already handled"));
@@ -157,7 +157,7 @@ pub async fn resolve(
     .bind(claims.sub)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("resolve", e))?;
 
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "Alert not found or already resolved"));
@@ -209,7 +209,7 @@ pub async fn get_rules(
     .bind(claims.sub)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("get rules", e))?;
 
     Ok(Json(rules))
 }
@@ -368,7 +368,7 @@ async fn upsert_rules(
     .bind(&body.muted_types)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("update server rules", e))?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -386,7 +386,7 @@ pub async fn delete_server_rules(
     .bind(server_id)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("delete server rules", e))?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }

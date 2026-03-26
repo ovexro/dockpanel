@@ -10,7 +10,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{err, ApiError};
+use crate::error::{internal_error, err, ApiError};
 use crate::AppState;
 
 #[derive(serde::Serialize, sqlx::FromRow)]
@@ -37,7 +37,7 @@ pub async fn list(
     .bind(claims.sub)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list notifications", e))?;
 
     Ok(Json(notifs))
 }
@@ -53,7 +53,7 @@ pub async fn unread_count(
     .bind(claims.sub)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("unread count", e))?;
 
     Ok(Json(serde_json::json!({ "count": count })))
 }
@@ -71,7 +71,7 @@ pub async fn mark_read(
     .bind(claims.sub)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("mark read", e))?;
 
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "Notification not found or already read"));
@@ -91,7 +91,7 @@ pub async fn mark_all_read(
     .bind(claims.sub)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("mark all read", e))?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }

@@ -273,8 +273,9 @@ pub async fn install_joomla(
         .map(|t| t.trim().to_string())
         .ok_or_else(|| "Failed to determine latest Joomla version".to_string())?;
 
-    // Download Joomla zip
-    let zip_path = format!("/tmp/joomla-{domain}.zip");
+    // Download Joomla zip with random suffix to prevent symlink attacks
+    let random_suffix: u64 = rand::random();
+    let zip_path = format!("/tmp/joomla-{domain}-{random_suffix:016x}.zip");
     let download_url = format!(
         "https://github.com/joomla/joomla-cms/releases/download/{tag}/Joomla_{tag}-Stable-Full_Package.zip"
     );

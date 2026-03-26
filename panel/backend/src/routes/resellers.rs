@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AdminUser;
-use crate::error::{err, ApiError};
+use crate::error::{internal_error, err, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -101,7 +101,7 @@ pub async fn list(
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list resellers", e))?;
 
     Ok(Json(resellers))
 }
@@ -118,7 +118,7 @@ pub async fn create(
             .bind(body.user_id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("create resellers", e))?;
 
     let (user_id, email, role) =
         user.ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
@@ -134,7 +134,7 @@ pub async fn create(
                 .bind(user_id)
                 .fetch_optional(&state.db)
                 .await
-                .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+                .map_err(|e| internal_error("create resellers", e))?;
         if existing.is_some() {
             return Err(err(StatusCode::CONFLICT, "Reseller profile already exists"));
         }
@@ -145,7 +145,7 @@ pub async fn create(
         .bind(user_id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("create resellers", e))?;
 
     // Insert reseller profile
     let profile: ResellerProfile = sqlx::query_as(
@@ -162,7 +162,7 @@ pub async fn create(
     .bind(body.hide_branding)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create resellers", e))?;
 
     tracing::info!("User promoted to reseller by {}: {}", claims.email, email);
     activity::log_activity(
@@ -192,7 +192,7 @@ pub async fn get(
     .bind(id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("get resellers", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Reseller profile not found"))?;
 
     Ok(Json(profile))
@@ -212,7 +212,7 @@ pub async fn update(
     .bind(id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("update resellers", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Reseller profile not found"))?;
 
     sqlx::query(
@@ -241,14 +241,14 @@ pub async fn update(
     .bind(id)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("update resellers", e))?;
 
     // Get email for activity log
     let user_email: (String,) = sqlx::query_as("SELECT email FROM users WHERE id = $1")
         .bind(profile.user_id)
         .fetch_one(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("update resellers", e))?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "reseller.update",
@@ -271,7 +271,7 @@ pub async fn remove(
     .bind(id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("remove resellers", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Reseller profile not found"))?;
 
     // Get email for logging before we delete
@@ -279,35 +279,35 @@ pub async fn remove(
         .bind(profile.user_id)
         .fetch_one(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove resellers", e))?;
 
     // Delete reseller profile
     sqlx::query("DELETE FROM reseller_profiles WHERE id = $1")
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove resellers", e))?;
 
     // Demote user back to regular user
     sqlx::query("UPDATE users SET role = 'user', updated_at = NOW() WHERE id = $1")
         .bind(profile.user_id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove resellers", e))?;
 
     // Clear reseller_id on any users that belonged to this reseller
     sqlx::query("UPDATE users SET reseller_id = NULL, updated_at = NOW() WHERE reseller_id = $1")
         .bind(profile.user_id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove resellers", e))?;
 
     // Delete server allocations
     sqlx::query("DELETE FROM reseller_servers WHERE reseller_id = $1")
         .bind(profile.user_id)
         .execute(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove resellers", e))?;
 
     tracing::info!("Reseller demoted by {}: {}", claims.email, user_email.0);
     activity::log_activity(
@@ -334,7 +334,7 @@ pub async fn list_servers(
     .bind(id)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list servers", e))?;
 
     Ok(Json(servers))
 }
@@ -353,7 +353,7 @@ pub async fn allocate_server(
     .bind(id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("allocate server", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Reseller profile not found"))?;
 
     // Verify server exists
@@ -362,7 +362,7 @@ pub async fn allocate_server(
             .bind(body.server_id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("allocate server", e))?;
 
     let server_name = server_name
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Server not found"))?
@@ -378,7 +378,7 @@ pub async fn allocate_server(
     .bind(body.server_id)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("allocate server", e))?;
 
     tracing::info!(
         "Server {} allocated to reseller {} by {}",
@@ -413,7 +413,7 @@ pub async fn deallocate_server(
     .bind(id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("deallocate server", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Reseller profile not found"))?;
 
     let result = sqlx::query(
@@ -423,7 +423,7 @@ pub async fn deallocate_server(
     .bind(server_id)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("deallocate server", e))?;
 
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "Server allocation not found"));

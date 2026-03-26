@@ -6,7 +6,7 @@ use axum::{
 use std::collections::HashMap;
 
 use crate::auth::{AdminUser, ServerScope};
-use crate::error::{err, agent_error, ApiError};
+use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -25,7 +25,7 @@ pub async fn list(
     let rows: Vec<SettingRow> = sqlx::query_as("SELECT key, value FROM settings")
         .fetch_all(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("list settings", e))?;
 
     let map: HashMap<String, String> = rows
         .into_iter()
@@ -97,7 +97,7 @@ pub async fn update(
 
     // Update all settings atomically in a transaction
     let mut tx = state.db.begin().await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("update settings", e))?;
 
     // Sensitive keys that are masked in the GET response — skip if value is the mask sentinel
     const SENSITIVE_KEYS: &[&str] = &["smtp_password", "pdns_api_key"];
@@ -131,11 +131,11 @@ pub async fn update(
         .bind(&store_value)
         .execute(&mut *tx)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("update settings", e))?;
     }
 
     tx.commit().await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("update settings", e))?;
 
     tracing::info!("Settings updated by {}: {} keys", claims.email, body.len());
 
@@ -146,7 +146,7 @@ pub async fn update(
         let rows: Vec<SettingRow> = sqlx::query_as("SELECT key, value FROM settings WHERE key LIKE 'smtp_%'")
             .fetch_all(&state.db)
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("update settings", e))?;
 
         let map: HashMap<String, String> = rows.into_iter().map(|r| (r.key, r.value)).collect();
 
@@ -197,7 +197,7 @@ pub async fn test_email(
     let rows: Vec<SettingRow> = sqlx::query_as("SELECT key, value FROM settings WHERE key LIKE 'smtp_%'")
         .fetch_all(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("test email", e))?;
 
     let map: HashMap<String, String> = rows.into_iter().map(|r| (r.key, r.value)).collect();
     let from = map.get("smtp_from").cloned().unwrap_or_default();
@@ -270,7 +270,7 @@ pub async fn branding(
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("branding", e))?;
 
     let map: HashMap<String, String> = rows.into_iter().collect();
 
@@ -380,7 +380,7 @@ pub async fn export_config(
     let rows: Vec<SettingRow> = sqlx::query_as("SELECT key, value FROM settings")
         .fetch_all(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("export config", e))?;
 
     let map: HashMap<String, String> = rows
         .into_iter()

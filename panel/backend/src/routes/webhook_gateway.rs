@@ -7,7 +7,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AdminUser;
-use crate::error::{err, paginate, ApiError};
+use crate::error::{internal_error, err, paginate, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
@@ -103,7 +103,7 @@ pub async fn list_endpoints(
     )
     .bind(claims.sub)
     .fetch_all(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list endpoints", e))?;
 
     Ok(Json(endpoints))
 }
@@ -137,7 +137,7 @@ pub async fn create_endpoint(
     .bind(&req.verify_secret)
     .bind(&req.verify_header)
     .fetch_one(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create endpoint", e))?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "webhook_endpoint.create",
@@ -156,7 +156,7 @@ pub async fn delete_endpoint(
     let result = sqlx::query("DELETE FROM webhook_endpoints WHERE id = $1 AND user_id = $2")
         .bind(id).bind(claims.sub)
         .execute(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("delete endpoint", e))?;
 
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "Endpoint not found"));
@@ -180,7 +180,7 @@ pub async fn list_deliveries(
     )
     .bind(id).bind(claims.sub)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("list deliveries", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Endpoint not found"))?;
 
     let (limit, offset) = paginate(params.limit, params.offset);
@@ -190,7 +190,7 @@ pub async fn list_deliveries(
     )
     .bind(id).bind(limit).bind(offset)
     .fetch_all(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list deliveries", e))?;
 
     Ok(Json(deliveries))
 }
@@ -208,7 +208,7 @@ pub async fn replay_delivery(
     )
     .bind(claims.sub).bind(delivery_id)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("replay delivery", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Delivery not found"))?;
 
     // Forward to all enabled routes
@@ -217,7 +217,7 @@ pub async fn replay_delivery(
     )
     .bind(delivery.endpoint_id)
     .fetch_all(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("replay delivery", e))?;
 
     let body = delivery.body.unwrap_or_default();
     let db = state.db.clone();
@@ -247,7 +247,7 @@ pub async fn list_routes(
     )
     .bind(id).bind(claims.sub)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("list routes", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Endpoint not found"))?;
 
     let routes: Vec<WebhookRoute> = sqlx::query_as(
@@ -255,7 +255,7 @@ pub async fn list_routes(
     )
     .bind(id)
     .fetch_all(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list routes", e))?;
 
     Ok(Json(routes))
 }
@@ -272,7 +272,7 @@ pub async fn create_route(
     )
     .bind(id).bind(claims.sub)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("create route", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Endpoint not found"))?;
 
     if req.destination_url.is_empty() {
@@ -297,7 +297,7 @@ pub async fn create_route(
     .bind(req.retry_count.unwrap_or(3).min(10).max(0))
     .bind(req.retry_delay_secs.unwrap_or(5).min(300).max(1))
     .fetch_one(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create route", e))?;
 
     Ok((StatusCode::CREATED, Json(route)))
 }
@@ -314,7 +314,7 @@ pub async fn delete_route(
     )
     .bind(route_id).bind(claims.sub)
     .execute(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("delete route", e))?;
 
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "Route not found"));
@@ -338,7 +338,7 @@ pub async fn receive_webhook(
     )
     .bind(&token)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("receive webhook", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Invalid webhook endpoint"))?;
 
     let body_str = String::from_utf8_lossy(&body).to_string();
@@ -398,7 +398,7 @@ pub async fn receive_webhook(
     .bind(&source_ip)
     .bind(signature_valid)
     .fetch_one(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("receive webhook", e))?;
 
     // Update endpoint stats
     let _ = sqlx::query(

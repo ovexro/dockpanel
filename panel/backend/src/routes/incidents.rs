@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{AdminUser, AuthUser};
-use crate::error::{err, paginate, ApiError};
+use crate::error::{internal_error, err, paginate, ApiError};
 use crate::services::activity;
 use crate::services::extensions::fire_event;
 use crate::services::notifications;
@@ -102,7 +102,7 @@ pub async fn list(
         .bind(claims.sub).bind(limit).bind(offset)
         .fetch_all(&state.db).await
     }
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list incidents", e))?;
 
     Ok(Json(incidents))
 }
@@ -139,7 +139,7 @@ pub async fn create(
     .bind(req.visible_on_status_page.unwrap_or(true))
     .fetch_one(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create incidents", e))?;
 
     // Link affected components
     if let Some(component_ids) = &req.component_ids {
@@ -192,7 +192,7 @@ pub async fn get_one(
     )
     .bind(id).bind(claims.sub)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("get_one incidents", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Incident not found"))?;
 
     let updates: Vec<IncidentUpdate> = sqlx::query_as(
@@ -200,7 +200,7 @@ pub async fn get_one(
     )
     .bind(id)
     .fetch_all(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("get_one incidents", e))?;
 
     let component_ids: Vec<(Uuid,)> = sqlx::query_as(
         "SELECT component_id FROM managed_incident_components WHERE incident_id = $1"
@@ -229,7 +229,7 @@ pub async fn update(
     )
     .bind(id).bind(claims.sub)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("update incidents", e))?;
 
     if existing.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Incident not found"));
@@ -278,7 +278,7 @@ pub async fn update(
         .bind(req.visible_on_status_page)
         .fetch_one(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("update incidents", e))?;
 
     // GAP 34: Auto-populate postmortem template when transitioning to "postmortem"
     if req.status.as_deref() == Some("postmortem") && req.postmortem.is_none() {
@@ -336,7 +336,7 @@ pub async fn update(
     let incident: ManagedIncident = sqlx::query_as(
         "SELECT * FROM managed_incidents WHERE id = $1"
     ).bind(id).fetch_one(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("update incidents", e))?;
 
     Ok(Json(incident))
 }
@@ -350,7 +350,7 @@ pub async fn remove(
     let result = sqlx::query("DELETE FROM managed_incidents WHERE id = $1 AND user_id = $2")
         .bind(id).bind(claims.sub)
         .execute(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("remove incidents", e))?;
 
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "Incident not found"));
@@ -372,7 +372,7 @@ pub async fn post_update(
     )
     .bind(id).bind(claims.sub)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("post update", e))?;
 
     if existing.is_none() {
         return Err(err(StatusCode::NOT_FOUND, "Incident not found"));
@@ -419,7 +419,7 @@ pub async fn post_update(
     )
     .bind(id).bind(&req.status).bind(&req.message).bind(&claims.email)
     .fetch_one(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("post update", e))?;
 
     // Notify subscribers
     let title: Option<(String,)> = sqlx::query_as("SELECT title FROM managed_incidents WHERE id = $1")
@@ -443,7 +443,7 @@ pub async fn list_updates(
     )
     .bind(id).bind(claims.sub)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .map_err(|e| internal_error("list updates", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Incident not found"))?;
 
     let updates: Vec<IncidentUpdate> = sqlx::query_as(
@@ -451,7 +451,7 @@ pub async fn list_updates(
     )
     .bind(id)
     .fetch_all(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list updates", e))?;
 
     Ok(Json(updates))
 }
@@ -494,7 +494,7 @@ pub async fn get_config(
     )
     .bind(claims.sub)
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("get config", e))?;
 
     match config {
         Some(c) => Ok(Json(c)),
@@ -506,7 +506,7 @@ pub async fn get_config(
             )
             .bind(claims.sub)
             .fetch_one(&state.db).await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| internal_error("get config", e))?;
             Ok(Json(c))
         }
     }
@@ -549,7 +549,7 @@ pub async fn update_config(
     .bind(req.history_days)
     .bind(req.enabled)
     .fetch_one(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("update config", e))?;
 
     Ok(Json(config))
 }
@@ -586,7 +586,7 @@ pub async fn list_components(
     )
     .bind(claims.sub)
     .fetch_all(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list components", e))?;
 
     let mut result = Vec::new();
     for comp in &components {
@@ -631,7 +631,7 @@ pub async fn create_component(
     .bind(req.sort_order.unwrap_or(0))
     .bind(&req.group_name)
     .fetch_one(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("create component", e))?;
 
     // Link monitors
     if let Some(monitor_ids) = &req.monitor_ids {
@@ -656,7 +656,7 @@ pub async fn delete_component(
     let result = sqlx::query("DELETE FROM status_page_components WHERE id = $1 AND user_id = $2")
         .bind(id).bind(claims.sub)
         .execute(&state.db).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| internal_error("delete component", e))?;
 
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "Component not found"));
@@ -692,7 +692,7 @@ pub async fn subscribe(
     .bind(&token)
     .execute(&state.db)
     .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("subscribe", e))?;
 
     Ok(Json(serde_json::json!({ "ok": true, "message": "Subscribed to status updates" })))
 }
@@ -718,7 +718,7 @@ pub async fn list_subscribers(
         "SELECT email, verified, created_at FROM status_page_subscribers ORDER BY created_at DESC"
     )
     .fetch_all(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("list subscribers", e))?;
 
     let result: Vec<serde_json::Value> = rows.into_iter().map(|(email, verified, created_at)| {
         serde_json::json!({ "email": email, "verified": verified, "created_at": created_at })
@@ -739,7 +739,7 @@ pub async fn public_status_page(
          FROM status_page_config LIMIT 1"
     )
     .fetch_optional(&state.db).await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| internal_error("public status page", e))?;
 
     let (title, description, logo_url, accent_color, show_subscribe, show_history, history_days, enabled) =
         config.unwrap_or(("Service Status".into(), "Current status of our services".into(), None, "#22c55e".into(), true, true, 90, true));
