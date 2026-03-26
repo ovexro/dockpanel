@@ -59,6 +59,7 @@ pub struct Site {
     pub app_command: Option<String>,
     pub parent_site_id: Option<Uuid>,
     pub synced_at: Option<DateTime<Utc>>,
+    pub enabled: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

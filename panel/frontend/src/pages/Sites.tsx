@@ -11,6 +11,7 @@ interface Site {
   runtime: string;
   status: string;
   ssl_enabled: boolean;
+  enabled: boolean;
   parent_site_id: string | null;
   created_at: string;
 }
@@ -390,8 +391,10 @@ export default function Sites() {
                     {runtimeLabels[site.runtime] || site.runtime}
                   </td>
                   <td className="px-5 py-4">
-                    <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${statusColors[site.status] || "bg-dark-700 text-dark-200"}`}>
-                      {site.status}
+                    <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                      site.enabled === false ? "bg-amber-500/10 text-amber-400" : statusColors[site.status] || "bg-dark-700 text-dark-200"
+                    }`}>
+                      {site.enabled === false ? "disabled" : site.status}
                     </span>
                   </td>
                   <td className="px-5 py-4 hidden md:table-cell">

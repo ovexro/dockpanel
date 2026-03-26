@@ -21,6 +21,7 @@ interface Site {
   php_preset: string | null;
   parent_site_id: string | null;
   synced_at: string | null;
+  enabled: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -103,6 +104,15 @@ export default function SiteDetail() {
   const [sslCert, setSslCert] = useState("");
   const [sslKey, setSslKey] = useState("");
   const [uploadingSsl, setUploadingSsl] = useState(false);
+
+  // Site toggle (disable/enable)
+  const [toggling, setToggling] = useState(false);
+
+  // Domain rename
+  const [showRename, setShowRename] = useState(false);
+  const [newDomain, setNewDomain] = useState("");
+  const [renaming, setRenaming] = useState(false);
+  const [renameMsg, setRenameMsg] = useState("");
 
   // PHP Extensions
   const [phpExts, setPhpExts] = useState<{ installed: string[]; available: string[] } | null>(null);
@@ -310,29 +320,98 @@ export default function SiteDetail() {
             </div>
           ) : (
             <div className="flex items-center gap-2">
+              {/* Enable/Disable toggle */}
+              <button disabled={toggling} onClick={async () => {
+                setToggling(true);
+                try {
+                  await api.put(`/sites/${id}/toggle`, { enabled: !site?.enabled });
+                  setSite(s => s ? { ...s, enabled: !s.enabled } : s);
+                } catch (e) { alert(e instanceof Error ? e.message : "Toggle failed"); }
+                finally { setToggling(false); }
+              }} className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${
+                site?.enabled !== false
+                  ? "bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
+                  : "bg-rust-500/10 text-rust-400 hover:bg-rust-500/20"
+              }`}>
+                {toggling ? "..." : site?.enabled !== false ? "Disable" : "Enable"}
+              </button>
+              {/* Rename */}
+              <button onClick={() => { setNewDomain(site?.domain || ""); setShowRename(true); setRenameMsg(""); }}
+                className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 transition-colors">
+                Rename
+              </button>
+              {/* Clone */}
               <button disabled={cloning} onClick={async () => {
-                const newDomain = prompt("Clone site to domain:", `clone-${site?.domain}`);
-                if (!newDomain) return;
+                const cloneDomain = prompt("Clone site to domain:", `clone-${site?.domain}`);
+                if (!cloneDomain) return;
                 setCloning(true);
                 setCloneMsg("");
                 try {
-                  await api.post(`/sites/${id}/clone`, { domain: newDomain });
-                  setCloneMsg(`Site cloned to ${newDomain}`);
+                  await api.post(`/sites/${id}/clone`, { domain: cloneDomain });
+                  setCloneMsg(`Site cloned to ${cloneDomain}`);
                 } catch (e) { setCloneMsg(e instanceof Error ? e.message : "Clone failed"); }
                 finally { setCloning(false); }
               }} className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 disabled:opacity-50 transition-colors">
-                {cloning ? "Cloning..." : "Clone Site"}
+                {cloning ? "Cloning..." : "Clone"}
               </button>
               <button
                 onClick={handleDelete}
                 className="px-4 py-2 bg-danger-500/10 text-danger-400 rounded-lg text-sm font-medium hover:bg-danger-500/20 transition-colors"
               >
-                Delete Site
+                Delete
               </button>
             </div>
           )}
         </div>
       </div>
+      {/* Disabled banner */}
+      {site.enabled === false && (
+        <div className="mb-4 px-4 py-3 rounded-lg text-sm bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center justify-between">
+          <span>This site is currently disabled. Visitors see a 503 maintenance page.</span>
+          <button disabled={toggling} onClick={async () => {
+            setToggling(true);
+            try {
+              await api.put(`/sites/${id}/toggle`, { enabled: true });
+              setSite(s => s ? { ...s, enabled: true } : s);
+            } catch (e) { alert(e instanceof Error ? e.message : "Enable failed"); }
+            finally { setToggling(false); }
+          }} className="px-3 py-1 bg-rust-500 text-white rounded text-xs font-medium hover:bg-rust-600 disabled:opacity-50">
+            {toggling ? "..." : "Enable Now"}
+          </button>
+        </div>
+      )}
+
+      {/* Rename modal */}
+      {showRename && (
+        <div className="mb-4 p-4 rounded-lg bg-dark-800 border border-dark-600">
+          <h3 className="text-sm font-medium text-dark-100 mb-3">Rename Domain</h3>
+          <div className="flex items-center gap-3">
+            <input type="text" value={newDomain} onChange={e => setNewDomain(e.target.value)}
+              placeholder="new-domain.com"
+              className="flex-1 bg-dark-700 text-dark-50 border border-dark-500 rounded-lg px-3 py-2 text-sm font-mono focus:ring-1 focus:ring-rust-500 focus:border-rust-500 outline-none" />
+            <button disabled={renaming || !newDomain || newDomain === site.domain} onClick={async () => {
+              setRenaming(true);
+              setRenameMsg("");
+              try {
+                await api.put(`/sites/${id}/domain`, { new_domain: newDomain });
+                setRenameMsg(`Domain renamed to ${newDomain}`);
+                setSite(s => s ? { ...s, domain: newDomain } : s);
+                setShowRename(false);
+              } catch (e) { setRenameMsg(e instanceof Error ? e.message : "Rename failed"); }
+              finally { setRenaming(false); }
+            }} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50">
+              {renaming ? "Renaming..." : "Rename"}
+            </button>
+            <button onClick={() => setShowRename(false)} className="px-4 py-2 bg-dark-600 text-dark-100 rounded-lg text-sm hover:bg-dark-500">
+              Cancel
+            </button>
+          </div>
+          {renameMsg && (
+            <p className={`mt-2 text-xs ${renameMsg.includes("renamed") ? "text-rust-400" : "text-danger-400"}`}>{renameMsg}</p>
+          )}
+        </div>
+      )}
+
       {cloneMsg && (
         <div className={`mb-4 px-4 py-3 rounded-lg text-sm ${
           cloneMsg.includes("cloned") ? "bg-rust-500/10 text-rust-400 border border-rust-500/20" : "bg-danger-500/10 text-danger-400 border border-danger-500/20"

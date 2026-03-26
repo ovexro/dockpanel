@@ -1400,12 +1400,91 @@ async fn set_env(Path(domain): Path<String>, Json(body): Json<serde_json::Value>
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+/// POST /nginx/sites/{domain}/disable — Disable a site by replacing its nginx config with a 503 page.
+async fn disable_site(Path(domain): Path<String>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    if !is_valid_domain(&domain) {
+        return Err((StatusCode::BAD_REQUEST, "Invalid domain".into()));
+    }
+    let conf_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+    let backup_path = format!("/etc/nginx/sites-available/{domain}.conf.disabled");
+
+    // Check config exists
+    if !std::path::Path::new(&conf_path).exists() {
+        return Err((StatusCode::NOT_FOUND, format!("No config for {domain}")));
+    }
+
+    // Back up the current config
+    std::fs::copy(&conf_path, &backup_path)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Backup config: {e}")))?;
+
+    // Write a 503 maintenance page config
+    let disabled_conf = format!(
+        r#"server {{
+    listen 80;
+    listen [::]:80;
+    server_name {domain} www.{domain};
+    return 503;
+    error_page 503 @maintenance;
+    location @maintenance {{
+        default_type text/html;
+        return 503 '<html><body style="font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#1a1a2e;color:#e0e0e0"><div style="text-align:center"><h1>Site Disabled</h1><p>{domain} is currently disabled by the administrator.</p></div></body></html>';
+    }}
+}}
+"#
+    );
+
+    std::fs::write(&conf_path, &disabled_conf)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Write disabled config: {e}")))?;
+
+    // Stop app process if it exists (node/python)
+    let service_name = format!("dockpanel-app-{}", domain.replace('.', "-"));
+    let _ = safe_command("systemctl").args(["stop", &service_name]).output().await;
+
+    // Reload nginx
+    services::nginx::reload().await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Nginx reload: {e}")))?;
+
+    tracing::info!("Site disabled: {domain}");
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// POST /nginx/sites/{domain}/enable — Re-enable a disabled site by restoring its nginx config.
+async fn enable_site(Path(domain): Path<String>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    if !is_valid_domain(&domain) {
+        return Err((StatusCode::BAD_REQUEST, "Invalid domain".into()));
+    }
+    let conf_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+    let backup_path = format!("/etc/nginx/sites-available/{domain}.conf.disabled");
+
+    // Restore the backed-up config
+    if !std::path::Path::new(&backup_path).exists() {
+        return Err((StatusCode::NOT_FOUND, format!("No disabled config backup for {domain}")));
+    }
+
+    std::fs::copy(&backup_path, &conf_path)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Restore config: {e}")))?;
+    std::fs::remove_file(&backup_path).ok();
+
+    // Restart app process if it exists (node/python)
+    let service_name = format!("dockpanel-app-{}", domain.replace('.', "-"));
+    let _ = safe_command("systemctl").args(["restart", &service_name]).output().await;
+
+    // Reload nginx
+    services::nginx::reload().await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Nginx reload: {e}")))?;
+
+    tracing::info!("Site enabled: {domain}");
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/nginx/sites/{domain}", put(put_site))
         .route("/nginx/sites/{domain}", delete(delete_site))
         .route("/nginx/sites/{domain}", get(get_site))
         .route("/nginx/sites/{domain}/rename", post(rename_site))
+        .route("/nginx/sites/{domain}/disable", post(disable_site))
+        .route("/nginx/sites/{domain}/enable", post(enable_site))
         .route("/nginx/test", post(test_nginx))
         .route("/nginx/reload", post(reload_nginx))
         // Redirects

@@ -2127,3 +2127,67 @@ pub async fn rename_domain(
         "new_domain": new_domain,
     })))
 }
+
+/// PUT /api/sites/{id}/toggle — Enable or disable a site without deleting it.
+pub async fn toggle_enabled(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let site: crate::models::Site = sqlx::query_as(
+        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("toggle site", e))?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    let enabled = body.get("enabled")
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Missing 'enabled' boolean field"))?;
+
+    if enabled == site.enabled {
+        return Ok(Json(serde_json::json!({
+            "ok": true,
+            "enabled": enabled,
+            "message": if enabled { "Site is already enabled" } else { "Site is already disabled" },
+        })));
+    }
+
+    // Call agent to enable/disable the nginx config
+    let action = if enabled { "enable" } else { "disable" };
+    agent.post(
+        &format!("/nginx/sites/{}/{action}", site.domain),
+        None,
+    ).await.map_err(|e| agent_error("Toggle site", e))?;
+
+    // Update DB
+    sqlx::query("UPDATE sites SET enabled = $1, updated_at = NOW() WHERE id = $2")
+        .bind(enabled)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| internal_error("toggle site", e))?;
+
+    let action_label = if enabled { "enabled" } else { "disabled" };
+    tracing::info!("Site {} {action_label}", site.domain);
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email,
+        &format!("site.{action_label}"),
+        Some("site"), Some(&site.domain), None, None,
+    ).await;
+
+    notifications::notify_panel(&state.db, Some(claims.sub),
+        &format!("Site {action_label}: {}", site.domain),
+        &format!("Site has been {action_label}"), "info", "site", None,
+    ).await;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "enabled": enabled,
+    })))
+}

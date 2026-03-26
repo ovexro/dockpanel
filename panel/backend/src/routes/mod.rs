@@ -380,6 +380,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/sites/{id}/php", put(sites::switch_php))
         .route("/api/sites/{id}/limits", put(sites::update_limits))
         .route("/api/sites/{id}/domain", put(sites::rename_domain))
+        .route("/api/sites/{id}/toggle", put(sites::toggle_enabled))
         // PHP versions
         .route("/api/php/versions", get(sites::php_versions))
         .route("/api/php/install", post(sites::php_install))
