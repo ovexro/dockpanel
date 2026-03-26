@@ -171,19 +171,25 @@ fn open_pty_shell(cwd: &str, cols: u16, rows: u16, site_domain: Option<&str>) ->
                 libc::close(slave_fd);
             }
 
-            // Close master FD in child to prevent FD leak to shell process.
-            // Without this, child inherits the PTY master and could manipulate it.
-            libc::close(master_fd.as_raw_fd());
-
-            // Close all inherited FDs > 2 (DB connections, TLS sockets, etc.)
-            if let Ok(entries) = std::fs::read_dir("/proc/self/fd") {
-                for entry in entries.flatten() {
-                    if let Ok(fd) = entry.file_name().to_string_lossy().parse::<i32>() {
-                        if fd > 2 && fd != slave_fd {
+            // Close all inherited FDs > 2 (master PTY, DB connections, TLS sockets, etc.)
+            // Must use raw libc (opendir/readdir/closedir) — NOT std::fs::read_dir which
+            // allocates memory (violates async-signal-safety after fork) and the iterator
+            // holds its own FD which we'd close from under it (causing closedir EBADF panic).
+            let proc_fd_dir = libc::opendir(b"/proc/self/fd\0".as_ptr() as *const _);
+            if !proc_fd_dir.is_null() {
+                let dir_fd = libc::dirfd(proc_fd_dir);
+                loop {
+                    let entry = libc::readdir(proc_fd_dir);
+                    if entry.is_null() { break; }
+                    let name = std::ffi::CStr::from_ptr((*entry).d_name.as_ptr());
+                    if let Ok(fd) = name.to_str().unwrap_or("").parse::<i32>() {
+                        // Close everything > 2 except the slave PTY and the /proc/self/fd dir itself
+                        if fd > 2 && fd != slave_fd && fd != dir_fd {
                             libc::close(fd);
                         }
                     }
                 }
+                libc::closedir(proc_fd_dir);
             }
 
             // Clear inherited environment to prevent leaking agent secrets
