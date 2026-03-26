@@ -72,7 +72,7 @@ pub async fn list(
     AuthUser(claims): AuthUser,
 ) -> Result<Json<Vec<Monitor>>, ApiError> {
     let monitors: Vec<Monitor> = sqlx::query_as(
-        "SELECT * FROM monitors WHERE user_id = $1 ORDER BY created_at DESC",
+        "SELECT * FROM monitors WHERE user_id = $1 ORDER BY created_at DESC LIMIT 500",
     )
     .bind(claims.sub)
     .fetch_all(&state.db)

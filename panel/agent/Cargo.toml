@@ -34,3 +34,4 @@ base64 = "0.22"
 rand = "0.8"
 rustix = { version = "1", features = ["termios", "pty", "fs", "process"] }
 libc = "0.2"
+tikv-jemallocator = { version = "0.6", features = ["background_threads"] }

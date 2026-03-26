@@ -142,7 +142,7 @@ pub async fn list(
     require_admin(&claims.role)?;
 
     let mut deploys: Vec<GitDeploy> = sqlx::query_as(
-        "SELECT * FROM git_deploys WHERE user_id = $1 AND server_id = $2 ORDER BY created_at DESC",
+        "SELECT * FROM git_deploys WHERE user_id = $1 AND server_id = $2 ORDER BY created_at DESC LIMIT 200",
     )
     .bind(claims.sub)
     .bind(server_id)

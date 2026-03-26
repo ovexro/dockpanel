@@ -39,7 +39,7 @@ pub async fn list(
 ) -> Result<Json<Vec<BackupDestination>>, ApiError> {
 
     let dests: Vec<BackupDestination> = sqlx::query_as(
-        "SELECT * FROM backup_destinations ORDER BY created_at DESC",
+        "SELECT * FROM backup_destinations ORDER BY created_at DESC LIMIT 200",
     )
     .fetch_all(&state.db)
     .await

@@ -224,7 +224,7 @@ pub async fn list_zones(
     AuthUser(claims): AuthUser,
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
     let zones: Vec<DnsZone> = sqlx::query_as(
-        "SELECT * FROM dns_zones WHERE user_id = $1 ORDER BY domain",
+        "SELECT * FROM dns_zones WHERE user_id = $1 ORDER BY domain LIMIT 500",
     )
     .bind(claims.sub)
     .fetch_all(&state.db)

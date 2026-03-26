@@ -172,7 +172,7 @@ pub async fn list_domains(
 ) -> Result<Json<Vec<MailDomain>>, ApiError> {
     let domains: Vec<MailDomain> = sqlx::query_as(
         "SELECT id, domain, dkim_selector, dkim_public_key, catch_all, enabled, created_at \
-         FROM mail_domains ORDER BY domain",
+         FROM mail_domains ORDER BY domain LIMIT 500",
     )
     .fetch_all(&state.db)
     .await

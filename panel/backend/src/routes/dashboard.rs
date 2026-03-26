@@ -437,93 +437,62 @@ pub async fn fleet_overview(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let servers: Vec<(uuid::Uuid, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, name, hostname, ip_address FROM servers WHERE user_id = $1 ORDER BY name",
+    // Single query replaces N+1 pattern (was: 5 queries per server in a loop).
+    // Uses LEFT JOIN with subqueries to aggregate all data in one round trip.
+    let rows: Vec<(uuid::Uuid, String, String, Option<String>, i64, i64, i64, Option<f32>, Option<f32>, Option<f32>)> = sqlx::query_as(
+        "SELECT s.id, s.name, s.hostname, s.ip_address, \
+         COALESCE(a.firing, 0) AS firing_alerts, \
+         COALESCE(si.cnt, 0) AS site_count, \
+         COALESCE(d.cnt, 0) AS db_count, \
+         m.cpu_pct, m.mem_pct, m.disk_pct \
+         FROM servers s \
+         LEFT JOIN LATERAL (SELECT COUNT(*) AS firing FROM alerts WHERE server_id = s.id AND status = 'firing') a ON true \
+         LEFT JOIN LATERAL (SELECT COUNT(*) AS cnt FROM sites WHERE server_id = s.id AND status = 'active') si ON true \
+         LEFT JOIN LATERAL (SELECT COUNT(*) AS cnt FROM databases WHERE site_id IN (SELECT id FROM sites WHERE server_id = s.id)) d ON true \
+         LEFT JOIN LATERAL (SELECT cpu_pct, mem_pct, disk_pct FROM metrics_history WHERE server_id = s.id ORDER BY created_at DESC LIMIT 1) m ON true \
+         WHERE s.user_id = $1 \
+         ORDER BY s.name",
     )
     .bind(claims.sub)
     .fetch_all(&state.db)
     .await
     .map_err(|e| internal_error("fleet overview", e))?;
 
-    let mut fleet = Vec::new();
-    for (id, name, hostname, ip) in &servers {
-        let firing: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM alerts WHERE server_id = $1 AND status = 'firing'",
-        )
-        .bind(id)
-        .fetch_one(&state.db)
-        .await
-        .unwrap_or((0,));
+    // Active incidents (global for user, not per-server)
+    let active_incidents: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM managed_incidents WHERE user_id = $1 AND status NOT IN ('resolved', 'postmortem')",
+    )
+    .bind(claims.sub)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or((0,));
 
-        let incidents: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM managed_incidents WHERE user_id = $1 AND status NOT IN ('resolved', 'postmortem')",
-        )
-        .bind(claims.sub)
-        .fetch_one(&state.db)
-        .await
-        .unwrap_or((0,));
-
-        let sites: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM sites WHERE server_id = $1 AND status = 'active'",
-        )
-        .bind(id)
-        .fetch_one(&state.db)
-        .await
-        .unwrap_or((0,));
-
-        let dbs: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM databases WHERE site_id IN (SELECT id FROM sites WHERE server_id = $1)",
-        )
-        .bind(id)
-        .fetch_one(&state.db)
-        .await
-        .unwrap_or((0,));
-
-        // Latest metrics for this server
-        let metrics: Option<(f32, f32, f32)> = sqlx::query_as(
-            "SELECT cpu_pct, mem_pct, disk_pct FROM metrics_history \
-             WHERE server_id = $1 ORDER BY created_at DESC LIMIT 1",
-        )
-        .bind(id)
-        .fetch_optional(&state.db)
-        .await
-        .ok()
-        .flatten();
-
-        fleet.push(serde_json::json!({
-            "id": id,
-            "name": name,
-            "hostname": hostname,
-            "ip_address": ip,
-            "firing_alerts": firing.0,
-            "active_incidents": incidents.0,
-            "sites": sites.0,
-            "databases": dbs.0,
-            "cpu_pct": metrics.as_ref().map(|m| m.0),
-            "mem_pct": metrics.as_ref().map(|m| m.1),
-            "disk_pct": metrics.as_ref().map(|m| m.2),
-            "status": if firing.0 > 0 { "warning" } else { "healthy" },
-        }));
-    }
-
-    let total_firing: i64 = fleet
-        .iter()
-        .filter_map(|s| s.get("firing_alerts").and_then(|v| v.as_i64()))
-        .sum();
-    let total_incidents: i64 = fleet
-        .iter()
-        .filter_map(|s| s.get("active_incidents").and_then(|v| v.as_i64()))
-        .sum();
-    let total_sites: i64 = fleet
-        .iter()
-        .filter_map(|s| s.get("sites").and_then(|v| v.as_i64()))
-        .sum();
+    let mut total_firing: i64 = 0;
+    let mut total_sites: i64 = 0;
+    let fleet: Vec<serde_json::Value> = rows.iter().map(|r| {
+        total_firing += r.4;
+        total_sites += r.5;
+        serde_json::json!({
+            "id": r.0,
+            "name": r.1,
+            "hostname": r.2,
+            "ip_address": r.3,
+            "firing_alerts": r.4,
+            "active_incidents": active_incidents.0,
+            "sites": r.5,
+            "databases": r.6,
+            "cpu_pct": r.7,
+            "mem_pct": r.8,
+            "disk_pct": r.9,
+            "status": if r.4 > 0 { "warning" } else { "healthy" },
+        })
+    }).collect();
 
     Ok(Json(serde_json::json!({
         "servers": fleet,
-        "total_servers": servers.len(),
+        "total_servers": rows.len(),
         "total_firing": total_firing,
-        "total_incidents": total_incidents,
+        "total_incidents": active_incidents.0,
         "total_sites": total_sites,
     })))
 }

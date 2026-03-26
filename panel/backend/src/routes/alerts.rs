@@ -204,7 +204,7 @@ pub async fn get_rules(
          alert_backup_failure, alert_ssl_expiry, alert_service_health, \
          ssl_warning_days, notify_email, notify_slack_url, notify_discord_url, cooldown_minutes, \
          notify_pagerduty_key, notify_webhook_url, muted_types \
-         FROM alert_rules WHERE user_id = $1 ORDER BY server_id NULLS FIRST",
+         FROM alert_rules WHERE user_id = $1 ORDER BY server_id NULLS FIRST LIMIT 500",
     )
     .bind(claims.sub)
     .fetch_all(&state.db)

@@ -126,7 +126,7 @@ pub async fn list_vaults(
     AuthUser(claims): AuthUser,
 ) -> Result<Json<Vec<SecretVault>>, ApiError> {
     let vaults: Vec<SecretVault> = sqlx::query_as(
-        "SELECT * FROM secret_vaults WHERE user_id = $1 ORDER BY created_at DESC"
+        "SELECT * FROM secret_vaults WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200"
     )
     .bind(claims.sub)
     .fetch_all(&state.db).await

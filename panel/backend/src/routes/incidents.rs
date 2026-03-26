@@ -196,7 +196,7 @@ pub async fn get_one(
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Incident not found"))?;
 
     let updates: Vec<IncidentUpdate> = sqlx::query_as(
-        "SELECT * FROM incident_updates WHERE incident_id = $1 ORDER BY created_at ASC"
+        "SELECT * FROM incident_updates WHERE incident_id = $1 ORDER BY created_at ASC LIMIT 500"
     )
     .bind(id)
     .fetch_all(&state.db).await
@@ -447,7 +447,7 @@ pub async fn list_updates(
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Incident not found"))?;
 
     let updates: Vec<IncidentUpdate> = sqlx::query_as(
-        "SELECT * FROM incident_updates WHERE incident_id = $1 ORDER BY created_at ASC"
+        "SELECT * FROM incident_updates WHERE incident_id = $1 ORDER BY created_at ASC LIMIT 500"
     )
     .bind(id)
     .fetch_all(&state.db).await
@@ -715,7 +715,7 @@ pub async fn list_subscribers(
     AdminUser(_claims): AdminUser,
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
     let rows: Vec<(String, bool, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT email, verified, created_at FROM status_page_subscribers ORDER BY created_at DESC"
+        "SELECT email, verified, created_at FROM status_page_subscribers ORDER BY created_at DESC LIMIT 1000"
     )
     .fetch_all(&state.db).await
     .map_err(|e| internal_error("list subscribers", e))?;
@@ -810,7 +810,7 @@ pub async fn public_status_page(
     let mut incident_list = Vec::new();
     for inc in &incidents {
         let updates: Vec<IncidentUpdate> = sqlx::query_as(
-            "SELECT * FROM incident_updates WHERE incident_id = $1 ORDER BY created_at ASC"
+            "SELECT * FROM incident_updates WHERE incident_id = $1 ORDER BY created_at ASC LIMIT 500"
         )
         .bind(inc.id)
         .fetch_all(&state.db).await
