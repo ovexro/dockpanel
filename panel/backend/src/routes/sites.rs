@@ -1040,6 +1040,28 @@ pub async fn php_install(
     Ok(Json(result))
 }
 
+/// POST /api/php/uninstall — Uninstall a specific PHP version (admin only).
+pub async fn php_uninstall(
+    State(_state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Json(body): Json<InstallPhpRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if claims.role != "admin" {
+        return Err(err(StatusCode::FORBIDDEN, "Admin only"));
+    }
+
+    let result = agent
+        .post(
+            "/php/uninstall",
+            Some(serde_json::json!({ "version": body.version })),
+        )
+        .await
+        .map_err(|e| agent_error("PHP uninstall", e))?;
+
+    Ok(Json(result))
+}
+
 /// PUT /api/sites/{id}/limits — Update per-site resource limits.
 #[derive(serde::Deserialize)]
 pub struct UpdateLimitsRequest {

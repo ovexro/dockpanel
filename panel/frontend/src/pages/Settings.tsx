@@ -1851,7 +1851,8 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
     setUninstalling(service);
     setMsg({ text: "", type: "" });
     try {
-      await api.post(`/services/uninstall/${service}`, {});
+      const endpoint = service === "mail" ? "/mail/uninstall" : `/services/uninstall/${service}`;
+      await api.post(endpoint, {});
       setMsg({ text: `${label} uninstalled successfully`, type: "success" });
       refreshStatus();
     } catch (e) {
@@ -1945,7 +1946,7 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
                 {installed ? (
                   <div className="flex items-center gap-2 shrink-0 ml-3">
                     <span className="text-[10px] text-dark-300 uppercase tracking-wider">Installed</span>
-                    {svc.id !== "mail" && (
+                    {(
                       <button
                         onClick={() => uninstall(svc.id, svc.label)}
                         disabled={uninstalling !== null || installing !== null}

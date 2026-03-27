@@ -121,6 +121,8 @@ pub fn router() -> Router<AppState> {
         // TLS Enforcement
         .route("/mail/tls/status", get(tls_status))
         .route("/mail/tls/enforce", post(tls_enforce))
+        // Uninstall
+        .route("/mail/uninstall", post(mail_uninstall))
 }
 
 // ── Mail server status + installation ────────────────────────────────────
@@ -323,6 +325,63 @@ ssl = required
     tracing::info!("Mail server installation complete");
 
     Ok(ok("Mail server installed and configured"))
+}
+
+/// POST /mail/uninstall — Remove mail server packages and configuration.
+async fn mail_uninstall() -> Result<Json<serde_json::Value>, ApiErr> {
+    tracing::info!("Starting mail server uninstall...");
+
+    // 1. Stop and disable services
+    for service in &["postfix", "dovecot", "opendkim"] {
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            safe_command("systemctl")
+                .args(["stop", service])
+                .output()
+        ).await;
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            safe_command("systemctl")
+                .args(["disable", service])
+                .output()
+        ).await;
+    }
+
+    // 2. Purge packages
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        safe_command("apt-get")
+            .args(["purge", "-y",
+                   "postfix", "dovecot-imapd", "dovecot-pop3d", "dovecot-lmtpd",
+                   "opendkim", "opendkim-tools"])
+            .env("DEBIAN_FRONTEND", "noninteractive")
+            .output()
+    ).await
+        .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Package removal timed out (300s)"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("apt purge failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Package purge failed: {}", stderr.chars().take(200).collect::<String>())));
+    }
+
+    // 3. Autoremove
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        safe_command("apt-get")
+            .args(["autoremove", "-y"])
+            .env("DEBIAN_FRONTEND", "noninteractive")
+            .output()
+    ).await;
+
+    // 4. Remove DockPanel mail config dirs (NOT /var/vmail — user mail data)
+    let _ = tokio::fs::remove_dir_all("/etc/dockpanel/mail").await;
+    let _ = tokio::fs::remove_dir_all("/etc/dockpanel/dkim").await;
+
+    tracing::info!("Mail server uninstalled (user mail data preserved in /var/vmail)");
+
+    Ok(ok("Mail server uninstalled. Note: /var/vmail (user mail data) was NOT removed. Delete it manually if no longer needed."))
 }
 
 async fn is_service_active(name: &str) -> bool {

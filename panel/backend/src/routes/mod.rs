@@ -384,6 +384,7 @@ pub fn router() -> Router<AppState> {
         // PHP versions
         .route("/api/php/versions", get(sites::php_versions))
         .route("/api/php/install", post(sites::php_install))
+        .route("/api/php/uninstall", post(sites::php_uninstall))
         // SSL
         .route("/api/sites/{id}/ssl", post(ssl::provision).get(ssl::status))
         // File Manager
@@ -753,6 +754,7 @@ pub fn router() -> Router<AppState> {
         // Mail
         .route("/api/mail/status", get(mail::mail_status))
         .route("/api/mail/install", post(mail::mail_install))
+        .route("/api/mail/uninstall", post(mail::mail_uninstall))
         .route("/api/mail/domains", get(mail::list_domains).post(mail::create_domain))
         .route("/api/mail/domains/{id}", put(mail::update_domain).delete(mail::delete_domain))
         .route("/api/mail/domains/{id}/dns", get(mail::domain_dns))

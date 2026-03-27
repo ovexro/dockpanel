@@ -163,6 +163,67 @@ pub async fn mail_install(
     }))))
 }
 
+/// POST /api/mail/uninstall — Uninstall mail server (admin only).
+pub async fn mail_uninstall(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let install_id = Uuid::new_v4();
+
+    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
+    {
+        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
+        logs.insert(install_id, (Vec::new(), tx, Instant::now()));
+    }
+
+    let logs = state.provision_logs.clone();
+    let db = state.db.clone();
+    let user_id = claims.sub;
+    let email = claims.email.clone();
+
+    tokio::spawn(async move {
+        let emit = |step: &str, label: &str, status: &str, msg: Option<String>| {
+            let ev = ProvisionStep {
+                step: step.into(), label: label.into(), status: status.into(), message: msg,
+            };
+            if let Ok(mut map) = logs.lock() {
+                if let Some((history, tx, _)) = map.get_mut(&install_id) {
+                    history.push(ev.clone());
+                    let _ = tx.send(ev);
+                }
+            }
+        };
+
+        emit("uninstall", "Uninstalling mail server", "in_progress", None);
+
+        match agent.post("/mail/uninstall", None).await {
+            Ok(_) => {
+                emit("uninstall", "Uninstalling mail server", "done", None);
+                emit("complete", "Mail server uninstalled", "done", None);
+                activity::log_activity(
+                    &db, user_id, &email, "mail.server.uninstall",
+                    Some("mail"), None, None, None,
+                ).await;
+                tracing::info!("Mail server uninstalled");
+            }
+            Err(e) => {
+                emit("uninstall", "Uninstalling mail server", "error", Some(format!("{e}")));
+                emit("complete", "Uninstall failed", "error", None);
+                tracing::error!("Mail server uninstall failed: {e}");
+            }
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&install_id);
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
+        "install_id": install_id,
+        "message": "Mail server uninstall started",
+    }))))
+}
+
 // ── Domain routes ───────────────────────────────────────────────────────
 
 /// GET /api/mail/domains
