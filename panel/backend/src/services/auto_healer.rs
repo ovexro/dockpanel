@@ -840,6 +840,86 @@ async fn run_retention_cleanup(pool: &PgPool) {
         tracing::info!("Retention: deleted {ts_deleted} expired terminal shares (>1 hour)");
     }
 
+    // ── Backup Retention Enforcement ────────────────────────────────────
+    // For each backup schedule, enforce retention_count by deleting oldest backups
+    // that exceed the limit (both DB records and local files via filesystem).
+
+    let schedules: Vec<(uuid::Uuid, uuid::Uuid, i32, String)> = sqlx::query_as(
+        "SELECT bs.id, bs.site_id, bs.retention_count, s.domain \
+         FROM backup_schedules bs JOIN sites s ON s.id = bs.site_id \
+         WHERE bs.retention_count > 0"
+    ).fetch_all(pool).await.unwrap_or_default();
+
+    let mut total_pruned = 0u64;
+    for (_schedule_id, site_id, retention_count, domain) in &schedules {
+        // Find backups exceeding retention_count (ordered newest first, skip retention_count)
+        let excess: Vec<(uuid::Uuid, String)> = sqlx::query_as(
+            "SELECT id, filename FROM backups WHERE site_id = $1 \
+             ORDER BY created_at DESC OFFSET $2"
+        )
+        .bind(site_id)
+        .bind(*retention_count)
+        .fetch_all(pool).await.unwrap_or_default();
+
+        for (backup_id, filename) in &excess {
+            // Delete the local backup file if it exists
+            let filepath = format!("/var/backups/dockpanel/{domain}/{filename}");
+            let _ = std::fs::remove_file(&filepath);
+
+            // Delete the DB record
+            let _ = sqlx::query("DELETE FROM backups WHERE id = $1")
+                .bind(backup_id)
+                .execute(pool).await;
+
+            total_pruned += 1;
+        }
+    }
+    if total_pruned > 0 {
+        tracing::info!("Retention: pruned {total_pruned} backups exceeding retention_count limits");
+    }
+
+    // Enforce retention for backup policies (database_backups + volume_backups)
+    let policies: Vec<(uuid::Uuid, i32)> = sqlx::query_as(
+        "SELECT id, retention_count FROM backup_policies WHERE retention_count > 0"
+    ).fetch_all(pool).await.unwrap_or_default();
+
+    for (policy_id, retention_count) in &policies {
+        // Prune excess database backups for this policy
+        let excess_db: Vec<(uuid::Uuid, String)> = sqlx::query_as(
+            "SELECT id, filename FROM database_backups WHERE policy_id = $1 \
+             ORDER BY created_at DESC OFFSET $2"
+        )
+        .bind(policy_id).bind(*retention_count)
+        .fetch_all(pool).await.unwrap_or_default();
+
+        for (id, filename) in &excess_db {
+            let filepath = format!("/var/backups/dockpanel/databases/{filename}");
+            let _ = std::fs::remove_file(&filepath);
+            let _ = sqlx::query("DELETE FROM database_backups WHERE id = $1")
+                .bind(id).execute(pool).await;
+            total_pruned += 1;
+        }
+
+        // Prune excess volume backups for this policy
+        let excess_vol: Vec<(uuid::Uuid, String)> = sqlx::query_as(
+            "SELECT id, filename FROM volume_backups WHERE policy_id = $1 \
+             ORDER BY created_at DESC OFFSET $2"
+        )
+        .bind(policy_id).bind(*retention_count)
+        .fetch_all(pool).await.unwrap_or_default();
+
+        for (id, filename) in &excess_vol {
+            let filepath = format!("/var/backups/dockpanel/volumes/{filename}");
+            let _ = std::fs::remove_file(&filepath);
+            let _ = sqlx::query("DELETE FROM volume_backups WHERE id = $1")
+                .bind(id).execute(pool).await;
+            total_pruned += 1;
+        }
+    }
+    if total_pruned > 0 {
+        tracing::info!("Retention: total {total_pruned} excess backups pruned (schedules + policies)");
+    }
+
     // ── Security Enhancement Retention ─────────────────────────────────
 
     // Clean suspicious_events older than 90 days

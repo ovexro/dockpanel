@@ -1,13 +1,19 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{internal_error, err, require_admin, ApiError};
+use crate::error::{internal_error, err, paginate, require_admin, ApiError};
 use crate::AppState;
+
+#[derive(serde::Deserialize)]
+pub struct PaginationQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
 
 #[derive(serde::Serialize, sqlx::FromRow)]
 pub struct Monitor {
@@ -70,11 +76,16 @@ pub struct UpdateMonitor {
 pub async fn list(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    Query(params): Query<PaginationQuery>,
 ) -> Result<Json<Vec<Monitor>>, ApiError> {
+    let (limit, offset) = paginate(params.limit, params.offset);
+
     let monitors: Vec<Monitor> = sqlx::query_as(
-        "SELECT * FROM monitors WHERE user_id = $1 ORDER BY created_at DESC LIMIT 500",
+        "SELECT * FROM monitors WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
     )
     .bind(claims.sub)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(&state.db)
     .await
     .map_err(|e| internal_error("list monitors", e))?;

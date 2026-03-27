@@ -419,6 +419,8 @@ pub fn router() -> Router<AppState> {
         // Terminal
         .route("/api/terminal/token", get(terminal::ws_token))
         .route("/api/terminal/share", post(terminal::share_output))
+        .route("/api/terminal/shares", get(terminal::list_shares))
+        .route("/api/terminal/share/{id}", delete(terminal::revoke_share))
         // Databases
         .route("/api/databases", get(databases::list).post(databases::create))
         .route("/api/databases/{id}", delete(databases::remove))

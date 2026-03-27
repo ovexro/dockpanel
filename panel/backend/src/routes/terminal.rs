@@ -135,6 +135,72 @@ pub async fn share_output(
     })))
 }
 
+/// DELETE /api/terminal/share/{id} — Revoke (delete) a terminal share early.
+pub async fn revoke_share(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+
+    // Validate share_id format (12 hex chars)
+    if id.len() != 12 || !id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid share ID"));
+    }
+
+    let key = format!("terminal_share_{id}");
+    let result = sqlx::query("DELETE FROM settings WHERE key = $1")
+        .bind(&key)
+        .execute(&state.db)
+        .await
+        .map_err(|e| internal_error("revoke share", e))?;
+
+    if result.rows_affected() == 0 {
+        return Err(err(StatusCode::NOT_FOUND, "Share not found or already expired"));
+    }
+
+    Ok(Json(serde_json::json!({ "ok": true, "share_id": id })))
+}
+
+/// GET /api/terminal/shares — List active terminal shares (admin only).
+pub async fn list_shares(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT key, value FROM settings WHERE key LIKE 'terminal_share_%'"
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| internal_error("list shares", e))?;
+
+    let now = chrono::Utc::now().timestamp();
+    let mut shares = Vec::new();
+
+    for (key, value) in &rows {
+        let share_id = key.strip_prefix("terminal_share_").unwrap_or(key);
+        let created_ts: i64 = value.split('|').next()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
+        let remaining = if created_ts > 0 { 3600 - (now - created_ts) } else { 0 };
+        if remaining <= 0 {
+            continue; // Already expired, will be cleaned up by retention
+        }
+
+        shares.push(serde_json::json!({
+            "share_id": share_id,
+            "created_at": created_ts,
+            "expires_in_seconds": remaining,
+            "url": format!("/api/terminal/shared/{share_id}"),
+        }));
+    }
+
+    Ok(Json(serde_json::json!({ "shares": shares })))
+}
+
 /// GET /api/terminal/shared/{id} — View shared terminal output (public, no auth).
 pub async fn view_shared(
     State(state): State<AppState>,
