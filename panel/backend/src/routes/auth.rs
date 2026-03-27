@@ -172,7 +172,8 @@ pub async fn login(
     // GAP 68: IP whitelist check — block login from non-whitelisted IPs
     let whitelist: Option<(String,)> = sqlx::query_as(
         "SELECT value FROM settings WHERE key = 'allowed_panel_ips'"
-    ).fetch_optional(&state.db).await.ok().flatten();
+    ).fetch_optional(&state.db).await
+        .map_err(|e| internal_error("login ip whitelist", e))?;
     if let Some((ips,)) = whitelist {
         if !ips.is_empty() {
             let client_ip = headers.get("x-real-ip").and_then(|v| v.to_str().ok()).unwrap_or("");

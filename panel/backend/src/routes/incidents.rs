@@ -285,7 +285,8 @@ pub async fn update(
         // Check if postmortem is currently empty
         let current_pm: Option<(Option<String>,)> = sqlx::query_as(
             "SELECT postmortem FROM managed_incidents WHERE id = $1"
-        ).bind(id).fetch_optional(&state.db).await.ok().flatten();
+        ).bind(id).fetch_optional(&state.db).await
+            .map_err(|e| internal_error("incident postmortem check", e))?;
 
         let pm_empty = current_pm
             .as_ref()
@@ -389,7 +390,8 @@ pub async fn post_update(
 
         // GAP 16: Auto-resolve linked alerts when incident is resolved
         let incident_title: Option<(String,)> = sqlx::query_as("SELECT title FROM managed_incidents WHERE id = $1")
-            .bind(id).fetch_optional(&state.db).await.ok().flatten();
+            .bind(id).fetch_optional(&state.db).await
+            .map_err(|e| internal_error("incident auto-resolve title lookup", e))?;
         if let Some((ref title,)) = incident_title {
             let _ = sqlx::query(
                 "UPDATE alerts SET status = 'resolved', resolved_at = NOW() \
@@ -423,7 +425,8 @@ pub async fn post_update(
 
     // Notify subscribers
     let title: Option<(String,)> = sqlx::query_as("SELECT title FROM managed_incidents WHERE id = $1")
-        .bind(id).fetch_optional(&state.db).await.ok().flatten();
+        .bind(id).fetch_optional(&state.db).await
+        .map_err(|e| internal_error("incident notify title lookup", e))?;
     if let Some((title,)) = title {
         notify_subscribers(&state.db, &title, &req.status, &req.message).await;
     }
@@ -874,9 +877,15 @@ async fn notify_subscribers(db: &sqlx::PgPool, title: &str, status: &str, messag
     let body = format!("{title}\nStatus: {status}\n\n{message}");
 
     // Get SMTP settings for sending
-    let smtp_host: Option<(String,)> = sqlx::query_as(
+    let smtp_host: Option<(String,)> = match sqlx::query_as(
         "SELECT value FROM settings WHERE key = 'smtp_host'"
-    ).fetch_optional(db).await.ok().flatten();
+    ).fetch_optional(db).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("DB error fetching SMTP settings for subscriber notification: {e}");
+            return;
+        }
+    };
 
     if smtp_host.is_none() {
         tracing::debug!("No SMTP configured — skipping subscriber notifications for {title}");

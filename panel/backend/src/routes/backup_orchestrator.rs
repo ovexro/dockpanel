@@ -738,39 +738,54 @@ pub async fn trigger_verify(
     tokio::spawn(async move {
         let result: Result<serde_json::Value, String> = match backup_type.as_str() {
             "site" => {
-                let row: Option<(String, String)> = sqlx::query_as(
+                let row = sqlx::query_as::<_, (String, String)>(
                     "SELECT s.domain, b.filename FROM backups b JOIN sites s ON s.id = b.site_id WHERE b.id = $1"
-                ).bind(backup_id).fetch_optional(&db).await.ok().flatten();
+                ).bind(backup_id).fetch_optional(&db).await;
 
-                if let Some((domain, filename)) = row {
-                    let body = serde_json::json!({ "domain": domain, "filename": filename });
-                    agent.post("/backups/verify/site", Some(body)).await.map_err(|e| e.to_string())
-                } else {
-                    Err("Backup not found".to_string())
+                match row {
+                    Ok(Some((domain, filename))) => {
+                        let body = serde_json::json!({ "domain": domain, "filename": filename });
+                        agent.post("/backups/verify/site", Some(body)).await.map_err(|e| e.to_string())
+                    }
+                    Ok(None) => Err("Backup not found".to_string()),
+                    Err(e) => {
+                        tracing::warn!("DB error fetching site backup for verification: {e}");
+                        Err(format!("Database error: {e}"))
+                    }
                 }
             }
             "database" => {
-                let row: Option<(String, String, String)> = sqlx::query_as(
+                let row = sqlx::query_as::<_, (String, String, String)>(
                     "SELECT db_type, db_name, filename FROM database_backups WHERE id = $1"
-                ).bind(backup_id).fetch_optional(&db).await.ok().flatten();
+                ).bind(backup_id).fetch_optional(&db).await;
 
-                if let Some((db_type, db_name, filename)) = row {
-                    let body = serde_json::json!({ "db_type": db_type, "db_name": db_name, "filename": filename });
-                    agent.post("/backups/verify/database", Some(body)).await.map_err(|e| e.to_string())
-                } else {
-                    Err("Database backup not found".to_string())
+                match row {
+                    Ok(Some((db_type, db_name, filename))) => {
+                        let body = serde_json::json!({ "db_type": db_type, "db_name": db_name, "filename": filename });
+                        agent.post("/backups/verify/database", Some(body)).await.map_err(|e| e.to_string())
+                    }
+                    Ok(None) => Err("Database backup not found".to_string()),
+                    Err(e) => {
+                        tracing::warn!("DB error fetching database backup for verification: {e}");
+                        Err(format!("Database error: {e}"))
+                    }
                 }
             }
             "volume" => {
-                let row: Option<(String, String)> = sqlx::query_as(
+                let row = sqlx::query_as::<_, (String, String)>(
                     "SELECT container_name, filename FROM volume_backups WHERE id = $1"
-                ).bind(backup_id).fetch_optional(&db).await.ok().flatten();
+                ).bind(backup_id).fetch_optional(&db).await;
 
-                if let Some((container_name, filename)) = row {
-                    let body = serde_json::json!({ "container_name": container_name, "filename": filename });
-                    agent.post("/backups/verify/volume", Some(body)).await.map_err(|e| e.to_string())
-                } else {
-                    Err("Volume backup not found".to_string())
+                match row {
+                    Ok(Some((container_name, filename))) => {
+                        let body = serde_json::json!({ "container_name": container_name, "filename": filename });
+                        agent.post("/backups/verify/volume", Some(body)).await.map_err(|e| e.to_string())
+                    }
+                    Ok(None) => Err("Volume backup not found".to_string()),
+                    Err(e) => {
+                        tracing::warn!("DB error fetching volume backup for verification: {e}");
+                        Err(format!("Database error: {e}"))
+                    }
                 }
             }
             _ => Err("Invalid backup type".to_string()),

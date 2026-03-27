@@ -367,19 +367,22 @@ pub async fn uptime_stats(
     let day: Option<(i64, i64)> = sqlx::query_as(
         "SELECT COUNT(*) FILTER (WHERE status_code IS NOT NULL AND error IS NULL), COUNT(*) \
          FROM monitor_checks WHERE monitor_id = $1 AND checked_at > NOW() - INTERVAL '24 hours'"
-    ).bind(id).fetch_optional(&state.db).await.ok().flatten();
+    ).bind(id).fetch_optional(&state.db).await
+        .map_err(|e| internal_error("uptime stats 24h", e))?;
 
     // 7d uptime
     let week: Option<(i64, i64)> = sqlx::query_as(
         "SELECT COUNT(*) FILTER (WHERE status_code IS NOT NULL AND error IS NULL), COUNT(*) \
          FROM monitor_checks WHERE monitor_id = $1 AND checked_at > NOW() - INTERVAL '7 days'"
-    ).bind(id).fetch_optional(&state.db).await.ok().flatten();
+    ).bind(id).fetch_optional(&state.db).await
+        .map_err(|e| internal_error("uptime stats 7d", e))?;
 
     // 30d uptime
     let month: Option<(i64, i64)> = sqlx::query_as(
         "SELECT COUNT(*) FILTER (WHERE status_code IS NOT NULL AND error IS NULL), COUNT(*) \
          FROM monitor_checks WHERE monitor_id = $1 AND checked_at > NOW() - INTERVAL '30 days'"
-    ).bind(id).fetch_optional(&state.db).await.ok().flatten();
+    ).bind(id).fetch_optional(&state.db).await
+        .map_err(|e| internal_error("uptime stats 30d", e))?;
 
     let calc = |data: Option<(i64, i64)>| -> f64 {
         match data {
@@ -391,7 +394,8 @@ pub async fn uptime_stats(
     // Average response time (24h)
     let avg_rt: Option<(Option<f64>,)> = sqlx::query_as(
         "SELECT AVG(response_time)::float8 FROM monitor_checks WHERE monitor_id = $1 AND checked_at > NOW() - INTERVAL '24 hours' AND status_code IS NOT NULL"
-    ).bind(id).fetch_optional(&state.db).await.ok().flatten();
+    ).bind(id).fetch_optional(&state.db).await
+        .map_err(|e| internal_error("uptime stats avg response", e))?;
 
     Ok(Json(serde_json::json!({
         "uptime_24h": calc(day),
@@ -464,7 +468,8 @@ pub async fn status_page(
     // Check if status page is enabled
     let enabled: Option<(String,)> = sqlx::query_as(
         "SELECT value FROM settings WHERE key = 'status_page_enabled'"
-    ).fetch_optional(&state.db).await.ok().flatten();
+    ).fetch_optional(&state.db).await
+        .map_err(|e| internal_error("status page enabled check", e))?;
 
     if enabled.map(|(v,)| v).unwrap_or_else(|| "false".to_string()) != "true" {
         return Err(err(StatusCode::NOT_FOUND, "Status page not enabled"));
@@ -576,7 +581,8 @@ pub async fn heartbeat(
     // Validate monitor exists and is a heartbeat type
     let monitor: Option<(uuid::Uuid, String, Option<String>)> = sqlx::query_as(
         "SELECT id, COALESCE(name, ''), heartbeat_token FROM monitors WHERE id = $1 AND monitor_type = 'heartbeat'"
-    ).bind(monitor_id).fetch_optional(&state.db).await.ok().flatten();
+    ).bind(monitor_id).fetch_optional(&state.db).await
+        .map_err(|e| internal_error("heartbeat monitor lookup", e))?;
 
     let monitor = monitor.ok_or_else(|| err(StatusCode::NOT_FOUND, "Monitor not found"))?;
 

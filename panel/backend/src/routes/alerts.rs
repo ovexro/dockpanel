@@ -291,11 +291,13 @@ async fn upsert_rules(
     let existing: Option<(Uuid,)> = if server_id.is_some() {
         sqlx::query_as("SELECT id FROM alert_rules WHERE user_id = $1 AND server_id = $2")
             .bind(user_id).bind(server_id)
-            .fetch_optional(&state.db).await.ok().flatten()
+            .fetch_optional(&state.db).await
+            .map_err(|e| internal_error("check alert rule exists", e))?
     } else {
         sqlx::query_as("SELECT id FROM alert_rules WHERE user_id = $1 AND server_id IS NULL")
             .bind(user_id)
-            .fetch_optional(&state.db).await.ok().flatten()
+            .fetch_optional(&state.db).await
+            .map_err(|e| internal_error("check alert rule exists", e))?
     };
 
     let query = if existing.is_some() {

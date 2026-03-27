@@ -252,11 +252,13 @@ pub async fn create(
     // Check reseller server isolation: user under a reseller can only use allocated servers
     let user_reseller: Option<(Option<uuid::Uuid>,)> = sqlx::query_as(
         "SELECT reseller_id FROM users WHERE id = $1"
-    ).bind(claims.sub).fetch_optional(&state.db).await.ok().flatten();
+    ).bind(claims.sub).fetch_optional(&state.db).await
+        .map_err(|e| internal_error("reseller check", e))?;
     if let Some((Some(rid),)) = user_reseller {
         let allowed: Option<(uuid::Uuid,)> = sqlx::query_as(
             "SELECT id FROM reseller_servers WHERE reseller_id = $1 AND server_id = $2"
-        ).bind(rid).bind(server_id).fetch_optional(&state.db).await.ok().flatten();
+        ).bind(rid).bind(server_id).fetch_optional(&state.db).await
+            .map_err(|e| internal_error("reseller server check", e))?;
         if allowed.is_none() {
             return Err(err(StatusCode::FORBIDDEN, "This server is not allocated to your reseller account"));
         }
@@ -457,9 +459,15 @@ pub async fn create(
                 let sp_user_id = claims.sub;
                 let sp_domain = body.domain.clone();
                 tokio::spawn(async move {
-                    let enabled: Option<(bool,)> = sqlx::query_as(
+                    let enabled: Option<(bool,)> = match sqlx::query_as(
                         "SELECT enabled FROM status_page_config WHERE user_id = $1"
-                    ).bind(sp_user_id).fetch_optional(&sp_db).await.ok().flatten();
+                    ).bind(sp_user_id).fetch_optional(&sp_db).await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            tracing::warn!("DB error checking status page config for auto-component: {e}");
+                            None
+                        }
+                    };
 
                     if enabled.map(|(e,)| e).unwrap_or(false) {
                         let _ = sqlx::query(
@@ -489,9 +497,15 @@ pub async fn create(
                         dns_domain.clone()
                     };
 
-                    let zone: Option<(String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+                    let zone: Option<(String, Option<String>, Option<String>, Option<String>)> = match sqlx::query_as(
                         "SELECT provider, cf_zone_id, cf_api_token, cf_api_email FROM dns_zones WHERE domain = $1 AND user_id = $2"
-                    ).bind(&parent).bind(dns_user_id).fetch_optional(&dns_db).await.ok().flatten();
+                    ).bind(&parent).bind(dns_user_id).fetch_optional(&dns_db).await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            tracing::warn!("DB error fetching DNS zone for auto-DNS on site create: {e}");
+                            None
+                        }
+                    };
 
                     if let Some((provider, cf_zone_id, cf_api_token, cf_api_email)) = zone {
                         let server_ip = crate::helpers::detect_public_ip().await;
@@ -1273,9 +1287,15 @@ pub async fn remove(
                 dns_domain.clone()
             };
 
-            let zone: Option<(String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+            let zone: Option<(String, Option<String>, Option<String>, Option<String>)> = match sqlx::query_as(
                 "SELECT provider, cf_zone_id, cf_api_token, cf_api_email FROM dns_zones WHERE domain = $1 AND user_id = $2"
-            ).bind(&parent).bind(dns_user).fetch_optional(&dns_db).await.ok().flatten();
+            ).bind(&parent).bind(dns_user).fetch_optional(&dns_db).await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!("DB error fetching DNS zone for auto-cleanup on site delete: {e}");
+                    None
+                }
+            };
 
             if let Some((provider, cf_zone_id, cf_api_token, cf_api_email)) = zone {
                 let server_ip = crate::helpers::detect_public_ip().await;
@@ -1712,13 +1732,15 @@ pub async fn health_summary(
     // Backup freshness
     let last_backup: Option<(chrono::DateTime<chrono::Utc>,)> = sqlx::query_as(
         "SELECT created_at FROM backups WHERE site_id = $1 ORDER BY created_at DESC LIMIT 1"
-    ).bind(id).fetch_optional(db).await.ok().flatten();
+    ).bind(id).fetch_optional(db).await
+        .map_err(|e| internal_error("health summary backup check", e))?;
     let backup_hours_since = last_backup.map(|(t,)| (now - t).num_hours());
 
     // Uptime: latest monitor status + response time
     let monitor: Option<(String, Option<i32>, bool)> = sqlx::query_as(
         "SELECT status, last_response_ms, enabled FROM monitors WHERE site_id = $1 ORDER BY created_at DESC LIMIT 1"
-    ).bind(id).fetch_optional(db).await.ok().flatten();
+    ).bind(id).fetch_optional(db).await
+        .map_err(|e| internal_error("health summary monitor check", e))?;
     let (monitor_status, response_time, monitor_enabled) = monitor
         .map(|(s, r, e)| (Some(s), r, e))
         .unwrap_or((None, None, false));
@@ -1911,9 +1933,15 @@ pub async fn clone_site(
         let sp_user_id = claims.sub;
         let sp_domain = target_domain.to_string();
         tokio::spawn(async move {
-            let enabled: Option<(bool,)> = sqlx::query_as(
+            let enabled: Option<(bool,)> = match sqlx::query_as(
                 "SELECT enabled FROM status_page_config WHERE user_id = $1"
-            ).bind(sp_user_id).fetch_optional(&sp_db).await.ok().flatten();
+            ).bind(sp_user_id).fetch_optional(&sp_db).await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!("DB error checking status page config for cloned site auto-component: {e}");
+                    None
+                }
+            };
 
             if enabled.map(|(e,)| e).unwrap_or(false) {
                 let _ = sqlx::query(

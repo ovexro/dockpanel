@@ -543,11 +543,13 @@ pub async fn deploy(
     }
 
     // Update status to building
-    sqlx::query("UPDATE git_deploys SET status = 'building', updated_at = NOW() WHERE id = $1")
+    if let Err(e) = sqlx::query("UPDATE git_deploys SET status = 'building', updated_at = NOW() WHERE id = $1")
         .bind(id)
         .execute(&state.db)
         .await
-        .ok();
+    {
+        tracing::warn!("Failed to update git deploy status: {e}");
+    }
 
     let deploy_id = Uuid::new_v4();
 
@@ -691,11 +693,13 @@ pub async fn rollback(
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "History entry not found"))?;
 
     // Update status to building
-    sqlx::query("UPDATE git_deploys SET status = 'building', updated_at = NOW() WHERE id = $1")
+    if let Err(e) = sqlx::query("UPDATE git_deploys SET status = 'building', updated_at = NOW() WHERE id = $1")
         .bind(id)
         .execute(&state.db)
         .await
-        .ok();
+    {
+        tracing::warn!("Failed to update git deploy status: {e}");
+    }
 
     let deploy_id = Uuid::new_v4();
 
@@ -762,7 +766,7 @@ pub async fn rollback(
                 let duration_ms = started.elapsed().as_millis() as i32;
 
                 // Record history
-                sqlx::query(
+                if let Err(e) = sqlx::query(
                     "INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by, duration_ms) \
                      VALUES ($1, $2, $3, $4, 'success', $5, 'rollback', $6)",
                 )
@@ -774,10 +778,12 @@ pub async fn rollback(
                 .bind(duration_ms)
                 .execute(&db)
                 .await
-                .ok();
+                {
+                    tracing::warn!("Failed to record git deploy rollback history: {e}");
+                }
 
                 // Update git_deploys
-                sqlx::query(
+                if let Err(e) = sqlx::query(
                     "UPDATE git_deploys SET status = 'running', container_id = $1, image_tag = $2, last_deploy = NOW(), last_commit = $3, updated_at = NOW() WHERE id = $4",
                 )
                 .bind(container_id)
@@ -786,7 +792,9 @@ pub async fn rollback(
                 .bind(id)
                 .execute(&db)
                 .await
-                .ok();
+                {
+                    tracing::warn!("Failed to update git deploy status: {e}");
+                }
 
                 tracing::info!("Git deploy rollback success: {deploy_name} → {rollback_image}");
                 activity::log_activity(
@@ -803,7 +811,7 @@ pub async fn rollback(
 
                 let duration_ms = started.elapsed().as_millis() as i32;
 
-                sqlx::query(
+                if let Err(db_err) = sqlx::query(
                     "INSERT INTO git_deploy_history (git_deploy_id, commit_hash, image_tag, status, output, triggered_by, duration_ms) \
                      VALUES ($1, $2, $3, 'failed', $4, 'rollback', $5)",
                 )
@@ -814,13 +822,17 @@ pub async fn rollback(
                 .bind(duration_ms)
                 .execute(&db)
                 .await
-                .ok();
+                {
+                    tracing::warn!("Failed to record git deploy rollback history: {db_err}");
+                }
 
-                sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                if let Err(db_err) = sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
                     .bind(id)
                     .execute(&db)
                     .await
-                    .ok();
+                {
+                    tracing::warn!("Failed to update git deploy status: {db_err}");
+                }
 
                 tracing::error!("Git deploy rollback failed: {deploy_name}: {e}");
 
@@ -896,8 +908,11 @@ pub async fn stop(
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
     agent.post("/git/stop", Some(serde_json::json!({ "name": config.name }))).await
         .map_err(|e| agent_error("Stop container", e))?;
-    sqlx::query("UPDATE git_deploys SET status = 'stopped', updated_at = NOW() WHERE id = $1")
-        .bind(id).execute(&state.db).await.ok();
+    if let Err(e) = sqlx::query("UPDATE git_deploys SET status = 'stopped', updated_at = NOW() WHERE id = $1")
+        .bind(id).execute(&state.db).await
+    {
+        tracing::warn!("Failed to update git deploy status: {e}");
+    }
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -915,8 +930,11 @@ pub async fn start(
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
     agent.post("/git/start", Some(serde_json::json!({ "name": config.name }))).await
         .map_err(|e| agent_error("Start container", e))?;
-    sqlx::query("UPDATE git_deploys SET status = 'running', updated_at = NOW() WHERE id = $1")
-        .bind(id).execute(&state.db).await.ok();
+    if let Err(e) = sqlx::query("UPDATE git_deploys SET status = 'running', updated_at = NOW() WHERE id = $1")
+        .bind(id).execute(&state.db).await
+    {
+        tracing::warn!("Failed to update git deploy status: {e}");
+    }
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -934,8 +952,11 @@ pub async fn restart(
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
     agent.post("/git/restart", Some(serde_json::json!({ "name": config.name }))).await
         .map_err(|e| agent_error("Restart container", e))?;
-    sqlx::query("UPDATE git_deploys SET status = 'running', updated_at = NOW() WHERE id = $1")
-        .bind(id).execute(&state.db).await.ok();
+    if let Err(e) = sqlx::query("UPDATE git_deploys SET status = 'running', updated_at = NOW() WHERE id = $1")
+        .bind(id).execute(&state.db).await
+    {
+        tracing::warn!("Failed to update git deploy status: {e}");
+    }
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -1090,11 +1111,13 @@ pub async fn webhook(
     }
 
     // Update status to building
-    sqlx::query("UPDATE git_deploys SET status = 'building', updated_at = NOW() WHERE id = $1")
+    if let Err(e) = sqlx::query("UPDATE git_deploys SET status = 'building', updated_at = NOW() WHERE id = $1")
         .bind(id)
         .execute(&state.db)
         .await
-        .ok();
+    {
+        tracing::warn!("Failed to update git deploy status: {e}");
+    }
 
     let deploy_id = Uuid::new_v4();
 
@@ -1212,7 +1235,7 @@ fn spawn_deploy_task(
                 emit("complete", "Deploy failed", "error", None);
 
                 let duration_ms = started.elapsed().as_millis() as i32;
-                sqlx::query(
+                if let Err(db_err) = sqlx::query(
                     "INSERT INTO git_deploy_history (git_deploy_id, commit_hash, image_tag, status, output, triggered_by, duration_ms) \
                      VALUES ($1, 'unknown', '', 'failed', $2, $3, $4)",
                 )
@@ -1222,13 +1245,17 @@ fn spawn_deploy_task(
                 .bind(duration_ms)
                 .execute(&db)
                 .await
-                .ok();
+                {
+                    tracing::warn!("Failed to record git deploy history: {db_err}");
+                }
 
-                sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                if let Err(db_err) = sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
                     .bind(git_deploy_id)
                     .execute(&db)
                     .await
-                    .ok();
+                {
+                    tracing::warn!("Failed to update git deploy status: {db_err}");
+                }
 
                 tracing::error!("Git deploy clone failed: {deploy_name}: {e}");
                 tokio::time::sleep(Duration::from_secs(60)).await;
@@ -1264,12 +1291,18 @@ fn spawn_deploy_task(
                     emit("complete", "Deploy complete (Compose)", "done", None);
 
                     let duration_ms = started.elapsed().as_millis() as i32;
-                    sqlx::query("INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by, duration_ms) VALUES ($1, $2, $3, 'compose', 'success', 'Deployed via Docker Compose', $4, $5)")
+                    if let Err(db_err) = sqlx::query("INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by, duration_ms) VALUES ($1, $2, $3, 'compose', 'success', 'Deployed via Docker Compose', $4, $5)")
                         .bind(git_deploy_id).bind(&commit_hash).bind(&commit_message).bind(&triggered).bind(duration_ms)
-                        .execute(&db).await.ok();
+                        .execute(&db).await
+                    {
+                        tracing::warn!("Failed to record git deploy history: {db_err}");
+                    }
 
-                    sqlx::query("UPDATE git_deploys SET status = 'running', build_method = 'compose', last_deploy = NOW(), last_commit = $1, updated_at = NOW() WHERE id = $2")
-                        .bind(&commit_hash).bind(git_deploy_id).execute(&db).await.ok();
+                    if let Err(db_err) = sqlx::query("UPDATE git_deploys SET status = 'running', build_method = 'compose', last_deploy = NOW(), last_commit = $1, updated_at = NOW() WHERE id = $2")
+                        .bind(&commit_hash).bind(git_deploy_id).execute(&db).await
+                    {
+                        tracing::warn!("Failed to update git deploy status: {db_err}");
+                    }
 
                     tracing::info!("Git deploy (compose) success: {deploy_name} ({commit_hash})");
                     crate::services::activity::log_activity(&db, user_id, &email, "git_deploy.compose", Some("git_deploy"), Some(&deploy_name), Some(&commit_hash), Some("success")).await;
@@ -1278,11 +1311,17 @@ fn spawn_deploy_task(
                     emit("compose", "Docker Compose deploy failed", "error", Some(format!("{e}")));
                     emit("complete", "Deploy failed", "error", None);
                     let duration_ms = started.elapsed().as_millis() as i32;
-                    sqlx::query("INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by, duration_ms) VALUES ($1, $2, $3, '', 'failed', $4, $5, $6)")
+                    if let Err(db_err) = sqlx::query("INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by, duration_ms) VALUES ($1, $2, $3, '', 'failed', $4, $5, $6)")
                         .bind(git_deploy_id).bind(&commit_hash).bind(&commit_message).bind(format!("Compose failed: {e}")).bind(&triggered).bind(duration_ms)
-                        .execute(&db).await.ok();
-                    sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
-                        .bind(git_deploy_id).execute(&db).await.ok();
+                        .execute(&db).await
+                    {
+                        tracing::warn!("Failed to record git deploy history: {db_err}");
+                    }
+                    if let Err(db_err) = sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                        .bind(git_deploy_id).execute(&db).await
+                    {
+                        tracing::warn!("Failed to update git deploy status: {db_err}");
+                    }
                 }
             }
 
@@ -1303,8 +1342,11 @@ fn spawn_deploy_task(
             Ok(result) => {
                 nixpacks_image = result.get("image_tag").and_then(|v| v.as_str()).map(|s| s.to_string());
                 emit("detect", "Built with Nixpacks", "done", None);
-                sqlx::query("UPDATE git_deploys SET build_method = 'nixpacks', updated_at = NOW() WHERE id = $1")
-                    .bind(git_deploy_id).execute(&db).await.ok();
+                if let Err(db_err) = sqlx::query("UPDATE git_deploys SET build_method = 'nixpacks', updated_at = NOW() WHERE id = $1")
+                    .bind(git_deploy_id).execute(&db).await
+                {
+                    tracing::warn!("Failed to update git deploy build method: {db_err}");
+                }
             }
             Err(_) => {
                 // Nixpacks failed or not available — fall back to auto-detect
@@ -1315,24 +1357,36 @@ fn spawn_deploy_task(
                         let auto = result.get("auto_generated").and_then(|v| v.as_bool()).unwrap_or(false);
                         if auto {
                             emit("detect", "Auto-detected project type", "done", None);
-                            sqlx::query("UPDATE git_deploys SET build_method = 'auto-detect', updated_at = NOW() WHERE id = $1")
-                                .bind(git_deploy_id).execute(&db).await.ok();
+                            if let Err(db_err) = sqlx::query("UPDATE git_deploys SET build_method = 'auto-detect', updated_at = NOW() WHERE id = $1")
+                                .bind(git_deploy_id).execute(&db).await
+                            {
+                                tracing::warn!("Failed to update git deploy build method: {db_err}");
+                            }
                         } else {
                             emit("detect", "Using existing Dockerfile", "done", None);
-                            sqlx::query("UPDATE git_deploys SET build_method = 'dockerfile', updated_at = NOW() WHERE id = $1")
-                                .bind(git_deploy_id).execute(&db).await.ok();
+                            if let Err(db_err) = sqlx::query("UPDATE git_deploys SET build_method = 'dockerfile', updated_at = NOW() WHERE id = $1")
+                                .bind(git_deploy_id).execute(&db).await
+                            {
+                                tracing::warn!("Failed to update git deploy build method: {db_err}");
+                            }
                         }
                     }
                     Err(e) => {
                         emit("detect", "No Dockerfile and auto-detect failed", "error", Some(format!("{e}")));
                         emit("complete", "Deploy failed", "error", None);
                         let duration_ms = started.elapsed().as_millis() as i32;
-                        sqlx::query("INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by, duration_ms) VALUES ($1, $2, $3, '', 'failed', $4, $5, $6)")
+                        if let Err(db_err) = sqlx::query("INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by, duration_ms) VALUES ($1, $2, $3, '', 'failed', $4, $5, $6)")
                             .bind(git_deploy_id).bind(&commit_hash).bind(&commit_message)
                             .bind(format!("Auto-detect failed: {e}")).bind(&triggered).bind(duration_ms)
-                            .execute(&db).await.ok();
-                        sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
-                            .bind(git_deploy_id).execute(&db).await.ok();
+                            .execute(&db).await
+                        {
+                            tracing::warn!("Failed to record git deploy history: {db_err}");
+                        }
+                        if let Err(db_err) = sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                            .bind(git_deploy_id).execute(&db).await
+                        {
+                            tracing::warn!("Failed to update git deploy status: {db_err}");
+                        }
                         tokio::time::sleep(Duration::from_secs(60)).await;
                         logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&deploy_id);
                         return;
@@ -1387,7 +1441,7 @@ fn spawn_deploy_task(
                 emit("complete", "Deploy failed", "error", None);
 
                 let duration_ms = started.elapsed().as_millis() as i32;
-                sqlx::query(
+                if let Err(db_err) = sqlx::query(
                     "INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by, duration_ms) \
                      VALUES ($1, $2, $3, $4, 'failed', $5, $6, $7)",
                 )
@@ -1400,13 +1454,17 @@ fn spawn_deploy_task(
                 .bind(duration_ms)
                 .execute(&db)
                 .await
-                .ok();
+                {
+                    tracing::warn!("Failed to record git deploy history: {db_err}");
+                }
 
-                sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                if let Err(db_err) = sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
                     .bind(git_deploy_id)
                     .execute(&db)
                     .await
-                    .ok();
+                {
+                    tracing::warn!("Failed to update git deploy status: {db_err}");
+                }
 
                 tracing::error!("Git deploy build failed: {deploy_name}: {e}");
                 tokio::time::sleep(Duration::from_secs(60)).await;
@@ -1453,7 +1511,7 @@ fn spawn_deploy_task(
                 let duration_ms = started.elapsed().as_millis() as i32;
 
                 // Record success history
-                sqlx::query(
+                if let Err(db_err) = sqlx::query(
                     "INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by, duration_ms) \
                      VALUES ($1, $2, $3, $4, 'success', $5, $6, $7)",
                 )
@@ -1466,10 +1524,12 @@ fn spawn_deploy_task(
                 .bind(duration_ms)
                 .execute(&db)
                 .await
-                .ok();
+                {
+                    tracing::warn!("Failed to record git deploy history: {db_err}");
+                }
 
                 // Update git_deploys
-                sqlx::query(
+                if let Err(db_err) = sqlx::query(
                     "UPDATE git_deploys SET status = 'running', container_id = $1, image_tag = $2, last_deploy = NOW(), last_commit = $3, updated_at = NOW() WHERE id = $4",
                 )
                 .bind(container_id)
@@ -1478,7 +1538,9 @@ fn spawn_deploy_task(
                 .bind(git_deploy_id)
                 .execute(&db)
                 .await
-                .ok();
+                {
+                    tracing::warn!("Failed to update git deploy status: {db_err}");
+                }
 
                 tracing::info!("Git deploy success: {deploy_name} ({commit_hash})");
                 activity::log_activity(
@@ -1634,7 +1696,7 @@ fn spawn_deploy_task(
 
                                         if monitor_agent.post_long("/git/deploy", Some(rollback_body), 120).await.is_ok() {
                                             // Record rollback in history
-                                            sqlx::query(
+                                            if let Err(db_err) = sqlx::query(
                                                 "INSERT INTO git_deploy_history (git_deploy_id, commit_hash, image_tag, status, output, triggered_by) \
                                                  VALUES ($1, $2, $3, 'success', 'Auto-rollback after container crash', 'auto-rollback')"
                                             )
@@ -1643,16 +1705,20 @@ fn spawn_deploy_task(
                                             .bind(&prev_image)
                                             .execute(&monitor_db)
                                             .await
-                                            .ok();
+                                            {
+                                                tracing::warn!("Failed to record git deploy auto-rollback history: {db_err}");
+                                            }
 
                                             // Update git_deploys
-                                            sqlx::query("UPDATE git_deploys SET image_tag = $1, last_commit = $2, updated_at = NOW() WHERE id = $3")
+                                            if let Err(db_err) = sqlx::query("UPDATE git_deploys SET image_tag = $1, last_commit = $2, updated_at = NOW() WHERE id = $3")
                                                 .bind(&prev_image)
                                                 .bind(&prev_commit)
                                                 .bind(monitor_gd_id)
                                                 .execute(&monitor_db)
                                                 .await
-                                                .ok();
+                                            {
+                                                tracing::warn!("Failed to update git deploy status: {db_err}");
+                                            }
 
                                             // Notify
                                             if let Some(channels) = crate::services::notifications::get_user_channels(&monitor_db, monitor_user, None).await {
@@ -1691,7 +1757,7 @@ fn spawn_deploy_task(
 
                 let duration_ms = started.elapsed().as_millis() as i32;
 
-                sqlx::query(
+                if let Err(db_err) = sqlx::query(
                     "INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by, duration_ms) \
                      VALUES ($1, $2, $3, $4, 'failed', $5, $6, $7)",
                 )
@@ -1704,13 +1770,17 @@ fn spawn_deploy_task(
                 .bind(duration_ms)
                 .execute(&db)
                 .await
-                .ok();
+                {
+                    tracing::warn!("Failed to record git deploy history: {db_err}");
+                }
 
-                sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                if let Err(db_err) = sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
                     .bind(git_deploy_id)
                     .execute(&db)
                     .await
-                    .ok();
+                {
+                    tracing::warn!("Failed to update git deploy status: {db_err}");
+                }
 
                 tracing::error!("Git deploy failed: {deploy_name}: {e}");
                 activity::log_activity(
@@ -1865,12 +1935,22 @@ pub async fn trigger_deploy_task(
         _ => return,
     };
 
-    let email: String = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
-        .bind(user_id).fetch_optional(&db).await.ok().flatten().unwrap_or_default();
+    let email: String = match sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
+        .bind(user_id).fetch_optional(&db).await {
+        Ok(Some(e)) => e,
+        Ok(None) => String::new(),
+        Err(e) => {
+            tracing::warn!("DB error fetching user email for git deploy: {e}");
+            String::new()
+        }
+    };
 
     // Update status
-    sqlx::query("UPDATE git_deploys SET status = 'building', updated_at = NOW() WHERE id = $1")
-        .bind(git_deploy_id).execute(&db).await.ok();
+    if let Err(e) = sqlx::query("UPDATE git_deploys SET status = 'building', updated_at = NOW() WHERE id = $1")
+        .bind(git_deploy_id).execute(&db).await
+    {
+        tracing::warn!("Failed to update git deploy status: {e}");
+    }
 
     let started = std::time::Instant::now();
 
@@ -1908,8 +1988,11 @@ pub async fn trigger_deploy_task(
         Err(e) => {
             tracing::error!("Scheduled deploy clone failed: {}: {e}", config.name);
             record_failed_history(&db, git_deploy_id, "unknown", "", &format!("Clone failed: {e}"), &triggered_by).await;
-            sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
-                .bind(git_deploy_id).execute(&db).await.ok();
+            if let Err(db_err) = sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                .bind(git_deploy_id).execute(&db).await
+            {
+                tracing::warn!("Failed to update git deploy status: {db_err}");
+            }
             return;
         }
     };
@@ -1926,19 +2009,28 @@ pub async fn trigger_deploy_task(
             })), 660).await {
                 Ok(_) => {
                     let duration_ms = started.elapsed().as_millis() as i32;
-                    sqlx::query("INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by, duration_ms) VALUES ($1, $2, $3, 'compose', 'success', 'Deployed via Docker Compose', $4, $5)")
+                    if let Err(db_err) = sqlx::query("INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by, duration_ms) VALUES ($1, $2, $3, 'compose', 'success', 'Deployed via Docker Compose', $4, $5)")
                         .bind(git_deploy_id).bind(&commit_hash).bind(&commit_message).bind(&triggered_by).bind(duration_ms)
-                        .execute(&db).await.ok();
-                    sqlx::query("UPDATE git_deploys SET status = 'running', build_method = 'compose', last_deploy = NOW(), last_commit = $1, updated_at = NOW() WHERE id = $2")
-                        .bind(&commit_hash).bind(git_deploy_id).execute(&db).await.ok();
+                        .execute(&db).await
+                    {
+                        tracing::warn!("Failed to record git deploy history: {db_err}");
+                    }
+                    if let Err(db_err) = sqlx::query("UPDATE git_deploys SET status = 'running', build_method = 'compose', last_deploy = NOW(), last_commit = $1, updated_at = NOW() WHERE id = $2")
+                        .bind(&commit_hash).bind(git_deploy_id).execute(&db).await
+                    {
+                        tracing::warn!("Failed to update git deploy status: {db_err}");
+                    }
                     tracing::info!("Deploy success (compose/{}): {} ({commit_hash})", triggered_by, config.name);
                     crate::services::activity::log_activity(&db, user_id, &email, "git_deploy.compose", Some("git_deploy"), Some(&config.name), Some(&commit_hash), Some(&triggered_by)).await;
                 }
                 Err(e) => {
                     tracing::error!("Compose deploy failed ({}): {}: {e}", triggered_by, config.name);
                     record_failed_history(&db, git_deploy_id, &commit_hash, &commit_message, &format!("Compose failed: {e}"), &triggered_by).await;
-                    sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
-                        .bind(git_deploy_id).execute(&db).await.ok();
+                    if let Err(db_err) = sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                        .bind(git_deploy_id).execute(&db).await
+                    {
+                        tracing::warn!("Failed to update git deploy status: {db_err}");
+                    }
                 }
             }
             return; // Skip single-container path
@@ -1955,8 +2047,11 @@ pub async fn trigger_deploy_task(
     })), 660).await {
         nixpacks_image = result.get("image_tag").and_then(|v| v.as_str()).map(|s| s.to_string());
         tracing::info!("Nixpacks build succeeded for {}", config.name);
-        sqlx::query("UPDATE git_deploys SET build_method = 'nixpacks', updated_at = NOW() WHERE id = $1")
-            .bind(git_deploy_id).execute(&db).await.ok();
+        if let Err(db_err) = sqlx::query("UPDATE git_deploys SET build_method = 'nixpacks', updated_at = NOW() WHERE id = $1")
+            .bind(git_deploy_id).execute(&db).await
+        {
+            tracing::warn!("Failed to update git deploy build method: {db_err}");
+        }
     } else {
         // Nixpacks unavailable — try auto-detect
         if let Err(e) = agent.post("/git/auto-detect", Some(serde_json::json!({
@@ -1964,8 +2059,11 @@ pub async fn trigger_deploy_task(
         }))).await {
             tracing::error!("Auto-detect failed ({}): {}: {e}", triggered_by, config.name);
             record_failed_history(&db, git_deploy_id, &commit_hash, &commit_message, &format!("Auto-detect failed: {e}"), &triggered_by).await;
-            sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
-                .bind(git_deploy_id).execute(&db).await.ok();
+            if let Err(db_err) = sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                .bind(git_deploy_id).execute(&db).await
+            {
+                tracing::warn!("Failed to update git deploy status: {db_err}");
+            }
             return;
         }
     }
@@ -1991,8 +2089,11 @@ pub async fn trigger_deploy_task(
             Err(e) => {
                 tracing::error!("Scheduled deploy build failed: {}: {e}", config.name);
                 record_failed_history(&db, git_deploy_id, &commit_hash, &commit_message, &format!("Build failed: {e}"), &triggered_by).await;
-                sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
-                    .bind(git_deploy_id).execute(&db).await.ok();
+                if let Err(db_err) = sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                    .bind(git_deploy_id).execute(&db).await
+                {
+                    tracing::warn!("Failed to update git deploy status: {db_err}");
+                }
                 if let Some(ref gh_token) = config.github_token {
                     if !gh_token.is_empty() && commit_hash != "unknown" {
                         set_github_status(gh_token, &config.repo_url, &commit_hash, "failure", config.domain.as_deref()).await;
@@ -2019,13 +2120,19 @@ pub async fn trigger_deploy_task(
             let container_id = result.get("container_id").and_then(|v| v.as_str()).unwrap_or("");
             let duration_ms = started.elapsed().as_millis() as i32;
 
-            sqlx::query(
+            if let Err(db_err) = sqlx::query(
                 "INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, triggered_by, duration_ms) VALUES ($1, $2, $3, $4, 'success', $5, $6)"
             ).bind(git_deploy_id).bind(&commit_hash).bind(&commit_message).bind(&image_tag).bind(&triggered_by).bind(duration_ms)
-            .execute(&db).await.ok();
+            .execute(&db).await
+            {
+                tracing::warn!("Failed to record git deploy history: {db_err}");
+            }
 
-            sqlx::query("UPDATE git_deploys SET status = 'running', container_id = $1, image_tag = $2, last_deploy = NOW(), last_commit = $3, updated_at = NOW() WHERE id = $4")
-                .bind(container_id).bind(&image_tag).bind(&commit_hash).bind(git_deploy_id).execute(&db).await.ok();
+            if let Err(db_err) = sqlx::query("UPDATE git_deploys SET status = 'running', container_id = $1, image_tag = $2, last_deploy = NOW(), last_commit = $3, updated_at = NOW() WHERE id = $4")
+                .bind(container_id).bind(&image_tag).bind(&commit_hash).bind(git_deploy_id).execute(&db).await
+            {
+                tracing::warn!("Failed to update git deploy status: {db_err}");
+            }
 
             // Post-deploy hook
             if let Some(ref cmd) = config.post_deploy_cmd {
@@ -2087,7 +2194,9 @@ pub async fn trigger_deploy_task(
         Err(e) => {
             let _duration_ms = started.elapsed().as_millis() as i32;
             record_failed_history(&db, git_deploy_id, &commit_hash, &commit_message, &format!("Deploy failed: {e}"), &triggered_by).await;
-            sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1").bind(git_deploy_id).execute(&db).await.ok();
+            if let Err(db_err) = sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1").bind(git_deploy_id).execute(&db).await {
+                tracing::warn!("Failed to update git deploy status: {db_err}");
+            }
 
             if let Some(ref gh_token) = config.github_token {
                 if !gh_token.is_empty() && commit_hash != "unknown" {
@@ -2101,9 +2210,11 @@ pub async fn trigger_deploy_task(
 }
 
 async fn record_failed_history(db: &sqlx::PgPool, git_deploy_id: Uuid, commit_hash: &str, commit_message: &str, output: &str, triggered_by: &str) {
-    sqlx::query(
+    if let Err(e) = sqlx::query(
         "INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by) VALUES ($1, $2, $3, '', 'failed', $4, $5)"
-    ).bind(git_deploy_id).bind(commit_hash).bind(commit_message).bind(output).bind(triggered_by).execute(db).await.ok();
+    ).bind(git_deploy_id).bind(commit_hash).bind(commit_message).bind(output).bind(triggered_by).execute(db).await {
+        tracing::warn!("Failed to record git deploy history: {e}");
+    }
 }
 
 /// Handle preview deployment for non-configured branches.
@@ -2129,13 +2240,16 @@ async fn handle_preview_deploy(state: &AppState, agent: &AgentHandle, config: &G
     let preview_domain = config.domain.as_ref().map(|d| format!("{branch_slug}.{d}"));
 
     // Upsert preview record
-    sqlx::query(
+    if let Err(e) = sqlx::query(
         "INSERT INTO git_previews (git_deploy_id, branch, container_name, host_port, domain, status) \
          VALUES ($1, $2, $3, $4, $5, 'deploying') \
          ON CONFLICT (git_deploy_id, branch) DO UPDATE SET status = 'deploying', container_name = $3, host_port = $4, updated_at = NOW()"
     )
     .bind(config.id).bind(branch).bind(&container_name).bind(port).bind(&preview_domain)
-    .execute(&state.db).await.ok();
+    .execute(&state.db).await
+    {
+        tracing::warn!("Failed to upsert git preview record: {e}");
+    }
 
     // Spawn deploy task
     let db = state.db.clone();
@@ -2171,8 +2285,11 @@ async fn handle_preview_deploy(state: &AppState, agent: &AgentHandle, config: &G
             Ok(r) => r.get("commit_hash").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
             Err(e) => {
                 tracing::error!("Preview clone failed: {name}/{branch}: {e}");
-                sqlx::query("UPDATE git_previews SET status = 'failed' WHERE git_deploy_id = $1 AND branch = $2")
-                    .bind(deploy_id).bind(&branch).execute(&db).await.ok();
+                if let Err(db_err) = sqlx::query("UPDATE git_previews SET status = 'failed' WHERE git_deploy_id = $1 AND branch = $2")
+                    .bind(deploy_id).bind(&branch).execute(&db).await
+                {
+                    tracing::warn!("Failed to update git preview status: {db_err}");
+                }
                 return;
             }
         };
@@ -2188,8 +2305,11 @@ async fn handle_preview_deploy(state: &AppState, agent: &AgentHandle, config: &G
             Ok(r) => r.get("image_tag").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
             Err(e) => {
                 tracing::error!("Preview build failed: {name}/{branch}: {e}");
-                sqlx::query("UPDATE git_previews SET status = 'failed' WHERE git_deploy_id = $1 AND branch = $2")
-                    .bind(deploy_id).bind(&branch).execute(&db).await.ok();
+                if let Err(db_err) = sqlx::query("UPDATE git_previews SET status = 'failed' WHERE git_deploy_id = $1 AND branch = $2")
+                    .bind(deploy_id).bind(&branch).execute(&db).await
+                {
+                    tracing::warn!("Failed to update git preview status: {db_err}");
+                }
                 return;
             }
         };
@@ -2213,14 +2333,20 @@ async fn handle_preview_deploy(state: &AppState, agent: &AgentHandle, config: &G
         match agent.post_long("/git/deploy", Some(deploy_body), 120).await {
             Ok(result) => {
                 let cid = result.get("container_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                sqlx::query("UPDATE git_previews SET status = 'running', container_id = $1, commit_hash = $2 WHERE git_deploy_id = $3 AND branch = $4")
-                    .bind(&cid).bind(&commit_hash).bind(deploy_id).bind(&branch).execute(&db).await.ok();
+                if let Err(db_err) = sqlx::query("UPDATE git_previews SET status = 'running', container_id = $1, commit_hash = $2 WHERE git_deploy_id = $3 AND branch = $4")
+                    .bind(&cid).bind(&commit_hash).bind(deploy_id).bind(&branch).execute(&db).await
+                {
+                    tracing::warn!("Failed to update git preview status: {db_err}");
+                }
                 tracing::info!("Preview deployed: {name}/{branch} -> port {port}");
             }
             Err(e) => {
                 tracing::error!("Preview deploy failed: {name}/{branch}: {e}");
-                sqlx::query("UPDATE git_previews SET status = 'failed' WHERE git_deploy_id = $1 AND branch = $2")
-                    .bind(deploy_id).bind(&branch).execute(&db).await.ok();
+                if let Err(db_err) = sqlx::query("UPDATE git_previews SET status = 'failed' WHERE git_deploy_id = $1 AND branch = $2")
+                    .bind(deploy_id).bind(&branch).execute(&db).await
+                {
+                    tracing::warn!("Failed to update git preview status: {db_err}");
+                }
             }
         }
     });
@@ -2258,7 +2384,9 @@ pub async fn delete_preview(
     let cleanup_name = preview.container_name.strip_prefix("dockpanel-git-").unwrap_or(&preview.container_name);
     agent.post("/git/cleanup", Some(serde_json::json!({ "name": cleanup_name }))).await.ok();
 
-    sqlx::query("DELETE FROM git_previews WHERE id = $1").bind(preview_id).execute(&state.db).await.ok();
+    if let Err(e) = sqlx::query("DELETE FROM git_previews WHERE id = $1").bind(preview_id).execute(&state.db).await {
+        tracing::warn!("Failed to delete git preview record: {e}");
+    }
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -2431,9 +2559,12 @@ pub async fn approve_deploy(
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
 
     // Update status to building
-    sqlx::query("UPDATE git_deploys SET status = 'building', updated_at = NOW() WHERE id = $1")
+    if let Err(e) = sqlx::query("UPDATE git_deploys SET status = 'building', updated_at = NOW() WHERE id = $1")
         .bind(deploy_id)
-        .execute(&state.db).await.ok();
+        .execute(&state.db).await
+    {
+        tracing::warn!("Failed to update git deploy status: {e}");
+    }
 
     let new_deploy_id = Uuid::new_v4();
     let (tx, _) = broadcast::channel::<ProvisionStep>(32);

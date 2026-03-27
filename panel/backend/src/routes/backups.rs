@@ -89,9 +89,15 @@ pub async fn create(
 
                 // Feature 13: Backup integrity chain — compute hash and link to previous
                 let sha256_hash = result.get("sha256").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let previous_hash: Option<String> = sqlx::query_scalar(
+                let previous_hash: Option<String> = match sqlx::query_scalar(
                     "SELECT sha256_hash FROM backups WHERE site_id = $1 ORDER BY created_at DESC LIMIT 1"
-                ).bind(id).fetch_optional(&db).await.ok().flatten();
+                ).bind(id).fetch_optional(&db).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!("DB error fetching previous backup hash: {e}");
+                        None
+                    }
+                };
 
                 let _ = sqlx::query(
                     "INSERT INTO backups (site_id, filename, size_bytes, sha256_hash, previous_hash, chain_valid) VALUES ($1, $2, $3, $4, $5, TRUE)",
@@ -221,9 +227,15 @@ pub async fn restore(
                 }))).await;
 
                 // Restart PHP-FPM if the site uses PHP (clear OPcache)
-                let site_info: Option<(String, Option<String>)> = sqlx::query_as(
+                let site_info: Option<(String, Option<String>)> = match sqlx::query_as(
                     "SELECT runtime, php_version FROM sites WHERE id = $1"
-                ).bind(id).fetch_optional(&db).await.ok().flatten();
+                ).bind(id).fetch_optional(&db).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!("DB error fetching site info for post-restore reload: {e}");
+                        None
+                    }
+                };
 
                 if let Some((runtime, php_version)) = &site_info {
                     if runtime == "php" {

@@ -325,7 +325,8 @@ pub async fn compliance_report(
     let scan: Option<(uuid::Uuid, String, i32, i32, i32, i32, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
         "SELECT id, status, findings_count, critical_count, warning_count, info_count, completed_at \
          FROM security_scans WHERE status = 'completed' ORDER BY completed_at DESC LIMIT 1"
-    ).fetch_optional(&state.db).await.ok().flatten();
+    ).fetch_optional(&state.db).await
+        .map_err(|e| internal_error("compliance report scan lookup", e))?;
 
     // Fetch overview from agent
     let overview = agent.get("/security/overview").await.ok();

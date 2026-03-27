@@ -251,7 +251,8 @@ pub async fn callback(
             let auto_create: Option<(String,)> = sqlx::query_as(
                 "SELECT value FROM settings WHERE key = 'oauth_auto_create'"
             )
-            .fetch_optional(&state.db).await.ok().flatten();
+            .fetch_optional(&state.db).await
+                .map_err(|e| internal_error("oauth auto-create setting", e))?;
             let auto_create = auto_create.map(|(v,)| v != "false").unwrap_or(true);
 
             if !auto_create {

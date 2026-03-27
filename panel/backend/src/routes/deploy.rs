@@ -498,7 +498,8 @@ async fn execute_deploy(
     if success {
         let ssl_enabled: Option<(bool,)> = sqlx::query_as(
             "SELECT ssl_enabled FROM sites WHERE id = $1"
-        ).bind(site_id).fetch_optional(db).await.ok().flatten();
+        ).bind(site_id).fetch_optional(db).await
+            .map_err(|e| internal_error("deploy ssl check", e))?;
         let use_ssl = ssl_enabled.map(|(s,)| s).unwrap_or(false);
 
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -514,7 +515,8 @@ async fn execute_deploy(
                     if status_code >= 500 {
                         tracing::warn!("Post-deploy health check FAILED for {domain}: HTTP {status_code}");
                         let user_id_opt: Option<uuid::Uuid> = sqlx::query_scalar("SELECT user_id FROM sites WHERE id = $1")
-                            .bind(site_id).fetch_optional(db).await.ok().flatten();
+                            .bind(site_id).fetch_optional(db).await
+                            .map_err(|e| internal_error("deploy health check user lookup", e))?;
                         notifications::notify_panel(db, user_id_opt,
                             &format!("Deploy warning: {} returning HTTP {}", domain, status_code),
                             &format!("Deploy succeeded but the site is returning HTTP {}. Check your application logs.", status_code),
@@ -526,7 +528,8 @@ async fn execute_deploy(
                 Err(e) => {
                     tracing::warn!("Post-deploy health check FAILED for {domain}: {e}");
                     let user_id_opt: Option<uuid::Uuid> = sqlx::query_scalar("SELECT user_id FROM sites WHERE id = $1")
-                        .bind(site_id).fetch_optional(db).await.ok().flatten();
+                        .bind(site_id).fetch_optional(db).await
+                        .map_err(|e| internal_error("deploy health check user lookup", e))?;
                     notifications::notify_panel(db, user_id_opt,
                         &format!("Deploy warning: {} unreachable", domain),
                         &format!("Deploy succeeded but the site is not responding: {}", e),
@@ -593,7 +596,8 @@ async fn execute_deploy(
 
     // Panel notification center
     let user_id: Option<uuid::Uuid> = sqlx::query_scalar("SELECT user_id FROM sites WHERE id = $1")
-        .bind(site_id).fetch_optional(db).await.ok().flatten();
+        .bind(site_id).fetch_optional(db).await
+        .map_err(|e| internal_error("deploy notification user lookup", e))?;
     if success {
         notifications::notify_panel(db, user_id, &format!("Deploy complete: {}", domain), "Site deployment completed successfully", "info", "deploy", None).await;
     } else {

@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::auth::ServerScope;
-use crate::error::{err, agent_error, require_admin, ApiError};
+use crate::error::{internal_error, err, agent_error, require_admin, ApiError};
 use crate::routes::{is_valid_container_id, is_valid_name};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
@@ -110,7 +110,8 @@ pub async fn deploy(
     // Read reverse proxy preference (nginx or traefik)
     let reverse_proxy: Option<(String,)> = sqlx::query_as(
         "SELECT value FROM settings WHERE key = 'reverse_proxy'"
-    ).fetch_optional(&state.db).await.ok().flatten();
+    ).fetch_optional(&state.db).await
+        .map_err(|e| internal_error("docker app reverse proxy setting", e))?;
     let use_traefik = reverse_proxy.map(|(v,)| v == "traefik").unwrap_or(false);
 
     let mut agent_body = serde_json::json!({
@@ -1037,9 +1038,15 @@ pub async fn remove_app(
                 dns_domain.clone()
             };
 
-            let zone: Option<(String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+            let zone: Option<(String, Option<String>, Option<String>, Option<String>)> = match sqlx::query_as(
                 "SELECT provider, cf_zone_id, cf_api_token, cf_api_email FROM dns_zones WHERE domain = $1 AND user_id = $2"
-            ).bind(&parent).bind(dns_user).fetch_optional(&dns_db).await.ok().flatten();
+            ).bind(&parent).bind(dns_user).fetch_optional(&dns_db).await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!("DB error fetching DNS zone for docker app cleanup: {e}");
+                    None
+                }
+            };
 
             if let Some((provider, cf_zone_id, cf_api_token, cf_api_email)) = zone {
                 let server_ip = crate::helpers::detect_public_ip().await;
