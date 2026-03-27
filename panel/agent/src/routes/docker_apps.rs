@@ -129,7 +129,9 @@ async fn deploy(
                     } else {
                         match nginx::test_config().await {
                             Ok(output) if output.success => {
-                                nginx::reload().await.ok();
+                                if let Err(e) = nginx::reload().await {
+                                    tracing::warn!("Auto-proxy: nginx reload failed after deploy for {domain}: {e}");
+                                }
                                 response["domain"] = serde_json::json!(domain);
                                 response["proxy"] = serde_json::json!(true);
                                 tracing::info!("Auto-proxy: {domain} → 127.0.0.1:{}", body.port);
@@ -486,12 +488,15 @@ async fn shell_info(
         ));
     }
 
-    let name_output = safe_command("docker")
-        .args(["inspect", "--format", "{{.Name}}", &container_id])
-        .output()
-        .await;
+    let name_output = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        safe_command("docker")
+            .args(["inspect", "--format", "{{.Name}}", &container_id])
+            .output(),
+    ).await;
     let name = name_output
         .ok()
+        .and_then(|r| r.ok())
         .map(|o| {
             String::from_utf8_lossy(&o.stdout)
                 .trim()
@@ -500,17 +505,21 @@ async fn shell_info(
         })
         .unwrap_or_default();
 
-    let bash = safe_command("docker")
-        .args(["exec", &container_id, "which", "bash"])
-        .output()
-        .await;
-    let has_bash = bash.map(|o| o.status.success()).unwrap_or(false);
+    let bash = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        safe_command("docker")
+            .args(["exec", &container_id, "which", "bash"])
+            .output(),
+    ).await;
+    let has_bash = bash.ok().and_then(|r| r.ok()).map(|o| o.status.success()).unwrap_or(false);
 
-    let sh = safe_command("docker")
-        .args(["exec", &container_id, "which", "sh"])
-        .output()
-        .await;
-    let has_sh = sh.map(|o| o.status.success()).unwrap_or(false);
+    let sh = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        safe_command("docker")
+            .args(["exec", &container_id, "which", "sh"])
+            .output(),
+    ).await;
+    let has_sh = sh.ok().and_then(|r| r.ok()).map(|o| o.status.success()).unwrap_or(false);
 
     Ok(Json(serde_json::json!({
         "name": name,
@@ -599,21 +608,25 @@ async fn container_volumes(
         ));
     }
 
-    let output = safe_command("docker")
-        .args([
-            "inspect",
-            "--format",
-            "{{range .Mounts}}{{.Source}}|{{.Destination}}|{{.Type}}\n{{end}}",
-            &container_id,
-        ])
-        .output()
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        safe_command("docker")
+            .args([
+                "inspect",
+                "--format",
+                "{{range .Mounts}}{{.Source}}|{{.Destination}}|{{.Type}}\n{{end}}",
+                &container_id,
+            ])
+            .output(),
+    )
+    .await
+    .map_err(|_| (StatusCode::GATEWAY_TIMEOUT, Json(serde_json::json!({"error": "Timeout"}))))?
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+    })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut volumes = Vec::new();
@@ -625,12 +638,15 @@ async fn container_volumes(
             let dest = parts[1];
             let mount_type = parts[2];
 
-            let du = safe_command("du")
-                .args(["-sb", source])
-                .output()
-                .await;
+            let du = tokio::time::timeout(
+                std::time::Duration::from_secs(15),
+                safe_command("du")
+                    .args(["-sb", source])
+                    .output(),
+            ).await;
             let size: u64 = du
                 .ok()
+                .and_then(|r| r.ok())
                 .map(|o| {
                     String::from_utf8_lossy(&o.stdout)
                         .split_whitespace()
@@ -641,12 +657,15 @@ async fn container_volumes(
                 })
                 .unwrap_or(0);
 
-            let ls = safe_command("ls")
-                .args(["-la", source])
-                .output()
-                .await;
+            let ls = tokio::time::timeout(
+                std::time::Duration::from_secs(15),
+                safe_command("ls")
+                    .args(["-la", source])
+                    .output(),
+            ).await;
             let listing = ls
                 .ok()
+                .and_then(|r| r.ok())
                 .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
                 .unwrap_or_default();
 
@@ -762,10 +781,12 @@ async fn registry_logout(
         ));
     }
 
-    let _ = safe_command("docker")
-        .args(["logout", server])
-        .output()
-        .await;
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        safe_command("docker")
+            .args(["logout", server])
+            .output(),
+    ).await;
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
@@ -806,7 +827,9 @@ async fn remove(
         let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
         if std::path::Path::new(&config_path).exists() {
             std::fs::remove_file(&config_path).ok();
-            nginx::reload().await.ok();
+            if let Err(e) = nginx::reload().await {
+                tracing::warn!("Auto-proxy cleanup: nginx reload failed after removing config for {domain}: {e}");
+            }
             tracing::info!("Auto-proxy cleanup: removed nginx config for {domain}");
         }
 
@@ -949,9 +972,13 @@ async fn stack_action(
 
 /// GET /apps/images — List Docker images.
 async fn list_images() -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let output = safe_command("docker")
-        .args(["images", "--format", "{{.Repository}}|{{.Tag}}|{{.ID}}|{{.Size}}|{{.CreatedSince}}", "--no-trunc"])
-        .output().await
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        safe_command("docker")
+            .args(["images", "--format", "{{.Repository}}|{{.Tag}}|{{.ID}}|{{.Size}}|{{.CreatedSince}}", "--no-trunc"])
+            .output(),
+    ).await
+        .map_err(|_| (StatusCode::GATEWAY_TIMEOUT, Json(serde_json::json!({"error": "Timeout listing images"}))))?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -971,9 +998,13 @@ async fn list_images() -> Result<Json<serde_json::Value>, (StatusCode, Json<serd
 
 /// POST /apps/images/prune — Remove unused Docker images.
 async fn prune_images_all() -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let output = safe_command("docker")
-        .args(["image", "prune", "-af"])
-        .output().await
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        safe_command("docker")
+            .args(["image", "prune", "-af"])
+            .output(),
+    ).await
+        .map_err(|_| (StatusCode::GATEWAY_TIMEOUT, Json(serde_json::json!({"error": "Image prune timed out (120s)"}))))?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -992,9 +1023,13 @@ async fn remove_image(Path(id): Path<String>) -> Result<Json<serde_json::Value>,
 
     // Strip sha256: prefix if present (docker images --no-trunc includes it)
     let image_ref = if id.starts_with("sha256:") { &id } else { &id };
-    let output = safe_command("docker")
-        .args(["rmi", image_ref])
-        .output().await
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        safe_command("docker")
+            .args(["rmi", image_ref])
+            .output(),
+    ).await
+        .map_err(|_| (StatusCode::GATEWAY_TIMEOUT, Json(serde_json::json!({"error": "Image removal timed out (60s)"}))))?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
 
     if !output.status.success() {
@@ -1108,10 +1143,13 @@ async fn change_image(
     tracing::info!("Pulled image: {image}");
 
     // 2. Get current container info (name, volumes, env, ports)
-    let inspect_output = safe_command("docker")
-        .args(["inspect", "--format", "{{.Name}}", &container_id])
-        .output()
-        .await
+    let inspect_output = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        safe_command("docker")
+            .args(["inspect", "--format", "{{.Name}}", &container_id])
+            .output(),
+    ).await
+        .map_err(|_| (StatusCode::GATEWAY_TIMEOUT, Json(serde_json::json!({"error": "Inspect timed out"}))))?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
 
     let container_name = String::from_utf8_lossy(&inspect_output.stdout)
@@ -1127,9 +1165,18 @@ async fn change_image(
     let backup_name = format!("{container_name}-old-{}", &uuid::Uuid::new_v4().to_string()[..8]);
 
     // Stop
-    safe_command("docker")
-        .args(["stop", &container_id])
-        .output().await.ok();
+    if let Err(e) = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        safe_command("docker")
+            .args(["stop", &container_id])
+            .output(),
+    ).await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r.map_err(|e| e.to_string()))
+        .map(|_| ())
+    {
+        tracing::warn!("change_image: failed to stop container {container_id}: {e}");
+    }
 
     // Rename old container
     safe_command("docker")
@@ -1156,9 +1203,18 @@ async fn change_image(
             let new_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
             // Remove old container
-            safe_command("docker")
-                .args(["rm", "-f", &backup_name])
-                .output().await.ok();
+            if let Err(e) = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                safe_command("docker")
+                    .args(["rm", "-f", &backup_name])
+                    .output(),
+            ).await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r.map_err(|e| e.to_string()))
+                .map(|_| ())
+            {
+                tracing::warn!("change_image: failed to remove old container {backup_name}: {e}");
+            }
 
             tracing::info!("Image changed for {container_name}: → {image} (new: {new_id})");
             Ok(Json(serde_json::json!({
@@ -1169,12 +1225,24 @@ async fn change_image(
         }
         _ => {
             // Rollback: rename old container back and start it
-            safe_command("docker")
+            if let Err(e) = safe_command("docker")
                 .args(["rename", &backup_name, &container_name])
-                .output().await.ok();
-            safe_command("docker")
-                .args(["start", &container_name])
-                .output().await.ok();
+                .output().await
+            {
+                tracing::warn!("change_image rollback: failed to rename {backup_name} back to {container_name}: {e}");
+            }
+            if let Err(e) = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                safe_command("docker")
+                    .args(["start", &container_name])
+                    .output(),
+            ).await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r.map_err(|e| e.to_string()))
+                .map(|_| ())
+            {
+                tracing::warn!("change_image rollback: failed to start {container_name}: {e}");
+            }
 
             Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to create new container, rolled back to previous image"}))))
         }

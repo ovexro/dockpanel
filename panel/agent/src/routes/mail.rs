@@ -151,12 +151,15 @@ async fn mail_install() -> Result<Json<serde_json::Value>, ApiErr> {
     tracing::info!("Starting mail server installation...");
 
     // 1. Install packages
-    let output = safe_command("apt-get")
-        .args(["-o", "Dpkg::Options::=--force-confnew", "install", "-y",
-               "postfix", "dovecot-imapd", "dovecot-pop3d", "dovecot-lmtpd", "opendkim", "opendkim-tools"])
-        .env("DEBIAN_FRONTEND", "noninteractive")
-        .output()
-        .await
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        safe_command("apt-get")
+            .args(["-o", "Dpkg::Options::=--force-confnew", "install", "-y",
+                   "postfix", "dovecot-imapd", "dovecot-pop3d", "dovecot-lmtpd", "opendkim", "opendkim-tools"])
+            .env("DEBIAN_FRONTEND", "noninteractive")
+            .output()
+    ).await
+        .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Mail package installation timed out (300s)"))?
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("apt install failed: {e}")))?;
 
     if !output.status.success() {
@@ -167,12 +170,15 @@ async fn mail_install() -> Result<Json<serde_json::Value>, ApiErr> {
     // 2. Create vmail user (uid/gid 5000)
     let _ = safe_command("groupadd").args(["-g", "5000", "vmail"]).output().await;
     let _ = safe_command("useradd").args(["-g", "5000", "-u", "5000", "-d", VMAIL_DIR, "-s", "/usr/sbin/nologin", "-m", "vmail"]).output().await;
-    tokio::fs::create_dir_all(VMAIL_DIR).await.ok();
+    tokio::fs::create_dir_all(VMAIL_DIR).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to create vmail dir: {e}")))?;
     let _ = safe_command("chown").args(["-R", "vmail:vmail", VMAIL_DIR]).output().await;
 
     // 3. Create config directories
-    tokio::fs::create_dir_all(DKIM_KEYS_DIR).await.ok();
-    tokio::fs::create_dir_all("/etc/dockpanel/mail").await.ok();
+    tokio::fs::create_dir_all(DKIM_KEYS_DIR).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to create DKIM dir: {e}")))?;
+    tokio::fs::create_dir_all("/etc/dockpanel/mail").await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to create mail config dir: {e}")))?;
 
     // 4. Write Postfix main.cf additions for virtual mailbox hosting
     let postfix_config = r#"
@@ -269,31 +275,50 @@ ssl = required
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write dovecot config: {e}")))?;
 
     // 7. Create empty map files
-    write_file_atomic(POSTFIX_VIRTUAL_DOMAINS, "").await.ok();
-    write_file_atomic(POSTFIX_VIRTUAL_MAILBOX, "").await.ok();
-    write_file_atomic(POSTFIX_VIRTUAL_ALIAS, "").await.ok();
-    write_file_atomic(DOVECOT_USERS, "").await.ok();
+    write_file_atomic(POSTFIX_VIRTUAL_DOMAINS, "").await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write virtual_domains: {e}")))?;
+    write_file_atomic(POSTFIX_VIRTUAL_MAILBOX, "").await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write virtual_mailbox_maps: {e}")))?;
+    write_file_atomic(POSTFIX_VIRTUAL_ALIAS, "").await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write virtual_alias_maps: {e}")))?;
+    write_file_atomic(DOVECOT_USERS, "").await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write dovecot users: {e}")))?;
     let _ = safe_command("postmap").arg(POSTFIX_VIRTUAL_MAILBOX).output().await;
     let _ = safe_command("postmap").arg(POSTFIX_VIRTUAL_ALIAS).output().await;
 
     // 8. Configure OpenDKIM
     let opendkim_conf = "Syslog yes\nUMask 007\nSocket local:/var/spool/postfix/opendkim/opendkim.sock\nPidFile /run/opendkim/opendkim.pid\nOversignHeaders From\nTrustAnchorFile /usr/share/dns/root.key\nKeyTable /etc/dockpanel/dkim/key.table\nSigningTable refile:/etc/dockpanel/dkim/signing.table\nExternalIgnoreList /etc/dockpanel/dkim/trusted.hosts\nInternalHosts /etc/dockpanel/dkim/trusted.hosts\n";
-    write_file_atomic("/etc/opendkim.conf", opendkim_conf).await.ok();
+    write_file_atomic("/etc/opendkim.conf", opendkim_conf).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write opendkim.conf: {e}")))?;
 
     let trusted_hosts = "127.0.0.1\nlocalhost\n";
-    write_file_atomic("/etc/dockpanel/dkim/trusted.hosts", trusted_hosts).await.ok();
-    write_file_atomic("/etc/dockpanel/dkim/key.table", "").await.ok();
-    write_file_atomic("/etc/dockpanel/dkim/signing.table", "").await.ok();
+    write_file_atomic("/etc/dockpanel/dkim/trusted.hosts", trusted_hosts).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write trusted.hosts: {e}")))?;
+    write_file_atomic("/etc/dockpanel/dkim/key.table", "").await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write key.table: {e}")))?;
+    write_file_atomic("/etc/dockpanel/dkim/signing.table", "").await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write signing.table: {e}")))?;
 
     // Create opendkim socket directory in Postfix chroot
-    tokio::fs::create_dir_all("/var/spool/postfix/opendkim").await.ok();
+    tokio::fs::create_dir_all("/var/spool/postfix/opendkim").await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to create opendkim socket dir: {e}")))?;
     let _ = safe_command("chown").args(["opendkim:postfix", "/var/spool/postfix/opendkim"]).output().await;
 
     // 9. Enable and start services
-    let _ = safe_command("systemctl").args(["enable", "postfix", "dovecot", "opendkim"]).output().await;
-    let _ = safe_command("systemctl").args(["restart", "postfix"]).output().await;
-    let _ = safe_command("systemctl").args(["restart", "dovecot"]).output().await;
-    let _ = safe_command("systemctl").args(["restart", "opendkim"]).output().await;
+    if let Ok(out) = safe_command("systemctl").args(["enable", "postfix", "dovecot", "opendkim"]).output().await {
+        if !out.status.success() {
+            tracing::warn!("Failed to enable mail services: {}", String::from_utf8_lossy(&out.stderr));
+        }
+    }
+    for service in &["postfix", "dovecot", "opendkim"] {
+        if let Ok(out) = safe_command("systemctl").args(["restart", service]).output().await {
+            if !out.status.success() {
+                tracing::warn!("Failed to restart {service}: {}", String::from_utf8_lossy(&out.stderr));
+            }
+        } else {
+            tracing::warn!("Failed to execute systemctl restart {service}");
+        }
+    }
 
     tracing::info!("Mail server installation complete");
 
@@ -476,9 +501,12 @@ async fn sync_config(
     }
 
     // Ensure directories exist
-    tokio::fs::create_dir_all(VMAIL_DIR).await.ok();
-    tokio::fs::create_dir_all("/etc/postfix").await.ok();
-    tokio::fs::create_dir_all("/etc/dovecot").await.ok();
+    tokio::fs::create_dir_all(VMAIL_DIR).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to create vmail dir: {e}")))?;
+    tokio::fs::create_dir_all("/etc/postfix").await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to create postfix dir: {e}")))?;
+    tokio::fs::create_dir_all("/etc/dovecot").await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to create dovecot dir: {e}")))?;
 
     // 1. Write virtual_domains (one domain per line)
     let domains_content: String = body.domains.iter()
@@ -545,8 +573,15 @@ async fn sync_config(
     let _ = safe_command("postmap").arg(POSTFIX_VIRTUAL_ALIAS).output().await;
 
     // 6. Reload Postfix and Dovecot
-    let _ = safe_command("systemctl").args(["reload", "postfix"]).output().await;
-    let _ = safe_command("systemctl").args(["reload", "dovecot"]).output().await;
+    for service in &["postfix", "dovecot"] {
+        if let Ok(out) = safe_command("systemctl").args(["reload", service]).output().await {
+            if !out.status.success() {
+                tracing::warn!("Failed to reload {service}: {}", String::from_utf8_lossy(&out.stderr));
+            }
+        } else {
+            tracing::warn!("Failed to execute systemctl reload {service}");
+        }
+    }
 
     // 7. Create maildir directories for each account
     for acc in &body.accounts {
@@ -554,7 +589,9 @@ async fn sync_config(
         let parts: Vec<&str> = acc.email.splitn(2, '@').collect();
         if parts.len() == 2 {
             let maildir = format!("{VMAIL_DIR}/{}/{}", parts[1], parts[0]);
-            tokio::fs::create_dir_all(&maildir).await.ok();
+            if let Err(e) = tokio::fs::create_dir_all(&maildir).await {
+                tracing::warn!("Failed to create maildir {maildir}: {e}");
+            }
             let _ = safe_command("chown").args(["-R", "vmail:vmail", &maildir]).output().await;
         }
     }
@@ -695,10 +732,14 @@ async fn rspamd_install() -> Result<Json<serde_json::Value>, ApiErr> {
     tracing::info!("Installing Rspamd spam filter...");
 
     // Install rspamd
-    let output = safe_command("apt-get")
-        .args(["-o", "Dpkg::Options::=--force-confnew", "install", "-y", "rspamd", "redis-server"])
-        .env("DEBIAN_FRONTEND", "noninteractive")
-        .output().await
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        safe_command("apt-get")
+            .args(["-o", "Dpkg::Options::=--force-confnew", "install", "-y", "rspamd", "redis-server"])
+            .env("DEBIAN_FRONTEND", "noninteractive")
+            .output()
+    ).await
+        .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Rspamd installation timed out (300s)"))?
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Install failed: {e}")))?;
 
     if !output.status.success() {
@@ -722,10 +763,25 @@ async fn rspamd_install() -> Result<Json<serde_json::Value>, ApiErr> {
     }
 
     // Enable and start
-    let _ = safe_command("systemctl").args(["enable", "rspamd", "redis-server"]).output().await;
-    let _ = safe_command("systemctl").args(["restart", "redis-server"]).output().await;
-    let _ = safe_command("systemctl").args(["restart", "rspamd"]).output().await;
-    let _ = safe_command("systemctl").args(["reload", "postfix"]).output().await;
+    if let Ok(out) = safe_command("systemctl").args(["enable", "rspamd", "redis-server"]).output().await {
+        if !out.status.success() {
+            tracing::warn!("Failed to enable rspamd/redis: {}", String::from_utf8_lossy(&out.stderr));
+        }
+    }
+    for service in &["redis-server", "rspamd"] {
+        if let Ok(out) = safe_command("systemctl").args(["restart", service]).output().await {
+            if !out.status.success() {
+                tracing::warn!("Failed to restart {service}: {}", String::from_utf8_lossy(&out.stderr));
+            }
+        } else {
+            tracing::warn!("Failed to execute systemctl restart {service}");
+        }
+    }
+    if let Ok(out) = safe_command("systemctl").args(["reload", "postfix"]).output().await {
+        if !out.status.success() {
+            tracing::warn!("Failed to reload postfix: {}", String::from_utf8_lossy(&out.stderr));
+        }
+    }
 
     tracing::info!("Rspamd installed and configured");
     Ok(ok("Rspamd spam filter installed"))
@@ -743,11 +799,25 @@ async fn rspamd_status() -> Json<serde_json::Value> {
 async fn rspamd_toggle(Json(body): Json<serde_json::Value>) -> Result<Json<serde_json::Value>, ApiErr> {
     let enable = body.get("enable").and_then(|v| v.as_bool()).unwrap_or(true);
     if enable {
-        let _ = safe_command("systemctl").args(["start", "rspamd"]).output().await;
-        let _ = safe_command("systemctl").args(["enable", "rspamd"]).output().await;
+        for (action, service) in &[("start", "rspamd"), ("enable", "rspamd")] {
+            if let Ok(out) = safe_command("systemctl").args([*action, service]).output().await {
+                if !out.status.success() {
+                    tracing::warn!("Failed to {action} {service}: {}", String::from_utf8_lossy(&out.stderr));
+                }
+            } else {
+                tracing::warn!("Failed to execute systemctl {action} {service}");
+            }
+        }
     } else {
-        let _ = safe_command("systemctl").args(["stop", "rspamd"]).output().await;
-        let _ = safe_command("systemctl").args(["disable", "rspamd"]).output().await;
+        for (action, service) in &[("stop", "rspamd"), ("disable", "rspamd")] {
+            if let Ok(out) = safe_command("systemctl").args([*action, service]).output().await {
+                if !out.status.success() {
+                    tracing::warn!("Failed to {action} {service}: {}", String::from_utf8_lossy(&out.stderr));
+                }
+            } else {
+                tracing::warn!("Failed to execute systemctl {action} {service}");
+            }
+        }
     }
     Ok(ok(if enable { "Rspamd enabled" } else { "Rspamd disabled" }))
 }

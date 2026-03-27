@@ -6,6 +6,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 use super::AppState;
 use crate::services::command_filter;
@@ -96,12 +97,16 @@ async fn run_cron(
         return Err(err(StatusCode::BAD_REQUEST, "Command contains disallowed characters or patterns"));
     }
 
-    let output = safe_command("bash")
-        .arg("-c")
-        .arg(&body.command)
-        .output()
-        .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to execute: {e}")))?;
+    let output = tokio::time::timeout(
+        Duration::from_secs(30),
+        safe_command("bash")
+            .arg("-c")
+            .arg(&body.command)
+            .output(),
+    )
+    .await
+    .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Command timed out after 30s"))?
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to execute: {e}")))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -173,21 +178,23 @@ async fn remove_cron(
 
 /// Read the current root crontab.
 async fn read_crontab() -> String {
-    let output = safe_command("crontab")
-        .arg("-l")
-        .output()
-        .await;
+    let output = tokio::time::timeout(
+        Duration::from_secs(15),
+        safe_command("crontab")
+            .arg("-l")
+            .output(),
+    )
+    .await;
 
     match output {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
-        _ => String::new(), // No crontab or error
+        Ok(Ok(o)) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+        _ => String::new(), // No crontab, timeout, or error
     }
 }
 
 /// Write a new crontab for root.
 async fn write_crontab(content: &str) -> Result<(), String> {
     use tokio::io::AsyncWriteExt;
-    use std::time::Duration;
 
     let mut child = safe_command("crontab")
         .arg("-")

@@ -700,7 +700,12 @@ async fn add_redirect(
     // Test and reload
     match services::nginx::test_config().await {
         Ok(output) if output.success => {
-            services::nginx::reload().await.ok();
+            if let Err(e) = services::nginx::reload().await {
+                return Err(api_err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Config saved but nginx reload failed: {e}"),
+                ));
+            }
         }
         _ => {
             // Rollback
@@ -780,7 +785,12 @@ async fn remove_redirect(
 
     match services::nginx::test_config().await {
         Ok(output) if output.success => {
-            services::nginx::reload().await.ok();
+            if let Err(e) = services::nginx::reload().await {
+                return Err(api_err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Config saved but nginx reload failed: {e}"),
+                ));
+            }
         }
         _ => {}
     }
@@ -883,7 +893,12 @@ async fn password_protect(
 
     match services::nginx::test_config().await {
         Ok(output) if output.success => {
-            services::nginx::reload().await.ok();
+            if let Err(e) = services::nginx::reload().await {
+                return Err(api_err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Config saved but nginx reload failed: {e}"),
+                ));
+            }
         }
         _ => {
             return Err(api_err(
@@ -973,7 +988,12 @@ async fn remove_protection(
     std::fs::write(&auth_file, cleaned).ok();
     match services::nginx::test_config().await {
         Ok(output) if output.success => {
-            services::nginx::reload().await.ok();
+            if let Err(e) = services::nginx::reload().await {
+                return Err(api_err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Config saved but nginx reload failed: {e}"),
+                ));
+            }
         }
         _ => {}
     }
@@ -1033,12 +1053,19 @@ async fn add_alias(
 
     match services::nginx::test_config().await {
         Ok(output) if output.success => {
-            services::nginx::reload().await.ok();
+            if let Err(e) = services::nginx::reload().await {
+                return Err(api_err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Config saved but nginx reload failed: {e}"),
+                ));
+            }
         }
         _ => {
             // Revert
             std::fs::write(&site_conf, &content).ok();
-            services::nginx::reload().await.ok();
+            if let Err(e) = services::nginx::reload().await {
+                tracing::warn!("Nginx reload failed during alias rollback for {}: {e}", body.domain);
+            }
             return Err(api_err(
                 StatusCode::BAD_REQUEST,
                 "Nginx test failed — alias reverted",
@@ -1111,11 +1138,18 @@ async fn remove_alias(
 
     match services::nginx::test_config().await {
         Ok(output) if output.success => {
-            services::nginx::reload().await.ok();
+            if let Err(e) = services::nginx::reload().await {
+                return Err(api_err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Config saved but nginx reload failed: {e}"),
+                ));
+            }
         }
         _ => {
             std::fs::write(&site_conf, &content).ok();
-            services::nginx::reload().await.ok();
+            if let Err(e) = services::nginx::reload().await {
+                tracing::warn!("Nginx reload failed during alias removal rollback for {domain}: {e}");
+            }
         }
     }
 

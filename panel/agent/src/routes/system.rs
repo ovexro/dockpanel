@@ -274,8 +274,12 @@ async fn disk_cleanup() -> Json<serde_json::Value> {
     }
 
     // Get disk usage after cleanup
-    let df = safe_command("df").args(["-h", "/"]).output().await;
-    let disk_info = df.ok().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+    let df = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        safe_command("df").args(["-h", "/"]).output(),
+    ).await;
+    let disk_info = df.ok().and_then(|r| r.ok())
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
 
     Json(serde_json::json!({
         "cleaned": freed,

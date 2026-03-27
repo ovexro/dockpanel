@@ -298,11 +298,15 @@ async fn log_stats(
     }
 
     // Read last 50000 lines
-    let output = safe_command("tail")
-        .args(["-n", "50000", &log_path])
-        .output()
-        .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        safe_command("tail")
+            .args(["-n", "50000", &log_path])
+            .output(),
+    )
+    .await
+    .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Timeout reading log file"))?
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     let content = String::from_utf8_lossy(&output.stdout);
 
@@ -374,19 +378,22 @@ async fn log_stats(
 
 /// GET /logs/docker — List Docker containers with dockpanel.managed label.
 async fn docker_containers() -> Json<serde_json::Value> {
-    let output = safe_command("docker")
-        .args([
-            "ps",
-            "--filter",
-            "label=dockpanel.managed=true",
-            "--format",
-            "{{.Names}}",
-        ])
-        .output()
-        .await;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        safe_command("docker")
+            .args([
+                "ps",
+                "--filter",
+                "label=dockpanel.managed=true",
+                "--format",
+                "{{.Names}}",
+            ])
+            .output(),
+    )
+    .await;
 
     let names: Vec<String> = output
-        .ok()
+        .ok().and_then(|r| r.ok())
         .map(|o| {
             String::from_utf8_lossy(&o.stdout)
                 .lines()

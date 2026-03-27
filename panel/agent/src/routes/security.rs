@@ -6,6 +6,7 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
+use std::time::Duration;
 
 use super::AppState;
 use crate::services::security;
@@ -203,45 +204,54 @@ async fn forensic_snapshot() -> Result<Json<serde_json::Value>, ApiErr> {
     let _ = std::fs::create_dir_all(&dir);
 
     // Capture running processes
-    let ps = safe_command("ps").args(["auxf"]).output().await.ok()
+    let ps = tokio::time::timeout(Duration::from_secs(15), safe_command("ps").args(["auxf"]).output()).await
+        .ok().and_then(|r| r.ok())
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
     let _ = std::fs::write(format!("{dir}/processes.txt"), &ps);
 
     // Capture network connections
-    let ss = safe_command("ss").args(["-tulnp"]).output().await.ok()
+    let ss = tokio::time::timeout(Duration::from_secs(15), safe_command("ss").args(["-tulnp"]).output()).await
+        .ok().and_then(|r| r.ok())
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
     let _ = std::fs::write(format!("{dir}/network.txt"), &ss);
 
     // Capture established connections
-    let ss_est = safe_command("ss").args(["-tnp"]).output().await.ok()
+    let ss_est = tokio::time::timeout(Duration::from_secs(15), safe_command("ss").args(["-tnp"]).output()).await
+        .ok().and_then(|r| r.ok())
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
     let _ = std::fs::write(format!("{dir}/connections.txt"), &ss_est);
 
     // Capture open files
-    let lsof = safe_command("lsof").args(["-nP", "+L1"]).output().await.ok()
+    let lsof = tokio::time::timeout(Duration::from_secs(15), safe_command("lsof").args(["-nP", "+L1"]).output()).await
+        .ok().and_then(|r| r.ok())
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
     let _ = std::fs::write(format!("{dir}/open_files.txt"), &lsof);
 
     // Capture recent journal
-    let journal = safe_command("journalctl")
-        .args(["--since", "1 hour ago", "--no-pager", "-q"])
-        .output().await.ok()
+    let journal = tokio::time::timeout(Duration::from_secs(15),
+        safe_command("journalctl")
+            .args(["--since", "1 hour ago", "--no-pager", "-q"])
+            .output()
+    ).await
+        .ok().and_then(|r| r.ok())
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
     let _ = std::fs::write(format!("{dir}/journal.txt"), &journal);
 
     // Capture who is logged in
-    let who = safe_command("who").output().await.ok()
+    let who = tokio::time::timeout(Duration::from_secs(15), safe_command("who").output()).await
+        .ok().and_then(|r| r.ok())
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
     let _ = std::fs::write(format!("{dir}/who.txt"), &who);
 
     // Capture last logins
-    let last = safe_command("last").args(["-20"]).output().await.ok()
+    let last = tokio::time::timeout(Duration::from_secs(15), safe_command("last").args(["-20"]).output()).await
+        .ok().and_then(|r| r.ok())
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
     let _ = std::fs::write(format!("{dir}/last.txt"), &last);

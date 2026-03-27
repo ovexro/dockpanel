@@ -292,8 +292,12 @@ async fn stop_container(Json(body): Json<LifecycleRequest>) -> Result<Json<serde
     let container_name = format!("dockpanel-git-{}", body.name);
     let docker = bollard::Docker::connect_with_local_defaults()
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
-    docker.stop_container(&container_name, Some(bollard::container::StopContainerOptions { t: 10 }))
-        .await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        docker.stop_container(&container_name, Some(bollard::container::StopContainerOptions { t: 10 }))
+    ).await
+        .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "docker stop timed out (30s)"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
@@ -303,8 +307,12 @@ async fn start_container(Json(body): Json<LifecycleRequest>) -> Result<Json<serd
     let container_name = format!("dockpanel-git-{}", body.name);
     let docker = bollard::Docker::connect_with_local_defaults()
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
-    docker.start_container(&container_name, None::<bollard::container::StartContainerOptions<String>>)
-        .await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        docker.start_container(&container_name, None::<bollard::container::StartContainerOptions<String>>)
+    ).await
+        .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "docker start timed out (30s)"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
@@ -314,8 +322,12 @@ async fn restart_container(Json(body): Json<LifecycleRequest>) -> Result<Json<se
     let container_name = format!("dockpanel-git-{}", body.name);
     let docker = bollard::Docker::connect_with_local_defaults()
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
-    docker.restart_container(&container_name, Some(bollard::container::RestartContainerOptions { t: 10 }))
-        .await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        docker.restart_container(&container_name, Some(bollard::container::RestartContainerOptions { t: 10 }))
+    ).await
+        .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "docker restart timed out (30s)"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
