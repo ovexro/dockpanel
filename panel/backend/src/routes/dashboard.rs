@@ -439,8 +439,8 @@ pub async fn fleet_overview(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Single query replaces N+1 pattern (was: 5 queries per server in a loop).
     // Uses LEFT JOIN with subqueries to aggregate all data in one round trip.
-    let rows: Vec<(uuid::Uuid, String, String, Option<String>, i64, i64, i64, Option<f32>, Option<f32>, Option<f32>)> = sqlx::query_as(
-        "SELECT s.id, s.name, s.hostname, s.ip_address, \
+    let rows: Vec<(uuid::Uuid, String, Option<String>, i64, i64, i64, Option<f32>, Option<f32>, Option<f32>)> = sqlx::query_as(
+        "SELECT s.id, s.name, s.ip_address, \
          COALESCE(a.firing, 0) AS firing_alerts, \
          COALESCE(si.cnt, 0) AS site_count, \
          COALESCE(d.cnt, 0) AS db_count, \
@@ -470,21 +470,20 @@ pub async fn fleet_overview(
     let mut total_firing: i64 = 0;
     let mut total_sites: i64 = 0;
     let fleet: Vec<serde_json::Value> = rows.iter().map(|r| {
-        total_firing += r.4;
-        total_sites += r.5;
+        total_firing += r.3;
+        total_sites += r.4;
         serde_json::json!({
             "id": r.0,
             "name": r.1,
-            "hostname": r.2,
-            "ip_address": r.3,
-            "firing_alerts": r.4,
+            "ip_address": r.2,
+            "firing_alerts": r.3,
             "active_incidents": active_incidents.0,
-            "sites": r.5,
-            "databases": r.6,
-            "cpu_pct": r.7,
-            "mem_pct": r.8,
-            "disk_pct": r.9,
-            "status": if r.4 > 0 { "warning" } else { "healthy" },
+            "sites": r.4,
+            "databases": r.5,
+            "cpu_pct": r.6,
+            "mem_pct": r.7,
+            "disk_pct": r.8,
+            "status": if r.3 > 0 { "warning" } else { "healthy" },
         })
     }).collect();
 

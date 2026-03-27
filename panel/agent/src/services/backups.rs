@@ -57,7 +57,7 @@ pub async fn create_backup(domain: &str) -> Result<BackupInfo, String> {
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(300),
         safe_command("tar")
-            .args(["czf", filepath_str, "--no-dereference", "-C", site_root_str, "."])
+            .args(["czf", filepath_str, "-C", site_root_str, "."])
             .output(),
     )
     .await
