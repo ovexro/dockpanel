@@ -126,11 +126,18 @@ detect_pkg_manager() {
 }
 
 pkg_install() {
+    local output
     case "$PKG_MGR" in
-        apt) apt-get install -y "$@" > /dev/null 2>&1 ;;
-        dnf) dnf install -y "$@" > /dev/null 2>&1 ;;
-        yum) yum install -y "$@" > /dev/null 2>&1 ;;
+        apt) output=$(apt-get install -y "$@" 2>&1) ;;
+        dnf) output=$(dnf install -y "$@" 2>&1) ;;
+        yum) output=$(yum install -y "$@" 2>&1) ;;
     esac
+    local rc=$?
+    if [ $rc -ne 0 ]; then
+        warn "Failed to install: $* (exit code $rc)"
+        echo "$output" | tail -5 >&2
+        return $rc
+    fi
 }
 
 pkg_update() {
@@ -388,6 +395,14 @@ setup_database() {
         log "Starting existing PostgreSQL container..."
         docker start "$DB_CONTAINER" > /dev/null 2>&1
     else
+        # Remove stale volume from previous failed install (PostgreSQL ignores
+        # POSTGRES_PASSWORD when an existing data directory is found, causing
+        # password mismatch if the password was regenerated)
+        if docker volume inspect dockpanel-pgdata > /dev/null 2>&1; then
+            warn "Removing stale database volume from previous install..."
+            docker volume rm dockpanel-pgdata > /dev/null 2>&1 || true
+        fi
+
         log "Creating PostgreSQL 16 container..."
         docker run -d \
             --name "$DB_CONTAINER" \
@@ -824,17 +839,24 @@ install_recommended_services() {
                 add-apt-repository -y ppa:ondrej/php > /dev/null 2>&1 || true
                 apt-get update -y > /dev/null 2>&1
             fi
-            apt-get install -y php${PHP_VER}-fpm php${PHP_VER}-cli php${PHP_VER}-mysql \
+            if apt-get install -y php${PHP_VER}-fpm php${PHP_VER}-cli php${PHP_VER}-mysql \
                 php${PHP_VER}-pgsql php${PHP_VER}-curl php${PHP_VER}-gd php${PHP_VER}-mbstring \
                 php${PHP_VER}-xml php${PHP_VER}-zip php${PHP_VER}-bcmath php${PHP_VER}-intl \
-                php${PHP_VER}-readline php${PHP_VER}-opcache > /dev/null 2>&1
-            systemctl enable --now php${PHP_VER}-fpm > /dev/null 2>&1
+                php${PHP_VER}-readline php${PHP_VER}-opcache > /dev/null 2>&1; then
+                systemctl enable --now php${PHP_VER}-fpm > /dev/null 2>&1
+                log "PHP ${PHP_VER} installed with FPM"
+            else
+                warn "PHP ${PHP_VER} installation failed — install manually later from Settings → Services"
+            fi
         else
             # RHEL/Rocky/Fedora
-            pkg_install php-fpm php-cli php-common php-mysqlnd php-pgsql php-xml php-mbstring php-curl php-zip php-gd
-            systemctl enable --now php-fpm > /dev/null 2>&1
+            if pkg_install php-fpm php-cli php-common php-mysqlnd php-pgsql php-xml php-mbstring php-curl php-zip php-gd; then
+                systemctl enable --now php-fpm > /dev/null 2>&1
+                log "PHP installed with FPM"
+            else
+                warn "PHP installation failed — install manually later from Settings → Services"
+            fi
         fi
-        log "PHP ${PHP_VER} installed with FPM"
     else
         log "PHP already installed: $(php -v | head -1 | awk '{print $2}')"
     fi
@@ -842,9 +864,12 @@ install_recommended_services() {
     # Certbot (needed for SSL certificates)
     if ! command -v certbot &> /dev/null; then
         log "Installing Certbot..."
-        pkg_install certbot python3-certbot-nginx
-        systemctl enable --now certbot.timer > /dev/null 2>&1
-        log "Certbot installed with auto-renewal"
+        if pkg_install certbot python3-certbot-nginx; then
+            systemctl enable --now certbot.timer > /dev/null 2>&1
+            log "Certbot installed with auto-renewal"
+        else
+            warn "Certbot installation failed — SSL provisioning will not work until installed"
+        fi
     else
         log "Certbot already installed"
     fi
@@ -875,7 +900,11 @@ install_recommended_services() {
     # Fail2Ban (intrusion prevention)
     if ! command -v fail2ban-client &> /dev/null; then
         log "Installing Fail2Ban..."
-        pkg_install fail2ban
+        if ! pkg_install fail2ban; then
+            warn "Fail2Ban installation failed — install manually later from Settings → Services"
+            log "All recommended services ready"
+            return
+        fi
         cat > /etc/fail2ban/jail.local << 'F2BEOF'
 [DEFAULT]
 bantime = 3600
