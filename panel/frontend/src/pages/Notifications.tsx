@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api";
 import { timeAgo } from "../utils/format";
 
@@ -101,6 +102,9 @@ export default function Notifications() {
               ? `${unreadCount} unread notification${unreadCount !== 1 ? "s" : ""}`
               : "All caught up"}
           </p>
+          <Link to="/settings" className="text-xs text-accent-400 hover:text-accent-300 mt-1 inline-block">
+            Configure alert channels &rarr;
+          </Link>
         </div>
         {unreadCount > 0 && (
           <button

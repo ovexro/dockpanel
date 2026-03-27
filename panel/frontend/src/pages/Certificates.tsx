@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { api } from "../api";
 
 interface Certificate {
+  site_id: string;
   domain: string;
   expiry: string | null;
   days_left: number;
@@ -19,13 +20,57 @@ export default function Certificates() {
   const [certs, setCerts] = useState<Certificate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [message, setMessage] = useState({ text: "", type: "" });
+  const [renewingId, setRenewingId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadCerts = () => {
     api.get<{ certificates: Certificate[] }>("/monitors/certificates")
       .then((data) => setCerts(data.certificates || []))
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    loadCerts();
   }, []);
+
+  const handleRenew = async (cert: Certificate) => {
+    setRenewingId(cert.site_id);
+    setMessage({ text: "", type: "" });
+    try {
+      await api.post(`/ssl/${cert.site_id}/renew`);
+      setMessage({ text: `Certificate renewed for ${cert.domain}`, type: "success" });
+      loadCerts();
+    } catch (e) {
+      setMessage({
+        text: e instanceof Error ? e.message : "Failed to renew certificate",
+        type: "error",
+      });
+    } finally {
+      setRenewingId(null);
+    }
+  };
+
+  const handleDelete = async (cert: Certificate) => {
+    setDeletingId(cert.site_id);
+    setMessage({ text: "", type: "" });
+    try {
+      await api.delete(`/ssl/${cert.site_id}`);
+      setDeleteTarget(null);
+      setMessage({ text: `Certificate deleted for ${cert.domain}`, type: "success" });
+      loadCerts();
+    } catch (e) {
+      setMessage({
+        text: e instanceof Error ? e.message : "Failed to delete certificate",
+        type: "error",
+      });
+      setDeleteTarget(null);
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   if (loading) {
     return (
@@ -53,6 +98,19 @@ export default function Certificates() {
         </div>
       )}
 
+      {message.text && (
+        <div
+          className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
+            message.type === "success"
+              ? "bg-rust-500/10 text-rust-400 border-rust-500/20"
+              : "bg-danger-500/10 text-danger-400 border-danger-500/20"
+          }`}
+        >
+          {message.text}
+          <button onClick={() => setMessage({ text: "", type: "" })} className="ml-2 font-medium hover:underline">Dismiss</button>
+        </div>
+      )}
+
       {certs.length === 0 ? (
         <div className="bg-dark-800 rounded-lg border border-dark-500 p-12 text-center">
           <svg className="w-12 h-12 text-dark-300 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
@@ -69,13 +127,14 @@ export default function Certificates() {
                 <th className="text-left px-4 py-3 text-xs font-medium text-dark-300 uppercase font-mono">Expiry</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-dark-300 uppercase font-mono">Days Left</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-dark-300 uppercase font-mono">Status</th>
+                <th className="text-right px-4 py-3 text-xs font-medium text-dark-300 uppercase font-mono">Actions</th>
               </tr>
             </thead>
             <tbody>
               {certs.map((cert) => {
                 const style = STATUS_STYLES[cert.status] || STATUS_STYLES.ok;
                 return (
-                  <tr key={cert.domain} className="border-b border-dark-600/50 last:border-b-0">
+                  <tr key={cert.site_id} className="border-b border-dark-600/50 last:border-b-0">
                     <td className="px-4 py-3 font-mono text-dark-50">{cert.domain}</td>
                     <td className="px-4 py-3 text-dark-200 font-mono">
                       {cert.expiry ? new Date(cert.expiry).toLocaleDateString() : "Unknown"}
@@ -89,6 +148,47 @@ export default function Certificates() {
                       <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${style.bg} ${style.text}`}>
                         {style.label}
                       </span>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {deleteTarget === cert.site_id ? (
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={() => handleDelete(cert)}
+                            disabled={deletingId === cert.site_id}
+                            className="px-2 py-1 bg-danger-500 text-white rounded text-xs disabled:opacity-50 flex items-center gap-1"
+                          >
+                            {deletingId === cert.site_id && <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+                            Confirm
+                          </button>
+                          <button
+                            onClick={() => setDeleteTarget(null)}
+                            className="px-2 py-1 bg-dark-600 text-dark-200 rounded text-xs"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={() => handleRenew(cert)}
+                            disabled={renewingId === cert.site_id}
+                            className="px-2 py-1 text-xs text-dark-300 hover:text-dark-50 bg-dark-700 rounded hover:bg-dark-600 transition-colors disabled:opacity-50 flex items-center gap-1"
+                            title="Renew certificate"
+                          >
+                            {renewingId === cert.site_id && <span className="w-3 h-3 border-2 border-dark-400/30 border-t-dark-200 rounded-full animate-spin" />}
+                            {renewingId === cert.site_id ? "Renewing..." : "Renew"}
+                          </button>
+                          <button
+                            onClick={() => setDeleteTarget(cert.site_id)}
+                            className="text-dark-300 hover:text-danger-500 transition-colors p-1"
+                            title="Delete certificate"
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                            </svg>
+                          </button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 );

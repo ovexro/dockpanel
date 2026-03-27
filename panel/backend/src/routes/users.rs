@@ -203,6 +203,143 @@ pub async fn update(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+/// POST /api/users/{id}/toggle-suspend — Suspend or un-suspend a user (admin only).
+///
+/// When suspended, the user's role is set to "suspended" (previous role is stored in reset_token
+/// field temporarily). Un-suspending restores the original role. All sessions are invalidated.
+pub async fn toggle_suspend(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if id == claims.sub {
+        return Err(err(StatusCode::BAD_REQUEST, "Cannot suspend your own account"));
+    }
+
+    let user: User = sqlx::query_as("SELECT * FROM users WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| internal_error("toggle_suspend", e))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
+
+    let (new_role, action) = if user.role == "suspended" {
+        // Un-suspend: restore previous role (stored in reset_token) or default to "user"
+        let original_role = user.reset_token.as_deref().unwrap_or("user");
+        let role = if ["admin", "reseller", "user"].contains(&original_role) {
+            original_role.to_string()
+        } else {
+            "user".to_string()
+        };
+        (role, "user.unsuspend")
+    } else {
+        // Suspend: save current role in reset_token, set role to "suspended"
+        sqlx::query("UPDATE users SET reset_token = $1 WHERE id = $2")
+            .bind(&user.role)
+            .bind(id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| internal_error("toggle_suspend", e))?;
+        ("suspended".to_string(), "user.suspend")
+    };
+
+    sqlx::query("UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2")
+        .bind(&new_role)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| internal_error("toggle_suspend", e))?;
+
+    // Invalidate all sessions for this user
+    sqlx::query("DELETE FROM user_sessions WHERE user_id = $1")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| internal_error("toggle_suspend", e))?;
+
+    tracing::info!("{action} by {}: {} -> role={new_role}", claims.email, user.email);
+    let ip = crate::routes::client_ip(&headers);
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, action,
+        Some("user"), Some(&user.email), Some(&new_role), ip.as_deref(),
+    ).await;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "email": user.email,
+        "role": new_role,
+        "suspended": new_role == "suspended",
+    })))
+}
+
+#[derive(serde::Deserialize)]
+pub struct ResetPasswordRequest {
+    pub password: String,
+}
+
+/// POST /api/users/{id}/reset-password — Admin resets a user's password.
+///
+/// Hashes the new password with Argon2, updates the DB, and invalidates all sessions.
+pub async fn reset_password(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<ResetPasswordRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if body.password.len() < 8 {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "Password must be at least 8 characters",
+        ));
+    }
+    if body.password.len() > 128 {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "Password must be at most 128 characters",
+        ));
+    }
+
+    let user: User = sqlx::query_as("SELECT * FROM users WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| internal_error("reset_password", e))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
+
+    // Hash new password with Argon2
+    let salt = SaltString::generate(&mut OsRng);
+    let hash = Argon2::default()
+        .hash_password(body.password.as_bytes(), &salt)
+        .map_err(|e| internal_error("reset_password", e))?
+        .to_string();
+
+    // Update password
+    sqlx::query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2")
+        .bind(&hash)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| internal_error("reset_password", e))?;
+
+    // Invalidate all sessions for this user
+    sqlx::query("DELETE FROM user_sessions WHERE user_id = $1")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| internal_error("reset_password", e))?;
+
+    tracing::info!("Password reset by admin {} for user {}", claims.email, user.email);
+    let ip = crate::routes::client_ip(&headers);
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "user.reset_password",
+        Some("user"), Some(&user.email), None, ip.as_deref(),
+    ).await;
+
+    Ok(Json(serde_json::json!({ "ok": true, "email": user.email })))
+}
+
 /// DELETE /api/users/{id} — Delete a user (admin only, cannot delete self).
 pub async fn remove(
     State(state): State<AppState>,

@@ -2,10 +2,11 @@ use crate::safe_cmd::safe_command;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::Deserialize;
+use std::time::Duration;
 
 use super::{is_valid_domain, AppState};
 use crate::routes::nginx::SiteConfig;
@@ -191,9 +192,107 @@ async fn upload_cert(
     Ok(Json(serde_json::json!({ "ok": true, "cert_path": cert_path, "key_path": key_path })))
 }
 
+/// POST /ssl/{domain}/renew — Force-renew a Let's Encrypt certificate.
+async fn renew(
+    Path(domain): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_domain(&domain) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid domain format" })),
+        ));
+    }
+
+    tracing::info!("Force-renewing SSL certificate for {domain}");
+
+    let output = tokio::time::timeout(
+        Duration::from_secs(120),
+        safe_command("certbot")
+            .args(["renew", "--cert-name", &domain, "--force-renewal"])
+            .output(),
+    )
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(serde_json::json!({ "error": "Certificate renewal timed out after 120s" })),
+        )
+    })?
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Failed to run certbot: {e}") })),
+        )
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        tracing::error!("certbot renew failed for {domain}: {stderr}");
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("certbot renew failed: {stderr}") })),
+        ));
+    }
+
+    tracing::info!("SSL certificate renewed for {domain}");
+    Ok(Json(serde_json::json!({ "ok": true, "domain": domain })))
+}
+
+/// DELETE /ssl/{domain} — Revoke and delete a Let's Encrypt certificate.
+async fn revoke(
+    Path(domain): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_domain(&domain) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid domain format" })),
+        ));
+    }
+
+    tracing::info!("Deleting SSL certificate for {domain}");
+
+    let output = tokio::time::timeout(
+        Duration::from_secs(60),
+        safe_command("certbot")
+            .args(["delete", "--cert-name", &domain])
+            .output(),
+    )
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(serde_json::json!({ "error": "Certificate deletion timed out after 60s" })),
+        )
+    })?
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Failed to run certbot: {e}") })),
+        )
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        tracing::error!("certbot delete failed for {domain}: {stderr}");
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("certbot delete failed: {stderr}") })),
+        ));
+    }
+
+    // Also clean up custom cert directory if it exists
+    let ssl_dir = format!("/etc/dockpanel/ssl/{domain}");
+    let _ = tokio::fs::remove_dir_all(&ssl_dir).await;
+
+    tracing::info!("SSL certificate deleted for {domain}");
+    Ok(Json(serde_json::json!({ "ok": true, "domain": domain })))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/ssl/provision/{domain}", post(provision))
         .route("/ssl/status/{domain}", get(status))
         .route("/ssl/upload", post(upload_cert))
+        .route("/ssl/{domain}/renew", post(renew))
+        .route("/ssl/{domain}", delete(revoke))
 }

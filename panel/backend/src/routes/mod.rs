@@ -373,6 +373,8 @@ pub fn router() -> Router<AppState> {
         // Users (admin)
         .route("/api/users", get(users::list).post(users::create))
         .route("/api/users/{id}", put(users::update).delete(users::remove))
+        .route("/api/users/{id}/toggle-suspend", post(users::toggle_suspend))
+        .route("/api/users/{id}/reset-password", post(users::reset_password))
         // Sites
         .route("/api/sites", get(sites::list).post(sites::create))
         .route("/api/sites/{id}", get(sites::get_one).delete(sites::remove))
@@ -387,6 +389,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/php/uninstall", post(sites::php_uninstall))
         // SSL
         .route("/api/sites/{id}/ssl", post(ssl::provision).get(ssl::status))
+        .route("/api/ssl/{id}/renew", post(ssl::renew))
+        .route("/api/ssl/{id}", delete(ssl::revoke))
         // File Manager
         .route("/api/sites/{id}/files", get(files::list_dir).delete(files::delete_entry))
         .route("/api/sites/{id}/files/read", get(files::read_file))

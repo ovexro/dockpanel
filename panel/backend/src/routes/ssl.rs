@@ -5,10 +5,11 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::{AuthUser, ServerScope};
+use crate::auth::{AdminUser, AuthUser, ServerScope};
 use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::models::Site;
 use crate::AppState;
+use crate::services::activity;
 
 /// POST /api/sites/{id}/ssl — Provision SSL certificate for a site.
 pub async fn provision(
@@ -150,4 +151,95 @@ pub async fn status(
         "expiry": site.ssl_expiry,
         "agent_status": agent_status,
     })))
+}
+
+/// POST /api/ssl/{id}/renew — Force-renew SSL certificate (admin only).
+pub async fn renew(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let site: Site = sqlx::query_as("SELECT * FROM sites WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| internal_error("ssl renew", e))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    if !site.ssl_enabled {
+        return Err(err(StatusCode::BAD_REQUEST, "SSL is not enabled for this site"));
+    }
+
+    let agent_path = format!("/ssl/{}/renew", site.domain);
+    agent
+        .post_long(&agent_path, None, 120)
+        .await
+        .map_err(|e| agent_error("SSL renewal", e))?;
+
+    // Refresh expiry from agent status
+    let status_path = format!("/ssl/status/{}", site.domain);
+    if let Ok(status) = agent.get(&status_path).await {
+        if let Some(expiry_str) = status.get("not_after").and_then(|v| v.as_str()) {
+            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(expiry_str, "%Y-%m-%d %H:%M:%S%.f UTC") {
+                let expiry = dt.and_utc();
+                let _ = sqlx::query("UPDATE sites SET ssl_expiry = $1, updated_at = NOW() WHERE id = $2")
+                    .bind(expiry)
+                    .bind(id)
+                    .execute(&state.db)
+                    .await;
+            }
+        }
+    }
+
+    tracing::info!("SSL renewed for {} by {}", site.domain, claims.email);
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "ssl.renew",
+        Some("site"), Some(&site.domain), None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({ "ok": true, "domain": site.domain })))
+}
+
+/// DELETE /api/ssl/{id} — Revoke and delete SSL certificate (admin only).
+pub async fn revoke(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let site: Site = sqlx::query_as("SELECT * FROM sites WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| internal_error("ssl revoke", e))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    if !site.ssl_enabled {
+        return Err(err(StatusCode::BAD_REQUEST, "SSL is not enabled for this site"));
+    }
+
+    let agent_path = format!("/ssl/{}", site.domain);
+    agent
+        .delete(&agent_path)
+        .await
+        .map_err(|e| agent_error("SSL deletion", e))?;
+
+    // Clear SSL fields in DB
+    sqlx::query(
+        "UPDATE sites SET ssl_enabled = false, ssl_cert_path = NULL, ssl_key_path = NULL, \
+         ssl_expiry = NULL, updated_at = NOW() WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| internal_error("ssl revoke", e))?;
+
+    tracing::info!("SSL revoked for {} by {}", site.domain, claims.email);
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "ssl.revoke",
+        Some("site"), Some(&site.domain), None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({ "ok": true, "domain": site.domain })))
 }

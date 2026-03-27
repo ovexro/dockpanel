@@ -505,15 +505,15 @@ pub async fn certificate_dashboard(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
 
-    let certs: Vec<(String, bool, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
-        "SELECT domain, ssl_enabled, ssl_expiry FROM sites WHERE user_id = $1 AND ssl_enabled = true ORDER BY ssl_expiry ASC NULLS LAST"
+    let certs: Vec<(uuid::Uuid, String, bool, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+        "SELECT id, domain, ssl_enabled, ssl_expiry FROM sites WHERE user_id = $1 AND ssl_enabled = true ORDER BY ssl_expiry ASC NULLS LAST"
     ).bind(claims.sub).fetch_all(&state.db).await.unwrap_or_default();
 
     let now = chrono::Utc::now();
-    let items: Vec<serde_json::Value> = certs.iter().map(|(domain, _, expiry)| {
+    let items: Vec<serde_json::Value> = certs.iter().map(|(id, domain, _, expiry)| {
         let days_left = expiry.map(|e| (e - now).num_days()).unwrap_or(999);
         let status = if days_left < 0 { "expired" } else if days_left <= 7 { "critical" } else if days_left <= 30 { "warning" } else { "ok" };
-        serde_json::json!({ "domain": domain, "expiry": expiry, "days_left": days_left, "status": status })
+        serde_json::json!({ "site_id": id, "domain": domain, "expiry": expiry, "days_left": days_left, "status": status })
     }).collect();
 
     Ok(Json(serde_json::json!({ "certificates": items })))

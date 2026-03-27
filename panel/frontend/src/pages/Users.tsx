@@ -26,6 +26,10 @@ export default function Users() {
   const [editRole, setEditRole] = useState("");
   const [message, setMessage] = useState({ text: "", type: "" });
   const [search, setSearch] = useState("");
+  const [suspendingId, setSuspendingId] = useState<string | null>(null);
+  const [resetPwTarget, setResetPwTarget] = useState<string | null>(null);
+  const [resetPwValue, setResetPwValue] = useState("");
+  const [resettingPw, setResettingPw] = useState(false);
 
   const loadUsers = async () => {
     try {
@@ -92,6 +96,50 @@ export default function Users() {
       });
     }
   };
+
+  const handleToggleSuspend = async (user: User) => {
+    setSuspendingId(user.id);
+    setMessage({ text: "", type: "" });
+    try {
+      const data = await api.post<{ suspended: boolean; email: string }>(`/users/${user.id}/toggle-suspend`);
+      setMessage({
+        text: data.suspended ? `${user.email} has been suspended` : `${user.email} has been unsuspended`,
+        type: "success",
+      });
+      loadUsers();
+    } catch (e) {
+      setMessage({
+        text: e instanceof Error ? e.message : "Failed to update user",
+        type: "error",
+      });
+    } finally {
+      setSuspendingId(null);
+    }
+  };
+
+  const handleResetPassword = async (id: string) => {
+    if (resetPwValue.length < 8) {
+      setMessage({ text: "Password must be at least 8 characters", type: "error" });
+      return;
+    }
+    setResettingPw(true);
+    setMessage({ text: "", type: "" });
+    try {
+      await api.post(`/users/${id}/reset-password`, { password: resetPwValue });
+      setResetPwTarget(null);
+      setResetPwValue("");
+      setMessage({ text: "Password reset successfully", type: "success" });
+    } catch (e) {
+      setMessage({
+        text: e instanceof Error ? e.message : "Failed to reset password",
+        type: "error",
+      });
+    } finally {
+      setResettingPw(false);
+    }
+  };
+
+  const isSelf = (id: string) => authUser?.id === id;
 
   if (error) {
     return (
@@ -167,20 +215,27 @@ export default function Users() {
                 <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 w-28">Role</th>
                 <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 w-20">Sites</th>
                 <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 w-36">Created</th>
-                <th scope="col" className="text-right text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 w-28">Actions</th>
+                <th scope="col" className="text-right text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 w-44">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-dark-600">
               {users.filter((u) => u.email.toLowerCase().includes(search.toLowerCase())).map((user) => (
-                <tr key={user.id} className="table-row-hover">
+                <tr key={user.id} className={`table-row-hover ${user.role === "suspended" ? "opacity-60" : ""}`}>
                   <td className="px-5 py-4">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-rust-500/15 text-rust-500 flex items-center justify-center text-sm font-medium">{user.email[0].toUpperCase()}</div>
-                      <span className="text-sm text-dark-50 font-mono">{user.email}</span>
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${user.role === "suspended" ? "bg-dark-600 text-dark-400" : "bg-rust-500/15 text-rust-500"}`}>{user.email[0].toUpperCase()}</div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-dark-50 font-mono">{user.email}</span>
+                        {user.role === "suspended" && (
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-danger-500/15 text-danger-400">Suspended</span>
+                        )}
+                      </div>
                     </div>
                   </td>
                   <td className="px-5 py-4">
-                    {editTarget === user.id ? (
+                    {user.role === "suspended" ? (
+                      <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium bg-danger-500/15 text-danger-400">suspended</span>
+                    ) : editTarget === user.id ? (
                       <select value={editRole} onChange={(e) => setEditRole(e.target.value)} onBlur={() => { if (editRole !== user.role) handleUpdateRole(user.id, editRole); else setEditTarget(null); }} autoFocus className="text-sm border border-dark-500 rounded px-2 py-1">
                         <option value="admin">admin</option>
                         <option value="reseller">reseller</option>
@@ -199,9 +254,35 @@ export default function Users() {
                         <button onClick={() => setDeleteTarget(null)} className="px-2 py-1 bg-dark-600 text-dark-200 rounded text-xs">Cancel</button>
                       </div>
                     ) : (
-                      <button onClick={() => setDeleteTarget(user.id)} className="text-dark-300 hover:text-danger-500 transition-colors" title="Delete user">
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" /></svg>
-                      </button>
+                      <div className="flex items-center justify-end gap-1">
+                        {!isSelf(user.id) && (
+                          <>
+                            <button
+                              onClick={() => handleToggleSuspend(user)}
+                              disabled={suspendingId === user.id}
+                              className={`px-2 py-1 text-xs rounded transition-colors disabled:opacity-50 flex items-center gap-1 ${
+                                user.role === "suspended"
+                                  ? "text-rust-400 bg-rust-500/10 hover:bg-rust-500/20"
+                                  : "text-warn-400 bg-warn-500/10 hover:bg-warn-500/20"
+                              }`}
+                              title={user.role === "suspended" ? "Unsuspend user" : "Suspend user"}
+                            >
+                              {suspendingId === user.id && <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />}
+                              {user.role === "suspended" ? "Unsuspend" : "Suspend"}
+                            </button>
+                            <button
+                              onClick={() => { setResetPwTarget(user.id); setResetPwValue(""); }}
+                              className="px-2 py-1 text-xs text-dark-300 hover:text-dark-50 bg-dark-700 rounded hover:bg-dark-600 transition-colors"
+                              title="Reset password"
+                            >
+                              Reset PW
+                            </button>
+                          </>
+                        )}
+                        <button onClick={() => setDeleteTarget(user.id)} className="text-dark-300 hover:text-danger-500 transition-colors" title="Delete user">
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 00-7.5 0" /></svg>
+                        </button>
+                      </div>
                     )}
                   </td>
                 </tr>
@@ -212,17 +293,44 @@ export default function Users() {
           {/* Mobile Cards */}
           <div className="sm:hidden divide-y divide-dark-600">
             {users.filter((u) => u.email.toLowerCase().includes(search.toLowerCase())).map((user) => (
-              <div key={user.id} className="px-4 py-3">
+              <div key={user.id} className={`px-4 py-3 ${user.role === "suspended" ? "opacity-60" : ""}`}>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="w-8 h-8 rounded-full bg-rust-500/15 text-rust-500 flex items-center justify-center text-sm font-medium shrink-0">{user.email[0].toUpperCase()}</div>
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium shrink-0 ${user.role === "suspended" ? "bg-dark-600 text-dark-400" : "bg-rust-500/15 text-rust-500"}`}>{user.email[0].toUpperCase()}</div>
                     <div className="min-w-0">
-                      <span className="text-sm text-dark-50 font-mono block truncate">{user.email}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm text-dark-50 font-mono block truncate">{user.email}</span>
+                        {user.role === "suspended" && (
+                          <span className="inline-flex px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-danger-500/15 text-danger-400 shrink-0">Suspended</span>
+                        )}
+                      </div>
                       <span className="text-xs text-dark-300 font-mono">{new Date(user.created_at).toLocaleDateString()}</span>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0 ml-2">
-                    <button onClick={() => { setEditTarget(user.id); setEditRole(user.role); }} className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${user.role === "admin" ? "bg-accent-600/15 text-accent-400" : "bg-accent-500/15 text-accent-400"}`}>{user.role}</button>
+                    <button onClick={() => { setEditTarget(user.id); setEditRole(user.role); }} className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${user.role === "admin" ? "bg-accent-600/15 text-accent-400" : user.role === "suspended" ? "bg-danger-500/15 text-danger-400" : "bg-accent-500/15 text-accent-400"}`}>{user.role}</button>
+                    {!isSelf(user.id) && (
+                      <button
+                        onClick={() => handleToggleSuspend(user)}
+                        disabled={suspendingId === user.id}
+                        className={`px-2 py-1 text-xs rounded transition-colors disabled:opacity-50 ${
+                          user.role === "suspended"
+                            ? "text-rust-400 bg-rust-500/10"
+                            : "text-warn-400 bg-warn-500/10"
+                        }`}
+                      >
+                        {user.role === "suspended" ? "Unsuspend" : "Suspend"}
+                      </button>
+                    )}
+                    {!isSelf(user.id) && (
+                      <button
+                        onClick={() => { setResetPwTarget(user.id); setResetPwValue(""); }}
+                        className="p-1.5 text-dark-300 hover:text-dark-50"
+                        title="Reset password"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 0 1 3 3m3 0a6 6 0 0 1-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25Z" /></svg>
+                      </button>
+                    )}
                     {deleteTarget === user.id ? (
                       <div className="flex items-center gap-1">
                         <button onClick={() => handleDelete(user.id)} className="px-2 py-1 bg-danger-500 text-white rounded text-xs">Del</button>
@@ -325,6 +433,68 @@ export default function Users() {
               >
                 {creating && <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
                 {creating ? "Creating..." : "Create User"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reset Password dialog */}
+      {resetPwTarget && (
+        <div
+          className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 dp-modal-overlay"
+          role="dialog"
+          aria-labelledby="reset-pw-title"
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              setResetPwTarget(null);
+              setResetPwValue("");
+            }
+          }}
+        >
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-[420px] dp-modal">
+            <h3 id="reset-pw-title" className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-4">
+              Reset Password
+            </h3>
+            <p className="text-sm text-dark-200 mb-4">
+              Set a new password for <span className="font-mono text-dark-50">{users.find(u => u.id === resetPwTarget)?.email}</span>
+            </p>
+            <div>
+              <label htmlFor="reset-pw-input" className="block text-sm font-medium text-dark-100 mb-1">
+                New Password
+              </label>
+              <input
+                id="reset-pw-input"
+                type="password"
+                value={resetPwValue}
+                onChange={(e) => setResetPwValue(e.target.value)}
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
+                placeholder="Minimum 8 characters"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && resetPwValue.length >= 8) {
+                    handleResetPassword(resetPwTarget);
+                  }
+                }}
+              />
+            </div>
+            <div className="flex justify-end gap-2 mt-6">
+              <button
+                onClick={() => {
+                  setResetPwTarget(null);
+                  setResetPwValue("");
+                }}
+                className="px-4 py-2 text-sm text-dark-300 border border-dark-600 rounded-lg hover:text-dark-100 hover:border-dark-400 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleResetPassword(resetPwTarget)}
+                disabled={resettingPw || resetPwValue.length < 8}
+                className="flex items-center gap-2 px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+              >
+                {resettingPw && <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+                {resettingPw ? "Resetting..." : "Reset Password"}
               </button>
             </div>
           </div>
