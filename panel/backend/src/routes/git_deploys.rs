@@ -1074,15 +1074,17 @@ pub async fn webhook(
 
     if is_branch_delete {
         // Clean up preview for this deleted branch
-        let deleted = sqlx::query_as::<_, (uuid::Uuid, String)>(
+        let deleted = match sqlx::query_as::<_, (uuid::Uuid, String)>(
             "SELECT id, container_name FROM git_previews WHERE git_deploy_id = $1 AND branch = $2"
         )
         .bind(config.id)
         .bind(&push_branch)
         .fetch_optional(&state.db)
         .await
-        .ok()
-        .flatten();
+        {
+            Ok(row) => row,
+            Err(e) => { tracing::warn!("Failed to query git preview for cleanup: {e}"); None }
+        };
 
         if let Some((preview_id, container_name)) = deleted {
             let _ = agent.post("/git/cleanup", Some(serde_json::json!({ "name": container_name }))).await;
@@ -1128,14 +1130,16 @@ pub async fn webhook(
     }
 
     // Get user email for activity log
-    let user_email: Option<(String,)> = sqlx::query_as(
+    let user_email: Option<(String,)> = match sqlx::query_as(
         "SELECT email FROM users WHERE id = $1",
     )
     .bind(config.user_id)
     .fetch_optional(&state.db)
     .await
-    .ok()
-    .flatten();
+    {
+        Ok(row) => row,
+        Err(e) => { tracing::warn!("Failed to fetch user email for webhook deploy: {e}"); None }
+    };
 
     let email = user_email.map(|(e,)| e).unwrap_or_default();
     let owner_id = config.user_id;
@@ -1677,8 +1681,7 @@ fn spawn_deploy_task(
                                     .bind(&monitor_image)
                                     .fetch_optional(&monitor_db)
                                     .await
-                                    .ok()
-                                    .flatten();
+                                    .unwrap_or_else(|e| { tracing::warn!("Failed to fetch previous deploy for rollback: {e}"); None });
 
                                     if let Some((prev_image, prev_commit)) = prev {
                                         tracing::warn!("Auto-rollback: rolling back {monitor_name} to {prev_image}");
