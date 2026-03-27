@@ -1,6 +1,6 @@
 # DockPanel Feature Manifest
 
-> **Last verified**: 2026-03-25 | **Version**: v2.6.5 | **Total**: 45 major features, ~215 capabilities
+> **Last verified**: 2026-03-27 | **Version**: v2.6.6 | **Total**: 48 major features, ~230 capabilities
 >
 > This file is the single source of truth for what DockPanel offers.
 > Update it whenever features are added, changed, or removed.
@@ -18,7 +18,7 @@
 | **Incident Management** | Incident lifecycle (investigating→resolved→postmortem), timeline updates, severity, affected components, postmortem | `routes/incidents.rs` | — | `IncidentManagement.tsx` | `managed_incidents`, `incident_updates`, `managed_incident_components` |
 | **Public Status Page** | Customizable status page with component groups, incident history, subscriber notifications, overall status | `routes/incidents.rs` | — | `PublicStatusPage.tsx` | `status_page_config`, `status_page_components`, `status_page_subscribers` |
 | **Cron Jobs** | Cron scheduling with manual execution and history | `routes/crons.rs` | `crons.rs` | `Crons.tsx` | (via agent crontab) |
-| **Docker Apps** | 51 templates, Compose stacks, container lifecycle, registry, image tag change, live resource limits | `routes/docker_apps.rs`, `stacks.rs` | `docker_apps.rs` | `Apps.tsx` | `docker_stacks` |
+| **Docker Apps** | 54 templates, Compose stacks, container lifecycle, registry, image tag change, live resource limits | `routes/docker_apps.rs`, `stacks.rs` | `docker_apps.rs` | `Apps.tsx` | `docker_stacks` |
 | **Git Deploy** | Push-to-deploy, blue-green, Nixpacks (30+ langs), preview envs, one-time scheduled deploys | `routes/git_deploys.rs` | `git_build.rs` | `GitDeploys.tsx` | `git_deploys`, `git_deploy_history`, `git_previews` |
 | **WordPress Toolkit** | Multi-site dashboard, vuln scanning (14 known), hardening (7 checks), bulk updates | `routes/wordpress.rs` | `wordpress.rs`, `wp_vulnerability.rs` | `WordPressToolkit.tsx`, `WordPress.tsx` | `wp_vuln_scans`, `wp_hardening` |
 | **Migration Wizard** | Import from cPanel/Plesk/HestiaCP — sites, databases, mail | `routes/migration.rs` | `migration.rs` | `Migration.tsx` | `migrations` |
@@ -58,6 +58,9 @@
 | **Diagnostics** | 6 check categories, one-click fixes | `routes/system.rs` | `diagnostics.rs` | (in Security) | — |
 | **Traefik** | Alternative reverse proxy, auto-SSL, Docker discovery | `routes/system.rs` | `traefik.rs` | (in Settings) | — |
 | **Service Installers** | PHP, Certbot, UFW, Fail2Ban, PowerDNS — one-click | `routes/system.rs` | `service_installer.rs` | (in Settings) | — |
+| **Service Uninstall** | Uninstall routes for all 10 services (PHP, Certbot, UFW, Fail2Ban, PowerDNS, Redis, Node.js, Composer, mail server, PHP versions) | `routes/system.rs` | `service_installer.rs` | (in Settings) | — |
+| **SSL Renew/Delete** | Force-renew and delete SSL certificates via certbot | `routes/ssl.rs` | `ssl.rs` | `Certificates.tsx` | — |
+| **User Suspend/Reset** | Suspend/unsuspend users with session invalidation, admin password reset | `routes/users.rs` | — | (in Settings) | `users` |
 | **System Updates** | OS package updates, auto-updates toggle, reboot | `routes/system.rs` | `updates.rs` | (in Settings) | — |
 
 ## Admin
@@ -127,8 +130,8 @@
 | Agent RAM (RSS) | ~30 MB | 2026-03-19 |
 | API RAM (RSS) | ~27 MB | 2026-03-19 |
 | Total RAM | ~57 MB | 2026-03-19 |
-| App templates | 51 | 2026-03-25 |
+| App templates | 54 | 2026-03-27 |
 | API endpoints | 50+ tested | 2026-03-19 |
-| Frontend pages | 48 | 2026-03-25 |
-| DB tables | 67 migrations | 2026-03-25 |
+| Frontend pages | 48 | 2026-03-27 |
+| DB tables | 69 migrations | 2026-03-27 |
 | Background services | 11 | 2026-03-22 |

@@ -78,6 +78,18 @@ DockPanel is designed with defense in depth. Key security properties include:
 
 ## Past Security Work
 
+### Audit Rounds 4-5: Feature Gap Audit + Error Handling Hardening (March 2026)
+
+Audited all agent and backend code for silent error suppression and missing functionality:
+
+- **59 silent `.ok()` failures** in the agent replaced with proper error handling and logging.
+- **51 `.ok().flatten()` anti-patterns** in the backend replaced with error propagation.
+- **45+ command timeouts** added to agent (Docker, systemctl, apt, system commands) to prevent hanging.
+- **Uninstall routes** added for all 10 services (PHP, Certbot, UFW, Fail2Ban, PowerDNS, Redis, Node.js, Composer, mail server, PHP versions).
+- **SSL certificate management** — force-renewal and deletion endpoints added.
+- **User lifecycle** — suspend/unsuspend with session invalidation, admin password reset.
+- **Installer hardening** — silent package failures now warn, Docker volume cleanup prevents DB password mismatch on retry.
+
 ### Audit Round 3: Research-Driven Audit (March 2026)
 
 A research-driven security audit studied real-world CVEs from CyberPanel, HestiaCP, CloudPanel, VestaCP, Webmin, and cPanel, then audited DockPanel against those attack patterns. This round identified **55 findings** (12 HIGH, 28 MEDIUM, 15 LOW), including:
@@ -102,7 +114,7 @@ The initial comprehensive security audit identified and resolved **117 vulnerabi
 - Privilege escalation
 - Input validation gaps
 
-All identified issues across all three audit rounds have been fixed. Combined total: **180+ vulnerabilities** found and resolved.
+All identified issues across all five audit rounds have been fixed. Combined total: **230+ vulnerabilities** found and resolved.
 
 ## Contact
 

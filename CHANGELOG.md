@@ -4,6 +4,30 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.6.6] - 2026-03-27
+
+### Fixed
+- Dashboard fleet overview crash on fresh install (SQL column mismatch)
+- Backup creation failure on GNU tar (`--no-dereference` flag)
+- Installer: silent package install failures now warn instead of lying
+- Installer: Docker volume cleanup prevents DB password mismatch on retry
+- 59 silent .ok() failures in agent replaced with proper error handling
+- 51 .ok().flatten() anti-patterns in backend replaced with error propagation
+- System updates (apt upgrade) broken by API's ProtectSystem=strict — proxied through agent
+
+### Added
+- Uninstall routes for all 10 services (PHP, Certbot, UFW, Fail2Ban, PowerDNS, Redis, Node.js, Composer, mail server, PHP versions)
+- SSL certificate renewal (certbot force-renewal) and deletion endpoints
+- User suspend/unsuspend toggle with session invalidation
+- Admin password reset for managed users
+- System Health tab shows real data (API status, uptime, CPU/mem/disk)
+- Certificates page: renew and delete buttons with confirmation
+- Monitor list pagination (limit/offset)
+- Backup retention auto-enforcement
+- Terminal share token revocation
+- 45+ command timeouts in agent (Docker, systemctl, apt, system commands)
+- Notifications page link to alert channel configuration
+
 ## [2.6.5] - 2026-03-25
 
 ### Security
