@@ -741,6 +741,15 @@ pub fn router() -> Router<AppState> {
         .route("/api/services/install/fail2ban", post(system::install_fail2ban))
         .route("/api/services/install/powerdns", post(system::install_powerdns))
         .route("/api/services/install/{install_id}/log", get(system::install_log))
+        // Service uninstallers
+        .route("/api/services/uninstall/php", post(system::uninstall_php))
+        .route("/api/services/uninstall/certbot", post(system::uninstall_certbot))
+        .route("/api/services/uninstall/ufw", post(system::uninstall_ufw))
+        .route("/api/services/uninstall/fail2ban", post(system::uninstall_fail2ban))
+        .route("/api/services/uninstall/powerdns", post(system::uninstall_powerdns))
+        .route("/api/services/uninstall/redis", post(system::uninstall_redis))
+        .route("/api/services/uninstall/nodejs", post(system::uninstall_nodejs))
+        .route("/api/services/uninstall/composer", post(system::uninstall_composer))
         // Mail
         .route("/api/mail/status", get(mail::mail_status))
         .route("/api/mail/install", post(mail::mail_install))

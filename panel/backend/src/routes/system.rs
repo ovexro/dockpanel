@@ -570,6 +570,72 @@ pub async fn install_fail2ban(
     install_service_with_log(&state, agent, claims.sub, &claims.email, "Fail2Ban", "/services/install/fail2ban").await
 }
 
+// ── Service uninstallers (proxy to agent, async with SSE progress) ───────
+
+pub async fn uninstall_php(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "PHP (uninstall)", "/services/uninstall/php").await
+}
+
+pub async fn uninstall_certbot(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "Certbot (uninstall)", "/services/uninstall/certbot").await
+}
+
+pub async fn uninstall_ufw(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "UFW Firewall (uninstall)", "/services/uninstall/ufw").await
+}
+
+pub async fn uninstall_fail2ban(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "Fail2Ban (uninstall)", "/services/uninstall/fail2ban").await
+}
+
+pub async fn uninstall_powerdns(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "PowerDNS (uninstall)", "/services/uninstall/powerdns").await
+}
+
+pub async fn uninstall_redis(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "Redis (uninstall)", "/services/uninstall/redis").await
+}
+
+pub async fn uninstall_nodejs(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "Node.js (uninstall)", "/services/uninstall/nodejs").await
+}
+
+pub async fn uninstall_composer(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "Composer (uninstall)", "/services/uninstall/composer").await
+}
+
 /// POST /api/traefik/install — Install Traefik reverse proxy.
 pub async fn traefik_install(
     State(state): State<AppState>,

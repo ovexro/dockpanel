@@ -1811,6 +1811,7 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
   const [mailStatus, setMailStatus] = useState<{ installed: boolean; running: boolean } | null>(null);
   const [installing, setInstalling] = useState<string | null>(null);
   const [installId, setInstallId] = useState<string | null>(null);
+  const [uninstalling, setUninstalling] = useState<string | null>(null);
   const [msg, setMsg] = useState({ text: "", type: "" });
   const [showGuide, setShowGuide] = useState(false);
 
@@ -1842,6 +1843,21 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
     } catch (e) {
       setMsg({ text: e instanceof Error ? e.message : "Installation failed", type: "error" });
       setInstalling(null);
+    }
+  };
+
+  const uninstall = async (service: string, label: string) => {
+    if (!confirm(`Are you sure you want to uninstall ${label}?`)) return;
+    setUninstalling(service);
+    setMsg({ text: "", type: "" });
+    try {
+      await api.post(`/services/uninstall/${service}`, {});
+      setMsg({ text: `${label} uninstalled successfully`, type: "success" });
+      refreshStatus();
+    } catch (e) {
+      setMsg({ text: e instanceof Error ? e.message : "Uninstall failed", type: "error" });
+    } finally {
+      setUninstalling(null);
     }
   };
 
@@ -1927,7 +1943,18 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
                   <p className="text-[10px] text-dark-300 mt-0.5">{svc.desc}</p>
                 </div>
                 {installed ? (
-                  <span className="text-[10px] text-dark-300 uppercase tracking-wider shrink-0 ml-3">Installed</span>
+                  <div className="flex items-center gap-2 shrink-0 ml-3">
+                    <span className="text-[10px] text-dark-300 uppercase tracking-wider">Installed</span>
+                    {svc.id !== "mail" && (
+                      <button
+                        onClick={() => uninstall(svc.id, svc.label)}
+                        disabled={uninstalling !== null || installing !== null}
+                        className="px-2.5 py-1 bg-danger-500/10 text-danger-400 border border-danger-500/20 rounded-lg text-[10px] font-medium hover:bg-danger-500/20 disabled:opacity-50"
+                      >
+                        {uninstalling === svc.id ? "Removing..." : "Uninstall"}
+                      </button>
+                    )}
+                  </div>
                 ) : (
                   <button
                     onClick={() => install(svc.id, svc.label)}

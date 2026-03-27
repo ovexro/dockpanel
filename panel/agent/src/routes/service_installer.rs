@@ -29,6 +29,14 @@ pub fn router() -> Router<AppState> {
         .route("/services/install/redis", post(install_redis))
         .route("/services/install/nodejs", post(install_nodejs))
         .route("/services/install/composer", post(install_composer))
+        .route("/services/uninstall/php", post(uninstall_php))
+        .route("/services/uninstall/certbot", post(uninstall_certbot))
+        .route("/services/uninstall/ufw", post(uninstall_ufw))
+        .route("/services/uninstall/fail2ban", post(uninstall_fail2ban))
+        .route("/services/uninstall/powerdns", post(uninstall_powerdns))
+        .route("/services/uninstall/redis", post(uninstall_redis))
+        .route("/services/uninstall/nodejs", post(uninstall_nodejs))
+        .route("/services/uninstall/composer", post(uninstall_composer))
 }
 
 // ── Status check ────────────────────────────────────────────────────────
@@ -433,6 +441,230 @@ async fn install_composer() -> Result<Json<serde_json::Value>, ApiErr> {
 
     tracing::info!("Composer installed: {ver}");
     Ok(ok("Composer installed globally at /usr/local/bin/composer"))
+}
+
+// ── PHP uninstaller ─────────────────────────────────────────────────────
+
+async fn uninstall_php() -> Result<Json<serde_json::Value>, ApiErr> {
+    tracing::info!("Uninstalling PHP...");
+
+    let version = detect_php_version().await.unwrap_or_else(|| "8.3".to_string());
+
+    // Stop and disable PHP-FPM
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["stop", &format!("php{version}-fpm")]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["disable", &format!("php{version}-fpm")]).output()).await;
+
+    // Purge all PHP packages for this version
+    let output = tokio::time::timeout(
+        Duration::from_secs(300),
+        safe_command("sh")
+            .args(["-c", &format!("DEBIAN_FRONTEND=noninteractive apt-get purge -y php{version}-* && apt-get autoremove -y")])
+            .output()
+    ).await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "PHP uninstall timed out after 300s"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("PHP uninstall failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("PHP uninstall failed: {}", stderr.chars().take(300).collect::<String>())));
+    }
+
+    tracing::info!("PHP {version} uninstalled");
+    Ok(ok(&format!("PHP {version} purged and removed")))
+}
+
+// ── Certbot uninstaller ─────────────────────────────────────────────────
+
+async fn uninstall_certbot() -> Result<Json<serde_json::Value>, ApiErr> {
+    tracing::info!("Uninstalling Certbot...");
+
+    // Stop and disable certbot timer
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["stop", "certbot.timer"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["disable", "certbot.timer"]).output()).await;
+
+    // Purge certbot packages
+    let output = tokio::time::timeout(
+        Duration::from_secs(300),
+        safe_command("sh")
+            .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get purge -y certbot python3-certbot-nginx && apt-get autoremove -y"])
+            .output()
+    ).await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Certbot uninstall timed out after 300s"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Certbot uninstall failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Certbot uninstall failed: {}", stderr.chars().take(300).collect::<String>())));
+    }
+
+    tracing::info!("Certbot uninstalled");
+    Ok(ok("Certbot and auto-renewal timer removed"))
+}
+
+// ── UFW uninstaller ─────────────────────────────────────────────────────
+
+async fn uninstall_ufw() -> Result<Json<serde_json::Value>, ApiErr> {
+    tracing::info!("Uninstalling UFW...");
+
+    // Disable UFW first
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("ufw").arg("disable").output()).await;
+
+    // Purge UFW
+    let output = tokio::time::timeout(
+        Duration::from_secs(300),
+        safe_command("sh")
+            .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get purge -y ufw && apt-get autoremove -y"])
+            .output()
+    ).await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "UFW uninstall timed out after 300s"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("UFW uninstall failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("UFW uninstall failed: {}", stderr.chars().take(300).collect::<String>())));
+    }
+
+    tracing::info!("UFW uninstalled");
+    Ok(ok("UFW disabled and removed"))
+}
+
+// ── Fail2Ban uninstaller ────────────────────────────────────────────────
+
+async fn uninstall_fail2ban() -> Result<Json<serde_json::Value>, ApiErr> {
+    tracing::info!("Uninstalling Fail2Ban...");
+
+    // Stop and disable fail2ban
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["stop", "fail2ban"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["disable", "fail2ban"]).output()).await;
+
+    // Purge fail2ban
+    let output = tokio::time::timeout(
+        Duration::from_secs(300),
+        safe_command("sh")
+            .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get purge -y fail2ban && apt-get autoremove -y"])
+            .output()
+    ).await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Fail2Ban uninstall timed out after 300s"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Fail2Ban uninstall failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Fail2Ban uninstall failed: {}", stderr.chars().take(300).collect::<String>())));
+    }
+
+    // Remove custom jail config
+    let _ = tokio::fs::remove_file("/etc/fail2ban/jail.local").await;
+
+    tracing::info!("Fail2Ban uninstalled");
+    Ok(ok("Fail2Ban stopped and purged with jail config removed"))
+}
+
+// ── PowerDNS uninstaller ────────────────────────────────────────────────
+
+async fn uninstall_powerdns() -> Result<Json<serde_json::Value>, ApiErr> {
+    tracing::info!("Uninstalling PowerDNS...");
+
+    // Stop and disable pdns
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["stop", "pdns"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["disable", "pdns"]).output()).await;
+
+    // Purge PowerDNS packages
+    let output = tokio::time::timeout(
+        Duration::from_secs(300),
+        safe_command("sh")
+            .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get purge -y pdns-server pdns-backend-pgsql && apt-get autoremove -y"])
+            .output()
+    ).await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "PowerDNS uninstall timed out after 300s"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("PowerDNS uninstall failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("PowerDNS uninstall failed: {}", stderr.chars().take(300).collect::<String>())));
+    }
+
+    // Remove config file (but keep the pdns database — user may want DNS records)
+    let _ = tokio::fs::remove_file("/etc/powerdns/pdns.conf").await;
+
+    tracing::info!("PowerDNS uninstalled (database preserved)");
+    Ok(ok("PowerDNS purged and config removed (database preserved)"))
+}
+
+// ── Redis uninstaller ───────────────────────────────────────────────────
+
+async fn uninstall_redis() -> Result<Json<serde_json::Value>, ApiErr> {
+    tracing::info!("Uninstalling Redis...");
+
+    // Stop and disable redis-server
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["stop", "redis-server"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["disable", "redis-server"]).output()).await;
+
+    // Purge redis
+    let output = tokio::time::timeout(
+        Duration::from_secs(300),
+        safe_command("sh")
+            .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get purge -y redis-server && apt-get autoremove -y"])
+            .output()
+    ).await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Redis uninstall timed out after 300s"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Redis uninstall failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Redis uninstall failed: {}", stderr.chars().take(300).collect::<String>())));
+    }
+
+    tracing::info!("Redis uninstalled");
+    Ok(ok("Redis stopped and purged"))
+}
+
+// ── Node.js uninstaller ─────────────────────────────────────────────────
+
+async fn uninstall_nodejs() -> Result<Json<serde_json::Value>, ApiErr> {
+    tracing::info!("Uninstalling Node.js...");
+
+    // Purge nodejs
+    let output = tokio::time::timeout(
+        Duration::from_secs(300),
+        safe_command("sh")
+            .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get purge -y nodejs && apt-get autoremove -y"])
+            .output()
+    ).await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Node.js uninstall timed out after 300s"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Node.js uninstall failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Node.js uninstall failed: {}", stderr.chars().take(300).collect::<String>())));
+    }
+
+    // Remove nodesource apt repo if present
+    let _ = tokio::fs::remove_file("/etc/apt/sources.list.d/nodesource.list").await;
+
+    tracing::info!("Node.js uninstalled");
+    Ok(ok("Node.js purged and nodesource repo removed"))
+}
+
+// ── Composer uninstaller ────────────────────────────────────────────────
+
+async fn uninstall_composer() -> Result<Json<serde_json::Value>, ApiErr> {
+    tracing::info!("Uninstalling Composer...");
+
+    // Composer is just a binary — remove it
+    let output = tokio::time::timeout(
+        Duration::from_secs(120),
+        safe_command("rm").args(["-f", "/usr/local/bin/composer"]).output()
+    ).await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Composer uninstall timed out"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Composer uninstall failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Composer uninstall failed: {}", stderr.chars().take(300).collect::<String>())));
+    }
+
+    tracing::info!("Composer uninstalled");
+    Ok(ok("Composer binary removed from /usr/local/bin"))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
