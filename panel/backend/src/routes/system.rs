@@ -1,4 +1,3 @@
-use crate::safe_cmd::safe_command;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -132,19 +131,20 @@ pub async fn updates_list(
 
 /// POST /api/system/updates/apply — Apply package updates (admin only).
 /// Returns install_id for SSE progress tracking via /api/services/install/{id}/log.
-/// Streams apt output line-by-line for live terminal experience.
+/// Proxies to agent which runs apt with proper filesystem access, then streams
+/// the output line-by-line for live terminal experience.
 pub async fn updates_apply(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-    ServerScope(_server_id, _agent): ServerScope,
+    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let install_id = uuid::Uuid::new_v4();
 
-    let (tx, _) = tokio::sync::broadcast::channel::<crate::routes::sites::ProvisionStep>(256);
+    let (tx, _) = tokio::sync::broadcast::channel::<ProvisionStep>(256);
     {
         let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        logs.insert(install_id, (Vec::new(), tx, std::time::Instant::now()));
+        logs.insert(install_id, (Vec::new(), tx, Instant::now()));
     }
 
     let logs = state.provision_logs.clone();
@@ -154,7 +154,7 @@ pub async fn updates_apply(
 
     tokio::spawn(async move {
         let emit = |step: &str, label: &str, status: &str, msg: Option<String>| {
-            let ev = crate::routes::sites::ProvisionStep {
+            let ev = ProvisionStep {
                 step: step.into(), label: label.into(), status: status.into(), message: msg,
             };
             if let Ok(mut map) = logs.lock() {
@@ -167,84 +167,37 @@ pub async fn updates_apply(
 
         emit("update", "Applying system updates", "in_progress", None);
 
-        // Build apt command with validated package names
-        let packages: Vec<String> = body.get("packages")
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-            .unwrap_or_default();
+        // Proxy to agent (which has proper filesystem access for apt)
+        match agent.post_long("/system/updates/apply", Some(body), 300).await {
+            Ok(result) => {
+                let success = result.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                let output = result.get("output").and_then(|v| v.as_str()).unwrap_or("");
 
-        // Validate package names
-        for pkg in &packages {
-            if pkg.is_empty() || !pkg.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '+' || c == ':') {
-                emit("line", &format!("ERROR: Invalid package name: {pkg}"), "error", None);
-                emit("complete", "Update failed", "error", Some(format!("Invalid package name: {pkg}")));
-                return;
-            }
-        }
-
-        let mut cmd = safe_command("apt-get");
-        cmd.env("DEBIAN_FRONTEND", "noninteractive");
-        if packages.is_empty() {
-            cmd.args(["upgrade", "-y"]);
-        } else {
-            cmd.arg("install").arg("-y");
-            for pkg in &packages {
-                cmd.arg(pkg);
-            }
-        }
-
-        // Spawn and stream stdout/stderr line by line
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
-
-        match cmd.spawn() {
-            Ok(mut child) => {
-                use tokio::io::{AsyncBufReadExt, BufReader};
-
-                let stdout = child.stdout.take();
-                let stderr = child.stderr.take();
-                let mut all_output = Vec::new();
-
-                // Read stdout line by line
-                if let Some(stdout) = stdout {
-                    let mut reader = BufReader::new(stdout).lines();
-                    while let Ok(Some(line)) = reader.next_line().await {
-                        emit("line", &line, "in_progress", None);
-                        all_output.push(line);
+                // Stream output line-by-line for live terminal experience
+                for line in output.lines() {
+                    if !line.is_empty() {
+                        emit("line", line, "in_progress", None);
                     }
                 }
-
-                // Read remaining stderr
-                if let Some(stderr) = stderr {
-                    let mut reader = BufReader::new(stderr).lines();
-                    while let Ok(Some(line)) = reader.next_line().await {
-                        emit("line", &line, "in_progress", None);
-                        all_output.push(line);
-                    }
-                }
-
-                let status = child.wait().await;
-                let success = status.map(|s| s.success()).unwrap_or(false);
-                let full_output = all_output.join("\n");
 
                 if success {
                     emit("update", "Applying system updates", "done", None);
-                    emit("complete", "Updates applied", "done", Some(full_output));
+                    emit("complete", "Updates applied", "done", Some(output.to_string()));
                 } else {
                     emit("update", "Applying system updates", "error", None);
-                    emit("complete", "Updates finished with errors", "error", Some(full_output));
+                    emit("complete", "Updates finished with errors", "error", Some(output.to_string()));
                 }
 
                 activity::log_activity(&db, user_id, &email, "system.updates.apply",
                     Some("system"), Some("packages"), None, None).await;
             }
             Err(e) => {
-                emit("update", "Failed to start apt", "error", Some(format!("{e}")));
+                emit("update", "Failed to apply updates", "error", Some(format!("{e}")));
                 emit("complete", "Update failed", "error", None);
             }
         }
 
-        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        tokio::time::sleep(Duration::from_secs(60)).await;
         logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&install_id);
     });
 
