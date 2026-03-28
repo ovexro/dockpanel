@@ -364,6 +364,10 @@ export default function Apps() {
   // Compose view state (Feature #11 — packages tab)
   const [composeView, setComposeView] = useState<"compose" | "packages">("compose");
 
+  // Image update check state
+  const [updateInfo, setUpdateInfo] = useState<Record<string, { update_available: boolean; check_error?: string }>>({});
+  const [updateChecking, setUpdateChecking] = useState(false);
+
   // Stacks state
   const [stacks, setStacks] = useState<StackInfo[]>([]);
   const [expandedStack, setExpandedStack] = useState<string | null>(null);
@@ -634,6 +638,29 @@ export default function Apps() {
       setMessage({ text: e instanceof Error ? e.message : "Update failed", type: "error" });
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  const handleCheckUpdates = async () => {
+    setUpdateChecking(true);
+    setMessage({ text: "", type: "" });
+    try {
+      const result = await api.get<{ updates: { container_id: string; update_available: boolean; check_error?: string }[]; updates_available: number }>("/apps/updates");
+      const info: Record<string, { update_available: boolean; check_error?: string }> = {};
+      for (const u of result.updates) {
+        info[u.container_id] = { update_available: u.update_available, check_error: u.check_error || undefined };
+      }
+      setUpdateInfo(info);
+      setMessage({
+        text: result.updates_available > 0
+          ? `${result.updates_available} update${result.updates_available > 1 ? "s" : ""} available`
+          : "All containers are up to date",
+        type: result.updates_available > 0 ? "warning" : "success",
+      });
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : "Update check failed", type: "error" });
+    } finally {
+      setUpdateChecking(false);
     }
   };
 
@@ -1117,13 +1144,27 @@ volumes:
             <h2 className="text-sm font-medium text-dark-200 uppercase font-mono tracking-widest">
               Running Apps
             </h2>
-            <select value={tagFilter} onChange={e => setTagFilter(e.target.value)} className="px-2 py-1.5 bg-dark-700 text-dark-200 rounded text-xs border border-dark-500">
-              <option value="">All Apps</option>
-              <option value="production">Production</option>
-              <option value="staging">Staging</option>
-              <option value="development">Development</option>
-              <option value="internal">Internal</option>
-            </select>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleCheckUpdates}
+                disabled={updateChecking}
+                className="px-3 py-1.5 bg-dark-700 text-dark-200 rounded text-xs font-medium hover:bg-dark-600 border border-dark-500 disabled:opacity-50 transition-colors"
+              >
+                {updateChecking ? (
+                  <span className="flex items-center gap-1.5">
+                    <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                    Checking...
+                  </span>
+                ) : "Check for Updates"}
+              </button>
+              <select value={tagFilter} onChange={e => setTagFilter(e.target.value)} className="px-2 py-1.5 bg-dark-700 text-dark-200 rounded text-xs border border-dark-500">
+                <option value="">All Apps</option>
+                <option value="production">Production</option>
+                <option value="staging">Staging</option>
+                <option value="development">Development</option>
+                <option value="internal">Internal</option>
+              </select>
+            </div>
           </div>
           <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-x-auto">
             <table className="w-full">
@@ -1144,6 +1185,12 @@ volumes:
                     <td className="px-5 py-4 text-sm text-dark-50 font-medium font-mono">
                       <div className="flex items-center gap-2">
                         {app.name}
+                        {updateInfo[app.container_id]?.update_available && (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-accent-500/15 text-accent-400 animate-pulse" title="Newer image available">
+                            <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4-4m0 0l-4 4m4-4v12" /></svg>
+                            Update
+                          </span>
+                        )}
                         <select
                           value={appTags[app.container_id] || ''}
                           onChange={e => {
@@ -1269,9 +1316,13 @@ volumes:
                         <button
                           onClick={() => handleUpdate(app.container_id)}
                           disabled={!!actionLoading}
-                          className="px-2 py-1 bg-dark-700 text-dark-300 rounded text-xs font-medium hover:bg-dark-600 disabled:opacity-50"
+                          className={`px-2 py-1 rounded text-xs font-medium disabled:opacity-50 ${
+                            updateInfo[app.container_id]?.update_available
+                              ? "bg-accent-500/20 text-accent-400 hover:bg-accent-500/30"
+                              : "bg-dark-700 text-dark-300 hover:bg-dark-600"
+                          }`}
                         >
-                          {actionLoading === `${app.container_id}-update` ? "Updating..." : "Update"}
+                          {actionLoading === `${app.container_id}-update` ? "Updating..." : updateInfo[app.container_id]?.update_available ? "Update Now" : "Update"}
                         </button>
                         {deleteTarget === app.container_id ? (
                           <>

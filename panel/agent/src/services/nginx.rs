@@ -206,6 +206,11 @@ pub fn render_site_config(
     let fastcgi_cache = config.fastcgi_cache.unwrap_or(false) && config.runtime == "php";
     ctx.insert("fastcgi_cache", &fastcgi_cache);
 
+    // Redis object cache (PHP sites only)
+    let redis_cache = config.redis_cache.unwrap_or(false) && config.runtime == "php";
+    ctx.insert("redis_cache", &redis_cache);
+    ctx.insert("redis_db", &config.redis_db.unwrap_or(0));
+
     let ssl = config.ssl.unwrap_or(false);
     ctx.insert("ssl", &ssl);
 

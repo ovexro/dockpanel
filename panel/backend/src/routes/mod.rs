@@ -385,6 +385,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/sites/{id}/toggle", put(sites::toggle_enabled))
         .route("/api/sites/{id}/fastcgi-cache", put(sites::toggle_fastcgi_cache))
         .route("/api/sites/{id}/fastcgi-cache/purge", post(sites::purge_fastcgi_cache))
+        .route("/api/sites/{id}/redis-cache", put(sites::toggle_redis_cache))
+        .route("/api/sites/{id}/redis-cache/purge", post(sites::purge_redis_cache))
         // PHP versions
         .route("/api/php/versions", get(sites::php_versions))
         .route("/api/php/install", post(sites::php_install))
@@ -437,6 +439,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/stacks/{id}/stop", post(stacks::stop))
         .route("/api/stacks/{id}/restart", post(stacks::restart))
         // Docker Apps (admin)
+        .route("/api/apps/updates", get(docker_apps::check_updates))
         .route("/api/apps/templates", get(docker_apps::list_templates))
         .route("/api/apps/deploy", post(docker_apps::deploy))
         .route("/api/apps/deploy/{deploy_id}/log", get(docker_apps::deploy_log))

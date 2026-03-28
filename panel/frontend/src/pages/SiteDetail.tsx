@@ -23,6 +23,8 @@ interface Site {
   synced_at: string | null;
   enabled: boolean;
   fastcgi_cache: boolean;
+  redis_cache: boolean;
+  redis_db: number;
   created_at: string;
   updated_at: string;
 }
@@ -119,6 +121,11 @@ export default function SiteDetail() {
   const [cacheToggling, setCacheToggling] = useState(false);
   const [cachePurging, setCachePurging] = useState(false);
   const [cacheMsg, setCacheMsg] = useState("");
+
+  // Redis Cache
+  const [redisToggling, setRedisToggling] = useState(false);
+  const [redisPurging, setRedisPurging] = useState(false);
+  const [redisMsg, setRedisMsg] = useState("");
 
   // PHP Extensions
   const [phpExts, setPhpExts] = useState<{ installed: string[]; available: string[] } | null>(null);
@@ -863,6 +870,80 @@ export default function SiteDetail() {
               {cacheMsg && (
                 <span className={`text-xs ${cacheMsg.includes("failed") || cacheMsg.includes("Failed") ? "text-danger-400" : "text-rust-400"}`}>
                   {cacheMsg}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Redis Object Cache — PHP sites only */}
+      {site.runtime === "php" && site.status === "active" && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-6">
+          <div className="px-5 py-4 border-b border-dark-600 flex items-center justify-between">
+            <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Redis Object Cache</h2>
+            <div className="flex items-center gap-2">
+              {site.redis_cache && (
+                <span className="text-[10px] font-mono text-dark-400">DB {site.redis_db}</span>
+              )}
+              <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                site.redis_cache ? "bg-rust-500/10 text-rust-400" : "bg-dark-700 text-dark-300"
+              }`}>
+                {site.redis_cache ? "Enabled" : "Disabled"}
+              </span>
+            </div>
+          </div>
+          <div className="p-5 space-y-4">
+            <p className="text-sm text-dark-200">
+              Caches database queries and PHP objects in Redis for dramatically faster page loads. Essential for WordPress + WooCommerce. Each site uses an isolated Redis database.
+            </p>
+            <div className="flex items-center gap-3">
+              <button
+                disabled={redisToggling}
+                onClick={async () => {
+                  setRedisToggling(true);
+                  setRedisMsg("");
+                  try {
+                    const result = await api.put<{ redis_cache: boolean; redis_db?: number }>(`/sites/${id}/redis-cache`, { enabled: !site.redis_cache });
+                    setSite(s => s ? { ...s, redis_cache: result.redis_cache, redis_db: result.redis_db ?? s.redis_db } : s);
+                    setRedisMsg(site.redis_cache ? "Redis cache disabled" : "Redis cache enabled");
+                  } catch (e) {
+                    setRedisMsg(e instanceof Error ? e.message : "Toggle failed");
+                  } finally {
+                    setRedisToggling(false);
+                  }
+                }}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${
+                  site.redis_cache
+                    ? "bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
+                    : "bg-rust-500 text-white hover:bg-rust-600"
+                }`}
+              >
+                {redisToggling ? "..." : site.redis_cache ? "Disable Redis" : "Enable Redis"}
+              </button>
+              {site.redis_cache && (
+                <button
+                  disabled={redisPurging}
+                  onClick={async () => {
+                    setRedisPurging(true);
+                    setRedisMsg("");
+                    try {
+                      await api.post(`/sites/${id}/redis-cache/purge`);
+                      setRedisMsg("Redis cache flushed");
+                    } catch (e) {
+                      setRedisMsg(e instanceof Error ? e.message : "Flush failed");
+                    } finally {
+                      setRedisPurging(false);
+                    }
+                  }}
+                  className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 disabled:opacity-50 transition-colors"
+                >
+                  {redisPurging ? "Flushing..." : "Flush Cache"}
+                </button>
+              )}
+              {redisMsg && (
+                <span className={`text-xs ${redisMsg.includes("failed") || redisMsg.includes("Failed") ? "text-danger-400" : "text-rust-400"}`}>
+                  {redisMsg}
                 </span>
               )}
             </div>

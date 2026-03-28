@@ -418,6 +418,8 @@ pub async fn deploy_or_update(
                                         php_memory_mb: None, php_max_workers: None,
                                         custom_nginx: None, php_preset: None, app_command: None,
                                         fastcgi_cache: None,
+                                        redis_cache: None,
+                                        redis_db: None,
                                     };
                                     if let Ok(()) = crate::services::ssl::enable_ssl_for_site(templates, d, &ssl_config).await {
                                         tracing::info!("Auto-SSL: certificate provisioned for {d}");
@@ -794,6 +796,8 @@ async fn setup_nginx_proxy(
         php_preset: None,
         app_command: None,
         fastcgi_cache: None,
+        redis_cache: None,
+        redis_db: None,
     };
 
     let rendered = crate::services::nginx::render_site_config(templates, domain, &site_config)

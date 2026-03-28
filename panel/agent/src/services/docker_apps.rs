@@ -8,6 +8,206 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio_stream::StreamExt;
 
+// ── Container auto-update detection ────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct ImageUpdateInfo {
+    pub container_id: String,
+    pub name: String,
+    pub image: String,
+    pub current_digest: Option<String>,
+    pub remote_digest: Option<String>,
+    pub update_available: bool,
+    pub check_error: Option<String>,
+}
+
+struct ImageRef {
+    registry: String,
+    repository: String,
+    tag: String,
+}
+
+/// Parse a Docker image reference into registry, repository, tag.
+/// Examples:
+///   "redis:7-alpine"           → registry-1.docker.io / library/redis / 7-alpine
+///   "grafana/grafana:latest"   → registry-1.docker.io / grafana/grafana / latest
+///   "ghcr.io/foo/bar:v1"      → ghcr.io / foo/bar / v1
+fn parse_image_ref(image: &str) -> ImageRef {
+    // Strip any @sha256:... digest suffix
+    let image = image.split('@').next().unwrap_or(image);
+
+    let has_registry = image.contains('/') && {
+        let first = image.split('/').next().unwrap_or("");
+        first.contains('.') || first.contains(':')
+    };
+
+    let (registry, rest) = if has_registry {
+        let (reg, rest) = image.split_once('/').unwrap_or(("", image));
+        (reg.to_string(), rest.to_string())
+    } else if image.contains('/') {
+        ("registry-1.docker.io".to_string(), image.to_string())
+    } else {
+        ("registry-1.docker.io".to_string(), format!("library/{image}"))
+    };
+
+    let (repository, tag) = if let Some((r, t)) = rest.rsplit_once(':') {
+        (r.to_string(), t.to_string())
+    } else {
+        (rest, "latest".to_string())
+    };
+
+    ImageRef { registry, repository, tag }
+}
+
+/// Fetch the manifest digest from a Docker registry (Docker Hub, GHCR, or generic OCI).
+async fn get_registry_digest(image_ref: &ImageRef) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client: {e}"))?;
+
+    let accept = "application/vnd.docker.distribution.manifest.list.v2+json, \
+                  application/vnd.oci.image.index.v1+json, \
+                  application/vnd.docker.distribution.manifest.v2+json, \
+                  application/vnd.oci.image.manifest.v1+json";
+
+    if image_ref.registry == "registry-1.docker.io" || image_ref.registry == "docker.io" {
+        // Docker Hub auth
+        let token_url = format!(
+            "https://auth.docker.io/token?service=registry.docker.io&scope=repository:{}:pull",
+            image_ref.repository
+        );
+        #[derive(Deserialize)]
+        struct TokenResp { token: String }
+
+        let token: TokenResp = client.get(&token_url)
+            .send().await.map_err(|e| format!("Auth failed: {e}"))?
+            .json().await.map_err(|e| format!("Auth parse: {e}"))?;
+
+        let url = format!(
+            "https://registry-1.docker.io/v2/{}/manifests/{}",
+            image_ref.repository, image_ref.tag
+        );
+        let resp = client.head(&url)
+            .header("Authorization", format!("Bearer {}", token.token))
+            .header("Accept", accept)
+            .send().await.map_err(|e| format!("Manifest fetch: {e}"))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("Registry HTTP {}", resp.status()));
+        }
+        extract_digest(&resp)
+    } else if image_ref.registry == "ghcr.io" {
+        // GitHub Container Registry
+        let token_url = format!(
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:{}:pull",
+            image_ref.repository
+        );
+        #[derive(Deserialize)]
+        struct TokenResp { token: String }
+
+        let token: TokenResp = client.get(&token_url)
+            .send().await.map_err(|e| format!("GHCR auth: {e}"))?
+            .json().await.map_err(|e| format!("GHCR auth parse: {e}"))?;
+
+        let url = format!(
+            "https://ghcr.io/v2/{}/manifests/{}",
+            image_ref.repository, image_ref.tag
+        );
+        let resp = client.head(&url)
+            .header("Authorization", format!("Bearer {}", token.token))
+            .header("Accept", accept)
+            .send().await.map_err(|e| format!("GHCR manifest: {e}"))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("GHCR HTTP {}", resp.status()));
+        }
+        extract_digest(&resp)
+    } else {
+        // Generic OCI registry — try anonymous access
+        let url = format!(
+            "https://{}/v2/{}/manifests/{}",
+            image_ref.registry, image_ref.repository, image_ref.tag
+        );
+        let resp = client.head(&url)
+            .header("Accept", accept)
+            .send().await.map_err(|e| format!("Registry: {e}"))?;
+
+        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err("Auth required".to_string());
+        }
+        if !resp.status().is_success() {
+            return Err(format!("HTTP {}", resp.status()));
+        }
+        extract_digest(&resp)
+    }
+}
+
+fn extract_digest(resp: &reqwest::Response) -> Result<String, String> {
+    resp.headers()
+        .get("docker-content-digest")
+        .ok_or_else(|| "No digest header".to_string())?
+        .to_str()
+        .map(|s| s.to_string())
+        .map_err(|e| format!("Invalid digest: {e}"))
+}
+
+/// Check all managed containers for available image updates by comparing
+/// local RepoDigests against registry manifests.
+pub async fn check_image_updates() -> Result<Vec<ImageUpdateInfo>, String> {
+    let docker = Docker::connect_with_local_defaults()
+        .map_err(|e| format!("Docker connect: {e}"))?;
+
+    let apps = list_deployed_apps().await?;
+    let mut results = Vec::with_capacity(apps.len());
+
+    for app in &apps {
+        let image = match &app.image {
+            Some(img) => img.clone(),
+            None => {
+                results.push(ImageUpdateInfo {
+                    container_id: app.container_id.clone(),
+                    name: app.name.clone(),
+                    image: "unknown".to_string(),
+                    current_digest: None,
+                    remote_digest: None,
+                    update_available: false,
+                    check_error: Some("No image info".to_string()),
+                });
+                continue;
+            }
+        };
+
+        // Get local image digest from RepoDigests
+        let local_digest = docker.inspect_image(&image).await.ok()
+            .and_then(|info| info.repo_digests)
+            .and_then(|d| d.into_iter().next())
+            .and_then(|d| d.split('@').nth(1).map(|s| s.to_string()));
+
+        let image_ref = parse_image_ref(&image);
+
+        let (remote_digest, check_error, update_available) = match get_registry_digest(&image_ref).await {
+            Ok(digest) => {
+                let has_update = local_digest.as_ref().map_or(false, |local| local != &digest);
+                (Some(digest), None, has_update)
+            }
+            Err(e) => (None, Some(e), false),
+        };
+
+        results.push(ImageUpdateInfo {
+            container_id: app.container_id.clone(),
+            name: app.name.clone(),
+            image,
+            current_digest: local_digest,
+            remote_digest,
+            update_available,
+            check_error,
+        });
+    }
+
+    Ok(results)
+}
+
 /// Template definition used in the static array (slice-based, no heap allocation).
 struct AppTemplateDef {
     id: &'static str,

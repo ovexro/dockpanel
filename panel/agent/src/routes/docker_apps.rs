@@ -114,6 +114,8 @@ async fn deploy(
                 php_preset: None,
                 app_command: None,
                 fastcgi_cache: None,
+                redis_cache: None,
+                redis_db: None,
             };
 
             match nginx::render_site_config(&state.templates, domain, &site_config) {
@@ -200,6 +202,8 @@ async fn deploy(
                                         php_preset: None,
                                         app_command: None,
                                         fastcgi_cache: None,
+                redis_cache: None,
+                redis_db: None,
                                     };
                                     match ssl::enable_ssl_for_site(&state.templates, domain, &ssl_site_config).await {
                                         Ok(()) => {
@@ -1301,9 +1305,24 @@ async fn update_container_limits(
     })))
 }
 
+/// GET /apps/update-check — Check all managed containers for available image updates.
+async fn update_check() -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    match docker_apps::check_image_updates().await {
+        Ok(results) => {
+            let count = results.iter().filter(|r| r.update_available).count();
+            Ok(Json(serde_json::json!({
+                "updates": results,
+                "updates_available": count,
+            })))
+        }
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e})))),
+    }
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/apps/templates", get(templates))
+        .route("/apps/update-check", get(update_check))
         .route("/apps/deploy", post(deploy))
         .route("/apps/compose/parse", post(compose_parse))
         .route("/apps/compose/deploy", post(compose_deploy))

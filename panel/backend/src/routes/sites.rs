@@ -336,6 +336,9 @@ pub async fn create(
     if let Some(ref preset) = body.php_preset {
         agent_body["php_preset"] = serde_json::json!(preset);
     }
+    agent_body["fastcgi_cache"] = serde_json::json!(false);
+    agent_body["redis_cache"] = serde_json::json!(false);
+    agent_body["redis_db"] = serde_json::json!(0);
 
     // Call agent to create nginx config
     let agent_path = format!("/nginx/sites/{}", body.domain);
@@ -958,6 +961,8 @@ pub async fn switch_php(
         "runtime": "php",
         "php_socket": format!("unix:/run/php/php{version}-fpm.sock"),
         "fastcgi_cache": site.fastcgi_cache,
+        "redis_cache": site.redis_cache,
+        "redis_db": site.redis_db,
     });
 
     if let Some(ref preset) = site.php_preset {
@@ -1137,6 +1142,8 @@ pub async fn update_limits(
         "php_memory_mb": php_memory,
         "php_max_workers": php_workers,
         "fastcgi_cache": site.fastcgi_cache,
+        "redis_cache": site.redis_cache,
+        "redis_db": site.redis_db,
     });
     if let Some(ref custom) = body.custom_nginx {
         agent_body["custom_nginx"] = serde_json::json!(custom);
@@ -1228,6 +1235,14 @@ pub async fn remove(
                 }
             }
         }
+    }
+
+    // Flush Redis DB for this site if Redis cache was enabled
+    if site.redis_cache {
+        agent.post(
+            &format!("/nginx/sites/{}/redis/purge", site.domain),
+            Some(serde_json::json!({ "redis_db": site.redis_db })),
+        ).await.ok(); // Best-effort — don't block deletion
     }
 
     // Remove nginx config + SSL + PHP pool + site files + logs
@@ -1908,6 +1923,8 @@ pub async fn clone_site(
         nginx_body["php_preset"] = serde_json::json!(preset);
     }
     nginx_body["fastcgi_cache"] = serde_json::json!(source.fastcgi_cache);
+    nginx_body["redis_cache"] = serde_json::json!(source.redis_cache);
+    nginx_body["redis_db"] = serde_json::json!(source.redis_db);
 
     agent.put(&format!("/nginx/sites/{target_domain}"), nginx_body).await
         .map_err(|e| agent_error("Nginx config", e))?;
@@ -2375,5 +2392,175 @@ pub async fn purge_fastcgi_cache(
     Ok(Json(serde_json::json!({
         "ok": true,
         "message": format!("FastCGI cache purged for {}", site.domain),
+    })))
+}
+
+/// PUT /api/sites/{id}/redis-cache — Toggle Redis object cache for a PHP site.
+pub async fn toggle_redis_cache(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let site: crate::models::Site = sqlx::query_as(
+        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("toggle redis cache", e))?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    if site.runtime != "php" {
+        return Err(err(StatusCode::BAD_REQUEST, "Redis object cache is only available for PHP sites"));
+    }
+
+    let enabled = body.get("enabled")
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Missing 'enabled' boolean field"))?;
+
+    if enabled == site.redis_cache {
+        return Ok(Json(serde_json::json!({
+            "ok": true,
+            "redis_cache": enabled,
+            "message": if enabled { "Redis cache is already enabled" } else { "Redis cache is already disabled" },
+        })));
+    }
+
+    // Assign unique Redis DB number (0-15) when enabling
+    let redis_db = if enabled {
+        let used: Vec<(i32,)> = sqlx::query_as(
+            "SELECT redis_db FROM sites WHERE redis_cache = true AND id != $1"
+        )
+        .bind(id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| internal_error("redis db allocation", e))?;
+
+        let used_dbs: std::collections::HashSet<i32> = used.into_iter().map(|(db,)| db).collect();
+        (1..=15).find(|n| !used_dbs.contains(n))
+            .ok_or_else(|| err(StatusCode::CONFLICT, "All Redis DB slots (1-15) are in use"))?
+    } else {
+        0
+    };
+
+    // Configure Redis on the agent
+    if enabled {
+        agent.post(
+            &format!("/nginx/sites/{}/redis/enable", site.domain),
+            Some(serde_json::json!({
+                "redis_db": redis_db,
+                "php_preset": site.php_preset,
+            })),
+        ).await.map_err(|e| agent_error("Redis cache enable", e))?;
+    } else {
+        agent.post(
+            &format!("/nginx/sites/{}/redis/disable", site.domain),
+            None,
+        ).await.map_err(|e| agent_error("Redis cache disable", e))?;
+    }
+
+    // Rebuild nginx config with redis_cache setting
+    let mut agent_body = serde_json::json!({
+        "runtime": "php",
+        "fastcgi_cache": site.fastcgi_cache,
+        "redis_cache": enabled,
+        "redis_db": redis_db,
+        "rate_limit": site.rate_limit,
+        "max_upload_mb": site.max_upload_mb,
+        "php_memory_mb": site.php_memory_mb,
+        "php_max_workers": site.php_max_workers,
+    });
+    if let Some(ref preset) = site.php_preset {
+        agent_body["php_preset"] = serde_json::json!(preset);
+    }
+    if let Some(ref custom) = site.custom_nginx {
+        agent_body["custom_nginx"] = serde_json::json!(custom);
+    }
+    if let Some(ref php) = site.php_version {
+        agent_body["php_socket"] = serde_json::json!(format!("unix:/run/php/php{php}-fpm.sock"));
+    }
+    if site.ssl_enabled {
+        agent_body["ssl"] = serde_json::json!(true);
+        if let Some(ref cert) = site.ssl_cert_path {
+            agent_body["ssl_cert"] = serde_json::json!(cert);
+        }
+        if let Some(ref key) = site.ssl_key_path {
+            agent_body["ssl_key"] = serde_json::json!(key);
+        }
+    }
+
+    agent.put(
+        &format!("/nginx/sites/{}", site.domain),
+        agent_body,
+    ).await.map_err(|e| agent_error("Redis nginx config", e))?;
+
+    // Update DB
+    sqlx::query("UPDATE sites SET redis_cache = $1, redis_db = $2, updated_at = NOW() WHERE id = $3")
+        .bind(enabled)
+        .bind(redis_db)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| internal_error("toggle redis cache", e))?;
+
+    let action = if enabled { "enabled" } else { "disabled" };
+    tracing::info!("Redis cache {action} for {} (db: {redis_db})", site.domain);
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email,
+        &format!("site.redis_cache.{action}"),
+        Some("site"), Some(&site.domain), None, None,
+    ).await;
+
+    notifications::notify_panel(&state.db, Some(claims.sub),
+        &format!("Redis cache {action}: {}", site.domain),
+        &format!("Redis object cache has been {action} (DB {redis_db})"), "info", "site", None,
+    ).await;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "redis_cache": enabled,
+        "redis_db": redis_db,
+    })))
+}
+
+/// POST /api/sites/{id}/redis-cache/purge — Flush Redis cache for a site.
+pub async fn purge_redis_cache(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let site: crate::models::Site = sqlx::query_as(
+        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("purge redis cache", e))?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    if !site.redis_cache {
+        return Err(err(StatusCode::BAD_REQUEST, "Redis cache is not enabled for this site"));
+    }
+
+    agent.post(
+        &format!("/nginx/sites/{}/redis/purge", site.domain),
+        Some(serde_json::json!({ "redis_db": site.redis_db })),
+    ).await.map_err(|e| agent_error("Purge Redis", e))?;
+
+    tracing::info!("Redis cache purged for {} (db: {})", site.domain, site.redis_db);
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email,
+        "site.redis_cache.purge",
+        Some("site"), Some(&site.domain), None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "message": format!("Redis cache purged for {}", site.domain),
     })))
 }

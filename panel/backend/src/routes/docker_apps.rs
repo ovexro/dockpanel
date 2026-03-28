@@ -1106,3 +1106,17 @@ pub async fn remove_app(
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
+
+/// GET /api/apps/updates — Check all containers for available image updates.
+pub async fn check_updates(
+    State(_state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let result = agent
+        .get("/apps/update-check")
+        .await
+        .map_err(|e| agent_error("Update check", e))?;
+    Ok(Json(result))
+}

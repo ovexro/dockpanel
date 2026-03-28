@@ -45,6 +45,12 @@ pub struct SiteConfig {
     /// Enable FastCGI cache for PHP sites
     #[serde(default)]
     pub fastcgi_cache: Option<bool>,
+    /// Enable Redis object cache for PHP sites
+    #[serde(default)]
+    pub redis_cache: Option<bool>,
+    /// Redis DB number (0-15) for per-site isolation
+    #[serde(default)]
+    pub redis_db: Option<i32>,
 }
 
 #[derive(Serialize)]
@@ -1593,6 +1599,186 @@ async fn purge_cache(
     }
 }
 
+// ── Redis object cache per site ─────────────────────────────────────
+
+#[derive(Deserialize)]
+struct RedisEnableBody {
+    redis_db: i32,
+    php_preset: Option<String>,
+}
+
+/// POST /nginx/sites/{domain}/redis/enable — Configure Redis object cache for a PHP site.
+async fn redis_enable(
+    Path(domain): Path<String>,
+    Json(body): Json<RedisEnableBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_domain(&domain) {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid domain"}))));
+    }
+
+    let redis_db = body.redis_db.clamp(0, 15);
+
+    // Verify Redis is running
+    let check = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        safe_command("redis-cli").args(["ping"]).output(),
+    ).await;
+
+    match check {
+        Ok(Ok(out)) if String::from_utf8_lossy(&out.stdout).trim() == "PONG" => {}
+        _ => {
+            return Err((StatusCode::PRECONDITION_FAILED, Json(serde_json::json!({
+                "error": "Redis is not running. Install Redis first from the Services page."
+            }))));
+        }
+    }
+
+    // For WordPress sites, configure wp-config.php
+    if body.php_preset.as_deref() == Some("wordpress") {
+        let wp_config = format!("/var/www/{domain}/public/wp-config.php");
+        if std::path::Path::new(&wp_config).exists() {
+            // Read current wp-config
+            let content = std::fs::read_to_string(&wp_config)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Read wp-config: {e}")}))))?;
+
+            // Remove any existing Redis config lines
+            let cleaned: Vec<&str> = content.lines()
+                .filter(|l| !l.contains("WP_REDIS_") && !l.contains("WP_CACHE_KEY_SALT"))
+                .collect();
+
+            // Insert Redis config before "That's all, stop editing!" or before first require
+            let redis_config = format!(
+                "// Redis Object Cache (managed by DockPanel)\n\
+                 define('WP_REDIS_HOST', '127.0.0.1');\n\
+                 define('WP_REDIS_PORT', 6379);\n\
+                 define('WP_REDIS_DATABASE', {redis_db});\n\
+                 define('WP_CACHE_KEY_SALT', '{domain}:');\n\
+                 define('WP_REDIS_TIMEOUT', 1);\n\
+                 define('WP_REDIS_READ_TIMEOUT', 1);\n"
+            );
+
+            let joined = cleaned.join("\n");
+            let new_content = if let Some(pos) = joined.find("/* That's all, stop editing!") {
+                format!("{}\n{}\n{}", &joined[..pos], redis_config, &joined[pos..])
+            } else if let Some(pos) = joined.find("require_once") {
+                format!("{}\n{}\n{}", &joined[..pos], redis_config, &joined[pos..])
+            } else {
+                format!("{redis_config}\n{joined}")
+            };
+
+            std::fs::write(&wp_config, new_content)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Write wp-config: {e}")}))))?;
+
+            // Install Redis Object Cache drop-in if not present
+            let dropin = format!("/var/www/{domain}/public/wp-content/object-cache.php");
+            if !std::path::Path::new(&dropin).exists() {
+                // Use wp-cli to install the Redis Object Cache plugin
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    safe_command("sudo")
+                        .args(["-u", "www-data", "wp", "plugin", "install", "redis-cache",
+                               "--activate", "--skip-plugins", "--skip-themes",
+                               &format!("--path=/var/www/{domain}/public")])
+                        .output(),
+                ).await;
+
+                // Enable the Redis drop-in
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(15),
+                    safe_command("sudo")
+                        .args(["-u", "www-data", "wp", "redis", "enable",
+                               "--skip-plugins", "--skip-themes",
+                               &format!("--path=/var/www/{domain}/public")])
+                        .output(),
+                ).await;
+            }
+
+            tracing::info!("WordPress Redis configured for {domain} (db: {redis_db})");
+        }
+    }
+
+    tracing::info!("Redis object cache enabled for {domain} (db: {redis_db})");
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "redis_db": redis_db,
+    })))
+}
+
+/// POST /nginx/sites/{domain}/redis/disable — Remove Redis object cache config.
+async fn redis_disable(
+    Path(domain): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_domain(&domain) {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid domain"}))));
+    }
+
+    // For WordPress, remove Redis config from wp-config.php
+    let wp_config = format!("/var/www/{domain}/public/wp-config.php");
+    if std::path::Path::new(&wp_config).exists() {
+        if let Ok(content) = std::fs::read_to_string(&wp_config) {
+            let cleaned: Vec<&str> = content.lines()
+                .filter(|l| {
+                    !l.contains("WP_REDIS_") &&
+                    !l.contains("WP_CACHE_KEY_SALT") &&
+                    !l.contains("// Redis Object Cache (managed by DockPanel)")
+                })
+                .collect();
+            let _ = std::fs::write(&wp_config, cleaned.join("\n"));
+        }
+
+        // Disable the Redis drop-in
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            safe_command("sudo")
+                .args(["-u", "www-data", "wp", "redis", "disable",
+                       "--skip-plugins", "--skip-themes",
+                       &format!("--path=/var/www/{domain}/public")])
+                .output(),
+        ).await;
+    }
+
+    tracing::info!("Redis object cache disabled for {domain}");
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// POST /nginx/sites/{domain}/redis/purge — Flush the Redis DB for a site.
+async fn redis_purge(
+    Path(domain): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_domain(&domain) {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid domain"}))));
+    }
+
+    let redis_db = body.get("redis_db").and_then(|v| v.as_i64()).unwrap_or(0);
+    if !(0..=15).contains(&redis_db) {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid Redis DB (0-15)"}))));
+    }
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        safe_command("redis-cli")
+            .args(["-n", &redis_db.to_string(), "FLUSHDB"])
+            .output(),
+    ).await;
+
+    match result {
+        Ok(Ok(out)) if out.status.success() => {
+            tracing::info!("Redis DB {redis_db} flushed for {domain}");
+            Ok(Json(serde_json::json!({
+                "ok": true,
+                "message": format!("Redis DB {redis_db} flushed for {domain}"),
+            })))
+        }
+        Ok(Ok(out)) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("redis-cli failed: {stderr}")}))))
+        }
+        Ok(Err(e)) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("redis-cli: {e}")})))),
+        Err(_) => Err((StatusCode::GATEWAY_TIMEOUT, Json(serde_json::json!({"error": "Redis flush timed out"})))),
+    }
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/nginx/sites/{domain}", put(put_site))
@@ -1602,6 +1788,9 @@ pub fn router() -> Router<AppState> {
         .route("/nginx/sites/{domain}/disable", post(disable_site))
         .route("/nginx/sites/{domain}/enable", post(enable_site))
         .route("/nginx/sites/{domain}/cache/purge", post(purge_cache))
+        .route("/nginx/sites/{domain}/redis/enable", post(redis_enable))
+        .route("/nginx/sites/{domain}/redis/disable", post(redis_disable))
+        .route("/nginx/sites/{domain}/redis/purge", post(redis_purge))
         .route("/nginx/test", post(test_nginx))
         .route("/nginx/reload", post(reload_nginx))
         // Redirects

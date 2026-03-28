@@ -61,6 +61,8 @@ pub struct Site {
     pub synced_at: Option<DateTime<Utc>>,
     pub enabled: bool,
     pub fastcgi_cache: bool,
+    pub redis_cache: bool,
+    pub redis_db: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

@@ -283,6 +283,8 @@ pub async fn enable_ssl_for_site(
         php_preset: site_config.php_preset.clone(),
         app_command: site_config.app_command.clone(),
         fastcgi_cache: site_config.fastcgi_cache,
+        redis_cache: site_config.redis_cache,
+        redis_db: site_config.redis_db,
     };
 
     let rendered = nginx::render_site_config(templates, domain, &ssl_config)

@@ -67,6 +67,8 @@ async fn provision(
         php_preset: None,
         app_command: None,
         fastcgi_cache: None,
+        redis_cache: None,
+        redis_db: None,
     };
 
     ssl::enable_ssl_for_site(&state.templates, &domain, &site_config)
@@ -181,6 +183,8 @@ async fn upload_cert(
         php_memory_mb: None, php_max_workers: None,
         custom_nginx: None, php_preset: None, app_command: None,
         fastcgi_cache: None,
+        redis_cache: None,
+        redis_db: None,
     };
 
     ssl::enable_ssl_for_site(&state.templates, &body.domain, &site_config)
