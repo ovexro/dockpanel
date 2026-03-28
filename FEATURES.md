@@ -18,10 +18,10 @@
 | **Incident Management** | Incident lifecycle (investigating→resolved→postmortem), timeline updates, severity, affected components, postmortem | `routes/incidents.rs` | — | `IncidentManagement.tsx` | `managed_incidents`, `incident_updates`, `managed_incident_components` |
 | **Public Status Page** | Customizable status page with component groups, incident history, subscriber notifications, overall status | `routes/incidents.rs` | — | `PublicStatusPage.tsx` | `status_page_config`, `status_page_components`, `status_page_subscribers` |
 | **Cron Jobs** | Cron scheduling with manual execution and history | `routes/crons.rs` | `crons.rs` | `Crons.tsx` | (via agent crontab) |
-| **Docker Apps** | 54 templates, Compose stacks, container lifecycle, registry, image tag change, live resource limits | `routes/docker_apps.rs`, `stacks.rs` | `docker_apps.rs` | `Apps.tsx` | `docker_stacks` |
+| **Docker Apps** | 101 templates, Compose stacks, container lifecycle, registry, image tag change, live resource limits | `routes/docker_apps.rs`, `stacks.rs` | `docker_apps.rs` | `Apps.tsx` | `docker_stacks` |
 | **Git Deploy** | Push-to-deploy, blue-green, Nixpacks (30+ langs), preview envs, one-time scheduled deploys | `routes/git_deploys.rs` | `git_build.rs` | `GitDeploys.tsx` | `git_deploys`, `git_deploy_history`, `git_previews` |
 | **WordPress Toolkit** | Multi-site dashboard, vuln scanning (14 known), hardening (7 checks), bulk updates | `routes/wordpress.rs` | `wordpress.rs`, `wp_vulnerability.rs` | `WordPressToolkit.tsx`, `WordPress.tsx` | `wp_vuln_scans`, `wp_hardening` |
-| **Migration Wizard** | Import from cPanel/Plesk/HestiaCP — sites, databases, mail | `routes/migration.rs` | `migration.rs` | `Migration.tsx` | `migrations` |
+| **Migration Wizard** | Import from cPanel/HestiaCP — sites, databases, mail. Plesk (beta) | `routes/migration.rs` | `migration.rs` | `Migration.tsx` | `migrations` |
 | **Staging** | Clone site to staging, sync to/from production | `routes/staging.rs` | `staging.rs` | (in SiteDetail) | `sites.parent_site_id` |
 
 ## Operations
@@ -130,7 +130,7 @@
 | Agent RAM (RSS) | ~30 MB | 2026-03-19 |
 | API RAM (RSS) | ~27 MB | 2026-03-19 |
 | Total RAM | ~57 MB | 2026-03-19 |
-| App templates | 54 | 2026-03-27 |
+| App templates | 101 | 2026-03-28 |
 | API endpoints | 50+ tested | 2026-03-19 |
 | Frontend pages | 48 | 2026-03-27 |
 | DB tables | 69 migrations | 2026-03-27 |
