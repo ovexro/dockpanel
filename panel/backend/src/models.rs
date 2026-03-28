@@ -60,6 +60,7 @@ pub struct Site {
     pub parent_site_id: Option<Uuid>,
     pub synced_at: Option<DateTime<Utc>>,
     pub enabled: bool,
+    pub fastcgi_cache: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

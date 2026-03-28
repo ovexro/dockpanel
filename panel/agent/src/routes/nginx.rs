@@ -42,6 +42,9 @@ pub struct SiteConfig {
     /// App start command (for node/python runtimes)
     #[serde(default)]
     pub app_command: Option<String>,
+    /// Enable FastCGI cache for PHP sites
+    #[serde(default)]
+    pub fastcgi_cache: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -144,6 +147,22 @@ async fn put_site(
                     tracing::warn!("Failed to write PHP pool config for {domain}: {e}");
                 }
             }
+        }
+    }
+
+    // Create FastCGI cache directory if enabled
+    if config.fastcgi_cache.unwrap_or(false) && config.runtime == "php" {
+        let cache_dir = format!(
+            "/var/cache/nginx/fastcgi/{}",
+            domain.replace('.', "_")
+        );
+        if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+            tracing::warn!("Failed to create cache dir {cache_dir}: {e}");
+        } else {
+            // Ensure nginx can write to it
+            let _ = safe_command_sync("chown")
+                .args(["www-data:www-data", &cache_dir])
+                .output();
         }
     }
 
@@ -322,6 +341,16 @@ async fn delete_site(
 
     // Clean up all associated resources (best-effort, don't fail the delete)
     let pool_name = domain.replace('.', "_");
+
+    // FastCGI cache directory
+    let cache_dir = format!(
+        "/var/cache/nginx/fastcgi/{}",
+        domain.replace('.', "_")
+    );
+    if std::path::Path::new(&cache_dir).exists() {
+        std::fs::remove_dir_all(&cache_dir).ok();
+        tracing::info!("Removed FastCGI cache: {cache_dir}");
+    }
 
     // SSL certificates
     let ssl_dir = format!("/etc/dockpanel/ssl/{domain}");
@@ -1511,6 +1540,59 @@ async fn enable_site(Path(domain): Path<String>) -> Result<Json<serde_json::Valu
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+/// POST /nginx/sites/{domain}/cache/purge — Purge FastCGI cache for a site.
+async fn purge_cache(
+    Path(domain): Path<String>,
+) -> Result<Json<NginxResponse>, (StatusCode, Json<NginxResponse>)> {
+    if !is_valid_domain(&domain) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(NginxResponse {
+                success: false,
+                message: "Invalid domain format".into(),
+            }),
+        ));
+    }
+
+    let cache_dir = format!(
+        "/var/cache/nginx/fastcgi/{}",
+        domain.replace('.', "_")
+    );
+
+    if !std::path::Path::new(&cache_dir).exists() {
+        return Ok(Json(NginxResponse {
+            success: true,
+            message: "No cache directory found (cache may not be enabled)".into(),
+        }));
+    }
+
+    // Remove all files in the cache directory
+    match std::fs::remove_dir_all(&cache_dir) {
+        Ok(_) => {
+            // Recreate the empty directory
+            std::fs::create_dir_all(&cache_dir).ok();
+            let _ = safe_command_sync("chown")
+                .args(["www-data:www-data", &cache_dir])
+                .output();
+            tracing::info!("FastCGI cache purged for {domain}");
+            Ok(Json(NginxResponse {
+                success: true,
+                message: format!("FastCGI cache purged for {domain}"),
+            }))
+        }
+        Err(e) => {
+            tracing::warn!("Failed to purge cache for {domain}: {e}");
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(NginxResponse {
+                    success: false,
+                    message: format!("Failed to purge cache: {e}"),
+                }),
+            ))
+        }
+    }
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/nginx/sites/{domain}", put(put_site))
@@ -1519,6 +1601,7 @@ pub fn router() -> Router<AppState> {
         .route("/nginx/sites/{domain}/rename", post(rename_site))
         .route("/nginx/sites/{domain}/disable", post(disable_site))
         .route("/nginx/sites/{domain}/enable", post(enable_site))
+        .route("/nginx/sites/{domain}/cache/purge", post(purge_cache))
         .route("/nginx/test", post(test_nginx))
         .route("/nginx/reload", post(reload_nginx))
         // Redirects

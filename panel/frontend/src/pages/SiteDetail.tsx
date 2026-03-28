@@ -22,6 +22,7 @@ interface Site {
   parent_site_id: string | null;
   synced_at: string | null;
   enabled: boolean;
+  fastcgi_cache: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -113,6 +114,11 @@ export default function SiteDetail() {
   const [newDomain, setNewDomain] = useState("");
   const [renaming, setRenaming] = useState(false);
   const [renameMsg, setRenameMsg] = useState("");
+
+  // FastCGI Cache
+  const [cacheToggling, setCacheToggling] = useState(false);
+  const [cachePurging, setCachePurging] = useState(false);
+  const [cacheMsg, setCacheMsg] = useState("");
 
   // PHP Extensions
   const [phpExts, setPhpExts] = useState<{ installed: string[]; available: string[] } | null>(null);
@@ -790,6 +796,75 @@ export default function SiteDetail() {
                   {savingLimits ? "Saving..." : "Apply Limits"}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* FastCGI Cache — PHP sites only */}
+      {site.runtime === "php" && site.status === "active" && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-6">
+          <div className="px-5 py-4 border-b border-dark-600 flex items-center justify-between">
+            <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">FastCGI Cache</h2>
+            <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${
+              site.fastcgi_cache ? "bg-rust-500/10 text-rust-400" : "bg-dark-700 text-dark-300"
+            }`}>
+              {site.fastcgi_cache ? "Enabled" : "Disabled"}
+            </span>
+          </div>
+          <div className="p-5 space-y-4">
+            <p className="text-sm text-dark-200">
+              Caches PHP responses at the Nginx level. Dramatically improves page load times for WordPress, Laravel, and other PHP applications. Logged-in users and POST requests bypass the cache automatically.
+            </p>
+            <div className="flex items-center gap-3">
+              <button
+                disabled={cacheToggling}
+                onClick={async () => {
+                  setCacheToggling(true);
+                  setCacheMsg("");
+                  try {
+                    await api.put(`/sites/${id}/fastcgi-cache`, { enabled: !site.fastcgi_cache });
+                    setSite(s => s ? { ...s, fastcgi_cache: !s.fastcgi_cache } : s);
+                    setCacheMsg(site.fastcgi_cache ? "Cache disabled" : "Cache enabled");
+                  } catch (e) {
+                    setCacheMsg(e instanceof Error ? e.message : "Toggle failed");
+                  } finally {
+                    setCacheToggling(false);
+                  }
+                }}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${
+                  site.fastcgi_cache
+                    ? "bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
+                    : "bg-rust-500 text-white hover:bg-rust-600"
+                }`}
+              >
+                {cacheToggling ? "..." : site.fastcgi_cache ? "Disable Cache" : "Enable Cache"}
+              </button>
+              {site.fastcgi_cache && (
+                <button
+                  disabled={cachePurging}
+                  onClick={async () => {
+                    setCachePurging(true);
+                    setCacheMsg("");
+                    try {
+                      await api.post(`/sites/${id}/fastcgi-cache/purge`);
+                      setCacheMsg("Cache purged");
+                    } catch (e) {
+                      setCacheMsg(e instanceof Error ? e.message : "Purge failed");
+                    } finally {
+                      setCachePurging(false);
+                    }
+                  }}
+                  className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 disabled:opacity-50 transition-colors"
+                >
+                  {cachePurging ? "Purging..." : "Purge Cache"}
+                </button>
+              )}
+              {cacheMsg && (
+                <span className={`text-xs ${cacheMsg.includes("failed") || cacheMsg.includes("Failed") ? "text-danger-400" : "text-rust-400"}`}>
+                  {cacheMsg}
+                </span>
+              )}
             </div>
           </div>
         </div>

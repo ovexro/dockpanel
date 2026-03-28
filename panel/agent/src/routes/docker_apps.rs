@@ -113,6 +113,7 @@ async fn deploy(
                 custom_nginx: None,
                 php_preset: None,
                 app_command: None,
+                fastcgi_cache: None,
             };
 
             match nginx::render_site_config(&state.templates, domain, &site_config) {
@@ -198,6 +199,7 @@ async fn deploy(
                                         custom_nginx: None,
                                         php_preset: None,
                                         app_command: None,
+                                        fastcgi_cache: None,
                                     };
                                     match ssl::enable_ssl_for_site(&state.templates, domain, &ssl_site_config).await {
                                         Ok(()) => {

@@ -202,6 +202,10 @@ pub fn render_site_config(
     }
     ctx.insert("custom_nginx", &config.custom_nginx.as_deref().unwrap_or(""));
 
+    // FastCGI cache (PHP sites only)
+    let fastcgi_cache = config.fastcgi_cache.unwrap_or(false) && config.runtime == "php";
+    ctx.insert("fastcgi_cache", &fastcgi_cache);
+
     let ssl = config.ssl.unwrap_or(false);
     ctx.insert("ssl", &ssl);
 

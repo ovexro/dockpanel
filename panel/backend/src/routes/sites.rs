@@ -957,6 +957,7 @@ pub async fn switch_php(
     let mut agent_body = serde_json::json!({
         "runtime": "php",
         "php_socket": format!("unix:/run/php/php{version}-fpm.sock"),
+        "fastcgi_cache": site.fastcgi_cache,
     });
 
     if let Some(ref preset) = site.php_preset {
@@ -1135,6 +1136,7 @@ pub async fn update_limits(
         "max_upload_mb": max_upload,
         "php_memory_mb": php_memory,
         "php_max_workers": php_workers,
+        "fastcgi_cache": site.fastcgi_cache,
     });
     if let Some(ref custom) = body.custom_nginx {
         agent_body["custom_nginx"] = serde_json::json!(custom);
@@ -1905,6 +1907,7 @@ pub async fn clone_site(
     if let Some(ref preset) = source.php_preset {
         nginx_body["php_preset"] = serde_json::json!(preset);
     }
+    nginx_body["fastcgi_cache"] = serde_json::json!(source.fastcgi_cache);
 
     agent.put(&format!("/nginx/sites/{target_domain}"), nginx_body).await
         .map_err(|e| agent_error("Nginx config", e))?;
@@ -2239,5 +2242,138 @@ pub async fn toggle_enabled(
     Ok(Json(serde_json::json!({
         "ok": true,
         "enabled": enabled,
+    })))
+}
+
+/// PUT /api/sites/{id}/fastcgi-cache — Toggle FastCGI cache for a PHP site.
+pub async fn toggle_fastcgi_cache(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let site: crate::models::Site = sqlx::query_as(
+        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("toggle fastcgi cache", e))?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    if site.runtime != "php" {
+        return Err(err(StatusCode::BAD_REQUEST, "FastCGI cache is only available for PHP sites"));
+    }
+
+    let enabled = body.get("enabled")
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Missing 'enabled' boolean field"))?;
+
+    if enabled == site.fastcgi_cache {
+        return Ok(Json(serde_json::json!({
+            "ok": true,
+            "fastcgi_cache": enabled,
+            "message": if enabled { "FastCGI cache is already enabled" } else { "FastCGI cache is already disabled" },
+        })));
+    }
+
+    // Rebuild nginx config with cache setting
+    let mut agent_body = serde_json::json!({
+        "runtime": "php",
+        "fastcgi_cache": enabled,
+        "rate_limit": site.rate_limit,
+        "max_upload_mb": site.max_upload_mb,
+        "php_memory_mb": site.php_memory_mb,
+        "php_max_workers": site.php_max_workers,
+    });
+    if let Some(ref preset) = site.php_preset {
+        agent_body["php_preset"] = serde_json::json!(preset);
+    }
+    if let Some(ref custom) = site.custom_nginx {
+        agent_body["custom_nginx"] = serde_json::json!(custom);
+    }
+    if let Some(ref php) = site.php_version {
+        agent_body["php_socket"] = serde_json::json!(format!("unix:/run/php/php{php}-fpm.sock"));
+    }
+    if site.ssl_enabled {
+        agent_body["ssl"] = serde_json::json!(true);
+        if let Some(ref cert) = site.ssl_cert_path {
+            agent_body["ssl_cert"] = serde_json::json!(cert);
+        }
+        if let Some(ref key) = site.ssl_key_path {
+            agent_body["ssl_key"] = serde_json::json!(key);
+        }
+    }
+
+    agent.put(
+        &format!("/nginx/sites/{}", site.domain),
+        agent_body,
+    ).await.map_err(|e| agent_error("FastCGI cache", e))?;
+
+    // Update DB
+    sqlx::query("UPDATE sites SET fastcgi_cache = $1, updated_at = NOW() WHERE id = $2")
+        .bind(enabled)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| internal_error("toggle fastcgi cache", e))?;
+
+    let action = if enabled { "enabled" } else { "disabled" };
+    tracing::info!("FastCGI cache {action} for {}", site.domain);
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email,
+        &format!("site.fastcgi_cache.{action}"),
+        Some("site"), Some(&site.domain), None, None,
+    ).await;
+
+    notifications::notify_panel(&state.db, Some(claims.sub),
+        &format!("FastCGI cache {action}: {}", site.domain),
+        &format!("FastCGI cache has been {action}"), "info", "site", None,
+    ).await;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "fastcgi_cache": enabled,
+    })))
+}
+
+/// POST /api/sites/{id}/fastcgi-cache/purge — Purge FastCGI cache for a site.
+pub async fn purge_fastcgi_cache(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let site: crate::models::Site = sqlx::query_as(
+        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("purge fastcgi cache", e))?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    if !site.fastcgi_cache {
+        return Err(err(StatusCode::BAD_REQUEST, "FastCGI cache is not enabled for this site"));
+    }
+
+    agent.post(
+        &format!("/nginx/sites/{}/cache/purge", site.domain),
+        None,
+    ).await.map_err(|e| agent_error("Purge cache", e))?;
+
+    tracing::info!("FastCGI cache purged for {}", site.domain);
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email,
+        "site.fastcgi_cache.purge",
+        Some("site"), Some(&site.domain), None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "message": format!("FastCGI cache purged for {}", site.domain),
     })))
 }
