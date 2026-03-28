@@ -9,6 +9,7 @@ pub mod backup_destinations;
 pub mod backup_orchestrator;
 pub mod backup_schedules;
 pub mod backups;
+pub mod cdn;
 pub mod dashboard;
 pub mod oauth;
 pub mod billing;
@@ -565,6 +566,14 @@ pub fn router() -> Router<AppState> {
         .route("/api/settings/test-webhook", post(settings::test_webhook))
         .route("/api/settings/health", get(settings::health))
         // DNS Management
+        // CDN Integration (BunnyCDN + Cloudflare CDN)
+        .route("/api/cdn/zones", get(cdn::list_zones).post(cdn::create_zone))
+        .route("/api/cdn/zones/{id}", put(cdn::update_zone).delete(cdn::delete_zone))
+        .route("/api/cdn/zones/{id}/purge", post(cdn::purge_cache))
+        .route("/api/cdn/zones/{id}/stats", get(cdn::zone_stats))
+        .route("/api/cdn/zones/{id}/test", post(cdn::test_credentials))
+        .route("/api/cdn/zones/{id}/pull-zones", get(cdn::list_pull_zones))
+        // DNS Management
         .route("/api/dns/zones", get(dns::list_zones).post(dns::create_zone))
         .route("/api/dns/zones/{id}", delete(dns::delete_zone))
         .route("/api/dns/zones/{id}/records", get(dns::list_records).post(dns::create_record))
@@ -599,6 +608,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/sites/{id}/deploy/trigger", post(deploy::trigger))
         .route("/api/sites/{id}/deploy/keygen", post(deploy::keygen))
         .route("/api/sites/{id}/deploy/logs", get(deploy::logs))
+        .route("/api/sites/{id}/deploy/releases", get(deploy::list_releases))
+        .route("/api/sites/{id}/deploy/rollback/{release_id}", post(deploy::rollback_release))
         // Uptime Monitors
         .route("/api/monitors", get(monitors::list).post(monitors::create))
         .route("/api/monitors/certificates", get(monitors::certificate_dashboard))

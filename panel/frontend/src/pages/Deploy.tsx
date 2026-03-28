@@ -16,6 +16,8 @@ interface DeployConfig {
   deploy_key_path: string | null;
   last_deploy: string | null;
   last_status: string | null;
+  atomic_deploy: boolean;
+  keep_releases: number;
   created_at: string;
   updated_at: string;
 }
@@ -31,15 +33,24 @@ interface DeployLog {
   created_at: string;
 }
 
+interface ReleaseInfo {
+  id: string;
+  active: boolean;
+  commit_hash: string | null;
+  created_at: string;
+}
+
 export default function Deploy() {
   const { id } = useParams<{ id: string }>();
   const [config, setConfig] = useState<DeployConfig | null>(null);
   const [logs, setLogs] = useState<DeployLog[]>([]);
+  const [releases, setReleases] = useState<ReleaseInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deploying, setDeploying] = useState(false);
   const [deployId, setDeployId] = useState<string | null>(null);
   const [generatingKey, setGeneratingKey] = useState(false);
+  const [rollingBack, setRollingBack] = useState<string | null>(null);
   const [message, setMessage] = useState({ text: "", type: "" });
   const [expandedLog, setExpandedLog] = useState<string | null>(null);
   const [showSecret, setShowSecret] = useState(false);
@@ -49,6 +60,8 @@ export default function Deploy() {
   const [branch, setBranch] = useState("main");
   const [deployScript, setDeployScript] = useState("");
   const [autoDeploy, setAutoDeploy] = useState(false);
+  const [atomicDeploy, setAtomicDeploy] = useState(false);
+  const [keepReleases, setKeepReleases] = useState(5);
 
   const load = async () => {
     try {
@@ -63,6 +76,15 @@ export default function Deploy() {
         setBranch(cfg.branch);
         setDeployScript(cfg.deploy_script);
         setAutoDeploy(cfg.auto_deploy);
+        setAtomicDeploy(cfg.atomic_deploy);
+        setKeepReleases(cfg.keep_releases);
+        // Load releases if atomic deploy is enabled
+        if (cfg.atomic_deploy) {
+          try {
+            const rel = await api.get<ReleaseInfo[]>(`/sites/${id}/deploy/releases`);
+            setReleases(rel);
+          } catch { /* no releases yet */ }
+        }
       }
     } catch {
       // No config yet — that's fine
@@ -82,6 +104,8 @@ export default function Deploy() {
         branch: branch || "main",
         deploy_script: deployScript || undefined,
         auto_deploy: autoDeploy,
+        atomic_deploy: atomicDeploy,
+        keep_releases: keepReleases,
       });
       setConfig(cfg);
       setMessage({ text: "Deploy configuration saved.", type: "success" });
@@ -110,6 +134,21 @@ export default function Deploy() {
     }
   };
 
+  const handleRollback = async (releaseId: string) => {
+    if (!confirm(`Rollback to release ${releaseId}? This will instantly activate that release.`)) return;
+    setRollingBack(releaseId);
+    setMessage({ text: "", type: "" });
+    try {
+      await api.post(`/sites/${id}/deploy/rollback/${releaseId}`);
+      setMessage({ text: `Rolled back to release ${releaseId}.`, type: "success" });
+      await load();
+    } catch (err) {
+      setMessage({ text: err instanceof Error ? err.message : "Rollback failed", type: "error" });
+    } finally {
+      setRollingBack(null);
+    }
+  };
+
   const handleKeygen = async () => {
     setGeneratingKey(true);
     setMessage({ text: "", type: "" });
@@ -133,6 +172,9 @@ export default function Deploy() {
       setBranch("main");
       setDeployScript("");
       setAutoDeploy(false);
+      setAtomicDeploy(false);
+      setKeepReleases(5);
+      setReleases([]);
       setMessage({ text: "Deploy configuration removed.", type: "success" });
     } catch (err) {
       setMessage({ text: err instanceof Error ? err.message : "Remove failed", type: "error" });
@@ -260,6 +302,46 @@ export default function Deploy() {
               className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
             />
           </div>
+
+          {/* Zero-Downtime Deploy */}
+          <div className="border border-dark-500 rounded-lg p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-medium text-dark-50">Zero-Downtime Deploy</h3>
+                <p className="text-xs text-dark-300 mt-0.5">
+                  Capistrano-style atomic symlink deploys. Each deploy creates an immutable release. Rollback is instant.
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={atomicDeploy}
+                  onChange={(e) => setAtomicDeploy(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-dark-600 peer-focus:ring-2 peer-focus:ring-accent-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rust-500" />
+              </label>
+            </div>
+            {atomicDeploy && (
+              <div className="flex items-center gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-dark-200 mb-1">Keep Releases</label>
+                  <input
+                    type="number"
+                    value={keepReleases}
+                    onChange={(e) => setKeepReleases(Math.max(2, Math.min(20, parseInt(e.target.value) || 5)))}
+                    min={2}
+                    max={20}
+                    className="w-20 px-3 py-1.5 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+                  />
+                </div>
+                <p className="text-xs text-dark-300 mt-4">
+                  Old releases are automatically cleaned up. Shared dirs (uploads, .env) persist across releases.
+                </p>
+              </div>
+            )}
+          </div>
+
           <div className="flex items-center gap-3">
             <button
               onClick={handleSave}
@@ -271,6 +353,51 @@ export default function Deploy() {
           </div>
         </div>
       </div>
+
+      {/* Releases (atomic deploy only) */}
+      {config?.atomic_deploy && releases.length > 0 && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+          <div className="px-5 py-4 border-b border-dark-600">
+            <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Releases</h2>
+            <p className="text-xs text-dark-200 mt-1">{releases.length} release{releases.length !== 1 ? "s" : ""} on disk. Active release serves traffic.</p>
+          </div>
+          <div className="divide-y divide-dark-600">
+            {releases.map((rel) => (
+              <div key={rel.id} className="px-5 py-3 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  {rel.active ? (
+                    <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-rust-500/15 text-rust-400">
+                      active
+                    </span>
+                  ) : (
+                    <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-dark-700 text-dark-300">
+                      inactive
+                    </span>
+                  )}
+                  <code className="text-sm text-dark-50 font-mono">{rel.id}</code>
+                  {rel.commit_hash && (
+                    <code className="text-xs text-dark-200 bg-dark-700 px-1.5 py-0.5 rounded">
+                      {rel.commit_hash}
+                    </code>
+                  )}
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-dark-300">{rel.created_at ? formatDate(rel.created_at) : ""}</span>
+                  {!rel.active && (
+                    <button
+                      onClick={() => handleRollback(rel.id)}
+                      disabled={rollingBack === rel.id}
+                      className="px-3 py-1 bg-dark-700 text-dark-100 rounded text-xs font-medium hover:bg-dark-600 disabled:opacity-50 transition-colors"
+                    >
+                      {rollingBack === rel.id ? "Rolling back..." : "Rollback"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Deploy Key */}
       {config && (

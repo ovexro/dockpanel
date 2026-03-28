@@ -29,6 +29,8 @@ pub struct DeployConfig {
     pub deploy_key_path: Option<String>,
     pub last_deploy: Option<chrono::DateTime<chrono::Utc>>,
     pub last_status: Option<String>,
+    pub atomic_deploy: bool,
+    pub keep_releases: i32,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -51,6 +53,16 @@ pub struct SetDeployRequest {
     pub branch: Option<String>,
     pub deploy_script: Option<String>,
     pub auto_deploy: Option<bool>,
+    pub atomic_deploy: Option<bool>,
+    pub keep_releases: Option<i32>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct ReleaseInfo {
+    pub id: String,
+    pub active: bool,
+    pub commit_hash: Option<String>,
+    pub created_at: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -107,13 +119,15 @@ pub async fn set_config(
     let branch = body.branch.as_deref().unwrap_or("main");
     let deploy_script = body.deploy_script.as_deref().unwrap_or("");
     let auto_deploy = body.auto_deploy.unwrap_or(false);
+    let atomic_deploy = body.atomic_deploy.unwrap_or(false);
+    let keep_releases = body.keep_releases.unwrap_or(5).clamp(2, 20);
     let webhook_secret = Uuid::new_v4().to_string().replace('-', "");
 
     let config: DeployConfig = sqlx::query_as(
-        "INSERT INTO deploy_configs (site_id, repo_url, branch, deploy_script, auto_deploy, webhook_secret) \
-         VALUES ($1, $2, $3, $4, $5, $6) \
+        "INSERT INTO deploy_configs (site_id, repo_url, branch, deploy_script, auto_deploy, webhook_secret, atomic_deploy, keep_releases) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
          ON CONFLICT (site_id) DO UPDATE SET \
-         repo_url = $2, branch = $3, deploy_script = $4, auto_deploy = $5, updated_at = NOW() \
+         repo_url = $2, branch = $3, deploy_script = $4, auto_deploy = $5, atomic_deploy = $7, keep_releases = $8, updated_at = NOW() \
          RETURNING *",
     )
     .bind(id)
@@ -122,6 +136,8 @@ pub async fn set_config(
     .bind(deploy_script)
     .bind(auto_deploy)
     .bind(&webhook_secret)
+    .bind(atomic_deploy)
+    .bind(keep_releases)
     .fetch_one(&state.db)
     .await
     .map_err(|e| internal_error("set config", e))?;
@@ -415,18 +431,33 @@ async fn execute_deploy(
     ).await;
     tracing::info!("Pre-deploy backup requested for {domain}");
 
-    let agent_body = serde_json::json!({
-        "domain": domain,
-        "repo_url": config.repo_url,
-        "branch": config.branch,
-        "deploy_script": if config.deploy_script.is_empty() { None } else { Some(&config.deploy_script) },
-        "key_path": config.deploy_key_path,
-    });
-
-    let result = agent
-        .post("/deploy/run", Some(agent_body))
-        .await
-        .map_err(|e| agent_error("Deploy execution", e))?;
+    // Choose atomic or standard deploy path
+    let result = if config.atomic_deploy {
+        let agent_body = serde_json::json!({
+            "domain": domain,
+            "repo_url": config.repo_url,
+            "branch": config.branch,
+            "deploy_script": if config.deploy_script.is_empty() { None } else { Some(&config.deploy_script) },
+            "key_path": config.deploy_key_path,
+            "keep_releases": config.keep_releases,
+        });
+        agent
+            .post("/deploy/atomic", Some(agent_body))
+            .await
+            .map_err(|e| agent_error("Atomic deploy execution", e))?
+    } else {
+        let agent_body = serde_json::json!({
+            "domain": domain,
+            "repo_url": config.repo_url,
+            "branch": config.branch,
+            "deploy_script": if config.deploy_script.is_empty() { None } else { Some(&config.deploy_script) },
+            "key_path": config.deploy_key_path,
+        });
+        agent
+            .post("/deploy/run", Some(agent_body))
+            .await
+            .map_err(|e| agent_error("Deploy execution", e))?
+    };
 
     let success = result.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
     let output = result.get("output").and_then(|v| v.as_str()).unwrap_or("");
@@ -605,4 +636,64 @@ async fn execute_deploy(
     }
 
     Ok(log)
+}
+
+/// GET /api/sites/{id}/deploy/releases — List releases for atomic deploy site.
+pub async fn list_releases(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<ReleaseInfo>>, ApiError> {
+    let domain = get_site(&state, id, claims.sub).await?;
+
+    let result = agent
+        .get(&format!("/deploy/releases/{domain}"))
+        .await
+        .map_err(|e| agent_error("List releases", e))?;
+
+    let releases: Vec<ReleaseInfo> = serde_json::from_value(result)
+        .unwrap_or_default();
+
+    Ok(Json(releases))
+}
+
+/// POST /api/sites/{id}/deploy/rollback/{release_id} — Rollback to a specific release.
+pub async fn rollback_release(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path((id, release_id)): Path<(Uuid, String)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = get_site(&state, id, claims.sub).await?;
+
+    let result = agent
+        .post("/deploy/activate", Some(serde_json::json!({
+            "domain": domain,
+            "release_id": release_id,
+        })))
+        .await
+        .map_err(|e| agent_error("Rollback release", e))?;
+
+    // Record rollback in deploy logs
+    sqlx::query(
+        "INSERT INTO deploy_logs (site_id, commit_hash, status, output, triggered_by, duration_ms) \
+         VALUES ($1, $2, 'success', $3, 'rollback', 0)",
+    )
+    .bind(id)
+    .bind(&release_id)
+    .bind(format!("Rolled back to release {release_id}"))
+    .execute(&state.db)
+    .await
+    .ok();
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "deploy.rollback",
+        Some("deploy"), Some(&domain), Some(&release_id), Some("success"),
+    ).await;
+
+    // Reload nginx to pick up any config changes
+    let _ = agent.post("/nginx/reload", None::<serde_json::Value>).await;
+
+    Ok(Json(result))
 }

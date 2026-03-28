@@ -84,6 +84,10 @@ echo "── Git Deploys ──"
 test_api GET /api/git-deploys "List git deploys"
 
 echo ""
+echo "── CDN ──"
+test_api GET /api/cdn/zones "List CDN zones"
+
+echo ""
 echo "── DNS ──"
 test_api GET /api/dns/zones "List DNS zones"
 
