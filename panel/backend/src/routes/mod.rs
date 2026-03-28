@@ -47,6 +47,7 @@ pub mod resellers;
 pub mod secrets;
 pub mod passkeys;
 pub mod webhook_gateway;
+pub mod whmcs;
 pub mod wordpress;
 pub mod ws_metrics;
 
@@ -759,6 +760,13 @@ pub fn router() -> Router<AppState> {
         .route("/api/webhook-gateway/endpoints/{id}/routes", get(webhook_gateway::list_routes).post(webhook_gateway::create_route))
         .route("/api/webhook-gateway/routes/{route_id}", delete(webhook_gateway::delete_route))
         .route("/api/webhook-gateway/deliveries/{delivery_id}/replay", post(webhook_gateway::replay_delivery))
+        // WHMCS billing integration
+        .route("/api/whmcs/config", get(whmcs::get_config).put(whmcs::update_config).delete(whmcs::delete_config))
+        .route("/api/whmcs/webhook", post(whmcs::webhook))
+        .route("/api/whmcs/services", get(whmcs::list_services))
+        // App migration between servers
+        .route("/api/migrations/apps", get(whmcs::list_migrations).post(whmcs::start_migration))
+        .route("/api/migrations/apps/{id}", get(whmcs::migration_status))
         // Secrets Manager
         .route("/api/secrets/vaults", get(secrets::list_vaults).post(secrets::create_vault))
         .route("/api/secrets/vaults/{vault_id}", delete(secrets::delete_vault))
