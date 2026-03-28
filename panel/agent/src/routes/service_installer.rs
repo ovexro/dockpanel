@@ -39,6 +39,10 @@ pub fn router() -> Router<AppState> {
         .route("/services/uninstall/composer", post(uninstall_composer))
         .route("/services/install/waf", post(install_waf))
         .route("/services/uninstall/waf", post(uninstall_waf))
+        .route("/services/install/cloudflared", post(install_cloudflared))
+        .route("/services/uninstall/cloudflared", post(uninstall_cloudflared))
+        .route("/services/cloudflared/configure", post(configure_cloudflared))
+        .route("/services/cloudflared/status", get(cloudflared_status))
 }
 
 // ── Status check ────────────────────────────────────────────────────────
@@ -67,6 +71,9 @@ async fn install_status() -> Result<Json<serde_json::Value>, ApiErr> {
     let waf_installed = std::path::Path::new("/etc/modsecurity/modsecurity.conf").exists()
         && is_installed("libmodsecurity3").await;
 
+    let cloudflared_installed = which("cloudflared").await;
+    let cloudflared_running = is_active("cloudflared").await;
+
     Ok(Json(serde_json::json!({
         "php": { "installed": php_installed, "running": php_running, "version": php_version },
         "certbot": { "installed": certbot_installed },
@@ -77,6 +84,7 @@ async fn install_status() -> Result<Json<serde_json::Value>, ApiErr> {
         "nodejs": { "installed": nodejs_installed },
         "composer": { "installed": composer_installed },
         "waf": { "installed": waf_installed },
+        "cloudflared": { "installed": cloudflared_installed, "running": cloudflared_running },
     })))
 }
 
@@ -888,6 +896,146 @@ async fn uninstall_waf() -> Result<Json<serde_json::Value>, ApiErr> {
 
     tracing::info!("WAF uninstalled");
     Ok(ok("WAF (ModSecurity3) uninstalled"))
+}
+
+// ── Cloudflare Tunnel (cloudflared) ─────────────────────────────────
+
+async fn install_cloudflared() -> Result<Json<serde_json::Value>, ApiErr> {
+    tracing::info!("Installing cloudflared...");
+
+    let output = tokio::time::timeout(
+        Duration::from_secs(120),
+        safe_command("sh")
+            .args(["-c", "curl -sL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg && \
+                echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared $(lsb_release -cs) main' > /etc/apt/sources.list.d/cloudflared.list && \
+                DEBIAN_FRONTEND=noninteractive apt-get update && \
+                DEBIAN_FRONTEND=noninteractive apt-get install -y cloudflared"])
+            .output()
+    ).await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "cloudflared install timed out"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Install: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("cloudflared install failed: {}", stderr.chars().take(400).collect::<String>())));
+    }
+
+    std::fs::create_dir_all("/etc/cloudflared").ok();
+
+    let verify = tokio::time::timeout(
+        Duration::from_secs(5),
+        safe_command("cloudflared").args(["version"]).output()
+    ).await;
+    let version = verify.ok()
+        .and_then(|r| r.ok())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    tracing::info!("cloudflared installed: {version}");
+    Ok(ok(&format!("cloudflared installed: {version}")))
+}
+
+async fn uninstall_cloudflared() -> Result<Json<serde_json::Value>, ApiErr> {
+    tracing::info!("Uninstalling cloudflared...");
+
+    let _ = tokio::time::timeout(Duration::from_secs(30), safe_command("systemctl").args(["stop", "cloudflared"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(30), safe_command("systemctl").args(["disable", "cloudflared"]).output()).await;
+
+    let output = tokio::time::timeout(
+        Duration::from_secs(120),
+        safe_command("sh")
+            .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get purge -y cloudflared && apt-get autoremove -y"])
+            .output()
+    ).await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Timeout"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Uninstall: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed: {}", stderr.chars().take(300).collect::<String>())));
+    }
+
+    let _ = std::fs::remove_dir_all("/etc/cloudflared");
+    tracing::info!("cloudflared uninstalled");
+    Ok(ok("cloudflared uninstalled"))
+}
+
+/// POST /services/cloudflared/configure — Configure tunnel with token and ingress rules.
+async fn configure_cloudflared(
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    let token = body.get("token").and_then(|v| v.as_str()).unwrap_or("");
+    if token.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "Missing tunnel token"));
+    }
+
+    // Validate token format (base64-encoded, typically 100+ chars)
+    if token.len() < 50 {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid tunnel token format"));
+    }
+
+    std::fs::create_dir_all("/etc/cloudflared").ok();
+
+    // Write systemd service that uses the token
+    let service = format!(
+        "[Unit]\n\
+         Description=Cloudflare Tunnel\n\
+         After=network-online.target\n\
+         Wants=network-online.target\n\n\
+         [Service]\n\
+         Type=simple\n\
+         ExecStart=/usr/bin/cloudflared tunnel run --token {token}\n\
+         Restart=on-failure\n\
+         RestartSec=5\n\
+         LimitNOFILE=65536\n\n\
+         [Install]\n\
+         WantedBy=multi-user.target\n"
+    );
+
+    std::fs::write("/etc/systemd/system/cloudflared.service", &service)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Write service: {e}")))?;
+
+    // Reload systemd and start
+    let _ = tokio::time::timeout(Duration::from_secs(10), safe_command("systemctl").args(["daemon-reload"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(10), safe_command("systemctl").args(["enable", "cloudflared"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(15), safe_command("systemctl").args(["restart", "cloudflared"]).output()).await;
+
+    // Check if running
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    let running = is_active("cloudflared").await;
+
+    tracing::info!("Cloudflare Tunnel configured, running: {running}");
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "running": running,
+    })))
+}
+
+/// GET /services/cloudflared/status — Get tunnel connection status.
+async fn cloudflared_status() -> Result<Json<serde_json::Value>, ApiErr> {
+    let installed = which("cloudflared").await;
+    let running = is_active("cloudflared").await;
+
+    let version = if installed {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            safe_command("cloudflared").args(["version"]).output()
+        ).await.ok()
+            .and_then(|r| r.ok())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    } else {
+        None
+    };
+
+    let has_service = std::path::Path::new("/etc/systemd/system/cloudflared.service").exists();
+
+    Ok(Json(serde_json::json!({
+        "installed": installed,
+        "running": running,
+        "version": version,
+        "configured": has_service,
+    })))
 }
 
 async fn detect_available_php() -> Option<String> {

@@ -356,3 +356,176 @@ pub fn is_auto_update_enabled(domain: &str) -> bool {
         .map(|o| String::from_utf8_lossy(&o.stdout).contains(&marker))
         .unwrap_or(false)
 }
+
+/// Create a pre-update snapshot (files + DB) for rollback.
+pub async fn create_update_snapshot(domain: &str) -> Result<String, String> {
+    let path = site_path(domain)?;
+    let snapshot_dir = format!("/var/backups/dockpanel/wp-snapshots/{domain}");
+    std::fs::create_dir_all(&snapshot_dir)
+        .map_err(|e| format!("Create snapshot dir: {e}"))?;
+
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let snapshot_path = format!("{snapshot_dir}/pre-update-{timestamp}.tar.gz");
+
+    // Tar the site directory
+    let tar = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        safe_command("tar")
+            .args(["czf", &snapshot_path, "-C", "/var/www", &format!("{domain}/public")])
+            .output()
+    ).await
+        .map_err(|_| "Snapshot tar timed out".to_string())?
+        .map_err(|e| format!("Snapshot tar: {e}"))?;
+
+    if !tar.status.success() {
+        let stderr = String::from_utf8_lossy(&tar.stderr);
+        return Err(format!("Snapshot failed: {}", stderr.chars().take(200).collect::<String>()));
+    }
+
+    // DB dump if WordPress has a database
+    let db_name_output = wp(domain, &["config", "get", "DB_NAME"]).await.unwrap_or_default();
+    let db_name = db_name_output.trim();
+    if !db_name.is_empty() {
+        let db_path = format!("{snapshot_dir}/pre-update-{timestamp}.sql");
+        let _ = wp(domain, &["db", "export", &db_path, "--quiet"]).await;
+    }
+
+    // Cleanup old snapshots (keep last 5)
+    if let Ok(mut entries) = std::fs::read_dir(&snapshot_dir) {
+        let mut files: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tar.gz"))
+            .collect();
+        files.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
+        for old in files.iter().skip(5) {
+            std::fs::remove_file(old.path()).ok();
+            // Also remove matching .sql
+            let sql = old.path().with_extension("").with_extension("sql");
+            std::fs::remove_file(sql).ok();
+        }
+    }
+
+    tracing::info!("WP update snapshot created for {domain}: {snapshot_path}");
+    Ok(snapshot_path)
+}
+
+/// Rollback a WordPress site to a snapshot.
+pub async fn rollback_from_snapshot(domain: &str, snapshot_path: &str) -> Result<(), String> {
+    if !std::path::Path::new(snapshot_path).exists() {
+        return Err("Snapshot file not found".to_string());
+    }
+
+    // Extract tar over site directory
+    let restore = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        safe_command("tar")
+            .args(["xzf", snapshot_path, "-C", "/var/www"])
+            .output()
+    ).await
+        .map_err(|_| "Rollback timed out".to_string())?
+        .map_err(|e| format!("Rollback tar: {e}"))?;
+
+    if !restore.status.success() {
+        return Err("Rollback tar extraction failed".to_string());
+    }
+
+    // Restore DB if SQL dump exists
+    let sql_path = snapshot_path.replace(".tar.gz", ".sql");
+    if std::path::Path::new(&sql_path).exists() {
+        let _ = wp(domain, &["db", "import", &sql_path, "--quiet"]).await;
+    }
+
+    // Fix ownership
+    let _ = safe_command("chown")
+        .args(["-R", "www-data:www-data", &format!("/var/www/{domain}/public")])
+        .output()
+        .await;
+
+    tracing::info!("WP rollback completed for {domain} from {snapshot_path}");
+    Ok(())
+}
+
+/// Run a health check on a WordPress site after update.
+pub async fn health_check(domain: &str) -> bool {
+    // Check if WordPress responds to wp-cli
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        safe_command("sudo")
+            .args(["-u", "www-data", WP_CLI, "eval", "echo 'OK';",
+                   "--skip-plugins", "--skip-themes", "--allow-root",
+                   &format!("--path={}", site_path(domain).unwrap_or_default())])
+            .output()
+    ).await;
+
+    match result {
+        Ok(Ok(out)) => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            out.status.success() && stdout.contains("OK")
+        }
+        _ => false,
+    }
+}
+
+/// Update WordPress with snapshot + rollback on failure.
+pub async fn update_with_rollback(domain: &str) -> Result<serde_json::Value, String> {
+    let mut log: Vec<String> = Vec::new();
+
+    // 1. Health check before update
+    if !health_check(domain).await {
+        return Err("Site failed pre-update health check — skipping update".to_string());
+    }
+    log.push("Pre-update health check: passed".into());
+
+    // 2. Create snapshot
+    let snapshot = create_update_snapshot(domain).await?;
+    log.push("Snapshot created".into());
+
+    // 3. Get current versions
+    let core_before = wp(domain, &["core", "version"]).await.unwrap_or_default().trim().to_string();
+
+    // 4. Run updates
+    let core_ok = wp(domain, &["core", "update"]).await.is_ok();
+    let plugins_ok = wp(domain, &["plugin", "update", "--all"]).await.is_ok();
+    let themes_ok = wp(domain, &["theme", "update", "--all"]).await.is_ok();
+    log.push(format!("Updates: core={}, plugins={}, themes={}",
+        if core_ok { "ok" } else { "failed" },
+        if plugins_ok { "ok" } else { "failed" },
+        if themes_ok { "ok" } else { "failed" }));
+
+    // 5. Fix ownership
+    let _ = safe_command("chown")
+        .args(["-R", "www-data:www-data", &format!("/var/www/{domain}/public")])
+        .output()
+        .await;
+
+    // 6. Post-update health check
+    let healthy = health_check(domain).await;
+
+    if !healthy {
+        log.push("Post-update health check: FAILED — rolling back".into());
+        match rollback_from_snapshot(domain, &snapshot).await {
+            Ok(()) => {
+                log.push("Rollback completed successfully".into());
+                tracing::warn!("WP update for {domain} rolled back due to health check failure");
+            }
+            Err(e) => {
+                log.push(format!("Rollback failed: {e}"));
+                tracing::error!("WP rollback failed for {domain}: {e}");
+            }
+        }
+    } else {
+        log.push("Post-update health check: passed".into());
+    }
+
+    let core_after = wp(domain, &["core", "version"]).await.unwrap_or_default().trim().to_string();
+
+    Ok(serde_json::json!({
+        "domain": domain,
+        "healthy": healthy,
+        "rolled_back": !healthy,
+        "core_before": core_before,
+        "core_after": core_after,
+        "snapshot": snapshot,
+        "log": log,
+    }))
+}

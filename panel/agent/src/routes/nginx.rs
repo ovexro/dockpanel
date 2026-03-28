@@ -1969,6 +1969,130 @@ fn parse_modsec_event(raw: &str) -> Option<serde_json::Value> {
     }))
 }
 
+// ── Image Optimization ──────────────────────────────────────────────
+
+/// POST /nginx/sites/{domain}/optimize-images — Convert images to WebP/AVIF.
+async fn optimize_images(
+    Path(domain): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_domain(&domain) {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid domain"}))));
+    }
+
+    let site_dir = format!("/var/www/{domain}/public");
+    if !std::path::Path::new(&site_dir).exists() {
+        return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Site directory not found"}))));
+    }
+
+    let format = body.get("format").and_then(|v| v.as_str()).unwrap_or("webp");
+    let quality = body.get("quality").and_then(|v| v.as_u64()).unwrap_or(80);
+    let quality = quality.clamp(1, 100);
+
+    // Check if tools are installed
+    let tool = match format {
+        "avif" => "avifenc",
+        _ => "cwebp",
+    };
+
+    let has_tool = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        safe_command("which").arg(tool).output()
+    ).await.ok().and_then(|r| r.ok()).map(|o| o.status.success()).unwrap_or(false);
+
+    if !has_tool {
+        // Try to install
+        let pkg = match format {
+            "avif" => "libavif-bin",
+            _ => "webp",
+        };
+        let install = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            safe_command("sh")
+                .args(["-c", &format!("DEBIAN_FRONTEND=noninteractive apt-get install -y {pkg}")])
+                .output()
+        ).await;
+
+        if install.ok().and_then(|r| r.ok()).map(|o| o.status.success()).unwrap_or(false) {
+            tracing::info!("Installed {pkg} for image optimization");
+        } else {
+            return Err((StatusCode::PRECONDITION_FAILED, Json(serde_json::json!({
+                "error": format!("{tool} not available. Install '{pkg}' package.")
+            }))));
+        }
+    }
+
+    // Find images and convert
+    let ext_pattern = "jpg,jpeg,png";
+    let find_cmd = format!(
+        "find {site_dir} -type f \\( -name '*.jpg' -o -name '*.jpeg' -o -name '*.png' \\) -size +1k 2>/dev/null | head -500"
+    );
+
+    let find_output = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        safe_command("sh").args(["-c", &find_cmd]).output()
+    ).await
+        .map_err(|_| (StatusCode::GATEWAY_TIMEOUT, Json(serde_json::json!({"error": "Find timed out"}))))?
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Find: {e}")}))))?;
+
+    let files: Vec<&str> = std::str::from_utf8(&find_output.stdout)
+        .unwrap_or("")
+        .lines()
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    let total = files.len();
+    let mut converted = 0u32;
+    let mut skipped = 0u32;
+    let mut saved_bytes: i64 = 0;
+
+    for file in &files {
+        let output_file = match format {
+            "avif" => format!("{file}.avif"),
+            _ => format!("{file}.webp"),
+        };
+
+        // Skip if already converted
+        if std::path::Path::new(&output_file).exists() {
+            skipped += 1;
+            continue;
+        }
+
+        let cmd = match format {
+            "avif" => format!("avifenc --min 0 --max 63 -a end-usage=q -a cq-level={} -a tune=ssim '{}' '{}'",
+                100 - quality, file, output_file),
+            _ => format!("cwebp -q {} '{}' -o '{}'", quality, file, output_file),
+        };
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            safe_command("sh").args(["-c", &cmd]).output()
+        ).await;
+
+        if result.ok().and_then(|r| r.ok()).map(|o| o.status.success()).unwrap_or(false) {
+            // Calculate savings
+            if let (Ok(orig), Ok(opt)) = (std::fs::metadata(file), std::fs::metadata(&output_file)) {
+                saved_bytes += orig.len() as i64 - opt.len() as i64;
+            }
+            converted += 1;
+        }
+    }
+
+    let saved_mb = saved_bytes as f64 / 1048576.0;
+    tracing::info!("Image optimization for {domain}: {converted}/{total} converted ({format}), {saved_mb:.1}MB saved");
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "format": format,
+        "quality": quality,
+        "total_images": total,
+        "converted": converted,
+        "skipped": skipped,
+        "saved_bytes": saved_bytes,
+        "saved_mb": format!("{saved_mb:.1}"),
+    })))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/nginx/sites/{domain}", put(put_site))
@@ -1983,6 +2107,7 @@ pub fn router() -> Router<AppState> {
         .route("/nginx/sites/{domain}/redis/purge", post(redis_purge))
         .route("/nginx/sites/{domain}/waf/configure", post(waf_configure))
         .route("/nginx/sites/{domain}/waf/logs", get(waf_logs))
+        .route("/nginx/sites/{domain}/optimize-images", post(optimize_images))
         .route("/nginx/test", post(test_nginx))
         .route("/nginx/reload", post(reload_nginx))
         // Redirects

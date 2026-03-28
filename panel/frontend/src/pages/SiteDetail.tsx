@@ -132,6 +132,10 @@ export default function SiteDetail() {
   // WAF
   const [wafToggling, setWafToggling] = useState(false);
   const [wafMsg, setWafMsg] = useState("");
+
+  // Image Optimization
+  const [imgOptRunning, setImgOptRunning] = useState(false);
+  const [imgOptResult, setImgOptResult] = useState<{ converted?: number; total_images?: number; saved_mb?: string; format?: string } | null>(null);
   const [wafLogs, setWafLogs] = useState<{ timestamp: string; client_ip: string; uri: string; rule_message: string; severity: string; action: string }[]>([]);
   const [wafLogsLoading, setWafLogsLoading] = useState(false);
 
@@ -1125,6 +1129,63 @@ export default function SiteDetail() {
                 </table>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Image Optimization */}
+      {site.status === "active" && (site.runtime === "php" || site.runtime === "static") && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-6">
+          <div className="px-5 py-4 border-b border-dark-600">
+            <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Image Optimization</h2>
+          </div>
+          <div className="p-5 space-y-4">
+            <p className="text-sm text-dark-200">
+              Convert images to WebP or AVIF for smaller file sizes and faster page loads. Original files are preserved — optimized versions are served automatically by nginx.
+            </p>
+            <div className="flex items-center gap-3 flex-wrap">
+              <button
+                disabled={imgOptRunning}
+                onClick={async () => {
+                  setImgOptRunning(true);
+                  setImgOptResult(null);
+                  try {
+                    const result = await api.post<typeof imgOptResult>(`/sites/${id}/optimize-images`, { format: "webp", quality: 80 });
+                    setImgOptResult(result);
+                  } catch (e) {
+                    setImgOptResult({ converted: 0, total_images: 0, saved_mb: "0", format: "error" });
+                  } finally {
+                    setImgOptRunning(false);
+                  }
+                }}
+                className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
+              >
+                {imgOptRunning ? "Converting..." : "Convert to WebP"}
+              </button>
+              <button
+                disabled={imgOptRunning}
+                onClick={async () => {
+                  setImgOptRunning(true);
+                  setImgOptResult(null);
+                  try {
+                    const result = await api.post<typeof imgOptResult>(`/sites/${id}/optimize-images`, { format: "avif", quality: 70 });
+                    setImgOptResult(result);
+                  } catch (e) {
+                    setImgOptResult({ converted: 0, total_images: 0, saved_mb: "0", format: "error" });
+                  } finally {
+                    setImgOptRunning(false);
+                  }
+                }}
+                className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 disabled:opacity-50 transition-colors"
+              >
+                {imgOptRunning ? "..." : "Convert to AVIF"}
+              </button>
+              {imgOptResult && imgOptResult.format !== "error" && (
+                <span className="text-xs text-rust-400">
+                  {imgOptResult.converted}/{imgOptResult.total_images} converted, {imgOptResult.saved_mb}MB saved ({imgOptResult.format?.toUpperCase()})
+                </span>
+              )}
+            </div>
           </div>
         </div>
       )}

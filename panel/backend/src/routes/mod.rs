@@ -389,6 +389,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/sites/{id}/redis-cache/purge", post(sites::purge_redis_cache))
         .route("/api/sites/{id}/waf", put(sites::toggle_waf))
         .route("/api/sites/{id}/waf/logs", get(sites::waf_logs))
+        .route("/api/sites/{id}/optimize-images", post(sites::optimize_images))
         // PHP versions
         .route("/api/php/versions", get(sites::php_versions))
         .route("/api/php/install", post(sites::php_install))
@@ -571,6 +572,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/dns/zones/{id}/analytics", get(dns::dns_analytics))
         .route("/api/dns/zones/{id}/cf/settings", get(dns::cf_zone_settings).put(dns::cf_update_setting))
         .route("/api/dns/zones/{id}/cf/cache/purge", post(dns::cf_purge_cache))
+        .route("/api/tunnel/configure", post(dns::configure_tunnel))
+        .route("/api/tunnel/status", get(dns::tunnel_status))
         // WordPress Toolkit
         .route("/api/wordpress/sites", get(wordpress::all_wp_sites))
         .route("/api/wordpress/bulk-update", post(wordpress::bulk_update))
@@ -586,6 +589,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/sites/{id}/wordpress/plugin/{action}", post(wordpress::plugin_action))
         .route("/api/sites/{id}/wordpress/theme/{action}", post(wordpress::theme_action))
         .route("/api/sites/{id}/wordpress/auto-update", post(wordpress::set_auto_update))
+        .route("/api/sites/{id}/wordpress/update-safe", post(wordpress::update_safe))
         // Git Deploy
         .route("/api/sites/{id}/deploy", get(deploy::get_config).put(deploy::set_config).delete(deploy::remove_config))
         .route("/api/sites/{id}/deploy/trigger", post(deploy::trigger))

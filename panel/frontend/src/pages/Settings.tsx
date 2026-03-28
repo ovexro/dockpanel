@@ -1873,6 +1873,7 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
     { id: "nodejs", label: "Node.js", desc: "JavaScript runtime for builds, SSR, and npm packages", field: "nodejs", checkInstalled: (s: any) => s?.nodejs?.installed, checkRunning: () => null, extra: () => null },
     { id: "composer", label: "Composer", desc: "PHP dependency manager for Laravel, Symfony, Drupal", field: "composer", checkInstalled: (s: any) => s?.composer?.installed, checkRunning: () => null, extra: () => null },
     { id: "waf", label: "WAF (ModSecurity)", desc: "Web Application Firewall with OWASP CRS — blocks SQL injection, XSS, and OWASP Top 10", field: "waf", checkInstalled: (s: any) => s?.waf?.installed, checkRunning: () => null, extra: () => null },
+    { id: "cloudflared", label: "Cloudflare Tunnel", desc: "Expose sites without port forwarding — zero-trust access via Cloudflare's network", field: "cloudflared", checkInstalled: (s: any) => s?.cloudflared?.installed, checkRunning: (s: any) => s?.cloudflared?.running, extra: () => null },
   ];
 
   return (

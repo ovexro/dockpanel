@@ -471,3 +471,32 @@ pub async fn wp_harden(
 
     Ok(Json(result))
 }
+
+/// POST /api/sites/{id}/wordpress/update-safe — Update WP with snapshot + auto-rollback.
+pub async fn update_safe(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = site_domain(&state, id, claims.sub).await?;
+
+    let result = agent
+        .post_long(
+            &format!("/wordpress/{domain}/update-with-rollback"),
+            None,
+            300,
+        )
+        .await
+        .map_err(|e| agent_error("WP safe update", e))?;
+
+    let rolled_back = result.get("rolled_back").and_then(|v| v.as_bool()).unwrap_or(false);
+    let action = if rolled_back { "wordpress.update.rollback" } else { "wordpress.update.safe" };
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email,
+        action, Some("site"), Some(&domain), None, None,
+    ).await;
+
+    Ok(Json(result))
+}

@@ -412,6 +412,29 @@ export default function WordPress() {
                     {busy === "update-themes" ? "Updating..." : "Update All Themes"}
                   </button>
                 )}
+                <button
+                  onClick={async () => {
+                    setBusy("safe-update");
+                    try {
+                      const result = await api.post<{ rolled_back?: boolean; core_before?: string; core_after?: string; log?: string[] }>(`/sites/${id}/wordpress/update-safe`);
+                      if (result.rolled_back) {
+                        setMessage({ text: "Update failed health check — rolled back to snapshot", type: "warning" });
+                      } else {
+                        setMessage({ text: `Safe update complete: ${result.core_before} → ${result.core_after}`, type: "success" });
+                      }
+                      loadInfo();
+                    } catch (e) {
+                      setMessage({ text: e instanceof Error ? e.message : "Safe update failed", type: "error" });
+                    } finally {
+                      setBusy("");
+                    }
+                  }}
+                  disabled={!!busy}
+                  className="px-3 py-1.5 bg-accent-500/20 text-accent-400 rounded-lg text-xs font-medium hover:bg-accent-500/30 disabled:opacity-50"
+                  title="Creates a snapshot before updating, rolls back automatically if health check fails"
+                >
+                  {busy === "safe-update" ? "Updating..." : "Safe Update (Rollback)"}
+                </button>
                 <label className="flex items-center gap-2 ml-2 cursor-pointer">
                   <span className="text-xs text-dark-200">Auto-update</span>
                   <button

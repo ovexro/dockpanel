@@ -2697,3 +2697,46 @@ pub async fn waf_logs(
 
     Ok(Json(result))
 }
+
+/// POST /api/sites/{id}/optimize-images — Convert site images to WebP/AVIF.
+pub async fn optimize_images(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let site: crate::models::Site = sqlx::query_as(
+        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("optimize images", e))?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    let format = body.get("format").and_then(|v| v.as_str()).unwrap_or("webp");
+    let quality = body.get("quality").and_then(|v| v.as_u64()).unwrap_or(80);
+
+    if format != "webp" && format != "avif" {
+        return Err(err(StatusCode::BAD_REQUEST, "Format must be 'webp' or 'avif'"));
+    }
+
+    let result = agent
+        .post_long(
+            &format!("/nginx/sites/{}/optimize-images", site.domain),
+            Some(serde_json::json!({ "format": format, "quality": quality })),
+            300,
+        )
+        .await
+        .map_err(|e| agent_error("Image optimization", e))?;
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email,
+        "site.optimize_images",
+        Some("site"), Some(&site.domain), Some(format), None,
+    ).await;
+
+    Ok(Json(result))
+}
