@@ -468,6 +468,9 @@ pub async fn enable_ssl_for_site(
         redis_db: site_config.redis_db,
         waf_enabled: site_config.waf_enabled,
         waf_mode: site_config.waf_mode.clone(),
+        csp_policy: site_config.csp_policy.clone(),
+        permissions_policy: site_config.permissions_policy.clone(),
+        bot_protection: site_config.bot_protection.clone(),
     };
 
     let rendered = nginx::render_site_config(templates, domain, &ssl_config)

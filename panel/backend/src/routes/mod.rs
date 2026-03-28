@@ -391,6 +391,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/sites/{id}/waf", put(sites::toggle_waf))
         .route("/api/sites/{id}/waf/logs", get(sites::waf_logs))
         .route("/api/sites/{id}/optimize-images", post(sites::optimize_images))
+        .route("/api/sites/{id}/security-headers", put(sites::update_security_headers))
+        .route("/api/sites/{id}/bot-protection", put(sites::toggle_bot_protection))
         // PHP versions
         .route("/api/php/versions", get(sites::php_versions))
         .route("/api/php/install", post(sites::php_install))

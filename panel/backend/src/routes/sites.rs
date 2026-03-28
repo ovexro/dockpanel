@@ -2740,3 +2740,166 @@ pub async fn optimize_images(
 
     Ok(Json(result))
 }
+
+/// Build the full nginx agent body from a Site model. Shared by all config-rebuild paths.
+fn build_nginx_body(site: &crate::models::Site) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "runtime": site.runtime,
+        "fastcgi_cache": site.fastcgi_cache,
+        "redis_cache": site.redis_cache,
+        "redis_db": site.redis_db,
+        "waf_enabled": site.waf_enabled,
+        "waf_mode": site.waf_mode,
+        "rate_limit": site.rate_limit,
+        "max_upload_mb": site.max_upload_mb,
+        "php_memory_mb": site.php_memory_mb,
+        "php_max_workers": site.php_max_workers,
+        "csp_policy": site.csp_policy,
+        "permissions_policy": site.permissions_policy,
+        "bot_protection": site.bot_protection,
+    });
+    if let Some(ref preset) = site.php_preset {
+        body["php_preset"] = serde_json::json!(preset);
+    }
+    if let Some(ref custom) = site.custom_nginx {
+        body["custom_nginx"] = serde_json::json!(custom);
+    }
+    if let Some(ref php) = site.php_version {
+        body["php_socket"] = serde_json::json!(format!("unix:/run/php/php{php}-fpm.sock"));
+    }
+    if site.ssl_enabled {
+        body["ssl"] = serde_json::json!(true);
+        if let Some(ref cert) = site.ssl_cert_path {
+            body["ssl_cert"] = serde_json::json!(cert);
+        }
+        if let Some(ref key) = site.ssl_key_path {
+            body["ssl_key"] = serde_json::json!(key);
+        }
+    }
+    if site.runtime == "proxy" || site.runtime == "node" || site.runtime == "python" {
+        body["proxy_port"] = serde_json::json!(site.proxy_port);
+    }
+    body
+}
+
+/// PUT /api/sites/{id}/security-headers — Update CSP and Permissions-Policy.
+pub async fn update_security_headers(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let site: crate::models::Site = sqlx::query_as(
+        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("security headers", e))?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    let csp = body.get("csp_policy").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let perms = body.get("permissions_policy").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+    // Validate CSP (max 4KB, no dangerous injections)
+    if let Some(ref csp_val) = csp {
+        if csp_val.len() > 4096 {
+            return Err(err(StatusCode::BAD_REQUEST, "CSP policy must be under 4KB"));
+        }
+        if csp_val.contains('\n') || csp_val.contains('\r') || csp_val.contains('\0') {
+            return Err(err(StatusCode::BAD_REQUEST, "CSP policy contains invalid characters"));
+        }
+    }
+    if let Some(ref perms_val) = perms {
+        if perms_val.len() > 2048 {
+            return Err(err(StatusCode::BAD_REQUEST, "Permissions-Policy must be under 2KB"));
+        }
+    }
+
+    // Update DB
+    sqlx::query("UPDATE sites SET csp_policy = $1, permissions_policy = $2, updated_at = NOW() WHERE id = $3")
+        .bind(&csp)
+        .bind(&perms)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| internal_error("security headers", e))?;
+
+    // Rebuild nginx with updated headers
+    let mut updated_site = site.clone();
+    updated_site.csp_policy = csp.clone();
+    updated_site.permissions_policy = perms.clone();
+    let agent_body = build_nginx_body(&updated_site);
+
+    agent.put(
+        &format!("/nginx/sites/{}", site.domain),
+        agent_body,
+    ).await.map_err(|e| agent_error("Security headers nginx config", e))?;
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email,
+        "site.security_headers",
+        Some("site"), Some(&site.domain), None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "csp_policy": csp,
+        "permissions_policy": perms,
+    })))
+}
+
+/// PUT /api/sites/{id}/bot-protection — Toggle bot protection mode.
+pub async fn toggle_bot_protection(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let site: crate::models::Site = sqlx::query_as(
+        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("bot protection", e))?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    let mode = body.get("mode").and_then(|v| v.as_str()).unwrap_or("off");
+    if !["off", "rate-limit", "challenge", "block"].contains(&mode) {
+        return Err(err(StatusCode::BAD_REQUEST, "Mode must be 'off', 'rate-limit', 'challenge', or 'block'"));
+    }
+
+    // Update DB
+    sqlx::query("UPDATE sites SET bot_protection = $1, updated_at = NOW() WHERE id = $2")
+        .bind(mode)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| internal_error("bot protection", e))?;
+
+    // Rebuild nginx with bot protection
+    let mut updated_site = site.clone();
+    updated_site.bot_protection = mode.to_string();
+    let agent_body = build_nginx_body(&updated_site);
+
+    agent.put(
+        &format!("/nginx/sites/{}", site.domain),
+        agent_body,
+    ).await.map_err(|e| agent_error("Bot protection nginx config", e))?;
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email,
+        &format!("site.bot_protection.{mode}"),
+        Some("site"), Some(&site.domain), None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "bot_protection": mode,
+    })))
+}

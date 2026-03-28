@@ -57,6 +57,15 @@ pub struct SiteConfig {
     /// WAF mode: "detection" (log only) or "prevention" (block)
     #[serde(default)]
     pub waf_mode: Option<String>,
+    /// Content-Security-Policy header value
+    #[serde(default)]
+    pub csp_policy: Option<String>,
+    /// Permissions-Policy header value
+    #[serde(default)]
+    pub permissions_policy: Option<String>,
+    /// Bot protection mode: "off", "rate-limit", "challenge", "block"
+    #[serde(default)]
+    pub bot_protection: Option<String>,
 }
 
 #[derive(Serialize)]

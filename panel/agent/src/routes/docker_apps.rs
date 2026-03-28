@@ -118,6 +118,9 @@ async fn deploy(
                 redis_db: None,
                 waf_enabled: None,
                 waf_mode: None,
+        csp_policy: None,
+        permissions_policy: None,
+        bot_protection: None,
             };
 
             match nginx::render_site_config(&state.templates, domain, &site_config) {
@@ -208,6 +211,9 @@ async fn deploy(
                 redis_db: None,
                 waf_enabled: None,
                 waf_mode: None,
+        csp_policy: None,
+        permissions_policy: None,
+        bot_protection: None,
                                     };
                                     match ssl::enable_ssl_for_site(&state.templates, domain, &ssl_site_config).await {
                                         Ok(()) => {

@@ -27,6 +27,9 @@ interface Site {
   redis_db: number;
   waf_enabled: boolean;
   waf_mode: string;
+  csp_policy: string | null;
+  permissions_policy: string | null;
+  bot_protection: string;
   created_at: string;
   updated_at: string;
 }
@@ -133,6 +136,17 @@ export default function SiteDetail() {
   const [wafToggling, setWafToggling] = useState(false);
   const [wafMsg, setWafMsg] = useState("");
 
+  // Security Headers (CSP)
+  const [cspPolicy, setCspPolicy] = useState("");
+  const [permsPolicy, setPermsPolicy] = useState("");
+  const [headersSaving, setHeadersSaving] = useState(false);
+  const [headersMsg, setHeadersMsg] = useState("");
+
+  // Bot Protection
+  const [botMode, setBotMode] = useState("off");
+  const [botSaving, setBotSaving] = useState(false);
+  const [botMsg, setBotMsg] = useState("");
+
   // Image Optimization
   const [imgOptRunning, setImgOptRunning] = useState(false);
   const [imgOptResult, setImgOptResult] = useState<{ converted?: number; total_images?: number; saved_mb?: string; format?: string } | null>(null);
@@ -221,6 +235,9 @@ export default function SiteDetail() {
         setPhpMemory(String(s.php_memory_mb));
         setPhpWorkers(String(s.php_max_workers));
         setCustomNginx(s.custom_nginx || "");
+        setCspPolicy(s.csp_policy || "");
+        setPermsPolicy(s.permissions_policy || "");
+        setBotMode(s.bot_protection || "off");
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
@@ -1132,6 +1149,114 @@ export default function SiteDetail() {
           </div>
         </div>
       )}
+
+      {/* Security Headers (CSP) */}
+      <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+        <div className="px-5 py-4 border-b border-dark-600">
+          <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Security Headers</h2>
+          <p className="text-xs text-dark-200 mt-1">Content-Security-Policy and Permissions-Policy headers per site</p>
+        </div>
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-dark-100 mb-1">Content-Security-Policy</label>
+            <textarea
+              value={cspPolicy}
+              onChange={(e) => setCspPolicy(e.target.value)}
+              placeholder="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:;"
+              rows={3}
+              className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+            />
+            <div className="flex flex-wrap gap-2 mt-2">
+              {[
+                { label: "WordPress", value: "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self';" },
+                { label: "SPA", value: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https:; font-src 'self';" },
+                { label: "Strict", value: "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; base-uri 'self'; form-action 'self';" },
+              ].map(preset => (
+                <button key={preset.label} onClick={() => setCspPolicy(preset.value)}
+                  className="px-2 py-1 bg-dark-700 text-dark-200 rounded text-xs hover:bg-dark-600 transition-colors"
+                >{preset.label}</button>
+              ))}
+              {cspPolicy && <button onClick={() => setCspPolicy("")} className="px-2 py-1 bg-dark-700 text-dark-200 rounded text-xs hover:bg-dark-600">Clear</button>}
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-dark-100 mb-1">Permissions-Policy</label>
+            <input
+              type="text"
+              value={permsPolicy}
+              onChange={(e) => setPermsPolicy(e.target.value)}
+              placeholder="camera=(), microphone=(), geolocation=()"
+              className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+            />
+          </div>
+          {headersMsg && <p className={`text-xs ${headersMsg.includes("Saved") ? "text-rust-400" : "text-danger-400"}`}>{headersMsg}</p>}
+          <button
+            onClick={async () => {
+              setHeadersSaving(true); setHeadersMsg("");
+              try {
+                await api.put(`/sites/${id}/security-headers`, {
+                  csp_policy: cspPolicy || null,
+                  permissions_policy: permsPolicy || null,
+                });
+                setSite(s => s ? { ...s, csp_policy: cspPolicy || null, permissions_policy: permsPolicy || null } : s);
+                setHeadersMsg("Saved — nginx reloaded");
+              } catch (e) { setHeadersMsg(e instanceof Error ? e.message : "Failed"); }
+              finally { setHeadersSaving(false); }
+            }}
+            disabled={headersSaving}
+            className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
+          >{headersSaving ? "Saving..." : "Save Headers"}</button>
+        </div>
+      </div>
+
+      {/* Bot Protection */}
+      <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+        <div className="px-5 py-4 border-b border-dark-600 flex items-center justify-between">
+          <div>
+            <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Bot Protection</h2>
+            <p className="text-xs text-dark-200 mt-1">Block scrapers and bad bots. Legitimate search engines (Google, Bing) are always allowed.</p>
+          </div>
+          <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${
+            botMode !== "off" ? "bg-rust-500/10 text-rust-400" : "bg-dark-700 text-dark-300"
+          }`}>
+            {botMode === "off" ? "Off" : botMode === "rate-limit" ? "Rate Limit" : botMode === "challenge" ? "JS Challenge" : "Block"}
+          </span>
+        </div>
+        <div className="p-5 space-y-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {[
+              { mode: "off", label: "Off", desc: "No bot protection" },
+              { mode: "rate-limit", label: "Rate Limit", desc: "5 req/s per IP for all traffic" },
+              { mode: "challenge", label: "JS Challenge", desc: "Browser verification via cookie" },
+              { mode: "block", label: "Block", desc: "Block known bad bot user-agents" },
+            ].map(opt => (
+              <button
+                key={opt.mode}
+                onClick={async () => {
+                  setBotSaving(true); setBotMsg("");
+                  try {
+                    await api.put(`/sites/${id}/bot-protection`, { mode: opt.mode });
+                    setBotMode(opt.mode);
+                    setSite(s => s ? { ...s, bot_protection: opt.mode } : s);
+                    setBotMsg(`Bot protection: ${opt.label}`);
+                  } catch (e) { setBotMsg(e instanceof Error ? e.message : "Failed"); }
+                  finally { setBotSaving(false); }
+                }}
+                disabled={botSaving}
+                className={`p-3 rounded-lg border text-left transition-colors ${
+                  botMode === opt.mode
+                    ? "border-rust-500 bg-rust-500/10"
+                    : "border-dark-500 hover:border-dark-400"
+                }`}
+              >
+                <div className="text-sm font-medium text-dark-50">{opt.label}</div>
+                <div className="text-xs text-dark-300 mt-0.5">{opt.desc}</div>
+              </button>
+            ))}
+          </div>
+          {botMsg && <p className="text-xs text-rust-400">{botMsg}</p>}
+        </div>
+      </div>
 
       {/* Image Optimization */}
       {site.status === "active" && (site.runtime === "php" || site.runtime === "static") && (

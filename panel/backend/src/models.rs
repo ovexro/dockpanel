@@ -65,6 +65,9 @@ pub struct Site {
     pub redis_db: i32,
     pub waf_enabled: bool,
     pub waf_mode: String,
+    pub csp_policy: Option<String>,
+    pub permissions_policy: Option<String>,
+    pub bot_protection: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

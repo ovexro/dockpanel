@@ -216,6 +216,13 @@ pub fn render_site_config(
     ctx.insert("waf_enabled", &waf_enabled);
     ctx.insert("waf_mode", &config.waf_mode.as_deref().unwrap_or("detection"));
 
+    // CSP and security headers
+    ctx.insert("csp_policy", &config.csp_policy.as_deref().unwrap_or(""));
+    ctx.insert("permissions_policy", &config.permissions_policy.as_deref().unwrap_or("camera=(), microphone=(), geolocation=()"));
+
+    // Bot protection
+    ctx.insert("bot_protection", &config.bot_protection.as_deref().unwrap_or("off"));
+
     let ssl = config.ssl.unwrap_or(false);
     ctx.insert("ssl", &ssl);
 

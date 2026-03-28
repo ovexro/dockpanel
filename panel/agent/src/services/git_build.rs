@@ -422,6 +422,9 @@ pub async fn deploy_or_update(
                                         redis_db: None,
                                         waf_enabled: None,
                                         waf_mode: None,
+        csp_policy: None,
+        permissions_policy: None,
+        bot_protection: None,
                                     };
                                     if let Ok(()) = crate::services::ssl::enable_ssl_for_site(templates, d, &ssl_config).await {
                                         tracing::info!("Auto-SSL: certificate provisioned for {d}");
@@ -802,6 +805,9 @@ async fn setup_nginx_proxy(
         redis_db: None,
         waf_enabled: None,
         waf_mode: None,
+        csp_policy: None,
+        permissions_policy: None,
+        bot_protection: None,
     };
 
     let rendered = crate::services::nginx::render_site_config(templates, domain, &site_config)
