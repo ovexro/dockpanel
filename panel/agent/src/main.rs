@@ -46,24 +46,52 @@ async fn main() {
     std::fs::create_dir_all("/var/backups/dockpanel/volumes").ok();
     std::fs::create_dir_all("/var/www/acme/.well-known/acme-challenge").ok();
 
-    // Load or generate auth token
+    // Load auth token: prefer AGENT_TOKEN env var, then file, then generate new
     let token_path = format!("{CONFIG_DIR}/agent.token");
-    let token = match std::fs::read_to_string(&token_path) {
-        Ok(t) => t.trim().to_string(),
-        Err(_) => {
-            let t = uuid::Uuid::new_v4().to_string();
-            std::fs::write(&token_path, &t).expect("Failed to write agent token");
+    let token = if let Ok(env_token) = std::env::var("AGENT_TOKEN") {
+        let env_token = env_token.trim().to_string();
+        if !env_token.is_empty() {
+            // Sync env token to file so both sources stay consistent
+            std::fs::write(&token_path, &env_token).ok();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(
-                    &token_path,
-                    std::fs::Permissions::from_mode(0o600),
-                )
-                .ok();
+                std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600)).ok();
             }
-            tracing::info!("Generated new agent token (saved to {token_path})");
-            t
+            tracing::info!("Using agent token from AGENT_TOKEN env var");
+            env_token
+        } else {
+            // Empty env var — fall through to file
+            match std::fs::read_to_string(&token_path) {
+                Ok(t) if !t.trim().is_empty() => t.trim().to_string(),
+                _ => {
+                    let t = uuid::Uuid::new_v4().to_string();
+                    std::fs::write(&token_path, &t).expect("Failed to write agent token");
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600)).ok();
+                    }
+                    tracing::info!("Generated new agent token (saved to {token_path})");
+                    t
+                }
+            }
+        }
+    } else {
+        // No env var — use file or generate
+        match std::fs::read_to_string(&token_path) {
+            Ok(t) if !t.trim().is_empty() => t.trim().to_string(),
+            _ => {
+                let t = uuid::Uuid::new_v4().to_string();
+                std::fs::write(&token_path, &t).expect("Failed to write agent token");
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600)).ok();
+                }
+                tracing::info!("Generated new agent token (saved to {token_path})");
+                t
+            }
         }
     };
 
