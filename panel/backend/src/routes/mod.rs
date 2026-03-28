@@ -563,6 +563,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/dns/zones/{id}/dnssec", get(dns::dnssec_status))
         .route("/api/dns/zones/{id}/changelog", get(dns::dns_changelog))
         .route("/api/dns/zones/{id}/analytics", get(dns::dns_analytics))
+        .route("/api/dns/zones/{id}/cf/settings", get(dns::cf_zone_settings).put(dns::cf_update_setting))
+        .route("/api/dns/zones/{id}/cf/cache/purge", post(dns::cf_purge_cache))
         // WordPress Toolkit
         .route("/api/wordpress/sites", get(wordpress::all_wp_sites))
         .route("/api/wordpress/bulk-update", post(wordpress::bulk_update))

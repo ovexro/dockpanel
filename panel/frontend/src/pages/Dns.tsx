@@ -90,6 +90,13 @@ export default function Dns() {
   const [analytics, setAnalytics] = useState<any>(null);
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
 
+  // Cloudflare Zone Settings
+  const [cfSettings, setCfSettings] = useState<Record<string, string> | null>(null);
+  const [loadingCfSettings, setLoadingCfSettings] = useState(false);
+  const [cfSettingUpdating, setCfSettingUpdating] = useState<string | null>(null);
+  const [cfCachePurging, setCfCachePurging] = useState(false);
+  const [cfMsg, setCfMsg] = useState("");
+
   const loadZones = async () => {
     try {
       const data = await api.get<DnsZone[]>("/dns/zones");
@@ -123,10 +130,13 @@ export default function Dns() {
     } finally {
       setLoadingRecords(false);
     }
-    // Load DNSSEC & analytics for Cloudflare zones
+    // Load DNSSEC, analytics, and settings for Cloudflare zones
+    setCfSettings(null);
+    setCfMsg("");
     if (zone.provider === "cloudflare") {
       loadDnssec(zone.id);
       loadAnalytics(zone.id);
+      loadCfSettings(zone.id);
     }
   };
 
@@ -404,6 +414,50 @@ export default function Dns() {
       setAnalytics(null);
     } finally {
       setLoadingAnalytics(false);
+    }
+  };
+
+  // ── Cloudflare Zone Settings ───────────────────────────────────────────
+  const loadCfSettings = async (zoneId: string) => {
+    setLoadingCfSettings(true);
+    setCfSettings(null);
+    try {
+      const data = await api.get<any>(`/dns/zones/${zoneId}/cf/settings`);
+      if (data.supported) setCfSettings(data.settings || {});
+    } catch {
+      setCfSettings(null);
+    } finally {
+      setLoadingCfSettings(false);
+    }
+  };
+
+  const updateCfSetting = async (setting: string, value: string) => {
+    if (!selectedZone) return;
+    setCfSettingUpdating(setting);
+    setCfMsg("");
+    try {
+      await api.put(`/dns/zones/${selectedZone.id}/cf/settings`, { setting, value });
+      setCfSettings(prev => prev ? { ...prev, [setting]: value } : prev);
+      setCfMsg(`${setting} updated`);
+    } catch (e) {
+      setCfMsg(e instanceof Error ? e.message : "Update failed");
+    } finally {
+      setCfSettingUpdating(null);
+    }
+  };
+
+  const purgeCfCache = async (files?: string[]) => {
+    if (!selectedZone) return;
+    setCfCachePurging(true);
+    setCfMsg("");
+    try {
+      const body = files ? { files } : {};
+      await api.post(`/dns/zones/${selectedZone.id}/cf/cache/purge`, body);
+      setCfMsg(files ? `${files.length} URL(s) purged` : "Entire cache purged");
+    } catch (e) {
+      setCfMsg(e instanceof Error ? e.message : "Purge failed");
+    } finally {
+      setCfCachePurging(false);
     }
   };
 
@@ -1152,6 +1206,115 @@ export default function Dns() {
                 <div className="px-4 sm:px-5 py-4 border-t border-dark-600">
                   <div className="bg-dark-900 rounded-lg border border-dark-500 p-3">
                     <p className="text-xs text-dark-300">{analytics.message || "DNS analytics not available for this zone."}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Cloudflare Zone Settings */}
+              {selectedZone?.provider === "cloudflare" && cfSettings && (
+                <div className="px-4 sm:px-5 py-4 border-t border-dark-600">
+                  <div className="bg-dark-900 rounded-lg border border-dark-500 p-4 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">
+                        Cloudflare Settings
+                      </h4>
+                      {cfMsg && (
+                        <span className={`text-xs ${cfMsg.includes("failed") || cfMsg.includes("Failed") ? "text-danger-400" : "text-rust-400"}`}>
+                          {cfMsg}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Cache Purge */}
+                    <div className="flex items-center gap-3">
+                      <button
+                        disabled={cfCachePurging}
+                        onClick={() => purgeCfCache()}
+                        className="px-3 py-1.5 bg-amber-500/10 text-amber-400 rounded-lg text-xs font-medium hover:bg-amber-500/20 disabled:opacity-50 transition-colors"
+                      >
+                        {cfCachePurging ? "Purging..." : "Purge Entire Cache"}
+                      </button>
+                      <span className="text-xs text-dark-400">Clears all cached resources for this zone</span>
+                    </div>
+
+                    {/* Security Level */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-medium text-dark-200 mb-1">Security Level</label>
+                        <select
+                          value={cfSettings.security_level || "medium"}
+                          disabled={cfSettingUpdating === "security_level"}
+                          onChange={(e) => updateCfSetting("security_level", e.target.value)}
+                          className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+                        >
+                          <option value="off">Off</option>
+                          <option value="essentially_off">Essentially Off</option>
+                          <option value="low">Low</option>
+                          <option value="medium">Medium</option>
+                          <option value="high">High</option>
+                          <option value="under_attack">Under Attack</option>
+                        </select>
+                      </div>
+
+                      {/* SSL Mode */}
+                      <div>
+                        <label className="block text-xs font-medium text-dark-200 mb-1">SSL Mode</label>
+                        <select
+                          value={cfSettings.ssl || "full"}
+                          disabled={cfSettingUpdating === "ssl"}
+                          onChange={(e) => updateCfSetting("ssl", e.target.value)}
+                          className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+                        >
+                          <option value="off">Off</option>
+                          <option value="flexible">Flexible</option>
+                          <option value="full">Full</option>
+                          <option value="strict">Full (Strict)</option>
+                        </select>
+                      </div>
+
+                      {/* Min TLS Version */}
+                      <div>
+                        <label className="block text-xs font-medium text-dark-200 mb-1">Min TLS Version</label>
+                        <select
+                          value={cfSettings.min_tls_version || "1.0"}
+                          disabled={cfSettingUpdating === "min_tls_version"}
+                          onChange={(e) => updateCfSetting("min_tls_version", e.target.value)}
+                          className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+                        >
+                          <option value="1.0">TLS 1.0</option>
+                          <option value="1.1">TLS 1.1</option>
+                          <option value="1.2">TLS 1.2</option>
+                          <option value="1.3">TLS 1.3</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Toggle Settings */}
+                    <div className="flex flex-wrap gap-3">
+                      <button
+                        disabled={cfSettingUpdating === "development_mode"}
+                        onClick={() => updateCfSetting("development_mode", cfSettings.development_mode === "on" ? "off" : "on")}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 ${
+                          cfSettings.development_mode === "on"
+                            ? "bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
+                            : "bg-dark-700 text-dark-200 hover:bg-dark-600"
+                        }`}
+                      >
+                        {cfSettingUpdating === "development_mode" ? "..." : cfSettings.development_mode === "on" ? "Dev Mode: ON" : "Dev Mode: OFF"}
+                      </button>
+
+                      <button
+                        disabled={cfSettingUpdating === "always_use_https"}
+                        onClick={() => updateCfSetting("always_use_https", cfSettings.always_use_https === "on" ? "off" : "on")}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 ${
+                          cfSettings.always_use_https === "on"
+                            ? "bg-rust-500/10 text-rust-400 hover:bg-rust-500/20"
+                            : "bg-dark-700 text-dark-200 hover:bg-dark-600"
+                        }`}
+                      >
+                        {cfSettingUpdating === "always_use_https" ? "..." : cfSettings.always_use_https === "on" ? "Always HTTPS: ON" : "Always HTTPS: OFF"}
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}

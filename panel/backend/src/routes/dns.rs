@@ -1350,3 +1350,227 @@ pub async fn dns_analytics(
         "period": "24h",
     })))
 }
+
+// ── Cloudflare Zone Settings ───────────────────────────────────────────
+
+/// GET /api/dns/zones/{id}/cf/settings — Get Cloudflare zone settings.
+pub async fn cf_zone_settings(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let zone = get_zone(&state, id, claims.sub).await?;
+
+    if zone.provider != "cloudflare" {
+        return Ok(Json(serde_json::json!({
+            "supported": false,
+            "message": "Settings management only available for Cloudflare zones",
+        })));
+    }
+
+    let token = zone.cf_api_token.as_deref().unwrap_or("");
+    let zone_id = zone.cf_zone_id.as_deref().unwrap_or("");
+    let (client, headers) = cf_client(token, zone.cf_api_email.as_deref())?;
+
+    // Fetch multiple settings in parallel
+    let settings_keys = ["security_level", "development_mode", "ssl", "always_use_https", "min_tls_version"];
+    let mut results = serde_json::Map::new();
+
+    for key in &settings_keys {
+        let resp = client
+            .get(&format!("{CF_API}/zones/{zone_id}/settings/{key}"))
+            .headers(headers.clone())
+            .send()
+            .await
+            .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
+
+        let data: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
+
+        if let Some(result) = data.get("result") {
+            if let Some(value) = result.get("value") {
+                results.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "supported": true,
+        "settings": results,
+    })))
+}
+
+/// PUT /api/dns/zones/{id}/cf/settings — Update a Cloudflare zone setting.
+pub async fn cf_update_setting(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let zone = get_zone(&state, id, claims.sub).await?;
+
+    if zone.provider != "cloudflare" {
+        return Err(err(StatusCode::BAD_REQUEST, "Only available for Cloudflare zones"));
+    }
+
+    let setting = body.get("setting").and_then(|v| v.as_str())
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Missing 'setting' field"))?;
+    let value = body.get("value")
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Missing 'value' field"))?;
+
+    // Whitelist allowed settings
+    const ALLOWED: &[&str] = &[
+        "security_level", "development_mode", "ssl", "always_use_https", "min_tls_version",
+    ];
+    if !ALLOWED.contains(&setting) {
+        return Err(err(StatusCode::BAD_REQUEST, &format!(
+            "Setting '{setting}' not allowed. Allowed: {}", ALLOWED.join(", ")
+        )));
+    }
+
+    // Validate values
+    match setting {
+        "security_level" => {
+            let v = value.as_str().unwrap_or("");
+            if !["off", "essentially_off", "low", "medium", "high", "under_attack"].contains(&v) {
+                return Err(err(StatusCode::BAD_REQUEST, "Invalid security_level value"));
+            }
+        }
+        "development_mode" => {
+            if !value.is_string() || !["on", "off"].contains(&value.as_str().unwrap_or("")) {
+                return Err(err(StatusCode::BAD_REQUEST, "development_mode must be 'on' or 'off'"));
+            }
+        }
+        "ssl" => {
+            let v = value.as_str().unwrap_or("");
+            if !["off", "flexible", "full", "strict"].contains(&v) {
+                return Err(err(StatusCode::BAD_REQUEST, "Invalid ssl value. Use: off, flexible, full, strict"));
+            }
+        }
+        "always_use_https" => {
+            if !value.is_string() || !["on", "off"].contains(&value.as_str().unwrap_or("")) {
+                return Err(err(StatusCode::BAD_REQUEST, "always_use_https must be 'on' or 'off'"));
+            }
+        }
+        "min_tls_version" => {
+            let v = value.as_str().unwrap_or("");
+            if !["1.0", "1.1", "1.2", "1.3"].contains(&v) {
+                return Err(err(StatusCode::BAD_REQUEST, "Invalid min_tls_version. Use: 1.0, 1.1, 1.2, 1.3"));
+            }
+        }
+        _ => {}
+    }
+
+    let token = zone.cf_api_token.as_deref().unwrap_or("");
+    let zone_id = zone.cf_zone_id.as_deref().unwrap_or("");
+    let (client, headers) = cf_client(token, zone.cf_api_email.as_deref())?;
+
+    let resp = client
+        .patch(&format!("{CF_API}/zones/{zone_id}/settings/{setting}"))
+        .headers(headers)
+        .json(&serde_json::json!({ "value": value }))
+        .send()
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
+
+    let status = resp.status();
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
+
+    if !status.is_success() {
+        let cf_err = data.get("errors")
+            .and_then(|e| e.as_array())
+            .and_then(|a| a.first())
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("Unknown Cloudflare error");
+        return Err(err(StatusCode::BAD_GATEWAY, cf_err));
+    }
+
+    tracing::info!("CF setting updated: {setting}={value} for zone {}", zone.domain);
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email,
+        &format!("dns.cf.setting.{setting}"),
+        Some("dns_zone"), Some(&zone.domain), None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "setting": setting,
+        "value": value,
+    })))
+}
+
+// ── Cloudflare Cache Purge ─────────────────────────────────────────────
+
+/// POST /api/dns/zones/{id}/cf/cache/purge — Purge Cloudflare cache.
+pub async fn cf_purge_cache(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let zone = get_zone(&state, id, claims.sub).await?;
+
+    if zone.provider != "cloudflare" {
+        return Err(err(StatusCode::BAD_REQUEST, "Cache purge only available for Cloudflare zones"));
+    }
+
+    let token = zone.cf_api_token.as_deref().unwrap_or("");
+    let zone_id = zone.cf_zone_id.as_deref().unwrap_or("");
+    let (client, headers) = cf_client(token, zone.cf_api_email.as_deref())?;
+
+    // Build purge request: either purge_everything or specific files
+    let purge_body = if let Some(files) = body.get("files").and_then(|f| f.as_array()) {
+        if files.is_empty() || files.len() > 30 {
+            return Err(err(StatusCode::BAD_REQUEST, "Provide 1-30 URLs to purge"));
+        }
+        serde_json::json!({ "files": files })
+    } else {
+        serde_json::json!({ "purge_everything": true })
+    };
+
+    let resp = client
+        .post(&format!("{CF_API}/zones/{zone_id}/purge_cache"))
+        .headers(headers)
+        .json(&purge_body)
+        .send()
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
+
+    let status = resp.status();
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
+
+    if !status.is_success() {
+        let cf_err = data.get("errors")
+            .and_then(|e| e.as_array())
+            .and_then(|a| a.first())
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("Cloudflare cache purge failed");
+        return Err(err(StatusCode::BAD_GATEWAY, cf_err));
+    }
+
+    let purge_type = if body.get("files").is_some() { "selective" } else { "full" };
+    tracing::info!("CF cache purge ({purge_type}) for zone {}", zone.domain);
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email,
+        &format!("dns.cf.cache.purge.{purge_type}"),
+        Some("dns_zone"), Some(&zone.domain), None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "purge_type": purge_type,
+    })))
+}
