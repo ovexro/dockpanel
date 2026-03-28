@@ -393,6 +393,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/php/uninstall", post(sites::php_uninstall))
         // SSL
         .route("/api/sites/{id}/ssl", post(ssl::provision).get(ssl::status))
+        .route("/api/sites/{id}/ssl/dns01", post(ssl::provision_dns01))
         .route("/api/ssl/{id}/renew", post(ssl::renew))
         .route("/api/ssl/{id}", delete(ssl::revoke))
         // File Manager

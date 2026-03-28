@@ -208,6 +208,187 @@ pub async fn provision_cert(account: &Account, domain: &str) -> Result<CertInfo,
     })
 }
 
+/// Provision a Let's Encrypt certificate using DNS-01 challenge via Cloudflare.
+/// Supports wildcard certificates (*.domain + domain).
+pub async fn provision_cert_dns01(
+    account: &Account,
+    domain: &str,
+    cf_zone_id: &str,
+    cf_api_token: &str,
+    cf_api_email: Option<&str>,
+    wildcard: bool,
+) -> Result<CertInfo, String> {
+    let label = if wildcard { "wildcard" } else { "dns01" };
+    tracing::info!("Provisioning SSL ({label}) for {domain}");
+
+    // Build identifiers
+    let mut ids = vec![Identifier::Dns(domain.to_string())];
+    if wildcard {
+        ids.push(Identifier::Dns(format!("*.{domain}")));
+    }
+
+    let mut order = account
+        .new_order(&NewOrder::new(&ids))
+        .await
+        .map_err(|e| format!("ACME order: {e}"))?;
+
+    let state = order.state();
+    if !matches!(state.status, OrderStatus::Pending | OrderStatus::Ready) {
+        return Err(format!("Unexpected order status: {:?}", state.status));
+    }
+
+    // Build Cloudflare client
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client: {e}"))?;
+    let cf_api = "https://api.cloudflare.com/client/v4";
+    let mut headers = reqwest::header::HeaderMap::new();
+    if let Some(email) = cf_api_email {
+        headers.insert("X-Auth-Email", email.parse().map_err(|_| "Invalid CF email")?);
+        headers.insert("X-Auth-Key", cf_api_token.parse().map_err(|_| "Invalid CF token")?);
+    } else {
+        headers.insert(
+            "Authorization",
+            format!("Bearer {cf_api_token}").parse().map_err(|_| "Invalid CF token")?,
+        );
+    }
+
+    let mut created_records: Vec<String> = Vec::new();
+
+    if matches!(state.status, OrderStatus::Pending) {
+        let mut authorizations = order.authorizations();
+        while let Some(result) = authorizations.next().await {
+            let mut authz = result.map_err(|e| format!("Authorization: {e}"))?;
+
+            match authz.status {
+                AuthorizationStatus::Valid => continue,
+                AuthorizationStatus::Pending => {}
+                status => {
+                    cleanup_cf_records(&client, cf_api, cf_zone_id, &headers, &created_records).await;
+                    return Err(format!("Auth status: {status:?}"));
+                }
+            }
+
+            let mut challenge = authz
+                .challenge(ChallengeType::Dns01)
+                .ok_or_else(|| {
+                    "No DNS-01 challenge (Let's Encrypt may require HTTP-01 for this domain)".to_string()
+                })?;
+
+            let key_auth = challenge.key_authorization();
+            let txt_value = key_auth.dns_value();
+
+            // Create TXT record: _acme-challenge.{domain}
+            let record_name = format!("_acme-challenge.{domain}");
+            tracing::info!("DNS-01: creating TXT {record_name} = {txt_value}");
+
+            let resp = client
+                .post(&format!("{cf_api}/zones/{cf_zone_id}/dns_records"))
+                .headers(headers.clone())
+                .json(&serde_json::json!({
+                    "type": "TXT",
+                    "name": &record_name,
+                    "content": &txt_value,
+                    "ttl": 120,
+                }))
+                .send()
+                .await
+                .map_err(|e| format!("CF create TXT: {e}"))?;
+
+            let resp_json: serde_json::Value = resp.json().await
+                .map_err(|e| format!("CF parse: {e}"))?;
+
+            if resp_json.get("success").and_then(|v| v.as_bool()) != Some(true) {
+                cleanup_cf_records(&client, cf_api, cf_zone_id, &headers, &created_records).await;
+                let errs = resp_json.get("errors").cloned().unwrap_or_default();
+                return Err(format!("CF TXT create failed: {errs}"));
+            }
+
+            if let Some(rid) = resp_json.pointer("/result/id").and_then(|v| v.as_str()) {
+                created_records.push(rid.to_string());
+            }
+
+            // Wait for DNS propagation (Cloudflare is fast, but ACME servers cache)
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+
+            if let Err(e) = challenge.set_ready().await {
+                cleanup_cf_records(&client, cf_api, cf_zone_id, &headers, &created_records).await;
+                return Err(format!("Challenge ready: {e}"));
+            }
+        }
+    }
+
+    // Poll until order is ready (120s timeout for DNS propagation)
+    use instant_acme::RetryPolicy;
+    let timeout = std::time::Duration::from_secs(120);
+    let poll_result = order.poll_ready(&RetryPolicy::new().timeout(timeout)).await;
+
+    // Always clean up TXT records
+    cleanup_cf_records(&client, cf_api, cf_zone_id, &headers, &created_records).await;
+
+    poll_result.map_err(|e| format!("Order not ready: {e}"))?;
+
+    // Finalize
+    let private_key_pem = order
+        .finalize()
+        .await
+        .map_err(|e| format!("Finalize: {e}"))?;
+
+    let cert_chain_pem = order
+        .poll_certificate(&RetryPolicy::new().timeout(timeout))
+        .await
+        .map_err(|e| format!("Certificate fetch: {e}"))?;
+
+    // Save cert (use base domain for directory)
+    let cert_dir = format!("{SSL_DIR}/{domain}");
+    tokio::fs::create_dir_all(&cert_dir)
+        .await
+        .map_err(|e| format!("Create cert dir: {e}"))?;
+
+    let cert_path = format!("{cert_dir}/fullchain.pem");
+    let key_path = format!("{cert_dir}/privkey.pem");
+
+    tokio::fs::write(&cert_path, &cert_chain_pem)
+        .await
+        .map_err(|e| format!("Write cert: {e}"))?;
+    tokio::fs::write(&key_path, &private_key_pem)
+        .await
+        .map_err(|e| format!("Write key: {e}"))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = tokio::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).await;
+    }
+
+    let expiry = get_cert_expiry(&cert_path).await;
+    tracing::info!("SSL ({label}) provisioned for {domain}");
+
+    Ok(CertInfo { cert_path, key_path, expiry })
+}
+
+/// Clean up Cloudflare TXT records created during DNS-01 challenge.
+async fn cleanup_cf_records(
+    client: &reqwest::Client,
+    cf_api: &str,
+    zone_id: &str,
+    headers: &reqwest::header::HeaderMap,
+    record_ids: &[String],
+) {
+    for rid in record_ids {
+        match client
+            .delete(&format!("{cf_api}/zones/{zone_id}/dns_records/{rid}"))
+            .headers(headers.clone())
+            .send()
+            .await
+        {
+            Ok(_) => tracing::info!("DNS-01: cleaned up TXT record {rid}"),
+            Err(e) => tracing::warn!("DNS-01: failed to clean up TXT {rid}: {e}"),
+        }
+    }
+}
+
 /// Get certificate expiry date from PEM file.
 async fn get_cert_expiry(cert_path: &str) -> Option<String> {
     let pem_data = tokio::fs::read(cert_path).await.ok()?;

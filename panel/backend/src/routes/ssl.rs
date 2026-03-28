@@ -125,6 +125,127 @@ pub async fn provision(
     })))
 }
 
+/// POST /api/sites/{id}/ssl/dns01 — Provision SSL via DNS-01 challenge (Cloudflare).
+/// Supports wildcard certificates when wildcard=true.
+pub async fn provision_dns01(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let site: Site = sqlx::query_as("SELECT * FROM sites WHERE id = $1 AND user_id = $2")
+        .bind(id)
+        .bind(claims.sub)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| internal_error("dns01 provision", e))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    if site.status != "active" {
+        return Err(err(StatusCode::BAD_REQUEST, "Site must be active"));
+    }
+
+    if site.ssl_enabled {
+        return Err(err(StatusCode::CONFLICT, "SSL is already enabled"));
+    }
+
+    let wildcard = body.get("wildcard").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    // Find the matching Cloudflare DNS zone for this domain.
+    // Uses longest-suffix match to handle multi-part TLDs (e.g., example.co.uk).
+    let zones: Vec<crate::routes::dns::DnsZone> = sqlx::query_as(
+        "SELECT * FROM dns_zones WHERE user_id = $1 AND provider = 'cloudflare'",
+    )
+    .bind(claims.sub)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| internal_error("dns01 zone lookup", e))?;
+
+    let zone = zones.into_iter()
+        .filter(|z| {
+            site.domain == z.domain || site.domain.ends_with(&format!(".{}", z.domain))
+        })
+        .max_by_key(|z| z.domain.len())
+        .ok_or_else(|| err(
+            StatusCode::PRECONDITION_FAILED,
+            "No Cloudflare DNS zone found for this domain. Add it in DNS management first.",
+        ))?;
+
+    let cf_zone_id = zone.cf_zone_id.as_deref()
+        .ok_or_else(|| err(StatusCode::PRECONDITION_FAILED, "Zone has no Cloudflare zone ID"))?;
+    let cf_api_token = zone.cf_api_token.as_deref()
+        .ok_or_else(|| err(StatusCode::PRECONDITION_FAILED, "Zone has no Cloudflare API token"))?;
+
+    // Get admin email for ACME
+    let (email,): (String,) = sqlx::query_as("SELECT email FROM users WHERE id = $1")
+        .bind(claims.sub)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| internal_error("dns01 email", e))?;
+
+    // For wildcard, provision against the zone domain
+    // For single domain, provision against the site domain
+    let provision_domain = if wildcard { &zone.domain } else { &site.domain };
+
+    let agent_body = serde_json::json!({
+        "email": email,
+        "cf_zone_id": cf_zone_id,
+        "cf_api_token": cf_api_token,
+        "cf_api_email": zone.cf_api_email,
+        "wildcard": wildcard,
+    });
+
+    let result = agent
+        .post_long(
+            &format!("/ssl/provision-dns01/{provision_domain}"),
+            Some(agent_body),
+            180,
+        )
+        .await
+        .map_err(|e| agent_error("DNS-01 SSL", e))?;
+
+    // Parse response
+    let ssl_expiry = result
+        .get("expiry")
+        .and_then(|v| v.as_str())
+        .and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f UTC").ok())
+        .map(|dt| dt.and_utc());
+
+    let cert_path = result.get("cert_path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let key_path = result.get("key_path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+    // Update site in DB
+    sqlx::query(
+        "UPDATE sites SET ssl_enabled = true, ssl_cert_path = $1, ssl_key_path = $2, \
+         ssl_expiry = $3, updated_at = NOW() WHERE id = $4",
+    )
+    .bind(&cert_path)
+    .bind(&key_path)
+    .bind(ssl_expiry)
+    .bind(id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| internal_error("dns01 update", e))?;
+
+    let label = if wildcard { "Wildcard SSL (DNS-01)" } else { "SSL (DNS-01)" };
+    tracing::info!("{label} provisioned for {}", site.domain);
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email,
+        if wildcard { "site.ssl.wildcard" } else { "site.ssl.dns01" },
+        Some("site"), Some(&site.domain), None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "domain": site.domain,
+        "wildcard": wildcard,
+        "ssl_enabled": true,
+        "cert_path": cert_path,
+        "expiry": ssl_expiry,
+    })))
+}
+
 /// GET /api/sites/{id}/ssl — Get SSL status for a site.
 pub async fn status(
     State(state): State<AppState>,

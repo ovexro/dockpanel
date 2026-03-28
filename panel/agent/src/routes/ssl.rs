@@ -294,9 +294,93 @@ async fn revoke(
     Ok(Json(serde_json::json!({ "ok": true, "domain": domain })))
 }
 
+// ── DNS-01 wildcard SSL ─────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct Dns01ProvisionRequest {
+    email: String,
+    cf_zone_id: String,
+    cf_api_token: String,
+    cf_api_email: Option<String>,
+    wildcard: bool,
+}
+
+/// POST /ssl/provision-dns01/{domain} — Provision cert via DNS-01 (Cloudflare).
+async fn provision_dns01(
+    State(state): State<AppState>,
+    Path(domain): Path<String>,
+    Json(body): Json<Dns01ProvisionRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_domain(&domain) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid domain format" })),
+        ));
+    }
+
+    let account = ssl::load_or_create_account(&body.email).await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e })))
+    })?;
+
+    let cert_info = ssl::provision_cert_dns01(
+        &account,
+        &domain,
+        &body.cf_zone_id,
+        &body.cf_api_token,
+        body.cf_api_email.as_deref(),
+        body.wildcard,
+    )
+    .await
+    .map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e })))
+    })?;
+
+    // If NOT wildcard, enable SSL in nginx for this domain
+    // (wildcard certs are applied per-site by the backend)
+    if !body.wildcard {
+        let site_conf = format!("/etc/nginx/sites-enabled/{domain}.conf");
+        if std::path::Path::new(&site_conf).exists() {
+            let content = tokio::fs::read_to_string(&site_conf).await.unwrap_or_default();
+            let is_proxy = content.contains("proxy_pass");
+
+            let site_config = SiteConfig {
+                runtime: if is_proxy { "proxy".to_string() } else { "php".to_string() },
+                root: Some("/var/www".to_string()),
+                proxy_port: if is_proxy {
+                    content.lines().find(|l| l.contains("proxy_pass"))
+                        .and_then(|l| l.split(':').last())
+                        .and_then(|s| s.trim_end_matches(';').trim().parse().ok())
+                } else { None },
+                php_socket: None,
+                ssl: None, ssl_cert: None, ssl_key: None,
+                rate_limit: None, max_upload_mb: None,
+                php_memory_mb: None, php_max_workers: None,
+                custom_nginx: None, php_preset: None, app_command: None,
+                fastcgi_cache: None, redis_cache: None, redis_db: None,
+            };
+
+            ssl::enable_ssl_for_site(&state.templates, &domain, &site_config)
+                .await
+                .map_err(|e| {
+                    (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e })))
+                })?;
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "domain": domain,
+        "wildcard": body.wildcard,
+        "cert_path": cert_info.cert_path,
+        "key_path": cert_info.key_path,
+        "expiry": cert_info.expiry,
+    })))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/ssl/provision/{domain}", post(provision))
+        .route("/ssl/provision-dns01/{domain}", post(provision_dns01))
         .route("/ssl/status/{domain}", get(status))
         .route("/ssl/upload", post(upload_cert))
         .route("/ssl/{domain}/renew", post(renew))

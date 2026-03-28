@@ -239,7 +239,6 @@ export default function SiteDetail() {
     setSslMessage("");
     try {
       await api.post(`/sites/${id}/ssl`);
-      // Refresh site data
       const updated = await api.get<Site>(`/sites/${id}`);
       setSite(updated);
       setSslMessage("SSL certificate provisioned successfully!");
@@ -249,6 +248,27 @@ export default function SiteDetail() {
       );
     } finally {
       setProvisioning(false);
+    }
+  };
+
+  const [dns01Loading, setDns01Loading] = useState(false);
+
+  const handleProvisionDns01 = async (wildcard: boolean) => {
+    if (!site) return;
+    setDns01Loading(true);
+    setSslMessage("");
+    try {
+      await api.post(`/sites/${id}/ssl/dns01`, { wildcard });
+      const updated = await api.get<Site>(`/sites/${id}`);
+      setSite(updated);
+      setSslMessage(wildcard
+        ? "Wildcard SSL certificate provisioned via DNS-01!"
+        : "SSL certificate provisioned via DNS-01!"
+      );
+    } catch (err) {
+      setSslMessage(err instanceof Error ? err.message : "DNS-01 provisioning failed");
+    } finally {
+      setDns01Loading(false);
     }
   };
 
@@ -527,6 +547,22 @@ export default function SiteDetail() {
                           className="px-3 py-1 bg-rust-500 text-white rounded-md text-xs font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
                         >
                           {provisioning ? "Provisioning..." : "Let's Encrypt"}
+                        </button>
+                        <button
+                          onClick={() => handleProvisionDns01(false)}
+                          disabled={dns01Loading || provisioning}
+                          className="px-3 py-1 bg-accent-500/20 text-accent-400 rounded-md text-xs font-medium hover:bg-accent-500/30 disabled:opacity-50 transition-colors"
+                          title="Uses Cloudflare DNS-01 challenge — works behind CDN or when port 80 is blocked"
+                        >
+                          {dns01Loading ? "Provisioning..." : "DNS-01 (CF)"}
+                        </button>
+                        <button
+                          onClick={() => handleProvisionDns01(true)}
+                          disabled={dns01Loading || provisioning}
+                          className="px-3 py-1 bg-accent-500/10 text-accent-300 rounded-md text-xs font-medium hover:bg-accent-500/20 disabled:opacity-50 transition-colors"
+                          title="Wildcard SSL (*.domain) via Cloudflare DNS-01 — covers all subdomains"
+                        >
+                          {dns01Loading ? "..." : "Wildcard SSL"}
                         </button>
                         <button
                           onClick={() => setShowSslUpload(!showSslUpload)}
