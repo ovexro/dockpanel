@@ -45,6 +45,7 @@ pub mod reseller_dashboard;
 pub mod migration;
 pub mod resellers;
 pub mod secrets;
+pub mod iac;
 pub mod passkeys;
 pub mod webhook_gateway;
 pub mod whmcs;
@@ -760,6 +761,14 @@ pub fn router() -> Router<AppState> {
         .route("/api/webhook-gateway/endpoints/{id}/routes", get(webhook_gateway::list_routes).post(webhook_gateway::create_route))
         .route("/api/webhook-gateway/routes/{route_id}", delete(webhook_gateway::delete_route))
         .route("/api/webhook-gateway/deliveries/{delivery_id}/replay", post(webhook_gateway::replay_delivery))
+        // IaC / Terraform provider
+        .route("/api/iac/tokens", get(iac::list_tokens).post(iac::create_token))
+        .route("/api/iac/tokens/{id}", delete(iac::delete_token))
+        .route("/api/iac/resources/sites", get(iac::tf_list_sites))
+        .route("/api/iac/resources/databases", get(iac::tf_list_databases))
+        // Auto-scaling
+        .route("/api/autoscale", get(iac::list_autoscale).post(iac::create_autoscale))
+        .route("/api/autoscale/{id}", put(iac::update_autoscale).delete(iac::delete_autoscale))
         // WHMCS billing integration
         .route("/api/whmcs/config", get(whmcs::get_config).put(whmcs::update_config).delete(whmcs::delete_config))
         .route("/api/whmcs/webhook", post(whmcs::webhook))
