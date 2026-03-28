@@ -144,7 +144,23 @@ fn generate_challenge() -> Vec<u8> {
     challenge
 }
 
-fn get_rp_id(state: &AppState) -> String {
+/// Extract the RP ID from the request's Origin header (most reliable) or fall back to BASE_URL.
+/// The RP ID is just the hostname (e.g. "demo.dockpanel.dev"), not a full URL.
+fn get_rp_id_from_headers(headers: &axum::http::HeaderMap, state: &AppState) -> String {
+    // Try Origin header first (set by browser on all WebAuthn calls)
+    if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
+        if let Ok(parsed) = url::Url::parse(origin) {
+            if let Some(host) = parsed.host_str() {
+                return host.to_string();
+            }
+        }
+    }
+    // Try Host header
+    if let Some(host) = headers.get("host").and_then(|v| v.to_str().ok()) {
+        // Strip port if present
+        return host.split(':').next().unwrap_or(host).to_string();
+    }
+    // Fall back to BASE_URL config
     if !state.config.base_url.is_empty() {
         if let Ok(parsed) = url::Url::parse(&state.config.base_url) {
             if let Some(host) = parsed.host_str() {
@@ -155,10 +171,17 @@ fn get_rp_id(state: &AppState) -> String {
     "localhost".to_string()
 }
 
-fn get_rp_origin(state: &AppState) -> String {
+/// Extract the origin URL from the request's Origin header.
+fn get_rp_origin_from_headers(headers: &axum::http::HeaderMap, state: &AppState) -> String {
+    if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
+        return origin.trim_end_matches('/').to_string();
+    }
     if !state.config.base_url.is_empty() {
-        // Strip trailing slash
         return state.config.base_url.trim_end_matches('/').to_string();
+    }
+    // Construct from Host header
+    if let Some(host) = headers.get("host").and_then(|v| v.to_str().ok()) {
+        return format!("https://{}", host.split(':').next().unwrap_or(host));
     }
     "https://localhost".to_string()
 }
@@ -270,11 +293,12 @@ fn parse_cose_p256_key(cbor_bytes: &[u8]) -> Result<VerifyingKey, String> {
 /// POST /api/auth/passkey/register/begin — Start passkey registration ceremony.
 pub async fn register_begin(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     AuthUser(claims): AuthUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     purge_expired(&state.passkey_challenges);
 
-    let rp_id = get_rp_id(&state);
+    let rp_id = get_rp_id_from_headers(&headers, &state);
 
     // Get existing passkeys to exclude
     let existing: Vec<(String, Option<String>)> = sqlx::query_as(
@@ -339,13 +363,14 @@ pub async fn register_begin(
 /// POST /api/auth/passkey/register/complete — Finish passkey registration.
 pub async fn register_complete(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     AuthUser(claims): AuthUser,
     Json(body): Json<RegisterCompleteRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     purge_expired(&state.passkey_challenges);
 
-    let rp_id = get_rp_id(&state);
-    let rp_origin = get_rp_origin(&state);
+    let rp_id = get_rp_id_from_headers(&headers, &state);
+    let rp_origin = get_rp_origin_from_headers(&headers, &state);
 
     // Decode clientDataJSON
     let client_data_bytes = URL_SAFE_NO_PAD.decode(&body.response.client_data_json)
@@ -482,10 +507,11 @@ pub async fn register_complete(
 /// POST /api/auth/passkey/auth/begin — Start passkey authentication ceremony.
 pub async fn auth_begin(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     purge_expired(&state.passkey_challenges);
 
-    let rp_id = get_rp_id(&state);
+    let rp_id = get_rp_id_from_headers(&headers, &state);
 
     let challenge = generate_challenge();
     let challenge_b64 = URL_SAFE_NO_PAD.encode(&challenge);
@@ -515,8 +541,8 @@ pub async fn auth_complete(
 ) -> Result<(StatusCode, [(axum::http::header::HeaderName, String); 1], Json<serde_json::Value>), ApiError> {
     purge_expired(&state.passkey_challenges);
 
-    let rp_id = get_rp_id(&state);
-    let rp_origin = get_rp_origin(&state);
+    let rp_id = get_rp_id_from_headers(&headers, &state);
+    let rp_origin = get_rp_origin_from_headers(&headers, &state);
 
     // Rate limit passkey auth: reuse login_attempts (same IP-based)
     let ip = headers
