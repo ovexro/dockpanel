@@ -50,6 +50,7 @@ pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync:
         auto_restart_services(&pool, &agent).await;
         auto_clean_disk(&pool, &agent).await;
         auto_renew_ssl(&pool, &agent).await;
+        auto_sleep_idle_containers(&pool, &agent).await;
 
         // Security hardening tasks (run every 2 minutes with auto-healer)
         security_ingest_suspicious_events(&pool).await;
@@ -1161,6 +1162,106 @@ async fn security_check_lockdown_expiry(pool: &PgPool) {
                 None, "info",
             ).await;
             tracing::info!("Lockdown auto-expired after {hours_locked}h");
+        }
+    }
+}
+
+/// Auto-sleep: stop containers that have been idle beyond their configured threshold.
+async fn auto_sleep_idle_containers(pool: &PgPool, agent: &AgentClient) {
+    // Fetch all containers with auto-sleep enabled and not already sleeping
+    let configs: Vec<(String, String, Option<String>, i32)> = sqlx::query_as(
+        "SELECT container_id, container_name, domain, sleep_after_minutes \
+         FROM container_sleep_config \
+         WHERE auto_sleep_enabled = true AND is_sleeping = false"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    if configs.is_empty() {
+        return;
+    }
+
+    let now = chrono::Utc::now();
+
+    for (container_id, container_name, domain, threshold_minutes) in &configs {
+        // Check last activity: use the stored last_activity_at
+        let last_activity: Option<(Option<chrono::DateTime<chrono::Utc>>,)> = sqlx::query_as(
+            "SELECT last_activity_at FROM container_sleep_config WHERE container_id = $1"
+        )
+        .bind(container_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+
+        let idle = match last_activity.and_then(|r| r.0) {
+            Some(last) => (now - last).num_minutes() >= *threshold_minutes as i64,
+            None => {
+                // No activity recorded yet — check if container is running via agent
+                if let Ok(result) = agent.get("/apps").await {
+                    if let Some(apps) = result.as_array() {
+                        let is_running = apps.iter().any(|a|
+                            a.get("container_id").and_then(|v| v.as_str()) == Some(container_id) &&
+                            a.get("status").and_then(|v| v.as_str()) == Some("running")
+                        );
+                        if is_running {
+                            // First run: record activity and skip
+                            let _ = sqlx::query(
+                                "UPDATE container_sleep_config SET last_activity_at = NOW() WHERE container_id = $1"
+                            ).bind(container_id).execute(pool).await;
+                            false
+                        } else {
+                            false // Not running, nothing to sleep
+                        }
+                    } else { false }
+                } else { false }
+            }
+        };
+
+        if idle {
+            tracing::info!("Auto-sleeping idle container: {container_name} ({container_id})");
+
+            // Stop the container via agent
+            let stop_result = agent.post(
+                &format!("/apps/{container_id}/stop"),
+                None::<serde_json::Value>,
+            ).await;
+
+            match stop_result {
+                Ok(_) => {
+                    // Update sleep state
+                    let _ = sqlx::query(
+                        "UPDATE container_sleep_config SET is_sleeping = true, last_slept_at = NOW(), \
+                         total_sleeps = total_sleeps + 1, updated_at = NOW() \
+                         WHERE container_id = $1"
+                    )
+                    .bind(container_id)
+                    .execute(pool)
+                    .await;
+
+                    activity::log_activity(
+                        pool, uuid::Uuid::nil(), "auto-sleeper", "container.auto_sleep",
+                        Some("container"), Some(container_name),
+                        Some(&format!("Idle {}+ minutes", threshold_minutes)),
+                        None,
+                    ).await;
+
+                    // Notify
+                    notifications::notify_panel(
+                        pool,
+                        None,
+                        "Auto-Sleep",
+                        &format!("Container {} auto-slept (idle {}+ min)", container_name, threshold_minutes),
+                        "info",
+                        "system",
+                        None,
+                    ).await;
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to auto-sleep container {container_name}: {e}");
+                }
+            }
         }
     }
 }

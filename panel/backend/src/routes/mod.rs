@@ -453,6 +453,9 @@ pub fn router() -> Router<AppState> {
         .route("/api/databases/{id}/credentials", get(databases::credentials))
         .route("/api/databases/{id}/tables", get(databases::tables))
         .route("/api/databases/{id}/tables/{table}", get(databases::table_schema))
+        .route("/api/databases/{id}/indexes/{table}", get(databases::table_indexes))
+        .route("/api/databases/{id}/foreign-keys", get(databases::foreign_keys))
+        .route("/api/databases/{id}/schema-overview", get(databases::schema_overview))
         .route("/api/databases/{id}/query", post(databases::query))
         // Compose Stacks
         .route("/api/stacks", get(stacks::list).post(stacks::create))
@@ -489,6 +492,12 @@ pub fn router() -> Router<AppState> {
         .route("/api/apps/{container_id}/snapshot", post(docker_apps::snapshot_container))
         .route("/api/apps/{container_id}/image", put(docker_apps::update_image))
         .route("/api/apps/{container_id}/limits", put(docker_apps::update_limits))
+        // Container auto-sleep
+        .route("/api/apps/sleep-status", get(docker_apps::sleep_status_list))
+        .route("/api/apps/{container_id}/sleep-config", get(docker_apps::get_sleep_config).put(docker_apps::update_sleep_config))
+        .route("/api/apps/{container_id}/wake", post(docker_apps::wake_container))
+        .route("/api/apps/{container_id}/sleep", post(docker_apps::sleep_container))
+        .route("/api/apps/{container_id}/activity-ping", post(docker_apps::activity_ping))
         // Git Deploy
         .route("/api/git-deploys", get(git_deploys::list).post(git_deploys::create))
         .route("/api/git-deploys/{id}", get(git_deploys::get_one).put(git_deploys::update).delete(git_deploys::remove))

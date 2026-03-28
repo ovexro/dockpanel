@@ -1324,6 +1324,21 @@ volumes:
                         >
                           {actionLoading === `${app.container_id}-update` ? "Updating..." : updateInfo[app.container_id]?.update_available ? "Update Now" : "Update"}
                         </button>
+                        <button
+                          onClick={async () => {
+                            const cfg = await api.get<any>(`/apps/${app.container_id}/sleep-config`);
+                            const newEnabled = !cfg.auto_sleep_enabled;
+                            await api.put(`/apps/${app.container_id}/sleep-config`, {
+                              auto_sleep_enabled: newEnabled,
+                              sleep_after_minutes: cfg.sleep_after_minutes || 30,
+                            });
+                            setMessage({ text: `Auto-sleep ${newEnabled ? "enabled" : "disabled"}`, type: "success" });
+                          }}
+                          className="px-2 py-1 rounded text-xs font-medium bg-dark-700 text-dark-300 hover:bg-dark-600"
+                          title="Toggle auto-sleep (stop container when idle)"
+                        >
+                          Sleep
+                        </button>
                         {deleteTarget === app.container_id ? (
                           <>
                             <button onClick={() => handleRemove(app.container_id)} className="px-2 py-1 bg-danger-500 text-white rounded text-xs">Confirm</button>

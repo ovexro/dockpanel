@@ -470,6 +470,164 @@ pub async fn query(
         .map_err(sql_error)
 }
 
+/// GET /api/databases/{id}/indexes/{table} — Get indexes for a table.
+pub async fn table_indexes(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path((id, table)): Path<(Uuid, String)>,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if table.is_empty() || table.len() > 128 || !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid table name"));
+    }
+
+    let (name, engine, password, _port) = get_db_info(&state, id, claims.sub).await?;
+
+    let sql = match engine.as_str() {
+        "mysql" | "mariadb" => format!(
+            "SELECT index_name, GROUP_CONCAT(column_name ORDER BY seq_in_index) AS columns, \
+             non_unique, index_type \
+             FROM information_schema.statistics \
+             WHERE table_schema = DATABASE() AND table_name = '{}' \
+             GROUP BY index_name, non_unique, index_type \
+             ORDER BY index_name", table
+        ),
+        _ => format!(
+            "SELECT indexname AS index_name, indexdef AS definition \
+             FROM pg_indexes \
+             WHERE schemaname = 'public' AND tablename = '{}' \
+             ORDER BY indexname", table
+        ),
+    };
+
+    let container = format!("dockpanel-db-{name}");
+    let agent_body = serde_json::json!({
+        "container": container,
+        "engine": engine,
+        "user": name,
+        "password": password,
+        "database": name,
+        "sql": sql,
+    });
+
+    agent.post("/databases/query", Some(agent_body)).await.map(Json).map_err(sql_error)
+}
+
+/// GET /api/databases/{id}/foreign-keys — Get all foreign key relationships.
+pub async fn foreign_keys(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (name, engine, password, _port) = get_db_info(&state, id, claims.sub).await?;
+
+    let sql = match engine.as_str() {
+        "mysql" | "mariadb" =>
+            "SELECT kcu.table_name AS source_table, kcu.column_name AS source_column, \
+             kcu.referenced_table_name AS target_table, kcu.referenced_column_name AS target_column, \
+             rc.constraint_name, rc.update_rule, rc.delete_rule \
+             FROM information_schema.key_column_usage kcu \
+             JOIN information_schema.referential_constraints rc \
+               ON kcu.constraint_name = rc.constraint_name AND kcu.constraint_schema = rc.constraint_schema \
+             WHERE kcu.table_schema = DATABASE() AND kcu.referenced_table_name IS NOT NULL \
+             ORDER BY kcu.table_name, kcu.column_name".to_string(),
+        _ =>
+            "SELECT \
+               tc.table_name AS source_table, \
+               kcu.column_name AS source_column, \
+               ccu.table_name AS target_table, \
+               ccu.column_name AS target_column, \
+               tc.constraint_name, \
+               rc.update_rule, rc.delete_rule \
+             FROM information_schema.table_constraints tc \
+             JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name \
+             JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name = ccu.constraint_name \
+             JOIN information_schema.referential_constraints rc ON tc.constraint_name = rc.constraint_name \
+             WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = 'public' \
+             ORDER BY tc.table_name, kcu.column_name".to_string(),
+    };
+
+    let container = format!("dockpanel-db-{name}");
+    let agent_body = serde_json::json!({
+        "container": container,
+        "engine": engine,
+        "user": name,
+        "password": password,
+        "database": name,
+        "sql": sql,
+    });
+
+    agent.post("/databases/query", Some(agent_body)).await.map(Json).map_err(sql_error)
+}
+
+/// GET /api/databases/{id}/schema-overview — Full schema overview for visual browser.
+/// Returns tables, columns, indexes, and foreign keys in a single call.
+pub async fn schema_overview(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (name, engine, password, _port) = get_db_info(&state, id, claims.sub).await?;
+    let container = format!("dockpanel-db-{name}");
+
+    // Execute all queries concurrently
+    let tables_sql = match engine.as_str() {
+        "mysql" | "mariadb" =>
+            "SELECT table_name, table_type, table_rows, \
+             ROUND((data_length + index_length) / 1024, 1) AS size_kb \
+             FROM information_schema.tables WHERE table_schema = DATABASE() \
+             ORDER BY table_name".to_string(),
+        _ =>
+            "SELECT t.table_name, t.table_type, \
+             pg_stat_user_tables.n_live_tup AS table_rows, \
+             pg_total_relation_size(quote_ident(t.table_name))/1024 AS size_kb \
+             FROM information_schema.tables t \
+             LEFT JOIN pg_stat_user_tables ON pg_stat_user_tables.relname = t.table_name \
+             WHERE t.table_schema = 'public' ORDER BY t.table_name".to_string(),
+    };
+
+    let fk_sql = match engine.as_str() {
+        "mysql" | "mariadb" =>
+            "SELECT kcu.table_name AS source_table, kcu.column_name AS source_column, \
+             kcu.referenced_table_name AS target_table, kcu.referenced_column_name AS target_column, \
+             rc.constraint_name \
+             FROM information_schema.key_column_usage kcu \
+             JOIN information_schema.referential_constraints rc \
+               ON kcu.constraint_name = rc.constraint_name AND kcu.constraint_schema = rc.constraint_schema \
+             WHERE kcu.table_schema = DATABASE() AND kcu.referenced_table_name IS NOT NULL".to_string(),
+        _ =>
+            "SELECT tc.table_name AS source_table, kcu.column_name AS source_column, \
+             ccu.table_name AS target_table, ccu.column_name AS target_column, \
+             tc.constraint_name \
+             FROM information_schema.table_constraints tc \
+             JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name \
+             JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name = ccu.constraint_name \
+             WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = 'public'".to_string(),
+    };
+
+    let (tables_res, fk_res) = tokio::join!(
+        agent.post("/databases/query", Some(serde_json::json!({
+            "container": &container, "engine": &engine, "user": &name,
+            "password": &password, "database": &name, "sql": &tables_sql,
+        }))),
+        agent.post("/databases/query", Some(serde_json::json!({
+            "container": &container, "engine": &engine, "user": &name,
+            "password": &password, "database": &name, "sql": &fk_sql,
+        })))
+    );
+
+    let tables = tables_res.map_err(sql_error)?;
+    let foreign_keys = fk_res.unwrap_or_else(|_| serde_json::json!({"columns":[],"rows":[]}));
+
+    Ok(Json(serde_json::json!({
+        "tables": tables,
+        "foreign_keys": foreign_keys,
+        "engine": engine,
+    })))
+}
+
 /// Find an available port using a single SQL query to find the first gap.
 async fn find_available_port(state: &AppState, engine: &str) -> Result<i32, ApiError> {
     // Choose port range based on engine

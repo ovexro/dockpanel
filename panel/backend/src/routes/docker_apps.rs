@@ -1453,3 +1453,228 @@ pub async fn policy_usage(
         }
     }
 }
+
+// ─── Container Auto-Sleep / Scale to Zero ──────────────────────
+
+#[derive(serde::Deserialize)]
+pub struct SleepConfigRequest {
+    pub auto_sleep_enabled: Option<bool>,
+    pub sleep_after_minutes: Option<i32>,
+}
+
+/// GET /api/apps/{container_id}/sleep-config — Get sleep configuration for a container.
+pub async fn get_sleep_config(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(container_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    if !is_valid_container_id(&container_id) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
+    }
+
+    let config: Option<(bool, i32, bool, Option<chrono::DateTime<chrono::Utc>>, Option<chrono::DateTime<chrono::Utc>>, i32)> =
+        sqlx::query_as(
+            "SELECT auto_sleep_enabled, sleep_after_minutes, is_sleeping, last_slept_at, last_woken_at, total_sleeps \
+             FROM container_sleep_config WHERE container_id = $1"
+        )
+        .bind(&container_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| internal_error("get sleep config", e))?;
+
+    match config {
+        Some((enabled, minutes, sleeping, slept_at, woken_at, total)) => {
+            Ok(Json(serde_json::json!({
+                "auto_sleep_enabled": enabled,
+                "sleep_after_minutes": minutes,
+                "is_sleeping": sleeping,
+                "last_slept_at": slept_at,
+                "last_woken_at": woken_at,
+                "total_sleeps": total,
+            })))
+        }
+        None => Ok(Json(serde_json::json!({
+            "auto_sleep_enabled": false,
+            "sleep_after_minutes": 30,
+            "is_sleeping": false,
+        }))),
+    }
+}
+
+/// PUT /api/apps/{container_id}/sleep-config — Update sleep configuration.
+pub async fn update_sleep_config(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(container_id): Path<String>,
+    Json(body): Json<SleepConfigRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    if !is_valid_container_id(&container_id) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
+    }
+
+    let minutes = body.sleep_after_minutes.unwrap_or(30).max(5).min(1440);
+    let enabled = body.auto_sleep_enabled.unwrap_or(false);
+
+    // Resolve container name and domain from agent
+    let mut container_name = container_id.clone();
+    let mut domain: Option<String> = None;
+    if let Ok(apps) = agent.get("/apps").await {
+        if let Some(apps_arr) = apps.as_array() {
+            for app in apps_arr {
+                if app.get("container_id").and_then(|v| v.as_str()) == Some(&container_id) {
+                    container_name = app.get("name").and_then(|v| v.as_str()).unwrap_or(&container_id).to_string();
+                    domain = app.get("domain").and_then(|v| v.as_str()).map(String::from);
+                    break;
+                }
+            }
+        }
+    }
+
+    sqlx::query(
+        "INSERT INTO container_sleep_config (container_id, container_name, domain, auto_sleep_enabled, sleep_after_minutes, last_activity_at) \
+         VALUES ($1, $2, $3, $4, $5, NOW()) \
+         ON CONFLICT (container_id) DO UPDATE SET \
+         auto_sleep_enabled = $4, sleep_after_minutes = $5, container_name = $2, domain = $3, updated_at = NOW()"
+    )
+    .bind(&container_id)
+    .bind(&container_name)
+    .bind(&domain)
+    .bind(enabled)
+    .bind(minutes)
+    .execute(&state.db)
+    .await
+    .map_err(|e| internal_error("update sleep config", e))?;
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email,
+        if enabled { "container.auto_sleep_enabled" } else { "container.auto_sleep_disabled" },
+        Some("container"), Some(&container_name), None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// POST /api/apps/{container_id}/wake — Wake a sleeping container.
+pub async fn wake_container(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(container_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    if !is_valid_container_id(&container_id) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
+    }
+
+    // Start the container
+    agent.post(&format!("/apps/{container_id}/start"), None::<serde_json::Value>)
+        .await
+        .map_err(|e| agent_error("Wake container", e))?;
+
+    // Update sleep state
+    sqlx::query(
+        "UPDATE container_sleep_config SET is_sleeping = false, last_woken_at = NOW(), \
+         last_activity_at = NOW(), updated_at = NOW() WHERE container_id = $1"
+    )
+    .bind(&container_id)
+    .execute(&state.db)
+    .await
+    .ok();
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "container.wake",
+        Some("container"), Some(&container_id), None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// POST /api/apps/{container_id}/sleep — Manually sleep a container.
+pub async fn sleep_container(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(container_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    if !is_valid_container_id(&container_id) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
+    }
+
+    agent.post(&format!("/apps/{container_id}/stop"), None::<serde_json::Value>)
+        .await
+        .map_err(|e| agent_error("Sleep container", e))?;
+
+    sqlx::query(
+        "UPDATE container_sleep_config SET is_sleeping = true, last_slept_at = NOW(), \
+         total_sleeps = total_sleeps + 1, updated_at = NOW() WHERE container_id = $1"
+    )
+    .bind(&container_id)
+    .execute(&state.db)
+    .await
+    .ok();
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "container.manual_sleep",
+        Some("container"), Some(&container_id), None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// POST /api/apps/{container_id}/activity-ping — Record container activity (called by nginx or frontend).
+pub async fn activity_ping(
+    State(state): State<AppState>,
+    Path(container_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if container_id.len() > 64 {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
+    }
+
+    sqlx::query(
+        "UPDATE container_sleep_config SET last_activity_at = NOW() WHERE container_id = $1"
+    )
+    .bind(&container_id)
+    .execute(&state.db)
+    .await
+    .ok();
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// GET /api/apps/sleep-status — List all containers with sleep config (admin overview).
+pub async fn sleep_status_list(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+
+    let configs: Vec<(String, String, Option<String>, bool, i32, bool, Option<chrono::DateTime<chrono::Utc>>, Option<chrono::DateTime<chrono::Utc>>, i32)> =
+        sqlx::query_as(
+            "SELECT container_id, container_name, domain, auto_sleep_enabled, sleep_after_minutes, \
+             is_sleeping, last_slept_at, last_woken_at, total_sleeps \
+             FROM container_sleep_config ORDER BY container_name"
+        )
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| internal_error("sleep status list", e))?;
+
+    let items: Vec<serde_json::Value> = configs.iter().map(|(cid, name, domain, enabled, mins, sleeping, slept, woken, total)| {
+        serde_json::json!({
+            "container_id": cid,
+            "container_name": name,
+            "domain": domain,
+            "auto_sleep_enabled": enabled,
+            "sleep_after_minutes": mins,
+            "is_sleeping": sleeping,
+            "last_slept_at": slept,
+            "last_woken_at": woken,
+            "total_sleeps": total,
+        })
+    }).collect();
+
+    Ok(Json(serde_json::json!({ "configs": items })))
+}
