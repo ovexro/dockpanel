@@ -77,6 +77,19 @@ pub async fn diagnostics_fix(
     Ok(Json(data))
 }
 
+/// GET /api/agent/recommendations — Auto-optimization recommendations (admin only).
+pub async fn recommendations(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let data = agent
+        .get("/diagnostics/recommendations")
+        .await
+        .map_err(|e| agent_error("Recommendations", e))?;
+    Ok(Json(data))
+}
+
 /// POST /api/system/cleanup — Proxy to agent's disk cleanup (admin only).
 pub async fn disk_cleanup(
     State(state): State<AppState>,

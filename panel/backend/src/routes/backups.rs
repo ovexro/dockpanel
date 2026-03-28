@@ -314,3 +314,77 @@ pub async fn remove(
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
+
+/// POST /api/sites/{id}/restic/backup — Run incremental Restic backup.
+pub async fn restic_backup(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = get_site_domain(&state, id, claims.sub).await?;
+
+    let result = agent
+        .post_long(
+            &format!("/backups/{}/restic/backup", domain),
+            None,
+            600,
+        )
+        .await
+        .map_err(|e| agent_error("Restic backup", e))?;
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email,
+        "backup.restic.create", Some("site"), Some(&domain), None, None,
+    ).await;
+
+    Ok(Json(result))
+}
+
+/// GET /api/sites/{id}/restic/snapshots — List Restic snapshots.
+pub async fn restic_snapshots(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = get_site_domain(&state, id, claims.sub).await?;
+
+    let result = agent
+        .get(&format!("/backups/{}/restic/snapshots", domain))
+        .await
+        .map_err(|e| agent_error("Restic snapshots", e))?;
+
+    Ok(Json(result))
+}
+
+/// POST /api/sites/{id}/restic/restore/{snapshot_id} — Restore from Restic snapshot.
+pub async fn restic_restore(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path((id, snapshot_id)): Path<(Uuid, String)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let domain = get_site_domain(&state, id, claims.sub).await?;
+
+    // Validate snapshot ID
+    if snapshot_id.len() < 6 || !snapshot_id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid snapshot ID"));
+    }
+
+    let result = agent
+        .post_long(
+            &format!("/backups/{}/restic/restore/{}", domain, snapshot_id),
+            None,
+            600,
+        )
+        .await
+        .map_err(|e| agent_error("Restic restore", e))?;
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email,
+        "backup.restic.restore", Some("site"), Some(&domain), Some(&snapshot_id), None,
+    ).await;
+
+    Ok(Json(result))
+}

@@ -946,6 +946,31 @@ pub async fn snapshot_container(
     Ok(Json(result))
 }
 
+/// POST /api/apps/compose/validate — Validate compose YAML with detailed feedback.
+pub async fn compose_validate(
+    State(_state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+
+    let yaml = body["yaml"]
+        .as_str()
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Missing 'yaml' field"))?;
+
+    if yaml.len() > 65536 {
+        return Err(err(StatusCode::BAD_REQUEST, "YAML too large (max 64KB)"));
+    }
+
+    let result = agent
+        .post("/apps/compose/validate", Some(serde_json::json!({ "yaml": yaml })))
+        .await
+        .map_err(|e| agent_error("Compose validate", e))?;
+
+    Ok(Json(result))
+}
+
 /// POST /api/apps/compose/parse — Parse docker-compose.yml and preview services.
 pub async fn compose_parse(
     State(state): State<AppState>,

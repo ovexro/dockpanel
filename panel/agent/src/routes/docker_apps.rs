@@ -900,6 +900,88 @@ async fn compose_parse(
     Ok(Json(services))
 }
 
+/// POST /apps/compose/validate — Validate compose YAML with detailed feedback.
+async fn compose_validate(
+    Json(body): Json<ComposeParseRequest>,
+) -> Json<serde_json::Value> {
+    let mut errors: Vec<serde_json::Value> = Vec::new();
+    let mut warnings: Vec<serde_json::Value> = Vec::new();
+    let mut info: Vec<serde_json::Value> = Vec::new();
+
+    // Try to parse
+    match compose::parse_compose(&body.yaml) {
+        Ok(services) => {
+            info.push(serde_json::json!({
+                "message": format!("{} service(s) found", services.len()),
+            }));
+
+            for svc in &services {
+                // Check for latest tag
+                if svc.image.ends_with(":latest") || !svc.image.contains(':') {
+                    warnings.push(serde_json::json!({
+                        "service": svc.name,
+                        "message": "Using ':latest' tag — pin to a specific version for reproducible deploys",
+                    }));
+                }
+
+                // Check for exposed privileged ports
+                for port in &svc.ports {
+                    if port.host < 1024 && port.host != 80 && port.host != 443 {
+                        warnings.push(serde_json::json!({
+                            "service": svc.name,
+                            "message": format!("Privileged port {} — consider using a higher port", port.host),
+                        }));
+                    }
+                }
+
+                // Check for missing volumes on databases
+                let db_images = ["postgres", "mysql", "mariadb", "mongo", "redis"];
+                if db_images.iter().any(|db| svc.image.contains(db)) && svc.volumes.is_empty() {
+                    warnings.push(serde_json::json!({
+                        "service": svc.name,
+                        "message": "Database service without volumes — data will be lost on container restart",
+                    }));
+                }
+
+                // Check for missing restart policy
+                if svc.restart.is_empty() || svc.restart == "no" {
+                    info.push(serde_json::json!({
+                        "service": svc.name,
+                        "message": "No restart policy — container won't auto-restart. Consider 'unless-stopped'",
+                    }));
+                }
+
+                // Check for missing health check env vars
+                if svc.environment.is_empty() && db_images.iter().any(|db| svc.image.contains(db)) {
+                    warnings.push(serde_json::json!({
+                        "service": svc.name,
+                        "message": "Database without environment variables — password/root may use defaults",
+                    }));
+                }
+            }
+        }
+        Err(e) => {
+            errors.push(serde_json::json!({
+                "message": e,
+            }));
+        }
+    }
+
+    // YAML syntax check
+    if body.yaml.contains('\t') {
+        warnings.push(serde_json::json!({
+            "message": "YAML contains tabs — use spaces for indentation to avoid parse errors",
+        }));
+    }
+
+    Json(serde_json::json!({
+        "valid": errors.is_empty(),
+        "errors": errors,
+        "warnings": warnings,
+        "info": info,
+    }))
+}
+
 /// POST /apps/compose/deploy — Deploy services from parsed compose file.
 async fn compose_deploy(
     Json(body): Json<ComposeParseRequest>,
@@ -1329,6 +1411,7 @@ pub fn router() -> Router<AppState> {
         .route("/apps/update-check", get(update_check))
         .route("/apps/deploy", post(deploy))
         .route("/apps/compose/parse", post(compose_parse))
+        .route("/apps/compose/validate", post(compose_validate))
         .route("/apps/compose/deploy", post(compose_deploy))
         .route("/apps/stack/action", post(stack_action))
         .route("/apps/registries", get(list_registries))
