@@ -30,6 +30,8 @@ pub struct DeployRequest {
     pub ssl_email: Option<String>,
     pub memory_mb: Option<u64>,
     pub cpu_percent: Option<u64>,
+    #[serde(default)]
+    pub gpu_enabled: bool,
 }
 
 /// GET /api/apps/templates — List available app templates.
@@ -167,6 +169,7 @@ pub async fn deploy(
         "port": body.port,
         "env": body.env.unwrap_or_default(),
         "user_id": user_id_for_agent,
+        "gpu_enabled": body.gpu_enabled,
     });
     if let Some(ref domain) = deploy_domain {
         agent_body["domain"] = serde_json::json!(domain);
@@ -1191,6 +1194,18 @@ pub async fn check_updates(
         .get("/apps/update-check")
         .await
         .map_err(|e| agent_error("Update check", e))?;
+    Ok(Json(result))
+}
+
+/// GET /api/apps/gpu-info — Get GPU availability information from the server.
+pub async fn gpu_info(
+    State(_state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    let result = agent.get("/apps/gpu-info").await
+        .map_err(|e| agent_error("GPU info", e))?;
     Ok(Json(result))
 }
 

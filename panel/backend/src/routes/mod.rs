@@ -457,6 +457,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/databases/{id}/foreign-keys", get(databases::foreign_keys))
         .route("/api/databases/{id}/schema-overview", get(databases::schema_overview))
         .route("/api/databases/{id}/query", post(databases::query))
+        .route("/api/databases/{id}/pitr", get(databases::pitr_config).put(databases::update_pitr_config))
+        .route("/api/databases/{id}/pitr/restore", post(databases::pitr_restore))
         // Compose Stacks
         .route("/api/stacks", get(stacks::list).post(stacks::create))
         .route("/api/stacks/{id}", get(stacks::get_one).put(stacks::update).delete(stacks::remove))
@@ -465,6 +467,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/stacks/{id}/restart", post(stacks::restart))
         // Docker Apps (admin)
         .route("/api/apps/updates", get(docker_apps::check_updates))
+        .route("/api/apps/gpu-info", get(docker_apps::gpu_info))
         .route("/api/apps/templates", get(docker_apps::list_templates))
         .route("/api/apps/deploy", post(docker_apps::deploy))
         .route("/api/apps/deploy/{deploy_id}/log", get(docker_apps::deploy_log))

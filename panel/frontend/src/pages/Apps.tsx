@@ -287,6 +287,7 @@ export default function Apps() {
   const [sslEmail, setSslEmail] = useState("");
   const [memoryMb, setMemoryMb] = useState("");
   const [cpuPercent, setCpuPercent] = useState("");
+  const [gpuEnabled, setGpuEnabled] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [message, setMessage] = useState({ text: "", type: "" });
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -418,6 +419,7 @@ export default function Apps() {
         ...(appDomain && sslEmail ? { ssl_email: sslEmail } : {}),
         ...(memoryMb ? { memory_mb: parseInt(memoryMb) } : {}),
         ...(cpuPercent ? { cpu_percent: parseInt(cpuPercent) } : {}),
+        ...(gpuEnabled ? { gpu_enabled: true } : {}),
       };
       if (enableHealthCheck && healthCmd) {
         deployBody.health_check = {
@@ -1695,6 +1697,12 @@ volumes:
                   </div>
                 </div>
               </div>
+
+              {/* GPU Passthrough */}
+              <label className="flex items-center gap-2 text-sm font-medium text-dark-100 mt-2">
+                <input type="checkbox" checked={gpuEnabled} onChange={e => setGpuEnabled(e.target.checked)} className="rounded border-dark-500" />
+                Enable GPU passthrough <span className="text-dark-300 font-normal text-xs">(requires NVIDIA Container Toolkit)</span>
+              </label>
 
               {/* Health Check Configuration (Feature #9) */}
               <div>

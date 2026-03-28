@@ -34,6 +34,9 @@ struct DeployRequest {
     use_traefik: bool,
     /// User ID for container labeling and isolation
     user_id: Option<String>,
+    /// Enable GPU passthrough (requires NVIDIA Container Toolkit)
+    #[serde(default)]
+    gpu_enabled: bool,
 }
 
 /// GET /apps/templates — List all available app templates.
@@ -63,7 +66,7 @@ async fn deploy(
     }
 
     let result =
-        docker_apps::deploy_app(&body.template_id, &body.name, body.port, body.env, body.domain.as_deref(), body.memory_mb, body.cpu_percent, body.user_id.as_deref())
+        docker_apps::deploy_app(&body.template_id, &body.name, body.port, body.env, body.domain.as_deref(), body.memory_mb, body.cpu_percent, body.user_id.as_deref(), body.gpu_enabled)
             .await
             .map_err(|e| {
                 (
@@ -1443,4 +1446,53 @@ pub fn router() -> Router<AppState> {
         .route("/apps/{container_id}/snapshot", post(snapshot_container))
         .route("/apps/{container_id}/change-image", post(change_image))
         .route("/apps/{container_id}/update-limits", post(update_container_limits))
+        .route("/apps/gpu-info", get(gpu_info))
+}
+
+/// GET /apps/gpu-info — Detect available GPUs on the host.
+async fn gpu_info() -> Json<serde_json::Value> {
+    // Check if nvidia-smi is available and get GPU info
+    let output = tokio::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=name,memory.total,driver_version,utilization.gpu", "--format=csv,noheader,nounits"])
+        .output()
+        .await;
+
+    match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let gpus: Vec<serde_json::Value> = stdout.lines().filter(|l| !l.trim().is_empty()).enumerate().map(|(i, line)| {
+                let parts: Vec<&str> = line.split(", ").collect();
+                serde_json::json!({
+                    "index": i,
+                    "name": parts.first().unwrap_or(&"Unknown"),
+                    "memory_mb": parts.get(1).and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0),
+                    "driver_version": parts.get(2).unwrap_or(&""),
+                    "utilization_pct": parts.get(3).and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(0),
+                })
+            }).collect();
+
+            // Check if NVIDIA Container Toolkit is installed
+            let toolkit = tokio::process::Command::new("nvidia-container-cli")
+                .arg("--version")
+                .output()
+                .await
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            Json(serde_json::json!({
+                "available": true,
+                "gpus": gpus,
+                "gpu_count": gpus.len(),
+                "nvidia_toolkit_installed": toolkit,
+            }))
+        }
+        _ => {
+            Json(serde_json::json!({
+                "available": false,
+                "gpus": [],
+                "gpu_count": 0,
+                "nvidia_toolkit_installed": false,
+            }))
+        }
+    }
 }

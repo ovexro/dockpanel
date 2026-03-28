@@ -2353,6 +2353,7 @@ pub async fn deploy_app(
     memory_mb: Option<u64>,
     cpu_percent: Option<u64>,
     user_id: Option<&str>,
+    gpu_enabled: bool,
 ) -> Result<DeployResult, String> {
     let template = TEMPLATES
         .iter()
@@ -2468,6 +2469,23 @@ pub async fn deploy_app(
             host_config.cpu_period = Some(100_000);
             host_config.cpu_quota = Some((cpu * 1000) as i64);
         }
+    }
+
+    // GPU passthrough (requires NVIDIA Container Toolkit installed on host)
+    if gpu_enabled {
+        host_config.device_requests = Some(vec![
+            bollard::service::DeviceRequest {
+                driver: Some("nvidia".to_string()),
+                count: Some(-1), // All GPUs
+                capabilities: Some(vec![vec!["gpu".to_string(), "compute".to_string(), "utility".to_string()]]),
+                ..Default::default()
+            }
+        ]);
+        // GPU containers may need additional caps
+        if let Some(ref mut caps) = host_config.cap_add {
+            caps.push("SYS_ADMIN".to_string());
+        }
+        tracing::info!("GPU passthrough enabled for container {container_name}");
     }
 
     if !binds.is_empty() {

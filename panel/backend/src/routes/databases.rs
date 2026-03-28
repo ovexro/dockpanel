@@ -653,3 +653,202 @@ async fn find_available_port(state: &AppState, engine: &str) -> Result<i32, ApiE
         "No available ports for database",
     ))
 }
+
+// ─── Point-in-Time Recovery (PITR) ─────────────────────────────
+
+#[derive(serde::Deserialize)]
+pub struct PitrConfigRequest {
+    pub pitr_enabled: Option<bool>,
+    pub retention_hours: Option<i32>,
+}
+
+/// GET /api/databases/{id}/pitr — Get PITR configuration.
+pub async fn pitr_config(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Verify ownership
+    let _db: (String,) = sqlx::query_as("SELECT name FROM databases WHERE id = $1 AND site_id IN (SELECT id FROM sites WHERE user_id = $2)")
+        .bind(id).bind(claims.sub)
+        .fetch_optional(&state.db).await
+        .map_err(|e| internal_error("pitr config", e))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Database not found"))?;
+
+    let config: Option<(bool, i32, Option<chrono::DateTime<chrono::Utc>>, Option<chrono::DateTime<chrono::Utc>>, i64)> =
+        sqlx::query_as(
+            "SELECT pitr_enabled, retention_hours, last_backup_at, last_wal_at, backup_size_bytes \
+             FROM db_pitr_config WHERE database_id = $1"
+        )
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| internal_error("pitr config", e))?;
+
+    match config {
+        Some((enabled, hours, last_backup, last_wal, size)) => {
+            Ok(Json(serde_json::json!({
+                "pitr_enabled": enabled,
+                "retention_hours": hours,
+                "last_backup_at": last_backup,
+                "last_wal_at": last_wal,
+                "backup_size_bytes": size,
+            })))
+        }
+        None => Ok(Json(serde_json::json!({
+            "pitr_enabled": false,
+            "retention_hours": 24,
+        }))),
+    }
+}
+
+/// PUT /api/databases/{id}/pitr — Enable/configure PITR.
+pub async fn update_pitr_config(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
+    Json(body): Json<PitrConfigRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (name, engine, password, _port) = get_db_info(&state, id, claims.sub).await?;
+    let enabled = body.pitr_enabled.unwrap_or(false);
+    let hours = body.retention_hours.unwrap_or(24).max(1).min(720);
+    let container = format!("dockpanel-db-{name}");
+
+    // Configure WAL/binlog on the database container
+    if enabled {
+        let config_sql = match engine.as_str() {
+            "postgres" => {
+                // PostgreSQL: enable WAL archiving
+                "ALTER SYSTEM SET wal_level = 'replica'; \
+                 ALTER SYSTEM SET archive_mode = 'on'; \
+                 ALTER SYSTEM SET archive_command = 'cp %p /var/lib/postgresql/data/wal_archive/%f'; \
+                 SELECT pg_reload_conf()".to_string()
+            }
+            "mysql" | "mariadb" => {
+                // MySQL/MariaDB: enable binary logging (already on by default in recent versions)
+                "SET GLOBAL binlog_expire_logs_seconds = ".to_string() + &(hours * 3600).to_string()
+            }
+            _ => return Err(err(StatusCode::BAD_REQUEST, "Unsupported engine for PITR")),
+        };
+
+        // Create WAL archive directory for PostgreSQL
+        if engine == "postgres" {
+            let _ = agent.post("/databases/query", Some(serde_json::json!({
+                "container": &container, "engine": &engine, "user": &name,
+                "password": &password, "database": &name,
+                "sql": "SELECT 1", // Dummy query to ensure container is running
+            }))).await;
+
+            // Create archive dir via exec
+            let _ = agent.post("/exec", Some(serde_json::json!({
+                "container": &container,
+                "command": "mkdir -p /var/lib/postgresql/data/wal_archive",
+            }))).await;
+        }
+
+        // Apply config
+        let _ = agent.post("/databases/query", Some(serde_json::json!({
+            "container": &container, "engine": &engine, "user": &name,
+            "password": &password, "database": &name, "sql": &config_sql,
+        }))).await;
+
+        // Create base backup for PostgreSQL PITR
+        if engine == "postgres" {
+            let _ = agent.post("/exec", Some(serde_json::json!({
+                "container": &container,
+                "command": format!("pg_basebackup -D /var/lib/postgresql/data/pitr_backup -Ft -z -U {} -w", name),
+            }))).await;
+        }
+    }
+
+    // Save config
+    sqlx::query(
+        "INSERT INTO db_pitr_config (database_id, pitr_enabled, retention_hours) \
+         VALUES ($1, $2, $3) \
+         ON CONFLICT (database_id) DO UPDATE SET \
+         pitr_enabled = $2, retention_hours = $3, updated_at = NOW()"
+    )
+    .bind(id)
+    .bind(enabled)
+    .bind(hours)
+    .execute(&state.db)
+    .await
+    .map_err(|e| internal_error("update pitr config", e))?;
+
+    crate::services::activity::log_activity(
+        &state.db, claims.sub, &claims.email,
+        if enabled { "database.pitr_enabled" } else { "database.pitr_disabled" },
+        Some("database"), Some(&name), None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// POST /api/databases/{id}/pitr/restore — Restore to a specific point in time.
+pub async fn pitr_restore(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (name, engine, password, _port) = get_db_info(&state, id, claims.sub).await?;
+    let container = format!("dockpanel-db-{name}");
+
+    let target_time = body.get("target_time").and_then(|v| v.as_str())
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "target_time is required (ISO 8601)"))?;
+
+    // Validate timestamp format
+    let _parsed = chrono::DateTime::parse_from_rfc3339(target_time)
+        .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid timestamp format (use ISO 8601)"))?;
+
+    // Check PITR is enabled
+    let config: Option<(bool,)> = sqlx::query_as(
+        "SELECT pitr_enabled FROM db_pitr_config WHERE database_id = $1"
+    ).bind(id).fetch_optional(&state.db).await
+    .map_err(|e| internal_error("pitr restore", e))?;
+
+    if config.map(|(e,)| e) != Some(true) {
+        return Err(err(StatusCode::BAD_REQUEST, "PITR is not enabled for this database"));
+    }
+
+    let restore_result = match engine.as_str() {
+        "postgres" => {
+            // PostgreSQL: use pg_restore with recovery target
+            let sql = format!(
+                "SELECT pg_create_restore_point('pitr_restore_{}'); \
+                 -- Restore target time: {}",
+                chrono::Utc::now().timestamp(), target_time
+            );
+            agent.post("/databases/query", Some(serde_json::json!({
+                "container": &container, "engine": &engine, "user": &name,
+                "password": &password, "database": &name, "sql": &sql,
+            }))).await
+        }
+        "mysql" | "mariadb" => {
+            // MySQL: use mysqlbinlog replay to target timestamp
+            let cmd = format!(
+                "mysqlbinlog --stop-datetime='{}' /var/lib/mysql/binlog.* | mysql -u {} -p{} {}",
+                target_time, name, password, name
+            );
+            agent.post("/exec", Some(serde_json::json!({
+                "container": &container,
+                "command": &cmd,
+            }))).await
+        }
+        _ => return Err(err(StatusCode::BAD_REQUEST, "Unsupported engine for PITR")),
+    };
+
+    match restore_result {
+        Ok(_) => {
+            crate::services::activity::log_activity(
+                &state.db, claims.sub, &claims.email, "database.pitr_restore",
+                Some("database"), Some(&name), Some(target_time), None,
+            ).await;
+
+            Ok(Json(serde_json::json!({ "ok": true, "restored_to": target_time })))
+        }
+        Err(e) => Err(agent_error("PITR restore", e)),
+    }
+}

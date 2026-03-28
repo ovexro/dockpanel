@@ -979,6 +979,23 @@ export default function Databases() {
                           Schema
                         </button>
                         <button
+                          onClick={async () => {
+                            try {
+                              const cfg = await api.get<any>(`/databases/${db.id}/pitr`);
+                              const newEnabled = !cfg.pitr_enabled;
+                              await api.put(`/databases/${db.id}/pitr`, {
+                                pitr_enabled: newEnabled,
+                                retention_hours: cfg.retention_hours || 24,
+                              });
+                              setError("");
+                            } catch (e) { setError(e instanceof Error ? e.message : "Failed to toggle PITR"); }
+                          }}
+                          className="px-2 py-1 rounded text-xs font-medium bg-dark-700 text-dark-300 hover:bg-dark-600 transition-colors"
+                          title="Toggle point-in-time recovery (WAL/binlog)"
+                        >
+                          PITR
+                        </button>
+                        <button
                           onClick={() => toggleCredentials(db.id)}
                           className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
                             credentialsId === db.id
