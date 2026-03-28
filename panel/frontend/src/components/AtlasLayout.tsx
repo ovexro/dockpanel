@@ -131,7 +131,7 @@ export default function AtlasLayout() {
                   <NavLink
                     key={item.to}
                     to={item.to}
-                    end={item.to === "/"}
+                    end
                     className={({ isActive }) =>
                       `flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md whitespace-nowrap shrink-0 transition-colors ${
                         isActive
@@ -404,7 +404,7 @@ export default function AtlasLayout() {
                       <NavLink
                         key={item.to}
                         to={item.to}
-                        end={item.to === "/"}
+                        end
                         onClick={() => setSidebarOpen(false)}
                         className={({ isActive }) =>
                           `flex items-center gap-3 px-3 py-2.5 text-sm rounded-md transition-colors ${

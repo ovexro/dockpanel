@@ -168,7 +168,7 @@ export default function GlassLayout() {
                 <NavLink
                   key={item.to}
                   to={item.to}
-                  end={item.to === "/"}
+                  end
                   onClick={() => setSidebarOpen(false)}
                 >
                   {({ isActive }) => (
@@ -222,7 +222,7 @@ export default function GlassLayout() {
                     <NavLink
                       key={item.to}
                       to={item.to}
-                      end={item.to === "/"}
+                      end
                       onClick={() => setSidebarOpen(false)}
                     >
                       {({ isActive }) => (
