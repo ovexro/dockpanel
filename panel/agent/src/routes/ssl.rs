@@ -69,6 +69,8 @@ async fn provision(
         fastcgi_cache: None,
         redis_cache: None,
         redis_db: None,
+        waf_enabled: None,
+        waf_mode: None,
     };
 
     ssl::enable_ssl_for_site(&state.templates, &domain, &site_config)
@@ -185,6 +187,8 @@ async fn upload_cert(
         fastcgi_cache: None,
         redis_cache: None,
         redis_db: None,
+        waf_enabled: None,
+        waf_mode: None,
     };
 
     ssl::enable_ssl_for_site(&state.templates, &body.domain, &site_config)
@@ -357,6 +361,7 @@ async fn provision_dns01(
                 php_memory_mb: None, php_max_workers: None,
                 custom_nginx: None, php_preset: None, app_command: None,
                 fastcgi_cache: None, redis_cache: None, redis_db: None,
+                waf_enabled: None, waf_mode: None,
             };
 
             ssl::enable_ssl_for_site(&state.templates, &domain, &site_config)

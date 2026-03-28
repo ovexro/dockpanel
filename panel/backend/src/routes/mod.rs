@@ -387,6 +387,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/sites/{id}/fastcgi-cache/purge", post(sites::purge_fastcgi_cache))
         .route("/api/sites/{id}/redis-cache", put(sites::toggle_redis_cache))
         .route("/api/sites/{id}/redis-cache/purge", post(sites::purge_redis_cache))
+        .route("/api/sites/{id}/waf", put(sites::toggle_waf))
+        .route("/api/sites/{id}/waf/logs", get(sites::waf_logs))
         // PHP versions
         .route("/api/php/versions", get(sites::php_versions))
         .route("/api/php/install", post(sites::php_install))

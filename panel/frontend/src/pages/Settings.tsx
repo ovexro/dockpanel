@@ -1872,6 +1872,7 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
     { id: "redis", label: "Redis", desc: "In-memory cache and data store for PHP applications", field: "redis", checkInstalled: (s: any) => s?.redis?.installed, checkRunning: (s: any) => s?.redis?.running, extra: () => null },
     { id: "nodejs", label: "Node.js", desc: "JavaScript runtime for builds, SSR, and npm packages", field: "nodejs", checkInstalled: (s: any) => s?.nodejs?.installed, checkRunning: () => null, extra: () => null },
     { id: "composer", label: "Composer", desc: "PHP dependency manager for Laravel, Symfony, Drupal", field: "composer", checkInstalled: (s: any) => s?.composer?.installed, checkRunning: () => null, extra: () => null },
+    { id: "waf", label: "WAF (ModSecurity)", desc: "Web Application Firewall with OWASP CRS — blocks SQL injection, XSS, and OWASP Top 10", field: "waf", checkInstalled: (s: any) => s?.waf?.installed, checkRunning: () => null, extra: () => null },
   ];
 
   return (

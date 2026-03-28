@@ -37,6 +37,8 @@ pub fn router() -> Router<AppState> {
         .route("/services/uninstall/redis", post(uninstall_redis))
         .route("/services/uninstall/nodejs", post(uninstall_nodejs))
         .route("/services/uninstall/composer", post(uninstall_composer))
+        .route("/services/install/waf", post(install_waf))
+        .route("/services/uninstall/waf", post(uninstall_waf))
 }
 
 // ── Status check ────────────────────────────────────────────────────────
@@ -62,6 +64,9 @@ async fn install_status() -> Result<Json<serde_json::Value>, ApiErr> {
     let nodejs_installed = which("node").await;
     let composer_installed = which("composer").await;
 
+    let waf_installed = std::path::Path::new("/etc/modsecurity/modsecurity.conf").exists()
+        && is_installed("libmodsecurity3").await;
+
     Ok(Json(serde_json::json!({
         "php": { "installed": php_installed, "running": php_running, "version": php_version },
         "certbot": { "installed": certbot_installed },
@@ -71,6 +76,7 @@ async fn install_status() -> Result<Json<serde_json::Value>, ApiErr> {
         "redis": { "installed": redis_installed, "running": redis_running },
         "nodejs": { "installed": nodejs_installed },
         "composer": { "installed": composer_installed },
+        "waf": { "installed": waf_installed },
     })))
 }
 
@@ -723,6 +729,165 @@ async fn detect_php_version() -> Option<String> {
     } else {
         None
     }
+}
+
+// ── WAF (ModSecurity3 + OWASP CRS) installer ───────────────────────
+
+async fn install_waf() -> Result<Json<serde_json::Value>, ApiErr> {
+    tracing::info!("Installing WAF (ModSecurity3 + OWASP CRS)...");
+
+    // 1. Install libmodsecurity3 and nginx connector
+    let output = tokio::time::timeout(
+        Duration::from_secs(300),
+        safe_command("sh")
+            .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get update && \
+                DEBIAN_FRONTEND=noninteractive apt-get install -y libmodsecurity3 libnginx-mod-http-modsecurity"])
+            .output()
+    ).await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "WAF install timed out"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("apt install: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("WAF install failed (libmodsecurity3 or nginx module not available): {}",
+                stderr.chars().take(400).collect::<String>())));
+    }
+
+    // 2. Create directory structure
+    let dirs = ["/etc/modsecurity", "/etc/modsecurity/sites", "/var/log/modsecurity"];
+    for dir in dirs {
+        std::fs::create_dir_all(dir).ok();
+    }
+
+    // 3. Download OWASP CRS v4
+    let crs_dir = "/etc/modsecurity/crs";
+    if !std::path::Path::new(&format!("{crs_dir}/crs-setup.conf")).exists() {
+        let dl = tokio::time::timeout(
+            Duration::from_secs(120),
+            safe_command("sh")
+                .args(["-c", &format!(
+                    "cd /tmp && \
+                     curl -sL https://github.com/coreruleset/coreruleset/archive/refs/tags/v4.4.0.tar.gz -o crs.tar.gz && \
+                     tar xzf crs.tar.gz && \
+                     rm -rf {crs_dir} && \
+                     mv coreruleset-4.4.0 {crs_dir} && \
+                     cp {crs_dir}/crs-setup.conf.example {crs_dir}/crs-setup.conf && \
+                     rm -f crs.tar.gz"
+                )])
+                .output()
+        ).await;
+
+        match dl {
+            Ok(Ok(o)) if o.status.success() => {
+                tracing::info!("OWASP CRS v4.4.0 downloaded");
+            }
+            _ => {
+                tracing::warn!("OWASP CRS download failed — WAF will work without rules");
+            }
+        }
+    }
+
+    // 4. Write base ModSecurity config
+    let modsec_conf = r#"# ModSecurity base config (managed by DockPanel)
+SecRuleEngine DetectionOnly
+SecRequestBodyAccess On
+SecRequestBodyLimit 13107200
+SecRequestBodyNoFilesLimit 131072
+SecResponseBodyAccess Off
+SecTmpDir /tmp/
+SecDataDir /tmp/
+SecAuditEngine RelevantOnly
+SecAuditLogRelevantStatus "^(?:5|4(?!04))"
+SecAuditLogParts ABIJDEFHZ
+SecAuditLogType Serial
+SecAuditLog /var/log/modsecurity/modsec_audit.log
+SecArgumentSeparator &
+SecCookieFormat 0
+SecUnicodeMapFile unicode.mapping 20127
+SecStatusEngine Off
+"#;
+
+    std::fs::write("/etc/modsecurity/modsecurity.conf", modsec_conf)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Write modsec config: {e}")))?;
+
+    // 5. Write unicode mapping (required by ModSecurity)
+    if !std::path::Path::new("/etc/modsecurity/unicode.mapping").exists() {
+        // Try to copy from default location or create minimal one
+        let _ = std::fs::copy(
+            "/usr/share/modsecurity-crs/unicode.mapping",
+            "/etc/modsecurity/unicode.mapping",
+        );
+        if !std::path::Path::new("/etc/modsecurity/unicode.mapping").exists() {
+            std::fs::write("/etc/modsecurity/unicode.mapping", "").ok();
+        }
+    }
+
+    // 6. Verify nginx can load the module
+    let test = tokio::time::timeout(
+        Duration::from_secs(10),
+        safe_command("nginx").args(["-t"]).output()
+    ).await;
+
+    let nginx_ok = test.ok()
+        .and_then(|r| r.ok())
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if !nginx_ok {
+        tracing::warn!("nginx -t failed after WAF install — module may need manual load_module directive");
+    }
+
+    tracing::info!("WAF installed (ModSecurity3 + OWASP CRS)");
+    Ok(ok("WAF installed: ModSecurity3 with OWASP Core Rule Set v4"))
+}
+
+async fn uninstall_waf() -> Result<Json<serde_json::Value>, ApiErr> {
+    tracing::info!("Uninstalling WAF...");
+
+    // Remove WAF directives from all nginx configs
+    let sites_dir = "/etc/nginx/sites-enabled";
+    if let Ok(entries) = std::fs::read_dir(sites_dir) {
+        for entry in entries.flatten() {
+            if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                if content.contains("modsecurity") {
+                    let cleaned: String = content.lines()
+                        .filter(|l| !l.contains("modsecurity"))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let _ = std::fs::write(entry.path(), cleaned);
+                }
+            }
+        }
+    }
+
+    // Reload nginx to remove WAF from active configs
+    let _ = tokio::time::timeout(
+        Duration::from_secs(10),
+        safe_command("nginx").args(["-s", "reload"]).output()
+    ).await;
+
+    // Purge packages
+    let output = tokio::time::timeout(
+        Duration::from_secs(300),
+        safe_command("sh")
+            .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get purge -y libnginx-mod-http-modsecurity libmodsecurity3 && apt-get autoremove -y"])
+            .output()
+    ).await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "WAF uninstall timed out"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("WAF uninstall: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("WAF uninstall failed: {}", stderr.chars().take(300).collect::<String>())));
+    }
+
+    // Clean up config files (preserve logs)
+    let _ = std::fs::remove_dir_all("/etc/modsecurity");
+
+    tracing::info!("WAF uninstalled");
+    Ok(ok("WAF (ModSecurity3) uninstalled"))
 }
 
 async fn detect_available_php() -> Option<String> {

@@ -339,6 +339,8 @@ pub async fn create(
     agent_body["fastcgi_cache"] = serde_json::json!(false);
     agent_body["redis_cache"] = serde_json::json!(false);
     agent_body["redis_db"] = serde_json::json!(0);
+    agent_body["waf_enabled"] = serde_json::json!(false);
+    agent_body["waf_mode"] = serde_json::json!("detection");
 
     // Call agent to create nginx config
     let agent_path = format!("/nginx/sites/{}", body.domain);
@@ -963,6 +965,8 @@ pub async fn switch_php(
         "fastcgi_cache": site.fastcgi_cache,
         "redis_cache": site.redis_cache,
         "redis_db": site.redis_db,
+        "waf_enabled": site.waf_enabled,
+        "waf_mode": site.waf_mode,
     });
 
     if let Some(ref preset) = site.php_preset {
@@ -1144,6 +1148,8 @@ pub async fn update_limits(
         "fastcgi_cache": site.fastcgi_cache,
         "redis_cache": site.redis_cache,
         "redis_db": site.redis_db,
+        "waf_enabled": site.waf_enabled,
+        "waf_mode": site.waf_mode,
     });
     if let Some(ref custom) = body.custom_nginx {
         agent_body["custom_nginx"] = serde_json::json!(custom);
@@ -1925,6 +1931,8 @@ pub async fn clone_site(
     nginx_body["fastcgi_cache"] = serde_json::json!(source.fastcgi_cache);
     nginx_body["redis_cache"] = serde_json::json!(source.redis_cache);
     nginx_body["redis_db"] = serde_json::json!(source.redis_db);
+    nginx_body["waf_enabled"] = serde_json::json!(source.waf_enabled);
+    nginx_body["waf_mode"] = serde_json::json!(source.waf_mode);
 
     agent.put(&format!("/nginx/sites/{target_domain}"), nginx_body).await
         .map_err(|e| agent_error("Nginx config", e))?;
@@ -2563,4 +2571,129 @@ pub async fn purge_redis_cache(
         "ok": true,
         "message": format!("Redis cache purged for {}", site.domain),
     })))
+}
+
+/// PUT /api/sites/{id}/waf — Toggle WAF and set mode for a site.
+pub async fn toggle_waf(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let site: crate::models::Site = sqlx::query_as(
+        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("toggle waf", e))?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    let enabled = body.get("enabled").and_then(|v| v.as_bool())
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Missing 'enabled' boolean"))?;
+    let mode = body.get("mode").and_then(|v| v.as_str()).unwrap_or("detection");
+
+    if mode != "detection" && mode != "prevention" {
+        return Err(err(StatusCode::BAD_REQUEST, "Mode must be 'detection' or 'prevention'"));
+    }
+
+    // Configure WAF on agent
+    if enabled {
+        agent.post(
+            &format!("/nginx/sites/{}/waf/configure", site.domain),
+            Some(serde_json::json!({ "mode": mode })),
+        ).await.map_err(|e| agent_error("WAF configure", e))?;
+    }
+
+    // Rebuild nginx config with WAF setting
+    let mut agent_body = serde_json::json!({
+        "runtime": site.runtime,
+        "fastcgi_cache": site.fastcgi_cache,
+        "redis_cache": site.redis_cache,
+        "redis_db": site.redis_db,
+        "waf_enabled": enabled,
+        "waf_mode": mode,
+        "rate_limit": site.rate_limit,
+        "max_upload_mb": site.max_upload_mb,
+        "php_memory_mb": site.php_memory_mb,
+        "php_max_workers": site.php_max_workers,
+    });
+    if let Some(ref preset) = site.php_preset {
+        agent_body["php_preset"] = serde_json::json!(preset);
+    }
+    if let Some(ref custom) = site.custom_nginx {
+        agent_body["custom_nginx"] = serde_json::json!(custom);
+    }
+    if let Some(ref php) = site.php_version {
+        agent_body["php_socket"] = serde_json::json!(format!("unix:/run/php/php{php}-fpm.sock"));
+    }
+    if site.ssl_enabled {
+        agent_body["ssl"] = serde_json::json!(true);
+        if let Some(ref cert) = site.ssl_cert_path {
+            agent_body["ssl_cert"] = serde_json::json!(cert);
+        }
+        if let Some(ref key) = site.ssl_key_path {
+            agent_body["ssl_key"] = serde_json::json!(key);
+        }
+    }
+
+    agent.put(
+        &format!("/nginx/sites/{}", site.domain),
+        agent_body,
+    ).await.map_err(|e| agent_error("WAF nginx config", e))?;
+
+    // Update DB
+    sqlx::query("UPDATE sites SET waf_enabled = $1, waf_mode = $2, updated_at = NOW() WHERE id = $3")
+        .bind(enabled)
+        .bind(mode)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| internal_error("toggle waf", e))?;
+
+    let action = if enabled { format!("enabled ({mode})") } else { "disabled".to_string() };
+    tracing::info!("WAF {action} for {}", site.domain);
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email,
+        &format!("site.waf.{}", if enabled { "enabled" } else { "disabled" }),
+        Some("site"), Some(&site.domain), None, None,
+    ).await;
+
+    notifications::notify_panel(&state.db, Some(claims.sub),
+        &format!("WAF {action}: {}", site.domain),
+        &format!("Web Application Firewall has been {action}"), "info", "site", None,
+    ).await;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "waf_enabled": enabled,
+        "waf_mode": mode,
+    })))
+}
+
+/// GET /api/sites/{id}/waf/logs — Get recent WAF events for a site.
+pub async fn waf_logs(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let site: crate::models::Site = sqlx::query_as(
+        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("waf logs", e))?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    let result = agent
+        .get(&format!("/nginx/sites/{}/waf/logs?limit=50", site.domain))
+        .await
+        .map_err(|e| agent_error("WAF logs", e))?;
+
+    Ok(Json(result))
 }

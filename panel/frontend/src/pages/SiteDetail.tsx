@@ -25,6 +25,8 @@ interface Site {
   fastcgi_cache: boolean;
   redis_cache: boolean;
   redis_db: number;
+  waf_enabled: boolean;
+  waf_mode: string;
   created_at: string;
   updated_at: string;
 }
@@ -126,6 +128,12 @@ export default function SiteDetail() {
   const [redisToggling, setRedisToggling] = useState(false);
   const [redisPurging, setRedisPurging] = useState(false);
   const [redisMsg, setRedisMsg] = useState("");
+
+  // WAF
+  const [wafToggling, setWafToggling] = useState(false);
+  const [wafMsg, setWafMsg] = useState("");
+  const [wafLogs, setWafLogs] = useState<{ timestamp: string; client_ip: string; uri: string; rule_message: string; severity: string; action: string }[]>([]);
+  const [wafLogsLoading, setWafLogsLoading] = useState(false);
 
   // PHP Extensions
   const [phpExts, setPhpExts] = useState<{ installed: string[]; available: string[] } | null>(null);
@@ -983,6 +991,140 @@ export default function SiteDetail() {
                 </span>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* WAF (ModSecurity) */}
+      {site.status === "active" && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-6">
+          <div className="px-5 py-4 border-b border-dark-600 flex items-center justify-between">
+            <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Web Application Firewall</h2>
+            <div className="flex items-center gap-2">
+              {site.waf_enabled && (
+                <span className={`text-[10px] font-mono ${site.waf_mode === "prevention" ? "text-danger-400" : "text-warn-400"}`}>
+                  {site.waf_mode === "prevention" ? "Blocking" : "Detection"}
+                </span>
+              )}
+              <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                site.waf_enabled ? "bg-rust-500/10 text-rust-400" : "bg-dark-700 text-dark-300"
+              }`}>
+                {site.waf_enabled ? "Active" : "Off"}
+              </span>
+            </div>
+          </div>
+          <div className="p-5 space-y-4">
+            <p className="text-sm text-dark-200">
+              ModSecurity WAF with OWASP Core Rule Set. Protects against SQL injection, XSS, RCE, and other OWASP Top 10 attacks. Start in Detection mode to monitor without blocking.
+            </p>
+            <div className="flex items-center gap-3 flex-wrap">
+              <button
+                disabled={wafToggling}
+                onClick={async () => {
+                  setWafToggling(true);
+                  setWafMsg("");
+                  try {
+                    const result = await api.put<{ waf_enabled: boolean; waf_mode: string }>(`/sites/${id}/waf`, {
+                      enabled: !site.waf_enabled,
+                      mode: site.waf_enabled ? "detection" : "detection",
+                    });
+                    setSite(s => s ? { ...s, waf_enabled: result.waf_enabled, waf_mode: result.waf_mode } : s);
+                    setWafMsg(site.waf_enabled ? "WAF disabled" : "WAF enabled (detection mode)");
+                  } catch (e) {
+                    setWafMsg(e instanceof Error ? e.message : "Toggle failed");
+                  } finally {
+                    setWafToggling(false);
+                  }
+                }}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${
+                  site.waf_enabled
+                    ? "bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
+                    : "bg-rust-500 text-white hover:bg-rust-600"
+                }`}
+              >
+                {wafToggling ? "..." : site.waf_enabled ? "Disable WAF" : "Enable WAF"}
+              </button>
+              {site.waf_enabled && (
+                <>
+                  <button
+                    disabled={wafToggling}
+                    onClick={async () => {
+                      setWafToggling(true);
+                      setWafMsg("");
+                      const newMode = site.waf_mode === "prevention" ? "detection" : "prevention";
+                      try {
+                        const result = await api.put<{ waf_enabled: boolean; waf_mode: string }>(`/sites/${id}/waf`, {
+                          enabled: true,
+                          mode: newMode,
+                        });
+                        setSite(s => s ? { ...s, waf_mode: result.waf_mode } : s);
+                        setWafMsg(`Switched to ${newMode} mode`);
+                      } catch (e) {
+                        setWafMsg(e instanceof Error ? e.message : "Mode switch failed");
+                      } finally {
+                        setWafToggling(false);
+                      }
+                    }}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${
+                      site.waf_mode === "prevention"
+                        ? "bg-danger-500/10 text-danger-400 hover:bg-danger-500/20"
+                        : "bg-warn-500/10 text-warn-400 hover:bg-warn-500/20"
+                    }`}
+                  >
+                    {site.waf_mode === "prevention" ? "Switch to Detection" : "Switch to Prevention"}
+                  </button>
+                  <button
+                    disabled={wafLogsLoading}
+                    onClick={async () => {
+                      setWafLogsLoading(true);
+                      try {
+                        const result = await api.get<{ events: typeof wafLogs }>(`/sites/${id}/waf/logs`);
+                        setWafLogs(result.events || []);
+                      } catch { setWafLogs([]); }
+                      finally { setWafLogsLoading(false); }
+                    }}
+                    className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 disabled:opacity-50 transition-colors"
+                  >
+                    {wafLogsLoading ? "Loading..." : "View Events"}
+                  </button>
+                </>
+              )}
+              {wafMsg && (
+                <span className={`text-xs ${wafMsg.includes("failed") || wafMsg.includes("Failed") ? "text-danger-400" : "text-rust-400"}`}>
+                  {wafMsg}
+                </span>
+              )}
+            </div>
+            {wafLogs.length > 0 && (
+              <div className="mt-3 bg-dark-900 rounded-lg border border-dark-600 overflow-x-auto max-h-64 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-dark-900">
+                    <tr className="border-b border-dark-600">
+                      <th className="text-left px-3 py-2 text-dark-300 font-mono">Time</th>
+                      <th className="text-left px-3 py-2 text-dark-300 font-mono">IP</th>
+                      <th className="text-left px-3 py-2 text-dark-300 font-mono">URI</th>
+                      <th className="text-left px-3 py-2 text-dark-300 font-mono">Rule</th>
+                      <th className="text-left px-3 py-2 text-dark-300 font-mono">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-dark-700">
+                    {wafLogs.map((evt, i) => (
+                      <tr key={i} className="hover:bg-dark-800/50">
+                        <td className="px-3 py-1.5 text-dark-200 font-mono whitespace-nowrap">{evt.timestamp?.slice(0, 19) || "-"}</td>
+                        <td className="px-3 py-1.5 text-dark-200 font-mono">{evt.client_ip || "-"}</td>
+                        <td className="px-3 py-1.5 text-dark-200 font-mono truncate max-w-[200px]">{evt.uri || "-"}</td>
+                        <td className="px-3 py-1.5 text-warn-400 truncate max-w-[250px]">{evt.rule_message || "-"}</td>
+                        <td className="px-3 py-1.5">
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                            evt.action === "blocked" ? "bg-danger-500/15 text-danger-400" : "bg-dark-600 text-dark-200"
+                          }`}>{evt.action}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}

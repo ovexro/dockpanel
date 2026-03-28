@@ -211,6 +211,11 @@ pub fn render_site_config(
     ctx.insert("redis_cache", &redis_cache);
     ctx.insert("redis_db", &config.redis_db.unwrap_or(0));
 
+    // WAF (ModSecurity)
+    let waf_enabled = config.waf_enabled.unwrap_or(false);
+    ctx.insert("waf_enabled", &waf_enabled);
+    ctx.insert("waf_mode", &config.waf_mode.as_deref().unwrap_or("detection"));
+
     let ssl = config.ssl.unwrap_or(false);
     ctx.insert("ssl", &ssl);
 

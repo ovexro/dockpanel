@@ -1,0 +1,3 @@
+-- Per-site WAF (ModSecurity) support
+ALTER TABLE sites ADD COLUMN IF NOT EXISTS waf_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE sites ADD COLUMN IF NOT EXISTS waf_mode VARCHAR(20) NOT NULL DEFAULT 'detection';

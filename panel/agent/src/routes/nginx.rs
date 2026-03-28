@@ -51,6 +51,12 @@ pub struct SiteConfig {
     /// Redis DB number (0-15) for per-site isolation
     #[serde(default)]
     pub redis_db: Option<i32>,
+    /// Enable WAF (ModSecurity) for this site
+    #[serde(default)]
+    pub waf_enabled: Option<bool>,
+    /// WAF mode: "detection" (log only) or "prevention" (block)
+    #[serde(default)]
+    pub waf_mode: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1779,6 +1785,190 @@ async fn redis_purge(
     }
 }
 
+// ── WAF (ModSecurity) per-site configuration ───────────────────────
+
+/// POST /nginx/sites/{domain}/waf/configure — Generate per-site ModSecurity config.
+async fn waf_configure(
+    Path(domain): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_domain(&domain) {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid domain"}))));
+    }
+
+    // Verify ModSecurity is installed
+    if !std::path::Path::new("/etc/modsecurity/modsecurity.conf").exists() {
+        return Err((StatusCode::PRECONDITION_FAILED, Json(serde_json::json!({
+            "error": "WAF not installed. Install it from the Services page first."
+        }))));
+    }
+
+    let mode = body.get("mode").and_then(|v| v.as_str()).unwrap_or("detection");
+    let engine = match mode {
+        "prevention" => "On",
+        _ => "DetectionOnly",
+    };
+
+    let safe_domain = domain.replace('.', "_");
+    let log_dir = "/var/log/modsecurity";
+    std::fs::create_dir_all(log_dir).ok();
+    std::fs::create_dir_all("/etc/modsecurity/sites").ok();
+
+    // Generate per-site config
+    let crs_dir = "/etc/modsecurity/crs";
+    let has_crs = std::path::Path::new(&format!("{crs_dir}/crs-setup.conf")).exists();
+
+    let config = format!(
+        "# WAF config for {domain} (managed by DockPanel)\n\
+         Include /etc/modsecurity/modsecurity.conf\n\
+         SecRuleEngine {engine}\n\
+         SecAuditLog {log_dir}/{safe_domain}_audit.log\n\
+         SecAuditLogType Serial\n\
+         {crs_include}\n\
+         # Allow larger request bodies for file uploads\n\
+         SecRequestBodyLimit 52428800\n",
+        crs_include = if has_crs {
+            format!(
+                "Include {crs_dir}/crs-setup.conf\n\
+                 Include {crs_dir}/rules/*.conf"
+            )
+        } else {
+            "# OWASP CRS not found — basic protection only".to_string()
+        }
+    );
+
+    let config_path = format!("/etc/modsecurity/sites/{safe_domain}.conf");
+    std::fs::write(&config_path, &config)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Write config: {e}")}))))?;
+
+    tracing::info!("WAF configured for {domain} (mode: {mode})");
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "mode": mode,
+        "config_path": config_path,
+    })))
+}
+
+/// GET /nginx/sites/{domain}/waf/logs — Get recent WAF events.
+async fn waf_logs(
+    Path(domain): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_domain(&domain) {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid domain"}))));
+    }
+
+    let safe_domain = domain.replace('.', "_");
+    let log_path = format!("/var/log/modsecurity/{safe_domain}_audit.log");
+    let limit: usize = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(50);
+
+    if !std::path::Path::new(&log_path).exists() {
+        return Ok(Json(serde_json::json!({
+            "events": [],
+            "total": 0,
+        })));
+    }
+
+    // Read last N KB of the log and parse events
+    let content = match tokio::fs::read_to_string(&log_path).await {
+        Ok(c) => c,
+        Err(_) => return Ok(Json(serde_json::json!({ "events": [], "total": 0 }))),
+    };
+
+    // ModSecurity audit log format: sections separated by "---xxx---"
+    // Parse the last `limit` entries
+    let mut events: Vec<serde_json::Value> = Vec::new();
+    let mut current_event = String::new();
+    let mut in_event = false;
+
+    for line in content.lines().rev().take(10000) {
+        if line.starts_with("--") && line.ends_with("-A--") {
+            // Start of a new event boundary (reading backwards)
+            if !current_event.is_empty() {
+                if let Some(evt) = parse_modsec_event(&current_event) {
+                    events.push(evt);
+                    if events.len() >= limit {
+                        break;
+                    }
+                }
+                current_event.clear();
+            }
+            in_event = true;
+        }
+        if in_event {
+            current_event = format!("{line}\n{current_event}");
+        }
+        if line.starts_with("--") && line.ends_with("-Z--") {
+            in_event = false;
+        }
+    }
+
+    // Handle last event
+    if !current_event.is_empty() {
+        if let Some(evt) = parse_modsec_event(&current_event) {
+            events.push(evt);
+        }
+    }
+
+    let total = events.len();
+    Ok(Json(serde_json::json!({
+        "events": events,
+        "total": total,
+    })))
+}
+
+fn parse_modsec_event(raw: &str) -> Option<serde_json::Value> {
+    let mut timestamp = "";
+    let mut request_line = "";
+    let mut uri = "";
+    let mut client_ip = "";
+    let mut rule_msg = "";
+    let mut severity = "";
+    let mut action = "";
+
+    for line in raw.lines() {
+        if line.starts_with('[') && timestamp.is_empty() {
+            timestamp = line;
+        }
+        if let Some(rest) = line.strip_prefix("GET ").or(line.strip_prefix("POST ").or(line.strip_prefix("PUT ").or(line.strip_prefix("DELETE ")))) {
+            request_line = line;
+            uri = rest.split_whitespace().next().unwrap_or("");
+        }
+        if line.contains("client:") || line.contains("client ") {
+            if let Some(ip) = line.split("client:").nth(1).or(line.split("client ").nth(1)) {
+                client_ip = ip.trim().split(',').next().unwrap_or("").trim();
+            }
+        }
+        if line.contains("[msg \"") {
+            if let Some(msg) = line.split("[msg \"").nth(1) {
+                rule_msg = msg.split('"').next().unwrap_or("");
+            }
+        }
+        if line.contains("[severity \"") {
+            if let Some(sev) = line.split("[severity \"").nth(1) {
+                severity = sev.split('"').next().unwrap_or("");
+            }
+        }
+        if line.contains("Action:") {
+            action = if line.contains("Intercepted") { "blocked" } else { "logged" };
+        }
+    }
+
+    if rule_msg.is_empty() && request_line.is_empty() {
+        return None;
+    }
+
+    Some(serde_json::json!({
+        "timestamp": timestamp,
+        "client_ip": client_ip,
+        "request": request_line,
+        "uri": uri,
+        "rule_message": rule_msg,
+        "severity": severity,
+        "action": if action.is_empty() { "logged" } else { action },
+    }))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/nginx/sites/{domain}", put(put_site))
@@ -1791,6 +1981,8 @@ pub fn router() -> Router<AppState> {
         .route("/nginx/sites/{domain}/redis/enable", post(redis_enable))
         .route("/nginx/sites/{domain}/redis/disable", post(redis_disable))
         .route("/nginx/sites/{domain}/redis/purge", post(redis_purge))
+        .route("/nginx/sites/{domain}/waf/configure", post(waf_configure))
+        .route("/nginx/sites/{domain}/waf/logs", get(waf_logs))
         .route("/nginx/test", post(test_nginx))
         .route("/nginx/reload", post(reload_nginx))
         // Redirects

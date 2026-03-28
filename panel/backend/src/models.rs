@@ -63,6 +63,8 @@ pub struct Site {
     pub fastcgi_cache: bool,
     pub redis_cache: bool,
     pub redis_db: i32,
+    pub waf_enabled: bool,
+    pub waf_mode: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

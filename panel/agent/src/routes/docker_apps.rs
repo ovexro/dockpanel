@@ -116,6 +116,8 @@ async fn deploy(
                 fastcgi_cache: None,
                 redis_cache: None,
                 redis_db: None,
+                waf_enabled: None,
+                waf_mode: None,
             };
 
             match nginx::render_site_config(&state.templates, domain, &site_config) {
@@ -204,6 +206,8 @@ async fn deploy(
                                         fastcgi_cache: None,
                 redis_cache: None,
                 redis_db: None,
+                waf_enabled: None,
+                waf_mode: None,
                                     };
                                     match ssl::enable_ssl_for_site(&state.templates, domain, &ssl_site_config).await {
                                         Ok(()) => {
