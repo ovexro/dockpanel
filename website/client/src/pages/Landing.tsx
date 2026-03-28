@@ -15,15 +15,15 @@ const features = [
   { icon: Lock, title: 'Free SSL Certificates', desc: "Automatic Let's Encrypt provisioning and renewal. One-click SSL for every site with zero-downtime certificate rotation." },
   { icon: Database, title: 'Database Management', desc: 'MySQL and PostgreSQL via Docker containers. Built-in SQL browser for both engines. Per-site credentials, one-click backups and restores.' },
   { icon: Terminal, title: 'Developer CLI', desc: 'Full-featured dockpanel command for all operations. Manage sites, databases, apps, SSL, backups, and more from your terminal. Scriptable and composable.' },
-  { icon: Box, title: 'Docker Apps & Compose', desc: '54 one-click app templates across 10 categories — databases, CMS, monitoring, analytics, mail, and more. Real-time deploy progress, auto reverse proxy with SSL.' },
+  { icon: Box, title: 'Docker Apps & Compose', desc: '151 one-click app templates across 14 categories — AI, databases, CMS, media, monitoring, and more. GPU passthrough, auto-sleep, real-time deploy progress, auto reverse proxy with SSL.' },
   { icon: FileCode2, title: 'Infrastructure as Code', desc: 'Export your entire server config as YAML. Version control it, review diffs, apply to new servers. Reproducible infrastructure with dry-run support.' },
   { icon: Activity, title: 'Monitoring & Incidents', desc: 'Uptime monitoring with incident management lifecycle (investigating → resolved → postmortem). Public status page with component groups, subscriber notifications, and incident timeline. Slack, Discord, PagerDuty alerts.' },
   { icon: Stethoscope, title: 'Smart Diagnostics', desc: 'Pattern-based log analysis, misconfiguration detection, and resource bottleneck identification. One-click fixes for common server issues.' },
   { icon: HardDriveDownload, title: 'Backup Orchestrator', desc: 'Database, volume & site backups with AES-256 encryption, automatic restore verification, and cross-resource policies. S3, B2, GCS, and SFTP destinations. Health dashboard with staleness alerts.' },
   { icon: Terminal, title: 'Web Terminal & File Manager', desc: 'Full SSH terminal in your browser with tabs, themes, sharing, and session recording. Built-in file manager — browse, edit, upload, and download files.' },
-  { icon: ShieldCheck, title: 'Secrets Manager', desc: 'AES-256-GCM encrypted vaults for API keys, passwords, certificates. Version history, auto-inject into .env on deploy, masked API responses, CLI pull. No more plaintext secrets.' },
+  { icon: ShieldCheck, title: 'WAF + Secrets Manager', desc: 'ModSecurity3 WAF with OWASP CRS v4 per site. AES-256-GCM encrypted secret vaults with version history and auto-inject. CSP headers and bot protection per site.' },
   { icon: Cpu, title: 'ARM & Homelab Ready', desc: 'Runs on Raspberry Pi, Oracle Cloud free-tier ARM instances, and any ARM64 server. Same ~41MB binaries, same features, same performance.' },
-  { icon: KeyRound, title: '2FA / TOTP Authentication', desc: 'Two-factor authentication with QR code setup, TOTP verification, and 10 one-time recovery codes. Protect your panel with industry-standard 2FA.' },
+  { icon: KeyRound, title: 'Passkeys + 2FA Authentication', desc: 'Passwordless login with passkeys (WebAuthn/biometrics/security keys). Plus TOTP two-factor with QR setup and 10 recovery codes. Enterprise-grade auth.' },
   { icon: Wrench, title: 'Auto-Healing Engine', desc: 'Automatic remediation of crashed services, disk space recovery, and SSL renewal. Runs silently in the background with full audit trail and opt-in control.' },
   { icon: ClipboardList, title: 'Activity & Audit Log', desc: 'Full audit trail of every action — site creation, SSL changes, database operations, user logins. Filterable, searchable, with timestamps and actor tracking.' },
   { icon: Mail, title: 'Email Management', desc: "Full mail server with one-click install. Domains, mailboxes, aliases, DKIM signing, DNS helper, mail queue, autoresponders, quotas. Roundcube webmail and Rspamd spam filter." },
@@ -41,11 +41,11 @@ const features = [
 
 const faqs = [
   { q: 'What are the system requirements?', a: 'DockPanel runs on any VPS with 512MB RAM, 1 CPU core, and 10GB disk. It supports Ubuntu 20+, Debian 11+, CentOS 9+, Rocky Linux 9+, Amazon Linux 2023, and ARM64 (Raspberry Pi, Oracle Cloud free tier). Docker is installed automatically if not present.' },
-  { q: 'Is DockPanel really free?', a: 'Yes. DockPanel is 100% free and open source under the MIT License. There are no artificial limits, no premium features hidden behind a paywall, and no subscriptions required. Every feature works on every installation.' },
-  { q: 'How does Docker-native work? Are sites in containers?', a: 'Sites run on the host with Nginx, which keeps things fast and simple. Docker is used for databases (MySQL/PostgreSQL containers), 54 one-click app templates (Ghost, Grafana, Nextcloud, n8n, Roundcube, Rspamd, and more), and Docker Compose imports. Containers get health monitoring, CPU/memory limits, and auto reverse proxy with SSL.' },
+  { q: 'Is DockPanel really free?', a: 'Yes. DockPanel is free under the Business Source License 1.1. There are no artificial limits, no premium features hidden behind a paywall, and no subscriptions required. Every feature works on every installation. Free to use on your own servers.' },
+  { q: 'How does Docker-native work? Are sites in containers?', a: 'Sites run on the host with Nginx, which keeps things fast and simple. Docker is used for databases (MySQL/PostgreSQL containers), 151 one-click app templates across 14 categories (AI, CMS, databases, media, monitoring, and more), and Docker Compose imports. Containers get health monitoring, CPU/memory limits, GPU passthrough, auto-sleep, and auto reverse proxy with SSL.' },
   { q: 'What happens if DockPanel goes down?', a: 'Your sites continue running. DockPanel manages Nginx configs and Docker containers, but they operate independently. Even if the panel process stops, all your sites, databases, and SSL certificates keep working. The panel auto-restarts via systemd.' },
   { q: 'Can I run DockPanel on a Raspberry Pi?', a: 'Yes. DockPanel compiles to ~41MB total binaries (agent, API, CLI) and uses about 57MB RAM. It runs great on Raspberry Pi 4/5, Oracle Cloud free-tier ARM instances, and any ARM64 server. Same features, same performance.' },
-  { q: 'How is this different from CloudPanel, RunCloud, or cPanel?', a: 'Dramatically. cPanel uses 800MB of RAM, costs $15/month, and has no Docker support. CloudPanel is free but has no Git deploy, no Docker apps, no CLI, no multi-server, no reseller accounts. RunCloud charges $8/month for features DockPanel includes for free. DockPanel runs on 57MB of RAM, includes 54 Docker app templates, blue-green Git deploy, a full CLI, Infrastructure as Code, multi-server management, reseller accounts with white-label, and a WordPress toolkit. No other free panel has anything close to this feature set.' },
+  { q: 'How is this different from CloudPanel, RunCloud, or cPanel?', a: 'Dramatically. cPanel uses 800MB of RAM, costs $15/month, and has no Docker support. CloudPanel is free but has no Git deploy, no Docker apps, no CLI, no multi-server, no reseller accounts. RunCloud charges $8/month for features DockPanel includes for free. DockPanel runs on 57MB of RAM, includes 151 Docker app templates, a WAF, passkey auth, GPU passthrough, zero-downtime Git deploy, a full CLI, Terraform/Pulumi IaC, multi-server management, reseller accounts with white-label, and a WordPress toolkit. No other free panel has anything close to this feature set.' },
   { q: 'Can I manage multiple servers?', a: 'Yes, with no limits. Each server runs a lightweight agent that communicates with the central API. You can view per-server metrics, run commands, and manage sites across all your servers from a single dashboard.' },
   { q: 'How do I try it?', a: 'Install DockPanel on your own server with one command to explore the full panel interface.' },
   { q: 'Why Rust instead of PHP/Node.js?', a: "Rust compiles to compact binaries (~41MB total for agent, API, and CLI) with no runtime dependencies. It uses ~57MB of RAM vs ~300-800MB for PHP-based panels. On a $5 VPS with 1GB RAM, that's the difference between running 2 sites and running 20. Rust also eliminates entire classes of security vulnerabilities (buffer overflows, use-after-free) at compile time." },
@@ -115,7 +115,7 @@ export default function Landing() {
               Your server. Your rules. Your panel.
             </p>
             <p className="max-w-2xl mx-auto text-lg md:text-xl text-zinc-400 mb-10 leading-relaxed">
-              54 Docker app templates. Git deploy with zero-downtime. Multi-server management. Reseller accounts. A full CLI. All running on 57MB of RAM. No vendor lock-in. All free. No other panel comes close.
+              151 Docker app templates. Git deploy with zero-downtime. WAF. Passkeys. GPU passthrough. Multi-server management. All running on 57MB of RAM. No vendor lock-in. All free. No other panel comes close.
             </p>
 
             <div className="max-w-2xl mx-auto mb-12">
@@ -163,9 +163,9 @@ export default function Landing() {
               { label: 'RAM usage', value: '~57MB' },
               { label: 'Install time', value: '<60s' },
               { label: 'Homelab ready', value: 'ARM64' },
-              { label: 'API Endpoints', value: '371' },
-              { label: 'E2E Tests', value: '116' },
-              { label: 'App Templates', value: '54' },
+              { label: 'API Endpoints', value: '711' },
+              { label: 'E2E Tests', value: '89' },
+              { label: 'App Templates', value: '151' },
             ].map((stat, i) => (
               <div key={i} className="bg-zinc-900/50 border border-zinc-800/50 rounded-xl p-6 backdrop-blur-sm">
                 <div className="text-3xl font-bold text-white mb-1">{stat.value}</div>

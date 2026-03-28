@@ -1,6 +1,6 @@
 # DockPanel Feature Manifest
 
-> **Last verified**: 2026-03-27 | **Version**: v2.6.6 | **Total**: 48 major features, ~230 capabilities
+> **Last verified**: 2026-03-28 | **Version**: v2.6.7 | **Total**: 60+ major features, ~280 capabilities
 >
 > This file is the single source of truth for what DockPanel offers.
 > Update it whenever features are added, changed, or removed.
@@ -18,7 +18,7 @@
 | **Incident Management** | Incident lifecycle (investigating→resolved→postmortem), timeline updates, severity, affected components, postmortem | `routes/incidents.rs` | — | `IncidentManagement.tsx` | `managed_incidents`, `incident_updates`, `managed_incident_components` |
 | **Public Status Page** | Customizable status page with component groups, incident history, subscriber notifications, overall status | `routes/incidents.rs` | — | `PublicStatusPage.tsx` | `status_page_config`, `status_page_components`, `status_page_subscribers` |
 | **Cron Jobs** | Cron scheduling with manual execution and history | `routes/crons.rs` | `crons.rs` | `Crons.tsx` | (via agent crontab) |
-| **Docker Apps** | 101 templates, Compose stacks, container lifecycle, registry, image tag change, live resource limits | `routes/docker_apps.rs`, `stacks.rs` | `docker_apps.rs` | `Apps.tsx` | `docker_stacks` |
+| **Docker Apps** | 151 templates across 14 categories, Compose stacks, container lifecycle, registry, image tag change, live resource limits, GPU passthrough | `routes/docker_apps.rs`, `stacks.rs` | `docker_apps.rs` | `Apps.tsx` | `docker_stacks` |
 | **Git Deploy** | Push-to-deploy, blue-green, Nixpacks (30+ langs), preview envs, one-time scheduled deploys | `routes/git_deploys.rs` | `git_build.rs` | `GitDeploys.tsx` | `git_deploys`, `git_deploy_history`, `git_previews` |
 | **WordPress Toolkit** | Multi-site dashboard, vuln scanning (14 known), hardening (7 checks), bulk updates | `routes/wordpress.rs` | `wordpress.rs`, `wp_vulnerability.rs` | `WordPressToolkit.tsx`, `WordPress.tsx` | `wp_vuln_scans`, `wp_hardening` |
 | **Migration Wizard** | Import from cPanel/HestiaCP — sites, databases, mail. Plesk (beta) | `routes/migration.rs` | `migration.rs` | `Migration.tsx` | `migrations` |
@@ -83,6 +83,7 @@
 |---------|-------------|---------|----------|
 | **Login/Register** | Email+password auth, JWT sessions, email verification | `routes/auth.rs` | `Login.tsx`, `Register.tsx` |
 | **2FA/TOTP** | QR setup, TOTP verify, 10 recovery codes, enforcement | `routes/auth.rs` | (in Login, Settings) |
+| **Passkey/WebAuthn** | Passwordless login, biometric/security key auth, max 10 per user | `routes/passkeys.rs` | (in Login, Settings) |
 | **OAuth/SSO** | Google, GitHub, GitLab OAuth 2.0 with auto-create | `routes/oauth.rs` | (in Login) |
 | **Branding** | Public `/api/branding` with panel name, logo, colors, OAuth providers | `routes/settings.rs` | `BrandingContext.tsx` |
 
@@ -120,6 +121,52 @@
 | `dockpanel logs -d <domain>` | View site logs |
 | `dockpanel top` | Top processes by CPU |
 
+## Performance & Caching
+
+| Feature | Description | Backend | Agent | Frontend |
+|---------|-------------|---------|-------|----------|
+| **FastCGI Cache** | Per-site nginx FastCGI cache toggle + purge, smart bypass for logged-in users | `routes/sites.rs` | nginx templates | `SiteDetail.tsx` |
+| **Redis Object Cache** | Per-site isolated Redis DB, WP auto-config via wp-cli | `routes/sites.rs` | `redis.rs` | `SiteDetail.tsx` |
+| **Image Optimization** | Server-side WebP/AVIF conversion per site | `routes/sites.rs` | `image_optimization.rs` | `SiteDetail.tsx` |
+| **CDN Integration** | BunnyCDN + Cloudflare CDN zones, cache purge, bandwidth stats | `routes/cdn.rs` | — | `Cdn.tsx` |
+| **Auto-Optimization** | PHP-FPM worker analysis, nginx workers vs CPUs, memory/disk recommendations | proxied to agent | `recommendations.rs` | (via Settings) |
+
+## Security (Advanced)
+
+| Feature | Description | Backend | Agent | Frontend |
+|---------|-------------|---------|-------|----------|
+| **WAF** | ModSecurity3 + OWASP CRS v4, per-site detection/prevention mode, event viewer | `routes/sites.rs` | `waf.rs`, nginx integration | `SiteDetail.tsx` |
+| **CSP Headers** | Per-site Content Security Policy editor with common presets | `routes/sites.rs` | nginx templates | `SiteDetail.tsx` |
+| **Bot Protection** | Per-site bot rate limiting (off/basic/strict modes) | `routes/sites.rs` | nginx templates | `SiteDetail.tsx` |
+| **Container Isolation** | Per-user container policies (max containers, memory, CPU, network isolation) | `routes/docker_apps.rs` | user labels | `ContainerPolicies.tsx` |
+
+## Container Lifecycle
+
+| Feature | Description | Backend | Agent | Frontend |
+|---------|-------------|---------|-------|----------|
+| **Auto-Sleep** | Stop idle containers after configurable inactivity, manual sleep/wake | `routes/docker_apps.rs`, `auto_healer.rs` | stop/start | `Apps.tsx` |
+| **Auto-Update Detection** | Registry digest comparison, update badges, one-click update | `routes/docker_apps.rs` | `docker_apps.rs` | `Apps.tsx` |
+| **GPU Passthrough** | NVIDIA Container Toolkit detection, --gpus flag on deploy | `routes/docker_apps.rs` | `docker_apps.rs` | `Apps.tsx` |
+| **Horizontal Auto-Scaling** | Rule-based CPU thresholds, min/max replicas, cooldown | `routes/iac.rs` | — | (via Integrations) |
+
+## Integrations (Advanced)
+
+| Feature | Description | Backend | Frontend |
+|---------|-------------|---------|----------|
+| **Cloudflare Settings** | Zone security level, SSL mode, dev mode, cache purge | `routes/dns.rs` | `Dns.tsx` |
+| **Cloudflare Tunnel** | Install cloudflared, token-based config, systemd service | `routes/system.rs` | `Settings.tsx` |
+| **Wildcard SSL** | DNS-01 challenge via Cloudflare API, multi-part TLD support | `routes/sites.rs` | `SiteDetail.tsx` |
+| **WHMCS Billing** | Webhook provisioning/suspension/termination, auto-create users | `routes/whmcs.rs` | `Integrations.tsx` |
+| **Terraform/Pulumi** | IaC token management, resource listing API (sites, databases) | `routes/iac.rs` | `Integrations.tsx` |
+| **App Migration** | Migrate containers between servers, progress tracking | `routes/whmcs.rs` | `Integrations.tsx` |
+
+## Database (Advanced)
+
+| Feature | Description | Backend | Frontend |
+|---------|-------------|---------|----------|
+| **Visual Schema Browser** | Tables, columns, indexes, foreign key relationships in one view | `routes/databases.rs` | `Databases.tsx` |
+| **Point-in-Time Recovery** | WAL archiving (PostgreSQL), binlog retention (MySQL), restore to timestamp | `routes/databases.rs` | `Databases.tsx` |
+
 ## Verified Metrics
 
 | Metric | Value | Verified |
@@ -130,8 +177,9 @@
 | Agent RAM (RSS) | ~30 MB | 2026-03-19 |
 | API RAM (RSS) | ~27 MB | 2026-03-19 |
 | Total RAM | ~57 MB | 2026-03-19 |
-| App templates | 101 | 2026-03-28 |
-| API endpoints | 50+ tested | 2026-03-19 |
-| Frontend pages | 48 | 2026-03-27 |
-| DB tables | 69 migrations | 2026-03-27 |
+| App templates | 151 (14 categories) | 2026-03-28 |
+| API endpoints | 711 (456 backend + 255 agent) | 2026-03-28 |
+| E2E tests | 89 | 2026-03-28 |
+| Frontend pages | 50 | 2026-03-28 |
+| DB migrations | 80 | 2026-03-28 |
 | Background services | 11 | 2026-03-22 |

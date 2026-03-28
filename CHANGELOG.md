@@ -4,6 +4,45 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.6.7] - 2026-03-28
+
+### Added — Tier 1 (High Impact)
+- Nginx FastCGI cache per site with smart bypass (logged-in users, POST, admin)
+- Cloudflare integration: zone settings, cache purge, security controls, SSL mode
+- Wildcard SSL via DNS-01 challenge (Cloudflare TXT automation, multi-part TLD support)
+- Container auto-update detection (registry digest comparison, update badges, one-click update)
+- 50 new Docker app templates (101→151 across 14 categories: AI, Media, Productivity, Communication, etc.)
+- Redis object cache per site (isolated DB numbers, WP auto-config via wp-cli)
+- WAF: ModSecurity3 + OWASP CRS v4 (per-site detection/prevention mode, event viewer)
+
+### Added — Tier 2 (Strong Differentiators)
+- Zero-downtime PHP deploys (Capistrano-style atomic symlink swap, instant rollback)
+- WordPress safe updates (pre-update snapshot, post-update health check, auto-rollback)
+- Image optimization (server-side WebP/AVIF conversion per site)
+- CDN integration (BunnyCDN + Cloudflare CDN, cache purge, bandwidth stats)
+- Restic incremental backups (encrypted, deduplicated, snapshot management)
+- Docker Compose editor validation (structured errors/warnings/info)
+- Auto-optimization recommendations (PHP-FPM workers, nginx workers, disk usage)
+- Cloudflare Tunnel (install cloudflared, token-based config, systemd service)
+
+### Added — Tier 3
+- CSP header management per site (policy editor + common presets)
+- Bot protection per site (off/basic/strict modes)
+- Passkey/WebAuthn passwordless login (manual p256+ciborium implementation, max 10 per user)
+- Per-user container isolation policies (max containers, memory, CPU, network isolation, allowed images)
+- Container auto-sleep / scale to zero (configurable idle threshold, auto-healer integration)
+- Visual DB schema browser (tables, columns, indexes, foreign key relationships)
+- Point-in-time DB recovery (WAL archiving for PostgreSQL, binlog retention for MySQL)
+- GPU passthrough for Docker (NVIDIA Container Toolkit detection, --gpus flag)
+- WHMCS billing integration (API config, webhook provisioning/suspension/termination)
+- App migration between servers (migration records, progress tracking)
+- Terraform/Pulumi IaC provider API (scoped tokens, resource listing)
+- Horizontal auto-scaling (rule-based CPU thresholds, min/max replicas, cooldown)
+
+### Fixed
+- Agent token desync on fresh install — agent now prefers AGENT_TOKEN env var over file
+- WebAuthn RP ID defaulted to "localhost" when BASE_URL unset — now derived from request Origin header
+
 ## [2.6.6] - 2026-03-27
 
 ### Fixed

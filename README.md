@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>The most feature-packed free server panel ever built.</strong><br>
-  Self-hosted. Docker-native. Written in Rust. ~57MB RAM. 628 API endpoints. 101 app templates. 82 E2E tests. ~41MB binaries. Zero subscriptions.
+  Self-hosted. Docker-native. Written in Rust. ~57MB RAM. 711 API endpoints. 151 app templates. 89 E2E tests. ~41MB binaries. Zero subscriptions.
 </p>
 
 <p align="center">
@@ -36,13 +36,13 @@ Supports Ubuntu 20+, Debian 11+, CentOS 9+, Rocky 9+, Fedora 39+, Amazon Linux 2
 
 ## Why DockPanel?
 
-No other free panel gives you Git push-to-deploy with blue-green zero-downtime updates, 101 one-click Docker app templates, multi-server management, reseller accounts, a developer CLI, and Infrastructure as Code — all running on ~57MB of RAM. DockPanel does.
+No other free panel gives you Git push-to-deploy with blue-green zero-downtime updates, 151 one-click Docker app templates, a WAF, passkey login, GPU passthrough, multi-server management, reseller accounts, a developer CLI, and Infrastructure as Code — all running on ~57MB of RAM. DockPanel does.
 
 | | DockPanel | HestiaCP | CloudPanel | RunCloud |
 |---|---|---|---|---|
 | **Price** | **Free** | Free | Free | $8/mo+ |
 | **Stack** | **Rust + React** | PHP | PHP | PHP (SaaS) |
-| **Docker native** | **101 templates** | No | No | No |
+| **Docker native** | **151 templates** | No | No | No |
 | **Git deploy** | **Blue-green, zero-downtime** | No | No | Basic |
 | **Multi-server** | **Unlimited** | No | No | Yes |
 | **Reseller + white-label** | **Yes** | Reseller only | No | No |
@@ -62,7 +62,7 @@ All screenshots use the **Clean** (light) theme.
 </details>
 
 <details>
-<summary><strong>Docker Apps</strong> — 54 one-click templates across 10 categories</summary>
+<summary><strong>Docker Apps</strong> — 151 one-click templates across 14 categories</summary>
 
 ![Docker Apps](.github/screenshots/dp-apps.png)
 </details>
@@ -137,19 +137,22 @@ All screenshots use the **Clean** (light) theme.
 
 ### Hosting
 - **Sites** — Static, PHP (8.1-8.4), Node.js, Python, reverse proxy. Automatic Nginx config, SSL, PHP-FPM pools.
-- **Databases** — MySQL/PostgreSQL in Docker. Built-in SQL browser. Auto-cleanup on site delete.
-- **Docker Apps** — 101 templates (WordPress, Redis, PostgreSQL, Grafana, n8n, Gitea...). Compose stacks. Resource limits.
-- **Git Deploy** — Push-to-deploy. Blue-green zero-downtime updates. Nixpacks (30+ languages). Preview environments.
+- **Databases** — MySQL/PostgreSQL in Docker. Built-in SQL browser, visual schema browser, point-in-time recovery (WAL/binlog). Auto-cleanup on site delete.
+- **Docker Apps** — 151 templates across 14 categories (AI, CMS, Database, Media, Monitoring, and more). Compose stacks. Resource limits. GPU passthrough.
+- **Git Deploy** — Push-to-deploy. Atomic zero-downtime deploys (Capistrano-style). Nixpacks (30+ languages). Preview environments.
 - **WordPress Toolkit** — Multi-site dashboard, vulnerability scanning, security hardening, bulk updates.
 - **CMS Install** — WordPress, Laravel, Drupal, Joomla, Symfony, CodeIgniter — one click.
-- **Backups** — Scheduled, S3/SFTP remote destinations, one-click restore.
+- **Backups** — Scheduled, S3/SFTP remote destinations, one-click restore. Restic incremental (encrypted, deduplicated).
 - **Backup Orchestrator** — DB/volume backups, AES-256 encryption, restore verification, cross-resource policies, S3/SFTP/B2/GCS destinations, health dashboard.
+- **CDN** — BunnyCDN and Cloudflare CDN management. Cache purge, bandwidth stats, pull zone discovery.
+- **Image Optimization** — Server-side WebP/AVIF conversion per site.
 - **Secrets Manager** — AES-256-GCM encrypted vaults, version history, auto-inject to .env, masked API, CLI pull endpoint.
 - **Webhook Gateway** — Inbound endpoints with unique URLs, HMAC-SHA256/SHA1 verification, request inspector, route builder, retry/replay.
 
 ### Operations
 - **Multi-Server** — Manage remote servers from one panel. Agent auto-registers.
-- **DNS** — Cloudflare + PowerDNS. Zone templates, propagation checker, DNSSEC.
+- **DNS** — Cloudflare + PowerDNS. Zone templates, propagation checker, DNSSEC. Cloudflare cache purge, security settings, Cloudflare Tunnel.
+- **Container Management** — Auto-sleep (scale to zero), auto-update detection, per-user isolation policies, app migration between servers.
 - **Mail** — Postfix + Dovecot + OpenDKIM. Webmail (Roundcube), spam filter (Rspamd), SMTP relay.
 - **Monitoring** — HTTP/TCP/ping uptime checks, SLA tracking, PagerDuty integration.
 - **Incident Management** — Full lifecycle (investigating, identified, monitoring, resolved, postmortem), severity levels, timeline, affected components.
@@ -157,19 +160,23 @@ All screenshots use the **Clean** (light) theme.
 - **Terminal** — Full SSH with tabs, themes, sharing, session recording.
 
 ### Security
-- **2FA/TOTP** — Two-factor authentication with recovery codes.
+- **Passkey/WebAuthn** — Passwordless login with biometrics or security keys. Plus 2FA/TOTP with recovery codes.
+- **WAF** — ModSecurity3 + OWASP CRS v4 per site. Detection or prevention mode. Event viewer.
+- **CSP & Bot Protection** — Per-site Content Security Policy headers and bot rate limiting.
 - **Firewall** — UFW management with smart port opener.
 - **Fail2Ban** — View/ban/unban IPs, panel-specific jail.
 - **SSH Hardening** — Disable password/root login, change port — one click.
 - **Vulnerability Scanning** — Container scanning, file integrity, security headers.
-- **Auto-Healing** — Restart crashed services, clean disk, renew expiring SSL.
+- **Auto-Healing** — Restart crashed services, clean disk, renew expiring SSL, auto-sleep idle containers.
 
 ### Developer Experience
 - **CLI** — `dockpanel status`, `sites`, `apps`, `diagnose`, `export`, `apply`
-- **Infrastructure as Code** — Export/import server config as YAML.
-- **Smart Diagnostics** — 6 check categories with one-click fixes.
+- **Infrastructure as Code** — Export/import server config as YAML. Terraform/Pulumi provider API with scoped IaC tokens.
+- **Smart Diagnostics** — 6 check categories with one-click fixes. Auto-optimization recommendations.
 - **File Manager** — Browse, edit, upload files from the browser.
 - **Command Palette** — Ctrl+K to navigate anywhere.
+- **Nginx FastCGI Cache** — Per-site toggle with smart bypass for logged-in users.
+- **Redis Object Cache** — Per-site isolated Redis DB with WP auto-config.
 
 ### Themes & Layouts
 - **6 Themes** — Terminal (hacker green), Midnight (navy blue), Ember (warm amber), Arctic (light teal), Clean (light blue SaaS), Clean Dark (GitHub-dark).
@@ -180,7 +187,9 @@ All screenshots use the **Clean** (light) theme.
 - **White-Label** — Custom logo, colors, panel name per reseller.
 - **OAuth/SSO** — Google, GitHub, GitLab login.
 - **Extension API** — Webhook events with HMAC signing and scoped API keys.
-- **Migration Wizard** — Import from cPanel, HestiaCP. Plesk (beta).
+- **WHMCS Integration** — Provisioning, suspension, termination hooks. Auto-create users from billing.
+- **Horizontal Auto-Scaling** — Rule-based CPU thresholds with min/max replicas and cooldown.
+- **Migration Wizard** — Import from cPanel, HestiaCP. Plesk (beta). App migration between servers.
 - **Teams** — Multi-user access with role-based permissions.
 
 ## Architecture
@@ -247,7 +256,7 @@ sudo bash /opt/dockpanel/scripts/uninstall.sh   # Remove
 ## Documentation
 
 - [Live Docs](https://docs.dockpanel.dev) — Getting started, guides, configuration
-- [FEATURES.md](FEATURES.md) — Complete feature manifest (48 features, ~230 capabilities)
+- [FEATURES.md](FEATURES.md) — Complete feature manifest (60+ features, ~280 capabilities)
 - [CHANGELOG.md](CHANGELOG.md) — Version history
 - [SECURITY.md](SECURITY.md) — Security model and vulnerability reporting
 - [CONTRIBUTING.md](CONTRIBUTING.md) — Development setup and PR process
