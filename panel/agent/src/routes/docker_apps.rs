@@ -32,6 +32,8 @@ struct DeployRequest {
     /// When true, use Traefik file-based routing instead of nginx
     #[serde(default)]
     use_traefik: bool,
+    /// User ID for container labeling and isolation
+    user_id: Option<String>,
 }
 
 /// GET /apps/templates — List all available app templates.
@@ -61,7 +63,7 @@ async fn deploy(
     }
 
     let result =
-        docker_apps::deploy_app(&body.template_id, &body.name, body.port, body.env, body.domain.as_deref(), body.memory_mb, body.cpu_percent)
+        docker_apps::deploy_app(&body.template_id, &body.name, body.port, body.env, body.domain.as_deref(), body.memory_mb, body.cpu_percent, body.user_id.as_deref())
             .await
             .map_err(|e| {
                 (

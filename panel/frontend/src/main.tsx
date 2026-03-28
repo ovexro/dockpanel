@@ -107,6 +107,7 @@ const Notifications = lazyRetry(() => import("./pages/Notifications"));
 const SecurityHardening = lazyRetry(() => import("./pages/SecurityHardening"));
 const Integrations = lazyRetry(() => import("./pages/Integrations"));
 const Users = lazyRetry(() => import("./pages/Users"));
+const ContainerPolicies = lazyRetry(() => import("./pages/ContainerPolicies"));
 const System = lazyRetry(() => import("./pages/System"));
 
 createRoot(document.getElementById("root")!).render(
@@ -154,6 +155,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/reseller" element={<ResellerDashboard />} />
               <Route path="/reseller/users" element={<ResellerUsers />} />
               <Route path="/users" element={<Users />} />
+              <Route path="/container-policies" element={<ContainerPolicies />} />
               <Route path="/backup-orchestrator" element={<BackupOrchestrator />} />
               <Route path="/incidents" element={<Navigate to="/monitoring" replace />} />
               <Route path="/secrets" element={<SecretsManager />} />

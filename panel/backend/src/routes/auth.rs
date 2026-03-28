@@ -386,6 +386,11 @@ pub async fn login(
 /// Issue a JWT session token + cookie for a user.
 /// Returns (token, cookie, jti) so callers can record the session.
 fn issue_session(state: &AppState, user: &User) -> Result<(String, String, String), ApiError> {
+    issue_session_pub(state, user)
+}
+
+/// Public version for use by passkey auth (same logic).
+pub fn issue_session_pub(state: &AppState, user: &User) -> Result<(String, String, String), ApiError> {
     let now = chrono::Utc::now();
     let jti = uuid::Uuid::new_v4().to_string();
     let claims = Claims {

@@ -80,6 +80,53 @@ pub async fn deploy(
         }
     }
 
+    // ── Container policy enforcement ──
+    let policy: Option<(i32, i64, i32, Option<String>)> = sqlx::query_as(
+        "SELECT max_containers, max_memory_mb, max_cpu_percent, allowed_images FROM container_policies WHERE user_id = $1"
+    )
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("container policy check", e))?;
+
+    if let Some((max_containers, max_memory, max_cpu, allowed_images)) = &policy {
+        // Check container count via agent (count dockpanel-managed containers)
+        if let Ok(apps_json) = agent.get("/apps").await {
+            if let Some(apps) = apps_json.as_array() {
+                if apps.len() >= *max_containers as usize {
+                    return Err(err(StatusCode::FORBIDDEN, &format!("Container limit reached ({max_containers})")));
+                }
+            }
+        }
+
+        // Enforce memory limit
+        if let Some(mem) = body.memory_mb {
+            if mem as i64 > *max_memory {
+                return Err(err(StatusCode::FORBIDDEN, &format!("Memory exceeds policy limit ({max_memory}MB)")));
+            }
+        }
+
+        // Enforce CPU limit
+        if let Some(cpu) = body.cpu_percent {
+            if cpu as i32 > *max_cpu {
+                return Err(err(StatusCode::FORBIDDEN, &format!("CPU exceeds policy limit ({max_cpu}%)")));
+            }
+        }
+
+        // Check allowed images
+        if let Some(allowed) = allowed_images {
+            if !allowed.is_empty() {
+                let allowed_list: Vec<&str> = allowed.split(',').map(|s| s.trim()).collect();
+                if !allowed_list.iter().any(|a| body.template_id.contains(a) || a == &"*") {
+                    return Err(err(StatusCode::FORBIDDEN, "Image not in allowed list"));
+                }
+            }
+        }
+    }
+
+    // Pass user_id to agent for labeling
+    let user_id_for_agent = claims.sub.to_string();
+
     let deploy_id = Uuid::new_v4();
 
     // Create provisioning channel (reuse the same provision_logs map from AppState)
@@ -119,6 +166,7 @@ pub async fn deploy(
         "name": body.name,
         "port": body.port,
         "env": body.env.unwrap_or_default(),
+        "user_id": user_id_for_agent,
     });
     if let Some(ref domain) = deploy_domain {
         agent_body["domain"] = serde_json::json!(domain);
@@ -1144,4 +1192,264 @@ pub async fn check_updates(
         .await
         .map_err(|e| agent_error("Update check", e))?;
     Ok(Json(result))
+}
+
+// ─── Container Isolation Policies (Admin) ──────────────────────
+
+#[derive(serde::Deserialize)]
+pub struct PolicyRequest {
+    pub user_id: Option<Uuid>,
+    pub max_containers: Option<i32>,
+    pub max_memory_mb: Option<i64>,
+    pub max_cpu_percent: Option<i32>,
+    pub network_isolation: Option<bool>,
+    pub allowed_images: Option<String>,
+}
+
+/// GET /api/container-policies — List all container policies.
+pub async fn list_policies(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+
+    let policies: Vec<(Uuid, Uuid, i32, i64, i32, bool, Option<String>, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> =
+        sqlx::query_as(
+            "SELECT cp.id, cp.user_id, cp.max_containers, cp.max_memory_mb, cp.max_cpu_percent, \
+             cp.network_isolation, cp.allowed_images, cp.created_at, cp.updated_at \
+             FROM container_policies cp ORDER BY cp.created_at DESC"
+        )
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| internal_error("list container policies", e))?;
+
+    // Also fetch user emails for display
+    let items: Vec<serde_json::Value> = {
+        let mut result = Vec::with_capacity(policies.len());
+        for (id, uid, max_c, max_m, max_cpu, net_iso, allowed, created, updated) in &policies {
+            let email: Option<(String,)> = sqlx::query_as("SELECT email FROM users WHERE id = $1")
+                .bind(uid)
+                .fetch_optional(&state.db)
+                .await
+                .ok()
+                .flatten();
+            result.push(serde_json::json!({
+                "id": id,
+                "user_id": uid,
+                "user_email": email.map(|e| e.0),
+                "max_containers": max_c,
+                "max_memory_mb": max_m,
+                "max_cpu_percent": max_cpu,
+                "network_isolation": net_iso,
+                "allowed_images": allowed,
+                "created_at": created,
+                "updated_at": updated,
+            }));
+        }
+        result
+    };
+
+    Ok(Json(serde_json::json!({ "policies": items })))
+}
+
+/// POST /api/container-policies — Create a container policy for a user.
+pub async fn create_policy(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Json(body): Json<PolicyRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_admin(&claims.role)?;
+
+    let user_id = body.user_id.ok_or_else(|| err(StatusCode::BAD_REQUEST, "user_id is required"))?;
+    let max_containers = body.max_containers.unwrap_or(10).max(1).min(1000);
+    let max_memory = body.max_memory_mb.unwrap_or(4096).max(128).min(1_048_576);
+    let max_cpu = body.max_cpu_percent.unwrap_or(400).max(10).min(10000);
+    let net_iso = body.network_isolation.unwrap_or(false);
+
+    // Validate allowed_images (comma-separated, max 4KB)
+    if let Some(ref imgs) = body.allowed_images {
+        if imgs.len() > 4096 {
+            return Err(err(StatusCode::BAD_REQUEST, "allowed_images too long"));
+        }
+    }
+
+    // Verify user exists
+    let user_exists: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| internal_error("verify user", e))?;
+    if user_exists.is_none() {
+        return Err(err(StatusCode::NOT_FOUND, "User not found"));
+    }
+
+    let id: (Uuid,) = sqlx::query_as(
+        "INSERT INTO container_policies (user_id, max_containers, max_memory_mb, max_cpu_percent, network_isolation, allowed_images) \
+         VALUES ($1, $2, $3, $4, $5, $6) \
+         ON CONFLICT (user_id) DO UPDATE SET \
+         max_containers = EXCLUDED.max_containers, max_memory_mb = EXCLUDED.max_memory_mb, \
+         max_cpu_percent = EXCLUDED.max_cpu_percent, network_isolation = EXCLUDED.network_isolation, \
+         allowed_images = EXCLUDED.allowed_images, updated_at = NOW() \
+         RETURNING id"
+    )
+    .bind(user_id)
+    .bind(max_containers)
+    .bind(max_memory)
+    .bind(max_cpu)
+    .bind(net_iso)
+    .bind(&body.allowed_images)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| internal_error("create container policy", e))?;
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "container_policy.created",
+        Some("container_policy"), Some(&user_id.to_string()), None, None,
+    ).await;
+
+    Ok((StatusCode::CREATED, Json(serde_json::json!({ "ok": true, "id": id.0 }))))
+}
+
+/// GET /api/container-policies/{user_id} — Get policy for a specific user.
+pub async fn get_policy(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(user_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Users can see their own policy; admins can see any
+    if claims.sub != user_id {
+        require_admin(&claims.role)?;
+    }
+
+    let policy: Option<(Uuid, i32, i64, i32, bool, Option<String>, chrono::DateTime<chrono::Utc>)> =
+        sqlx::query_as(
+            "SELECT id, max_containers, max_memory_mb, max_cpu_percent, network_isolation, allowed_images, updated_at \
+             FROM container_policies WHERE user_id = $1"
+        )
+        .bind(user_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| internal_error("get container policy", e))?;
+
+    match policy {
+        Some((id, max_c, max_m, max_cpu, net_iso, allowed, updated)) => {
+            Ok(Json(serde_json::json!({
+                "id": id,
+                "user_id": user_id,
+                "max_containers": max_c,
+                "max_memory_mb": max_m,
+                "max_cpu_percent": max_cpu,
+                "network_isolation": net_iso,
+                "allowed_images": allowed,
+                "updated_at": updated,
+            })))
+        }
+        None => Ok(Json(serde_json::json!({ "policy": null }))),
+    }
+}
+
+/// PUT /api/container-policies/{user_id} — Update a user's container policy.
+pub async fn update_policy(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(user_id): Path<Uuid>,
+    Json(body): Json<PolicyRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+
+    let result = sqlx::query(
+        "UPDATE container_policies SET \
+         max_containers = COALESCE($1, max_containers), \
+         max_memory_mb = COALESCE($2, max_memory_mb), \
+         max_cpu_percent = COALESCE($3, max_cpu_percent), \
+         network_isolation = COALESCE($4, network_isolation), \
+         allowed_images = COALESCE($5, allowed_images), \
+         updated_at = NOW() \
+         WHERE user_id = $6"
+    )
+    .bind(body.max_containers.map(|v| v.max(1).min(1000)))
+    .bind(body.max_memory_mb.map(|v| v.max(128).min(1_048_576)))
+    .bind(body.max_cpu_percent.map(|v| v.max(10).min(10000)))
+    .bind(body.network_isolation)
+    .bind(&body.allowed_images)
+    .bind(user_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| internal_error("update container policy", e))?;
+
+    if result.rows_affected() == 0 {
+        return Err(err(StatusCode::NOT_FOUND, "Policy not found for this user"));
+    }
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "container_policy.updated",
+        Some("container_policy"), Some(&user_id.to_string()), None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// DELETE /api/container-policies/{user_id} — Remove a user's container policy (reverts to no limits).
+pub async fn delete_policy(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(user_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+
+    let result = sqlx::query("DELETE FROM container_policies WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| internal_error("delete container policy", e))?;
+
+    if result.rows_affected() == 0 {
+        return Err(err(StatusCode::NOT_FOUND, "Policy not found"));
+    }
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// GET /api/container-policies/{user_id}/usage — Get current resource usage vs policy.
+pub async fn policy_usage(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(user_id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if claims.sub != user_id {
+        require_admin(&claims.role)?;
+    }
+
+    let policy: Option<(i32, i64, i32, bool)> = sqlx::query_as(
+        "SELECT max_containers, max_memory_mb, max_cpu_percent, network_isolation FROM container_policies WHERE user_id = $1"
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("policy usage", e))?;
+
+    // Count containers via agent
+    let container_count = match agent.get("/apps").await {
+        Ok(apps_json) => apps_json.as_array().map(|a| a.len()).unwrap_or(0),
+        Err(_) => 0,
+    };
+
+    match policy {
+        Some((max_c, max_m, max_cpu, net_iso)) => {
+            Ok(Json(serde_json::json!({
+                "containers": { "used": container_count, "max": max_c },
+                "memory_mb": { "max": max_m },
+                "cpu_percent": { "max": max_cpu },
+                "network_isolation": net_iso,
+                "has_policy": true,
+            })))
+        }
+        None => {
+            Ok(Json(serde_json::json!({
+                "containers": { "used": container_count, "max": null },
+                "has_policy": false,
+            })))
+        }
+    }
 }

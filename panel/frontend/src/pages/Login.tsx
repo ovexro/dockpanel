@@ -1,7 +1,23 @@
-import { useState, useEffect, FormEvent } from "react";
+import { useState, useEffect, FormEvent, useCallback } from "react";
 import { useNavigate, Link, Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useBranding } from "../context/BrandingContext";
+
+function base64urlToBuffer(b64: string): ArrayBuffer {
+  const pad = b64.length % 4 === 0 ? "" : "=".repeat(4 - (b64.length % 4));
+  const base64 = (b64 + pad).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr.buffer;
+}
+
+function bufferToBase64url(buf: ArrayBuffer): string {
+  const arr = new Uint8Array(buf);
+  let binary = "";
+  for (let i = 0; i < arr.length; i++) binary += String.fromCharCode(arr[i]);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
 
 export default function Login() {
   const { user, login, verify2fa, loading } = useAuth();
@@ -16,6 +32,67 @@ export default function Login() {
   // 2FA state
   const [twoFaToken, setTwoFaToken] = useState("");
   const [twoFaCode, setTwoFaCode] = useState("");
+  const [passkeySupported, setPasskeySupported] = useState(false);
+
+  // Check if WebAuthn is available
+  useEffect(() => {
+    if (window.PublicKeyCredential) {
+      setPasskeySupported(true);
+    }
+  }, []);
+
+  const handlePasskeyLogin = useCallback(async () => {
+    setError("");
+    setSubmitting(true);
+    try {
+      // 1. Get challenge from server
+      const beginRes = await fetch("/api/auth/passkey/auth/begin", { method: "POST" });
+      if (!beginRes.ok) throw new Error("Failed to start passkey authentication");
+      const { publicKey } = await beginRes.json();
+
+      // 2. Convert base64url fields to ArrayBuffer
+      publicKey.challenge = base64urlToBuffer(publicKey.challenge);
+      if (publicKey.allowCredentials) {
+        publicKey.allowCredentials = publicKey.allowCredentials.map((c: any) => ({
+          ...c, id: base64urlToBuffer(c.id),
+        }));
+      }
+
+      // 3. Call browser WebAuthn API
+      const credential = await navigator.credentials.get({ publicKey }) as PublicKeyCredential;
+      const response = credential.response as AuthenticatorAssertionResponse;
+
+      // 4. Send response to server
+      const completeRes = await fetch("/api/auth/passkey/auth/complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: credential.id,
+          rawId: bufferToBase64url(credential.rawId),
+          response: {
+            authenticatorData: bufferToBase64url(response.authenticatorData),
+            clientDataJson: bufferToBase64url(response.clientDataJSON),
+            signature: bufferToBase64url(response.signature),
+            userHandle: response.userHandle ? bufferToBase64url(response.userHandle) : null,
+          },
+        }),
+      });
+
+      if (!completeRes.ok) {
+        const data = await completeRes.json();
+        throw new Error(data.error || "Passkey authentication failed");
+      }
+
+      // Refresh auth state and navigate
+      window.location.href = "/";
+    } catch (err: any) {
+      if (err.name !== "NotAllowedError") {
+        setError(err.message || "Passkey authentication failed");
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }, []);
 
   // Check if setup is needed (no users exist)
   useEffect(() => {
@@ -183,6 +260,28 @@ export default function Login() {
             >
               {submitting ? "Signing in..." : "Sign in"}
             </button>
+
+            {passkeySupported && (
+              <>
+                <div className="flex items-center gap-3 my-1">
+                  <div className="flex-1 h-px bg-dark-600" />
+                  <span className="text-xs text-dark-400">or</span>
+                  <div className="flex-1 h-px bg-dark-600" />
+                </div>
+                <button
+                  type="button"
+                  onClick={handlePasskeyLogin}
+                  disabled={submitting}
+                  className="w-full py-2.5 bg-dark-700 text-dark-100 rounded-lg font-medium text-sm hover:bg-dark-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors border border-dark-500 flex items-center justify-center gap-2"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M2 18v3c0 .6.4 1 1 1h4v-3h3v-3h2l1.4-1.4a6.5 6.5 0 1 0-4-4Z" />
+                    <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
+                  </svg>
+                  Sign in with passkey
+                </button>
+              </>
+            )}
           </form>
         )}
 

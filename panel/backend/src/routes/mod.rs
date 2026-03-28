@@ -45,6 +45,7 @@ pub mod reseller_dashboard;
 pub mod migration;
 pub mod resellers;
 pub mod secrets;
+pub mod passkeys;
 pub mod webhook_gateway;
 pub mod wordpress;
 pub mod ws_metrics;
@@ -371,6 +372,17 @@ pub fn router() -> Router<AppState> {
         .route("/api/auth/2fa/verify", post(auth::twofa_verify))
         .route("/api/auth/2fa/disable", post(auth::twofa_disable))
         .route("/api/auth/2fa/status", get(auth::twofa_status))
+        // Passkeys / WebAuthn
+        .route("/api/auth/passkey/register/begin", post(passkeys::register_begin))
+        .route("/api/auth/passkey/register/complete", post(passkeys::register_complete))
+        .route("/api/auth/passkey/auth/begin", post(passkeys::auth_begin))
+        .route("/api/auth/passkey/auth/complete", post(passkeys::auth_complete))
+        .route("/api/auth/passkeys", get(passkeys::list_passkeys))
+        .route("/api/auth/passkeys/{id}", delete(passkeys::delete_passkey).put(passkeys::rename_passkey))
+        // Container isolation policies (admin)
+        .route("/api/container-policies", get(docker_apps::list_policies).post(docker_apps::create_policy))
+        .route("/api/container-policies/{user_id}", get(docker_apps::get_policy).put(docker_apps::update_policy).delete(docker_apps::delete_policy))
+        .route("/api/container-policies/{user_id}/usage", get(docker_apps::policy_usage))
         // Users (admin)
         .route("/api/users", get(users::list).post(users::create))
         .route("/api/users/{id}", put(users::update).delete(users::remove))

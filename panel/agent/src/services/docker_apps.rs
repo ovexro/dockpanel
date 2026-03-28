@@ -277,6 +277,7 @@ pub struct DeployedApp {
     pub image: Option<String>,
     pub volumes: Vec<String>,
     pub stack_id: Option<String>,
+    pub user_id: Option<String>,
 }
 
 static TEMPLATES: &[AppTemplateDef] = &[
@@ -2351,6 +2352,7 @@ pub async fn deploy_app(
     domain: Option<&str>,
     memory_mb: Option<u64>,
     cpu_percent: Option<u64>,
+    user_id: Option<&str>,
 ) -> Result<DeployResult, String> {
     let template = TEMPLATES
         .iter()
@@ -2496,6 +2498,9 @@ pub async fn deploy_app(
             if let Some(domain) = domain {
                 labels.insert("dockpanel.app.domain".to_string(), domain.to_string());
             }
+            if let Some(uid) = user_id {
+                labels.insert("dockpanel.user.id".to_string(), uid.to_string());
+            }
             labels
         }),
         ..Default::default()
@@ -2618,6 +2623,7 @@ pub async fn list_deployed_apps() -> Result<Vec<DeployedApp>, String> {
             });
 
             let stack_id = labels.get("dockpanel.stack_id").cloned();
+            let user_id = labels.get("dockpanel.user.id").cloned();
 
             Some(DeployedApp {
                 container_id: id.clone(),
@@ -2630,6 +2636,7 @@ pub async fn list_deployed_apps() -> Result<Vec<DeployedApp>, String> {
                 image,
                 volumes,
                 stack_id,
+                user_id,
             })
         })
         .collect();

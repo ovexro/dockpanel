@@ -54,6 +54,8 @@ pub struct AppState {
     pub sessions_revoked_at: Arc<RwLock<Option<i64>>>,
     /// Deploy ownership map: deploy_id -> user_id (for SSE log access control).
     pub deploy_owners: Arc<Mutex<HashMap<uuid::Uuid, uuid::Uuid>>>,
+    /// WebAuthn/Passkey challenge store (in-memory, 5-minute TTL).
+    pub passkey_challenges: routes::passkeys::ChallengeStore,
 }
 
 #[tokio::main]
@@ -227,6 +229,7 @@ async fn main() {
         notif_tx,
         sessions_revoked_at,
         deploy_owners: Arc::new(Mutex::new(HashMap::new())),
+        passkey_challenges: routes::passkeys::new_challenge_store(),
     };
 
     // Shutdown broadcast channel — all background services listen for this signal

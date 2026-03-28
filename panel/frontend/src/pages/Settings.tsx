@@ -54,6 +54,12 @@ export default function Settings() {
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
   const [twoFaLoading, setTwoFaLoading] = useState(false);
 
+  // Passkeys
+  const [passkeys, setPasskeys] = useState<any[]>([]);
+  const [passkeyLoading, setPasskeyLoading] = useState(false);
+  const [passkeyName, setPasskeyName] = useState("My Passkey");
+  const [passkeySupported] = useState(() => !!window.PublicKeyCredential);
+
   // Auto-healing
   const [autoHealEnabled, setAutoHealEnabled] = useState(false);
   const [reverseProxy, setReverseProxy] = useState("nginx");
@@ -163,6 +169,13 @@ export default function Settings() {
     } catch { /* ignore */ }
   };
 
+  const loadPasskeys = async () => {
+    try {
+      const data = await api.get<{ passkeys: any[] }>("/auth/passkeys");
+      setPasskeys(data.passkeys || []);
+    } catch { /* ignore */ }
+  };
+
   const loadNotifyChannels = async () => {
     try {
       const rules = await api.get<{ notify_email?: boolean; notify_slack_url?: string; notify_discord_url?: string; notify_pagerduty_key?: string }[]>("/alert-rules");
@@ -181,6 +194,7 @@ export default function Settings() {
     loadHealth();
     loadDestinations();
     load2faStatus();
+    loadPasskeys();
     loadNotifyChannels();
     api.get<{ count: number }>("/system/updates/count")
       .then((d) => setUpdateCount(d.count))
@@ -1304,6 +1318,156 @@ export default function Settings() {
             >
               <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform ${settings.enforce_2fa === "true" ? "translate-x-5" : ""}`} />
             </button>
+          </div>
+        </div>
+
+        {/* Passkeys / WebAuthn */}
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-4">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Passkeys</h3>
+            <p className="text-xs text-dark-200 mt-0.5">Passwordless sign-in with biometrics or security keys</p>
+          </div>
+          <div className="p-5">
+            {!passkeySupported ? (
+              <p className="text-sm text-dark-300">Your browser does not support WebAuthn/Passkeys.</p>
+            ) : (
+              <div className="space-y-4">
+                {/* Existing passkeys list */}
+                {passkeys.length > 0 && (
+                  <div className="space-y-2">
+                    {passkeys.map((pk: any) => (
+                      <div key={pk.id} className="flex items-center justify-between px-3 py-2 bg-dark-700 rounded-lg border border-dark-600">
+                        <div className="flex items-center gap-3">
+                          <svg className="w-4 h-4 text-rust-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M2 18v3c0 .6.4 1 1 1h4v-3h3v-3h2l1.4-1.4a6.5 6.5 0 1 0-4-4Z" />
+                            <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
+                          </svg>
+                          <div>
+                            <p className="text-sm text-dark-100">{pk.name}</p>
+                            <p className="text-xs text-dark-400">Added {new Date(pk.created_at).toLocaleDateString()}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={async () => {
+                              const newName = prompt("Rename passkey:", pk.name);
+                              if (!newName || newName === pk.name) return;
+                              try {
+                                await api.put(`/auth/passkeys/${pk.id}`, { name: newName });
+                                setPasskeys(prev => prev.map(p => p.id === pk.id ? { ...p, name: newName } : p));
+                                setMessage({ text: "Passkey renamed", type: "success" });
+                              } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                            }}
+                            className="text-xs text-accent-400 hover:text-accent-300"
+                          >
+                            Rename
+                          </button>
+                          <button
+                            onClick={async () => {
+                              try {
+                                await api.delete(`/auth/passkeys/${pk.id}`);
+                                setPasskeys(prev => prev.filter(p => p.id !== pk.id));
+                                setMessage({ text: "Passkey removed", type: "success" });
+                              } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                            }}
+                            className="text-xs text-danger-400 hover:text-danger-300"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Add new passkey */}
+                {passkeys.length < 10 && (
+                  <div className="flex items-end gap-3">
+                    <div className="flex-1">
+                      <label className="block text-xs text-dark-300 mb-1">Passkey name</label>
+                      <input
+                        type="text"
+                        value={passkeyName}
+                        onChange={e => setPasskeyName(e.target.value)}
+                        className="w-full px-3 py-2 text-sm border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+                        placeholder="My Passkey"
+                      />
+                    </div>
+                    <button
+                      disabled={passkeyLoading}
+                      onClick={async () => {
+                        setPasskeyLoading(true);
+                        try {
+                          // 1. Begin registration
+                          const beginData = await api.post<{ publicKey: any }>("/auth/passkey/register/begin", {});
+                          const publicKey = beginData.publicKey;
+
+                          // 2. Convert base64url to ArrayBuffer
+                          const b64toBuf = (b64: string) => {
+                            const pad = b64.length % 4 === 0 ? "" : "=".repeat(4 - (b64.length % 4));
+                            const raw = atob((b64 + pad).replace(/-/g, "+").replace(/_/g, "/"));
+                            const arr = new Uint8Array(raw.length);
+                            for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+                            return arr.buffer;
+                          };
+                          const bufTo64 = (buf: ArrayBuffer) => {
+                            const arr = new Uint8Array(buf);
+                            let bin = "";
+                            for (let i = 0; i < arr.length; i++) bin += String.fromCharCode(arr[i]);
+                            return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+                          };
+
+                          publicKey.challenge = b64toBuf(publicKey.challenge);
+                          publicKey.user.id = b64toBuf(publicKey.user.id);
+                          if (publicKey.excludeCredentials) {
+                            publicKey.excludeCredentials = publicKey.excludeCredentials.map((c: any) => ({
+                              ...c, id: b64toBuf(c.id),
+                            }));
+                          }
+
+                          // 3. Create credential via browser
+                          const credential = await navigator.credentials.create({ publicKey }) as PublicKeyCredential;
+                          const attestation = credential.response as AuthenticatorAttestationResponse;
+
+                          // 4. Get transports
+                          const transports = typeof (attestation as any).getTransports === "function"
+                            ? (attestation as any).getTransports() : undefined;
+
+                          // 5. Complete registration
+                          await api.post("/auth/passkey/register/complete", {
+                            id: credential.id,
+                            rawId: bufTo64(credential.rawId),
+                            response: {
+                              attestationObject: bufTo64(attestation.attestationObject),
+                              clientDataJson: bufTo64(attestation.clientDataJSON),
+                            },
+                            name: passkeyName || "My Passkey",
+                            transports,
+                          });
+
+                          setMessage({ text: "Passkey registered!", type: "success" });
+                          setPasskeyName("My Passkey");
+                          loadPasskeys();
+                        } catch (e: any) {
+                          if (e.name !== "NotAllowedError") {
+                            setMessage({ text: e.message || "Failed to register passkey", type: "error" });
+                          }
+                        } finally {
+                          setPasskeyLoading(false);
+                        }
+                      }}
+                      className="px-4 py-2 text-sm bg-rust-500 text-white rounded-lg hover:bg-rust-600 disabled:opacity-50 transition-colors whitespace-nowrap"
+                    >
+                      {passkeyLoading ? "Registering..." : "Add Passkey"}
+                    </button>
+                  </div>
+                )}
+
+                {passkeys.length === 0 && (
+                  <p className="text-xs text-dark-400">No passkeys registered. Add one to enable passwordless login.</p>
+                )}
+              </div>
+            )}
           </div>
         </div>
 

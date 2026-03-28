@@ -41,3 +41,7 @@ futures = "0.3"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 subtle = "2"
 tikv-jemallocator = { version = "0.6", features = ["background_threads"] }
+# WebAuthn / Passkey support
+ciborium = "0.2"
+p256 = { version = "0.13", features = ["ecdsa"] }
+url = "2"
