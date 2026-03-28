@@ -48,6 +48,7 @@ pub mod secrets;
 pub mod iac;
 pub mod passkeys;
 pub mod webhook_gateway;
+pub mod telemetry;
 pub mod whmcs;
 pub mod wordpress;
 pub mod ws_metrics;
@@ -897,6 +898,15 @@ pub fn router() -> Router<AppState> {
         .route("/api/reseller/servers", get(reseller_dashboard::list_servers))
         // Activity (admin)
         .route("/api/activity", get(activity::list))
+        // Telemetry & Updates (admin)
+        .route("/api/telemetry/events", get(telemetry::list_events).delete(telemetry::clear_events))
+        .route("/api/telemetry/stats", get(telemetry::stats))
+        .route("/api/telemetry/config", get(telemetry::get_config).put(telemetry::update_config))
+        .route("/api/telemetry/preview", get(telemetry::preview))
+        .route("/api/telemetry/export", get(telemetry::export_report))
+        .route("/api/telemetry/send", post(telemetry::send_now))
+        .route("/api/telemetry/update-status", get(telemetry::update_status))
+        .route("/api/telemetry/check-updates", post(telemetry::check_updates))
         // Migration Wizard
         .route("/api/migration/analyze", post(migration::analyze))
         .route("/api/migration", get(migration::list))

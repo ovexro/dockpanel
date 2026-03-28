@@ -70,6 +70,8 @@ pub async fn update(
         // Gap #70: Customizable notification templates
         "notif_template_email", "notif_template_slack",
         "notif_template_discord", "notif_template_webhook",
+        // Telemetry
+        "telemetry_enabled", "telemetry_endpoint",
     ];
     for key in body.keys() {
         if !allowed_keys.contains(&key.as_str()) {

@@ -222,6 +222,8 @@ export default function Dashboard() {
   const [showAddBookmark, setShowAddBookmark] = useState(false);
   const [bmLabel, setBmLabel] = useState("");
   const [bmUrl, setBmUrl] = useState("");
+  // Update notification
+  const [updateInfo, setUpdateInfo] = useState<{ update_available: boolean; update_available_version?: string; update_release_url?: string; current_version?: string } | null>(null);
 
   const isVisible = (widget: string) => widgetConfig[widget] !== false; // default visible
   const toggleWidget = (widget: string) => {
@@ -313,6 +315,11 @@ export default function Dashboard() {
         const count = d.count ?? (Array.isArray(d.queue) ? d.queue.length : (Array.isArray(d) ? d.length : 0));
         setMailQueue(count);
       })
+      .catch(() => {});
+    // Update check
+    api
+      .get<any>("/telemetry/update-status")
+      .then(setUpdateInfo)
       .catch(() => {});
   }, []);
 
@@ -548,6 +555,22 @@ export default function Dashboard() {
       )}
 
       {/* Health banner moved to page header */}
+
+      {/* Update available banner */}
+      {updateInfo?.update_available && updateInfo.update_available_version && (
+        <div className="rounded-lg border border-rust-500/30 bg-rust-500/10 px-4 py-3 mb-6 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <svg className="w-5 h-5 text-rust-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+            <span className="text-sm text-rust-300">
+              <strong>DockPanel v{updateInfo.update_available_version}</strong> is available
+              <span className="text-dark-400 ml-1">(current: v{updateInfo.current_version})</span>
+            </span>
+          </div>
+          <Link to="/telemetry" className="px-3 py-1.5 bg-rust-500 hover:bg-rust-600 text-white rounded-lg text-xs font-medium transition-colors whitespace-nowrap">
+            View Update
+          </Link>
+        </div>
+      )}
 
       {/* Feature #4: Action message toast */}
       {actionMessage && (

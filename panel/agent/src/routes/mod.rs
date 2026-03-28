@@ -6,6 +6,7 @@ pub mod crons;
 pub mod database;
 pub mod deploy;
 pub mod diagnostics;
+pub mod telemetry;
 pub mod git_build;
 pub mod php;
 pub mod docker_apps;

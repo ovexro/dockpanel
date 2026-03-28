@@ -162,6 +162,7 @@ async fn main() {
         .merge(routes::service_installer::router())
         .merge(routes::server_utils::router())
         .merge(routes::traefik::router())
+        .merge(routes::telemetry::router())
         .route("/auth/rotate-token", axum::routing::post(routes::rotate_token))
         .layer(middleware::from_fn_with_state(state.clone(), routes::auth_middleware))
         .layer(middleware::from_fn(routes::audit_middleware))
