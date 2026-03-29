@@ -603,7 +603,7 @@ export default function Dashboard() {
       {isVisible("onboarding") && !dismissed && system && (() => {
         const steps: OnboardingStep[] = [
           { id: "site", label: "Create your first site", description: "Set up a website with Nginx, PHP, or reverse proxy", link: "/sites", check: () => sites.total > 0 },
-          { id: "app", label: "Deploy a Docker app", description: "One-click deploy from 34 templates", link: "/apps", check: () => appCount > 0 },
+          { id: "app", label: "Deploy a Docker app", description: "One-click deploy from 151 templates", link: "/apps", check: () => appCount > 0 },
           { id: "2fa", label: "Enable 2FA", description: "Protect your panel with two-factor authentication", link: "/settings", check: () => twoFaEnabled },
           { id: "backup", label: "Set up backups", description: "Set up backups for any site", link: sitesList.length > 0 ? `/sites/${sitesList[0].id}` : "/sites", check: () => sitesList.some(s => !!s.backup_schedule) },
           { id: "diagnostics", label: "Run diagnostics", description: "Check your server health and fix issues", link: "/diagnostics", check: () => true },

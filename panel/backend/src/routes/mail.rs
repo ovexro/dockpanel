@@ -810,10 +810,11 @@ pub async fn get_queue(
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = agent
-        .get("/mail/queue")
-        .await
-        .map_err(|e| agent_error("Mail queue", e))?;
+    // Return empty queue if mail server isn't installed (avoids 502 spam on dashboard)
+    let result = match agent.get("/mail/queue").await {
+        Ok(v) => v,
+        Err(_) => serde_json::json!({ "queue": [], "count": 0 }),
+    };
 
     Ok(Json(result))
 }
