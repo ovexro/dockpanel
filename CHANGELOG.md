@@ -4,6 +4,23 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.6.8] - 2026-03-29
+
+### Fixed
+- Mail queue endpoint returns empty result when Postfix not installed (was causing 502 errors every 15s on dashboard)
+- Onboarding widget template count updated from 34 to 151
+- Real Vultr IP in test script examples replaced with RFC 5737 documentation IP
+- Monitoring screenshot scrubbed of test.dockpanel.dev URL
+
+### Added
+- 17 fresh screenshots from live VPS for all major pages (dashboard, sites, Docker apps, terminal, security, etc.)
+
+### Security
+- 6 CRITICAL/HIGH findings fixed (command injection ×3, auth bypass, timing attack, systemd injection)
+- 6 additional HIGH findings fixed (CDN SSRF, WebAuthn RP ID, IaC scope, SSH key injection, DB backup pattern)
+- 15 MEDIUM/LOW findings fixed (CORS, rate limiting, input validation, error handling)
+- CodeQL: bookmark URL validation hardened, DNS regex escaping fixed
+
 ## [2.6.7] - 2026-03-28
 
 ### Added — Tier 1 (High Impact)
