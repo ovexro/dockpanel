@@ -970,8 +970,13 @@ async fn configure_cloudflared(
         return Err(err(StatusCode::BAD_REQUEST, "Missing tunnel token"));
     }
 
-    // Validate token format (base64-encoded, typically 100+ chars)
-    if token.len() < 50 {
+    // Validate token format: must be base64-like, no newlines/specifiers/shell chars
+    if token.len() < 50 || token.len() > 4096
+        || token.contains('\n') || token.contains('\r') || token.contains('\0')
+        || token.contains('%') || token.contains('\'') || token.contains('"')
+        || token.contains(';') || token.contains('|') || token.contains('&')
+        || !token.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '=')
+    {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid tunnel token format"));
     }
 

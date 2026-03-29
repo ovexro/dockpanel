@@ -1643,6 +1643,7 @@ pub async fn sleep_container(
 /// POST /api/apps/{container_id}/activity-ping — Record container activity (called by nginx or frontend).
 pub async fn activity_ping(
     State(state): State<AppState>,
+    AuthUser(_claims): AuthUser,
     Path(container_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if container_id.len() > 64 {

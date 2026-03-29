@@ -477,7 +477,7 @@ pub async fn table_indexes(
     Path((id, table)): Path<(Uuid, String)>,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    if table.is_empty() || table.len() > 128 || !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    if table.is_empty() || table.len() > 128 || !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid table name"));
     }
 
@@ -828,8 +828,15 @@ pub async fn pitr_restore(
         }
         "mysql" | "mariadb" => {
             // MySQL: use mysqlbinlog replay to target timestamp
+            // Validate name and password contain only safe chars to prevent shell injection
+            if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                return Err(err(StatusCode::BAD_REQUEST, "Invalid database name"));
+            }
+            if password.contains('\'') || password.contains('\\') || password.contains('\0') {
+                return Err(internal_error("pitr", "Invalid database password characters"));
+            }
             let cmd = format!(
-                "mysqlbinlog --stop-datetime='{}' /var/lib/mysql/binlog.* | mysql -u {} -p{} {}",
+                "mysqlbinlog --stop-datetime='{}' /var/lib/mysql/binlog.* | mysql -u '{}' -p'{}' '{}'",
                 target_time, name, password, name
             );
             agent.post("/exec", Some(serde_json::json!({

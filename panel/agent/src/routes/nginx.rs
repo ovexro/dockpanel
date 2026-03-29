@@ -2067,15 +2067,20 @@ async fn optimize_images(
             continue;
         }
 
-        let cmd = match format {
-            "avif" => format!("avifenc --min 0 --max 63 -a end-usage=q -a cq-level={} -a tune=ssim '{}' '{}'",
-                100 - quality, file, output_file),
-            _ => format!("cwebp -q {} '{}' -o '{}'", quality, file, output_file),
-        };
-
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            safe_command("sh").args(["-c", &cmd]).output()
+            match format {
+                "avif" => safe_command("avifenc")
+                    .args(["--min", "0", "--max", "63",
+                           "-a", "end-usage=q",
+                           "-a", &format!("cq-level={}", 100 - quality),
+                           "-a", "tune=ssim",
+                           file, &output_file])
+                    .output(),
+                _ => safe_command("cwebp")
+                    .args(["-q", &quality.to_string(), file, "-o", &output_file])
+                    .output(),
+            }
         ).await;
 
         if result.ok().and_then(|r| r.ok()).map(|o| o.status.success()).unwrap_or(false) {

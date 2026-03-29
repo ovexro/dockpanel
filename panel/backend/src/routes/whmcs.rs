@@ -153,7 +153,9 @@ pub async fn webhook(
 
     if let Some(ref expected) = secret {
         let provided = body.secret.as_deref().unwrap_or("");
-        if provided != expected {
+        // Constant-time comparison to prevent timing attacks
+        use subtle::ConstantTimeEq;
+        if provided.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() != 1 {
             return Err(err(StatusCode::UNAUTHORIZED, "Invalid webhook secret"));
         }
     }
