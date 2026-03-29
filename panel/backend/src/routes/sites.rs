@@ -1248,7 +1248,7 @@ pub async fn remove(
         agent.post(
             &format!("/nginx/sites/{}/redis/purge", site.domain),
             Some(serde_json::json!({ "redis_db": site.redis_db })),
-        ).await.ok(); // Best-effort — don't block deletion
+        ).await.map_err(|e| tracing::warn!("Best-effort Redis purge failed for {}: {e}", site.domain)).ok();
     }
 
     // Remove nginx config + SSL + PHP pool + site files + logs
@@ -2030,8 +2030,10 @@ pub async fn upload_ssl(
         .map_err(|e| agent_error("SSL upload", e))?;
 
     // Update DB
-    sqlx::query("UPDATE sites SET ssl_enabled = true, updated_at = NOW() WHERE id = $1")
-        .bind(id).execute(&state.db).await.ok();
+    if let Err(e) = sqlx::query("UPDATE sites SET ssl_enabled = true, updated_at = NOW() WHERE id = $1")
+        .bind(id).execute(&state.db).await {
+        tracing::warn!("Failed to update ssl_enabled for site {id}: {e}");
+    }
 
     activity::log_activity(&state.db, claims.sub, &claims.email, "ssl.upload",
         Some("site"), Some(&domain), None, None).await;

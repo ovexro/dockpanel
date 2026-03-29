@@ -393,10 +393,14 @@ export default function Dashboard() {
 
     return () => {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-      if (wsRef.current) {
-        // Prevent reconnect on intentional close
-        wsRef.current.onclose = null;
-        wsRef.current.close();
+      const ws = wsRef.current;
+      if (ws) {
+        // Prevent reconnect on intentional close — null handlers before close
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.onmessage = null;
+        wsRef.current = null;
+        ws.close();
       }
     };
   }, []);

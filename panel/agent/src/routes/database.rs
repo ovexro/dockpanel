@@ -236,9 +236,82 @@ async fn query_db(
     })))
 }
 
+#[derive(Deserialize)]
+struct ResetPasswordRequest {
+    container: String,
+    engine: String,
+    user: String,
+    old_password: String,
+    new_password: String,
+}
+
+/// POST /databases/reset-password — Reset a database user's password.
+async fn reset_password(
+    Json(body): Json<ResetPasswordRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // Validate container name
+    if !body.container.starts_with("dockpanel-db-") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid container name" })),
+        ));
+    }
+    let suffix = &body.container["dockpanel-db-".len()..];
+    if !is_valid_name(suffix) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid container name" })),
+        ));
+    }
+
+    if !["mysql", "mariadb", "postgres"].contains(&body.engine.as_str()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Engine must be mysql, mariadb, or postgres" })),
+        ));
+    }
+
+    if !is_valid_name(&body.user) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid username" })),
+        ));
+    }
+
+    // Validate passwords
+    for (label, pw) in [("old_password", &body.old_password), ("new_password", &body.new_password)] {
+        if pw.is_empty() || pw.len() > 128
+            || pw.contains('\n') || pw.contains('\r') || pw.contains('\0')
+        {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("Invalid {label}") })),
+            ));
+        }
+    }
+
+    database::reset_password(
+        &body.container,
+        &body.engine,
+        &body.user,
+        &body.old_password,
+        &body.new_password,
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/databases", post(create).get(list))
         .route("/databases/query", post(query_db))
+        .route("/databases/reset-password", post(reset_password))
         .route("/databases/{container_id}", delete(remove))
 }

@@ -388,7 +388,7 @@ export default function SiteDetail() {
                 try {
                   await api.put(`/sites/${id}/toggle`, { enabled: !site?.enabled });
                   setSite(s => s ? { ...s, enabled: !s.enabled } : s);
-                } catch (e) { alert(e instanceof Error ? e.message : "Toggle failed"); }
+                } catch (e) { setError(e instanceof Error ? e.message : "Toggle failed"); }
                 finally { setToggling(false); }
               }} className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${
                 site?.enabled !== false
@@ -435,7 +435,7 @@ export default function SiteDetail() {
             try {
               await api.put(`/sites/${id}/toggle`, { enabled: true });
               setSite(s => s ? { ...s, enabled: true } : s);
-            } catch (e) { alert(e instanceof Error ? e.message : "Enable failed"); }
+            } catch (e) { setError(e instanceof Error ? e.message : "Enable failed"); }
             finally { setToggling(false); }
           }} className="px-3 py-1 bg-rust-500 text-white rounded text-xs font-medium hover:bg-rust-600 disabled:opacity-50">
             {toggling ? "..." : "Enable Now"}

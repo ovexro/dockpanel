@@ -45,6 +45,7 @@ export default function Extensions() {
   const [extensions, setExtensions] = useState<Extension[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [testResult, setTestResult] = useState("");
   const [creating, setCreating] = useState(false);
   const [newKey, setNewKey] = useState<{ api_key: string; webhook_secret: string } | null>(null);
 
@@ -118,9 +119,9 @@ export default function Extensions() {
     setTesting(id);
     try {
       const res = await api.post<{ status: number }>(`/extensions/${id}/test`);
-      alert(`Webhook returned HTTP ${res.status}`);
+      setTestResult(`Webhook test: HTTP ${res.status}`);
     } catch (e) {
-      alert(e instanceof ApiError ? e.message : "Test failed");
+      setTestResult(e instanceof ApiError ? e.message : "Test failed");
     } finally {
       setTesting(null);
       await fetchExtensions();
@@ -152,6 +153,7 @@ export default function Extensions() {
       </div>
 
       {error && <div className="px-4 py-3 bg-danger-500/10 border border-danger-500/30 rounded-lg text-sm text-danger-400">{error}</div>}
+      {testResult && <div className="px-4 py-3 bg-dark-700 border border-dark-500 rounded-lg text-sm text-dark-100">{testResult}</div>}
 
       {/* New key display */}
       {newKey && (

@@ -15,6 +15,7 @@ export default function ResellerUsers() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(true);
 
   const fetchUsers = useCallback(async () => {
@@ -64,7 +65,8 @@ export default function ResellerUsers() {
     setError("");
     try {
       await api.put(`/reseller/users/${id}`, { password: newPw });
-      alert("Password updated");
+      setError(""); // Clear any previous error
+      setSuccess("Password updated successfully");
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Failed to update password");
     }
@@ -89,6 +91,9 @@ export default function ResellerUsers() {
 
       {error && (
         <div className="px-4 py-3 bg-danger-500/10 border border-danger-500/30 rounded-lg text-sm text-danger-400">{error}</div>
+      )}
+      {success && (
+        <div className="px-4 py-3 bg-green-500/10 border border-green-500/30 rounded-lg text-sm text-green-400">{success}</div>
       )}
 
       {creating && (

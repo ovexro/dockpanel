@@ -67,6 +67,10 @@ export default function SecretsManager() {
   const [editingSecret, setEditingSecret] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ value: "", description: "" });
 
+  // Vault edit form
+  const [editingVault, setEditingVault] = useState<string | null>(null);
+  const [editVaultForm, setEditVaultForm] = useState({ name: "", description: "" });
+
   useEffect(() => { loadVaults(); }, []);
   useEffect(() => { if (selectedVault) loadSecrets(); }, [selectedVault, reveal]);
 
@@ -111,6 +115,21 @@ export default function SecretsManager() {
       await api.delete(`/secrets/vaults/${id}`);
       setVaults(vaults.filter(v => v.id !== id));
       if (selectedVault === id) setSelectedVault(vaults.find(v => v.id !== id)?.id || null);
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
+    }
+  };
+
+  const updateVault = async () => {
+    if (!editingVault) return;
+    try {
+      await api.put(`/secrets/vaults/${editingVault}`, {
+        name: editVaultForm.name || undefined,
+        description: editVaultForm.description || undefined,
+      });
+      setEditingVault(null);
+      setMessage({ text: "Vault updated", type: "success" });
+      await loadVaults();
     } catch (e) {
       setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
     }
@@ -210,19 +229,46 @@ export default function SecretsManager() {
         {/* Vault sidebar */}
         <div className="w-56 space-y-1 shrink-0">
           {vaults.map(v => (
-            <div key={v.id}
-              onClick={() => { setSelectedVault(v.id); setReveal(false); }}
-              className={`px-3 py-2 rounded-lg cursor-pointer flex items-center justify-between group transition-colors ${
-                selectedVault === v.id ? "bg-dark-700 border border-dark-500" : "hover:bg-dark-800"
-              }`}>
-              <div>
-                <p className="text-sm text-dark-50 font-mono">{v.name}</p>
-                {v.description && <p className="text-xs text-dark-300 font-mono">{v.description}</p>}
-              </div>
-              <button onClick={e => { e.stopPropagation(); deleteVault(v.id); }}
-                className="text-dark-400 hover:text-danger-400 opacity-0 group-hover:opacity-100 text-xs">
-                Del
-              </button>
+            <div key={v.id}>
+              {editingVault === v.id ? (
+                <div className="px-3 py-2 rounded-lg bg-dark-700 border border-accent-500/30 space-y-2">
+                  <div>
+                    <label className="block text-xs font-medium text-dark-100 mb-1 font-mono">Name</label>
+                    <input type="text" value={editVaultForm.name} onChange={e => setEditVaultForm({ ...editVaultForm, name: e.target.value })}
+                      className="w-full px-2 py-1 bg-dark-900 border border-dark-500 rounded text-sm font-mono text-dark-50 outline-none" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-dark-100 mb-1 font-mono">Description</label>
+                    <input type="text" value={editVaultForm.description} onChange={e => setEditVaultForm({ ...editVaultForm, description: e.target.value })}
+                      className="w-full px-2 py-1 bg-dark-900 border border-dark-500 rounded text-sm font-mono text-dark-50 outline-none" />
+                  </div>
+                  <div className="flex justify-end gap-1">
+                    <button onClick={() => setEditingVault(null)} className="px-2 py-1 text-dark-200 text-xs font-mono">Cancel</button>
+                    <button onClick={updateVault} className="px-2 py-1 bg-accent-500 text-white rounded text-xs font-medium font-mono">Save</button>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  onClick={() => { setSelectedVault(v.id); setReveal(false); }}
+                  className={`px-3 py-2 rounded-lg cursor-pointer flex items-center justify-between group transition-colors ${
+                    selectedVault === v.id ? "bg-dark-700 border border-dark-500" : "hover:bg-dark-800"
+                  }`}>
+                  <div>
+                    <p className="text-sm text-dark-50 font-mono">{v.name}</p>
+                    {v.description && <p className="text-xs text-dark-300 font-mono">{v.description}</p>}
+                  </div>
+                  <div className="flex gap-1 opacity-0 group-hover:opacity-100">
+                    <button onClick={e => { e.stopPropagation(); setEditingVault(v.id); setEditVaultForm({ name: v.name, description: v.description || "" }); }}
+                      className="text-dark-400 hover:text-accent-400 text-xs">
+                      Edit
+                    </button>
+                    <button onClick={e => { e.stopPropagation(); deleteVault(v.id); }}
+                      className="text-dark-400 hover:text-danger-400 text-xs">
+                      Del
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           ))}
           {vaults.length === 0 && <p className="text-xs text-dark-300 font-mono px-3 py-2">No vaults yet</p>}

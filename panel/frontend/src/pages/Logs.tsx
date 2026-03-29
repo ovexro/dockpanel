@@ -213,7 +213,7 @@ function SiteLogsContent() {
       await api.post("/logs/truncate", { path });
       await loadLogSizes();
     } catch (e) {
-      alert(`Failed to truncate: ${e instanceof Error ? e.message : "Unknown error"}`);
+      setError(`Failed to truncate: ${e instanceof Error ? e.message : "Unknown error"}`);
     } finally {
       setTruncating(null);
     }

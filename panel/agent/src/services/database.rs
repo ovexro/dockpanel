@@ -429,6 +429,83 @@ fn parse_csv(output: &str) -> (Vec<String>, Vec<Vec<String>>) {
     (columns, records)
 }
 
+/// Reset the password for a database user inside a running container.
+///
+/// For MariaDB/MySQL: connects as root via the unix socket (no password needed
+/// inside the container) and runs ALTER USER.
+/// For PostgreSQL: connects with the old password and runs ALTER USER.
+pub async fn reset_password(
+    container: &str,
+    engine: &str,
+    user: &str,
+    old_password: &str,
+    new_password: &str,
+) -> Result<(), String> {
+    let output = match engine {
+        "mysql" | "mariadb" => {
+            // MariaDB root can auth via unix socket inside the container.
+            let sql = format!(
+                "ALTER USER '{}'@'%' IDENTIFIED BY '{}';",
+                user.replace('\'', "\\'"),
+                new_password.replace('\'', "\\'"),
+            );
+            tokio::time::timeout(
+                std::time::Duration::from_secs(QUERY_TIMEOUT_SECS),
+                safe_command("docker")
+                    .arg("exec")
+                    .arg(container)
+                    .arg("mariadb")
+                    .arg("-u")
+                    .arg("root")
+                    .arg("--skip-password")
+                    .arg("-e")
+                    .arg(&sql)
+                    .output(),
+            )
+            .await
+        }
+        _ => {
+            // PostgreSQL: connect with old password, then ALTER USER.
+            let sql = format!(
+                "ALTER USER \"{}\" WITH PASSWORD '{}';",
+                user.replace('"', "\\\""),
+                new_password.replace('\'', "''"),
+            );
+            tokio::time::timeout(
+                std::time::Duration::from_secs(QUERY_TIMEOUT_SECS),
+                safe_command("docker")
+                    .arg("exec")
+                    .arg("-e")
+                    .arg(format!("PGPASSWORD={old_password}"))
+                    .arg(container)
+                    .arg("psql")
+                    .arg("-U")
+                    .arg(user)
+                    .arg("-d")
+                    .arg(user)
+                    .arg("-c")
+                    .arg(&sql)
+                    .output(),
+            )
+            .await
+        }
+    };
+
+    let output = match output {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => return Err(format!("Failed to execute docker exec: {e}")),
+        Err(_) => return Err(format!("Password reset timed out ({QUERY_TIMEOUT_SECS}s limit)")),
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Password reset failed: {}", stderr.trim()));
+    }
+
+    tracing::info!("Database password reset for user '{user}' in container '{container}'");
+    Ok(())
+}
+
 /// Ensure the dockpanel-db Docker network exists.
 async fn ensure_network(docker: &Docker) -> Result<(), String> {
     use bollard::network::CreateNetworkOptions;

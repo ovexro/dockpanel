@@ -338,28 +338,35 @@ async fn main() {
     let cleanup_provision = state.provision_logs.clone();
     let cleanup_deploy_owners = state.deploy_owners.clone();
     let cleanup_oauth = state.oauth_states.clone();
-    let mut cleanup_shutdown_rx = shutdown_tx.subscribe();
-    tokio::spawn(async move {
+    spawn_supervised("cleanup", &shutdown_tx, move |mut shutdown_rx| {
+        let blacklist = cleanup_blacklist.clone();
+        let bl_db = cleanup_bl_db.clone();
+        let login = cleanup_login.clone();
+        let twofa = cleanup_twofa.clone();
+        let webhook = cleanup_webhook.clone();
+        let agent_rl = cleanup_agent_rl.clone();
+        let provision = cleanup_provision.clone();
+        let deploy_owners = cleanup_deploy_owners.clone();
+        let oauth = cleanup_oauth.clone();
+        async move {
         let mut interval = tokio::time::interval(Duration::from_secs(900));
         loop {
             tokio::select! {
                 _ = interval.tick() => {}
-                _ = cleanup_shutdown_rx.recv() => {
+                _ = shutdown_rx.recv() => {
                     tracing::info!("Cleanup task shutting down gracefully");
                     break;
                 }
             }
             // Clean token blacklist: if over 10000 entries, purge expired from DB and reload
-            let bl_count = cleanup_blacklist.read().await.len();
+            let bl_count = blacklist.read().await.len();
             if bl_count > 10000 {
-                // Remove expired entries from DB
                 let _ = sqlx::query("DELETE FROM token_blacklist WHERE expires_at <= NOW()")
-                    .execute(&cleanup_bl_db).await;
-                // Reload active blacklist from DB
+                    .execute(&bl_db).await;
                 let active: Vec<(String,)> = sqlx::query_as(
                     "SELECT jti FROM token_blacklist WHERE expires_at > NOW()"
-                ).fetch_all(&cleanup_bl_db).await.unwrap_or_default();
-                let mut bl = cleanup_blacklist.write().await;
+                ).fetch_all(&bl_db).await.unwrap_or_default();
+                let mut bl = blacklist.write().await;
                 bl.clear();
                 for (jti,) in &active {
                     bl.insert(jti.clone());
@@ -370,39 +377,37 @@ async fn main() {
             let now = Instant::now();
             let window_15m = Duration::from_secs(900);
             let window_5m = Duration::from_secs(300);
-            if let Ok(mut map) = cleanup_login.lock() {
+            if let Ok(mut map) = login.lock() {
                 map.retain(|_, attempts| {
                     attempts.retain(|t| now.duration_since(*t) < window_15m);
                     !attempts.is_empty()
                 });
             }
-            if let Ok(mut map) = cleanup_twofa.lock() {
+            if let Ok(mut map) = twofa.lock() {
                 map.retain(|_, (_, start)| now.duration_since(*start) < window_5m);
             }
-            if let Ok(mut map) = cleanup_webhook.lock() {
+            if let Ok(mut map) = webhook.lock() {
                 map.retain(|_, (_, start)| now.duration_since(*start) < window_5m);
             }
-            if let Ok(mut map) = cleanup_agent_rl.lock() {
+            if let Ok(mut map) = agent_rl.lock() {
                 map.retain(|_, (_, start)| now.duration_since(*start) < Duration::from_secs(60));
             }
             // Clean stale provisioning logs (older than 5 minutes)
-            if let Ok(mut map) = cleanup_provision.lock() {
+            if let Ok(mut map) = provision.lock() {
                 let before = map.len();
                 map.retain(|_, (_, _, created)| now.duration_since(*created) < Duration::from_secs(300));
-                // Also clean deploy_owners for removed entries
                 if map.len() < before {
-                    if let Ok(mut owners) = cleanup_deploy_owners.lock() {
+                    if let Ok(mut owners) = deploy_owners.lock() {
                         owners.retain(|id, _| map.contains_key(id));
                     }
                 }
             }
             // Clean expired OAuth CSRF states (older than 10 minutes)
-            if let Ok(mut map) = cleanup_oauth.lock() {
+            if let Ok(mut map) = oauth.lock() {
                 map.retain(|_, (_, created)| now.duration_since(*created) < Duration::from_secs(600));
             }
-            // GAP 18: Webhook delivery + backup verification cleanup handled by auto_healer retention
         }
-    });
+    }});
 
     let shutdown_db = state.db.clone();
 
@@ -421,10 +426,12 @@ async fn main() {
         env!("CARGO_PKG_VERSION")
     );
 
-    axum::serve(listener, app)
+    if let Err(e) = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
-        .unwrap();
+    {
+        tracing::error!("API server error: {e}");
+    }
 
     // Signal all background services to stop
     tracing::info!("Sending shutdown signal to background services...");

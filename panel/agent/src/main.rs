@@ -200,7 +200,9 @@ async fn main() {
                 .await
                 .expect("Failed to bind TCP listener for remote mode");
             tracing::info!("Agent TCP listener on 127.0.0.1:9090 (remote command forwarding)");
-            axum::serve(tcp_listener, tcp_app).await.unwrap();
+            if let Err(e) = axum::serve(tcp_listener, tcp_app).await {
+                tracing::error!("Remote-mode TCP server error: {e}");
+            }
         });
     }
 
@@ -215,9 +217,14 @@ async fn main() {
         tokio::spawn(async move {
             let tcp_listener = tokio::net::TcpListener::bind(&tcp_addr)
                 .await
-                .unwrap_or_else(|e| panic!("Failed to bind TCP listener on {tcp_addr}: {e}"));
+                .unwrap_or_else(|e| {
+                    tracing::error!("Failed to bind TCP listener on {tcp_addr}: {e}");
+                    std::process::exit(1);
+                });
             tracing::info!("Agent TCP listener on {tcp_addr} (multi-server remote access)");
-            axum::serve(tcp_listener, tcp_app).await.unwrap();
+            if let Err(e) = axum::serve(tcp_listener, tcp_app).await {
+                tracing::error!("Multi-server TCP server error: {e}");
+            }
         });
     }
 
@@ -226,10 +233,12 @@ async fn main() {
         env!("CARGO_PKG_VERSION")
     );
 
-    axum::serve(listener, app)
+    if let Err(e) = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
-        .unwrap();
+    {
+        tracing::error!("Agent server error: {e}");
+    }
 
     tracing::info!("DockPanel Agent shut down gracefully");
 }

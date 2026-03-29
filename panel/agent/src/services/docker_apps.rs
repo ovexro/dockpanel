@@ -491,7 +491,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         default_port: 3002,
         container_port: "3000/tcp",
         env_vars: &[
-            EnvVarDef { name: "GF_SECURITY_ADMIN_PASSWORD", label: "Admin Password", default: "admin", required: false, secret: true },
+            EnvVarDef { name: "GF_SECURITY_ADMIN_PASSWORD", label: "Admin Password", default: "", required: true, secret: true },
         ],
         volumes: &["/var/lib/grafana"],
     },

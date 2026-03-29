@@ -77,6 +77,7 @@ export default function Settings() {
   const [notifyEmail, setNotifyEmail] = useState(true);
   const [testingWebhook, setTestingWebhook] = useState<string | null>(null);
   const [webhookResult, setWebhookResult] = useState<{ type: string; msg: string }>({ type: "", msg: "" });
+  const [mutedTypes, setMutedTypes] = useState<string[]>([]);
 
   // Password change
   const [currentPass, setCurrentPass] = useState("");
@@ -178,13 +179,16 @@ export default function Settings() {
 
   const loadNotifyChannels = async () => {
     try {
-      const rules = await api.get<{ notify_email?: boolean; notify_slack_url?: string; notify_discord_url?: string; notify_pagerduty_key?: string }[]>("/alert-rules");
+      const rules = await api.get<{ notify_email?: boolean; notify_slack_url?: string; notify_discord_url?: string; notify_pagerduty_key?: string; muted_types?: string }[]>("/alert-rules");
       if (rules.length > 0) {
         const r = rules[0];
         setNotifyEmail(r.notify_email !== false);
         setNotifySlackUrl(r.notify_slack_url || "");
         setNotifyDiscordUrl(r.notify_discord_url || "");
         setNotifyPagerdutyKey(r.notify_pagerduty_key || "");
+        if (r.muted_types) {
+          setMutedTypes(r.muted_types.split(',').filter((t: string) => t.trim()));
+        }
       }
     } catch { /* ignore */ }
   };
@@ -1819,6 +1823,34 @@ export default function Settings() {
               />
               <p className="text-xs text-dark-300 mt-1">Events API v2 integration key. Get it from PagerDuty &gt; Services &gt; Integrations.</p>
             </div>
+            {/* Alert Type Muting */}
+            <div className="bg-dark-800 rounded-lg border border-dark-600 p-5 space-y-3">
+              <h3 className="text-sm font-medium text-dark-100 font-mono">Suppress External Notifications</h3>
+              <p className="text-xs text-dark-400">Muted alert types still record in the panel but won't trigger Slack, Discord, PagerDuty, or webhook notifications.</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {[
+                  { key: "cpu", label: "CPU" },
+                  { key: "memory", label: "Memory" },
+                  { key: "disk", label: "Disk" },
+                  { key: "offline", label: "Offline" },
+                  { key: "backup_failure", label: "Backup" },
+                  { key: "ssl_expiry", label: "SSL" },
+                  { key: "service_down", label: "Service" },
+                ].map(({ key, label }) => (
+                  <label key={key} className="flex items-center gap-2 text-sm text-dark-200 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={mutedTypes.includes(key)}
+                      onChange={e => setMutedTypes(
+                        e.target.checked ? [...mutedTypes, key] : mutedTypes.filter(t => t !== key)
+                      )}
+                      className="rounded border-dark-500 bg-dark-900 text-rust-500 focus:ring-rust-500"
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </div>
             <div className="flex justify-end">
               <button
                 onClick={async () => {
@@ -1830,6 +1862,7 @@ export default function Settings() {
                       notify_slack_url: notifySlackUrl || null,
                       notify_discord_url: notifyDiscordUrl || null,
                       notify_pagerduty_key: notifyPagerdutyKey || null,
+                      muted_types: mutedTypes.join(','),
                     });
                     setMessage({ text: "Notification channels saved", type: "success" });
                   } catch (e) {

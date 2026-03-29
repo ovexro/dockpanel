@@ -75,6 +75,18 @@ interface Destination {
   dtype: string;
 }
 
+interface PolicyForm {
+  name: string;
+  schedule: string;
+  backup_sites: boolean;
+  backup_databases: boolean;
+  backup_volumes: boolean;
+  destination_id: string;
+  retention_count: number;
+  encrypt: boolean;
+  verify_after_backup: boolean;
+}
+
 interface Database {
   id: string;
   name: string;
@@ -322,8 +334,8 @@ function PoliciesTab({
 }: {
   policies: BackupPolicy[]; destinations: Destination[];
   showForm: boolean; setShowForm: (v: boolean) => void;
-  form: typeof import("./BackupOrchestrator").default extends never ? never : any;
-  setForm: (v: any) => void;
+  form: PolicyForm;
+  setForm: (v: PolicyForm) => void;
   onCreate: () => void; onDelete: (id: string) => void;
 }) {
   return (

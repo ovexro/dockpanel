@@ -323,8 +323,12 @@ export default function Terminal() {
 
         // Handle resize
         term.onResize(({ cols, rows }) => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "resize", cols, rows }));
+          try {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: "resize", cols, rows }));
+            }
+          } catch {
+            // Socket may have closed between readyState check and send
           }
         });
       } catch (e) {

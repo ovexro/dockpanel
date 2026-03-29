@@ -74,6 +74,12 @@ pub struct CreateVaultRequest {
 }
 
 #[derive(serde::Deserialize)]
+pub struct UpdateVaultRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
 pub struct CreateSecretRequest {
     pub key: String,
     pub value: String,
@@ -179,6 +185,40 @@ pub async fn delete_vault(
     }
 
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// PUT /api/secrets/vaults/{id} — Update vault name/description.
+pub async fn update_vault(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<UpdateVaultRequest>,
+) -> Result<Json<SecretVault>, ApiError> {
+    if let Some(ref name) = req.name {
+        if name.is_empty() || name.len() > 100 {
+            return Err(err(StatusCode::BAD_REQUEST, "Name must be 1-100 characters"));
+        }
+    }
+
+    let vault: Option<SecretVault> = sqlx::query_as(
+        "UPDATE secret_vaults SET name = COALESCE($1, name), description = COALESCE($2, description), \
+         updated_at = NOW() WHERE id = $3 AND user_id = $4 RETURNING *"
+    )
+    .bind(&req.name)
+    .bind(&req.description)
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db).await
+    .map_err(|e| internal_error("update vault", e))?;
+
+    let vault = vault.ok_or_else(|| err(StatusCode::NOT_FOUND, "Vault not found"))?;
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "vault.update",
+        Some("vault"), Some(&vault.name), None, None,
+    ).await;
+
+    Ok(Json(vault))
 }
 
 // ── Secret CRUD ─────────────────────────────────────────────────────────────

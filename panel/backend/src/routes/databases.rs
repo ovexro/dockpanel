@@ -859,3 +859,59 @@ pub async fn pitr_restore(
         Err(e) => Err(agent_error("PITR restore", e)),
     }
 }
+
+/// POST /api/databases/{id}/reset-password — Reset the database password.
+/// Generates a new random password, updates the database container via the agent,
+/// then stores the encrypted password in the panel DB and returns it to the user.
+pub async fn reset_password(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Fetch current db info with ownership check (returns decrypted old password)
+    let (name, engine, old_password, _port) = get_db_info(&state, id, claims.sub).await?;
+
+    // Generate a new random password (same pattern as create())
+    let new_password = uuid::Uuid::new_v4().to_string().replace('-', "");
+
+    // Reset password in the actual database container via the agent
+    let container = format!("dockpanel-db-{name}");
+    let agent_body = serde_json::json!({
+        "container": container,
+        "engine": engine,
+        "user": name,
+        "old_password": old_password,
+        "new_password": new_password,
+    });
+
+    agent
+        .post("/databases/reset-password", Some(agent_body))
+        .await
+        .map_err(|e| agent_error("Database password reset", e))?;
+
+    // Encrypt the new password
+    let encrypted = crate::services::secrets_crypto::encrypt_credential(&new_password, &state.config.jwt_secret)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Encryption failed: {e}")))?;
+
+    // Update the encrypted password in the panel database
+    sqlx::query("UPDATE databases SET db_password_enc = $1 WHERE id = $2")
+        .bind(&encrypted)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| internal_error("reset password", e))?;
+
+    // Log activity
+    crate::services::activity::log_activity(
+        &state.db, claims.sub, &claims.email, "database.password_reset",
+        Some("database"), Some(&name), None, None,
+    ).await;
+
+    tracing::info!("Database password reset: {name}");
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "password": new_password,
+    })))
+}

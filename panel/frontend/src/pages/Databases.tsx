@@ -656,6 +656,10 @@ export default function Databases() {
   const [browseDb, setBrowseDb] = useState<Database | null>(null);
   const [schemaDb, setSchemaDb] = useState<Database | null>(null);
 
+  // Password reset state
+  const [resettingPw, setResettingPw] = useState<string | null>(null);
+  const [pwResetSuccess, setPwResetSuccess] = useState<string | null>(null);
+
   const fetchData = async () => {
     try {
       const [dbs, sitesData] = await Promise.all([
@@ -733,6 +737,34 @@ export default function Databases() {
       setCredentialsId(null);
     } finally {
       setCredentialsLoading(false);
+    }
+  };
+
+  const handleResetPassword = async (id: string) => {
+    setResettingPw(id);
+    setPwResetSuccess(null);
+    setError("");
+    try {
+      const res = await api.post<{ ok: boolean; password: string }>(
+        `/databases/${id}/reset-password`
+      );
+      setPwResetSuccess(res.password);
+      // Show the new credentials panel with refreshed data
+      setCredentialsId(id);
+      setCredentials(null);
+      setCredentialsLoading(true);
+      try {
+        const creds = await api.get<Credentials>(`/databases/${id}/credentials`);
+        setCredentials(creds);
+      } catch {
+        // Credentials will be stale but password is shown in success message
+      } finally {
+        setCredentialsLoading(false);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Password reset failed");
+    } finally {
+      setResettingPw(null);
     }
   };
 
@@ -996,6 +1028,14 @@ export default function Databases() {
                           PITR
                         </button>
                         <button
+                          onClick={() => handleResetPassword(db.id)}
+                          disabled={resettingPw === db.id}
+                          className="px-2 py-1 rounded text-xs font-medium bg-dark-700 text-dark-300 hover:bg-dark-600 disabled:opacity-50 transition-colors"
+                          title="Generate a new database password"
+                        >
+                          {resettingPw === db.id ? "..." : "Reset PW"}
+                        </button>
+                        <button
                           onClick={() => toggleCredentials(db.id)}
                           className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
                             credentialsId === db.id
@@ -1050,6 +1090,36 @@ export default function Databases() {
               ) : null;
             })()}
           </div>
+
+          {/* Password reset success */}
+          {pwResetSuccess && (
+            <div className="mt-4 bg-dark-800 rounded-lg border border-accent-500/30 p-4">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-xs font-medium text-accent-400 uppercase font-mono tracking-widest">
+                  Password Reset Successful
+                </h3>
+                <button
+                  onClick={() => setPwResetSuccess(null)}
+                  className="text-dark-400 hover:text-dark-200 text-sm"
+                  aria-label="Dismiss"
+                >
+                  &times;
+                </button>
+              </div>
+              <p className="text-xs text-dark-300 mb-2">Save this password now — it will not be shown again after you leave this page.</p>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 bg-dark-900 border border-dark-500 rounded-lg px-3 py-2 text-sm font-mono text-dark-50">
+                  {pwResetSuccess}
+                </code>
+                <button
+                  onClick={() => copyToClipboard(pwResetSuccess, "new_password")}
+                  className="shrink-0 px-3 py-2 bg-dark-700 text-dark-200 rounded-lg text-xs hover:bg-dark-600 transition-colors"
+                >
+                  {copied === "new_password" ? "Copied!" : "Copy"}
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Credentials panel */}
           {credentialsId && (

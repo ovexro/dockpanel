@@ -462,6 +462,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/databases/{id}/query", post(databases::query))
         .route("/api/databases/{id}/pitr", get(databases::pitr_config).put(databases::update_pitr_config))
         .route("/api/databases/{id}/pitr/restore", post(databases::pitr_restore))
+        .route("/api/databases/{id}/reset-password", post(databases::reset_password))
         // Compose Stacks
         .route("/api/stacks", get(stacks::list).post(stacks::create))
         .route("/api/stacks/{id}", get(stacks::get_one).put(stacks::update).delete(stacks::remove))
@@ -779,7 +780,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/migrations/apps/{id}", get(whmcs::migration_status))
         // Secrets Manager
         .route("/api/secrets/vaults", get(secrets::list_vaults).post(secrets::create_vault))
-        .route("/api/secrets/vaults/{vault_id}", delete(secrets::delete_vault))
+        .route("/api/secrets/vaults/{vault_id}", delete(secrets::delete_vault).put(secrets::update_vault))
         .route("/api/secrets/vaults/{vault_id}/secrets", get(secrets::list_secrets).post(secrets::create_secret))
         .route("/api/secrets/vaults/{vault_id}/secrets/{secret_id}", put(secrets::update_secret).delete(secrets::delete_secret))
         .route("/api/secrets/vaults/{vault_id}/secrets/{secret_id}/versions", get(secrets::list_versions))

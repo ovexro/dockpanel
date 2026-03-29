@@ -69,7 +69,8 @@ impl Config {
         let jwt_secret = std::env::var("JWT_SECRET").expect("JWT_SECRET must be set");
 
         if jwt_secret.len() < 32 {
-            panic!("JWT_SECRET must be at least 32 characters (got {}). Generate with: openssl rand -hex 32", jwt_secret.len());
+            eprintln!("FATAL: JWT_SECRET must be at least 32 characters (got {}). Generate with: openssl rand -hex 32", jwt_secret.len());
+            std::process::exit(1);
         }
 
         let base_url = std::env::var("BASE_URL").unwrap_or_default();

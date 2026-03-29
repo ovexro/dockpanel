@@ -80,6 +80,7 @@ async fn check_schedules(pool: &PgPool, agent: &AgentClient) {
             .bind(id)
             .execute(pool)
             .await
+            .map_err(|e| tracing::warn!("Failed to clear scheduled_deploy_at for deploy {id}: {e}"))
             .ok();
 
         // Trigger the deploy

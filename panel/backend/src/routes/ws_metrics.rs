@@ -146,6 +146,8 @@ async fn handle_socket(mut socket: WebSocket, agent: AgentHandle) {
         }
     }
 
+    // Send explicit close frame so client doesn't linger
+    let _ = socket.send(Message::Close(None)).await;
     WS_CONNECTIONS.fetch_sub(1, Ordering::SeqCst);
     tracing::debug!("WebSocket metrics client disconnected");
 }
