@@ -120,7 +120,6 @@ pub async fn provision(
         "ok": true,
         "domain": site.domain,
         "ssl_enabled": true,
-        "cert_path": cert_path,
         "expiry": ssl_expiry,
     })))
 }
@@ -241,7 +240,6 @@ pub async fn provision_dns01(
         "domain": site.domain,
         "wildcard": wildcard,
         "ssl_enabled": true,
-        "cert_path": cert_path,
         "expiry": ssl_expiry,
     })))
 }

@@ -220,7 +220,9 @@ pub async fn update_config(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Validate endpoint URL if provided
     if let Some(ref endpoint) = body.telemetry_endpoint {
-        if !endpoint.is_empty() && !endpoint.starts_with("https://") {
+        if endpoint.is_empty() {
+            // Empty string is valid — means "disable remote telemetry"
+        } else if !endpoint.starts_with("https://") {
             return Err(err(
                 StatusCode::BAD_REQUEST,
                 "Telemetry endpoint must use HTTPS",

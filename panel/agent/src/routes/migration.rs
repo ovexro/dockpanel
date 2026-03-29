@@ -24,14 +24,22 @@ async fn analyze(
     let path = body["path"].as_str().ok_or((StatusCode::BAD_REQUEST, "path required".into()))?;
     let source = body["source"].as_str().unwrap_or("cpanel");
 
+    // Reject traversal attempts
+    if path.contains("..") || path.contains('\0') {
+        return Err((StatusCode::BAD_REQUEST, "Path traversal not allowed".into()));
+    }
+
     // Restrict path to allowed directories
     if !path.starts_with("/var/backups/") && !path.starts_with("/tmp/") {
         return Err((StatusCode::BAD_REQUEST, "Path must be within /var/backups/ or /tmp/".into()));
     }
 
-    // Validate path exists
-    if !std::path::Path::new(path).exists() {
-        return Err((StatusCode::BAD_REQUEST, format!("File not found: {path}")));
+    // Validate path exists and canonicalize to resolve symlinks
+    let canon_path = std::path::Path::new(path).canonicalize()
+        .map_err(|_| (StatusCode::BAD_REQUEST, format!("File not found: {path}")))?;
+    let canon_str = canon_path.to_string_lossy();
+    if !canon_str.starts_with("/var/backups/") && !canon_str.starts_with("/tmp/") {
+        return Err((StatusCode::BAD_REQUEST, "Resolved path not in allowed directories".into()));
     }
 
     match migration::analyze(path, source).await {

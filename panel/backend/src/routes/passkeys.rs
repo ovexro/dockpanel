@@ -32,10 +32,17 @@ pub fn new_challenge_store() -> ChallengeStore {
 }
 
 /// Purge expired challenges (>5 min old). Called on each operation.
+/// Also enforces a max size of 10,000 entries to prevent memory exhaustion.
 fn purge_expired(store: &ChallengeStore) {
     if let Ok(mut map) = store.lock() {
         let now = Instant::now();
         map.retain(|_, (_, created)| now.duration_since(*created).as_secs() < 300);
+        // Hard cap to prevent DoS via rapid challenge generation
+        if map.len() > 10_000 {
+            let excess = map.len() - 5_000;
+            let keys_to_remove: Vec<String> = map.keys().take(excess).cloned().collect();
+            for k in keys_to_remove { map.remove(&k); }
+        }
     }
 }
 
@@ -446,11 +453,11 @@ pub async fn register_complete(
 
     // Parse credential data
     let (credential_id, cose_key_cbor, aaguid) = parse_auth_data(&auth_data_bytes)
-        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("authData parse error: {e}")))?;
+        .map_err(|e| { tracing::warn!("Passkey authData parse error: {e}"); err(StatusCode::BAD_REQUEST, "Invalid attestation data") })?;
 
     // Verify the COSE key is a valid P-256 key
     parse_cose_p256_key(&cose_key_cbor)
-        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Invalid public key: {e}")))?;
+        .map_err(|e| { tracing::warn!("Passkey invalid public key: {e}"); err(StatusCode::BAD_REQUEST, "Invalid credential key") })?;
 
     let sign_count = u32::from_be_bytes([
         auth_data_bytes[33], auth_data_bytes[34],
@@ -640,7 +647,7 @@ pub async fn auth_complete(
     signed_data.extend_from_slice(&client_data_hash);
 
     let verifying_key = parse_cose_p256_key(&cose_key_cbor)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Stored key invalid: {e}")))?;
+        .map_err(|e| { tracing::error!("Passkey stored key invalid: {e}"); err(StatusCode::INTERNAL_SERVER_ERROR, "Authentication failed") })?;
 
     let sig_bytes = URL_SAFE_NO_PAD.decode(&body.response.signature)
         .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid signature encoding"))?;

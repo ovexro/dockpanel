@@ -1813,10 +1813,10 @@ async fn waf_configure(
     }
 
     let mode = body.get("mode").and_then(|v| v.as_str()).unwrap_or("detection");
-    let engine = match mode {
-        "prevention" => "On",
-        _ => "DetectionOnly",
-    };
+    if mode != "detection" && mode != "prevention" {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Mode must be 'detection' or 'prevention'"}))));
+    }
+    let engine = if mode == "prevention" { "On" } else { "DetectionOnly" };
 
     let safe_domain = domain.replace('.', "_");
     let log_dir = "/var/log/modsecurity";
@@ -1995,6 +1995,9 @@ async fn optimize_images(
     }
 
     let format = body.get("format").and_then(|v| v.as_str()).unwrap_or("webp");
+    if format != "webp" && format != "avif" {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Format must be 'webp' or 'avif'"}))));
+    }
     let quality = body.get("quality").and_then(|v| v.as_u64()).unwrap_or(80);
     let quality = quality.clamp(1, 100);
 

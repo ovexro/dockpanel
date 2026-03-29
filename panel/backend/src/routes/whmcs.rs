@@ -41,10 +41,16 @@ pub async fn get_config(
 
     match config {
         Some((url, ident, prov, susp, term, webhook)) => {
+            // Mask API identifier (show only first 4 + last 4 chars)
+            let masked_ident = if ident.len() > 8 {
+                format!("{}...{}", &ident[..4], &ident[ident.len()-4..])
+            } else {
+                "*".repeat(ident.len())
+            };
             Ok(Json(serde_json::json!({
                 "configured": true,
                 "api_url": url,
-                "api_identifier": ident,
+                "api_identifier": masked_ident,
                 "auto_provision": prov,
                 "auto_suspend": susp,
                 "auto_terminate": term,
@@ -151,12 +157,18 @@ pub async fn webhook(
     let (secret, auto_provision, auto_suspend, auto_terminate) = config
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "WHMCS not configured"))?;
 
-    if let Some(ref expected) = secret {
-        let provided = body.secret.as_deref().unwrap_or("");
-        // Constant-time comparison to prevent timing attacks
-        use subtle::ConstantTimeEq;
-        if provided.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() != 1 {
-            return Err(err(StatusCode::UNAUTHORIZED, "Invalid webhook secret"));
+    match secret {
+        Some(ref expected) => {
+            let provided = body.secret.as_deref().unwrap_or("");
+            // Constant-time comparison to prevent timing attacks
+            use subtle::ConstantTimeEq;
+            if provided.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() != 1 {
+                return Err(err(StatusCode::UNAUTHORIZED, "Invalid webhook secret"));
+            }
+        }
+        None => {
+            // Reject webhooks when no secret is configured (prevents open-access window)
+            return Err(err(StatusCode::UNAUTHORIZED, "Webhook secret not configured"));
         }
     }
 

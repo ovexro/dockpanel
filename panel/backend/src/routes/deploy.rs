@@ -355,18 +355,9 @@ pub async fn webhook(
     .map_err(|e| internal_error("webhook", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Invalid webhook"))?;
 
-    // Constant-time secret comparison: hash both and compare the hashes
-    let provided_hash = {
-        let mut h = Sha256::new();
-        h.update(secret.as_bytes());
-        h.finalize()
-    };
-    let stored_hash = {
-        let mut h = Sha256::new();
-        h.update(config.webhook_secret.as_bytes());
-        h.finalize()
-    };
-    if provided_hash != stored_hash {
+    // Constant-time secret comparison using subtle crate
+    use subtle::ConstantTimeEq;
+    if secret.as_bytes().ct_eq(config.webhook_secret.as_bytes()).unwrap_u8() != 1 {
         // Record failed attempt
         {
             let mut attempts = state.webhook_attempts.lock().unwrap_or_else(|e| e.into_inner());
@@ -477,10 +468,15 @@ async fn execute_deploy(
         .flatten();
 
         if let Some((filename,)) = latest_backup {
-            let restore_path = format!("/backups/{}/restore/{}", domain, filename);
-            match agent.post(&restore_path, None::<serde_json::Value>).await {
-                Ok(_) => tracing::info!("Auto-rollback: restored {filename} for {domain} after failed deploy"),
-                Err(e) => tracing::warn!("Auto-rollback failed for {domain}: {e}"),
+            // Validate filename has no path separators or traversal
+            if filename.contains('/') || filename.contains("..") || filename.contains('\0') {
+                tracing::warn!("Auto-rollback: suspicious backup filename '{filename}' for {domain}, skipping");
+            } else {
+                let restore_path = format!("/backups/{}/restore/{}", domain, filename);
+                match agent.post(&restore_path, None::<serde_json::Value>).await {
+                    Ok(_) => tracing::info!("Auto-rollback: restored {filename} for {domain} after failed deploy"),
+                    Err(e) => tracing::warn!("Auto-rollback failed for {domain}: {e}"),
+                }
             }
         } else {
             tracing::warn!("Auto-rollback: no backup found for {domain}, skipping restore");

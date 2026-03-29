@@ -1646,7 +1646,8 @@ pub async fn activity_ping(
     AuthUser(_claims): AuthUser,
     Path(container_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    if container_id.len() > 64 {
+    if container_id.is_empty() || container_id.len() > 64
+        || !container_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.') {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
     }
 

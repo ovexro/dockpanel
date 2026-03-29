@@ -470,7 +470,10 @@ pub async fn test_credentials(
                 .timeout(std::time::Duration::from_secs(10))
                 .send()
                 .await
-                .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Connection failed: {e}")))?;
+                .map_err(|e| {
+                    tracing::warn!("CDN credentials test failed: {e}");
+                    err(StatusCode::BAD_GATEWAY, "CDN API connection failed")
+                })?;
 
             if resp.status().is_success() {
                 Ok(Json(serde_json::json!({ "ok": true, "message": "BunnyCDN API key is valid" })))
@@ -487,7 +490,10 @@ pub async fn test_credentials(
                 .timeout(std::time::Duration::from_secs(10))
                 .send()
                 .await
-                .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Connection failed: {e}")))?;
+                .map_err(|e| {
+                    tracing::warn!("CDN credentials test failed: {e}");
+                    err(StatusCode::BAD_GATEWAY, "CDN API connection failed")
+                })?;
 
             let body: serde_json::Value = resp.json().await.unwrap_or_default();
             let success = body.get("success").and_then(|v| v.as_bool()).unwrap_or(false);

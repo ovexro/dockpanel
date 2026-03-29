@@ -37,7 +37,7 @@ pub async fn info(
     let resp: serde_json::Value = agent
         .get(&format!("/wordpress/{domain}/info"))
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
+        .map_err(|e| { tracing::warn!("WordPress info failed for {domain}: {e}"); err(StatusCode::BAD_GATEWAY, "WordPress service unavailable") })?;
 
     // Also get auto-update status
     let auto: serde_json::Value = agent
@@ -96,7 +96,7 @@ pub async fn plugins(
     let resp: serde_json::Value = agent
         .get(&format!("/wordpress/{domain}/plugins"))
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
+        .map_err(|e| { tracing::warn!("WordPress plugins failed for {domain}: {e}"); err(StatusCode::BAD_GATEWAY, "WordPress service unavailable") })?;
 
     Ok(Json(resp))
 }
@@ -113,7 +113,7 @@ pub async fn themes(
     let resp: serde_json::Value = agent
         .get(&format!("/wordpress/{domain}/themes"))
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
+        .map_err(|e| { tracing::warn!("WordPress themes failed for {domain}: {e}"); err(StatusCode::BAD_GATEWAY, "WordPress service unavailable") })?;
 
     Ok(Json(resp))
 }
@@ -313,6 +313,10 @@ pub async fn bulk_update(
             StatusCode::BAD_REQUEST,
             "Target must be plugins, themes, core, or all",
         ));
+    }
+
+    if body.site_ids.len() > 50 {
+        return Err(err(StatusCode::BAD_REQUEST, "Maximum 50 sites per bulk update"));
     }
 
     let mut results = Vec::new();
