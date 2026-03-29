@@ -1022,7 +1022,7 @@ export default function Dashboard() {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-dark-600">
                 {bookmarks.map((bm, i) => (
                   <div key={i} className="bg-dark-800 px-3 py-2.5 flex items-center justify-between group">
-                    <a href={/^https?:\/\//i.test(bm.url) ? bm.url : /^\/[^/]/.test(bm.url) ? bm.url : "#"} target="_blank" rel="noopener noreferrer" className="text-xs text-dark-100 hover:text-rust-400 truncate">{bm.label}</a>
+                    <a href={(() => { const u = String(bm.url || ''); return /^https?:\/\//i.test(u) ? u : /^\/[^/]/.test(u) ? u : '#'; })()} target="_blank" rel="noopener noreferrer" className="text-xs text-dark-100 hover:text-rust-400 truncate">{String(bm.label || '')}</a>
                     <button onClick={() => {
                       const next = bookmarks.filter((_, j) => j !== i);
                       setBookmarks(next);
