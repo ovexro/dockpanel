@@ -31,23 +31,23 @@ export default function TermsOfService() {
             <p className="mt-2">
               DockPanel is free, open-source software licensed under the{' '}
               <a
-                href="https://opensource.org/licenses/MIT"
+                href="https://github.com/ovexro/dockpanel/blob/main/LICENSE"
                 className="text-emerald-400 underline underline-offset-2 transition hover:text-emerald-300"
                 target="_blank"
                 rel="noopener noreferrer"
               >
-                MIT License
+                Business Source License 1.1
               </a>
-              . By using DockPanel, you agree to the following terms.
+              {' '}(which converts to MIT on 2030-03-25). By using DockPanel, you agree to the following terms.
             </p>
           </section>
 
           <section>
             <h2 className="text-lg font-semibold text-white">License</h2>
             <p className="mt-2">
-              DockPanel is released under the MIT License. You are free to use, copy, modify, merge,
-              publish, distribute, sublicense, and/or sell copies of the software, subject to the conditions
-              of the MIT License. The full license text is available in the{' '}
+              DockPanel is released under the Business Source License 1.1 (BSL 1.1). You are free to use,
+              copy, modify, and self-host the software for non-production or evaluation purposes. The license
+              converts to MIT on 2030-03-25. The full license text is available in the{' '}
               <a
                 href="https://github.com/ovexro/dockpanel/blob/main/LICENSE"
                 className="text-emerald-400 underline underline-offset-2 transition hover:text-emerald-300"

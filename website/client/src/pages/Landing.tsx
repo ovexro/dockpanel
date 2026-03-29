@@ -259,7 +259,7 @@ export default function Landing() {
           <div className="text-center max-w-3xl mx-auto mb-20">
             <h2 className="text-3xl md:text-5xl font-bold text-white mb-6 tracking-tight">A massive feature set. Zero monthly fees.</h2>
             <p className="text-lg text-zinc-400">
-              25 integrated systems. 371 API endpoints. Features that competitors charge $8-15/month for — Git deploy, multi-server, reseller accounts, Docker orchestration, WordPress toolkit — all included for free. Built in Rust, not legacy PHP.
+              25 integrated systems. 711 API endpoints. Features that competitors charge $8-15/month for — Git deploy, multi-server, reseller accounts, Docker orchestration, WordPress toolkit — all included for free. Built in Rust, not legacy PHP.
             </p>
           </div>
 
@@ -389,7 +389,7 @@ export default function Landing() {
             <h2 className="text-sm font-bold text-emerald-400 uppercase tracking-widest mb-2">Pricing</h2>
             <h3 className="text-3xl md:text-5xl font-bold text-white tracking-tight mb-6">Free. Forever. Everything included.</h3>
             <p className="text-lg text-zinc-400">
-              No "starter" tier. No "upgrade for multi-server." No "contact sales for reseller." Every single feature — all 25 systems, all 371 endpoints, all 54 templates — is free and open source under MIT. This is the panel that paid alternatives don't want you to find.
+              No "starter" tier. No "upgrade for multi-server." No "contact sales for reseller." Every single feature — all 25 systems, all 711 endpoints, all 151 templates — is free and open source under the BSL 1.1 license (converts to MIT in 2030). This is the panel that paid alternatives don't want you to find.
             </p>
           </div>
 
@@ -426,7 +426,7 @@ export default function Landing() {
                   <ul className="grid grid-cols-1 sm:grid-cols-2 gap-y-4 gap-x-6 text-sm text-zinc-300">
                     {[
                       'Unlimited servers', 'Unlimited sites', 'Free SSL certificates',
-                      'Database management + SQL browser', '54 Docker app templates',
+                      'Database management + SQL browser', '151 Docker app templates',
                       'Backup orchestrator (DB, volumes, encryption, verification)', 'Web terminal & file manager',
                       'Git deploy with zero-downtime', 'Nixpacks auto-build (30+ languages)',
                       'Preview environments with TTL', 'DNS management (CF + PowerDNS)',
@@ -548,7 +548,7 @@ export default function Landing() {
 
           <div className="border-t border-zinc-800 pt-8 flex flex-col md:flex-row items-center justify-between gap-4">
             <p className="text-zinc-500 text-sm">
-              &copy; 2026 DockPanel. Free &amp; open source under the MIT License.
+              &copy; 2026 DockPanel. Free &amp; open source under the BSL 1.1 License.
             </p>
           </div>
         </div>
