@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/screenshots/dp-apps.png" alt="DockPanel Docker Apps" width="800">
+  <img src=".github/screenshots/dp-dashboard.png" alt="DockPanel Dashboard" width="800">
 </p>
 
 <h1 align="center">DockPanel</h1>
@@ -53,12 +53,22 @@ No other free panel gives you Git push-to-deploy with blue-green zero-downtime u
 
 ## Screenshots
 
-All screenshots use the **Clean** (light) theme.
+<details>
+<summary><strong>Dashboard</strong> — Live server metrics, 24h graphs, site overview, recent activity</summary>
+
+![Dashboard](.github/screenshots/dp-dashboard.png)
+</details>
 
 <details>
 <summary><strong>Sites</strong> — Static, PHP, Node.js, Python, reverse proxy with Nginx + SSL</summary>
 
 ![Sites](.github/screenshots/dp-sites.png)
+</details>
+
+<details>
+<summary><strong>Site Detail</strong> — SSL, WAF, file manager, terminal, backups, resource limits, custom nginx</summary>
+
+![Site Detail](.github/screenshots/dp-site-detail.png)
 </details>
 
 <details>
@@ -68,33 +78,27 @@ All screenshots use the **Clean** (light) theme.
 </details>
 
 <details>
-<summary><strong>Backup Orchestrator</strong> — DB/volume backups, AES-256 encryption, restore verification, policies</summary>
+<summary><strong>Databases</strong> — MySQL/PostgreSQL, SQL browser, schema viewer, point-in-time recovery</summary>
 
-![Backup Orchestrator](.github/screenshots/dp-backups.png)
+![Databases](.github/screenshots/dp-databases.png)
 </details>
 
 <details>
-<summary><strong>Secrets Manager</strong> — AES-256-GCM encrypted vaults, version history, auto-inject to .env</summary>
+<summary><strong>File Manager</strong> — Browse, edit, upload files from the browser</summary>
 
-![Secrets Manager](.github/screenshots/dp-secrets.png)
+![File Manager](.github/screenshots/dp-file-manager.png)
 </details>
 
 <details>
-<summary><strong>Webhook Gateway</strong> — Inbound endpoints, HMAC verification, request inspector, route builder</summary>
+<summary><strong>Terminal</strong> — Full SSH in the browser with tabs, themes, session recording</summary>
 
-![Webhook Gateway](.github/screenshots/dp-webhooks.png)
+![Terminal](.github/screenshots/dp-terminal.png)
 </details>
 
 <details>
-<summary><strong>Incident Management</strong> — Full lifecycle, severity levels, timeline, affected components</summary>
+<summary><strong>Git Deploy</strong> — Push-to-deploy, atomic zero-downtime deploys, preview environments</summary>
 
-![Incident Management](.github/screenshots/dp-incidents.png)
-</details>
-
-<details>
-<summary><strong>Public Status Page</strong> — Standalone dark-themed page, component groups, email subscribers</summary>
-
-![Public Status Page](.github/screenshots/dp-status-page.png)
+![Git Deploy](.github/screenshots/dp-git-deploy.png)
 </details>
 
 <details>
@@ -104,33 +108,51 @@ All screenshots use the **Clean** (light) theme.
 </details>
 
 <details>
-<summary><strong>Security</strong> — Firewall, Fail2Ban, SSH hardening, vulnerability scanning</summary>
+<summary><strong>Security</strong> — Firewall, Fail2Ban, SSH hardening, vulnerability scanning, audit logs</summary>
 
-*Screenshot coming soon.*
+![Security](.github/screenshots/dp-security.png)
 </details>
 
 <details>
-<summary><strong>DNS Management</strong> — Cloudflare + PowerDNS, zone templates, propagation checker</summary>
+<summary><strong>Backups</strong> — Scheduled backups, S3/SFTP destinations, Restic incremental, one-click restore</summary>
 
-*Screenshot coming soon.*
+![Backups](.github/screenshots/dp-backups.png)
+</details>
+
+<details>
+<summary><strong>DNS</strong> — Cloudflare + PowerDNS, zone management, cache purge, security settings</summary>
+
+![DNS](.github/screenshots/dp-dns.png)
 </details>
 
 <details>
 <summary><strong>Mail</strong> — Postfix + Dovecot + DKIM, Roundcube webmail, Rspamd spam filter</summary>
 
-*Screenshot coming soon.*
+![Mail](.github/screenshots/dp-email.png)
 </details>
 
 <details>
-<summary><strong>Terminal</strong> — Full SSH in the browser with tabs, themes, session recording</summary>
+<summary><strong>Cron Jobs</strong> — Scheduled tasks with output logging</summary>
 
-*Screenshot coming soon.*
+![Cron Jobs](.github/screenshots/dp-crons.png)
 </details>
 
 <details>
-<summary><strong>Settings</strong> — Auto-healing, reverse proxy choice, timezone, notifications</summary>
+<summary><strong>System</strong> — Services, updates, diagnostics, auto-healing</summary>
+
+![System](.github/screenshots/dp-system.png)
+</details>
+
+<details>
+<summary><strong>Settings</strong> — Branding, notifications, alert channels, account security</summary>
 
 ![Settings](.github/screenshots/dp-settings.png)
+</details>
+
+<details>
+<summary><strong>Login</strong> — Email/password + passkey (WebAuthn) support</summary>
+
+![Login](.github/screenshots/dp-login.png)
 </details>
 
 ## Features
