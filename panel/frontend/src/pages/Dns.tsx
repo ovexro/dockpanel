@@ -262,7 +262,8 @@ export default function Dns() {
     if (!selectedZone || records.length === 0) return;
     let output = `; Zone file for ${selectedZone.domain}\n; Exported from DockPanel\n\n$ORIGIN ${selectedZone.domain}.\n$TTL 3600\n\n`;
     records.forEach(r => {
-      const shortName = r.name.replace(new RegExp(`\\.?${selectedZone.domain.replace(/\./g, '\\.')}\\.?$`), '') || '@';
+      const escapedDomain = selectedZone.domain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const shortName = r.name.replace(new RegExp(`\\.?${escapedDomain}\\.?$`), '') || '@';
       const pri = r.priority != null ? `\t${r.priority}` : '';
       output += `${shortName}\t${r.ttl}\tIN\t${r.type}${pri}\t${r.content}\n`;
     });
