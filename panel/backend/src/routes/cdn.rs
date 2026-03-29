@@ -267,6 +267,30 @@ pub async fn purge_cache(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let zone = get_zone(&state, id, claims.sub).await?;
 
+    // Validate purge URLs belong to this zone's domain (prevent SSRF)
+    if let Some(ref urls) = body.urls {
+        if urls.len() > 100 {
+            return Err(err(StatusCode::BAD_REQUEST, "Maximum 100 URLs per purge request"));
+        }
+        for u in urls {
+            if let Ok(parsed) = url::Url::parse(u) {
+                let host = parsed.host_str().unwrap_or("");
+                if !host.ends_with(&zone.domain) && host != zone.domain {
+                    return Err(err(StatusCode::BAD_REQUEST, "Purge URL does not match zone domain"));
+                }
+            } else {
+                return Err(err(StatusCode::BAD_REQUEST, "Invalid purge URL"));
+            }
+        }
+    }
+
+    // Validate pull_zone_id format (alphanumeric/hex only)
+    if let Some(ref pzid) = zone.pull_zone_id {
+        if !pzid.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err(err(StatusCode::BAD_REQUEST, "Invalid pull zone ID format"));
+        }
+    }
+
     match zone.provider.as_str() {
         "bunnycdn" => {
             let pull_zone_id = zone.pull_zone_id.as_deref()

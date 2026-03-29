@@ -285,19 +285,43 @@ async fn db_backup() -> Result<Json<serde_json::Value>, ApiErr> {
     let ts = chrono::Utc::now().format("%Y%m%d_%H%M%S");
     let filename = format!("{backup_dir}/dockpanel-db-{ts}.sql.gz");
 
-    // pg_dump via Docker exec, piped to gzip
-    let output = safe_command("sh")
-        .args(["-c", &format!(
-            "docker exec dockpanel-postgres pg_dump -U dockpanel dockpanel | gzip > {filename}"
-        )])
+    // pg_dump via Docker exec, capture output, then compress with gzip subprocess
+    // No shell interpolation — all args passed directly
+    let dump_output = safe_command("docker")
+        .args(["exec", "dockpanel-postgres", "pg_dump", "-U", "dockpanel", "dockpanel"])
         .output()
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("pg_dump failed: {e}")))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    if !dump_output.status.success() {
+        let stderr = String::from_utf8_lossy(&dump_output.stderr);
         return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("pg_dump failed: {stderr}")));
     }
+
+    // Compress via gzip subprocess (stdin/stdout, no shell needed)
+    let mut gzip_child = safe_command("gzip")
+        .args(["-c"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("gzip spawn: {e}")))?;
+
+    if let Some(mut stdin) = gzip_child.stdin.take() {
+        use tokio::io::AsyncWriteExt;
+        stdin.write_all(&dump_output.stdout).await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("gzip write: {e}")))?;
+        drop(stdin);
+    }
+
+    let gzip_output = gzip_child.wait_with_output().await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("gzip wait: {e}")))?;
+
+    if !gzip_output.status.success() {
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, "gzip compression failed"));
+    }
+
+    tokio::fs::write(&filename, &gzip_output.stdout).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("write backup: {e}")))?;
 
     // Cleanup old backups (keep last 7 days)
     if let Ok(entries) = std::fs::read_dir(backup_dir) {

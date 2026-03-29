@@ -144,23 +144,10 @@ fn generate_challenge() -> Vec<u8> {
     challenge
 }
 
-/// Extract the RP ID from the request's Origin header (most reliable) or fall back to BASE_URL.
-/// The RP ID is just the hostname (e.g. "demo.dockpanel.dev"), not a full URL.
+/// Extract the RP ID for WebAuthn. Prefers server-side BASE_URL config (trusted) over
+/// client-controlled headers to prevent RP ID manipulation by attackers.
 fn get_rp_id_from_headers(headers: &axum::http::HeaderMap, state: &AppState) -> String {
-    // Try Origin header first (set by browser on all WebAuthn calls)
-    if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
-        if let Ok(parsed) = url::Url::parse(origin) {
-            if let Some(host) = parsed.host_str() {
-                return host.to_string();
-            }
-        }
-    }
-    // Try Host header
-    if let Some(host) = headers.get("host").and_then(|v| v.to_str().ok()) {
-        // Strip port if present
-        return host.split(':').next().unwrap_or(host).to_string();
-    }
-    // Fall back to BASE_URL config
+    // Prefer server-side BASE_URL (trusted, not client-controlled)
     if !state.config.base_url.is_empty() {
         if let Ok(parsed) = url::Url::parse(&state.config.base_url) {
             if let Some(host) = parsed.host_str() {
@@ -168,18 +155,32 @@ fn get_rp_id_from_headers(headers: &axum::http::HeaderMap, state: &AppState) -> 
             }
         }
     }
+    // Fall back to Origin header only if BASE_URL is not configured
+    if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
+        if let Ok(parsed) = url::Url::parse(origin) {
+            if let Some(host) = parsed.host_str() {
+                return host.to_string();
+            }
+        }
+    }
+    // Last resort: Host header
+    if let Some(host) = headers.get("host").and_then(|v| v.to_str().ok()) {
+        return host.split(':').next().unwrap_or(host).to_string();
+    }
     "localhost".to_string()
 }
 
 /// Extract the origin URL from the request's Origin header.
+/// Extract the origin URL. Prefers server-side BASE_URL over client headers.
 fn get_rp_origin_from_headers(headers: &axum::http::HeaderMap, state: &AppState) -> String {
-    if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
-        return origin.trim_end_matches('/').to_string();
-    }
+    // Prefer server-side BASE_URL (trusted)
     if !state.config.base_url.is_empty() {
         return state.config.base_url.trim_end_matches('/').to_string();
     }
-    // Construct from Host header
+    // Fall back to Origin header only if BASE_URL not configured
+    if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
+        return origin.trim_end_matches('/').to_string();
+    }
     if let Some(host) = headers.get("host").and_then(|v| v.to_str().ok()) {
         return format!("https://{}", host.split(':').next().unwrap_or(host));
     }

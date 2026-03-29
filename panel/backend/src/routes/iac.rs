@@ -121,6 +121,7 @@ pub async fn tf_list_sites(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
     let sites: Vec<(uuid::Uuid, String, String, String, bool, chrono::DateTime<chrono::Utc>)> =
         sqlx::query_as(
             "SELECT id, domain, runtime, status, ssl_enabled, created_at \
@@ -146,6 +147,7 @@ pub async fn tf_list_databases(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
     let dbs: Vec<(uuid::Uuid, String, String, Option<i32>, chrono::DateTime<chrono::Utc>)> =
         sqlx::query_as(
             "SELECT d.id, d.name, d.engine, d.port, d.created_at \

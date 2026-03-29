@@ -68,7 +68,7 @@ async fn file_upload(
     let full_path = if domain == "_server" {
         // Server-level upload: validate no traversal manually
         let p = format!("/{}", body.path.trim_start_matches('/'));
-        if p.contains("..") {
+        if p.contains("..") || p.contains('\0') {
             return Err(err(StatusCode::BAD_REQUEST, "Path traversal not allowed"));
         }
         // Only allow uploads to specific directories
@@ -84,7 +84,22 @@ async fn file_upload(
         if !allowed {
             return Err(err(StatusCode::BAD_REQUEST, "Upload path not in allowed directories"));
         }
-        std::path::PathBuf::from(&p)
+        // Canonicalize parent to resolve symlinks, then re-check prefix
+        let path_buf = std::path::PathBuf::from(&p);
+        if let Some(parent) = path_buf.parent() {
+            if parent.exists() {
+                if let Ok(canon) = parent.canonicalize() {
+                    let canon_str = canon.to_string_lossy();
+                    let still_allowed = ALLOWED_SERVER_PATHS.iter().any(|prefix| {
+                        canon_str.starts_with(prefix.trim_end_matches('/'))
+                    });
+                    if !still_allowed {
+                        return Err(err(StatusCode::BAD_REQUEST, "Resolved path not in allowed directories"));
+                    }
+                }
+            }
+        }
+        path_buf
     } else {
         // Site upload: use resolve_safe_path to prevent TOCTOU race
         file_svc::resolve_safe_path(&domain, &body.path)
@@ -151,8 +166,23 @@ async fn add_ssh_key(
     Json(body): Json<AddKeyRequest>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
     let key = body.key.trim();
+    // Reject embedded newlines (prevents multi-key injection)
+    if key.contains('\n') || key.contains('\r') || key.contains('\0') {
+        return Err(err(StatusCode::BAD_REQUEST, "SSH key must be a single line"));
+    }
+    // Validate key format: must start with a known key type prefix
     if !key.starts_with("ssh-") && !key.starts_with("ecdsa-") && !key.starts_with("sk-") {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid SSH key format"));
+    }
+    // Validate structure: should have at least 2 space-separated parts (type + base64)
+    let parts: Vec<&str> = key.split_whitespace().collect();
+    if parts.len() < 2 || parts[1].len() < 16 {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid SSH key: missing key data"));
+    }
+    // Reject keys with authorized_keys options prefix (e.g. command=, from=, restrict)
+    if key.contains("command=") || key.contains("from=") || key.contains("restrict")
+        || key.contains("no-pty") || key.contains("permitopen") {
+        return Err(err(StatusCode::BAD_REQUEST, "SSH key options not allowed"));
     }
 
     let path = "/root/.ssh/authorized_keys";
