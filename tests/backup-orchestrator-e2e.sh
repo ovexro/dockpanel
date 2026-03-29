@@ -4,7 +4,7 @@
 # Tests database backups, volume backups, encryption, verification, and policies.
 #
 # Usage: bash tests/backup-orchestrator-e2e.sh <host> [port]
-# Example: bash tests/backup-orchestrator-e2e.sh 78.141.211.78 8443
+# Example: bash tests/backup-orchestrator-e2e.sh 203.0.113.10 8443
 #
 set -uo pipefail
 

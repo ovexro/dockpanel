@@ -3,7 +3,7 @@
 # DockPanel Incident Management + Status Page E2E Test Suite
 #
 # Usage: bash tests/incident-management-e2e.sh <host> [port]
-# Example: bash tests/incident-management-e2e.sh 78.141.211.78 8443
+# Example: bash tests/incident-management-e2e.sh 203.0.113.10 8443
 #
 set -uo pipefail
 
