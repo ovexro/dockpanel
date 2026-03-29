@@ -10,11 +10,11 @@
 | Feature | Description | Backend | Agent | Frontend | DB Tables |
 |---------|-------------|---------|-------|----------|-----------|
 | **Sites** | Static, PHP (8.1-8.4), Node.js, Python sites with nginx. Domain rename, auto-firewall for proxy ports, Laravel auto-migrations | `routes/sites.rs`, `ssl.rs`, `files.rs`, `deploy.rs` | `nginx.rs`, `php.rs`, `ssl.rs`, `files.rs`, `cms.rs` | `Sites.tsx`, `SiteDetail.tsx`, `Files.tsx` | `sites` |
-| **Databases** | MySQL/PostgreSQL via Docker, SQL browser, schema viewer | `routes/databases.rs` | `database.rs` | `Databases.tsx` | `databases` |
+| **Databases** | MySQL/PostgreSQL via Docker, SQL browser, schema viewer, password reset | `routes/databases.rs` | `database.rs` | `Databases.tsx` | `databases` |
 | **Backups** | Scheduled backups, S3/SFTP/B2/GCS remote storage, one-click restore | `routes/backups.rs`, `backup_schedules.rs`, `backup_destinations.rs` | `backups.rs`, `remote_backup.rs` | `Backups.tsx` | `backups`, `backup_schedules`, `backup_destinations` |
 | **Backup Orchestrator** | DB/volume/site backups, AES-256 encryption, restore verification, policies, health dashboard, auto-verifier | `routes/backup_orchestrator.rs` | `database_backup.rs`, `volume_backup.rs`, `encryption.rs`, `backup_verify.rs` | `BackupOrchestrator.tsx` | `backup_policies`, `database_backups`, `volume_backups`, `backup_verifications` |
 | **Webhook Gateway** | Receive, inspect, route, replay webhooks. HMAC-SHA256/SHA1 verification, JSON path filtering, retry with backoff, delivery logging | `routes/webhook_gateway.rs` | — | `WebhookGateway.tsx` | `webhook_endpoints`, `webhook_deliveries`, `webhook_routes` |
-| **Secrets Manager** | AES-256-GCM encrypted vaults, version history, auto-inject to .env, masked API, pull for CLI | `routes/secrets.rs`, `services/secrets_crypto.rs` | — | `SecretsManager.tsx` | `secret_vaults`, `secrets`, `secret_versions` |
+| **Secrets Manager** | AES-256-GCM encrypted vaults, version history, auto-inject to .env, masked API, pull for CLI, vault rename | `routes/secrets.rs`, `services/secrets_crypto.rs` | — | `SecretsManager.tsx` | `secret_vaults`, `secrets`, `secret_versions` |
 | **Incident Management** | Incident lifecycle (investigating→resolved→postmortem), timeline updates, severity, affected components, postmortem | `routes/incidents.rs` | — | `IncidentManagement.tsx` | `managed_incidents`, `incident_updates`, `managed_incident_components` |
 | **Public Status Page** | Customizable status page with component groups, incident history, subscriber notifications, overall status | `routes/incidents.rs` | — | `PublicStatusPage.tsx` | `status_page_config`, `status_page_components`, `status_page_subscribers` |
 | **Cron Jobs** | Cron scheduling with manual execution and history | `routes/crons.rs` | `crons.rs` | `Crons.tsx` | (via agent crontab) |
@@ -53,7 +53,7 @@
 |---------|-------------|---------|-------|----------|--------------------|
 | **Dashboard** | Live CPU/RAM/disk/network, Docker summary, health score | `routes/dashboard.rs` | — | `Dashboard.tsx` | — |
 | **Metrics** | Historical charts (24h), WebSocket live data | `routes/metrics.rs`, `ws_metrics.rs` | `system.rs` | (in Dashboard) | `metrics_collector.rs` |
-| **Alerts** | CPU/mem/disk thresholds, SSL expiry, service health | `routes/alerts.rs` | — | (in Monitoring) | `alert_engine.rs` |
+| **Alerts** | CPU/mem/disk thresholds, SSL expiry, service health, per-type muting for external channels | `routes/alerts.rs` | — | (in Settings) | `alert_engine.rs` |
 | **Auto-Healing** | Restart crashed services, clean logs, renew SSL | — | — | (in Settings) | `auto_healer.rs` |
 | **Diagnostics** | 6 check categories, one-click fixes | `routes/system.rs` | `diagnostics.rs` | (in Security) | — |
 | **Traefik** | Alternative reverse proxy, auto-SSL, Docker discovery | `routes/system.rs` | `traefik.rs` | (in Settings) | — |
