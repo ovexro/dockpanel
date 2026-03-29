@@ -211,7 +211,7 @@ pub async fn list_policies(
     AuthUser(claims): AuthUser,
 ) -> Result<Json<Vec<BackupPolicy>>, ApiError> {
     let policies: Vec<BackupPolicy> = sqlx::query_as(
-        "SELECT * FROM backup_policies WHERE user_id = $1 ORDER BY created_at DESC"
+        "SELECT * FROM backup_policies WHERE user_id = $1 ORDER BY created_at DESC LIMIT 500"
     )
     .bind(claims.sub)
     .fetch_all(&state.db)

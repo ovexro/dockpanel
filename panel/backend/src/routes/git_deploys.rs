@@ -2363,7 +2363,7 @@ pub async fn list_previews(
 ) -> Result<Json<Vec<GitPreview>>, ApiError> {
     require_admin(&claims.role)?;
     let previews: Vec<GitPreview> = sqlx::query_as(
-        "SELECT p.* FROM git_previews p JOIN git_deploys g ON p.git_deploy_id = g.id WHERE g.id = $1 AND g.user_id = $2 ORDER BY p.created_at DESC"
+        "SELECT p.* FROM git_previews p JOIN git_deploys g ON p.git_deploy_id = g.id WHERE g.id = $1 AND g.user_id = $2 ORDER BY p.created_at DESC LIMIT 500"
     ).bind(id).bind(claims.sub).fetch_all(&state.db).await
         .map_err(|e| internal_error("list previews", e))?;
     Ok(Json(previews))

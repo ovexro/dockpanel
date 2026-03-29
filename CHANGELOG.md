@@ -39,9 +39,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Terraform/Pulumi IaC provider API (scoped tokens, resource listing)
 - Horizontal auto-scaling (rule-based CPU thresholds, min/max replicas, cooldown)
 
+### Added — Infrastructure
+- Telemetry & diagnostics: local event collection, opt-in remote sending, PII stripping (19 patterns)
+- Update checker: GitHub Releases API polling every 6h, dashboard banner, release notes display
+
 ### Fixed
 - Agent token desync on fresh install — agent now prefers AGENT_TOKEN env var over file
 - WebAuthn RP ID defaulted to "localhost" when BASE_URL unset — now derived from request Origin header
+- Sidebar NavLink prefix matching: exact route matching on all layouts
+- 5 unbounded SQL queries now have LIMIT 500 (webhook_endpoints, pending_users, servers, backup_policies, git_previews)
+- Dependabot: picomatch 4.0.3→4.0.4, path-to-regexp 8.3.0→8.4.0 (website dependencies)
 
 ## [2.6.6] - 2026-03-27
 

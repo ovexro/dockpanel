@@ -45,7 +45,7 @@ pub async fn list(
     AuthUser(claims): AuthUser,
 ) -> Result<Json<Vec<Server>>, ApiError> {
     let servers: Vec<Server> =
-        sqlx::query_as("SELECT * FROM servers WHERE user_id = $1 ORDER BY is_local DESC, created_at DESC")
+        sqlx::query_as("SELECT * FROM servers WHERE user_id = $1 ORDER BY is_local DESC, created_at DESC LIMIT 500")
             .bind(claims.sub)
             .fetch_all(&state.db)
             .await

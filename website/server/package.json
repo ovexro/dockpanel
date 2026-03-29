@@ -25,5 +25,8 @@
     "@types/node": "^25.4.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "path-to-regexp": "^8.4.0"
   }
 }

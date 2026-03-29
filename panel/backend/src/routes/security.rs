@@ -639,7 +639,7 @@ pub async fn pending_users(
     AdminUser(_claims): AdminUser,
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
     let users: Vec<(uuid::Uuid, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT id, email, created_at FROM users WHERE approved = FALSE ORDER BY created_at DESC"
+        "SELECT id, email, created_at FROM users WHERE approved = FALSE ORDER BY created_at DESC LIMIT 500"
     )
     .fetch_all(&state.db)
     .await

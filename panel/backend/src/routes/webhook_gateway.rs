@@ -99,7 +99,7 @@ pub async fn list_endpoints(
     AdminUser(claims): AdminUser,
 ) -> Result<Json<Vec<WebhookEndpoint>>, ApiError> {
     let endpoints: Vec<WebhookEndpoint> = sqlx::query_as(
-        "SELECT * FROM webhook_endpoints WHERE user_id = $1 ORDER BY created_at DESC"
+        "SELECT * FROM webhook_endpoints WHERE user_id = $1 ORDER BY created_at DESC LIMIT 500"
     )
     .bind(claims.sub)
     .fetch_all(&state.db).await
