@@ -4,6 +4,25 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.6.9] - 2026-03-29
+
+### Fixed
+- 7 browser alert() calls replaced with in-page toast/message UI (SiteDetail, Logs, ResellerUsers, Extensions)
+- panic!() on invalid TCP bind (agent) and JWT_SECRET validation (API) replaced with clean exit
+- .unwrap() on server await replaced with error logging in agent and API main
+- Terminal WebSocket resize handler now wrapped in try-catch
+- Dashboard WebSocket cleanup race condition (handlers nulled before close)
+- Metrics WebSocket sends explicit Close frame before disconnect
+- 3 silent .ok() error discards replaced with tracing::warn logging
+- Grafana Docker template default password changed from "admin" to required field
+- Cleanup background task now supervised (auto-restarts on panic)
+- BackupOrchestrator form typed with PolicyForm interface (replaces `any`)
+
+### Added
+- Alert type muting UI in Settings notification channels (suppress per-type from Slack/Discord/PagerDuty)
+- Database password reset endpoint and UI (agent ALTER USER for PostgreSQL/MySQL/MariaDB)
+- Secrets vault rename and description update with inline edit UI
+
 ## [2.6.8] - 2026-03-29
 
 ### Fixed
