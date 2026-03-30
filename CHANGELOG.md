@@ -4,6 +4,36 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.7.0] - 2026-03-30
+
+### Security — Fresh Zero-Assumptions Audit (Audit 6)
+- 6 parallel agents audited 222 Rust + 506 TypeScript files from scratch
+- 33 findings fixed across 24 files (11 HIGH, 22 MEDIUM)
+- MySQL password reset: fixed SQL injection via wrong quote escaping
+- Deploy script: added `is_safe_shell_command()` validation before agent forwarding
+- Laravel migration: replaced shell interpolation with dedicated safe agent endpoint
+- Terminal: sanitized uploaded filename before shell echo
+- CSRF: added `X-Requested-With` header enforcement on all mutating cookie-auth requests
+- Compose YAML: rewrote validator from string matching to parsed AST (serde_yaml_ng)
+- Shell command blocklist: added encoding tools, interpreters, network tools
+- Cron filter: blocked `xxd`, `openssl enc`, `python3 -c`, process substitution
+- Remote agent TLS: default inverted from insecure to strict
+- Agent TCP: refuses `0.0.0.0` bind without explicit `AGENT_ALLOW_INSECURE_BIND=true`
+- Stripe webhook: constant-time HMAC comparison
+- KDF: upgraded from SHA-256 to HKDF with backwards-compatible legacy fallback
+- Symlink attack on security remove_file/quarantine_file: canonicalize before prefix check
+- Mail forward_to/catch_all: email format + CRLF + pipe injection validation
+- SMTP test email: CRLF header injection prevention
+- WordPress plugin/theme: slug validation (alphanumeric + hyphens only)
+- Dashboard intelligence: scoped queries to authenticated user (cross-user leak)
+- Backup paths: traversal validation on agent URL construction
+- Migration: container name validation (DockPanel-managed only)
+- Stack templates: random passwords generated at selection time
+- Unix socket: permissions tightened from 0o660 to 0o600
+- Raw `Command::new()`: replaced 3 instances with `safe_command` (env sanitization)
+- `is_safe_relative_path`: now rejects backslashes and enforces length limit
+- Compose volumes: long-form object syntax now validated (prevents docker.sock bypass)
+
 ## [2.6.9] - 2026-03-29
 
 ### Fixed
