@@ -148,17 +148,31 @@ pub fn decrypt_credential(encrypted_b64: &str, jwt_secret: &str) -> Result<Strin
             .map_err(|e| format!("UTF-8 decode failed: {e}"));
     }
 
-    // Fall back to legacy SHA-256 key
+    // Fall back to legacy SHA-256 key (jwt_secret with credential salt)
     let legacy_key = derive_key_legacy(jwt_secret, b"dockpanel-credential-v1:");
     let legacy_cipher = Aes256Gcm::new_from_slice(&legacy_key)
         .map_err(|e| format!("Cipher init failed: {e}"))?;
 
-    let plaintext = legacy_cipher
-        .decrypt(nonce, ciphertext)
-        .map_err(|_| "Decryption failed (wrong key or corrupted data)".to_string())?;
+    if let Ok(plaintext) = legacy_cipher.decrypt(nonce, ciphertext) {
+        return String::from_utf8(plaintext)
+            .map_err(|e| format!("UTF-8 decode failed: {e}"));
+    }
 
-    String::from_utf8(plaintext)
-        .map_err(|e| format!("UTF-8 decode failed: {e}"))
+    // Fall back to legacy SHA-256 key with SECRETS_ENCRYPTION_KEY env var
+    if let Ok(env_key) = std::env::var("SECRETS_ENCRYPTION_KEY") {
+        if !env_key.is_empty() {
+            let env_legacy_key = derive_key_legacy(&env_key, b"dockpanel-credential-encryption-v1:");
+            let env_legacy_cipher = Aes256Gcm::new_from_slice(&env_legacy_key)
+                .map_err(|e| format!("Cipher init failed: {e}"))?;
+
+            if let Ok(plaintext) = env_legacy_cipher.decrypt(nonce, ciphertext) {
+                return String::from_utf8(plaintext)
+                    .map_err(|e| format!("UTF-8 decode failed: {e}"));
+            }
+        }
+    }
+
+    Err("Decryption failed (wrong key or corrupted data)".to_string())
 }
 
 /// Decrypt a credential, falling back to treating it as plaintext if decryption fails.

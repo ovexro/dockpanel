@@ -245,21 +245,32 @@ pub fn validate_compose_yaml(yaml: &str) -> Result<(), &'static str> {
                 }
             }
 
-            // Block dangerous volume mounts
+            // Block dangerous volume mounts (both short-form string and long-form object syntax)
             if let Some(vols) = svc.get("volumes").and_then(|v| v.as_sequence()) {
                 for vol in vols {
-                    let vol_str = vol.as_str().unwrap_or("");
-                    if vol_str.contains("docker.sock") || vol_str.contains("/var/run/docker") {
+                    // Get the source path from either short-form ("host:container") or long-form ({source: "host"})
+                    let source = if let Some(s) = vol.as_str() {
+                        s.to_string()
+                    } else if let Some(m) = vol.as_mapping() {
+                        m.get(&serde_yaml_ng::Value::String("source".into()))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string()
+                    } else {
+                        String::new()
+                    };
+
+                    if source.contains("docker.sock") || source.contains("/var/run/docker") {
                         return Err("Compose: Docker socket mount is not allowed");
                     }
                     // Block host root mounts
-                    if vol_str.starts_with("/:/") || vol_str.starts_with("/:") {
+                    if source.starts_with("/:/") || source.starts_with("/:") || source == "/" {
                         return Err("Compose: mounting host root is not allowed");
                     }
                     // Block sensitive host paths
                     let sensitive = ["/etc/shadow", "/etc/passwd", "/etc/sudoers", "/root/", "/home/"];
                     for s in &sensitive {
-                        if vol_str.starts_with(s) || vol_str.contains(&format!(":{s}")) {
+                        if source.starts_with(s) || source.contains(&format!(":{s}")) {
                             return Err("Compose: sensitive host path mount is not allowed");
                         }
                     }
