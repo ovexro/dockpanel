@@ -132,6 +132,12 @@ password       {password}
 
 /// Send a test email via msmtp.
 pub async fn send_test(to: &str, from: &str, from_name: &str) -> Result<String, String> {
+    // Reject CRLF injection in email headers
+    for (label, val) in [("to", to), ("from", from), ("from_name", from_name)] {
+        if val.contains('\r') || val.contains('\n') || val.contains('\0') {
+            return Err(format!("{label} must not contain newlines or null bytes"));
+        }
+    }
     let subject = "DockPanel SMTP Test";
     let body = format!(
         "From: {from_name} <{from}>\r\n\

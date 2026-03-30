@@ -112,6 +112,8 @@ pub fn is_safe_relative_path(path: &str) -> bool {
         && !path.contains('\0')
         && !path.contains("..")
         && !path.starts_with('/')
+        && !path.contains('\\')
+        && path.len() <= 4096
 }
 
 /// Validate a shell command string for safety (used for cron, pre_build, post_deploy).
@@ -134,13 +136,47 @@ pub fn is_safe_shell_command(cmd: &str) -> Result<(), &'static str> {
 
     // Block injection patterns
     let dangerous = [
-        "`", "$(", "eval ", "exec ",
+        "`", "$(", "<(", "<<", "eval ", "exec ",
         "|sh", "|bash", "| sh", "| bash",
         ";sh", ";bash", "; sh", "; bash",
+        "/bin/sh", "/bin/bash",
     ];
     for d in &dangerous {
         if lower.contains(d) {
             return Err("Command contains dangerous shell injection pattern");
+        }
+    }
+
+    // Block encoding/decoding bypass tools
+    let encoding = [
+        "base64", "xxd", "openssl enc", "printf '\\x",
+    ];
+    for e in &encoding {
+        if lower.contains(e) {
+            return Err("Command contains encoding bypass tool");
+        }
+    }
+
+    // Block scripting interpreters that can execute arbitrary code
+    let interpreters = [
+        "python -c", "python2 -c", "python3 -c",
+        "perl -e", "perl -E", "ruby -e",
+        "node -e", "php -r",
+        "python -m http", "python3 -m http",
+    ];
+    for i in &interpreters {
+        if lower.contains(i) {
+            return Err("Command contains scripting interpreter with inline code");
+        }
+    }
+
+    // Block network tools
+    let network = [
+        "curl ", "wget ", "nc ", "ncat ", "socat ", "telnet ",
+    ];
+    for n in &network {
+        if lower.contains(n) {
+            return Err("Command contains network exfiltration tool");
         }
     }
 
@@ -171,27 +207,81 @@ pub fn is_safe_shell_command(cmd: &str) -> Result<(), &'static str> {
 }
 
 /// Validate a Docker Compose YAML for dangerous directives.
+/// Parses the YAML into a structured format to prevent bypass via anchors, aliases, or alternate quoting.
 pub fn validate_compose_yaml(yaml: &str) -> Result<(), &'static str> {
-    let lower = yaml.to_lowercase();
+    let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(yaml)
+        .map_err(|_| "Invalid YAML syntax")?;
 
-    // Block container escape vectors
-    let dangerous = [
-        "privileged: true", "privileged:true",
-        "network_mode: host", "network_mode:host", "network_mode: \"host\"",
-        "pid: host", "pid:host", "pid: \"host\"",
-        "ipc: host", "ipc:host",
-        "cap_add:", "- sys_admin", "- sys_ptrace", "- net_admin",
-        "- all",  // cap_add ALL
-        "- /:/",  // mount host root
-        ":/:/", ":/:rw",  // host root volume mounts
-        "- /etc/shadow", "- /etc/passwd",
-        "- /root/", "- /home/",
-        "docker.sock", "/var/run/docker.sock",
-        "security_opt:", "apparmor:unconfined", "seccomp:unconfined",
-    ];
-    for d in &dangerous {
-        if lower.contains(d) {
-            return Err("Compose YAML contains dangerous directive (privileged, host access, or capability escalation)");
+    // Check each service definition
+    if let Some(services) = doc.get("services").and_then(|s| s.as_mapping()) {
+        for (_name, svc) in services {
+            // Block privileged mode
+            if let Some(p) = svc.get("privileged") {
+                if p.as_bool() == Some(true) {
+                    return Err("Compose: privileged mode is not allowed");
+                }
+            }
+
+            // Block dangerous network/pid/ipc modes
+            for key in &["network_mode", "pid", "ipc"] {
+                if let Some(v) = svc.get(*key).and_then(|v| v.as_str()) {
+                    if v == "host" {
+                        return Err("Compose: host namespace sharing is not allowed");
+                    }
+                }
+            }
+
+            // Block dangerous capabilities
+            if let Some(caps) = svc.get("cap_add").and_then(|c| c.as_sequence()) {
+                let dangerous_caps = ["SYS_ADMIN", "SYS_PTRACE", "NET_ADMIN", "ALL",
+                                      "NET_RAW", "SYS_RAWIO", "SYS_MODULE", "DAC_OVERRIDE"];
+                for cap in caps {
+                    if let Some(s) = cap.as_str() {
+                        let upper = s.to_uppercase();
+                        if dangerous_caps.contains(&upper.as_str()) {
+                            return Err("Compose: dangerous capability not allowed");
+                        }
+                    }
+                }
+            }
+
+            // Block dangerous volume mounts
+            if let Some(vols) = svc.get("volumes").and_then(|v| v.as_sequence()) {
+                for vol in vols {
+                    let vol_str = vol.as_str().unwrap_or("");
+                    if vol_str.contains("docker.sock") || vol_str.contains("/var/run/docker") {
+                        return Err("Compose: Docker socket mount is not allowed");
+                    }
+                    // Block host root mounts
+                    if vol_str.starts_with("/:/") || vol_str.starts_with("/:") {
+                        return Err("Compose: mounting host root is not allowed");
+                    }
+                    // Block sensitive host paths
+                    let sensitive = ["/etc/shadow", "/etc/passwd", "/etc/sudoers", "/root/", "/home/"];
+                    for s in &sensitive {
+                        if vol_str.starts_with(s) || vol_str.contains(&format!(":{s}")) {
+                            return Err("Compose: sensitive host path mount is not allowed");
+                        }
+                    }
+                }
+            }
+
+            // Block dangerous security_opt
+            if let Some(opts) = svc.get("security_opt").and_then(|s| s.as_sequence()) {
+                for opt in opts {
+                    if let Some(s) = opt.as_str() {
+                        let lower = s.to_lowercase();
+                        if lower.contains("unconfined") {
+                            return Err("Compose: disabling security profiles is not allowed");
+                        }
+                    }
+                }
+            }
+
+            // Block devices (host device passthrough)
+            if svc.get("devices").is_some() {
+                return Err("Compose: host device passthrough is not allowed");
+            }
         }
     }
 

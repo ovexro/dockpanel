@@ -1452,7 +1452,7 @@ pub fn router() -> Router<AppState> {
 /// GET /apps/gpu-info — Detect available GPUs on the host.
 async fn gpu_info() -> Json<serde_json::Value> {
     // Check if nvidia-smi is available and get GPU info
-    let output = tokio::process::Command::new("nvidia-smi")
+    let output = crate::safe_cmd::safe_command("nvidia-smi")
         .args(["--query-gpu=name,memory.total,driver_version,utilization.gpu", "--format=csv,noheader,nounits"])
         .output()
         .await;
@@ -1472,7 +1472,7 @@ async fn gpu_info() -> Json<serde_json::Value> {
             }).collect();
 
             // Check if NVIDIA Container Toolkit is installed
-            let toolkit = tokio::process::Command::new("nvidia-container-cli")
+            let toolkit = crate::safe_cmd::safe_command("nvidia-container-cli")
                 .arg("--version")
                 .output()
                 .await

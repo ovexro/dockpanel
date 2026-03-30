@@ -12,7 +12,9 @@ async function request<T = unknown>(
   path: string,
   options?: RequestInit
 ): Promise<T> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = {
+    "X-Requested-With": "DockPanel",
+  };
   if (options?.body) headers["Content-Type"] = "application/json";
 
   // Multi-server: attach X-Server-Id header if a server is selected

@@ -7,6 +7,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::{is_valid_domain, AppState};
+use crate::safe_cmd::safe_command;
 use crate::services::deploy;
 
 type ApiErr = (StatusCode, Json<serde_json::Value>);
@@ -256,6 +257,46 @@ async fn activate_release(
     })))
 }
 
+/// POST /sites/{domain}/laravel-migrate — Run Laravel migrations safely.
+/// Uses argument arrays instead of shell interpolation to prevent injection.
+async fn laravel_migrate(
+    Path(domain): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    if !is_valid_domain(&domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain"));
+    }
+
+    let site_dir = format!("/var/www/{domain}");
+    if !std::path::Path::new(&site_dir).exists() {
+        return Err(err(StatusCode::NOT_FOUND, "Site directory not found"));
+    }
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        safe_command("php")
+            .args(["artisan", "migrate", "--force"])
+            .current_dir(&site_dir)
+            .output(),
+    )
+    .await
+    .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Migration timed out"))?
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Migration failed: {e}")))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() {
+        tracing::info!("Laravel migrations completed for {domain}");
+        Ok(Json(serde_json::json!({
+            "success": true,
+            "output": stdout,
+        })))
+    } else {
+        tracing::warn!("Laravel migrations failed for {domain}: {stderr}");
+        Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Migration failed: {stderr}")))
+    }
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/deploy/run", post(run_deploy))
@@ -263,4 +304,5 @@ pub fn router() -> Router<AppState> {
         .route("/deploy/releases/{domain}", get(list_releases))
         .route("/deploy/activate", post(activate_release))
         .route("/deploy/keygen", post(keygen))
+        .route("/sites/{domain}/laravel-migrate", post(laravel_migrate))
 }

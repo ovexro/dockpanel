@@ -13,9 +13,11 @@ const BLOCKED_PATTERNS: &[&str] = &[
     ";sh", ";bash", "; sh", "; bash",
     "`", "$(", "eval ", "exec ",
     // Encoding tricks
-    "base64",
+    "base64", "xxd", "openssl enc", "printf '\\x",
     // Scripting interpreters used for injection (not for legitimate site use)
     "perl", "ruby", "node -e", "php -r",
+    "python -c", "python2 -c", "python3 -c",
+    "python -m http", "python3 -m http",
     // Network exfiltration
     "nc ", "ncat ", "socat ", "telnet ",
     "curl", "wget",
@@ -71,7 +73,9 @@ pub fn is_safe_cron_command(cmd: &str) -> bool {
     }
 
     // Reject shell metacharacters that enable chaining/substitution
-    if cmd.contains('`') || cmd.contains("$(") || cmd.contains("| ") || cmd.contains("|/") {
+    if cmd.contains('`') || cmd.contains("$(") || cmd.contains("| ") || cmd.contains("|/")
+        || cmd.contains("<(") || cmd.contains("<<")
+    {
         return false;
     }
 

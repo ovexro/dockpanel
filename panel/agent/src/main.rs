@@ -177,11 +177,11 @@ async fn main() {
 
     let listener = UnixListener::bind(SOCKET_PATH).expect("Failed to bind Unix socket");
 
-    // Set socket permissions so Docker containers can access it
+    // Set socket permissions — owner-only access (backend runs as same user)
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(SOCKET_PATH, std::fs::Permissions::from_mode(0o660)).ok();
+        std::fs::set_permissions(SOCKET_PATH, std::fs::Permissions::from_mode(0o600)).ok();
     }
 
     // Start phone-home if configured (remote agent mode)
@@ -209,10 +209,14 @@ async fn main() {
     // Multi-server: start TCP listener for remote panel connections
     // Set AGENT_LISTEN_TCP=0.0.0.0:9443 to enable (used by remote agent install)
     if let Ok(tcp_addr) = std::env::var("AGENT_LISTEN_TCP") {
-        tracing::warn!("AGENT_LISTEN_TCP is enabled WITHOUT TLS — agent token is transmitted in plaintext. Use a VPN or reverse proxy with TLS for remote connections.");
         if tcp_addr.starts_with("0.0.0.0") {
-            tracing::warn!("Agent TCP is bound to 0.0.0.0 — accessible from ALL network interfaces. Consider binding to 127.0.0.1 or a specific IP.");
+            tracing::error!("AGENT_LISTEN_TCP bound to 0.0.0.0 without TLS is REFUSED — agent tokens would be sent in plaintext to all interfaces. Use 127.0.0.1 or set up a TLS reverse proxy. Set AGENT_ALLOW_INSECURE_BIND=true to override (NOT recommended).");
+            if std::env::var("AGENT_ALLOW_INSECURE_BIND").as_deref() != Ok("true") {
+                std::process::exit(1);
+            }
+            tracing::warn!("AGENT_ALLOW_INSECURE_BIND=true — proceeding with insecure 0.0.0.0 bind. This is NOT safe for production.");
         }
+        tracing::warn!("AGENT_LISTEN_TCP is enabled WITHOUT TLS — agent token is transmitted in plaintext. Use a VPN or reverse proxy with TLS for remote connections.");
         let tcp_app = app.clone();
         tokio::spawn(async move {
             let tcp_listener = tokio::net::TcpListener::bind(&tcp_addr)

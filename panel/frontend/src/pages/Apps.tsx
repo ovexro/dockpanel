@@ -2201,7 +2201,16 @@ volumes:
                     <div
                       key={pkg.id}
                       className="bg-dark-900 rounded-lg border border-dark-500 p-4 hover:border-dark-400 cursor-pointer transition-colors"
-                      onClick={() => { setComposeYaml(pkg.yaml); setComposeView('compose'); setComposeParsed(null); }}
+                      onClick={() => {
+                        // Replace placeholder passwords with random ones for security
+                        const randPw = () => crypto.randomUUID().replace(/-/g, '').slice(0, 20);
+                        const yaml = pkg.yaml
+                          .replace(/wp_password/g, randPw())
+                          .replace(/root_password/g, randPw())
+                          .replace(/ghost_password/g, randPw())
+                          .replace(/nc_password/g, randPw());
+                        setComposeYaml(yaml); setComposeView('compose'); setComposeParsed(null);
+                      }}
                     >
                       <h4 className="text-sm font-medium text-dark-50">{pkg.name}</h4>
                       <p className="text-xs text-dark-300 mt-1">{pkg.description}</p>

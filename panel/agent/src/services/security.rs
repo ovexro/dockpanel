@@ -719,18 +719,25 @@ pub async fn apply_fix(fix_type: &str, target: &str) -> Result<String, String> {
             Ok("SSH root login disabled".into())
         }
         "remove_file" => {
-            // Remove a suspicious file (malware)
-            if target.contains("..") || !target.starts_with("/var/www") {
+            // Remove a suspicious file (malware) — canonicalize to prevent symlink attacks
+            let canonical = std::fs::canonicalize(target)
+                .map_err(|e| format!("Cannot resolve path {target}: {e}"))?;
+            let canonical_str = canonical.to_string_lossy();
+            if !canonical_str.starts_with("/var/www/") {
                 return Err("Can only remove files under /var/www".into());
             }
-            tokio::fs::remove_file(target).await
-                .map_err(|e| format!("Failed to remove {target}: {e}"))?;
-            Ok(format!("File removed: {target}"))
+            tokio::fs::remove_file(&canonical).await
+                .map_err(|e| format!("Failed to remove {}: {e}", canonical_str))?;
+            Ok(format!("File removed: {}", canonical_str))
         }
         "quarantine_file" => {
-            if target.contains("..") || !target.starts_with("/var/www") {
+            let canonical = std::fs::canonicalize(target)
+                .map_err(|e| format!("Cannot resolve path {target}: {e}"))?;
+            let canonical_str = canonical.to_string_lossy();
+            if !canonical_str.starts_with("/var/www/") {
                 return Err("Can only quarantine files under /var/www".into());
             }
+            let target = canonical_str.as_ref();
             let quarantine_dir = "/var/lib/dockpanel/quarantine";
             std::fs::create_dir_all(quarantine_dir).ok();
             let filename = std::path::Path::new(target)

@@ -5,6 +5,8 @@ use axum::{
     Json,
 };
 
+use subtle::ConstantTimeEq;
+
 use crate::auth::AuthUser;
 use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::services::activity;
@@ -250,7 +252,7 @@ pub async fn webhook(
     mac.update(signed_payload.as_bytes());
     let expected = hex::encode(mac.finalize().into_bytes());
 
-    if expected != signature {
+    if expected.as_bytes().ct_eq(signature.as_bytes()).unwrap_u8() != 1 {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid signature"));
     }
 

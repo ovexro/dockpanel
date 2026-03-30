@@ -10,16 +10,27 @@ use aes_gcm::{
     Aes256Gcm, AeadCore,
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
+use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 
-/// Derive an AES-256 key from a secret with a specific salt prefix.
-fn derive_key_with_salt(secret: &str, salt: &[u8]) -> [u8; 32] {
+/// Legacy key derivation (SHA-256 only) — kept for decrypting existing data.
+fn derive_key_legacy(secret: &str, salt: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(salt);
     hasher.update(secret.as_bytes());
     let result = hasher.finalize();
     let mut key = [0u8; 32];
     key.copy_from_slice(&result);
+    key
+}
+
+/// Derive an AES-256 key from a secret with a specific salt prefix using HKDF.
+/// HKDF provides proper key derivation with extract-then-expand, unlike raw SHA-256.
+fn derive_key_with_salt(secret: &str, salt: &[u8]) -> [u8; 32] {
+    let hk = Hkdf::<Sha256>::new(Some(salt), secret.as_bytes());
+    let mut key = [0u8; 32];
+    hk.expand(b"dockpanel-encryption", &mut key)
+        .expect("HKDF expand failed: output length is valid");
     key
 }
 
@@ -60,11 +71,8 @@ pub fn encrypt(plaintext: &str, jwt_secret: &str) -> Result<String, String> {
 }
 
 /// Decrypt a base64-encoded (nonce + ciphertext) string.
+/// Tries HKDF-derived key first, falls back to legacy SHA-256 key for existing data.
 pub fn decrypt(encrypted_b64: &str, jwt_secret: &str) -> Result<String, String> {
-    let key = derive_key(jwt_secret);
-    let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|e| format!("Cipher init failed: {e}"))?;
-
     let combined = B64.decode(encrypted_b64)
         .map_err(|e| format!("Base64 decode failed: {e}"))?;
 
@@ -75,7 +83,22 @@ pub fn decrypt(encrypted_b64: &str, jwt_secret: &str) -> Result<String, String> 
     let (nonce_bytes, ciphertext) = combined.split_at(12);
     let nonce = aes_gcm::Nonce::from_slice(nonce_bytes);
 
-    let plaintext = cipher
+    // Try HKDF key first (new encryption)
+    let key = derive_key(jwt_secret);
+    let cipher = Aes256Gcm::new_from_slice(&key)
+        .map_err(|e| format!("Cipher init failed: {e}"))?;
+
+    if let Ok(plaintext) = cipher.decrypt(nonce, ciphertext) {
+        return String::from_utf8(plaintext)
+            .map_err(|e| format!("UTF-8 decode failed: {e}"));
+    }
+
+    // Fall back to legacy SHA-256 key for data encrypted before HKDF migration
+    let legacy_key = derive_key_legacy(jwt_secret, b"dockpanel-secrets-v1:");
+    let legacy_cipher = Aes256Gcm::new_from_slice(&legacy_key)
+        .map_err(|e| format!("Cipher init failed: {e}"))?;
+
+    let plaintext = legacy_cipher
         .decrypt(nonce, ciphertext)
         .map_err(|_| "Decryption failed (wrong key or corrupted data)".to_string())?;
 
@@ -103,11 +126,8 @@ pub fn encrypt_credential(plaintext: &str, jwt_secret: &str) -> Result<String, S
 }
 
 /// Decrypt a credential. Returns the plaintext string.
+/// Tries HKDF key first, falls back to legacy SHA-256 key for existing data.
 pub fn decrypt_credential(encrypted_b64: &str, jwt_secret: &str) -> Result<String, String> {
-    let key = derive_credential_key(jwt_secret);
-    let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|e| format!("Cipher init failed: {e}"))?;
-
     let combined = B64.decode(encrypted_b64)
         .map_err(|e| format!("Base64 decode failed: {e}"))?;
 
@@ -118,7 +138,22 @@ pub fn decrypt_credential(encrypted_b64: &str, jwt_secret: &str) -> Result<Strin
     let (nonce_bytes, ciphertext) = combined.split_at(12);
     let nonce = aes_gcm::Nonce::from_slice(nonce_bytes);
 
-    let plaintext = cipher
+    // Try HKDF key first (new encryption)
+    let key = derive_credential_key(jwt_secret);
+    let cipher = Aes256Gcm::new_from_slice(&key)
+        .map_err(|e| format!("Cipher init failed: {e}"))?;
+
+    if let Ok(plaintext) = cipher.decrypt(nonce, ciphertext) {
+        return String::from_utf8(plaintext)
+            .map_err(|e| format!("UTF-8 decode failed: {e}"));
+    }
+
+    // Fall back to legacy SHA-256 key
+    let legacy_key = derive_key_legacy(jwt_secret, b"dockpanel-credential-v1:");
+    let legacy_cipher = Aes256Gcm::new_from_slice(&legacy_key)
+        .map_err(|e| format!("Cipher init failed: {e}"))?;
+
+    let plaintext = legacy_cipher
         .decrypt(nonce, ciphertext)
         .map_err(|_| "Decryption failed (wrong key or corrupted data)".to_string())?;
 

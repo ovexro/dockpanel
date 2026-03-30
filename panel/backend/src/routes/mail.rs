@@ -340,8 +340,15 @@ pub async fn update_domain(
     let domain = domain.ok_or_else(|| err(StatusCode::NOT_FOUND, "Domain not found"))?;
 
     if let Some(catch_all) = &body.catch_all {
+        if !catch_all.is_empty() {
+            if !catch_all.contains('@') || catch_all.len() > 254
+                || catch_all.contains('\n') || catch_all.contains('\r') || catch_all.contains('|') || catch_all.contains('\0')
+            {
+                return Err(err(StatusCode::BAD_REQUEST, "Invalid catch-all email address"));
+            }
+        }
         sqlx::query("UPDATE mail_domains SET catch_all = $1, updated_at = NOW() WHERE id = $2")
-            .bind(catch_all)
+            .bind(if catch_all.is_empty() { None } else { Some(catch_all.as_str()) })
             .bind(id)
             .execute(&state.db)
             .await
@@ -637,6 +644,13 @@ pub async fn update_account(
     }
 
     if let Some(forward) = &body.forward_to {
+        if !forward.is_empty() {
+            if !forward.contains('@') || forward.len() > 254
+                || forward.contains('\n') || forward.contains('\r') || forward.contains('|') || forward.contains('\0')
+            {
+                return Err(err(StatusCode::BAD_REQUEST, "Invalid forwarding email address"));
+            }
+        }
         sqlx::query("UPDATE mail_accounts SET forward_to = $1, updated_at = NOW() WHERE id = $2")
             .bind(if forward.is_empty() { None } else { Some(forward.as_str()) })
             .bind(account_id)

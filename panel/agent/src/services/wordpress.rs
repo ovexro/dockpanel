@@ -154,8 +154,21 @@ pub async fn update_all_themes(domain: &str) -> Result<String, String> {
     Ok(result)
 }
 
+/// Validate a WordPress plugin/theme slug: alphanumeric, hyphens, underscores only.
+/// Rejects URLs, flags, and shell metacharacters.
+fn is_valid_wp_slug(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 200
+        && !name.starts_with('-')
+        && !name.contains("://")
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 /// Plugin action: activate, deactivate, update, delete, install.
 pub async fn plugin_action(domain: &str, name: &str, action: &str) -> Result<String, String> {
+    if !is_valid_wp_slug(name) {
+        return Err("Invalid plugin name. Only alphanumeric, hyphens, and underscores allowed.".into());
+    }
     let result = match action {
         "activate" | "deactivate" | "update" | "delete" => {
             wp(domain, &["plugin", action, name]).await?
@@ -175,6 +188,9 @@ pub async fn plugin_action(domain: &str, name: &str, action: &str) -> Result<Str
 
 /// Theme action: activate, update, delete, install.
 pub async fn theme_action(domain: &str, name: &str, action: &str) -> Result<String, String> {
+    if !is_valid_wp_slug(name) {
+        return Err("Invalid theme name. Only alphanumeric, hyphens, and underscores allowed.".into());
+    }
     let result = match action {
         "activate" | "update" | "delete" => wp(domain, &["theme", action, name]).await?,
         "install" => wp(domain, &["theme", "install", name]).await?,

@@ -33,13 +33,14 @@ impl FromRequestParts<AppState> for AuthUser {
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         // Try Authorization: Bearer <token> first
-        let token = parts
+        let bearer_token = parts
             .headers
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
-            .map(|t| t.to_string())
-            .or_else(|| {
+            .map(|t| t.to_string());
+
+        let token = bearer_token.clone().or_else(|| {
                 // Fall back to cookie
                 parts
                     .headers
@@ -52,6 +53,21 @@ impl FromRequestParts<AppState> for AuthUser {
                     })
             })
             .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "Authentication required"))?;
+
+        // CSRF protection: cookie-based auth on mutating methods requires X-Requested-With header.
+        // Bearer token auth (API keys) is exempt since it cannot be sent by cross-origin forms.
+        if bearer_token.is_none() {
+            let method = &parts.method;
+            if method == "POST" || method == "PUT" || method == "DELETE" || method == "PATCH" {
+                let has_custom_header = parts
+                    .headers
+                    .get("x-requested-with")
+                    .is_some();
+                if !has_custom_header {
+                    return Err(err(StatusCode::FORBIDDEN, "Missing CSRF header"));
+                }
+            }
+        }
 
         let mut validation = Validation::new(jsonwebtoken::Algorithm::HS256);
         validation.validate_exp = true;

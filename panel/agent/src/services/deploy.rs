@@ -536,7 +536,7 @@ pub fn list_releases(domain: &str) -> Result<Vec<ReleaseInfo>, String> {
             // Get commit hash from release
             let git_dir = format!("{}/{}", e.path().display(), ".git");
             let commit = if Path::new(&git_dir).exists() {
-                std::process::Command::new("git")
+                crate::safe_cmd::safe_command_sync("git")
                     .args(["-C", &e.path().to_string_lossy(), "rev-parse", "--short", "HEAD"])
                     .output()
                     .ok()

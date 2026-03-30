@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
 use crate::error::{internal_error, err, agent_error, paginate, ApiError};
+use crate::routes::is_safe_shell_command;
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
 use crate::services::agent::AgentHandle;
@@ -118,6 +119,10 @@ pub async fn set_config(
 
     let branch = body.branch.as_deref().unwrap_or("main");
     let deploy_script = body.deploy_script.as_deref().unwrap_or("");
+    if !deploy_script.is_empty() {
+        is_safe_shell_command(deploy_script)
+            .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    }
     let auto_deploy = body.auto_deploy.unwrap_or(false);
     let atomic_deploy = body.atomic_deploy.unwrap_or(false);
     let keep_releases = body.keep_releases.unwrap_or(5).clamp(2, 20);
@@ -495,15 +500,10 @@ async fn execute_deploy(
         .flatten();
 
         if let Some((Some(preset),)) = site_preset {
-            if preset == "laravel" {
-                let migration_cmd = format!(
-                    "cd /var/www/{domain}/public/.. && php artisan migrate --force 2>&1"
-                );
+            if preset == "laravel" && crate::routes::is_valid_domain(&domain) {
                 match agent.post(
-                    "/diagnostics/fix",
-                    Some(serde_json::json!({
-                        "fix_id": format!("exec-shell:{}:{}", domain, migration_cmd)
-                    })),
+                    &format!("/sites/{domain}/laravel-migrate"),
+                    None,
                 ).await {
                     Ok(_) => tracing::info!("Post-deploy: Laravel migrations run for {domain}"),
                     Err(e) => tracing::warn!("Post-deploy: Laravel migrations failed for {domain}: {e}"),

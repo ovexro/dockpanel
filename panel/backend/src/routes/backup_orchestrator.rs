@@ -516,6 +516,11 @@ pub async fn delete_db_backup(
 
     let backup = backup.ok_or_else(|| err(StatusCode::NOT_FOUND, "Backup not found"))?;
 
+    // Validate filename before constructing agent path (prevent path traversal from stored data)
+    if backup.filename.contains('/') || backup.filename.contains("..") || backup.filename.contains('\0') {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid backup filename"));
+    }
+
     // Delete from agent
     let agent_path = format!("/db-backups/{}/{}", backup.db_name, backup.filename);
     agent.delete(&agent_path).await
@@ -616,6 +621,14 @@ pub async fn create_volume_backup(
     ServerScope(_server_id, agent): ServerScope,
     Json(req): Json<CreateVolumeBackupRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    // Validate container/volume names to prevent path traversal in agent URLs
+    if req.container_name.contains('/') || req.container_name.contains("..") || req.container_name.contains('\0') || req.container_name.len() > 128 {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container name"));
+    }
+    if req.volume_name.contains('/') || req.volume_name.contains("..") || req.volume_name.contains('\0') || req.volume_name.len() > 128 {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid volume name"));
+    }
+
     let body = serde_json::json!({
         "volume_name": req.volume_name,
         "container_name": req.container_name,

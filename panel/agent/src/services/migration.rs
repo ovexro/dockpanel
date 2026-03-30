@@ -440,6 +440,14 @@ pub async fn import_database(migration_id: &str, sql_file: &str, container_name:
         return Err("Invalid migration ID format".into());
     }
 
+    // Validate container name — only allow DockPanel-managed DB containers
+    if !container_name.starts_with("dockpanel-") || container_name.contains('/') || container_name.contains('\0')
+        || container_name.len() > 128
+        || !container_name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err("Invalid container name — only DockPanel-managed containers are allowed".into());
+    }
+
     // Validate no path traversal in sql_file
     if sql_file.contains("..") || sql_file.starts_with('/') {
         return Err("Invalid SQL file path".into());

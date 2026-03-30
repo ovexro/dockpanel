@@ -566,10 +566,11 @@ export default function Terminal() {
                         });
                         setError("");
                         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                          const safeName = file.name.replace(/[^a-zA-Z0-9._\- ]/g, '_');
                           wsRef.current.send(
                             JSON.stringify({
                               type: "input",
-                              data: `echo "Uploaded: ${file.name}"\n`,
+                              data: `echo "Uploaded: ${safeName}"\n`,
                             })
                           );
                         }

@@ -446,8 +446,8 @@ pub async fn reset_password(
             // MariaDB root can auth via unix socket inside the container.
             let sql = format!(
                 "ALTER USER '{}'@'%' IDENTIFIED BY '{}';",
-                user.replace('\'', "\\'"),
-                new_password.replace('\'', "\\'"),
+                user.replace('\'', "''"),
+                new_password.replace('\'', "''").replace('\\', "\\\\"),
             );
             tokio::time::timeout(
                 std::time::Duration::from_secs(QUERY_TIMEOUT_SECS),

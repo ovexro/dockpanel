@@ -390,10 +390,10 @@ impl RemoteAgentClient {
         // This makes the connection vulnerable to MITM attacks on remote agent communication.
         // Mitigation: agents should generate a self-signed CA on enrollment and pin it here.
         let accept_invalid = std::env::var("AGENT_TLS_VERIFY")
-            .map(|v| v != "strict")
-            .unwrap_or(true);
+            .map(|v| v == "insecure")
+            .unwrap_or(false);
         if accept_invalid {
-            tracing::warn!("Remote agent TLS: accepting invalid certificates (set AGENT_TLS_VERIFY=strict to enforce)");
+            tracing::warn!("Remote agent TLS: accepting invalid certificates (AGENT_TLS_VERIFY=insecure). This is NOT recommended for production.");
         }
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(60))
