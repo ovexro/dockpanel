@@ -27,7 +27,7 @@ tokio-stream = "0.1"
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rustls = "0.23"
-sha2 = "0.10"
+sha2 = "0.11"
 subtle = "2"
 hex = "0.4"
 base64 = "0.22"
