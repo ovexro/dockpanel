@@ -31,7 +31,7 @@ lettre = { version = "0.11", default-features = false, features = ["tokio1-rustl
 rand = "0.8"
 sha1 = "0.10"
 sha2 = "0.10"
-hmac = "0.12"
+hmac = "0.13"
 hex = "0.4"
 aes-gcm = "0.10"
 base64 = "0.22"
