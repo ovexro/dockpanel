@@ -4,6 +4,24 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.7.1] - 2026-03-31
+
+### Changed
+- Version numbers synced across all packages: 2.0.6 → 2.7.0 in agent, API, CLI, and frontend
+- API endpoint count updated to 733 (465 backend + 268 agent) across all docs and marketing
+- E2E test count updated to 476 (8 test suites) across all docs and marketing
+- Docker template count corrected to 151 across 14 categories in docs site (was stale at 54)
+- Security audit rounds updated to 6 (was showing 5) in README and SECURITY.md
+- SECURITY.md now documents Audit Round 6 (zero-assumptions, 30 fixes, 260+ total)
+- FEATURES.md verified metrics updated with precise counts from code
+- CONTRIBUTING.md migration count updated (69 → 81)
+- COMPARISON.md corrected: RAM 60→57MB, templates 54→151, themes/layouts names fixed
+- Docs site getting-started.md RAM corrected (60→57MB)
+- Marketing site Landing.tsx updated with all corrected numbers
+
+### Fixed
+- Removed 3 orphaned lazy imports in frontend main.tsx (IncidentManagement, SecurityHardening, WebhookGateway — absorbed into consolidated pages)
+
 ## [2.7.0] - 2026-03-30
 
 ### Security — Fresh Zero-Assumptions Audit (Audit 6)
