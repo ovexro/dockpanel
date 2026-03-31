@@ -2,7 +2,7 @@
 
 ## What is DockPanel?
 
-DockPanel is a free, self-hosted, Docker-native server management panel built in Rust. It lets you manage sites, databases, Docker apps, SSL certificates, backups, email, DNS, and security from a single web interface or CLI. It installs in under 60 seconds, uses about 60MB of RAM, and runs on x86_64 and ARM64 servers with no subscriptions or artificial limits.
+DockPanel is a free, self-hosted, Docker-native server management panel built in Rust. It lets you manage sites, databases, Docker apps, SSL certificates, backups, email, DNS, and security from a single web interface or CLI. It installs in under 60 seconds, uses about 57MB of RAM, and runs on x86_64 and ARM64 servers with no subscriptions or artificial limits.
 
 ## System Requirements
 
@@ -62,7 +62,7 @@ If you have a domain pointed to your server, you can access the panel at `https:
 After your first login, here is what to do next:
 
 - [ ] **Create your first site** -- Go to Sites, click New Site, enter a domain, and choose a runtime (static, PHP, Node.js, or Python). DockPanel configures Nginx and provisions SSL automatically.
-- [ ] **Deploy a Docker app** -- Go to Docker Apps, browse 54 one-click templates (Ghost, Grafana, Nextcloud, n8n, and more), and deploy one with a single click.
+- [ ] **Deploy a Docker app** -- Go to Docker Apps, browse 151 one-click templates across 14 categories (AI, CMS, databases, media, monitoring, and more), and deploy one with a single click.
 - [ ] **Enable 2FA** -- Go to Settings and enable TOTP two-factor authentication. Save the 10 recovery codes somewhere safe.
 - [ ] **Set up backups** -- Go to Backups and create a backup schedule. Optionally configure an S3-compatible remote destination.
 - [ ] **Run diagnostics** -- Check the Dashboard for your server health score, or run `dockpanel diagnose` from the terminal to identify any issues.

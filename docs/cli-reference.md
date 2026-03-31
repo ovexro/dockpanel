@@ -210,7 +210,7 @@ prometheus        monitoring    Prometheus       Metrics collection
 uptime-kuma       monitoring    Uptime Kuma      Uptime monitoring
 nextcloud         storage       Nextcloud        Self-hosted cloud storage
 ...
-(54 templates across 10 categories)
+(151 templates across 14 categories)
 ```
 
 #### `dockpanel apps deploy`

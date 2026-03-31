@@ -23,15 +23,15 @@ An honest comparison. We're not shy about where DockPanel leads — and we're up
 
 ## Where DockPanel Wins — Massively
 
-**10x lighter** — The entire panel is 35MB on disk and 60MB in RAM. cPanel uses 800MB+ of RAM. CloudPanel uses 250MB+. On a $5 VPS with 1GB of RAM, that difference is the gap between running your apps and running out of memory.
+**10x lighter** — The entire panel is ~41MB on disk and ~57MB in RAM. cPanel uses 800MB+ of RAM. CloudPanel uses 250MB+. On a $5 VPS with 1GB of RAM, that difference is the gap between running your apps and running out of memory.
 
-**Docker integration that no other free panel has** — 54 one-click app templates. Docker Compose stack management. Container logs, shell, stats, resource limits, health checks. Blue-green zero-downtime updates. This is a full container management platform built into a hosting panel. HestiaCP, CloudPanel, and CyberPanel have nothing close to this.
+**Docker integration that no other free panel has** — 151 one-click app templates across 14 categories. Docker Compose stack management. Container logs, shell, stats, resource limits, health checks. Blue-green zero-downtime updates. This is a full container management platform built into a hosting panel. HestiaCP, CloudPanel, and CyberPanel have nothing close to this.
 
 **A complete developer toolkit** — Git push-to-deploy with Nixpacks auto-build (30+ languages, no Dockerfile needed), preview environments with TTL, a full CLI for automation, and Infrastructure as Code (YAML export/import). These are features that RunCloud and Ploi charge $8-15/month for. DockPanel includes all of them for free.
 
 **Business-ready out of the box** — Multi-server management (unlimited), reseller accounts with quotas and white-label branding, OAuth/SSO (Google, GitHub, GitLab), extension API with HMAC-signed webhooks, migration wizard (import from cPanel/Plesk/HestiaCP), and teams with role-based access. Most panels don't have even half of these at any price.
 
-**6 themes, 4 layouts** — Terminal (hacker), Midnight (navy), Ember (warm premium), Arctic (light), Nexus (light SaaS), Nexus Dark (GitHub-dark). Four layout options: sidebar, collapsible, top navbar, flat SaaS. Every combination works. No other panel lets you personalize the interface like this.
+**6 themes, 3 layouts** — Terminal (hacker green), Midnight (navy blue), Ember (warm amber), Arctic (light teal), Clean (light blue SaaS), Clean Dark (GitHub-dark). Three layout options: Sidebar (full nav), Compact (collapsible icon rail), Topbar (horizontal navbar). Every combination works. No other panel lets you personalize the interface like this.
 
 ## Where Others Win
 

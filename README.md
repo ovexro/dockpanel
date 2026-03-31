@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>The most feature-packed free server panel ever built.</strong><br>
-  Self-hosted. Docker-native. Written in Rust. ~57MB RAM. 711 API endpoints. 151 app templates. 89 E2E tests. ~41MB binaries. Zero subscriptions.
+  Self-hosted. Docker-native. Written in Rust. ~57MB RAM. 733 API endpoints. 151 app templates. 476 E2E tests. ~41MB binaries. Zero subscriptions.
 </p>
 
 <p align="center">
@@ -236,7 +236,7 @@ Browser → React 19 SPA → Nginx
 
 ## Security
 
-DockPanel has undergone five rounds of security auditing (230+ vulnerabilities found and fixed). Credentials are encrypted at rest with AES-256-GCM. All child processes run with sanitized environments. See [SECURITY.md](SECURITY.md) for details.
+DockPanel has undergone six rounds of security auditing (260+ vulnerabilities found and fixed). Credentials are encrypted at rest with AES-256-GCM. All child processes run with sanitized environments. See [SECURITY.md](SECURITY.md) for details.
 
 ## Development
 

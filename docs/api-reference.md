@@ -1,6 +1,6 @@
 # API Reference
 
-DockPanel exposes 371 REST endpoints across 37 categories. All endpoints except `/api/health`, `/api/branding`, `/api/auth/setup-status`, and `/api/auth/login` require authentication.
+DockPanel exposes 733 REST endpoints (465 backend + 268 agent) across 50+ categories. All endpoints except `/api/health`, `/api/branding`, `/api/auth/setup-status`, and `/api/auth/login` require authentication.
 
 ## Authentication
 
@@ -205,7 +205,7 @@ Execute SQL query.
 ## Docker Apps (25 endpoints)
 
 ### `GET /api/apps/templates`
-List available app templates (54 templates). **Admin only.**
+List available app templates (151 templates across 14 categories). **Admin only.**
 
 ### `POST /api/apps/deploy`
 Deploy a Docker app. **Admin only.**

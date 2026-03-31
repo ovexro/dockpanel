@@ -78,6 +78,19 @@ DockPanel is designed with defense in depth. Key security properties include:
 
 ## Past Security Work
 
+### Audit Round 6: Fresh Zero-Assumptions Audit (March 2026)
+
+A complete from-scratch security audit with six parallel agents treating the codebase as entirely unknown. This covered all 222 Rust files and 506 TypeScript files with zero prior assumptions. **30 findings** fixed across 24 files:
+
+- **MySQL SQL injection** — Parameterized all dynamic queries.
+- **Deploy script RCE** — Sanitized user-controlled deploy commands.
+- **CSRF protection** — Added `X-Requested-With` header enforcement.
+- **Compose YAML validation** — Rewrote from string matching to `serde_yaml_ng` AST parsing.
+- **KDF upgrade** — SHA-256 replaced with HKDF (backwards-compatible legacy fallback).
+- **Agent TLS default** — Changed from insecure to strict by default.
+- **Terminal filename injection**, **Laravel command injection**, **shell blocklist hardening**, **cron filter gaps**, **WP plugin slug validation**.
+- **Stripe timing attack**, **symlink attack**, **mail injection**, **SMTP CRLF**, **dashboard cross-user leak**, **backup path traversal**, **migration container validation**, **stack template passwords randomized**, **socket permissions tightened**, **env leak in Command::new**.
+
 ### Audit Rounds 4-5: Feature Gap Audit + Error Handling Hardening (March 2026)
 
 Audited all agent and backend code for silent error suppression and missing functionality:
@@ -114,7 +127,7 @@ The initial comprehensive security audit identified and resolved **117 vulnerabi
 - Privilege escalation
 - Input validation gaps
 
-All identified issues across all five audit rounds have been fixed. Combined total: **230+ vulnerabilities** found and resolved.
+All identified issues across all six audit rounds have been fixed. Combined total: **260+ vulnerabilities** found and resolved.
 
 ## Contact
 
