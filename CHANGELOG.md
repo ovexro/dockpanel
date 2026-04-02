@@ -4,6 +4,14 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.7.2] - 2026-04-02
+
+### Changed
+- System updates now stream apt output in real-time via NDJSON instead of buffering entire output
+- Agent `apply_updates` returns streaming response (newline-delimited JSON) for live terminal experience
+- Backend consumes streamed agent response via new `post_long_ndjson()` method, forwarding lines as SSE events
+- Added `stream` feature to reqwest for chunked response handling on remote agents
+
 ## [2.7.1] - 2026-03-31
 
 ### Changed
