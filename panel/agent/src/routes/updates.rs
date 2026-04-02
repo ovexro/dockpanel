@@ -1,6 +1,11 @@
 use axum::{routing::{get, post}, Json, Router};
+use axum::body::Body;
+use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio_stream::StreamExt;
+use std::process::Stdio;
 use crate::safe_cmd::safe_command;
 
 use super::AppState;
@@ -17,14 +22,6 @@ struct PackageUpdate {
 #[derive(Deserialize)]
 struct ApplyRequest {
     packages: Option<Vec<String>>,
-}
-
-#[derive(Serialize)]
-struct ApplyResult {
-    success: bool,
-    updated: usize,
-    output: String,
-    reboot_required: bool,
 }
 
 #[derive(Serialize)]
@@ -117,93 +114,112 @@ async fn list_updates() -> Json<Vec<PackageUpdate>> {
     Json(packages)
 }
 
-/// POST /system/updates/apply — apply package updates.
-async fn apply_updates(Json(body): Json<ApplyRequest>) -> Json<ApplyResult> {
+/// POST /system/updates/apply — apply package updates with streaming NDJSON output.
+///
+/// Returns newline-delimited JSON: each line is `{"type":"line","line":"..."}` for output,
+/// and the final line is `{"type":"done","success":bool,"reboot_required":bool}`.
+async fn apply_updates(Json(body): Json<ApplyRequest>) -> Response {
     let has_packages = body
         .packages
         .as_ref()
         .is_some_and(|p| !p.is_empty());
 
-    let result = if has_packages {
-        let packages = body.packages.unwrap();
-        // Validate package names — only allow alphanumeric, dash, dot, plus, colon
-        for pkg in &packages {
+    // Validate package names up-front
+    if has_packages {
+        for pkg in body.packages.as_ref().unwrap() {
             if pkg.is_empty()
                 || !pkg
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '+' || c == ':')
             {
-                return Json(ApplyResult {
-                    success: false,
-                    updated: 0,
-                    output: format!("Invalid package name: {pkg}"),
-                    reboot_required: false,
-                });
+                let error_line = serde_json::json!({"type":"line","line":format!("Invalid package name: {pkg}")});
+                let done_line = serde_json::json!({"type":"done","success":false,"reboot_required":false});
+                let body_str = format!("{}\n{}\n", error_line, done_line);
+                return Response::builder()
+                    .header("content-type", "application/x-ndjson")
+                    .body(Body::from(body_str))
+                    .unwrap();
             }
         }
-
-        let mut args = vec!["install".to_string(), "-y".to_string()];
-        args.extend(packages);
-
-        tokio::time::timeout(
-            Duration::from_secs(300),
-            safe_command("apt-get")
-                .args(&args)
-                .env("DEBIAN_FRONTEND", "noninteractive")
-                .output(),
-        )
-        .await
-    } else {
-        tokio::time::timeout(
-            Duration::from_secs(300),
-            safe_command("apt-get")
-                .args(["upgrade", "-y"])
-                .env("DEBIAN_FRONTEND", "noninteractive")
-                .output(),
-        )
-        .await
-    };
-
-    match result {
-        Ok(Ok(output)) => {
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            let combined = if stderr.is_empty() {
-                stdout
-            } else {
-                format!("{stdout}\n{stderr}")
-            };
-
-            // Count updated packages from apt output
-            let updated = combined
-                .lines()
-                .filter(|l| l.starts_with("Unpacking ") || l.starts_with("Setting up "))
-                .filter(|l| l.starts_with("Setting up "))
-                .count();
-
-            let reboot_required =
-                tokio::fs::metadata("/var/run/reboot-required").await.is_ok();
-
-            Json(ApplyResult {
-                success: output.status.success(),
-                updated,
-                output: combined,
-                reboot_required,
-            })
-        }
-        Ok(Err(e)) => Json(ApplyResult {
-            success: false,
-            updated: 0,
-            output: format!("Failed to execute apt: {e}"),
-            reboot_required: false,
-        }),
-        Err(_) => Json(ApplyResult {
-            success: false,
-            updated: 0,
-            output: "Command timed out after 300 seconds".to_string(),
-            reboot_required: false,
-        }),
     }
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<String>(128);
+
+    tokio::spawn(async move {
+        let mut cmd = safe_command("apt-get");
+        cmd.env("DEBIAN_FRONTEND", "noninteractive");
+
+        if has_packages {
+            let packages = body.packages.unwrap();
+            cmd.arg("install").arg("-y");
+            for pkg in &packages {
+                cmd.arg(pkg);
+            }
+        } else {
+            cmd.args(["upgrade", "-y"]);
+        }
+
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = tx.send(format!("{}\n", serde_json::json!({"type":"line","line":format!("Failed to start apt: {e}")}))).await;
+                let _ = tx.send(format!("{}\n", serde_json::json!({"type":"done","success":false,"reboot_required":false}))).await;
+                return;
+            }
+        };
+
+        let stderr = child.stderr.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        // Read stderr in a separate task and send lines through the same channel
+        let tx_err = tx.clone();
+        let stderr_task = tokio::spawn(async move {
+            let reader = BufReader::new(stderr);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if line.is_empty() { continue; }
+                let msg = serde_json::json!({"type":"line","line":line});
+                if tx_err.send(format!("{msg}\n")).await.is_err() { break; }
+            }
+        });
+
+        // Read stdout line-by-line and stream immediately
+        let reader = BufReader::new(stdout);
+        let mut lines = reader.lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            if line.is_empty() { continue; }
+            let msg = serde_json::json!({"type":"line","line":line});
+            if tx.send(format!("{msg}\n")).await.is_err() { break; }
+        }
+
+        // Wait for stderr reader to finish
+        let _ = stderr_task.await;
+
+        // Wait for process to exit (with timeout)
+        let success = match tokio::time::timeout(Duration::from_secs(10), child.wait()).await {
+            Ok(Ok(status)) => status.success(),
+            _ => false,
+        };
+
+        let reboot_required = tokio::fs::metadata("/var/run/reboot-required").await.is_ok();
+
+        let done = serde_json::json!({
+            "type": "done",
+            "success": success,
+            "reboot_required": reboot_required,
+        });
+        let _ = tx.send(format!("{done}\n")).await;
+    });
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx)
+        .map(|line| Ok::<_, std::convert::Infallible>(line));
+
+    Response::builder()
+        .header("content-type", "application/x-ndjson")
+        .body(Body::from_stream(stream))
+        .unwrap()
 }
 
 /// GET /system/updates/count — quick count of available updates (no apt update).

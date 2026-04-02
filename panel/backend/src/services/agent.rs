@@ -369,6 +369,137 @@ impl AgentClient {
 
         result
     }
+
+    /// POST with streaming NDJSON response. Reads the agent response body frame-by-frame,
+    /// parses newline-delimited JSON, and calls `on_line` for each parsed JSON value.
+    /// Used for long-running operations that stream output (e.g. apt updates).
+    pub async fn post_long_ndjson<F>(
+        &self,
+        path: &str,
+        body: Option<serde_json::Value>,
+        timeout_secs: u64,
+        on_line: F,
+    ) -> Result<(), AgentError>
+    where
+        F: Fn(serde_json::Value) + Send + 'static,
+    {
+        self.cb.check()?;
+        let _permit = self.cb.long_semaphore.acquire().await.map_err(|e| {
+            AgentError::Connection(format!("long operation semaphore closed: {e}"))
+        })?;
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(timeout_secs),
+            self.request_ndjson_inner(path, body, on_line),
+        )
+        .await
+        .map_err(|_| AgentError::Request(format!("agent request timed out after {timeout_secs}s")))?;
+
+        match &result {
+            Ok(_) => self.cb.record_success(),
+            Err(AgentError::Connection(_)) => self.cb.record_failure(),
+            _ => {}
+        }
+
+        result
+    }
+
+    async fn request_ndjson_inner<F>(
+        &self,
+        path: &str,
+        body: Option<serde_json::Value>,
+        on_line: F,
+    ) -> Result<(), AgentError>
+    where
+        F: Fn(serde_json::Value),
+    {
+        let stream = UnixStream::connect(&self.socket_path)
+            .await
+            .map_err(|e| AgentError::Connection(e.to_string()))?;
+
+        let io = TokioIo::new(stream);
+
+        let (mut sender, conn) = http1::handshake(io)
+            .await
+            .map_err(|e| AgentError::Connection(e.to_string()))?;
+
+        tokio::spawn(async move {
+            if let Err(e) = conn.await {
+                tracing::warn!("agent connection error: {e}");
+            }
+        });
+
+        let body_bytes = match &body {
+            Some(v) => Full::new(Bytes::from(
+                serde_json::to_vec(v)
+                    .map_err(|e| AgentError::Request(format!("JSON serialize error: {e}")))?,
+            )),
+            None => Full::new(Bytes::new()),
+        };
+
+        let token = self.token.read().await;
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(format!("http://localhost{path}"))
+            .header("authorization", format!("Bearer {token}"));
+
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+
+        let req = builder
+            .body(body_bytes)
+            .map_err(|e| AgentError::Request(e.to_string()))?;
+
+        let resp = sender
+            .send_request(req)
+            .await
+            .map_err(|e| AgentError::Request(e.to_string()))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let collected = resp.into_body().collect()
+                .await
+                .map_err(|e| AgentError::Response(e.to_string()))?;
+            let msg = String::from_utf8_lossy(&collected.to_bytes()).to_string();
+            return Err(AgentError::Status(status.as_u16(), msg));
+        }
+
+        // Read body frame-by-frame, parse NDJSON lines
+        let mut body = resp.into_body();
+        let mut buf = String::new();
+        while let Some(frame) = body.frame().await {
+            match frame {
+                Ok(frame) => {
+                    if let Some(data) = frame.data_ref() {
+                        buf.push_str(&String::from_utf8_lossy(data));
+                        // Process all complete lines in the buffer
+                        while let Some(pos) = buf.find('\n') {
+                            let line = &buf[..pos];
+                            if !line.is_empty() {
+                                if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                                    on_line(json);
+                                }
+                            }
+                            buf = buf[pos + 1..].to_string();
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Err(AgentError::Response(e.to_string()));
+                }
+            }
+        }
+
+        // Process any remaining data in buffer
+        if !buf.trim().is_empty() {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(buf.trim()) {
+                on_line(json);
+            }
+        }
+
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -565,6 +696,76 @@ impl RemoteAgentClient {
             }
         }
     }
+
+    /// POST with streaming NDJSON response (remote). Reads response chunks and
+    /// calls `on_line` for each parsed JSON line. Used for streamed operations.
+    pub async fn post_long_ndjson<F>(
+        &self,
+        path: &str,
+        body: Option<serde_json::Value>,
+        timeout_secs: u64,
+        on_line: F,
+    ) -> Result<(), AgentError>
+    where
+        F: Fn(serde_json::Value) + Send + 'static,
+    {
+        self.cb.check()?;
+        let _permit = self.cb.semaphore.acquire().await.map_err(|e| {
+            AgentError::Connection(format!("connection semaphore closed: {e}"))
+        })?;
+
+        let url = format!("{}{}", self.base_url, path);
+        let mut req = self.http.post(&url)
+            .header("authorization", format!("Bearer {}", self.token))
+            .timeout(Duration::from_secs(timeout_secs));
+
+        if let Some(b) = body {
+            req = req.json(&b);
+        }
+
+        let result = req.send().await;
+
+        match result {
+            Ok(resp) => {
+                self.cb.record_success();
+                let status = resp.status();
+                if !status.is_success() {
+                    let bytes = resp.bytes().await
+                        .map_err(|e| AgentError::Response(e.to_string()))?;
+                    let msg = String::from_utf8_lossy(&bytes).to_string();
+                    return Err(AgentError::Status(status.as_u16(), msg));
+                }
+
+                // Stream response chunks
+                let mut buf = String::new();
+                let mut stream = resp.bytes_stream();
+                use futures::StreamExt;
+                while let Some(chunk) = stream.next().await {
+                    let chunk = chunk.map_err(|e| AgentError::Response(e.to_string()))?;
+                    buf.push_str(&String::from_utf8_lossy(&chunk));
+                    while let Some(pos) = buf.find('\n') {
+                        let line = &buf[..pos];
+                        if !line.is_empty() {
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                                on_line(json);
+                            }
+                        }
+                        buf = buf[pos + 1..].to_string();
+                    }
+                }
+                if !buf.trim().is_empty() {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(buf.trim()) {
+                        on_line(json);
+                    }
+                }
+                Ok(())
+            }
+            Err(e) => {
+                self.cb.record_failure();
+                Err(AgentError::Connection(e.to_string()))
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -631,6 +832,22 @@ impl AgentHandle {
         match self {
             Self::Local(c) => c.post_long(path, body, timeout_secs).await,
             Self::Remote(c) => c.post_long(path, body, timeout_secs).await,
+        }
+    }
+
+    pub async fn post_long_ndjson<F>(
+        &self,
+        path: &str,
+        body: Option<serde_json::Value>,
+        timeout_secs: u64,
+        on_line: F,
+    ) -> Result<(), AgentError>
+    where
+        F: Fn(serde_json::Value) + Send + 'static,
+    {
+        match self {
+            Self::Local(c) => c.post_long_ndjson(path, body, timeout_secs, on_line).await,
+            Self::Remote(c) => c.post_long_ndjson(path, body, timeout_secs, on_line).await,
         }
     }
 

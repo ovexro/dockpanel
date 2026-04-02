@@ -144,8 +144,8 @@ pub async fn updates_list(
 
 /// POST /api/system/updates/apply — Apply package updates (admin only).
 /// Returns install_id for SSE progress tracking via /api/services/install/{id}/log.
-/// Proxies to agent which runs apt with proper filesystem access, then streams
-/// the output line-by-line for live terminal experience.
+/// Proxies to agent which runs apt with streaming NDJSON output, forwarded
+/// line-by-line as SSE events for a live terminal experience.
 pub async fn updates_apply(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
@@ -180,27 +180,60 @@ pub async fn updates_apply(
 
         emit("update", "Applying system updates", "in_progress", None);
 
-        // Proxy to agent (which has proper filesystem access for apt)
-        match agent.post_long("/system/updates/apply", Some(body), 300).await {
-            Ok(result) => {
-                let success = result.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
-                let output = result.get("output").and_then(|v| v.as_str()).unwrap_or("");
-
-                // Stream output line-by-line for live terminal experience
-                for line in output.lines() {
+        // Use streaming NDJSON: agent sends each apt output line as it happens
+        let logs_cb = logs.clone();
+        let emit_line = move |json: serde_json::Value| {
+            let ev_type = json.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            match ev_type {
+                "line" => {
+                    let line = json.get("line").and_then(|v| v.as_str()).unwrap_or("");
                     if !line.is_empty() {
-                        emit("line", line, "in_progress", None);
+                        let ev = ProvisionStep {
+                            step: "line".into(),
+                            label: line.into(),
+                            status: "in_progress".into(),
+                            message: None,
+                        };
+                        if let Ok(mut map) = logs_cb.lock() {
+                            if let Some((history, tx, _)) = map.get_mut(&install_id) {
+                                history.push(ev.clone());
+                                let _ = tx.send(ev);
+                            }
+                        }
                     }
                 }
+                "done" => {
+                    let success = json.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let (update_status, complete_label, complete_status) = if success {
+                        ("done", "Updates applied", "done")
+                    } else {
+                        ("error", "Updates finished with errors", "error")
+                    };
 
-                if success {
-                    emit("update", "Applying system updates", "done", None);
-                    emit("complete", "Updates applied", "done", Some(output.to_string()));
-                } else {
-                    emit("update", "Applying system updates", "error", None);
-                    emit("complete", "Updates finished with errors", "error", Some(output.to_string()));
+                    for (step, label, status) in [
+                        ("update", "Applying system updates", update_status),
+                        ("complete", complete_label, complete_status),
+                    ] {
+                        let ev = ProvisionStep {
+                            step: step.into(),
+                            label: label.into(),
+                            status: status.into(),
+                            message: None,
+                        };
+                        if let Ok(mut map) = logs_cb.lock() {
+                            if let Some((history, tx, _)) = map.get_mut(&install_id) {
+                                history.push(ev.clone());
+                                let _ = tx.send(ev);
+                            }
+                        }
+                    }
                 }
+                _ => {}
+            }
+        };
 
+        match agent.post_long_ndjson("/system/updates/apply", Some(body), 300, emit_line).await {
+            Ok(()) => {
                 activity::log_activity(&db, user_id, &email, "system.updates.apply",
                     Some("system"), Some("packages"), None, None).await;
             }
