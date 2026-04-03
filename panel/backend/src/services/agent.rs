@@ -213,21 +213,26 @@ impl AgentClient {
             .map_err(|e| AgentError::Request(e.to_string()))?;
 
         let status = resp.status();
-        let collected = resp
-            .into_body()
+
+        // Stream-limited body collection: stops reading as soon as the limit
+        // is exceeded instead of buffering the entire response first.
+        let limited = http_body_util::Limited::new(resp.into_body(), MAX_RESPONSE_SIZE);
+        let collected = limited
             .collect()
             .await
-            .map_err(|e| AgentError::Response(e.to_string()))?;
+            .map_err(|e| {
+                let msg = e.to_string();
+                if msg.contains("length limit exceeded") {
+                    AgentError::Response(format!(
+                        "agent response too large (limit: {}MB)",
+                        MAX_RESPONSE_SIZE / (1024 * 1024)
+                    ))
+                } else {
+                    AgentError::Response(msg)
+                }
+            })?;
 
         let bytes = collected.to_bytes();
-
-        if bytes.len() > MAX_RESPONSE_SIZE {
-            return Err(AgentError::Response(format!(
-                "agent response too large: {} bytes (limit: {}MB)",
-                bytes.len(),
-                MAX_RESPONSE_SIZE / (1024 * 1024)
-            )));
-        }
 
         if !status.is_success() {
             let msg = String::from_utf8_lossy(&bytes).to_string();

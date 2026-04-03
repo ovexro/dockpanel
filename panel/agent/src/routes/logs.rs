@@ -438,7 +438,9 @@ async fn docker_logs(
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let content = format!("{stdout}{stderr}");
+    let raw = format!("{stdout}{stderr}");
+    // Strip ANSI escape sequences so frontend doesn't render raw escape codes
+    let content = strip_ansi_escapes(&raw);
 
     Ok(Json(serde_json::json!({
         "logs": content,
@@ -620,4 +622,50 @@ pub fn router() -> Router<AppState> {
 /// Stream route — placed outside auth middleware (validates its own JWT via query param).
 pub fn stream_router() -> Router<AppState> {
     Router::new().route("/logs/stream", get(stream_handler))
+}
+
+/// Strip ANSI escape sequences (colors, cursor movement, etc.) from a string.
+/// Matches ESC[...X sequences (CSI), ESC]...ST (OSC), and bare ESC+char.
+fn strip_ansi_escapes(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            match chars.peek() {
+                Some('[') => {
+                    chars.next(); // consume '['
+                    // Skip until we find a letter (the final byte of a CSI sequence)
+                    while let Some(&ch) = chars.peek() {
+                        chars.next();
+                        if ch.is_ascii_alphabetic() || ch == 'H' || ch == 'J' || ch == 'K' {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    chars.next(); // consume ']'
+                    // OSC sequence: skip until ST (ESC\ or BEL)
+                    while let Some(&ch) = chars.peek() {
+                        chars.next();
+                        if ch == '\x07' {
+                            break;
+                        }
+                        if ch == '\x1b' {
+                            if chars.peek() == Some(&'\\') {
+                                chars.next();
+                            }
+                            break;
+                        }
+                    }
+                }
+                Some(_) => {
+                    chars.next(); // skip one char after ESC
+                }
+                None => {}
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }

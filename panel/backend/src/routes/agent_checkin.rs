@@ -24,6 +24,9 @@ pub struct CheckinRequest {
     pub cpu_usage: Option<f32>,
     pub mem_used_mb: Option<i64>,
     pub uptime_secs: Option<i64>,
+    /// Unix timestamp (seconds) from the agent. Replay prevention:
+    /// requests older than 120 seconds are rejected.
+    pub timestamp: Option<i64>,
 }
 
 /// POST /api/agent/checkin — Agent reports system info and heartbeat.
@@ -65,6 +68,19 @@ pub async fn checkin(
     };
     if !token_valid {
         return Err(err(StatusCode::UNAUTHORIZED, "Invalid token"));
+    }
+
+    // Replay prevention: reject requests with stale timestamps (>120s drift).
+    // Accepts requests without timestamp for backward compatibility with older agents.
+    if let Some(ts) = body.timestamp {
+        let now = chrono::Utc::now().timestamp();
+        let drift = (now - ts).abs();
+        if drift > 120 {
+            tracing::warn!(
+                "Checkin rejected for server {server_id}: timestamp drift {drift}s (limit 120s)"
+            );
+            return Err(err(StatusCode::BAD_REQUEST, "Request timestamp too old"));
+        }
     }
 
     // Rate limit: max 120 requests per minute per server_id

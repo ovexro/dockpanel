@@ -37,6 +37,53 @@ pub async fn provision(
         return Err(err(StatusCode::CONFLICT, "SSL is already enabled"));
     }
 
+    // Per-user ACME rate limiting: max 10 certificates per hour
+    let (recent_count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM sites WHERE user_id = $1 AND ssl_enabled = true \
+         AND updated_at > NOW() - INTERVAL '1 hour'",
+    )
+    .bind(claims.sub)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| internal_error("provision rate check", e))?;
+
+    if recent_count >= 10 {
+        return Err(err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Rate limit: max 10 SSL certificates per hour. Try again later.",
+        ));
+    }
+
+    // DNS pre-flight: verify domain resolves to this server before ACME HTTP-01
+    let server_ip = crate::helpers::detect_public_ip().await;
+    if !server_ip.is_empty() {
+        let lookup_host = format!("{}:80", site.domain);
+        match tokio::net::lookup_host(&lookup_host).await {
+            Ok(addrs) => {
+                let resolved_ips: Vec<String> = addrs.map(|a| a.ip().to_string()).collect();
+                if !resolved_ips.iter().any(|ip| ip == &server_ip) {
+                    return Err(err(
+                        StatusCode::PRECONDITION_FAILED,
+                        &format!(
+                            "Domain {} does not resolve to this server ({}). DNS points to: {}. \
+                             Fix DNS before provisioning SSL.",
+                            site.domain, server_ip, resolved_ips.join(", ")
+                        ),
+                    ));
+                }
+            }
+            Err(_) => {
+                return Err(err(
+                    StatusCode::PRECONDITION_FAILED,
+                    &format!(
+                        "Domain {} could not be resolved. Ensure DNS is configured before provisioning SSL.",
+                        site.domain
+                    ),
+                ));
+            }
+        }
+    }
+
     // Get admin email for ACME registration
     let (email,): (String,) =
         sqlx::query_as("SELECT email FROM users WHERE id = $1")
@@ -147,6 +194,23 @@ pub async fn provision_dns01(
 
     if site.ssl_enabled {
         return Err(err(StatusCode::CONFLICT, "SSL is already enabled"));
+    }
+
+    // Per-user ACME rate limiting: max 10 certificates per hour
+    let (recent_count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM sites WHERE user_id = $1 AND ssl_enabled = true \
+         AND updated_at > NOW() - INTERVAL '1 hour'",
+    )
+    .bind(claims.sub)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| internal_error("dns01 rate check", e))?;
+
+    if recent_count >= 10 {
+        return Err(err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Rate limit: max 10 SSL certificates per hour. Try again later.",
+        ));
     }
 
     let wildcard = body.get("wildcard").and_then(|v| v.as_bool()).unwrap_or(false);

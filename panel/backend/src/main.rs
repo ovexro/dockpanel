@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
@@ -414,6 +415,7 @@ async fn main() {
     let app = Router::new()
         .merge(routes::router())
         .layer(cors)
+        .layer(TimeoutLayer::new(Duration::from_secs(300)))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 

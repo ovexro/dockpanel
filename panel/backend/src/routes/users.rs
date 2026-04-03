@@ -172,6 +172,13 @@ pub async fn update(
             .execute(&state.db)
             .await
             .map_err(|e| internal_error("update users", e))?;
+
+        // Invalidate all sessions — role change must take effect immediately
+        sqlx::query("DELETE FROM user_sessions WHERE user_id = $1")
+            .bind(id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| internal_error("update users", e))?;
     }
 
     if let Some(ref password) = body.password {

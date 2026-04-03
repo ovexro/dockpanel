@@ -499,6 +499,24 @@ fn http_client() -> &'static reqwest::Client {
 }
 
 async fn forward_to_route(db: &sqlx::PgPool, route: &WebhookRoute, body: &str, delivery_id: Uuid) {
+    // Re-validate destination URL at forward time to prevent DNS rebinding SSRF.
+    // An attacker could register a route pointing to a public IP, then change DNS
+    // to resolve to an internal IP before the webhook fires.
+    if let Err(e) = crate::helpers::validate_url_not_internal(&route.destination_url).await {
+        tracing::warn!(
+            "Webhook route {} destination blocked at forward time (DNS rebinding?): {e}",
+            route.id
+        );
+        let _ = sqlx::query(
+            "UPDATE webhook_deliveries SET forwarded = TRUE, forward_status = 0, \
+             forward_response = $2 WHERE id = $1"
+        )
+        .bind(delivery_id)
+        .bind(format!("Blocked: destination URL failed validation: {e}"))
+        .execute(db).await;
+        return;
+    }
+
     let mut last_status = 0i32;
     let mut last_response = String::new();
     let mut last_duration = 0i32;

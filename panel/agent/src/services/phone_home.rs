@@ -66,6 +66,8 @@ fn collect_system_info() -> serde_json::Value {
         "cpu_usage": sys.global_cpu_usage(),
         "mem_used_mb": (sys.used_memory() / 1_048_576) as i64,
         "uptime_secs": System::uptime(),
+        // Replay prevention: server rejects requests >120s old
+        "timestamp": chrono::Utc::now().timestamp(),
     })
 }
 
