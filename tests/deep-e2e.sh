@@ -706,6 +706,71 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════
+# GPU MONITORING
+# ═══════════════════════════════════════════════════════════════════════
+
+echo -e "\n${CYAN}${BOLD}GPU Monitoring${NC}"
+
+GPU_RESP=$(api_get "/apps/gpu-info")
+GPU_HAS_FIELDS=$(echo "$GPU_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print('available' in d and 'gpus' in d and 'processes' in d)" 2>/dev/null)
+if [ "$GPU_HAS_FIELDS" = "True" ]; then
+    ok "GPU info endpoint returns expected fields (available, gpus, processes)"
+else
+    fail "GPU info endpoint missing expected fields"
+fi
+
+GPU_STATUS=$(api_get_status "/apps/gpu-info")
+if [ "$GPU_STATUS" = "200" ]; then
+    ok "GPU info returns 200"
+else
+    fail "GPU info returned $GPU_STATUS"
+fi
+
+GPU_IS_ARRAY=$(echo "$GPU_RESP" | python3 -c "import sys,json; print(isinstance(json.load(sys.stdin).get('gpus',[]), list))" 2>/dev/null)
+if [ "$GPU_IS_ARRAY" = "True" ]; then
+    ok "GPU gpus field is an array"
+else
+    fail "GPU gpus field is not an array"
+fi
+
+GPU_AVAILABLE=$(echo "$GPU_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('available', False))" 2>/dev/null)
+if [ "$GPU_AVAILABLE" = "True" ]; then
+    GPU_FIELDS=$(echo "$GPU_RESP" | python3 -c "
+import sys,json
+g=json.load(sys.stdin)['gpus'][0]
+fields=['memory_total_mb','memory_used_mb','memory_free_mb','utilization_gpu_pct','temperature_c','power_draw_w','driver_version']
+print(all(f in g for f in fields))
+" 2>/dev/null)
+    if [ "$GPU_FIELDS" = "True" ]; then
+        ok "GPU monitoring returns expanded metrics (VRAM, temp, power)"
+    else
+        fail "GPU monitoring missing expanded metric fields"
+    fi
+else
+    skip "No GPU detected — expanded field check"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════
+# SERVICE INSTALLER
+# ═══════════════════════════════════════════════════════════════════════
+
+echo -e "\n${CYAN}${BOLD}Service Installer${NC}"
+
+SERVICES_STATUS=$(api_get_status "/services/status")
+if [ "$SERVICES_STATUS" = "200" ]; then
+    ok "Services status endpoint returns 200"
+else
+    fail "Services status returned $SERVICES_STATUS"
+fi
+
+CERTBOT_FIELD=$(api_get "/services/status" | python3 -c "import sys,json; print('certbot' in json.load(sys.stdin))" 2>/dev/null)
+if [ "$CERTBOT_FIELD" = "True" ]; then
+    ok "Services status includes certbot"
+else
+    fail "Services status missing certbot field"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════
 # SUMMARY
 # ═══════════════════════════════════════════════════════════════════════
 

@@ -1449,50 +1449,156 @@ pub fn router() -> Router<AppState> {
         .route("/apps/gpu-info", get(gpu_info))
 }
 
-/// GET /apps/gpu-info — Detect available GPUs on the host.
+/// GET /apps/gpu-info — Full GPU monitoring: utilization, VRAM, temperature, power, per-process usage.
 async fn gpu_info() -> Json<serde_json::Value> {
-    // Check if nvidia-smi is available and get GPU info
-    let output = crate::safe_cmd::safe_command("nvidia-smi")
-        .args(["--query-gpu=name,memory.total,driver_version,utilization.gpu", "--format=csv,noheader,nounits"])
-        .output()
-        .await;
+    // Query comprehensive GPU metrics in one call
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        crate::safe_cmd::safe_command("nvidia-smi")
+            .args([
+                "--query-gpu=index,name,memory.total,memory.used,memory.free,utilization.gpu,utilization.memory,temperature.gpu,power.draw,power.limit,fan.speed,driver_version,pstate",
+                "--format=csv,noheader,nounits"
+            ])
+            .output()
+    ).await;
 
-    match output {
-        Ok(out) if out.status.success() => {
+    let gpu_output = match output {
+        Ok(Ok(out)) if out.status.success() => Some(out),
+        _ => None,
+    };
+
+    let Some(gpu_out) = gpu_output else {
+        return Json(serde_json::json!({
+            "available": false,
+            "gpus": [],
+            "gpu_count": 0,
+            "nvidia_toolkit_installed": false,
+            "processes": [],
+        }));
+    };
+
+    let stdout = String::from_utf8_lossy(&gpu_out.stdout);
+    let gpus: Vec<serde_json::Value> = stdout.lines().filter(|l| !l.trim().is_empty()).map(|line| {
+        // Split on ", " — GPU names can theoretically contain commas, so we parse
+        // index (first field) and the 11 numeric/string fields from the right,
+        // treating everything in between as the GPU name.
+        let p: Vec<&str> = line.split(", ").collect();
+        if p.len() >= 13 {
+            // Normal case: exactly 13 fields (index + name + 11 metrics)
+            let parse_u64 = |idx: usize| p.get(idx).and_then(|v| v.trim().parse::<u64>().ok());
+            let parse_f64 = |idx: usize| p.get(idx).and_then(|v| v.trim().parse::<f64>().ok());
+            let str_val = |idx: usize| p.get(idx).map(|v| v.trim()).unwrap_or("");
+            // If there are extra commas (in GPU name), join the excess back into the name
+            let name_end = p.len() - 11; // 11 fields after name
+            let name = p[1..name_end].join(", ");
+            serde_json::json!({
+                "index": parse_u64(0).unwrap_or(0),
+                "name": name.trim(),
+                "memory_total_mb": p.get(name_end).and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0),
+                "memory_used_mb": p.get(name_end + 1).and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0),
+                "memory_free_mb": p.get(name_end + 2).and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0),
+                "utilization_gpu_pct": p.get(name_end + 3).and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0),
+                "utilization_memory_pct": p.get(name_end + 4).and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0),
+                "temperature_c": p.get(name_end + 5).and_then(|v| v.trim().parse::<u64>().ok()),
+                "power_draw_w": p.get(name_end + 6).and_then(|v| v.trim().parse::<f64>().ok()),
+                "power_limit_w": p.get(name_end + 7).and_then(|v| v.trim().parse::<f64>().ok()),
+                "fan_speed_pct": p.get(name_end + 8).and_then(|v| v.trim().parse::<u64>().ok()),
+                "driver_version": p.get(name_end + 9).map(|v| v.trim()).unwrap_or(""),
+                "performance_state": p.get(name_end + 10).map(|v| v.trim()).unwrap_or(""),
+            })
+        } else {
+            // Fallback: fewer fields than expected
+            serde_json::json!({
+                "index": p.first().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0),
+                "name": p.get(1).unwrap_or(&"Unknown").trim(),
+                "memory_total_mb": 0, "memory_used_mb": 0, "memory_free_mb": 0,
+                "utilization_gpu_pct": 0, "utilization_memory_pct": 0,
+                "temperature_c": null, "power_draw_w": null, "power_limit_w": null,
+                "fan_speed_pct": null, "driver_version": "", "performance_state": "",
+            })
+        }
+    }).collect();
+
+    // Query per-process GPU usage (which PIDs are using which GPU and how much VRAM)
+    let proc_output = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        crate::safe_cmd::safe_command("nvidia-smi")
+            .args([
+                "--query-compute-apps=pid,gpu_uuid,used_gpu_memory,name",
+                "--format=csv,noheader,nounits"
+            ])
+            .output()
+    ).await;
+
+    let mut processes: Vec<serde_json::Value> = Vec::new();
+    if let Ok(Ok(out)) = proc_output {
+        if out.status.success() {
             let stdout = String::from_utf8_lossy(&out.stdout);
-            let gpus: Vec<serde_json::Value> = stdout.lines().filter(|l| !l.trim().is_empty()).enumerate().map(|(i, line)| {
-                let parts: Vec<&str> = line.split(", ").collect();
-                serde_json::json!({
-                    "index": i,
-                    "name": parts.first().unwrap_or(&"Unknown"),
-                    "memory_mb": parts.get(1).and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0),
-                    "driver_version": parts.get(2).unwrap_or(&""),
-                    "utilization_pct": parts.get(3).and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(0),
-                })
-            }).collect();
+            for line in stdout.lines().filter(|l| !l.trim().is_empty()) {
+                let p: Vec<&str> = line.split(", ").collect();
+                let pid = p.first().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0);
 
-            // Check if NVIDIA Container Toolkit is installed
-            let toolkit = crate::safe_cmd::safe_command("nvidia-container-cli")
-                .arg("--version")
-                .output()
-                .await
-                .map(|o| o.status.success())
-                .unwrap_or(false);
+                // Try to resolve PID to a Docker container name
+                let container_name = resolve_pid_to_container(pid).await;
 
-            Json(serde_json::json!({
-                "available": true,
-                "gpus": gpus,
-                "gpu_count": gpus.len(),
-                "nvidia_toolkit_installed": toolkit,
-            }))
+                processes.push(serde_json::json!({
+                    "pid": pid,
+                    "gpu_uuid": p.get(1).map(|v| v.trim()).unwrap_or(""),
+                    "vram_used_mb": p.get(2).and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0),
+                    "process_name": p.get(3).map(|v| v.trim()).unwrap_or(""),
+                    "container_name": container_name,
+                }));
+            }
         }
-        _ => {
-            Json(serde_json::json!({
-                "available": false,
-                "gpus": [],
-                "gpu_count": 0,
-                "nvidia_toolkit_installed": false,
-            }))
-        }
+    }
+
+    // Check if NVIDIA Container Toolkit is installed
+    let toolkit = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        crate::safe_cmd::safe_command("nvidia-container-cli")
+            .arg("--version")
+            .output()
+    ).await
+        .ok()
+        .and_then(|r| r.ok())
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    Json(serde_json::json!({
+        "available": true,
+        "gpus": gpus,
+        "gpu_count": gpus.len(),
+        "nvidia_toolkit_installed": toolkit,
+        "processes": processes,
+    }))
+}
+
+/// Resolve a host PID to a Docker container name (if it belongs to one).
+async fn resolve_pid_to_container(pid: u64) -> Option<String> {
+    // Read the cgroup of the process to find its container ID
+    let cgroup = tokio::fs::read_to_string(format!("/proc/{pid}/cgroup")).await.ok()?;
+    // Docker cgroup paths contain the container ID (64-char hex)
+    let container_id = cgroup.lines()
+        .filter_map(|line| {
+            // Format: "0::/docker/<container_id>" or "0::/system.slice/docker-<id>.scope"
+            let after_docker = line.split("/docker/").nth(1)
+                .or_else(|| line.split("/docker-").nth(1));
+            after_docker.map(|s| s.trim_end_matches(".scope").chars().take(12).collect::<String>())
+        })
+        .find(|id| id.len() >= 12)?;
+
+    // Use docker inspect to get the container name
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        crate::safe_cmd::safe_command("docker")
+            .args(["inspect", "--format", "{{.Name}}", &container_id])
+            .output()
+    ).await.ok()?.ok()?;
+
+    if output.status.success() {
+        let name = String::from_utf8_lossy(&output.stdout).trim().trim_start_matches('/').to_string();
+        if !name.is_empty() { Some(name) } else { None }
+    } else {
+        None
     }
 }

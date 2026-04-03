@@ -130,26 +130,79 @@ async fn install_php() -> Result<Json<serde_json::Value>, ApiErr> {
 async fn install_certbot() -> Result<Json<serde_json::Value>, ApiErr> {
     tracing::info!("Installing Certbot...");
 
-    let output = tokio::time::timeout(
+    // Remove old apt-based certbot first (if present) to avoid conflicts
+    let _ = tokio::time::timeout(
+        Duration::from_secs(120),
+        safe_command("sh")
+            .args(["-c", "systemctl stop certbot.timer 2>/dev/null; systemctl disable certbot.timer 2>/dev/null; DEBIAN_FRONTEND=noninteractive apt-get purge -y certbot python3-certbot-nginx 2>/dev/null; true"])
+            .output()
+    ).await;
+
+    // Strategy: snap (gets certbot 4.x with ARI support for 45-day certs)
+    // Fallback: pip (works when snap is unavailable)
+    let snap_ok = tokio::time::timeout(
         Duration::from_secs(300),
         safe_command("sh")
-            .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confnew install -y certbot python3-certbot-nginx"])
+            .args(["-c", "snap install --classic certbot && ln -sf /snap/bin/certbot /usr/bin/certbot"])
             .output()
     ).await
-        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Certbot install timed out after 300s"))?
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("apt install failed: {e}")))?;
+        .ok()
+        .and_then(|r| r.ok())
+        .map(|o| o.status.success())
+        .unwrap_or(false);
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Certbot install failed: {}", stderr.chars().take(300).collect::<String>())));
+    // Install nginx plugin separately (non-fatal if it fails — certbot still works)
+    if snap_ok {
+        let _ = tokio::time::timeout(
+            Duration::from_secs(120),
+            safe_command("sh")
+                .args(["-c", "snap set certbot trust-plugin-with-root=ok && snap install certbot-nginx"])
+                .output()
+        ).await;
     }
 
-    // Set up auto-renewal timer
-    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["enable", "certbot.timer"]).output()).await;
-    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["start", "certbot.timer"]).output()).await;
+    if snap_ok {
+        tracing::info!("Certbot installed via snap (4.x with ARI support)");
+        // snap auto-renewal runs via snap.certbot.renew.timer
+        let _ = tokio::time::timeout(Duration::from_secs(30),
+            safe_command("systemctl").args(["enable", "snap.certbot.renew.timer"]).output()).await;
+        let _ = tokio::time::timeout(Duration::from_secs(30),
+            safe_command("systemctl").args(["start", "snap.certbot.renew.timer"]).output()).await;
+        return Ok(ok("Certbot 4.x installed via snap with nginx plugin and auto-renewal (ARI-ready for 45-day certs)"));
+    }
 
-    tracing::info!("Certbot installed with auto-renewal");
-    Ok(ok("Certbot installed with nginx plugin and auto-renewal timer"))
+    tracing::warn!("Snap certbot failed, falling back to pip...");
+
+    // Fallback: pip install (gets latest certbot from PyPI)
+    let pip_ok = tokio::time::timeout(
+        Duration::from_secs(300),
+        safe_command("sh")
+            .args(["-c", "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y python3-venv && \
+                python3 -m venv /opt/certbot && \
+                /opt/certbot/bin/pip install --upgrade pip && \
+                /opt/certbot/bin/pip install certbot certbot-nginx && \
+                ln -sf /opt/certbot/bin/certbot /usr/bin/certbot"])
+            .output()
+    ).await
+        .ok()
+        .and_then(|r| r.ok())
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if pip_ok {
+        tracing::info!("Certbot installed via pip");
+        // Create systemd timer for auto-renewal
+        let timer_unit = "[Unit]\nDescription=Certbot renewal timer\n\n[Timer]\nOnCalendar=*-*-* 00,12:00:00\nRandomizedDelaySec=3600\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n";
+        let service_unit = "[Unit]\nDescription=Certbot renewal\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/certbot renew --quiet --deploy-hook \"systemctl reload nginx\"\n";
+        std::fs::write("/etc/systemd/system/certbot.timer", timer_unit).ok();
+        std::fs::write("/etc/systemd/system/certbot.service", service_unit).ok();
+        let _ = tokio::time::timeout(Duration::from_secs(30), safe_command("systemctl").args(["daemon-reload"]).output()).await;
+        let _ = tokio::time::timeout(Duration::from_secs(30), safe_command("systemctl").args(["enable", "certbot.timer"]).output()).await;
+        let _ = tokio::time::timeout(Duration::from_secs(30), safe_command("systemctl").args(["start", "certbot.timer"]).output()).await;
+        return Ok(ok("Certbot installed via pip with nginx plugin and auto-renewal timer"));
+    }
+
+    Err(err(StatusCode::INTERNAL_SERVER_ERROR, "Certbot install failed: both snap and pip methods failed"))
 }
 
 // ── UFW installer ───────────────────────────────────────────────────────
@@ -492,24 +545,38 @@ async fn uninstall_php() -> Result<Json<serde_json::Value>, ApiErr> {
 async fn uninstall_certbot() -> Result<Json<serde_json::Value>, ApiErr> {
     tracing::info!("Uninstalling Certbot...");
 
-    // Stop and disable certbot timer
-    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["stop", "certbot.timer"]).output()).await;
-    let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["disable", "certbot.timer"]).output()).await;
+    // Stop all possible renewal timers
+    let _ = tokio::time::timeout(Duration::from_secs(30), safe_command("systemctl").args(["stop", "certbot.timer"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(30), safe_command("systemctl").args(["disable", "certbot.timer"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(30), safe_command("systemctl").args(["stop", "snap.certbot.renew.timer"]).output()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(30), safe_command("systemctl").args(["disable", "snap.certbot.renew.timer"]).output()).await;
 
-    // Purge certbot packages
-    let output = tokio::time::timeout(
+    // Remove snap certbot (if installed)
+    let _ = tokio::time::timeout(
+        Duration::from_secs(120),
+        safe_command("sh")
+            .args(["-c", "snap remove certbot 2>/dev/null; snap remove certbot-nginx 2>/dev/null; true"])
+            .output()
+    ).await;
+
+    // Remove pip certbot (if installed)
+    if std::path::Path::new("/opt/certbot").exists() {
+        let _ = std::fs::remove_dir_all("/opt/certbot");
+        let _ = std::fs::remove_file("/etc/systemd/system/certbot.timer");
+        let _ = std::fs::remove_file("/etc/systemd/system/certbot.service");
+        let _ = tokio::time::timeout(Duration::from_secs(30), safe_command("systemctl").args(["daemon-reload"]).output()).await;
+    }
+
+    // Remove apt certbot (if installed)
+    let _ = tokio::time::timeout(
         Duration::from_secs(300),
         safe_command("sh")
-            .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get purge -y certbot python3-certbot-nginx && apt-get autoremove -y"])
+            .args(["-c", "DEBIAN_FRONTEND=noninteractive apt-get purge -y certbot python3-certbot-nginx 2>/dev/null; apt-get autoremove -y 2>/dev/null; true"])
             .output()
-    ).await
-        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Certbot uninstall timed out after 300s"))?
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Certbot uninstall failed: {e}")))?;
+    ).await;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Certbot uninstall failed: {}", stderr.chars().take(300).collect::<String>())));
-    }
+    // Clean up symlink
+    let _ = std::fs::remove_file("/usr/bin/certbot");
 
     tracing::info!("Certbot uninstalled");
     Ok(ok("Certbot and auto-renewal timer removed"))

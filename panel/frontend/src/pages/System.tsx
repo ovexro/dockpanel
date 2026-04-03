@@ -55,6 +55,38 @@ interface SystemInfoData {
   process_count: number;
 }
 
+interface GpuData {
+  index: number;
+  name: string;
+  memory_total_mb: number;
+  memory_used_mb: number;
+  memory_free_mb: number;
+  utilization_gpu_pct: number;
+  utilization_memory_pct: number;
+  temperature_c: number | null;
+  power_draw_w: number | null;
+  power_limit_w: number | null;
+  fan_speed_pct: number | null;
+  driver_version: string;
+  performance_state: string;
+}
+
+interface GpuProcess {
+  pid: number;
+  gpu_uuid: string;
+  vram_used_mb: number;
+  process_name: string;
+  container_name: string | null;
+}
+
+interface GpuInfoData {
+  available: boolean;
+  gpus: GpuData[];
+  gpu_count: number;
+  nvidia_toolkit_installed: boolean;
+  processes: GpuProcess[];
+}
+
 function formatUptime(secs: number): string {
   const days = Math.floor(secs / 86400);
   const hours = Math.floor((secs % 86400) / 3600);
@@ -67,6 +99,7 @@ function formatUptime(secs: number): string {
 function HealthContent() {
   const [health, setHealth] = useState<HealthData | null>(null);
   const [sysInfo, setSysInfo] = useState<SystemInfoData | null>(null);
+  const [gpuInfo, setGpuInfo] = useState<GpuInfoData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -74,9 +107,11 @@ function HealthContent() {
     Promise.all([
       api.get<HealthData>("/health").catch(() => null),
       api.get<SystemInfoData>("/system/info").catch(() => null),
-    ]).then(([h, s]) => {
+      api.get<GpuInfoData>("/apps/gpu-info").catch(() => null),
+    ]).then(([h, s, g]) => {
       if (h) setHealth(h);
       if (s) setSysInfo(s);
+      if (g) setGpuInfo(g);
       if (!h && !s) setError("Failed to fetch health data");
     }).finally(() => setLoading(false));
   }, []);
@@ -154,14 +189,140 @@ function HealthContent() {
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      {cards.map((c) => (
-        <div key={c.label} className="bg-dark-800 rounded-lg border border-dark-600 p-4">
-          <p className="text-xs text-dark-400 font-mono uppercase tracking-wider mb-1">{c.label}</p>
-          <p className={`text-lg font-semibold ${c.color || "text-dark-50"}`}>{c.value}</p>
-          {c.sub && <p className="text-xs text-dark-400 mt-0.5 truncate">{c.sub}</p>}
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {cards.map((c) => (
+          <div key={c.label} className="bg-dark-800 rounded-lg border border-dark-600 p-4">
+            <p className="text-xs text-dark-400 font-mono uppercase tracking-wider mb-1">{c.label}</p>
+            <p className={`text-lg font-semibold ${c.color || "text-dark-50"}`}>{c.value}</p>
+            {c.sub && <p className="text-xs text-dark-400 mt-0.5 truncate">{c.sub}</p>}
+          </div>
+        ))}
+      </div>
+
+      {gpuInfo && gpuInfo.available && gpuInfo.gpus.length > 0 && (
+        <GpuMonitor gpuInfo={gpuInfo} />
+      )}
+    </div>
+  );
+}
+
+function GpuMonitor({ gpuInfo }: { gpuInfo: GpuInfoData }) {
+  const vramColor = (used: number, total: number) => {
+    if (total === 0) return "text-dark-300";
+    const pct = (used / total) * 100;
+    return pct > 90 ? "text-danger-400" : pct > 70 ? "text-warn-400" : "text-emerald-400";
+  };
+  const tempColor = (t: number | null) => {
+    if (t === null) return "text-dark-300";
+    return t > 85 ? "text-danger-400" : t > 70 ? "text-warn-400" : "text-emerald-400";
+  };
+  const utilColor = (pct: number) => {
+    return pct > 90 ? "text-danger-400" : pct > 70 ? "text-warn-400" : "text-emerald-400";
+  };
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-4">
+        <h2 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">GPU Monitoring</h2>
+        <span className="text-xs text-dark-400">
+          {gpuInfo.gpu_count} GPU{gpuInfo.gpu_count !== 1 ? "s" : ""}
+          {gpuInfo.nvidia_toolkit_installed ? " \u00b7 Container Toolkit installed" : ""}
+        </span>
+      </div>
+
+      {gpuInfo.gpus.map((gpu) => {
+        const vramPct = gpu.memory_total_mb > 0 ? (gpu.memory_used_mb / gpu.memory_total_mb) * 100 : 0;
+        return (
+          <div key={gpu.index} className="bg-dark-800 rounded-lg border border-dark-600 p-5 mb-4">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-sm font-semibold text-dark-50">GPU {gpu.index}: {gpu.name}</h3>
+                <p className="text-xs text-dark-400 mt-0.5">Driver {gpu.driver_version} \u00b7 {gpu.performance_state}</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+              <div>
+                <p className="text-xs text-dark-400 font-mono uppercase tracking-wider mb-1">GPU Utilization</p>
+                <p className={`text-lg font-semibold ${utilColor(gpu.utilization_gpu_pct)}`}>{gpu.utilization_gpu_pct}%</p>
+              </div>
+              <div>
+                <p className="text-xs text-dark-400 font-mono uppercase tracking-wider mb-1">VRAM</p>
+                <p className={`text-lg font-semibold ${vramColor(gpu.memory_used_mb, gpu.memory_total_mb)}`}>
+                  {gpu.memory_used_mb.toLocaleString()} / {gpu.memory_total_mb.toLocaleString()} MB
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-dark-400 font-mono uppercase tracking-wider mb-1">Temperature</p>
+                <p className={`text-lg font-semibold ${tempColor(gpu.temperature_c)}`}>
+                  {gpu.temperature_c !== null ? `${gpu.temperature_c}\u00b0C` : "N/A"}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-dark-400 font-mono uppercase tracking-wider mb-1">Power</p>
+                <p className="text-lg font-semibold text-dark-50">
+                  {gpu.power_draw_w !== null ? `${gpu.power_draw_w.toFixed(0)}W` : "N/A"}
+                  {gpu.power_limit_w !== null ? <span className="text-dark-400 text-sm"> / {gpu.power_limit_w.toFixed(0)}W</span> : ""}
+                </p>
+              </div>
+            </div>
+
+            {/* VRAM usage bar */}
+            <div className="h-2 bg-dark-700 rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${vramPct > 90 ? "bg-danger-500" : vramPct > 70 ? "bg-warn-500" : "bg-emerald-500"}`}
+                style={{ width: `${Math.min(vramPct, 100)}%` }}
+              />
+            </div>
+            <div className="flex justify-between mt-1">
+              <span className="text-xs text-dark-400">{vramPct.toFixed(1)}% VRAM used</span>
+              <span className="text-xs text-dark-400">{gpu.memory_free_mb.toLocaleString()} MB free</span>
+            </div>
+
+            {gpu.fan_speed_pct !== null && (
+              <p className="text-xs text-dark-400 mt-2">Fan: {gpu.fan_speed_pct}%</p>
+            )}
+          </div>
+        );
+      })}
+
+      {/* GPU Processes */}
+      {gpuInfo.processes.length > 0 && (
+        <div className="bg-dark-800 rounded-lg border border-dark-600 p-5">
+          <h3 className="text-xs text-dark-400 font-mono uppercase tracking-wider mb-3">GPU Processes</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-dark-600">
+                  <th className="text-left text-xs text-dark-400 font-mono uppercase pb-2">PID</th>
+                  <th className="text-left text-xs text-dark-400 font-mono uppercase pb-2">Process</th>
+                  <th className="text-left text-xs text-dark-400 font-mono uppercase pb-2">Container</th>
+                  <th className="text-right text-xs text-dark-400 font-mono uppercase pb-2">VRAM</th>
+                </tr>
+              </thead>
+              <tbody>
+                {gpuInfo.processes.map((proc) => (
+                  <tr key={proc.pid} className="border-b border-dark-700/50">
+                    <td className="py-1.5 text-dark-200 font-mono text-xs">{proc.pid}</td>
+                    <td className="py-1.5 text-dark-200 text-xs truncate max-w-[200px]" title={proc.process_name}>
+                      {proc.process_name.split("/").pop()}
+                    </td>
+                    <td className="py-1.5 text-xs">
+                      {proc.container_name ? (
+                        <span className="text-rust-400">{proc.container_name}</span>
+                      ) : (
+                        <span className="text-dark-400">host</span>
+                      )}
+                    </td>
+                    <td className="py-1.5 text-right text-dark-200 font-mono text-xs">{proc.vram_used_mb} MB</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-      ))}
+      )}
     </div>
   );
 }
