@@ -4,23 +4,27 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [2.7.2] - 2026-04-03
+## [2.7.3] - 2026-04-03
 
 ### Added
 - **GPU monitoring dashboard** — VRAM used/free, temperature, power draw, fan speed, per-process usage with automatic Docker container name resolution. Shown in System Health tab. Gracefully hidden when no GPU detected.
 - GPU process table maps PIDs to Docker container names via /proc cgroup inspection
 
 ### Changed
-- System updates now stream apt output in real-time via NDJSON instead of buffering entire output
-- Agent `apply_updates` returns streaming response (newline-delimited JSON) for live terminal experience
-- Backend consumes streamed agent response via new `post_long_ndjson()` method, forwarding lines as SSE events
-- Added `stream` feature to reqwest for chunked response handling on remote agents
 - Certbot installer upgraded from apt (2.9.0) to snap (4.x with ARI support for upcoming 45-day LE certificates). Falls back to pip if snap unavailable.
 - OWASP CRS updated from v4.4.0 to v4.25.0 LTS
 
 ### Security
 - Fixed CVE-2026-21876 (CVSS 9.3): OWASP CRS multipart charset validation bypass
 - Fixed CVE-2026-33691: OWASP CRS file upload whitespace bypass
+
+## [2.7.2] - 2026-04-02
+
+### Changed
+- System updates now stream apt output in real-time via NDJSON instead of buffering entire output
+- Agent `apply_updates` returns streaming response (newline-delimited JSON) for live terminal experience
+- Backend consumes streamed agent response via new `post_long_ndjson()` method, forwarding lines as SSE events
+- Added `stream` feature to reqwest for chunked response handling on remote agents
 
 ## [2.7.1] - 2026-03-31
 
