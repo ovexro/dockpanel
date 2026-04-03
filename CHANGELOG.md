@@ -4,6 +4,20 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.7.4] - 2026-04-03
+
+### Security
+- JWT role staleness: sessions now invalidated immediately on role change (was stale up to 2h)
+- Webhook gateway DNS rebinding SSRF: destination URL re-validated at forward time, not just registration
+- Agent checkin replay prevention: timestamp validation rejects requests >120s old
+- Per-user ACME rate limiting: max 10 SSL certificates per hour per user (HTTP-01 and DNS-01)
+- DNS pre-flight check: verify domain resolves to this server's IP before HTTP-01 provisioning
+- Request timeout: 300s TimeoutLayer added as defense-in-depth against slow requests
+- Agent response streaming limit: uses `http_body_util::Limited` instead of buffering entire response before size check
+
+### Fixed
+- Docker container logs now strip ANSI escape sequences instead of returning raw escape codes
+
 ## [2.7.3] - 2026-04-03
 
 ### Added
