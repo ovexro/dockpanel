@@ -776,10 +776,10 @@ async fn install_waf() -> Result<Json<serde_json::Value>, ApiErr> {
             safe_command("sh")
                 .args(["-c", &format!(
                     "cd /tmp && \
-                     curl -sL https://github.com/coreruleset/coreruleset/archive/refs/tags/v4.4.0.tar.gz -o crs.tar.gz && \
+                     curl -sL https://github.com/coreruleset/coreruleset/archive/refs/tags/v4.25.0.tar.gz -o crs.tar.gz && \
                      tar xzf crs.tar.gz && \
                      rm -rf {crs_dir} && \
-                     mv coreruleset-4.4.0 {crs_dir} && \
+                     mv coreruleset-4.25.0 {crs_dir} && \
                      cp {crs_dir}/crs-setup.conf.example {crs_dir}/crs-setup.conf && \
                      rm -f crs.tar.gz"
                 )])
@@ -788,7 +788,7 @@ async fn install_waf() -> Result<Json<serde_json::Value>, ApiErr> {
 
         match dl {
             Ok(Ok(o)) if o.status.success() => {
-                tracing::info!("OWASP CRS v4.4.0 downloaded");
+                tracing::info!("OWASP CRS v4.25.0 downloaded");
             }
             _ => {
                 tracing::warn!("OWASP CRS download failed — WAF will work without rules");
@@ -847,7 +847,7 @@ SecStatusEngine Off
     }
 
     tracing::info!("WAF installed (ModSecurity3 + OWASP CRS)");
-    Ok(ok("WAF installed: ModSecurity3 with OWASP Core Rule Set v4"))
+    Ok(ok("WAF installed: ModSecurity3 with OWASP Core Rule Set v4.25.0"))
 }
 
 async fn uninstall_waf() -> Result<Json<serde_json::Value>, ApiErr> {
