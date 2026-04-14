@@ -132,6 +132,7 @@ export default function Mail() {
   const [showBulkImport, setShowBulkImport] = useState(false);
   const [bulkImportText, setBulkImportText] = useState("");
   const [importing, setImporting] = useState(false);
+  const [pendingConfirm, setPendingConfirm] = useState<{ type: string; label: string; data?: any } | null>(null);
 
   const loadMailStatus = async () => {
     try {
@@ -232,16 +233,12 @@ export default function Mail() {
     } finally { setSavingDomain(false); }
   };
 
-  const handleDeleteDomain = async (domain: MailDomain) => {
-    if (!confirm(`Delete mail domain "${domain.domain}"? All accounts and aliases will be removed.`)) return;
-    try {
-      await api.delete(`/mail/domains/${domain.id}`);
-      if (selectedDomain?.id === domain.id) { setSelectedDomain(null); setAccounts([]); setAliases([]); }
-      loadDomains();
-      setMessage({ text: "Domain removed", type: "success" });
-    } catch (e) {
-      setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
-    }
+  const handleDeleteDomain = (domain: MailDomain) => {
+    setPendingConfirm({
+      type: "delete_domain",
+      label: `Delete mail domain "${domain.domain}"? All accounts and aliases will be removed.`,
+      data: { id: domain.id }
+    });
   };
 
   const handleAddAccount = async () => {
@@ -263,15 +260,13 @@ export default function Mail() {
     } finally { setSavingAccount(false); }
   };
 
-  const handleDeleteAccount = async (account: MailAccount) => {
-    if (!selectedDomain || !confirm(`Delete mailbox "${account.email}"?`)) return;
-    try {
-      await api.delete(`/mail/domains/${selectedDomain.id}/accounts/${account.id}`);
-      loadDomainData(selectedDomain.id);
-      setMessage({ text: "Mailbox deleted", type: "success" });
-    } catch (e) {
-      setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
-    }
+  const handleDeleteAccount = (account: MailAccount) => {
+    if (!selectedDomain) return;
+    setPendingConfirm({
+      type: "delete_account",
+      label: `Delete mailbox "${account.email}"?`,
+      data: { domainId: selectedDomain.id, accountId: account.id }
+    });
   };
 
   const handleUpdateAccount = async () => {
@@ -310,14 +305,13 @@ export default function Mail() {
     } finally { setSavingAlias(false); }
   };
 
-  const handleDeleteAlias = async (alias: MailAlias) => {
-    if (!selectedDomain || !confirm(`Delete alias "${alias.source_email}"?`)) return;
-    try {
-      await api.delete(`/mail/domains/${selectedDomain.id}/aliases/${alias.id}`);
-      loadDomainData(selectedDomain.id);
-    } catch (e) {
-      setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
-    }
+  const handleDeleteAlias = (alias: MailAlias) => {
+    if (!selectedDomain) return;
+    setPendingConfirm({
+      type: "delete_alias",
+      label: `Delete alias "${alias.source_email}"?`,
+      data: { domainId: selectedDomain.id, aliasId: alias.id }
+    });
   };
 
   const openEditAccount = (acc: MailAccount) => {
@@ -328,6 +322,52 @@ export default function Mail() {
     setEditAutoEnabled(acc.autoresponder_enabled);
     setEditAutoSubject(acc.autoresponder_subject || "");
     setEditAutoBody(acc.autoresponder_body || "");
+  };
+
+  const executeConfirm = async () => {
+    if (!pendingConfirm) return;
+    const { type, data } = pendingConfirm;
+    setPendingConfirm(null);
+    try {
+      switch (type) {
+        case "delete_domain": {
+          await api.delete(`/mail/domains/${data.id}`);
+          if (selectedDomain?.id === data.id) { setSelectedDomain(null); setAccounts([]); setAliases([]); }
+          loadDomains();
+          setMessage({ text: "Domain removed", type: "success" });
+          break;
+        }
+        case "delete_account": {
+          await api.delete(`/mail/domains/${data.domainId}/accounts/${data.accountId}`);
+          loadDomainData(data.domainId);
+          setMessage({ text: "Mailbox deleted", type: "success" });
+          break;
+        }
+        case "delete_alias": {
+          await api.delete(`/mail/domains/${data.domainId}/aliases/${data.aliasId}`);
+          loadDomainData(data.domainId);
+          break;
+        }
+        case "remove_webmail": {
+          await api.post("/mail/webmail/remove", {});
+          setWebmail({ installed: false, running: false, port: 0 });
+          setMessage({ text: "Roundcube removed", type: "success" });
+          break;
+        }
+        case "restore_backup": {
+          await api.post("/mail/restore", { email: data.email, file: data.file });
+          setMessage({ text: "Mailbox restored", type: "success" });
+          break;
+        }
+        case "delete_backup": {
+          await api.post("/mail/backups/delete", { file: data.file });
+          loadBackups();
+          break;
+        }
+      }
+    } catch (e: any) {
+      setMessage({ text: e instanceof Error ? e.message : e.message || "Action failed", type: "error" });
+    }
   };
 
   if (loading) {
@@ -372,6 +412,25 @@ export default function Mail() {
       {message.text && (
         <div className={`mb-4 px-4 py-3 rounded-lg text-sm border ${message.type === "success" ? "bg-rust-500/10 text-rust-400 border-rust-500/20" : "bg-danger-500/10 text-danger-400 border-danger-500/20"}`}>
           {message.text}
+        </div>
+      )}
+
+      {/* Inline confirmation bar */}
+      {pendingConfirm && (
+        <div className={`mb-4 px-4 py-3 rounded-lg border flex items-center justify-between ${
+          ["delete_domain", "delete_account", "delete_backup"].includes(pendingConfirm.type) ? "border-danger-500/30 bg-danger-500/5" : "border-warn-500/30 bg-warn-500/5"
+        }`}>
+          <span className={`text-xs font-mono ${["delete_domain", "delete_account", "delete_backup"].includes(pendingConfirm.type) ? "text-danger-400" : "text-warn-400"}`}>
+            {pendingConfirm.label}
+          </span>
+          <div className="flex items-center gap-2 shrink-0 ml-4">
+            <button onClick={executeConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">
+              Confirm
+            </button>
+            <button onClick={() => setPendingConfirm(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">
+              Cancel
+            </button>
+          </div>
         </div>
       )}
 
@@ -449,11 +508,8 @@ export default function Mail() {
                   {webmail.running && (
                     <a href={`http://${window.location.hostname}:${webmail.port}`} target="_blank" rel="noopener noreferrer" className="flex-1 px-3 py-1.5 bg-dark-700 text-dark-100 rounded text-xs font-medium hover:bg-dark-600 transition-colors text-center">Open</a>
                   )}
-                  <button onClick={async () => {
-                    if (!confirm("Remove Roundcube webmail?")) return;
-                    try { await api.post("/mail/webmail/remove", {}); setWebmail({ installed: false, running: false, port: 0 }); setMessage({ text: "Roundcube removed", type: "success" }); }
-                    catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-                  }} className="flex-1 px-3 py-1.5 bg-dark-700 text-dark-100 rounded text-xs font-medium hover:bg-dark-600 transition-colors">Remove</button>
+                  <button onClick={() => setPendingConfirm({ type: "remove_webmail", label: "Remove Roundcube webmail?" })}
+                    className="flex-1 px-3 py-1.5 bg-dark-700 text-dark-100 rounded text-xs font-medium hover:bg-dark-600 transition-colors">Remove</button>
                 </div>
               )}
             </div>
@@ -915,16 +971,16 @@ export default function Mail() {
                                 <span className="text-dark-300 ml-2">{(b.size / 1024 / 1024).toFixed(1)} MB</span>
                               </div>
                               <div className="flex gap-2">
-                                <button onClick={async () => {
-                                  if (!confirm(`Restore ${b.email} from this backup? Current mail data will be overwritten.`)) return;
-                                  try { await api.post("/mail/restore", { email: b.email, file: b.file }); setMessage({ text: "Mailbox restored", type: "success" }); }
-                                  catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-                                }} className="text-rust-400 hover:text-rust-300">Restore</button>
-                                <button onClick={async () => {
-                                  if (!confirm("Delete this backup?")) return;
-                                  try { await api.post("/mail/backups/delete", { file: b.file }); loadBackups(); }
-                                  catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-                                }} className="text-danger-400 hover:text-danger-300">Delete</button>
+                                <button onClick={() => setPendingConfirm({
+                                  type: "restore_backup",
+                                  label: `Restore ${b.email} from this backup? Current mail data will be overwritten.`,
+                                  data: { email: b.email, file: b.file }
+                                })} className="text-rust-400 hover:text-rust-300">Restore</button>
+                                <button onClick={() => setPendingConfirm({
+                                  type: "delete_backup",
+                                  label: "Delete this backup?",
+                                  data: { file: b.file }
+                                })} className="text-danger-400 hover:text-danger-300">Delete</button>
                               </div>
                             </div>
                           ))}

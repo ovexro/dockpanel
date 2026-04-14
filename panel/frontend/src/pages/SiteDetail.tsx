@@ -63,6 +63,7 @@ export default function SiteDetail() {
   const [stagingLoading, setStagingLoading] = useState(false);
   const [stagingMessage, setStagingMessage] = useState("");
   const [stagingDomain, setStagingDomain] = useState("");
+  const [pendingConfirm, setPendingConfirm] = useState<{ type: string; label: string } | null>(null);
   const [showStagingForm, setShowStagingForm] = useState(false);
 
   // Redirects
@@ -166,6 +167,28 @@ export default function SiteDetail() {
 
   const fetchStaging = () => {
     api.get<StagingInfo>(`/sites/${id}/staging`).then(setStaging).catch(() => { /* no staging */ });
+  };
+
+  const executeConfirm = async () => {
+    if (!pendingConfirm) return;
+    const { type } = pendingConfirm;
+    setPendingConfirm(null);
+    setStagingLoading(true);
+    setStagingMessage("");
+    try {
+      if (type === "staging_push") {
+        await api.post(`/sites/${id}/staging/push`);
+        setStagingMessage("Staging pushed to production");
+      } else if (type === "staging_delete") {
+        await api.delete(`/sites/${id}/staging`);
+        setStaging({ exists: false });
+        setStagingMessage("Staging deleted");
+      }
+    } catch (e) {
+      setStagingMessage(e instanceof Error ? e.message : "Action failed");
+    } finally {
+      setStagingLoading(false);
+    }
   };
 
   const loadRedirects = () => {
@@ -1364,6 +1387,25 @@ export default function SiteDetail() {
                   </div>
                 </div>
 
+                {/* Inline staging confirmation bar */}
+                {pendingConfirm && (
+                  <div className={`px-4 py-3 rounded-lg border flex items-center justify-between ${
+                    pendingConfirm.type === "staging_delete" ? "border-danger-500/30 bg-danger-500/5" : "border-warn-500/30 bg-warn-500/5"
+                  }`}>
+                    <span className={`text-xs font-mono ${pendingConfirm.type === "staging_delete" ? "text-danger-400" : "text-warn-400"}`}>
+                      {pendingConfirm.label}
+                    </span>
+                    <div className="flex items-center gap-2 shrink-0 ml-4">
+                      <button onClick={executeConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">
+                        Confirm
+                      </button>
+                      <button onClick={() => setPendingConfirm(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {/* Staging actions */}
                 <div className="flex items-center gap-2 pt-2 border-t border-dark-600">
                   <button
@@ -1387,19 +1429,7 @@ export default function SiteDetail() {
                   </button>
                   <button
                     disabled={stagingLoading}
-                    onClick={async () => {
-                      if (!confirm("This will overwrite production files with staging files. Continue?")) return;
-                      setStagingLoading(true);
-                      setStagingMessage("");
-                      try {
-                        await api.post(`/sites/${id}/staging/push`);
-                        setStagingMessage("Staging pushed to production");
-                      } catch (e) {
-                        setStagingMessage(e instanceof Error ? e.message : "Push failed");
-                      } finally {
-                        setStagingLoading(false);
-                      }
-                    }}
+                    onClick={() => setPendingConfirm({ type: "staging_push", label: "This will overwrite production files with staging files. Continue?" })}
                     className="px-3 py-1.5 bg-warn-600 text-white rounded-lg text-xs font-medium hover:bg-warn-600 disabled:opacity-50 transition-colors"
                   >
                     Push to Prod
@@ -1419,20 +1449,7 @@ export default function SiteDetail() {
                   <div className="flex-1" />
                   <button
                     disabled={stagingLoading}
-                    onClick={async () => {
-                      if (!confirm("Delete this staging environment? This cannot be undone.")) return;
-                      setStagingLoading(true);
-                      setStagingMessage("");
-                      try {
-                        await api.delete(`/sites/${id}/staging`);
-                        setStaging({ exists: false });
-                        setStagingMessage("Staging deleted");
-                      } catch (e) {
-                        setStagingMessage(e instanceof Error ? e.message : "Delete failed");
-                      } finally {
-                        setStagingLoading(false);
-                      }
-                    }}
+                    onClick={() => setPendingConfirm({ type: "staging_delete", label: "Delete this staging environment? This cannot be undone." })}
                     className="px-3 py-1.5 bg-danger-500/10 text-danger-400 rounded-lg text-xs font-medium hover:bg-danger-500/20 transition-colors"
                   >
                     Delete Staging

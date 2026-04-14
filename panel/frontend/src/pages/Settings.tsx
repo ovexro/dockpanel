@@ -116,6 +116,7 @@ export default function Settings() {
   const [destSftpPath, setDestSftpPath] = useState("/backups");
   const [savingDest, setSavingDest] = useState(false);
   const [testingDest, setTestingDest] = useState<string | null>(null);
+  const [pendingConfirm, setPendingConfirm] = useState<{ type: string; label: string; data?: any } | null>(null);
 
   const loadSettings = async () => {
     try {
@@ -160,6 +161,49 @@ export default function Settings() {
       setDestinations(data);
     } catch {
       setMessage({ text: "Failed to load backup destinations", type: "error" });
+    }
+  };
+
+  const executeConfirm = async () => {
+    if (!pendingConfirm) return;
+    const { type, data } = pendingConfirm;
+    setPendingConfirm(null);
+    try {
+      switch (type) {
+        case "traefik_uninstall": {
+          setTraefikInstalling(true);
+          await api.post("/traefik/uninstall");
+          setReverseProxy("nginx");
+          setMessage({ text: "Switched to nginx", type: "success" });
+          setTraefikInstalling(false);
+          break;
+        }
+        case "import_config": {
+          await api.post("/settings/import", data.config);
+          setMessage({ text: "Config imported", type: "success" });
+          window.location.reload();
+          break;
+        }
+        case "delete_destination": {
+          await api.delete(`/backup-destinations/${data.id}`);
+          loadDestinations();
+          break;
+        }
+        case "revoke_sessions": {
+          await api.post("/auth/revoke-all");
+          setMessage({ text: "All sessions revoked", type: "success" });
+          setTimeout(() => { window.location.href = "/login"; }, 2000);
+          break;
+        }
+        case "revoke_key": {
+          await api.delete(`/api-keys/${data.id}`);
+          setApiKeys(apiKeys.filter((a: any) => a.id !== data.id));
+          break;
+        }
+      }
+    } catch (e: any) {
+      setMessage({ text: e instanceof Error ? e.message : e.message || "Action failed", type: "error" });
+      if (type === "traefik_uninstall") setTraefikInstalling(false);
     }
   };
 
@@ -355,6 +399,25 @@ export default function Settings() {
         </div>
       )}
 
+      {/* Inline confirmation bar */}
+      {pendingConfirm && (
+        <div className={`mb-4 px-4 py-3 rounded-lg border flex items-center justify-between ${
+          ["revoke_sessions", "revoke_key", "delete_destination"].includes(pendingConfirm.type) ? "border-danger-500/30 bg-danger-500/5" : "border-warn-500/30 bg-warn-500/5"
+        }`}>
+          <span className={`text-xs font-mono ${["revoke_sessions", "revoke_key", "delete_destination"].includes(pendingConfirm.type) ? "text-danger-400" : "text-warn-400"}`}>
+            {pendingConfirm.label}
+          </span>
+          <div className="flex items-center gap-2 shrink-0 ml-4">
+            <button onClick={executeConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">
+              Confirm
+            </button>
+            <button onClick={() => setPendingConfirm(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="space-y-6">
         {/* General Settings */}
         {tab === "general" && (<>
@@ -441,17 +504,7 @@ export default function Settings() {
               <button
                 onClick={async () => {
                   if (reverseProxy === "traefik") {
-                    if (!confirm("Switch back to nginx? Existing Docker apps with domains will need redeployment.")) return;
-                    try {
-                      setTraefikInstalling(true);
-                      await api.post("/traefik/uninstall");
-                      setReverseProxy("nginx");
-                      setMessage({ text: "Switched to nginx", type: "success" });
-                    } catch (e) {
-                      setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
-                    } finally {
-                      setTraefikInstalling(false);
-                    }
+                    setPendingConfirm({ type: "traefik_uninstall", label: "Switch back to nginx? Existing Docker apps with domains will need redeployment." });
                   }
                 }}
                 className={`flex-1 px-4 py-3 rounded-lg border text-sm font-mono text-center transition-colors ${reverseProxy === "nginx" ? "border-rust-500 bg-rust-500/10 text-rust-400" : "border-dark-600 bg-dark-900 text-dark-300 hover:border-dark-400 cursor-pointer"}`}
@@ -610,10 +663,11 @@ export default function Settings() {
                 const text = await file.text();
                 try {
                   const data = JSON.parse(text);
-                  if (!confirm(`Import ${Object.keys(data.settings || {}).length} settings? This will overwrite existing values.`)) return;
-                  await api.post("/settings/import", data);
-                  setMessage({ text: "Config imported", type: "success" });
-                  window.location.reload();
+                  setPendingConfirm({
+                    type: "import_config",
+                    label: `Import ${Object.keys(data.settings || {}).length} settings? This will overwrite existing values.`,
+                    data: { config: data }
+                  });
                 } catch { setMessage({ text: "Invalid config file", type: "error" }); }
                 e.target.value = "";
               }} />
@@ -1142,15 +1196,11 @@ export default function Settings() {
                         {testingDest === d.id ? "Testing..." : "Test"}
                       </button>
                       <button
-                        onClick={async () => {
-                          if (!confirm(`Delete "${d.name}"?`)) return;
-                          try {
-                            await api.delete(`/backup-destinations/${d.id}`);
-                            loadDestinations();
-                          } catch (e) {
-                            setMessage({ text: e instanceof Error ? e.message : "Delete failed", type: "error" });
-                          }
-                        }}
+                        onClick={() => setPendingConfirm({
+                          type: "delete_destination",
+                          label: `Delete "${d.name}"?`,
+                          data: { id: d.id }
+                        })}
                         className="px-2 py-1 bg-danger-500/10 text-danger-400 rounded text-xs font-medium hover:bg-danger-500/20"
                       >
                         Delete
@@ -1518,14 +1568,8 @@ export default function Settings() {
               <p className="text-sm text-dark-100">Active Sessions</p>
               <p className="text-xs text-dark-300 mt-0.5">Force all users to re-login</p>
             </div>
-            <button onClick={async () => {
-              if (!confirm("Revoke all sessions? All users (including you) will be logged out.")) return;
-              try {
-                await api.post("/auth/revoke-all");
-                setMessage({ text: "All sessions revoked", type: "success" });
-                setTimeout(() => { window.location.href = "/login"; }, 2000);
-              } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-            }} className="px-3 py-1.5 bg-danger-500/10 text-danger-400 rounded text-xs font-medium hover:bg-danger-500/20">Revoke All Sessions</button>
+            <button onClick={() => setPendingConfirm({ type: "revoke_sessions", label: "Revoke all sessions? All users (including you) will be logged out." })}
+              className="px-3 py-1.5 bg-danger-500/10 text-danger-400 rounded text-xs font-medium hover:bg-danger-500/20">Revoke All Sessions</button>
           </div>
         </div>
 
@@ -1576,13 +1620,11 @@ export default function Settings() {
                       api.get<any[]>("/api-keys").then(setApiKeys).catch(() => {});
                     } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
                   }} className="text-dark-300 hover:text-dark-100">Rotate</button>
-                  <button onClick={async () => {
-                    if (!confirm("Revoke this API key?")) return;
-                    try {
-                      await api.delete(`/api-keys/${k.id}`);
-                      setApiKeys(apiKeys.filter((a: any) => a.id !== k.id));
-                    } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-                  }} className="text-danger-400 hover:text-danger-300">Revoke</button>
+                  <button onClick={() => setPendingConfirm({
+                    type: "revoke_key",
+                    label: "Revoke this API key?",
+                    data: { id: k.id }
+                  })} className="text-danger-400 hover:text-danger-300">Revoke</button>
                 </div>
               </div>
             ))}
@@ -2011,6 +2053,7 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
   const [uninstalling, setUninstalling] = useState<string | null>(null);
   const [msg, setMsg] = useState({ text: "", type: "" });
   const [showGuide, setShowGuide] = useState(false);
+  const [svcPendingConfirm, setSvcPendingConfirm] = useState<{ service: string; label: string } | null>(null);
 
   const refreshStatus = () => {
     api.get<Record<string, unknown>>("/services/install-status")
@@ -2043,8 +2086,14 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
     }
   };
 
-  const uninstall = async (service: string, label: string) => {
-    if (!confirm(`Are you sure you want to uninstall ${label}?`)) return;
+  const uninstall = (service: string, label: string) => {
+    setSvcPendingConfirm({ service, label });
+  };
+
+  const executeUninstall = async () => {
+    if (!svcPendingConfirm) return;
+    const { service, label } = svcPendingConfirm;
+    setSvcPendingConfirm(null);
     setUninstalling(service);
     setMsg({ text: "", type: "" });
     try {
@@ -2094,6 +2143,23 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
         {msg.text && (
           <div className={`px-4 py-2 rounded-lg text-sm border ${msg.type === "success" ? "bg-rust-500/10 text-rust-400 border-rust-500/20" : "bg-danger-500/10 text-danger-400 border-danger-500/20"}`}>
             {msg.text}
+          </div>
+        )}
+
+        {/* Inline confirmation bar for service uninstall */}
+        {svcPendingConfirm && (
+          <div className="px-4 py-3 rounded-lg border flex items-center justify-between border-danger-500/30 bg-danger-500/5">
+            <span className="text-xs font-mono text-danger-400">
+              Uninstall {svcPendingConfirm.label}?
+            </span>
+            <div className="flex items-center gap-2 shrink-0 ml-4">
+              <button onClick={executeUninstall} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">
+                Confirm
+              </button>
+              <button onClick={() => setSvcPendingConfirm(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">
+                Cancel
+              </button>
+            </div>
           </div>
         )}
 

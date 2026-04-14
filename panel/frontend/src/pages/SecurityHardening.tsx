@@ -47,6 +47,7 @@ export default function SecurityHardening() {
   const [pendingUsers, setPendingUsers] = useState<PendingUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState({ type: "", text: "" });
+  const [pendingConfirm, setPendingConfirm] = useState<{ type: string; label: string } | null>(null);
 
   if (!user || user.role !== "admin") return <Navigate to="/" replace />;
 
@@ -76,13 +77,8 @@ export default function SecurityHardening() {
 
   useEffect(() => { loadData(); }, []);
 
-  const activateLockdown = async () => {
-    if (!confirm("Activate system lockdown? This will block all non-admin access.")) return;
-    try {
-      await api.post("/security/lockdown/activate", { reason: "Manual admin lockdown" });
-      showMsg("success", "Lockdown activated");
-      loadData();
-    } catch (e: any) { showMsg("error", e.message); }
+  const activateLockdown = () => {
+    setPendingConfirm({ type: "lockdown", label: "Activate system lockdown? This will block all non-admin access." });
   };
 
   const deactivateLockdown = async () => {
@@ -93,11 +89,22 @@ export default function SecurityHardening() {
     } catch (e: any) { showMsg("error", e.message); }
   };
 
-  const triggerPanic = async () => {
-    if (!confirm("EMERGENCY: This will kill all terminals, block non-admins, and disable registration. Continue?")) return;
+  const triggerPanic = () => {
+    setPendingConfirm({ type: "panic", label: "EMERGENCY: This will kill all terminals, block non-admins, and disable registration. Continue?" });
+  };
+
+  const executeConfirm = async () => {
+    if (!pendingConfirm) return;
+    const { type } = pendingConfirm;
+    setPendingConfirm(null);
     try {
-      await api.post("/security/panic", {});
-      showMsg("success", "Panic mode activated — all terminals killed, system locked");
+      if (type === "lockdown") {
+        await api.post("/security/lockdown/activate", { reason: "Manual admin lockdown" });
+        showMsg("success", "Lockdown activated");
+      } else if (type === "panic") {
+        await api.post("/security/panic", {});
+        showMsg("success", "Panic mode activated — all terminals killed, system locked");
+      }
       loadData();
     } catch (e: any) { showMsg("error", e.message); }
   };
@@ -150,6 +157,23 @@ export default function SecurityHardening() {
       {message.text && (
         <div className={`mb-4 px-4 py-3 rounded-lg text-sm border ${message.type === "success" ? "bg-rust-500/10 text-rust-400 border-rust-500/20" : "bg-red-500/10 text-red-400 border-red-500/20"}`}>
           {message.text}
+        </div>
+      )}
+
+      {/* Inline confirmation bar */}
+      {pendingConfirm && (
+        <div className="mb-4 px-4 py-3 rounded-lg border flex items-center justify-between border-danger-500/30 bg-danger-500/5">
+          <span className="text-xs font-mono text-danger-400">
+            {pendingConfirm.label}
+          </span>
+          <div className="flex items-center gap-2 shrink-0 ml-4">
+            <button onClick={executeConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">
+              Confirm
+            </button>
+            <button onClick={() => setPendingConfirm(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">
+              Cancel
+            </button>
+          </div>
         </div>
       )}
 

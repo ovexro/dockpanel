@@ -97,6 +97,7 @@ export default function Security() {
   const [banIp, setBanIp] = useState("");
   const [banJail, setBanJail] = useState("");
   const [panelJail, setPanelJail] = useState(false);
+  const [pendingConfirm, setPendingConfirm] = useState<{ type: string; label: string; data?: any } | null>(null);
 
   const loadData = async () => {
     try {
@@ -136,6 +137,81 @@ export default function Security() {
       const data = await api.get<{ panel: any[]; ssh: any[] }>("/security/login-audit");
       setLoginAudit(data);
     } catch {}
+  };
+
+  const executeConfirm = async () => {
+    if (!pendingConfirm) return;
+    const { type, data } = pendingConfirm;
+    setPendingConfirm(null);
+    try {
+      switch (type) {
+        case "ssh_password": {
+          await api.post(data.enabled ? "/security/ssh/disable-password" : "/security/ssh/enable-password", {});
+          setMessage({ text: `SSH password auth ${data.enabled ? "disabled" : "enabled"}`, type: "success" });
+          loadData();
+          break;
+        }
+        case "ssh_root": {
+          await api.post("/security/ssh/disable-root", {});
+          setMessage({ text: "SSH root login disabled", type: "success" });
+          loadData();
+          break;
+        }
+        case "ssh_port": {
+          await api.post("/security/ssh/change-port", { port: data.port });
+          setMessage({ text: `SSH port changed to ${data.port}`, type: "success" });
+          loadData();
+          break;
+        }
+        case "unban": {
+          await api.post("/security/fail2ban/unban", { jail: data.jail, ip: data.ip });
+          setMessage({ text: `${data.ip} unbanned from ${data.jail}`, type: "success" });
+          loadBannedIps(data.jail);
+          loadData();
+          break;
+        }
+        case "ban": {
+          await api.post("/security/fail2ban/ban", { jail: data.jail, ip: data.ip });
+          setMessage({ text: `${data.ip} banned in ${data.jail}`, type: "success" });
+          setBanIp("");
+          if (selectedJail === data.jail) loadBannedIps(data.jail);
+          loadData();
+          break;
+        }
+        case "quarantine": {
+          await api.post("/security/fix", { fix_type: "quarantine_file", target: data.path });
+          setMessage({ text: "File quarantined", type: "success" });
+          handleScan();
+          break;
+        }
+        case "delete_file": {
+          await api.post("/security/fix", { fix_type: "remove_file", target: data.path });
+          setMessage({ text: "File deleted", type: "success" });
+          handleScan();
+          break;
+        }
+        case "apply_fix": {
+          await api.post("/security/fix", { fix_type: data.fix_type, target: data.target });
+          setMessage({ text: `Fix applied: ${data.fix_label}`, type: "success" });
+          handleScan();
+          break;
+        }
+        case "lockdown": {
+          await api.post("/security/lockdown/activate", { reason: "Manual admin lockdown" });
+          setMessage({ text: "Lockdown activated", type: "success" });
+          loadData();
+          break;
+        }
+        case "panic": {
+          await api.post("/security/panic", {});
+          setMessage({ text: "Panic mode activated", type: "success" });
+          loadData();
+          break;
+        }
+      }
+    } catch (e: any) {
+      setMessage({ text: e instanceof Error ? e.message : e.message || "Action failed", type: "error" });
+    }
   };
 
   const getFixAction = (finding: ScanFinding): { type: string; target: string; label: string } | null => {
@@ -328,6 +404,25 @@ export default function Security() {
         </div>
       )}
 
+      {/* Inline confirmation bar */}
+      {pendingConfirm && (
+        <div className={`mb-4 px-4 py-3 rounded-lg border flex items-center justify-between ${
+          ["panic", "delete_file", "lockdown"].includes(pendingConfirm.type) ? "border-danger-500/30 bg-danger-500/5" : "border-warn-500/30 bg-warn-500/5"
+        }`}>
+          <span className={`text-xs font-mono ${["panic", "delete_file", "lockdown"].includes(pendingConfirm.type) ? "text-danger-400" : "text-warn-400"}`}>
+            {pendingConfirm.label}
+          </span>
+          <div className="flex items-center gap-2 shrink-0 ml-4">
+            <button onClick={executeConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">
+              Confirm
+            </button>
+            <button onClick={() => setPendingConfirm(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Tabs */}
       <div className="flex gap-1 mb-6 bg-dark-700 rounded-lg p-1 w-fit">
         <button
@@ -475,28 +570,21 @@ export default function Security() {
                   </p>
                   <div className="flex flex-wrap gap-1.5 mt-3">
                     <button
-                      onClick={async () => {
-                        if (!confirm(overview.ssh_password_auth ? "Disable SSH password authentication? Make sure you have SSH key access first!" : "Enable SSH password authentication?")) return;
-                        try {
-                          await api.post(overview.ssh_password_auth ? "/security/ssh/disable-password" : "/security/ssh/enable-password", {});
-                          setMessage({ text: `SSH password auth ${overview.ssh_password_auth ? "disabled" : "enabled"}`, type: "success" });
-                          loadData();
-                        } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-                      }}
+                      onClick={() => setPendingConfirm({
+                        type: "ssh_password",
+                        label: overview.ssh_password_auth ? "Disable SSH password authentication? Make sure you have SSH key access first!" : "Enable SSH password authentication?",
+                        data: { enabled: overview.ssh_password_auth }
+                      })}
                       className="px-3 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 border border-dark-600 rounded text-xs font-medium transition-colors"
                     >
                       {overview.ssh_password_auth ? "Disable Password" : "Enable Password"}
                     </button>
                     {overview.ssh_root_login && (
                       <button
-                        onClick={async () => {
-                          if (!confirm("Disable root SSH login? Make sure you have a non-root user with sudo access!")) return;
-                          try {
-                            await api.post("/security/ssh/disable-root", {});
-                            setMessage({ text: "SSH root login disabled", type: "success" });
-                            loadData();
-                          } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-                        }}
+                        onClick={() => setPendingConfirm({
+                          type: "ssh_root",
+                          label: "Disable root SSH login? Make sure you have a non-root user with sudo access!"
+                        })}
                         className="px-3 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 border border-dark-600 rounded text-xs font-medium transition-colors"
                       >
                         Disable Root
@@ -508,12 +596,11 @@ export default function Security() {
                         if (!newPort) return;
                         const port = parseInt(newPort);
                         if (isNaN(port) || port < 1 || port > 65535) { setMessage({ text: "Invalid port number", type: "error" }); return; }
-                        if (!confirm(`Change SSH port to ${port}? A firewall rule will be added automatically.`)) return;
-                        try {
-                          await api.post("/security/ssh/change-port", { port });
-                          setMessage({ text: `SSH port changed to ${port}`, type: "success" });
-                          loadData();
-                        } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                        setPendingConfirm({
+                          type: "ssh_port",
+                          label: `Change SSH port to ${port}? A firewall rule will be added automatically.`,
+                          data: { port }
+                        });
                       }}
                       className="px-3 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 border border-dark-600 rounded text-xs font-medium transition-colors"
                     >
@@ -707,15 +794,13 @@ export default function Security() {
                             <div key={ip} className="flex items-center justify-between bg-dark-900 rounded px-3 py-1.5">
                               <span className="text-sm text-dark-50 font-mono">{ip}</span>
                               <button
-                                onClick={async (e) => {
+                                onClick={(e) => {
                                   e.stopPropagation();
-                                  if (!confirm(`Unban ${ip} from ${selectedJail}?`)) return;
-                                  try {
-                                    await api.post("/security/fail2ban/unban", { jail: selectedJail, ip });
-                                    setMessage({ text: `${ip} unbanned from ${selectedJail}`, type: "success" });
-                                    loadBannedIps(selectedJail);
-                                    loadData();
-                                  } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Unban failed", type: "error" }); }
+                                  setPendingConfirm({
+                                    type: "unban",
+                                    label: `Unban ${ip} from ${selectedJail}?`,
+                                    data: { jail: selectedJail, ip }
+                                  });
                                 }}
                                 className="px-2 py-0.5 bg-rust-500/15 text-rust-400 rounded text-xs font-medium hover:bg-rust-500/25 transition-colors"
                               >
@@ -752,16 +837,13 @@ export default function Security() {
                         placeholder="IP address"
                       />
                       <button
-                        onClick={async () => {
+                        onClick={() => {
                           if (!banJail || !banIp) return;
-                          if (!confirm(`Ban ${banIp} in jail ${banJail}?`)) return;
-                          try {
-                            await api.post("/security/fail2ban/ban", { jail: banJail, ip: banIp });
-                            setMessage({ text: `${banIp} banned in ${banJail}`, type: "success" });
-                            setBanIp("");
-                            if (selectedJail === banJail) loadBannedIps(banJail);
-                            loadData();
-                          } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Ban failed", type: "error" }); }
+                          setPendingConfirm({
+                            type: "ban",
+                            label: `Ban ${banIp} in jail ${banJail}?`,
+                            data: { jail: banJail, ip: banIp }
+                          });
                         }}
                         disabled={!banJail || !banIp}
                         className="px-3 py-1.5 bg-danger-500/15 text-danger-400 rounded text-xs font-medium hover:bg-danger-500/25 transition-colors disabled:opacity-50"
@@ -867,27 +949,21 @@ export default function Security() {
                                         return (
                                           <span className="flex gap-1 ml-2">
                                             <button
-                                              onClick={async () => {
-                                                if (!confirm(`Quarantine ${f.file_path}? (moves to /var/lib/dockpanel/quarantine/)`)) return;
-                                                try {
-                                                  await api.post("/security/fix", { fix_type: "quarantine_file", target: f.file_path });
-                                                  setMessage({ text: "File quarantined", type: "success" });
-                                                  handleScan();
-                                                } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-                                              }}
+                                              onClick={() => setPendingConfirm({
+                                                type: "quarantine",
+                                                label: `Quarantine ${f.file_path}? (moves to /var/lib/dockpanel/quarantine/)`,
+                                                data: { path: f.file_path }
+                                              })}
                                               className="px-2 py-0.5 bg-warn-500/15 text-warn-400 rounded text-xs font-medium hover:bg-warn-500/25"
                                             >
                                               Quarantine
                                             </button>
                                             <button
-                                              onClick={async () => {
-                                                if (!confirm(`DELETE ${f.file_path}? This cannot be undone!`)) return;
-                                                try {
-                                                  await api.post("/security/fix", { fix_type: "remove_file", target: f.file_path });
-                                                  setMessage({ text: "File deleted", type: "success" });
-                                                  handleScan();
-                                                } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-                                              }}
+                                              onClick={() => setPendingConfirm({
+                                                type: "delete_file",
+                                                label: `DELETE ${f.file_path}? This cannot be undone!`,
+                                                data: { path: f.file_path }
+                                              })}
                                               className="px-2 py-0.5 bg-danger-500/15 text-danger-400 rounded text-xs font-medium hover:bg-danger-500/25"
                                             >
                                               Delete
@@ -899,14 +975,11 @@ export default function Security() {
                                       if (!fix) return null;
                                       return (
                                         <button
-                                          onClick={async () => {
-                                            if (!confirm(`Apply fix: ${fix.label}?\n\nThis will ${fix.type === "block_port" ? `block port ${fix.target}/tcp` : fix.label.toLowerCase()}`)) return;
-                                            try {
-                                              await api.post("/security/fix", { fix_type: fix.type, target: fix.target });
-                                              setMessage({ text: `Fix applied: ${fix.label}`, type: "success" });
-                                              handleScan();
-                                            } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Fix failed", type: "error" }); }
-                                          }}
+                                          onClick={() => setPendingConfirm({
+                                            type: "apply_fix",
+                                            label: `Apply fix: ${fix.label}? This will ${fix.type === "block_port" ? `block port ${fix.target}/tcp` : fix.label.toLowerCase()}`,
+                                            data: { fix_type: fix.type, target: fix.target, fix_label: fix.label }
+                                          })}
                                           className="ml-2 px-2 py-0.5 bg-rust-500/15 text-rust-400 rounded text-xs font-medium hover:bg-rust-500/25 transition-colors"
                                         >
                                           Fix
@@ -1125,10 +1198,10 @@ export default function Security() {
                   <button onClick={async () => { try { await api.post("/security/lockdown/deactivate", {}); setMessage({ text: "Lockdown deactivated", type: "success" }); loadData(); } catch (e: any) { setMessage({ text: e.message, type: "error" }); }}}
                     className="px-4 py-2 text-sm font-mono bg-green-600 hover:bg-green-700 text-white rounded-lg">Unlock System</button>
                 ) : (
-                  <button onClick={async () => { if (!confirm("Activate lockdown? All non-admin access will be blocked.")) return; try { await api.post("/security/lockdown/activate", { reason: "Manual admin lockdown" }); setMessage({ text: "Lockdown activated", type: "success" }); loadData(); } catch (e: any) { setMessage({ text: e.message, type: "error" }); }}}
+                  <button onClick={() => setPendingConfirm({ type: "lockdown", label: "Activate lockdown? All non-admin access will be blocked." })}
                     className="px-4 py-2 text-sm font-mono bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg">Activate Lockdown</button>
                 )}
-                <button onClick={async () => { if (!confirm("EMERGENCY: Kill all terminals, block non-admins, disable registration?")) return; try { await api.post("/security/panic", {}); setMessage({ text: "Panic mode activated", type: "success" }); loadData(); } catch (e: any) { setMessage({ text: e.message, type: "error" }); }}}
+                <button onClick={() => setPendingConfirm({ type: "panic", label: "EMERGENCY: Kill all terminals, block non-admins, disable registration?" })}
                   className="px-3 py-2 text-sm font-mono bg-red-600 hover:bg-red-700 text-white rounded-lg">Panic Button</button>
                 <button onClick={async () => { try { const r = await api.post<{ snapshot_dir: string }>("/security/forensic-snapshot", {}); setMessage({ text: `Snapshot saved: ${r.snapshot_dir}`, type: "success" }); } catch (e: any) { setMessage({ text: e.message, type: "error" }); }}}
                   className="px-3 py-2 text-sm font-mono bg-dark-700 hover:bg-dark-600 text-dark-200 rounded-lg border border-dark-500">Forensic Snapshot</button>
