@@ -98,6 +98,8 @@ export default function Security() {
   const [banJail, setBanJail] = useState("");
   const [panelJail, setPanelJail] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<{ type: string; label: string; data?: any } | null>(null);
+  const [showPortInput, setShowPortInput] = useState(false);
+  const [portValue, setPortValue] = useState("");
 
   const loadData = async () => {
     try {
@@ -590,22 +592,50 @@ export default function Security() {
                         Disable Root
                       </button>
                     )}
-                    <button
-                      onClick={async () => {
-                        const newPort = prompt("Enter new SSH port (1-65535):", String(overview.ssh_port));
-                        if (!newPort) return;
-                        const port = parseInt(newPort);
-                        if (isNaN(port) || port < 1 || port > 65535) { setMessage({ text: "Invalid port number", type: "error" }); return; }
-                        setPendingConfirm({
-                          type: "ssh_port",
-                          label: `Change SSH port to ${port}? A firewall rule will be added automatically.`,
-                          data: { port }
-                        });
-                      }}
-                      className="px-3 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 border border-dark-600 rounded text-xs font-medium transition-colors"
-                    >
-                      Change Port
-                    </button>
+                    {showPortInput ? (
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="number"
+                          min="1"
+                          max="65535"
+                          value={portValue}
+                          onChange={(e) => setPortValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              const port = parseInt(portValue);
+                              if (isNaN(port) || port < 1 || port > 65535) { setMessage({ text: "Invalid port number", type: "error" }); return; }
+                              setShowPortInput(false);
+                              setPendingConfirm({ type: "ssh_port", label: `Change SSH port to ${port}? A firewall rule will be added automatically.`, data: { port } });
+                            }
+                            if (e.key === "Escape") setShowPortInput(false);
+                          }}
+                          autoFocus
+                          className="w-20 px-2 py-1 bg-dark-900 border border-dark-500 rounded text-xs font-mono text-dark-100"
+                          placeholder="Port"
+                        />
+                        <button
+                          onClick={() => {
+                            const port = parseInt(portValue);
+                            if (isNaN(port) || port < 1 || port > 65535) { setMessage({ text: "Invalid port number", type: "error" }); return; }
+                            setShowPortInput(false);
+                            setPendingConfirm({ type: "ssh_port", label: `Change SSH port to ${port}? A firewall rule will be added automatically.`, data: { port } });
+                          }}
+                          className="px-2 py-1 bg-rust-500 text-white rounded text-xs font-medium"
+                        >
+                          Set
+                        </button>
+                        <button onClick={() => setShowPortInput(false)} className="px-2 py-1 bg-dark-600 text-dark-200 rounded text-xs font-medium">
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => { setPortValue(String(overview.ssh_port)); setShowPortInput(true); }}
+                        className="px-3 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 border border-dark-600 rounded text-xs font-medium transition-colors"
+                      >
+                        Change Port
+                      </button>
+                    )}
                   </div>
                 </div>
 

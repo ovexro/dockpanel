@@ -18,6 +18,8 @@ export default function ResellerUsers() {
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(true);
   const [pendingDelete, setPendingDelete] = useState<{ id: string; email: string } | null>(null);
+  const [resetTarget, setResetTarget] = useState<{ id: string; email: string } | null>(null);
+  const [resetPassword, setResetPassword] = useState("");
 
   const fetchUsers = useCallback(async () => {
     try {
@@ -63,17 +65,17 @@ export default function ResellerUsers() {
     }
   };
 
-  const handleResetPassword = async (id: string, userEmail: string) => {
-    const newPw = prompt(`New password for ${userEmail} (min 8 characters):`);
-    if (!newPw || newPw.length < 8) {
-      if (newPw) setError("Password must be at least 8 characters");
+  const handleResetPassword = async () => {
+    if (!resetTarget || resetPassword.length < 8) {
+      if (resetPassword) setError("Password must be at least 8 characters");
       return;
     }
     setError("");
     try {
-      await api.put(`/reseller/users/${id}`, { password: newPw });
-      setError(""); // Clear any previous error
+      await api.put(`/reseller/users/${resetTarget.id}`, { password: resetPassword });
       setSuccess("Password updated successfully");
+      setResetTarget(null);
+      setResetPassword("");
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Failed to update password");
     }
@@ -167,12 +169,28 @@ export default function ResellerUsers() {
                 <td className="px-4 py-3 text-dark-300">{u.site_count}</td>
                 <td className="px-4 py-3 text-dark-300">{new Date(u.created_at).toLocaleDateString()}</td>
                 <td className="px-4 py-3 text-right space-x-2">
-                  <button
-                    onClick={() => handleResetPassword(u.id, u.email)}
-                    className="px-2 py-1 text-xs text-dark-300 hover:text-dark-50 bg-dark-700 rounded hover:bg-dark-600 transition-colors"
-                  >
-                    Reset Password
-                  </button>
+                  {resetTarget?.id === u.id ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <input
+                        type="password"
+                        value={resetPassword}
+                        onChange={(e) => setResetPassword(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") handleResetPassword(); if (e.key === "Escape") { setResetTarget(null); setResetPassword(""); } }}
+                        autoFocus
+                        className="w-28 px-2 py-1 bg-dark-900 border border-dark-500 rounded text-xs text-dark-100"
+                        placeholder="New password"
+                      />
+                      <button onClick={handleResetPassword} disabled={resetPassword.length < 8} className="px-2 py-1 bg-rust-500 text-white rounded text-xs font-medium disabled:opacity-50">Set</button>
+                      <button onClick={() => { setResetTarget(null); setResetPassword(""); }} className="px-2 py-1 bg-dark-600 text-dark-200 rounded text-xs">Cancel</button>
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => { setResetTarget({ id: u.id, email: u.email }); setResetPassword(""); }}
+                      className="px-2 py-1 text-xs text-dark-300 hover:text-dark-50 bg-dark-700 rounded hover:bg-dark-600 transition-colors"
+                    >
+                      Reset Password
+                    </button>
+                  )}
                   <button
                     onClick={() => handleDelete(u.id, u.email)}
                     className="px-2 py-1 text-xs text-danger-400 bg-danger-500/10 rounded hover:bg-danger-500/20 transition-colors"

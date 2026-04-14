@@ -59,11 +59,15 @@ export default function Settings() {
   const [passkeyLoading, setPasskeyLoading] = useState(false);
   const [passkeyName, setPasskeyName] = useState("My Passkey");
   const [passkeySupported] = useState(() => !!window.PublicKeyCredential);
+  const [renamingPasskey, setRenamingPasskey] = useState<string | null>(null);
+  const [passkeyRenameValue, setPasskeyRenameValue] = useState("");
 
   // Auto-healing
   const [autoHealEnabled, setAutoHealEnabled] = useState(false);
   const [reverseProxy, setReverseProxy] = useState("nginx");
   const [traefikInstalling, setTraefikInstalling] = useState(false);
+  const [showTraefikEmail, setShowTraefikEmail] = useState(false);
+  const [traefikEmail, setTraefikEmail] = useState("admin@example.com");
 
   // PowerDNS
   const [pdnsApiUrl, setPdnsApiUrl] = useState("");
@@ -513,32 +517,61 @@ export default function Settings() {
                 <div className="text-xs text-dark-400 mt-1">Default, serves PHP/static + proxy</div>
               </button>
               <button
-                onClick={async () => {
+                onClick={() => {
                   if (reverseProxy === "nginx") {
-                    const email = prompt("ACME email for Traefik SSL (Let's Encrypt):", "admin@example.com");
-                    if (!email || !email.includes("@") || !email.includes(".")) {
-                      if (email) setMessage({ text: "Invalid email address", type: "error" });
-                      return;
-                    }
-                    try {
-                      setTraefikInstalling(true);
-                      await api.post("/traefik/install", { acme_email: email });
-                      setReverseProxy("traefik");
-                      setMessage({ text: "Traefik installed and active", type: "success" });
-                    } catch (e) {
-                      setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
-                    } finally {
-                      setTraefikInstalling(false);
-                    }
+                    setShowTraefikEmail(true);
+                    setTraefikEmail("admin@example.com");
                   }
                 }}
-                disabled={traefikInstalling}
+                disabled={traefikInstalling || showTraefikEmail}
                 className={`flex-1 px-4 py-3 rounded-lg border text-sm font-mono text-center transition-colors ${reverseProxy === "traefik" ? "border-rust-500 bg-rust-500/10 text-rust-400" : "border-dark-600 bg-dark-900 text-dark-300 hover:border-dark-400 cursor-pointer"} disabled:opacity-50`}
               >
                 <div className="font-bold">{traefikInstalling ? "Installing..." : "Traefik"}</div>
                 <div className="text-xs text-dark-400 mt-1">Docker-native, auto-SSL, dashboard</div>
               </button>
             </div>
+            {showTraefikEmail && (
+              <div className="flex items-center gap-2 mt-3 px-1">
+                <label className="text-xs text-dark-300">ACME email for Let's Encrypt:</label>
+                <input
+                  type="email"
+                  value={traefikEmail}
+                  onChange={(e) => setTraefikEmail(e.target.value)}
+                  onKeyDown={async (e) => {
+                    if (e.key === "Enter") {
+                      if (!traefikEmail.includes("@") || !traefikEmail.includes(".")) { setMessage({ text: "Invalid email address", type: "error" }); return; }
+                      setShowTraefikEmail(false);
+                      setTraefikInstalling(true);
+                      try {
+                        await api.post("/traefik/install", { acme_email: traefikEmail });
+                        setReverseProxy("traefik");
+                        setMessage({ text: "Traefik installed and active", type: "success" });
+                      } catch (err) { setMessage({ text: err instanceof Error ? err.message : "Failed", type: "error" }); }
+                      finally { setTraefikInstalling(false); }
+                    }
+                    if (e.key === "Escape") setShowTraefikEmail(false);
+                  }}
+                  autoFocus
+                  className="flex-1 px-3 py-1.5 bg-dark-900 border border-dark-500 rounded text-sm text-dark-100"
+                  placeholder="you@example.com"
+                />
+                <button
+                  onClick={async () => {
+                    if (!traefikEmail.includes("@") || !traefikEmail.includes(".")) { setMessage({ text: "Invalid email address", type: "error" }); return; }
+                    setShowTraefikEmail(false);
+                    setTraefikInstalling(true);
+                    try {
+                      await api.post("/traefik/install", { acme_email: traefikEmail });
+                      setReverseProxy("traefik");
+                      setMessage({ text: "Traefik installed and active", type: "success" });
+                    } catch (err) { setMessage({ text: err instanceof Error ? err.message : "Failed", type: "error" }); }
+                    finally { setTraefikInstalling(false); }
+                  }}
+                  className="px-3 py-1.5 bg-rust-500 text-white rounded text-xs font-medium"
+                >Install</button>
+                <button onClick={() => setShowTraefikEmail(false)} className="px-3 py-1.5 bg-dark-600 text-dark-200 rounded text-xs font-medium">Cancel</button>
+              </div>
+            )}
             {reverseProxy === "traefik" && (
               <div className="text-xs text-dark-300 space-y-1 pl-4 border-l-2 border-rust-500/30">
                 <p>Traefik handles Docker app routing via container labels</p>
@@ -1402,20 +1435,48 @@ export default function Settings() {
                           </div>
                         </div>
                         <div className="flex items-center gap-3">
-                          <button
-                            onClick={async () => {
-                              const newName = prompt("Rename passkey:", pk.name);
-                              if (!newName || newName === pk.name) return;
-                              try {
-                                await api.put(`/auth/passkeys/${pk.id}`, { name: newName });
-                                setPasskeys(prev => prev.map(p => p.id === pk.id ? { ...p, name: newName } : p));
-                                setMessage({ text: "Passkey renamed", type: "success" });
-                              } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-                            }}
-                            className="text-xs text-accent-400 hover:text-accent-300"
-                          >
-                            Rename
+                          {renamingPasskey === pk.id ? (
+                            <span className="inline-flex items-center gap-1">
+                              <input
+                                type="text"
+                                value={passkeyRenameValue}
+                                onChange={(e) => setPasskeyRenameValue(e.target.value)}
+                                onKeyDown={async (e) => {
+                                  if (e.key === "Enter" && passkeyRenameValue && passkeyRenameValue !== pk.name) {
+                                    try {
+                                      await api.put(`/auth/passkeys/${pk.id}`, { name: passkeyRenameValue });
+                                      setPasskeys(prev => prev.map(p => p.id === pk.id ? { ...p, name: passkeyRenameValue } : p));
+                                      setMessage({ text: "Passkey renamed", type: "success" });
+                                    } catch (err) { setMessage({ text: err instanceof Error ? err.message : "Failed", type: "error" }); }
+                                    setRenamingPasskey(null);
+                                  }
+                                  if (e.key === "Escape") setRenamingPasskey(null);
+                                }}
+                                autoFocus
+                                className="w-28 px-2 py-0.5 bg-dark-900 border border-dark-500 rounded text-xs text-dark-100"
+                              />
+                              <button
+                                onClick={async () => {
+                                  if (!passkeyRenameValue || passkeyRenameValue === pk.name) { setRenamingPasskey(null); return; }
+                                  try {
+                                    await api.put(`/auth/passkeys/${pk.id}`, { name: passkeyRenameValue });
+                                    setPasskeys(prev => prev.map(p => p.id === pk.id ? { ...p, name: passkeyRenameValue } : p));
+                                    setMessage({ text: "Passkey renamed", type: "success" });
+                                  } catch (err) { setMessage({ text: err instanceof Error ? err.message : "Failed", type: "error" }); }
+                                  setRenamingPasskey(null);
+                                }}
+                                className="px-1.5 py-0.5 bg-rust-500 text-white rounded text-[10px] font-medium"
+                              >Save</button>
+                              <button onClick={() => setRenamingPasskey(null)} className="px-1.5 py-0.5 bg-dark-600 text-dark-200 rounded text-[10px]">Cancel</button>
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => { setRenamingPasskey(pk.id); setPasskeyRenameValue(pk.name); }}
+                              className="text-xs text-accent-400 hover:text-accent-300"
+                            >
+                              Rename
                           </button>
+                          )}
                           <button
                             onClick={async () => {
                               try {

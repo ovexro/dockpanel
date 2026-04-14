@@ -107,6 +107,8 @@ export default function SiteDetail() {
   // Site Cloning
   const [cloning, setCloning] = useState(false);
   const [cloneMsg, setCloneMsg] = useState("");
+  const [showCloneInput, setShowCloneInput] = useState(false);
+  const [cloneDomainValue, setCloneDomainValue] = useState("");
 
   // Custom SSL Upload
   const [showSslUpload, setShowSslUpload] = useState(false);
@@ -426,19 +428,51 @@ export default function SiteDetail() {
                 Rename
               </button>
               {/* Clone */}
-              <button disabled={cloning} onClick={async () => {
-                const cloneDomain = prompt("Clone site to domain:", `clone-${site?.domain}`);
-                if (!cloneDomain) return;
-                setCloning(true);
-                setCloneMsg("");
-                try {
-                  await api.post(`/sites/${id}/clone`, { domain: cloneDomain });
-                  setCloneMsg(`Site cloned to ${cloneDomain}`);
-                } catch (e) { setCloneMsg(e instanceof Error ? e.message : "Clone failed"); }
-                finally { setCloning(false); }
-              }} className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 disabled:opacity-50 transition-colors">
-                {cloning ? "Cloning..." : "Clone"}
-              </button>
+              {showCloneInput ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={cloneDomainValue}
+                    onChange={(e) => setCloneDomainValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && cloneDomainValue) {
+                        setShowCloneInput(false);
+                        setCloning(true);
+                        setCloneMsg("");
+                        api.post(`/sites/${id}/clone`, { domain: cloneDomainValue })
+                          .then(() => setCloneMsg(`Site cloned to ${cloneDomainValue}`))
+                          .catch((err) => setCloneMsg(err instanceof Error ? err.message : "Clone failed"))
+                          .finally(() => setCloning(false));
+                      }
+                      if (e.key === "Escape") setShowCloneInput(false);
+                    }}
+                    autoFocus
+                    className="w-48 px-3 py-2 bg-dark-900 border border-dark-500 rounded-lg text-sm font-mono text-dark-100"
+                    placeholder="Clone to domain"
+                  />
+                  <button
+                    disabled={!cloneDomainValue || cloning}
+                    onClick={() => {
+                      setShowCloneInput(false);
+                      setCloning(true);
+                      setCloneMsg("");
+                      api.post(`/sites/${id}/clone`, { domain: cloneDomainValue })
+                        .then(() => setCloneMsg(`Site cloned to ${cloneDomainValue}`))
+                        .catch((err) => setCloneMsg(err instanceof Error ? err.message : "Clone failed"))
+                        .finally(() => setCloning(false));
+                    }}
+                    className="px-3 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium disabled:opacity-50"
+                  >
+                    {cloning ? "Cloning..." : "Clone"}
+                  </button>
+                  <button onClick={() => setShowCloneInput(false)} className="px-3 py-2 bg-dark-600 text-dark-200 rounded-lg text-sm font-medium">Cancel</button>
+                </div>
+              ) : (
+                <button disabled={cloning} onClick={() => { setCloneDomainValue(`clone-${site?.domain}`); setShowCloneInput(true); }}
+                  className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 disabled:opacity-50 transition-colors">
+                  {cloning ? "Cloning..." : "Clone"}
+                </button>
+              )}
               <button
                 onClick={handleDelete}
                 className="px-4 py-2 bg-danger-500/10 text-danger-400 rounded-lg text-sm font-medium hover:bg-danger-500/20 transition-colors"

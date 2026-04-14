@@ -793,12 +793,16 @@ export default function Apps() {
   };
 
   // Container snapshot handler (Feature #12)
-  const handleSnapshot = async (containerId: string, appName: string) => {
-    const tag = prompt("Image tag:", `snapshot-${appName}-${Date.now()}`);
-    if (!tag) return;
+  const [snapshotTarget, setSnapshotTarget] = useState<{ id: string; name: string } | null>(null);
+  const [snapshotTag, setSnapshotTag] = useState("");
+
+  const handleSnapshot = async () => {
+    if (!snapshotTarget || !snapshotTag) return;
     try {
-      await api.post(`/apps/${containerId}/snapshot`, { tag });
-      setMessage({ text: `Snapshot saved as ${tag}`, type: "success" });
+      await api.post(`/apps/${snapshotTarget.id}/snapshot`, { tag: snapshotTag });
+      setMessage({ text: `Snapshot saved as ${snapshotTag}`, type: "success" });
+      setSnapshotTarget(null);
+      setSnapshotTag("");
     } catch (e) {
       setMessage({ text: e instanceof Error ? e.message : "Snapshot failed", type: "error" });
     }
@@ -1309,12 +1313,28 @@ volumes:
                         >
                           Volumes
                         </button>
-                        <button
-                          onClick={() => handleSnapshot(app.container_id, app.name)}
-                          className="px-2 py-1 rounded text-xs font-medium bg-dark-700 text-dark-300 hover:bg-dark-600"
-                        >
-                          Snapshot
-                        </button>
+                        {snapshotTarget?.id === app.container_id ? (
+                          <span className="inline-flex items-center gap-1">
+                            <input
+                              type="text"
+                              value={snapshotTag}
+                              onChange={(e) => setSnapshotTag(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === "Enter") handleSnapshot(); if (e.key === "Escape") { setSnapshotTarget(null); setSnapshotTag(""); } }}
+                              autoFocus
+                              className="w-32 px-1.5 py-0.5 bg-dark-900 border border-dark-500 rounded text-xs font-mono text-dark-100"
+                              placeholder="Tag name"
+                            />
+                            <button onClick={handleSnapshot} disabled={!snapshotTag} className="px-1.5 py-0.5 bg-rust-500 text-white rounded text-[10px] font-medium disabled:opacity-50">Save</button>
+                            <button onClick={() => { setSnapshotTarget(null); setSnapshotTag(""); }} className="px-1.5 py-0.5 bg-dark-600 text-dark-200 rounded text-[10px]">Cancel</button>
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => { setSnapshotTarget({ id: app.container_id, name: app.name }); setSnapshotTag(`snapshot-${app.name}-${Date.now()}`); }}
+                            className="px-2 py-1 rounded text-xs font-medium bg-dark-700 text-dark-300 hover:bg-dark-600"
+                          >
+                            Snapshot
+                          </button>
+                        )}
                         <button
                           onClick={() => handleUpdate(app.container_id)}
                           disabled={!!actionLoading}
