@@ -31,7 +31,7 @@ pub async fn backup_volume(
     let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     let filename = format!("{container_name}-{volume_name}-{timestamp}.tar.gz");
     let filepath = dest_dir.join(&filename);
-    let filepath_str = filepath.to_str().ok_or("Invalid path encoding")?;
+    let _filepath_str = filepath.to_str().ok_or("Invalid path encoding")?;
 
     // Use a minimal alpine container to tar the volume contents
     let output = tokio::time::timeout(

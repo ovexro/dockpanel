@@ -5,14 +5,14 @@ use axum::{
     Json,
 };
 
-use crate::auth::{AdminUser, AuthUser, ServerScope};
+use crate::auth::{AdminUser, ServerScope};
 use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::services::{activity, security_hardening};
 use crate::AppState;
 
 /// GET /api/security/overview — Security overview.
 pub async fn overview(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -26,7 +26,7 @@ pub async fn overview(
 
 /// GET /api/security/firewall — Firewall status and rules.
 pub async fn firewall_status(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -111,7 +111,7 @@ pub async fn delete_firewall_rule(
 
 /// GET /api/security/fail2ban — Fail2ban status.
 pub async fn fail2ban_status(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -186,7 +186,7 @@ pub async fn ssh_change_port(
 
 /// POST /api/security/fail2ban/unban
 pub async fn fail2ban_unban_ip(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
@@ -198,7 +198,7 @@ pub async fn fail2ban_unban_ip(
 
 /// POST /api/security/fail2ban/ban
 pub async fn fail2ban_ban_ip(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
@@ -210,7 +210,7 @@ pub async fn fail2ban_ban_ip(
 
 /// GET /api/security/fail2ban/{jail}/banned
 pub async fn fail2ban_banned(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     Path(jail): Path<String>,
     ServerScope(_server_id, agent): ServerScope,
@@ -286,7 +286,7 @@ pub async fn setup_panel_jail(
 
 /// GET /api/security/panel-jail/status — Check if panel jail exists.
 pub async fn panel_jail_status(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -582,7 +582,7 @@ pub async fn audit_log_list(
 
 /// GET /api/security/recordings — List terminal session recordings (Feature 5).
 pub async fn recordings_list(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let dir = "/var/lib/dockpanel/recordings";

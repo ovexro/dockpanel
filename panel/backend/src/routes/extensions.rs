@@ -81,6 +81,7 @@ async fn validate_webhook_url(url: &str) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 #[derive(serde::Serialize, sqlx::FromRow)]
+#[allow(dead_code)]
 pub struct Extension {
     pub id: Uuid,
     pub user_id: Uuid,

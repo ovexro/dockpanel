@@ -11,7 +11,7 @@ use sha2::{Sha256, Digest};
 use std::collections::HashMap;
 use std::time::Instant;
 
-use crate::auth::{AuthUser, Claims};
+use crate::auth::AuthUser;
 use crate::error::{internal_error, err, ApiError};
 use crate::AppState;
 
@@ -111,6 +111,7 @@ struct PublicKeyCredentialRequestOptions {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct RegisterCompleteRequest {
     pub id: String,
     pub raw_id: String,
@@ -128,6 +129,7 @@ pub struct AttestationResponse {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct AuthCompleteRequest {
     pub id: String,
     pub raw_id: String,
@@ -136,6 +138,7 @@ pub struct AuthCompleteRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct AssertionResponse {
     pub authenticator_data: String,
     pub client_data_json: String,

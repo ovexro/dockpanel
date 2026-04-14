@@ -178,7 +178,7 @@ pub async fn webhook(
         "provision" | "CreateAccount" if auto_provision => {
             // Create user + site for new WHMCS service
             let email = body.client_email.as_deref().unwrap_or("user@example.com");
-            let domain = body.domain.as_deref().unwrap_or("pending.dockpanel.dev");
+            let _domain = body.domain.as_deref().unwrap_or("pending.dockpanel.dev");
             let plan = body.plan.as_deref().unwrap_or("basic");
 
             // Check if user already exists
@@ -264,7 +264,7 @@ pub async fn webhook(
                 "SELECT user_id FROM whmcs_service_map WHERE whmcs_service_id = $1"
             ).bind(service_id).fetch_optional(&state.db).await.ok().flatten();
 
-            if let Some((Some(user_id),)) = mapping {
+            if let Some((Some(_user_id),)) = mapping {
                 // Don't delete user — just mark terminated
                 sqlx::query("UPDATE whmcs_service_map SET status = 'terminated' WHERE whmcs_service_id = $1")
                     .bind(service_id).execute(&state.db).await.ok();

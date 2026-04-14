@@ -17,6 +17,7 @@ pub struct CreateServerRequest {
 }
 
 #[derive(serde::Serialize, sqlx::FromRow)]
+#[allow(dead_code)]
 pub struct Server {
     pub id: Uuid,
     pub user_id: Uuid,

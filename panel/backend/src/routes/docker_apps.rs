@@ -36,7 +36,7 @@ pub struct DeployRequest {
 
 /// GET /api/apps/templates — List available app templates.
 pub async fn list_templates(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -461,7 +461,7 @@ pub async fn deploy_log(
 
 /// GET /api/apps — List deployed Docker apps.
 pub async fn list_apps(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -477,7 +477,7 @@ pub async fn list_apps(
 
 /// POST /api/apps/{container_id}/stop — Stop an app.
 pub async fn stop_app(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
@@ -498,7 +498,7 @@ pub async fn stop_app(
 
 /// POST /api/apps/{container_id}/start — Start an app.
 pub async fn start_app(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
@@ -519,7 +519,7 @@ pub async fn start_app(
 
 /// POST /api/apps/{container_id}/restart — Restart an app.
 pub async fn restart_app(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
@@ -540,7 +540,7 @@ pub async fn restart_app(
 
 /// GET /api/apps/{container_id}/logs — Get app logs.
 pub async fn app_logs(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
@@ -650,7 +650,7 @@ pub async fn update_app(
 
 /// GET /api/apps/{container_id}/env — Get container environment variables.
 pub async fn app_env(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
@@ -701,7 +701,7 @@ pub async fn update_env(
 
 /// GET /api/apps/{container_id}/stats — Get container resource stats.
 pub async fn container_stats(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
@@ -815,7 +815,7 @@ pub async fn update_limits(
 
 /// GET /api/apps/{container_id}/shell-info — Get shell availability.
 pub async fn shell_info(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
@@ -833,7 +833,7 @@ pub async fn shell_info(
 
 /// POST /api/apps/{container_id}/exec — Execute a command inside a container.
 pub async fn exec_command(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
@@ -852,7 +852,7 @@ pub async fn exec_command(
 
 /// GET /api/apps/{container_id}/volumes — Get volume info and sizes.
 pub async fn container_volumes(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
@@ -896,7 +896,7 @@ pub async fn registry_login(
 
 /// GET /api/apps/registries — List configured registries.
 pub async fn list_registries(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -910,7 +910,7 @@ pub async fn list_registries(
 
 /// POST /api/apps/registry-logout — Logout from a registry.
 pub async fn registry_logout(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
@@ -925,7 +925,7 @@ pub async fn registry_logout(
 
 /// GET /api/apps/images — List Docker images.
 pub async fn list_images(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -1024,7 +1024,7 @@ pub async fn compose_validate(
 
 /// POST /api/apps/compose/parse — Parse docker-compose.yml and preview services.
 pub async fn compose_parse(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,

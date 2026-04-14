@@ -42,7 +42,7 @@ pub struct UserResponse {
 /// GET /api/users — List all users (admin only).
 pub async fn list(
     State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
+    AdminUser(_claims): AdminUser,
 ) -> Result<Json<Vec<UserResponse>>, ApiError> {
 
     let users: Vec<UserResponse> = sqlx::query_as(

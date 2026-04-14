@@ -41,7 +41,7 @@ struct StreamTicket {
 
 /// GET /api/logs — System-wide logs (admin only).
 pub async fn system_logs(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
     Query(q): Query<LogQuery>,
@@ -102,7 +102,7 @@ pub async fn site_logs(
 
 /// GET /api/logs/search — Search system logs with grep/regex (admin only).
 pub async fn search_system_logs(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
     Query(q): Query<SearchQuery>,
@@ -238,7 +238,7 @@ pub async fn stream_token(
 
 /// GET /api/logs/stats — Log aggregation stats (admin only).
 pub async fn log_stats(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
     Query(params): Query<std::collections::HashMap<String, String>>,
@@ -256,7 +256,7 @@ pub async fn log_stats(
 
 /// GET /api/logs/docker — List managed Docker containers (admin only).
 pub async fn docker_log_containers(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -269,7 +269,7 @@ pub async fn docker_log_containers(
 
 /// GET /api/logs/docker/{container} — Docker container logs (admin only).
 pub async fn docker_log_view(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     Path(container): Path<String>,
     ServerScope(_server_id, agent): ServerScope,
@@ -291,7 +291,7 @@ pub async fn docker_log_view(
 
 /// GET /api/logs/service/{service} — Systemd service logs (admin only).
 pub async fn service_logs(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     Path(service): Path<String>,
     ServerScope(_server_id, agent): ServerScope,
@@ -313,7 +313,7 @@ pub async fn service_logs(
 
 /// GET /api/logs/sizes — Log file sizes (admin only).
 pub async fn log_sizes(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -351,7 +351,7 @@ pub async fn truncate_log(
 
 /// POST /api/logs/check-errors — Scan recent logs for error patterns (admin only).
 pub async fn check_errors(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -383,7 +383,7 @@ pub async fn check_errors(
 
 /// GET /api/system/processes — Top processes (admin only).
 pub async fn processes(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -397,7 +397,7 @@ pub async fn processes(
 
 /// GET /api/system/network — Network I/O stats (admin only).
 pub async fn network(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {

@@ -25,6 +25,7 @@ fn geo_client() -> &'static reqwest::Client {
 // ── Geo-IP Lookup (Feature 1) ───────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
+#[allow(dead_code)]
 pub struct GeoInfo {
     #[serde(default)]
     pub country: String,

@@ -5,7 +5,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::{AdminUser, AuthUser};
+use crate::auth::AdminUser;
 use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::AppState;
 
@@ -35,7 +35,7 @@ pub struct UpdateDestinationRequest {
 /// GET /api/backup-destinations — List all backup destinations (admin).
 pub async fn list(
     State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
+    AdminUser(_claims): AdminUser,
 ) -> Result<Json<Vec<BackupDestination>>, ApiError> {
 
     let dests: Vec<BackupDestination> = sqlx::query_as(
@@ -68,7 +68,7 @@ pub async fn list(
 /// POST /api/backup-destinations — Create a new backup destination.
 pub async fn create(
     State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
+    AdminUser(_claims): AdminUser,
     Json(body): Json<CreateDestinationRequest>,
 ) -> Result<(StatusCode, Json<BackupDestination>), ApiError> {
 
@@ -100,7 +100,7 @@ pub async fn create(
 /// PUT /api/backup-destinations/{id} — Update a destination.
 pub async fn update(
     State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
+    AdminUser(_claims): AdminUser,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateDestinationRequest>,
 ) -> Result<Json<BackupDestination>, ApiError> {
@@ -163,7 +163,7 @@ pub async fn update(
 /// DELETE /api/backup-destinations/{id} — Delete a destination.
 pub async fn remove(
     State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
+    AdminUser(_claims): AdminUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
 
@@ -202,7 +202,7 @@ pub async fn remove(
 /// POST /api/backup-destinations/{id}/test — Test connection.
 pub async fn test_connection(
     State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
+    AdminUser(_claims): AdminUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
 

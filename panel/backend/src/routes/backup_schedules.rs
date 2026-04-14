@@ -10,7 +10,6 @@ use crate::error::{internal_error, err, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
-use super::backup_destinations::{BackupDestination, build_agent_destination};
 
 #[derive(serde::Serialize, sqlx::FromRow)]
 pub struct BackupSchedule {

@@ -254,7 +254,7 @@ pub async fn intelligence(
 /// GET /api/dashboard/docker — Docker container summary.
 pub async fn docker_summary(
     AuthUser(_claims): AuthUser,
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let result = agent.get("/apps").await.ok();

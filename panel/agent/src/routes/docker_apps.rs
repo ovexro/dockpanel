@@ -2,7 +2,7 @@ use crate::safe_cmd::safe_command;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{delete, get, post, put},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::Deserialize;
@@ -1486,8 +1486,8 @@ async fn gpu_info() -> Json<serde_json::Value> {
         if p.len() >= 13 {
             // Normal case: exactly 13 fields (index + name + 11 metrics)
             let parse_u64 = |idx: usize| p.get(idx).and_then(|v| v.trim().parse::<u64>().ok());
-            let parse_f64 = |idx: usize| p.get(idx).and_then(|v| v.trim().parse::<f64>().ok());
-            let str_val = |idx: usize| p.get(idx).map(|v| v.trim()).unwrap_or("");
+            let _parse_f64 = |idx: usize| p.get(idx).and_then(|v| v.trim().parse::<f64>().ok());
+            let _str_val = |idx: usize| p.get(idx).map(|v| v.trim()).unwrap_or("");
             // If there are extra commas (in GPU name), join the excess back into the name
             let name_end = p.len() - 11; // 11 fields after name
             let name = p[1..name_end].join(", ");

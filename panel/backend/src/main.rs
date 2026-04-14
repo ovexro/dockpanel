@@ -415,7 +415,7 @@ async fn main() {
     let app = Router::new()
         .merge(routes::router())
         .layer(cors)
-        .layer(TimeoutLayer::new(Duration::from_secs(300)))
+        .layer(TimeoutLayer::with_status_code(axum::http::StatusCode::GATEWAY_TIMEOUT, Duration::from_secs(300)))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 

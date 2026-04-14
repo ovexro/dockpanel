@@ -429,7 +429,7 @@ pub async fn disable_ssh_root_login() -> Result<(), String> {
 
 /// Change SSH port.
 pub async fn change_ssh_port(port: u16) -> Result<(), String> {
-    if port == 0 || port > 65535 {
+    if port == 0 {
         return Err("Invalid port".into());
     }
     modify_sshd_config("Port", &port.to_string()).await?;

@@ -51,7 +51,7 @@ async fn recommendations() -> Json<serde_json::Value> {
         safe_command("free").args(["-m"]).output()
     ).await;
 
-    let (total_mem_mb, used_mem_mb, avail_mem_mb) = mem_output.ok()
+    let (total_mem_mb, _used_mem_mb, avail_mem_mb) = mem_output.ok()
         .and_then(|r| r.ok())
         .map(|o| {
             let s = String::from_utf8_lossy(&o.stdout);

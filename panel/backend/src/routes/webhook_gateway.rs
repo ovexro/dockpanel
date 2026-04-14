@@ -1,6 +1,6 @@
 use axum::{
     body::Bytes,
-    extract::{ConnectInfo, Path, Query, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     Json,
 };

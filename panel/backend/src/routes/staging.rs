@@ -10,7 +10,6 @@ use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::models::Site;
 use crate::routes::is_valid_domain;
 use crate::services::activity;
-use crate::services::agent::AgentHandle;
 use crate::AppState;
 
 #[derive(serde::Deserialize)]

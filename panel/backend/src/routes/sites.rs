@@ -460,7 +460,7 @@ pub async fn create(
             // GAP 4: Auto-create status page component if status page is enabled
             {
                 let sp_db = state.db.clone();
-                let sp_site_id = site.id;
+                let _sp_site_id = site.id;
                 let sp_user_id = claims.sub;
                 let sp_domain = body.domain.clone();
                 tokio::spawn(async move {

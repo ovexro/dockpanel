@@ -9,7 +9,6 @@ use subtle::ConstantTimeEq;
 
 use crate::auth::AuthUser;
 use crate::error::{internal_error, err, agent_error, ApiError};
-use crate::services::activity;
 use crate::AppState;
 
 /// Plan definitions: name, price_id (set via Stripe dashboard), server_limit.

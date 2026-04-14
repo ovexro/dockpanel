@@ -2035,7 +2035,7 @@ async fn optimize_images(
     }
 
     // Find images and convert
-    let ext_pattern = "jpg,jpeg,png";
+    let _ext_pattern = "jpg,jpeg,png";
     let find_cmd = format!(
         "find {site_dir} -type f \\( -name '*.jpg' -o -name '*.jpeg' -o -name '*.png' \\) -size +1k 2>/dev/null | head -500"
     );

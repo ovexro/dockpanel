@@ -75,7 +75,7 @@ struct FirewallRuleExport {
 
 /// GET /iac/export — Export full server configuration as structured JSON.
 async fn export() -> Result<Json<ServerExport>, (StatusCode, Json<serde_json::Value>)> {
-    let map_err = |e: String| {
+    let _map_err = |e: String| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e })),

@@ -84,21 +84,6 @@ pub struct PurgeCacheRequest {
     pub urls: Option<Vec<String>>,
 }
 
-#[derive(serde::Serialize)]
-struct BandwidthStats {
-    total_bandwidth_used: u64,
-    total_requests: u64,
-    cache_hit_rate: f64,
-    bandwidth_per_day: Vec<DailyBandwidth>,
-}
-
-#[derive(serde::Serialize)]
-struct DailyBandwidth {
-    date: String,
-    bytes: u64,
-    requests: u64,
-}
-
 /// Helper: get CDN zone and verify ownership.
 async fn get_zone(state: &AppState, zone_id: Uuid, user_id: Uuid) -> Result<CdnZone, ApiError> {
     sqlx::query_as::<_, CdnZone>(
@@ -112,7 +97,7 @@ async fn get_zone(state: &AppState, zone_id: Uuid, user_id: Uuid) -> Result<CdnZ
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "CDN zone not found"))
 }
 
-fn bunny_client(api_key: &str) -> reqwest::Client {
+fn bunny_client(_api_key: &str) -> reqwest::Client {
     reqwest::Client::new()
 }
 

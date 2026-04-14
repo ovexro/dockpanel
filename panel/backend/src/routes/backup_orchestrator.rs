@@ -729,7 +729,7 @@ pub struct VerifyRequest {
 /// POST /api/backup-orchestrator/verify — Trigger backup verification.
 pub async fn trigger_verify(
     State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
+    AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
     Json(req): Json<VerifyRequest>,
 ) -> Result<(StatusCode, Json<BackupVerification>), ApiError> {

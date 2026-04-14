@@ -979,7 +979,7 @@ async fn run_retention_cleanup(pool: &PgPool) {
             Ok(o) if o.status.success() => {
                 tracing::info!("DockPanel DB auto-backup completed");
                 // Cleanup old backups (keep 7)
-                if let Ok(mut entries) = std::fs::read_dir("/var/backups/dockpanel") {
+                if let Ok(entries) = std::fs::read_dir("/var/backups/dockpanel") {
                     let mut files: Vec<_> = entries
                         .filter_map(|e| e.ok())
                         .filter(|e| e.file_name().to_string_lossy().starts_with("dockpanel-db-"))
@@ -1073,7 +1073,7 @@ async fn security_check_canary_files(pool: &PgPool) {
         };
 
         let atime = meta.atime();
-        let mtime = meta.mtime();
+        let _mtime = meta.mtime();
 
         // If accessed more recently than modified, someone read it
         // (mtime is set when we create it; atime changes on read)
@@ -1184,7 +1184,7 @@ async fn auto_sleep_idle_containers(pool: &PgPool, agent: &AgentClient) {
 
     let now = chrono::Utc::now();
 
-    for (container_id, container_name, domain, threshold_minutes) in &configs {
+    for (container_id, container_name, _domain, threshold_minutes) in &configs {
         // Check last activity: use the stored last_activity_at
         let last_activity: Option<(Option<chrono::DateTime<chrono::Utc>>,)> = sqlx::query_as(
             "SELECT last_activity_at FROM container_sleep_config WHERE container_id = $1"

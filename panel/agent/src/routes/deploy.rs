@@ -101,7 +101,7 @@ async fn run_deploy(
     }
 
     let mut total_output = git_result.output;
-    let mut total_duration = git_result.duration_ms;
+    let total_duration = git_result.duration_ms;
 
     // 2. Run deploy script (if provided)
     if let Some(ref script) = body.deploy_script {

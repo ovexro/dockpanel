@@ -10,6 +10,7 @@ use crate::error::{internal_error, err, ApiError};
 use crate::AppState;
 
 #[derive(serde::Deserialize)]
+#[allow(dead_code)]
 pub struct CheckinRequest {
     pub server_id: String,
     pub os_info: Option<String>,

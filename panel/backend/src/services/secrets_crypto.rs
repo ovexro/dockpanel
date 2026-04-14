@@ -5,6 +5,11 @@
 //! Each secret gets a random 12-byte nonce, prepended to the ciphertext.
 //! Format: base64(nonce || ciphertext || tag)
 
+// Suppress transitive deprecation warnings from aes-gcm 0.10's use of
+// generic-array 0.14; upgrading requires aes-gcm to publish a version
+// against generic-array 1.x.
+#![allow(deprecated)]
+
 use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
     Aes256Gcm, AeadCore,

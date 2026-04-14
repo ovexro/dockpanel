@@ -89,7 +89,7 @@ pub async fn dump_mysql(
     // Write gzip output to file
     let filepath_clone = filepath.clone();
     let write_handle = tokio::spawn(async move {
-        use tokio::io::AsyncReadExt;
+        
         let mut reader = gzip_stdout;
         let mut file = tokio::fs::File::create(&filepath_clone).await?;
         tokio::io::copy(&mut reader, &mut file).await?;

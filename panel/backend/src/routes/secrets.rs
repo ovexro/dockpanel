@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
-use crate::error::{internal_error, err, paginate, agent_error, ApiError};
+use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::services::activity;
 use crate::services::extensions::fire_event;
 use crate::services::secrets_crypto;
@@ -96,6 +96,7 @@ pub struct UpdateSecretRequest {
 }
 
 #[derive(serde::Deserialize)]
+#[allow(dead_code)]
 pub struct PaginationQuery {
     pub limit: Option<i64>,
     pub offset: Option<i64>,

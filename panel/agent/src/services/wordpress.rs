@@ -375,7 +375,7 @@ pub fn is_auto_update_enabled(domain: &str) -> bool {
 
 /// Create a pre-update snapshot (files + DB) for rollback.
 pub async fn create_update_snapshot(domain: &str) -> Result<String, String> {
-    let path = site_path(domain)?;
+    let _path = site_path(domain)?;
     let snapshot_dir = format!("/var/backups/dockpanel/wp-snapshots/{domain}");
     std::fs::create_dir_all(&snapshot_dir)
         .map_err(|e| format!("Create snapshot dir: {e}"))?;
@@ -407,7 +407,7 @@ pub async fn create_update_snapshot(domain: &str) -> Result<String, String> {
     }
 
     // Cleanup old snapshots (keep last 5)
-    if let Ok(mut entries) = std::fs::read_dir(&snapshot_dir) {
+    if let Ok(entries) = std::fs::read_dir(&snapshot_dir) {
         let mut files: Vec<_> = entries
             .filter_map(|e| e.ok())
             .filter(|e| e.file_name().to_string_lossy().ends_with(".tar.gz"))

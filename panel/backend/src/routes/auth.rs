@@ -721,7 +721,7 @@ pub struct ForgotPasswordRequest {
 /// POST /api/auth/forgot-password — Request password reset email.
 pub async fn forgot_password(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(body): Json<ForgotPasswordRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Rate limit: 3 requests per email per 15 minutes
@@ -1002,7 +1002,7 @@ pub async fn twofa_enable(
 
     // Generate recovery codes
     let codes = generate_recovery_codes();
-    let codes_json = serde_json::to_string(&codes)
+    let _codes_json = serde_json::to_string(&codes)
         .map_err(|e| internal_error("2FA enable", e))?;
 
     // Hash each code for storage (hashing is one-way, no need for reversible encryption)
@@ -1062,7 +1062,7 @@ pub async fn twofa_verify(
 
     // Rate limit: max 5 failed 2FA attempts per 5 minutes
     {
-        let mut attempts = state.twofa_attempts.lock().unwrap_or_else(|e| e.into_inner());
+        let attempts = state.twofa_attempts.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
         if let Some((count, window_start)) = attempts.get(&user_id) {
             if now.duration_since(*window_start).as_secs() < 300 && *count >= 5 {

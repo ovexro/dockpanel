@@ -3,7 +3,6 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
-use sha2::{Sha256, Digest};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 use uuid::Uuid;

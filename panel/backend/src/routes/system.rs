@@ -39,7 +39,7 @@ pub async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
 
 /// GET /api/system/info — Proxy to agent's system info (admin only).
 pub async fn info(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -52,7 +52,7 @@ pub async fn info(
 
 /// GET /api/agent/diagnostics — Proxy to agent's diagnostics (admin only).
 pub async fn diagnostics(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -65,7 +65,7 @@ pub async fn diagnostics(
 
 /// POST /api/agent/diagnostics/fix — Proxy to agent's diagnostics fix (admin).
 pub async fn diagnostics_fix(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     crate::auth::AdminUser(_claims): crate::auth::AdminUser,
     ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
@@ -79,7 +79,7 @@ pub async fn diagnostics_fix(
 
 /// GET /api/agent/recommendations — Auto-optimization recommendations (admin only).
 pub async fn recommendations(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -131,7 +131,7 @@ pub async fn change_hostname(
 
 /// GET /api/system/updates — List available package updates (admin only).
 pub async fn updates_list(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -255,7 +255,7 @@ pub async fn updates_apply(
 
 /// GET /api/system/updates/count — Get count of available updates (admin only).
 pub async fn updates_count(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -288,7 +288,7 @@ pub async fn system_reboot(
 // ── Service installers (proxy to agent, async with SSE progress) ─────────
 
 pub async fn install_status(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -431,7 +431,7 @@ pub async fn install_log(
 // ── SSH Keys ────────────────────────────────────────────────────────────
 
 pub async fn list_ssh_keys(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -464,7 +464,7 @@ pub async fn remove_ssh_key(
 // ── Auto-Updates ────────────────────────────────────────────────────────
 
 pub async fn auto_updates_status(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -495,7 +495,7 @@ pub async fn disable_auto_updates(
 // ── Panel IP Whitelist ──────────────────────────────────────────────────
 
 pub async fn get_panel_whitelist(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -597,7 +597,7 @@ pub async fn install_powerdns(
 
 /// GET /api/system/disk-io — Proxy to agent's disk I/O stats (admin only).
 pub async fn disk_io(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {

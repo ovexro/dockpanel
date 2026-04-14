@@ -10,6 +10,7 @@ use crate::services::notifications;
 
 /// Row from the policy query.
 #[derive(sqlx::FromRow)]
+#[allow(dead_code)]
 struct PolicyRow {
     id: Uuid,
     user_id: Uuid,
