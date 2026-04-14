@@ -97,6 +97,7 @@ export default function GitDeploys() {
   const [showLogs, setShowLogs] = useState(false);
   const [containerLogs, setContainerLogs] = useState("");
   const [previews, setPreviews] = useState<GitPreview[]>([]);
+  const [pendingConfirm, setPendingConfirm] = useState<{ type: string; id: string; label: string } | null>(null);
 
   // Form state
   const [formName, setFormName] = useState("");
@@ -258,10 +259,8 @@ export default function GitDeploys() {
   const handleDeploy = async (id: string) => {
     const deploy = deploys.find(d => d.id === id);
     if (deploy?.deploy_protected) {
-      const confirmed = window.confirm(
-        `PROTECTED DEPLOY\n\nThis deployment is protected. You are about to deploy "${deploy.name}" to production.\n\nAre you sure you want to proceed?`
-      );
-      if (!confirmed) return;
+      setPendingConfirm({ type: "deploy", id, label: `Protected deploy: "${deploy.name}" to production` });
+      return;
     }
     setDeploying(id);
     setMessage({ text: "", type: "" });
@@ -277,7 +276,10 @@ export default function GitDeploys() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Delete this deploy? The container will be removed.")) return;
+    setPendingConfirm({ type: "delete", id, label: "Delete this deploy? The container will be removed." });
+  };
+
+  const executeDelete = async (id: string) => {
     setMessage({ text: "", type: "" });
     try {
       await api.delete(`/git-deploys/${id}`);
@@ -291,7 +293,11 @@ export default function GitDeploys() {
 
   const handleRollback = async (historyId: string) => {
     if (!selected) return;
-    if (!confirm("Rollback to this deployment? The current container will be replaced.")) return;
+    setPendingConfirm({ type: "rollback", id: historyId, label: "Rollback to this deployment? The current container will be replaced." });
+  };
+
+  const executeRollback = async (historyId: string) => {
+    if (!selected) return;
     setMessage({ text: "", type: "" });
     try {
       const result = await api.post<{ deploy_id: string }>(`/git-deploys/${selected.id}/rollback/${historyId}`);
@@ -339,9 +345,33 @@ export default function GitDeploys() {
   };
 
   const deletePreview = async (previewId: string) => {
-    if (!selected || !confirm("Delete this preview deployment?")) return;
-    try { await api.delete(`/git-deploys/${selected.id}/previews/${previewId}`); loadPreviews(selected.id); }
-    catch (e) { setMessage({ text: e instanceof Error ? e.message : "Delete failed", type: "error" }); }
+    if (!selected) return;
+    setPendingConfirm({ type: "delete-preview", id: previewId, label: "Delete this preview deployment?" });
+  };
+
+  const executeConfirm = async () => {
+    if (!pendingConfirm) return;
+    const { type, id } = pendingConfirm;
+    setPendingConfirm(null);
+    if (type === "deploy") {
+      setDeploying(id);
+      setMessage({ text: "", type: "" });
+      try {
+        const result = await api.post<{ deploy_id: string }>(`/git-deploys/${id}/deploy`);
+        if (result.deploy_id) setDeployId(result.deploy_id);
+      } catch (err) {
+        setMessage({ text: err instanceof Error ? err.message : "Deploy failed", type: "error" });
+        setDeploying(null);
+      }
+    } else if (type === "delete") {
+      await executeDelete(id);
+    } else if (type === "rollback") {
+      await executeRollback(id);
+    } else if (type === "delete-preview") {
+      if (!selected) return;
+      try { await api.delete(`/git-deploys/${selected.id}/previews/${id}`); loadPreviews(selected.id); }
+      catch (e) { setMessage({ text: e instanceof Error ? e.message : "Delete failed", type: "error" }); }
+    }
   };
 
   return (
@@ -376,6 +406,25 @@ export default function GitDeploys() {
         >
           {message.text}
           <button onClick={() => setMessage({ text: "", type: "" })} className="float-right font-bold" aria-label="Close">&times;</button>
+        </div>
+      )}
+
+      {/* Inline confirmation bar */}
+      {pendingConfirm && (
+        <div className={`mb-4 px-4 py-3 rounded-lg border flex items-center justify-between ${
+          pendingConfirm.type === "deploy" ? "border-warn-500/30 bg-warn-500/5" : "border-danger-500/30 bg-danger-500/5"
+        }`}>
+          <span className={`text-xs font-mono ${pendingConfirm.type === "deploy" ? "text-warn-400" : "text-danger-400"}`}>
+            {pendingConfirm.label}
+          </span>
+          <div className="flex items-center gap-2 shrink-0 ml-4">
+            <button onClick={executeConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">
+              Confirm
+            </button>
+            <button onClick={() => setPendingConfirm(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">
+              Cancel
+            </button>
+          </div>
         </div>
       )}
 
