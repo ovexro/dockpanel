@@ -4,6 +4,28 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.7.6] - 2026-04-14
+
+### Improved
+- **Complete UX polish pass** — all remaining 12 pages reviewed and polished
+- Mail: success feedback for alias/backup delete, queue error handling, logs loading skeleton
+- Security: all raw Tailwind colors replaced with design system tokens (lockdown, audit log, approvals)
+- Settings: success feedback for destination delete, API key revoke, lockdown threshold save; SSH key error handling; empty states for SSH keys and IP whitelist
+- Monitors: success feedback for create/toggle/delete operations
+- IncidentManagement: inline delete confirmations (was direct delete), success feedback, settings tab empty state
+- WordPressToolkit: success banner for bulk update and hardening actions
+- Telemetry: fix unsafe error casts, fix version display bug (`vundefined`), color consistency
+- Login: loading spinner instead of blank page during auth check
+- Integrations: loading skeletons for WHMCS and Migrations tabs
+- NexusLayout: add missing incident count badge (consistent with other 3 layouts)
+- Color consistency: `emerald`/`green`/`red` → `rust`/`danger` design tokens across 5 files
+
+### Removed
+- **Zero `any`** remaining in entire frontend (37 new TypeScript interfaces, completed in v2.7.5 cycle)
+
+### Security
+- Updated `rand` 0.9.2 → 0.9.4 (fixes 2 low-severity Dependabot alerts — soundness with custom loggers)
+
 ## [2.7.5] - 2026-04-14
 
 ### Improved
