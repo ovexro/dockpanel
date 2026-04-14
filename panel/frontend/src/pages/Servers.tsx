@@ -21,6 +21,7 @@ export default function Servers() {
   const [testResult, setTestResult] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ name: "", ip_address: "", agent_url: "" });
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
 
   const handleCreate = useCallback(async () => {
     if (!form.name.trim()) return;
@@ -38,10 +39,15 @@ export default function Servers() {
     }
   }, [form, refreshServers]);
 
-  const handleDelete = useCallback(async (id: string, name: string) => {
-    if (!confirm(`Delete server "${name}"? All sites, databases, and apps on this server will be removed.`)) return;
+  const handleDelete = useCallback((id: string, name: string) => {
+    setPendingDelete({ id, name });
+  }, []);
+
+  const executeDelete = useCallback(async () => {
+    if (!pendingDelete) return;
+    setPendingDelete(null);
     try {
-      await api.delete(`/servers/${id}`);
+      await api.delete(`/servers/${pendingDelete.id}`);
       await refreshServers();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Failed to delete server");
@@ -110,6 +116,16 @@ export default function Servers() {
 
       {error && (
         <div className="px-4 py-3 bg-danger-500/10 border border-danger-500/30 rounded-lg text-sm text-danger-400">{error}</div>
+      )}
+
+      {pendingDelete && (
+        <div className="border border-danger-500/30 bg-danger-500/5 rounded-lg px-4 py-3 flex items-center justify-between">
+          <span className="text-xs text-danger-400 font-mono">Delete server "{pendingDelete.name}"? All sites, databases, and apps will be removed.</span>
+          <div className="flex items-center gap-2 shrink-0 ml-4">
+            <button onClick={executeDelete} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">Confirm</button>
+            <button onClick={() => setPendingDelete(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
+          </div>
+        </div>
       )}
 
       {creating && (

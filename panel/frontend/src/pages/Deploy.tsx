@@ -54,6 +54,7 @@ export default function Deploy() {
   const [message, setMessage] = useState({ text: "", type: "" });
   const [expandedLog, setExpandedLog] = useState<string | null>(null);
   const [showSecret, setShowSecret] = useState(false);
+  const [pendingConfirm, setPendingConfirm] = useState<{ type: string; id: string; label: string } | null>(null);
 
   // Form fields
   const [repoUrl, setRepoUrl] = useState("");
@@ -134,8 +135,11 @@ export default function Deploy() {
     }
   };
 
-  const handleRollback = async (releaseId: string) => {
-    if (!confirm(`Rollback to release ${releaseId}? This will instantly activate that release.`)) return;
+  const handleRollback = (releaseId: string) => {
+    setPendingConfirm({ type: "rollback", id: releaseId, label: `Rollback to release ${releaseId}? This will instantly activate that release.` });
+  };
+
+  const executeRollback = async (releaseId: string) => {
     setRollingBack(releaseId);
     setMessage({ text: "", type: "" });
     try {
@@ -163,8 +167,11 @@ export default function Deploy() {
     }
   };
 
-  const handleRemove = async () => {
-    if (!confirm("Remove deploy configuration? This won't delete your site files.")) return;
+  const handleRemove = () => {
+    setPendingConfirm({ type: "remove", id: "", label: "Remove deploy configuration? This won't delete your site files." });
+  };
+
+  const executeRemove = async () => {
     try {
       await api.delete(`/sites/${id}/deploy`);
       setConfig(null);
@@ -179,6 +186,14 @@ export default function Deploy() {
     } catch (err) {
       setMessage({ text: err instanceof Error ? err.message : "Remove failed", type: "error" });
     }
+  };
+
+  const executeConfirm = async () => {
+    if (!pendingConfirm) return;
+    const { type, id: confirmId } = pendingConfirm;
+    setPendingConfirm(null);
+    if (type === "rollback") await executeRollback(confirmId);
+    else if (type === "remove") await executeRemove();
   };
 
   const copyText = (text: string) => {
@@ -238,6 +253,17 @@ export default function Deploy() {
             : "bg-danger-500/10 text-danger-400 border-danger-500/20"
         }`}>
           {message.text}
+        </div>
+      )}
+
+      {/* Inline confirmation */}
+      {pendingConfirm && (
+        <div className="border border-danger-500/30 bg-danger-500/5 rounded-lg px-4 py-3 flex items-center justify-between">
+          <span className="text-xs text-danger-400 font-mono">{pendingConfirm.label}</span>
+          <div className="flex items-center gap-2 shrink-0 ml-4">
+            <button onClick={executeConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">Confirm</button>
+            <button onClick={() => setPendingConfirm(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
+          </div>
         </div>
       )}
 

@@ -17,6 +17,7 @@ export default function ResellerUsers() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(true);
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; email: string } | null>(null);
 
   const fetchUsers = useCallback(async () => {
     try {
@@ -45,8 +46,14 @@ export default function ResellerUsers() {
     }
   };
 
-  const handleDelete = async (id: string, userEmail: string) => {
-    if (!confirm(`Delete user "${userEmail}"? Their sites and databases will also be deleted.`)) return;
+  const handleDelete = (id: string, userEmail: string) => {
+    setPendingDelete({ id, email: userEmail });
+  };
+
+  const executeDelete = async () => {
+    if (!pendingDelete) return;
+    const { id } = pendingDelete;
+    setPendingDelete(null);
     setError("");
     try {
       await api.delete(`/reseller/users/${id}`);
@@ -94,6 +101,16 @@ export default function ResellerUsers() {
       )}
       {success && (
         <div className="px-4 py-3 bg-green-500/10 border border-green-500/30 rounded-lg text-sm text-green-400">{success}</div>
+      )}
+
+      {pendingDelete && (
+        <div className="border border-danger-500/30 bg-danger-500/5 rounded-lg px-4 py-3 flex items-center justify-between">
+          <span className="text-xs text-danger-400 font-mono">Delete user "{pendingDelete.email}"? Their sites and databases will also be deleted.</span>
+          <div className="flex items-center gap-2 shrink-0 ml-4">
+            <button onClick={executeDelete} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">Confirm</button>
+            <button onClick={() => setPendingDelete(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
+          </div>
+        </div>
       )}
 
       {creating && (

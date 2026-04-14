@@ -39,6 +39,7 @@ export default function Dns() {
   const [zoneEmail, setZoneEmail] = useState("");
   const [authMethod, setAuthMethod] = useState<"token" | "key">("token");
   const [savingZone, setSavingZone] = useState(false);
+  const [pendingConfirm, setPendingConfirm] = useState<{ type: string; data: any; label: string } | null>(null);
 
   // Add/edit record form
   const [showRecordForm, setShowRecordForm] = useState(false);
@@ -173,19 +174,11 @@ export default function Dns() {
     }
   };
 
-  const handleDeleteZone = async (zone: DnsZone) => {
-    const providerLabel = zone.provider === "powerdns" ? "PowerDNS" : "Cloudflare";
-    if (!confirm(`Remove "${zone.domain}" from DNS management?${zone.provider === "powerdns" ? " This will also delete the zone from PowerDNS." : " This won't delete your Cloudflare zone."}`)) return;
-    try {
-      await api.delete(`/dns/zones/${zone.id}`);
-      if (selectedZone?.id === zone.id) {
-        setSelectedZone(null);
-        setRecords([]);
-      }
-      loadZones();
-    } catch (e) {
-      setMessage({ text: e instanceof Error ? e.message : "Delete failed", type: "error" });
-    }
+  const handleDeleteZone = (zone: DnsZone) => {
+    const msg = zone.provider === "powerdns"
+      ? `Remove "${zone.domain}"? This will also delete the zone from PowerDNS.`
+      : `Remove "${zone.domain}" from DNS management? This won't delete your Cloudflare zone.`;
+    setPendingConfirm({ type: "delete-zone", data: zone, label: msg });
   };
 
   const openRecordForm = (record?: DnsRecord) => {
@@ -246,14 +239,37 @@ export default function Dns() {
     }
   };
 
-  const handleDeleteRecord = async (record: DnsRecord) => {
-    if (!selectedZone || !confirm(`Delete ${record.type} record for ${record.name}?`)) return;
-    try {
-      await api.delete(`/dns/zones/${selectedZone.id}/records/${record.id}`);
+  const handleDeleteRecord = (record: DnsRecord) => {
+    if (!selectedZone) return;
+    setPendingConfirm({ type: "delete-record", data: record, label: `Delete ${record.type} record for ${record.name}?` });
+  };
+
+  const executeConfirm = async () => {
+    if (!pendingConfirm) return;
+    const { type, data } = pendingConfirm;
+    setPendingConfirm(null);
+    if (type === "delete-zone") {
+      try {
+        await api.delete(`/dns/zones/${data.id}`);
+        if (selectedZone?.id === data.id) { setSelectedZone(null); setRecords([]); }
+        loadZones();
+      } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Delete failed", type: "error" }); }
+    } else if (type === "delete-record" && selectedZone) {
+      try {
+        await api.delete(`/dns/zones/${selectedZone.id}/records/${data.id}`);
+        selectZone(selectedZone);
+        setMessage({ text: "Record deleted", type: "success" });
+      } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Delete failed", type: "error" }); }
+    } else if (type === "bulk-delete" && selectedZone) {
+      setBulkDeleting(true);
+      let deleted = 0;
+      for (const recordId of selectedRecords) {
+        try { await api.delete(`/dns/zones/${selectedZone.id}/records/${recordId}`); deleted++; } catch {}
+      }
+      setMessage({ text: `Deleted ${deleted} records`, type: "success" });
+      setSelectedRecords(new Set());
+      setBulkDeleting(false);
       selectZone(selectedZone);
-      setMessage({ text: "Record deleted", type: "success" });
-    } catch (e) {
-      setMessage({ text: e instanceof Error ? e.message : "Delete failed", type: "error" });
     }
   };
 
@@ -547,6 +563,16 @@ export default function Dns() {
         </div>
       )}
 
+      {pendingConfirm && (
+        <div className="mb-4 border border-danger-500/30 bg-danger-500/5 rounded-lg px-4 py-3 flex items-center justify-between">
+          <span className="text-xs text-danger-400 font-mono">{pendingConfirm.label}</span>
+          <div className="flex items-center gap-2 shrink-0 ml-4">
+            <button onClick={executeConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">Confirm</button>
+            <button onClick={() => setPendingConfirm(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
+          </div>
+        </div>
+      )}
+
       {/* Add Zone Form */}
       {showAddZone && (
         <div className="bg-dark-800 rounded-lg border border-dark-500 p-5 mb-6 space-y-4">
@@ -786,18 +812,8 @@ export default function Dns() {
                       {loadingChangelog ? "Loading..." : "Changelog"}
                     </button>
                     {selectedRecords.size > 0 && (
-                      <button disabled={bulkDeleting} onClick={async () => {
-                        if (!confirm(`Delete ${selectedRecords.size} selected records?`)) return;
-                        setBulkDeleting(true);
-                        let deleted = 0;
-                        for (const recordId of selectedRecords) {
-                          try { await api.delete(`/dns/zones/${selectedZone!.id}/records/${recordId}`); deleted++; }
-                          catch {}
-                        }
-                        setMessage({ text: `Deleted ${deleted} records`, type: "success" });
-                        setSelectedRecords(new Set());
-                        setBulkDeleting(false);
-                        selectZone(selectedZone!);
+                      <button disabled={bulkDeleting} onClick={() => {
+                        setPendingConfirm({ type: "bulk-delete", data: null, label: `Delete ${selectedRecords.size} selected records?` });
                       }} className="px-3 py-1.5 bg-danger-500/10 text-danger-400 rounded-lg text-xs font-medium hover:bg-danger-500/20 disabled:opacity-50">
                         {bulkDeleting ? "Deleting..." : `Delete ${selectedRecords.size} Selected`}
                       </button>
