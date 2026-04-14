@@ -4,6 +4,27 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.7.5] - 2026-04-14
+
+### Improved
+- **Systematic UX polish** across 20+ frontend pages
+- All `confirm()` dialogs (25) replaced with inline confirmation bars across 5 files
+- All `prompt()` calls (6) replaced with inline input forms across 5 files
+- All `console.error/warn/log` removed from frontend page components
+- All `bg-rust-50` light-mode colors replaced with dark-mode-compatible `bg-rust-500/10` (8 files)
+- SiteDetail: loading skeletons for traffic stats, PHP extensions, access logs; WAF empty state
+- Databases: success feedback for create/delete/PITR toggle; typed SchemaBrowser generics
+- File Manager: save success indicator, Ctrl+S keyboard shortcut
+- DNS: 16 `any` type casts replaced with 5 proper TypeScript interfaces
+
+### Security
+- Upgraded `rand` 0.8 → 0.9.3 (fixes 2 Dependabot security alerts)
+- Upgraded `vite` 6.4.1 → 6.4.2 (fixes 2 high + 2 medium Dependabot alerts)
+
+### Added
+- Git hooks: pre-commit (infrastructure leak scan), pre-push (secrets + frontend staleness + version consistency)
+- Scripts: `docs-audit.sh`, `release.sh` (x86_64 + ARM64 cross-compile), `deploy-check.sh`
+
 ## [2.7.4] - 2026-04-03
 
 ### Security
