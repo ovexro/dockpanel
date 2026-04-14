@@ -93,11 +93,20 @@ export default function SiteDetail() {
   const [accessLogs, setAccessLogs] = useState("");
   const [errorLogs, setErrorLogs] = useState("");
   const [phpErrors, setPhpErrors] = useState("");
+  const [logsLoading, setLogsLoading] = useState(false);
   const [showAccessLogs, setShowAccessLogs] = useState(false);
   const [logType, setLogType] = useState<"access" | "error" | "php">("access");
 
   // Traffic Stats
-  const [stats, setStats] = useState<any>(null);
+  interface TrafficStats {
+    requests: number;
+    unique_ips: number;
+    bandwidth_mb: string;
+    top_pages?: { path: string; count: number }[];
+    status_codes?: Record<string, number>;
+  }
+  const [stats, setStats] = useState<TrafficStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
   const [showStats, setShowStats] = useState(false);
 
   // Health Check
@@ -153,11 +162,12 @@ export default function SiteDetail() {
   // Image Optimization
   const [imgOptRunning, setImgOptRunning] = useState(false);
   const [imgOptResult, setImgOptResult] = useState<{ converted?: number; total_images?: number; saved_mb?: string; format?: string } | null>(null);
-  const [wafLogs, setWafLogs] = useState<{ timestamp: string; client_ip: string; uri: string; rule_message: string; severity: string; action: string }[]>([]);
+  const [wafLogs, setWafLogs] = useState<{ timestamp: string; client_ip: string; uri: string; rule_message: string; severity: string; action: string }[] | null>(null);
   const [wafLogsLoading, setWafLogsLoading] = useState(false);
 
   // PHP Extensions
   const [phpExts, setPhpExts] = useState<{ installed: string[]; available: string[] } | null>(null);
+  const [phpExtsLoading, setPhpExtsLoading] = useState(false);
   const [showPhpExts, setShowPhpExts] = useState(false);
   const [installingExt, setInstallingExt] = useState<string | null>(null);
 
@@ -212,35 +222,50 @@ export default function SiteDetail() {
   };
 
   const loadLogs = async (type: "access" | "error") => {
+    setLogsLoading(true);
     try {
       const data = await api.get<{ logs: string }>(`/sites/${id}/access-logs?type=${type}&lines=200`);
       if (type === "access") setAccessLogs(data.logs);
       else setErrorLogs(data.logs);
     } catch {}
+    finally { setLogsLoading(false); }
   };
 
   const loadPhpErrors = async () => {
+    setLogsLoading(true);
     try {
       const data = await api.get<{ logs: string }>(`/sites/${id}/php-errors`);
       setPhpErrors(data.logs);
     } catch {
       setPhpErrors("");
+    } finally {
+      setLogsLoading(false);
     }
   };
 
   const loadStats = async () => {
+    setStatsLoading(true);
     try {
-      const data = await api.get<any>(`/sites/${id}/stats`);
+      const data = await api.get<TrafficStats>(`/sites/${id}/stats`);
       setStats(data);
-    } catch {}
+    } catch {
+      setStats(null);
+    } finally {
+      setStatsLoading(false);
+    }
   };
 
   const loadPhpExtensions = async () => {
     if (!site?.php_version) return;
+    setPhpExtsLoading(true);
     try {
-      const data = await api.get<any>(`/php/extensions/${site.php_version}`);
+      const data = await api.get<{ installed: string[]; available: string[] }>(`/php/extensions/${site.php_version}`);
       setPhpExts(data);
-    } catch {}
+    } catch {
+      setPhpExts(null);
+    } finally {
+      setPhpExtsLoading(false);
+    }
   };
 
   const loadEnvVars = async () => {
@@ -374,7 +399,7 @@ export default function SiteDetail() {
             </span>
             <button disabled={checkingHealth} onClick={async () => {
               setCheckingHealth(true);
-              try { const data = await api.get<any>(`/sites/${id}/health`); setHealth(data); }
+              try { const data = await api.get<{ healthy: boolean; status: number; response_time_ms: number }>(`/sites/${id}/health`); setHealth(data); }
               catch { setHealth({ healthy: false, status: 0, response_time_ms: 0 }); }
               finally { setCheckingHealth(false); }
             }} className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded text-xs font-medium hover:bg-dark-600 disabled:opacity-50 transition-colors">
@@ -1158,7 +1183,7 @@ export default function SiteDetail() {
                       try {
                         const result = await api.get<{ events: typeof wafLogs }>(`/sites/${id}/waf/logs`);
                         setWafLogs(result.events || []);
-                      } catch { setWafLogs([]); }
+                      } catch { setWafLogs(null); }
                       finally { setWafLogsLoading(false); }
                     }}
                     className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 disabled:opacity-50 transition-colors"
@@ -1173,7 +1198,10 @@ export default function SiteDetail() {
                 </span>
               )}
             </div>
-            {wafLogs.length > 0 && (
+            {!wafLogsLoading && wafLogs !== null && wafLogs.length === 0 && (
+              <p className="text-xs text-dark-300 mt-2">No WAF events recorded. Events appear when the firewall detects suspicious requests.</p>
+            )}
+            {wafLogs && wafLogs.length > 0 && (
               <div className="mt-3 bg-dark-900 rounded-lg border border-dark-600 overflow-x-auto max-h-64 overflow-y-auto">
                 <table className="w-full text-xs">
                   <thead className="sticky top-0 bg-dark-900">
@@ -1208,7 +1236,7 @@ export default function SiteDetail() {
       )}
 
       {/* Security Headers (CSP) */}
-      <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+      <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-6">
         <div className="px-5 py-4 border-b border-dark-600">
           <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Security Headers</h2>
           <p className="text-xs text-dark-200 mt-1">Content-Security-Policy and Permissions-Policy headers per site</p>
@@ -1267,7 +1295,7 @@ export default function SiteDetail() {
       </div>
 
       {/* Bot Protection */}
-      <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+      <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-6">
         <div className="px-5 py-4 border-b border-dark-600 flex items-center justify-between">
           <div>
             <h2 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Bot Protection</h2>
@@ -1923,10 +1951,12 @@ export default function SiteDetail() {
                       className={`px-2 py-1 rounded text-xs font-medium ${logType === "php" ? "bg-warn-500/15 text-warn-400" : "text-dark-300 hover:text-dark-100"}`}>PHP Errors</button>
                   )}
                 </div>
-                <button onClick={() => logType === "php" ? loadPhpErrors() : loadLogs(logType as "access" | "error")} className="text-xs text-rust-400 hover:text-rust-300">Refresh</button>
+                <button onClick={() => logType === "php" ? loadPhpErrors() : loadLogs(logType as "access" | "error")} className="text-xs text-rust-400 hover:text-rust-300">
+                  {logsLoading ? "Loading..." : "Refresh"}
+                </button>
               </div>
               <pre className="p-4 text-[11px] font-mono text-dark-200 bg-dark-950 max-h-80 overflow-y-auto overflow-x-auto whitespace-pre-wrap">
-                {(logType === "access" ? accessLogs : logType === "error" ? errorLogs : phpErrors) || "No logs available"}
+                {logsLoading ? "Loading logs..." : (logType === "access" ? accessLogs : logType === "error" ? errorLogs : phpErrors) || "No logs available"}
               </pre>
             </div>
           )}
@@ -1943,7 +1973,18 @@ export default function SiteDetail() {
               <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
             </svg>
           </button>
-          {showStats && stats && (
+          {showStats && statsLoading && (
+            <div className="border-t border-dark-600 p-5">
+              <div className="animate-pulse space-y-3">
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="h-12 bg-dark-700 rounded" />
+                  <div className="h-12 bg-dark-700 rounded" />
+                  <div className="h-12 bg-dark-700 rounded" />
+                </div>
+              </div>
+            </div>
+          )}
+          {showStats && !statsLoading && stats && (
             <div className="border-t border-dark-600 p-5">
               <div className="grid grid-cols-3 gap-4 mb-4">
                 <div className="text-center">
@@ -1963,7 +2004,7 @@ export default function SiteDetail() {
                 <div>
                   <h4 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-2">Top Pages</h4>
                   <div className="space-y-1">
-                    {stats.top_pages.map((p: any, i: number) => (
+                    {stats.top_pages.map((p, i) => (
                       <div key={i} className="flex items-center justify-between text-xs">
                         <span className="text-dark-100 font-mono truncate flex-1">{p.path}</span>
                         <span className="text-dark-300 ml-2 font-mono">{p.count}</span>
@@ -1976,7 +2017,7 @@ export default function SiteDetail() {
                 <div className="mt-4">
                   <h4 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-2">Status Codes</h4>
                   <div className="flex gap-3 flex-wrap">
-                    {Object.entries(stats.status_codes).sort().map(([code, count]: [string, any]) => (
+                    {Object.entries(stats.status_codes).sort().map(([code, count]) => (
                       <div key={code} className={`px-2 py-1 rounded text-xs font-mono ${code.startsWith("2") ? "bg-rust-500/15 text-rust-400" : code.startsWith("3") ? "bg-accent-500/15 text-accent-400" : code.startsWith("4") ? "bg-warn-500/15 text-warn-400" : "bg-danger-500/15 text-danger-400"}`}>
                         {code}: {count}
                       </div>
@@ -1999,7 +2040,17 @@ export default function SiteDetail() {
               <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
             </svg>
           </button>
-          {showPhpExts && phpExts && (
+          {showPhpExts && phpExtsLoading && (
+            <div className="border-t border-dark-600 p-5">
+              <div className="animate-pulse space-y-3">
+                <div className="h-4 bg-dark-700 rounded w-32" />
+                <div className="flex flex-wrap gap-1.5">
+                  {[1,2,3,4,5].map(i => <div key={i} className="h-6 w-16 bg-dark-700 rounded" />)}
+                </div>
+              </div>
+            </div>
+          )}
+          {showPhpExts && !phpExtsLoading && phpExts && (
             <div className="border-t border-dark-600 p-5">
               <div className="mb-4">
                 <h4 className="text-xs text-dark-300 uppercase font-mono mb-2">Installed ({phpExts.installed.length})</h4>

@@ -42,6 +42,7 @@ export default function Files() {
   const [editing, setEditing] = useState<string | null>(null);
   const [editorContent, setEditorContent] = useState("");
   const [saving, setSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
   // Create dialog
   const [showCreate, setShowCreate] = useState(false);
   const [createName, setCreateName] = useState("");
@@ -113,14 +114,17 @@ export default function Files() {
   const saveFile = async () => {
     if (!editing) return;
     setSaving(true);
+    setSaveSuccess(false);
     try {
       await api.put(`/sites/${id}/files/write`, {
         path: editing,
         content: editorContent,
       });
-      setSaving(false);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 2000);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save file");
+    } finally {
       setSaving(false);
     }
   };
@@ -437,6 +441,7 @@ export default function Files() {
                 {editing}
               </span>
               <div className="flex items-center gap-2">
+                {saveSuccess && <span className="text-xs text-rust-400">Saved</span>}
                 <button
                   onClick={saveFile}
                   disabled={saving}
@@ -457,6 +462,12 @@ export default function Files() {
             <textarea
               value={editorContent}
               onChange={(e) => setEditorContent(e.target.value)}
+              onKeyDown={(e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+                  e.preventDefault();
+                  saveFile();
+                }
+              }}
               className="flex-1 p-4 font-mono text-sm text-dark-50 resize-none focus:outline-none"
               spellCheck={false}
             />

@@ -19,6 +19,43 @@ interface DnsRecord {
   priority?: number;
 }
 
+interface PropagationResult {
+  name: string;
+  type: string;
+  results: { label: string; resolver: string; value: string; found: boolean }[];
+  fully_propagated: boolean;
+  propagated: number;
+  total: number;
+}
+
+interface HealthCheckResult {
+  domain: string;
+  checks?: { check: string; status: string; detail: string }[];
+  pass: number;
+  fail: number;
+  total: number;
+}
+
+interface DnssecStatus {
+  supported: boolean;
+  active: boolean;
+  status?: string;
+  ds_record?: string;
+}
+
+interface ChangelogData {
+  entries?: { action: string; details: string; user: string; time: string }[];
+}
+
+interface AnalyticsData {
+  supported: boolean;
+  available: boolean;
+  total_queries?: number;
+  avg_response_ms?: number;
+  by_type?: { type: string; queries: number }[];
+  message?: string;
+}
+
 const RECORD_TYPES = ["A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV", "CAA"];
 
 export default function Dns() {
@@ -39,7 +76,7 @@ export default function Dns() {
   const [zoneEmail, setZoneEmail] = useState("");
   const [authMethod, setAuthMethod] = useState<"token" | "key">("token");
   const [savingZone, setSavingZone] = useState(false);
-  const [pendingConfirm, setPendingConfirm] = useState<{ type: string; data: any; label: string } | null>(null);
+  const [pendingConfirm, setPendingConfirm] = useState<{ type: string; data: DnsRecord | DnsZone | null; label: string } | null>(null);
 
   // Add/edit record form
   const [showRecordForm, setShowRecordForm] = useState(false);
@@ -62,7 +99,7 @@ export default function Dns() {
   const [importing, setImporting] = useState(false);
 
   // Propagation checker
-  const [propagation, setPropagation] = useState<any>(null);
+  const [propagation, setPropagation] = useState<PropagationResult | null>(null);
   const [checkingProp, setCheckingProp] = useState<string | null>(null);
 
   // Zone templates
@@ -72,23 +109,23 @@ export default function Dns() {
   const [customTtl, setCustomTtl] = useState("");
 
   // Health Check (Feature #6)
-  const [healthCheck, setHealthCheck] = useState<any>(null);
+  const [healthCheck, setHealthCheck] = useState<HealthCheckResult | null>(null);
   const [checkingHealth, setCheckingHealth] = useState(false);
 
   // DNSSEC Status (Feature #7)
-  const [dnssec, setDnssec] = useState<any>(null);
+  const [dnssec, setDnssec] = useState<DnssecStatus | null>(null);
 
   // Bulk Record Management (Feature #8)
   const [selectedRecords, setSelectedRecords] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
 
   // Changelog (Feature #9)
-  const [changelog, setChangelog] = useState<any>(null);
+  const [changelog, setChangelog] = useState<ChangelogData | null>(null);
   const [showChangelog, setShowChangelog] = useState(false);
   const [loadingChangelog, setLoadingChangelog] = useState(false);
 
   // DNS Analytics (Feature #11)
-  const [analytics, setAnalytics] = useState<any>(null);
+  const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
 
   // Cloudflare Zone Settings
@@ -248,13 +285,13 @@ export default function Dns() {
     if (!pendingConfirm) return;
     const { type, data } = pendingConfirm;
     setPendingConfirm(null);
-    if (type === "delete-zone") {
+    if (type === "delete-zone" && data) {
       try {
         await api.delete(`/dns/zones/${data.id}`);
         if (selectedZone?.id === data.id) { setSelectedZone(null); setRecords([]); }
         loadZones();
       } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Delete failed", type: "error" }); }
-    } else if (type === "delete-record" && selectedZone) {
+    } else if (type === "delete-record" && selectedZone && data) {
       try {
         await api.delete(`/dns/zones/${selectedZone.id}/records/${data.id}`);
         selectZone(selectedZone);
@@ -338,7 +375,7 @@ export default function Dns() {
   const checkPropagation = async (name: string, type: string) => {
     setCheckingProp(name);
     try {
-      const data = await api.post<any>('/dns/propagation', { name, type });
+      const data = await api.post<PropagationResult>('/dns/propagation', { name, type });
       setPropagation(data);
     } catch {
       setMessage({ text: 'Propagation check failed', type: 'error' });
@@ -387,7 +424,7 @@ export default function Dns() {
     setCheckingHealth(true);
     setHealthCheck(null);
     try {
-      const data = await api.post<any>("/dns/health-check", { domain: selectedZone.domain });
+      const data = await api.post<HealthCheckResult>("/dns/health-check", { domain: selectedZone.domain });
       setHealthCheck(data);
     } catch {
       setMessage({ text: "Health check failed", type: "error" });
@@ -399,7 +436,7 @@ export default function Dns() {
   // ── DNSSEC Status (Feature #7) ───────────────────────────────────────
   const loadDnssec = async (zoneId: string) => {
     try {
-      const data = await api.get<any>(`/dns/zones/${zoneId}/dnssec`);
+      const data = await api.get<DnssecStatus>(`/dns/zones/${zoneId}/dnssec`);
       setDnssec(data);
     } catch {
       setDnssec(null);
@@ -411,7 +448,7 @@ export default function Dns() {
     if (!selectedZone) return;
     setLoadingChangelog(true);
     try {
-      const data = await api.get<any>(`/dns/zones/${selectedZone.id}/changelog`);
+      const data = await api.get<ChangelogData>(`/dns/zones/${selectedZone.id}/changelog`);
       setChangelog(data);
       setShowChangelog(true);
     } catch {
@@ -425,7 +462,7 @@ export default function Dns() {
   const loadAnalytics = async (zoneId: string) => {
     setLoadingAnalytics(true);
     try {
-      const data = await api.get<any>(`/dns/zones/${zoneId}/analytics`);
+      const data = await api.get<AnalyticsData>(`/dns/zones/${zoneId}/analytics`);
       setAnalytics(data);
     } catch {
       setAnalytics(null);
@@ -439,7 +476,7 @@ export default function Dns() {
     setLoadingCfSettings(true);
     setCfSettings(null);
     try {
-      const data = await api.get<any>(`/dns/zones/${zoneId}/cf/settings`);
+      const data = await api.get<{ supported: boolean; settings?: Record<string, string> }>(`/dns/zones/${zoneId}/cf/settings`);
       if (data.supported) setCfSettings(data.settings || {});
     } catch {
       setCfSettings(null);
@@ -1093,7 +1130,7 @@ export default function Dns() {
                       <button onClick={() => setPropagation(null)} className="text-xs text-dark-300 hover:text-dark-100">Close</button>
                     </div>
                     <div className="space-y-2">
-                      {propagation.results.map((r: any, i: number) => (
+                      {propagation.results.map((r, i) => (
                         <div key={i} className="flex items-center gap-3 text-xs">
                           <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${r.found ? "bg-rust-500" : "bg-danger-400"}`} />
                           <span className="text-dark-200 w-24">{r.label}</span>
@@ -1120,7 +1157,7 @@ export default function Dns() {
                       <button onClick={() => setHealthCheck(null)} className="text-xs text-dark-300 hover:text-dark-100">Close</button>
                     </div>
                     <div className="space-y-2">
-                      {healthCheck.checks?.map((c: any, i: number) => (
+                      {healthCheck.checks?.map((c, i) => (
                         <div key={i} className="flex items-center gap-3 text-xs">
                           <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${
                             c.status === "pass" ? "bg-rust-500" :
@@ -1160,7 +1197,7 @@ export default function Dns() {
                       <p className="text-xs text-dark-300">No DNS changes recorded yet.</p>
                     ) : (
                       <div className="space-y-2 max-h-64 overflow-y-auto">
-                        {changelog.entries?.map((entry: any, i: number) => (
+                        {changelog.entries?.map((entry, i) => (
                           <div key={i} className="flex items-start gap-3 text-xs py-1.5 border-b border-dark-700 last:border-0">
                             <span className={`shrink-0 px-1.5 py-0.5 rounded font-medium ${
                               entry.action.includes("create") ? "bg-rust-500/15 text-rust-400" :
@@ -1203,11 +1240,11 @@ export default function Dns() {
                         <p className="text-lg font-semibold text-dark-50 font-mono">{analytics.avg_response_ms}ms</p>
                       </div>
                     </div>
-                    {analytics.by_type?.length > 0 && (
+                    {analytics.by_type && analytics.by_type.length > 0 && (
                       <div>
                         <p className="text-xs text-dark-300 mb-2">By Query Type</p>
                         <div className="flex gap-3 flex-wrap">
-                          {analytics.by_type.map((t: any, i: number) => (
+                          {analytics.by_type.map((t, i) => (
                             <div key={i} className="px-2.5 py-1.5 bg-dark-800 rounded border border-dark-600 text-xs">
                               <span className={`font-medium ${typeColor[t.type]?.split(" ")[1] || "text-dark-100"}`}>{t.type}</span>
                               <span className="text-dark-300 ml-2">{t.queries?.toLocaleString()}</span>

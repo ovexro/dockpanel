@@ -47,7 +47,7 @@ export default function VerifyEmail() {
             <div className="text-center text-dark-200 py-4">Verifying your email...</div>
           )}
           {status === "success" && (
-            <div className="bg-rust-50 text-rust-400 text-sm px-4 py-3 rounded-lg border border-rust-200">
+            <div className="bg-rust-500/10 text-rust-400 text-sm px-4 py-3 rounded-lg border border-rust-500/20">
               {message}
             </div>
           )}

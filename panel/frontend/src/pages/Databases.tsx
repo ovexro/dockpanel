@@ -45,18 +45,23 @@ const engineLabels: Record<string, string> = {
 
 /* ─── SQL Browser ───────────────────────────────────────────────── */
 
+interface SchemaOverview {
+  tables?: QueryResult;
+  foreign_keys?: QueryResult;
+}
+
 function SchemaBrowser({ database, onClose }: { database: Database; onClose: () => void }) {
-  const [overview, setOverview] = useState<any>(null);
+  const [overview, setOverview] = useState<SchemaOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
-  const [tableSchema, setTableSchema] = useState<any>(null);
-  const [tableIndexes, setTableIndexes] = useState<any>(null);
+  const [tableSchema, setTableSchema] = useState<QueryResult | null>(null);
+  const [tableIndexes, setTableIndexes] = useState<QueryResult | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
-        const data = await api.get<any>(`/databases/${database.id}/schema-overview`);
+        const data = await api.get<SchemaOverview>(`/databases/${database.id}/schema-overview`);
         setOverview(data);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load schema");
@@ -70,8 +75,8 @@ function SchemaBrowser({ database, onClose }: { database: Database; onClose: () 
     setSelectedTable(table);
     try {
       const [schema, indexes] = await Promise.all([
-        api.get<any>(`/databases/${database.id}/tables/${encodeURIComponent(table)}`),
-        api.get<any>(`/databases/${database.id}/indexes/${encodeURIComponent(table)}`),
+        api.get<QueryResult>(`/databases/${database.id}/tables/${encodeURIComponent(table)}`),
+        api.get<QueryResult>(`/databases/${database.id}/indexes/${encodeURIComponent(table)}`),
       ]);
       setTableSchema(schema);
       setTableIndexes(indexes);
@@ -633,6 +638,7 @@ export default function Databases() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState("");
+  const [successMsg, setSuccessMsg] = useState("");
 
   // Form state
   const [siteId, setSiteId] = useState("");
@@ -682,6 +688,7 @@ export default function Databases() {
   const handleCreate = async (e: FormEvent) => {
     e.preventDefault();
     setError("");
+    setSuccessMsg("");
     setSubmitting(true);
     try {
       await api.post("/databases", {
@@ -690,6 +697,7 @@ export default function Databases() {
         engine,
       });
       setShowForm(false);
+      setSuccessMsg(`Database "${dbName}" created`);
       setDbName("");
       fetchData();
     } catch (err) {
@@ -705,9 +713,11 @@ export default function Databases() {
       return;
     }
     setDeletingId(id);
+    setSuccessMsg("");
     try {
       await api.delete(`/databases/${id}`);
       setConfirmDeleteId(null);
+      setSuccessMsg("Database deleted");
       if (credentialsId === id) {
         setCredentialsId(null);
         setCredentials(null);
@@ -827,6 +837,15 @@ export default function Databases() {
         <div role="alert" className="bg-danger-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-danger-500/20 mb-4">
           {error}
           <button onClick={() => setError("")} className="float-right font-bold" aria-label="Close error">
+            &times;
+          </button>
+        </div>
+      )}
+
+      {successMsg && (
+        <div className="bg-rust-500/10 text-rust-400 text-sm px-4 py-3 rounded-lg border border-rust-500/20 mb-4">
+          {successMsg}
+          <button onClick={() => setSuccessMsg("")} className="float-right font-bold" aria-label="Dismiss">
             &times;
           </button>
         </div>
@@ -1013,13 +1032,14 @@ export default function Databases() {
                         <button
                           onClick={async () => {
                             try {
-                              const cfg = await api.get<any>(`/databases/${db.id}/pitr`);
+                              const cfg = await api.get<{ pitr_enabled: boolean; retention_hours: number }>(`/databases/${db.id}/pitr`);
                               const newEnabled = !cfg.pitr_enabled;
                               await api.put(`/databases/${db.id}/pitr`, {
                                 pitr_enabled: newEnabled,
                                 retention_hours: cfg.retention_hours || 24,
                               });
                               setError("");
+                              setSuccessMsg(`Point-in-time recovery ${newEnabled ? "enabled" : "disabled"} for ${db.name}`);
                             } catch (e) { setError(e instanceof Error ? e.message : "Failed to toggle PITR"); }
                           }}
                           className="px-2 py-1 rounded text-xs font-medium bg-dark-700 text-dark-300 hover:bg-dark-600 transition-colors"

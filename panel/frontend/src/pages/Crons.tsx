@@ -177,7 +177,7 @@ export default function Crons() {
         <div
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
-              ? "bg-rust-50 text-rust-400 border-rust-200"
+              ? "bg-rust-500/10 text-rust-400 border-rust-500/20"
               : "bg-danger-500/10 text-danger-400 border-danger-500/20"
           }`}
           role="alert"

@@ -80,7 +80,7 @@ export default function ResetPassword() {
 
         {success ? (
           <div className="bg-dark-800 rounded-lg border border-dark-600 p-6 space-y-4">
-            <div className="bg-rust-50 text-rust-400 text-sm px-4 py-3 rounded-lg border border-rust-200">
+            <div className="bg-rust-500/10 text-rust-400 text-sm px-4 py-3 rounded-lg border border-rust-500/20">
               Password reset successfully!
             </div>
             <Link
