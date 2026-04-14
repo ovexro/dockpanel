@@ -13,10 +13,75 @@ body {
 }
 
 ::selection {
-  background: rgba(16, 185, 129, 0.3);
+  background: rgba(255, 255, 255, 0.15);
   color: white;
 }
 
 code, pre {
   font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
 }
+
+/* ── Noise grain overlay ─────────────────────────────────────────── */
+.noise::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 256px 256px;
+}
+
+/* ── Hero grid lines ─────────────────────────────────────────────── */
+.hero-grid {
+  background-image:
+    linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+  background-size: 64px 64px;
+}
+
+/* ── Section divider ─────────────────────────────────────────────── */
+.glow-divider {
+  position: relative;
+}
+
+.glow-divider::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 500px;
+  max-width: 60%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08) 50%, transparent);
+}
+
+/* ── Terminal cursor blink ────────────────────────────────────────── */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.terminal-cursor {
+  animation: blink 1s step-end infinite;
+  color: #e4e4e7;
+}
+
+/* ── Install command subtle glow ──────────────────────────────────── */
+@keyframes install-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
+  50% { box-shadow: 0 0 40px -10px rgba(255,255,255,0.06); }
+}
+
+.install-glow {
+  animation: install-pulse 4s ease-in-out infinite;
+}
+
+/* ── Scrollbar ────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #27272a; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #3f3f46; }

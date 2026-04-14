@@ -260,7 +260,7 @@ export default function Dashboard() {
     api
       .get<{ container_id: string }[]>("/apps")
       .then((list) => setAppCount(list.length))
-      .catch(() => console.warn("Optional: failed to load app count"));
+      .catch(() => {});
     api
       .get<{ count: number; security: number; reboot_required: boolean }>("/system/updates/count")
       .then((d) => { setUpdateCount(d.count); setRebootRequired(d.reboot_required); })
@@ -268,16 +268,16 @@ export default function Dashboard() {
     api
       .get<{ points: MetricPoint[] }>("/dashboard/metrics-history")
       .then((d) => setMetricsHistory(d.points || []))
-      .catch(() => console.warn("Optional: failed to load metrics history"));
+      .catch(() => {});
     api
       .get<{ enabled: boolean }>("/auth/2fa/status")
       .then((d) => setTwoFaEnabled(d.enabled))
-      .catch(() => console.warn("Optional: failed to load 2FA status"));
+      .catch(() => {});
     // Feature #1: Docker container overview
     api
       .get<{ total: number; running: number; stopped: number }>("/dashboard/docker")
       .then(setDockerInfo)
-      .catch(() => console.warn("Optional: failed to load docker summary"));
+      .catch(() => {});
     // Feature #2: Recent activity feed
     api
       .get<any[]>("/activity?limit=5")
@@ -332,11 +332,11 @@ export default function Dashboard() {
     api
       .get<Process[]>("/system/processes")
       .then(setProcesses)
-      .catch(() => console.warn("Optional: failed to load processes"));
+      .catch(() => {});
     api
       .get<NetworkIface[]>("/system/network")
       .then(setNetwork)
-      .catch(() => console.warn("Optional: failed to load network interfaces"));
+      .catch(() => {});
   }, []);
 
   // WebSocket connection for live metrics
@@ -382,7 +382,7 @@ export default function Dashboard() {
             }
           }
         } catch {
-          console.warn("Failed to parse WebSocket message");
+          // malformed WS frame — ignore
         }
       };
 

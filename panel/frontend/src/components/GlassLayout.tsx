@@ -160,7 +160,7 @@ export default function GlassLayout() {
         )}
 
         {/* ── Nav ────────────────────────────────────────────────── */}
-        <nav className="flex-1 px-2 pt-4 overflow-y-auto overflow-x-hidden">
+        <nav className="flex-1 px-2 pt-4 overflow-y-auto overflow-x-hidden sidebar-scroll-fade">
           {flatNav ? (
             /* Flat nav — no group labels */
             <div className="space-y-0.5">

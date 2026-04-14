@@ -168,7 +168,7 @@ export default function CommandLayout() {
         <ServerSelector />
 
         {/* Nav */}
-        <nav className="flex-1 px-3 pt-4 overflow-y-auto">
+        <nav className="flex-1 px-3 pt-4 overflow-y-auto sidebar-scroll-fade">
           {flatNav && navItems ? (
             /* Flat nav — no group labels */
             <div className="space-y-1">

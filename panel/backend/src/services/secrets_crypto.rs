@@ -12,6 +12,7 @@ use aes_gcm::{
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
+use zeroize::Zeroize;
 
 /// Legacy key derivation (SHA-256 only) — kept for decrypting existing data.
 fn derive_key_legacy(secret: &str, salt: &[u8]) -> [u8; 32] {
@@ -53,9 +54,10 @@ fn derive_credential_key(jwt_secret: &str) -> [u8; 32] {
 
 /// Encrypt a plaintext string. Returns base64-encoded (nonce + ciphertext).
 pub fn encrypt(plaintext: &str, jwt_secret: &str) -> Result<String, String> {
-    let key = derive_key(jwt_secret);
+    let mut key = derive_key(jwt_secret);
     let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|e| format!("Cipher init failed: {e}"))?;
+        .map_err(|e| { key.zeroize(); format!("Cipher init failed: {e}") })?;
+    key.zeroize();
 
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     let ciphertext = cipher
@@ -84,9 +86,10 @@ pub fn decrypt(encrypted_b64: &str, jwt_secret: &str) -> Result<String, String> 
     let nonce = aes_gcm::Nonce::from_slice(nonce_bytes);
 
     // Try HKDF key first (new encryption)
-    let key = derive_key(jwt_secret);
+    let mut key = derive_key(jwt_secret);
     let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|e| format!("Cipher init failed: {e}"))?;
+        .map_err(|e| { key.zeroize(); format!("Cipher init failed: {e}") })?;
+    key.zeroize();
 
     if let Ok(plaintext) = cipher.decrypt(nonce, ciphertext) {
         return String::from_utf8(plaintext)
@@ -94,9 +97,10 @@ pub fn decrypt(encrypted_b64: &str, jwt_secret: &str) -> Result<String, String> 
     }
 
     // Fall back to legacy SHA-256 key for data encrypted before HKDF migration
-    let legacy_key = derive_key_legacy(jwt_secret, b"dockpanel-secrets-v1:");
+    let mut legacy_key = derive_key_legacy(jwt_secret, b"dockpanel-secrets-v1:");
     let legacy_cipher = Aes256Gcm::new_from_slice(&legacy_key)
-        .map_err(|e| format!("Cipher init failed: {e}"))?;
+        .map_err(|e| { legacy_key.zeroize(); format!("Cipher init failed: {e}") })?;
+    legacy_key.zeroize();
 
     let plaintext = legacy_cipher
         .decrypt(nonce, ciphertext)
@@ -109,9 +113,10 @@ pub fn decrypt(encrypted_b64: &str, jwt_secret: &str) -> Result<String, String> 
 /// Encrypt a credential (DB password, SMTP password, DKIM key, etc.).
 /// Uses a separate key derivation from the vault encryption.
 pub fn encrypt_credential(plaintext: &str, jwt_secret: &str) -> Result<String, String> {
-    let key = derive_credential_key(jwt_secret);
+    let mut key = derive_credential_key(jwt_secret);
     let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|e| format!("Cipher init failed: {e}"))?;
+        .map_err(|e| { key.zeroize(); format!("Cipher init failed: {e}") })?;
+    key.zeroize();
 
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     let ciphertext = cipher
@@ -139,9 +144,10 @@ pub fn decrypt_credential(encrypted_b64: &str, jwt_secret: &str) -> Result<Strin
     let nonce = aes_gcm::Nonce::from_slice(nonce_bytes);
 
     // Try HKDF key first (new encryption)
-    let key = derive_credential_key(jwt_secret);
+    let mut key = derive_credential_key(jwt_secret);
     let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|e| format!("Cipher init failed: {e}"))?;
+        .map_err(|e| { key.zeroize(); format!("Cipher init failed: {e}") })?;
+    key.zeroize();
 
     if let Ok(plaintext) = cipher.decrypt(nonce, ciphertext) {
         return String::from_utf8(plaintext)
@@ -149,9 +155,10 @@ pub fn decrypt_credential(encrypted_b64: &str, jwt_secret: &str) -> Result<Strin
     }
 
     // Fall back to legacy SHA-256 key (jwt_secret with credential salt)
-    let legacy_key = derive_key_legacy(jwt_secret, b"dockpanel-credential-v1:");
+    let mut legacy_key = derive_key_legacy(jwt_secret, b"dockpanel-credential-v1:");
     let legacy_cipher = Aes256Gcm::new_from_slice(&legacy_key)
-        .map_err(|e| format!("Cipher init failed: {e}"))?;
+        .map_err(|e| { legacy_key.zeroize(); format!("Cipher init failed: {e}") })?;
+    legacy_key.zeroize();
 
     if let Ok(plaintext) = legacy_cipher.decrypt(nonce, ciphertext) {
         return String::from_utf8(plaintext)
@@ -161,9 +168,10 @@ pub fn decrypt_credential(encrypted_b64: &str, jwt_secret: &str) -> Result<Strin
     // Fall back to legacy SHA-256 key with SECRETS_ENCRYPTION_KEY env var
     if let Ok(env_key) = std::env::var("SECRETS_ENCRYPTION_KEY") {
         if !env_key.is_empty() {
-            let env_legacy_key = derive_key_legacy(&env_key, b"dockpanel-credential-encryption-v1:");
+            let mut env_legacy_key = derive_key_legacy(&env_key, b"dockpanel-credential-encryption-v1:");
             let env_legacy_cipher = Aes256Gcm::new_from_slice(&env_legacy_key)
-                .map_err(|e| format!("Cipher init failed: {e}"))?;
+                .map_err(|e| { env_legacy_key.zeroize(); format!("Cipher init failed: {e}") })?;
+            env_legacy_key.zeroize();
 
             if let Ok(plaintext) = env_legacy_cipher.decrypt(nonce, ciphertext) {
                 return String::from_utf8(plaintext)

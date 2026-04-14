@@ -219,10 +219,10 @@ export default function BackupOrchestrator() {
       )}
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-6 border-b border-dark-600">
+      <div className="flex gap-1 mb-6 border-b border-dark-600 overflow-x-auto">
         {tabs.map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
-            className={`px-4 py-2 text-xs font-mono uppercase tracking-widest transition-colors ${
+            className={`px-4 py-2 text-xs font-mono uppercase tracking-widest transition-colors whitespace-nowrap ${
               tab === t.key ? "text-rust-400 border-b-2 border-rust-400" : "text-dark-300 hover:text-dark-100"
             }`}>{t.label}</button>
         ))}

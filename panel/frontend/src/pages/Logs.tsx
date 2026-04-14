@@ -901,10 +901,10 @@ export default function Logs() {
           </div>
         </div>
         {/* Tabs */}
-        <div className="flex gap-6 mb-6 text-sm font-mono">
-          <button onClick={() => setTab("site")} className={tab === "site" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}>Site Logs</button>
-          <button onClick={() => setTab("system")} className={tab === "system" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}>System Logs</button>
-          <button onClick={() => setTab("audit")} className={tab === "audit" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}>Audit Log</button>
+        <div className="flex gap-6 mb-6 text-sm font-mono overflow-x-auto">
+          <button onClick={() => setTab("site")} className={`whitespace-nowrap ${tab === "site" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}`}>Site Logs</button>
+          <button onClick={() => setTab("system")} className={`whitespace-nowrap ${tab === "system" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}`}>System Logs</button>
+          <button onClick={() => setTab("audit")} className={`whitespace-nowrap ${tab === "audit" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}`}>Audit Log</button>
         </div>
       </div>
       {/* Content */}

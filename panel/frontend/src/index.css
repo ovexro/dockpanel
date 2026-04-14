@@ -6,13 +6,13 @@
    ═══════════════════════════════════════════════════════ */
 
 @theme {
-  /* Harmonized green — anchored at #22c55e (S:71 L:45) */
+  /* Harmonized green — darkened for WCAG AA contrast with white text */
   --color-rust-50:  #f0fdf6;
   --color-rust-100: #d6fce4;
   --color-rust-200: #a8f8c4;
   --color-rust-300: #46ec83;
-  --color-rust-400: #46ec83;
-  --color-rust-500: #22c55e;
+  --color-rust-400: #22c55e;
+  --color-rust-500: #16a34a;
   --color-rust-600: #16a34a;
   --color-rust-700: #047857;
   --color-rust-800: #065f46;
@@ -47,7 +47,7 @@
   --color-dark-700: #27272a;
   --color-dark-600: #3f3f46;
   --color-dark-500: #52525b;
-  --color-dark-400: #71717a;
+  --color-dark-400: #84848e;
   --color-dark-300: #a1a1aa;
   --color-dark-200: #d4d4d8;
   --color-dark-100: #e4e4e7;
@@ -99,19 +99,19 @@ body {
   --color-dark-700: #182d50;
   --color-dark-600: #243d66;
   --color-dark-500: #3a5785;
-  --color-dark-400: #6280a8;
+  --color-dark-400: #7a96bc;
   --color-dark-300: #8ba6c8;
   --color-dark-200: #b6cde4;
   --color-dark-100: #dae6f4;
   --color-dark-50:  #f0f5fb;
 
-  /* Electric blue accent */
+  /* Electric blue accent — darkened for WCAG AA contrast with white text */
   --color-rust-50:  #eff6ff;
   --color-rust-100: #dbeafe;
   --color-rust-200: #bfdbfe;
   --color-rust-300: #93c5fd;
-  --color-rust-400: #60a5fa;
-  --color-rust-500: #3b82f6;
+  --color-rust-400: #3b82f6;
+  --color-rust-500: #2563eb;
   --color-rust-600: #2563eb;
   --color-rust-700: #1d4ed8;
   --color-rust-800: #1e40af;
@@ -257,13 +257,13 @@ body {
   --color-dark-100: #ebe2d9;
   --color-dark-50:  #faf7f5;
 
-  /* Orange accent */
+  /* Orange accent — darkened for WCAG AA contrast with white text */
   --color-rust-50:  #fff7ed;
   --color-rust-100: #ffedd5;
   --color-rust-200: #fed7aa;
   --color-rust-300: #fdba74;
-  --color-rust-400: #fdba74;
-  --color-rust-500: #fb923c;
+  --color-rust-400: #fb923c;
+  --color-rust-500: #ea580c;
   --color-rust-600: #ea580c;
   --color-rust-700: #c2410c;
   --color-rust-800: #9a3412;
@@ -835,20 +835,20 @@ body {
   --color-dark-700: #2d333b;  /* borders, dividers */
   --color-dark-600: #444c56;  /* subtle borders, separators */
   --color-dark-500: #636e7b;  /* muted text, placeholders */
-  --color-dark-400: #8b949e;  /* secondary text */
+  --color-dark-400: #9ca5af;  /* secondary text — lightened for WCAG AA */
   --color-dark-300: #b1bac4;  /* primary secondary text */
   --color-dark-200: #d0d7de;  /* strong secondary text */
   --color-dark-100: #e6edf3;  /* near-white text */
   --color-dark-50:  #f0f6fc;  /* white text */
 
-  /* Blue accent — matches Nexus light */
+  /* Blue accent — darkened for WCAG AA contrast with white text */
   --color-rust-50:  #eff6ff;
   --color-rust-100: #dbeafe;
   --color-rust-200: #bfdbfe;
   --color-rust-300: #93c5fd;
-  --color-rust-400: #60a5fa;
-  --color-rust-500: #3b82f6;
-  --color-rust-600: #2563eb;
+  --color-rust-400: #3b82f6;
+  --color-rust-500: #2563eb;
+  --color-rust-600: #1d4ed8;
   --color-rust-700: #1d4ed8;
   --color-rust-800: #1e40af;
   --color-rust-900: #1e3a8a;
@@ -1155,6 +1155,12 @@ select:focus {
 input::placeholder,
 textarea::placeholder {
   color: var(--color-dark-300);
+}
+
+/* Sidebar scroll fade — hints that more items exist below the fold */
+.sidebar-scroll-fade {
+  mask-image: linear-gradient(to bottom, black calc(100% - 32px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 32px), transparent 100%);
 }
 
 /* Scrollbar */

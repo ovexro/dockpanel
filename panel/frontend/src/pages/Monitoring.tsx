@@ -20,13 +20,13 @@ export default function Monitoring() {
           <p className="text-sm text-dark-200 mt-1">Uptime monitors, certificates, alerts, and status page</p>
         </div>
       </div>
-      <div className="flex gap-6 mb-6 text-sm font-mono">
-        <button onClick={() => setTab("monitors")} className={tab === "monitors" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}>Monitors</button>
-        <button onClick={() => setTab("alerts")} className={tab === "alerts" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}>Alerts</button>
-        <button onClick={() => setTab("certificates")} className={tab === "certificates" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}>Certificates</button>
-        <button onClick={() => setTab("maintenance")} className={tab === "maintenance" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}>Maintenance</button>
+      <div className="flex gap-6 mb-6 text-sm font-mono overflow-x-auto pb-px">
+        <button onClick={() => setTab("monitors")} className={`whitespace-nowrap ${tab === "monitors" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}`}>Monitors</button>
+        <button onClick={() => setTab("alerts")} className={`whitespace-nowrap ${tab === "alerts" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}`}>Alerts</button>
+        <button onClick={() => setTab("certificates")} className={`whitespace-nowrap ${tab === "certificates" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}`}>Certificates</button>
+        <button onClick={() => setTab("maintenance")} className={`whitespace-nowrap ${tab === "maintenance" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}`}>Maintenance</button>
         {isAdmin && (
-          <button onClick={() => setTab("statuspage")} className={tab === "statuspage" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}>Status Page</button>
+          <button onClick={() => setTab("statuspage")} className={`whitespace-nowrap ${tab === "statuspage" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}`}>Status Page</button>
         )}
       </div>
       {tab === "monitors" && <MonitorsContent />}

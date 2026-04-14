@@ -47,3 +47,4 @@ p256 = { version = "0.13", features = ["ecdsa"] }
 url = "2"
 serde_yaml_ng = "0.10"
 hkdf = "0.12"
+zeroize = { version = "1", features = ["derive"] }

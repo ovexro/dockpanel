@@ -166,11 +166,11 @@ export default function Integrations() {
           <p className="text-sm text-dark-200 mt-1">Webhooks, extensions, billing, and migrations</p>
         </div>
       </div>
-      <div className="flex gap-6 mb-6 text-sm font-mono">
-        <button onClick={() => setTab("webhooks")} className={tab === "webhooks" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}>Webhooks</button>
-        <button onClick={() => setTab("extensions")} className={tab === "extensions" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}>Extensions</button>
-        <button onClick={() => setTab("whmcs")} className={tab === "whmcs" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}>WHMCS</button>
-        <button onClick={() => setTab("migrations")} className={tab === "migrations" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}>Migrations</button>
+      <div className="flex gap-6 mb-6 text-sm font-mono overflow-x-auto">
+        <button onClick={() => setTab("webhooks")} className={`whitespace-nowrap ${tab === "webhooks" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}`}>Webhooks</button>
+        <button onClick={() => setTab("extensions")} className={`whitespace-nowrap ${tab === "extensions" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}`}>Extensions</button>
+        <button onClick={() => setTab("whmcs")} className={`whitespace-nowrap ${tab === "whmcs" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}`}>WHMCS</button>
+        <button onClick={() => setTab("migrations")} className={`whitespace-nowrap ${tab === "migrations" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}`}>Migrations</button>
       </div>
       {tab === "webhooks" && <WebhookGatewayContent />}
       {tab === "extensions" && <ExtensionsContent />}

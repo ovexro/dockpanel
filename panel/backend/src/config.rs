@@ -50,7 +50,11 @@ mod tests {
     }
 }
 
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
 /// Application configuration loaded from environment variables.
+/// Secrets are zeroized when Config is dropped to prevent lingering in freed memory.
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct Config {
     pub database_url: String,
     pub jwt_secret: String,

@@ -1,62 +1,276 @@
-import { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence, useInView, useSpring, useMotionValue } from 'motion/react';
 import { Link } from 'react-router-dom';
 import {
   Terminal, Server, ShieldCheck, Database, Globe, Lock, Box,
   FileCode2, Activity, Stethoscope, HardDriveDownload, Cpu,
   KeyRound, Wrench, ClipboardList, Mail, Zap, Users, LogIn,
   Package, ArrowRightLeft, LayoutTemplate, Puzzle, Network,
-  ChevronDown, Check, Github, Play, Copy, CheckCircle2, X,
-  Palette
+  ChevronDown, Check, Github, Copy, CheckCircle2, X as XIcon,
+  Palette, Star, ArrowRight, Menu
 } from 'lucide-react';
 
-const features = [
-  { icon: Globe, title: 'Site Management', desc: 'One-click install for WordPress, Laravel, Drupal, Joomla, Symfony, and CodeIgniter. Auto-creates database, configures Nginx, installs the framework, and provisions SSL.' },
-  { icon: Lock, title: 'Free SSL Certificates', desc: "Automatic Let's Encrypt provisioning and renewal. One-click SSL for every site with zero-downtime certificate rotation." },
-  { icon: Database, title: 'Database Management', desc: 'MySQL and PostgreSQL via Docker containers. Built-in SQL browser for both engines. Per-site credentials, one-click backups and restores.' },
-  { icon: Terminal, title: 'Developer CLI', desc: 'Full-featured dockpanel command for all operations. Manage sites, databases, apps, SSL, backups, and more from your terminal. Scriptable and composable.' },
-  { icon: Box, title: 'Docker Apps & Compose', desc: '151 one-click app templates across 14 categories — AI, databases, CMS, media, monitoring, and more. GPU passthrough, auto-sleep, real-time deploy progress, auto reverse proxy with SSL.' },
-  { icon: FileCode2, title: 'Infrastructure as Code', desc: 'Export your entire server config as YAML. Version control it, review diffs, apply to new servers. Reproducible infrastructure with dry-run support.' },
-  { icon: Activity, title: 'Monitoring & Incidents', desc: 'Uptime monitoring with incident management lifecycle (investigating → resolved → postmortem). Public status page with component groups, subscriber notifications, and incident timeline. Slack, Discord, PagerDuty alerts.' },
-  { icon: Stethoscope, title: 'Smart Diagnostics', desc: 'Pattern-based log analysis, misconfiguration detection, and resource bottleneck identification. One-click fixes for common server issues.' },
-  { icon: HardDriveDownload, title: 'Backup Orchestrator', desc: 'Database, volume & site backups with AES-256 encryption, automatic restore verification, and cross-resource policies. S3, B2, GCS, and SFTP destinations. Health dashboard with staleness alerts.' },
-  { icon: Terminal, title: 'Web Terminal & File Manager', desc: 'Full SSH terminal in your browser with tabs, themes, sharing, and session recording. Built-in file manager — browse, edit, upload, and download files.' },
-  { icon: ShieldCheck, title: 'WAF + Secrets Manager', desc: 'ModSecurity3 WAF with OWASP CRS v4 per site. AES-256-GCM encrypted secret vaults with version history and auto-inject. CSP headers and bot protection per site.' },
-  { icon: Cpu, title: 'ARM & Homelab Ready', desc: 'Runs on Raspberry Pi, Oracle Cloud free-tier ARM instances, and any ARM64 server. Same ~41MB binaries, same features, same performance.' },
-  { icon: KeyRound, title: 'Passkeys + 2FA Authentication', desc: 'Passwordless login with passkeys (WebAuthn/biometrics/security keys). Plus TOTP two-factor with QR setup and 10 recovery codes. Enterprise-grade auth.' },
-  { icon: Wrench, title: 'Auto-Healing Engine', desc: 'Automatic remediation of crashed services, disk space recovery, and SSL renewal. Runs silently in the background with full audit trail and opt-in control.' },
-  { icon: ClipboardList, title: 'Activity & Audit Log', desc: 'Full audit trail of every action — site creation, SSL changes, database operations, user logins. Filterable, searchable, with timestamps and actor tracking.' },
-  { icon: Mail, title: 'Email Management', desc: "Full mail server with one-click install. Domains, mailboxes, aliases, DKIM signing, DNS helper, mail queue, autoresponders, quotas. Roundcube webmail and Rspamd spam filter." },
-  { icon: Zap, title: 'Zero-Friction Setup', desc: 'One install script sets up everything — Docker, Nginx, PHP, Certbot, UFW, Fail2Ban. Every additional service is one click away. SSH keys, auto-updates built in.' },
-  { icon: Server, title: 'Multi-Server Management', desc: 'Manage unlimited remote servers from a single dashboard. Install a lightweight agent, connect via HTTPS, and control sites, apps, and databases across all your servers.' },
-  { icon: Users, title: 'Reseller & White-Label', desc: 'Admin → Reseller → User hierarchy with quotas and server allocation. Per-reseller branding: custom logo, panel name, accent color, and option to hide branding.' },
-  { icon: LogIn, title: 'OAuth / SSO Login', desc: 'Login via Google, GitHub, or GitLab with OAuth 2.0. Auto-create users on first login, CSRF protection, and secure token handling. No more password fatigue.' },
-  { icon: Package, title: 'Nixpacks Auto-Build', desc: 'Deploy any app without a Dockerfile. Nixpacks auto-detects 30+ languages and builds optimized Docker images. Blue-green zero-downtime deployments included.' },
-  { icon: ArrowRightLeft, title: 'Migration Wizard', desc: 'Import sites, databases, and email from cPanel, Plesk, or HestiaCP. Upload your backup, review what was found, and import selected items with real-time progress.' },
-  { icon: LayoutTemplate, title: 'WordPress Toolkit', desc: 'Multi-site WP dashboard with vulnerability scanning against known exploits. Security hardening with one-click fixes. Bulk update plugins, themes, and core.' },
-  { icon: Puzzle, title: 'Webhook Gateway', desc: 'Receive external webhooks, inspect requests, route to destinations with JSON filtering. HMAC-SHA256/SHA1 verification, retry with backoff, replay past deliveries. Plus outbound extension webhooks with scoped API keys.' },
-  { icon: Network, title: 'Traefik Reverse Proxy', desc: "Choose nginx or Traefik for Docker app routing. Traefik provides native Docker service discovery, automatic Let's Encrypt SSL, and a built-in routing dashboard." },
-  { icon: Palette, title: '6 Themes + 3 Layouts', desc: 'Terminal, Midnight, Ember, Arctic, Clean, and Clean Dark themes — each with Sidebar, Compact, and Topbar layouts. No other panel lets you choose how your dashboard looks and feels.' },
+const hd = "font-['Space_Grotesk',system-ui,sans-serif]";
+
+/* ── Animated counter ─────────────────────────────────────────────── */
+function Counter({ value, suffix = '', delay = 0 }: { value: number; suffix?: string; delay?: number }) {
+  const ref = useRef(null);
+  const inView = useInView(ref, { once: true, margin: '-40px' });
+  const motionVal = useMotionValue(0);
+  const spring = useSpring(motionVal, { stiffness: 50, damping: 20 });
+  const [display, setDisplay] = useState('0');
+
+  useEffect(() => {
+    if (!inView) return;
+    if (delay > 0) {
+      const t = setTimeout(() => motionVal.set(value), delay * 1000);
+      return () => clearTimeout(t);
+    }
+    motionVal.set(value);
+  }, [inView, value, motionVal, delay]);
+
+  useEffect(() => {
+    const unsubscribe = spring.on('change', (v: number) => setDisplay(Math.round(v).toString()));
+    return unsubscribe;
+  }, [spring]);
+
+  return <span ref={ref}>{display}{suffix}</span>;
+}
+
+/* ── Animated terminal ────────────────────────────────────────────── */
+function AnimatedTerminal() {
+  const ref = useRef<HTMLDivElement>(null);
+  const inView = useInView(ref, { once: true });
+  const started = useRef(false);
+  const [lines, setLines] = useState<{ text: string; cls: string }[]>([]);
+  const [typing, setTyping] = useState('');
+  const [phase, setPhase] = useState<'idle' | 'typing' | 'running' | 'done'>('idle');
+
+  const command = 'curl -sL dockpanel.dev/install.sh | sudo bash';
+
+  useEffect(() => {
+    if (!inView || started.current) return;
+    started.current = true;
+    setPhase('typing');
+
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    let i = 0;
+
+    const typeNext = () => {
+      if (i <= command.length) {
+        setTyping(command.slice(0, i));
+        i++;
+        timers.push(setTimeout(typeNext, 25 + Math.random() * 35));
+      } else {
+        setPhase('running');
+        setTyping('');
+        setLines([{ text: '$ ' + command, cls: 'text-zinc-300' }]);
+
+        const output: { text: string; cls: string; delay: number }[] = [
+          { text: '  Detecting OS... Ubuntu 24.04 LTS', cls: 'text-zinc-600', delay: 400 },
+          { text: '  Downloading dockpanel-api (41 MB)...', cls: 'text-zinc-600', delay: 600 },
+          { text: '  Downloading dockpanel-agent...', cls: 'text-zinc-600', delay: 350 },
+          { text: '  Configuring nginx & PostgreSQL...', cls: 'text-zinc-600', delay: 500 },
+          { text: '  Starting services...', cls: 'text-zinc-600', delay: 400 },
+          { text: '\u00A0', cls: '', delay: 250 },
+          { text: '\u2713 DockPanel v2.7.4 installed in 47s', cls: 'text-emerald-400 font-medium', delay: 350 },
+          { text: '  Panel \u2192 https://your-server:3080', cls: 'text-zinc-300', delay: 200 },
+        ];
+
+        let cum = 500;
+        output.forEach((line) => {
+          cum += line.delay;
+          timers.push(setTimeout(() => {
+            setLines(prev => [...prev, line]);
+            if (line.text.startsWith('\u2713')) setPhase('done');
+          }, cum));
+        });
+      }
+    };
+
+    timers.push(setTimeout(typeNext, 600));
+    return () => timers.forEach(clearTimeout);
+  }, [inView]);
+
+  return (
+    <div ref={ref} className="w-full max-w-2xl mx-auto rounded-xl overflow-hidden border border-zinc-800 bg-zinc-950 shadow-2xl shadow-black/50">
+      <div className="h-9 bg-zinc-900 border-b border-zinc-800 flex items-center px-3.5 gap-2">
+        <div className="w-2.5 h-2.5 rounded-full bg-[#ff5f57]" />
+        <div className="w-2.5 h-2.5 rounded-full bg-[#febc2e]" />
+        <div className="w-2.5 h-2.5 rounded-full bg-[#28c840]" />
+        <span className="flex-1 text-center text-[11px] text-zinc-600 font-medium select-none">Terminal</span>
+      </div>
+      <div className="p-4 sm:p-5 font-mono text-[13px] leading-relaxed min-h-[220px]">
+        {phase === 'typing' && (
+          <div>
+            <span className="text-zinc-600">$ </span>
+            <span className="text-zinc-300">{typing}</span>
+            <span className="terminal-cursor">{'\u2588'}</span>
+          </div>
+        )}
+        {lines.map((line, i) => (
+          <div key={i} className={line.cls}>{line.text}</div>
+        ))}
+        {phase === 'running' && <span className="terminal-cursor">{'\u2588'}</span>}
+      </div>
+    </div>
+  );
+}
+
+/* ── RAM comparison bar ───────────────────────────────────────────── */
+function RamBar({ name, mb, max, highlight = false, delay = 0 }: {
+  name: string; mb: number; max: number; highlight?: boolean; delay?: number;
+}) {
+  const ref = useRef(null);
+  const inView = useInView(ref, { once: true, margin: '-20px' });
+  const width = (mb / max) * 100;
+
+  return (
+    <div ref={ref} className="flex items-center gap-4">
+      <span className={`w-24 text-right text-sm font-medium shrink-0 ${highlight ? 'text-white' : 'text-zinc-500'}`}>
+        {name}
+      </span>
+      <div className="flex-1 h-8 bg-zinc-900 rounded-md overflow-hidden border border-zinc-800">
+        <motion.div
+          initial={{ width: 0 }}
+          animate={inView ? { width: `${width}%` } : { width: 0 }}
+          transition={{ duration: 0.8, delay, ease: [0.23, 1, 0.32, 1] }}
+          className={`h-full rounded-md flex items-center px-3 ${highlight
+            ? 'bg-white'
+            : 'bg-zinc-800'
+          }`}
+        >
+          <span className={`text-xs font-mono font-medium whitespace-nowrap ${highlight ? 'text-zinc-900' : 'text-zinc-400'}`}>
+            ~{mb} MB
+          </span>
+        </motion.div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Nav link with active indicator ───────────────────────────────── */
+function NavLink({ href, label, active }: { href: string; label: string; active: boolean }) {
+  return (
+    <a href={href} className={`relative hover:text-white transition-colors pb-1 ${active ? 'text-white' : ''}`}>
+      {label}
+      <span className={`absolute bottom-0 left-0 right-0 h-px bg-white rounded-full transition-opacity duration-300 ${active ? 'opacity-100' : 'opacity-0'}`} />
+    </a>
+  );
+}
+
+/* ── Data ─────────────────────────────────────────────────────────── */
+const showcase = [
+  {
+    title: '151 templates. One click.',
+    desc: 'WordPress, Postgres, Grafana, n8n, Immich \u2014 pick a template. SSL, reverse proxy, and networking are configured automatically.',
+    shot: '/screenshots/dp-apps.png',
+    alt: 'Docker Apps gallery',
+  },
+  {
+    title: 'Monitoring that wakes you up.',
+    desc: 'HTTP, TCP, and DNS probes. Incident timelines. Public status pages. Alerts to Slack, Discord, or PagerDuty.',
+    shot: '/screenshots/dp-monitoring.png',
+    alt: 'Monitoring dashboard',
+  },
+  {
+    title: 'Six audits. 260 vulns fixed.',
+    desc: 'ModSecurity WAF, Fail2Ban, real-time scanning, and one-click hardening. Security is the default, not an add-on.',
+    shot: '/screenshots/dp-security.png',
+    alt: 'Security dashboard',
+  },
+  {
+    title: 'Git push \u2192 production.',
+    desc: 'Atomic deploys with symlink swap. Preview every branch. Roll back in one click when Friday deploys go sideways.',
+    shot: '/screenshots/dp-git-deploy.png',
+    alt: 'Git deploy',
+  },
+];
+
+const allFeatures = [
+  { name: 'Site Management', desc: 'PHP, Node, Python, static & reverse proxy', icon: Globe },
+  { name: 'Free SSL & Wildcard', desc: "Auto-renew via Let's Encrypt & Cloudflare DNS", icon: Lock },
+  { name: 'MySQL & PostgreSQL', desc: 'Create, backup, restore, point-in-time recovery', icon: Database },
+  { name: '151 Docker Templates', desc: 'One-click deploy across 14 categories', icon: Box },
+  { name: 'Web Terminal', desc: 'Full PTY with privilege drop & command filtering', icon: Terminal },
+  { name: 'Infrastructure as Code', desc: 'YAML export/import for reproducible setups', icon: FileCode2 },
+  { name: 'Uptime Monitoring', desc: 'HTTP, TCP, ping probes with incident management', icon: Activity },
+  { name: 'WAF (ModSecurity)', desc: 'OWASP CRS v4 \u2014 per-site detection or prevention', icon: ShieldCheck },
+  { name: 'Backup Orchestrator', desc: 'Scheduled, encrypted, verified, with S3 support', icon: HardDriveDownload },
+  { name: 'Smart Diagnostics', desc: '6 check categories with one-click auto-fix', icon: Stethoscope },
+  { name: 'GPU Passthrough', desc: 'NVIDIA Container Toolkit detection & monitoring', icon: Cpu },
+  { name: 'Passkeys & 2FA', desc: 'WebAuthn, TOTP, recovery codes', icon: KeyRound },
+  { name: 'Auto-Healing', desc: 'Restart services, clear disk, kill runaway processes', icon: Wrench },
+  { name: 'Audit Log', desc: 'Immutable, tamper-resistant, with session recording', icon: ClipboardList },
+  { name: 'Email Server', desc: 'Postfix + Dovecot + DKIM, virtual domains & aliases', icon: Mail },
+  { name: 'Reseller & White-Label', desc: 'Custom branding, teams, billing integration', icon: Users },
+  { name: 'Multi-Server', desc: 'Manage a fleet from one dashboard', icon: Server },
+  { name: 'OAuth / SSO', desc: 'GitHub & Google login out of the box', icon: LogIn },
+  { name: 'Nixpacks Build', desc: '30+ languages without writing a Dockerfile', icon: Package },
+  { name: 'Migration Wizard', desc: 'Import from cPanel, Hestia, or WordPress', icon: ArrowRightLeft },
+  { name: 'WordPress Toolkit', desc: 'Bulk scanning, hardening, safe updates', icon: Puzzle },
+  { name: 'Webhook Gateway', desc: 'Receive, inspect, route, and replay webhooks', icon: Zap },
+  { name: 'Traefik Proxy', desc: 'Install, manage routes, automatic discovery', icon: Network },
+  { name: '6 Themes, 3 Layouts', desc: 'Terminal, midnight, ember, arctic, and more', icon: Palette },
+  { name: 'CDN Integration', desc: 'BunnyCDN & Cloudflare management, cache purge', icon: Globe },
+  { name: 'Terraform / Pulumi', desc: 'IaC provider for external automation', icon: LayoutTemplate },
+];
+
+const steps = [
+  { icon: Terminal, title: 'Install', desc: 'One command. Under 60 seconds. No dependencies to manage.' },
+  { icon: Globe, title: 'Configure', desc: 'Add sites, databases, and Docker apps from the dashboard.' },
+  { icon: Zap, title: 'Deploy', desc: 'Push code, manage containers, monitor everything in real time.' },
 ];
 
 const faqs = [
-  { q: 'What are the system requirements?', a: 'DockPanel runs on any VPS with 512MB RAM, 1 CPU core, and 10GB disk. It supports Ubuntu 20+, Debian 11+, CentOS 9+, Rocky Linux 9+, Amazon Linux 2023, and ARM64 (Raspberry Pi, Oracle Cloud free tier). Docker is installed automatically if not present.' },
-  { q: 'Is DockPanel really free?', a: 'Yes. DockPanel is free under the Business Source License 1.1. There are no artificial limits, no premium features hidden behind a paywall, and no subscriptions required. Every feature works on every installation. Free to use on your own servers.' },
-  { q: 'How does Docker-native work? Are sites in containers?', a: 'Sites run on the host with Nginx, which keeps things fast and simple. Docker is used for databases (MySQL/PostgreSQL containers), 151 one-click app templates across 14 categories (AI, CMS, databases, media, monitoring, and more), and Docker Compose imports. Containers get health monitoring, CPU/memory limits, GPU passthrough, auto-sleep, and auto reverse proxy with SSL.' },
-  { q: 'What happens if DockPanel goes down?', a: 'Your sites continue running. DockPanel manages Nginx configs and Docker containers, but they operate independently. Even if the panel process stops, all your sites, databases, and SSL certificates keep working. The panel auto-restarts via systemd.' },
-  { q: 'Can I run DockPanel on a Raspberry Pi?', a: 'Yes. DockPanel compiles to ~41MB total binaries (agent, API, CLI) and uses about 57MB RAM. It runs great on Raspberry Pi 4/5, Oracle Cloud free-tier ARM instances, and any ARM64 server. Same features, same performance.' },
-  { q: 'How is this different from CloudPanel, RunCloud, or cPanel?', a: 'Dramatically. cPanel uses 800MB of RAM, costs $15/month, and has no Docker support. CloudPanel is free but has no Git deploy, no Docker apps, no CLI, no multi-server, no reseller accounts. RunCloud charges $8/month for features DockPanel includes for free. DockPanel runs on 57MB of RAM, includes 151 Docker app templates, a WAF, passkey auth, GPU passthrough, zero-downtime Git deploy, a full CLI, Terraform/Pulumi IaC, multi-server management, reseller accounts with white-label, and a WordPress toolkit. No other free panel has anything close to this feature set.' },
-  { q: 'Can I manage multiple servers?', a: 'Yes, with no limits. Each server runs a lightweight agent that communicates with the central API. You can view per-server metrics, run commands, and manage sites across all your servers from a single dashboard.' },
-  { q: 'How do I try it?', a: 'Install DockPanel on your own server with one command to explore the full panel interface.' },
-  { q: 'Why Rust instead of PHP/Node.js?', a: "Rust compiles to compact binaries (~41MB total for agent, API, and CLI) with no runtime dependencies. It uses ~57MB of RAM vs ~300-800MB for PHP-based panels. On a $5 VPS with 1GB RAM, that's the difference between running 2 sites and running 20. Rust also eliminates entire classes of security vulnerabilities (buffer overflows, use-after-free) at compile time." },
-  { q: 'Can DockPanel manage email?', a: "Yes. DockPanel has full email management — one-click install of Postfix + Dovecot + OpenDKIM, mail domains, mailboxes with quotas, aliases, forwarding, autoresponders, DKIM signing, DNS helper (generates MX/SPF/DKIM/DMARC records), and a mail queue viewer. Roundcube webmail and Rspamd spam filter are available as one-click Docker apps." },
-  { q: 'What gets installed automatically?', a: 'The install script sets up everything: Docker, Nginx, PHP-FPM, Certbot (SSL), UFW (firewall), Fail2Ban (intrusion prevention), and the DockPanel agent + API + frontend. Mail server, webmail, and DNS server are optional one-click installs from the panel. Zero manual configuration needed.' },
-  { q: 'Can I install WordPress / Laravel / Drupal with one click?', a: 'Yes. DockPanel supports one-click install for 6 frameworks: WordPress, Laravel, Drupal, Joomla, Symfony, and CodeIgniter. Select one, enter your domain, and DockPanel auto-creates the database, downloads the framework, configures everything, and provisions SSL — with real-time progress indicators showing each step as it completes.' },
+  { q: 'Is it really free?', a: 'Every feature, every server, no limits. Licensed under BSL 1.1, which converts to MIT in 2030. There is no premium tier.' },
+  { q: 'System requirements?', a: '512 MB RAM, 1 CPU, 10 GB disk. Runs on Ubuntu, Debian, CentOS, Rocky, and Amazon Linux. ARM64 works too.' },
+  { q: 'How is this different from cPanel?', a: "cPanel uses ~800 MB of RAM, costs $15/month, and doesn't support Docker. DockPanel uses 57 MB, costs nothing, and ships with 151 Docker templates, a WAF, passkey authentication, Git deploys, a CLI, and multi-server management." },
+  { q: 'What happens if DockPanel goes down?', a: 'Your sites keep running. Nginx and Docker are independent processes \u2014 the panel is just the management layer. It auto-restarts via systemd if it ever stops.' },
+  { q: 'Can I manage multiple servers?', a: 'As many as you want. Install a lightweight agent on each server and manage them all from one dashboard.' },
+  { q: 'Why Rust?', a: "41 MB binary, 57 MB of RAM at runtime, no JVM, no Node, no Python dependency to maintain. On a $5 VPS, that's the difference between running 20 sites and running 2." },
 ];
 
+/* ── Page ─────────────────────────────────────────────────────────── */
 export default function Landing() {
   const [copied, setCopied] = useState(false);
-  const [openFaq, setOpenFaq] = useState<number | null>(8);
+  const [openFaq, setOpenFaq] = useState<number | null>(null);
+  const [stars, setStars] = useState<number | null>(null);
+  const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
+  const [scrolled, setScrolled] = useState(false);
+  const [mobileMenu, setMobileMenu] = useState(false);
+  const [activeSection, setActiveSection] = useState('');
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 20);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  /* active nav tracking */
+  useEffect(() => {
+    const ids = ['features', 'compare', 'pricing', 'faq'];
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) setActiveSection(entry.target.id);
+        });
+      },
+      { threshold: 0.15, rootMargin: '-80px 0px -50% 0px' }
+    );
+    ids.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) observer.observe(el);
+    });
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    fetch('https://api.github.com/repos/ovexro/dockpanel')
+      .then(r => r.json())
+      .then(d => { if (d.stargazers_count) setStars(d.stargazers_count); })
+      .catch(() => {});
+  }, []);
 
   const handleCopy = () => {
     navigator.clipboard.writeText('curl -sL https://dockpanel.dev/install.sh | sudo bash');
@@ -65,434 +279,404 @@ export default function Landing() {
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-300 font-sans selection:bg-emerald-500/30">
-      {/* Navbar */}
-      <nav className="sticky top-0 z-50 border-b border-zinc-800/50 bg-zinc-950/80 backdrop-blur-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <Link to="/" className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-emerald-500 flex items-center justify-center">
-              <Server className="w-5 h-5 text-zinc-950" />
+    <div className="noise min-h-screen bg-[#09090b] text-zinc-400 selection:bg-white/15 selection:text-white overflow-x-hidden">
+
+      {/* ── Lightbox ─────────────────────────────────────────────── */}
+      <AnimatePresence>
+        {lightbox && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center p-6 sm:p-12 cursor-zoom-out"
+            onClick={() => setLightbox(null)}
+          >
+            <div className="absolute inset-0 bg-black/95 backdrop-blur-md" />
+            <motion.img
+              initial={{ scale: 0.92, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.92, opacity: 0 }}
+              transition={{ duration: 0.25, ease: [0.23, 1, 0.32, 1] }}
+              src={lightbox.src} alt={lightbox.alt}
+              className="relative max-w-full max-h-full rounded-lg shadow-2xl"
+            />
+            <button className="absolute top-6 right-6 p-2 text-zinc-500 hover:text-white transition-colors">
+              <XIcon className="w-6 h-6" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Nav ───────────────────────────────────────────────────── */}
+      <nav className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${scrolled ? 'bg-[#09090b]/80 backdrop-blur-2xl border-b border-zinc-800/60' : 'border-b border-transparent'}`}>
+        <div className="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between">
+          <Link to="/" className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-md bg-white flex items-center justify-center">
+              <Server className="w-4 h-4 text-zinc-900" />
             </div>
-            <span className="text-xl font-bold text-white tracking-tight">DockPanel</span>
+            <span className={`text-lg font-bold text-white ${hd}`}>DockPanel</span>
           </Link>
-          <div className="hidden md:flex items-center gap-8 text-sm font-medium">
-            <a href="#features" className="hover:text-white transition-colors">Features</a>
-            <a href="#how-it-works" className="hover:text-white transition-colors">How it works</a>
-            <a href="#pricing" className="hover:text-white transition-colors">Pricing</a>
-            <a href="#faq" className="hover:text-white transition-colors">FAQ</a>
-            <a href="https://github.com/ovexro/dockpanel#readme" className="hover:text-white transition-colors">Docs</a>
+          <div className="hidden md:flex items-center gap-8 text-[13px] font-medium text-zinc-500">
+            <NavLink href="#features" label="Features" active={activeSection === 'features'} />
+            <NavLink href="#compare" label="Compare" active={activeSection === 'compare'} />
+            <NavLink href="#pricing" label="Pricing" active={activeSection === 'pricing'} />
+            <NavLink href="#faq" label="FAQ" active={activeSection === 'faq'} />
           </div>
-          <div className="flex items-center gap-4">
-            <a href="https://github.com/ovexro/dockpanel" className="hidden sm:flex items-center gap-2 text-sm font-medium hover:text-white transition-colors">
+          <div className="flex items-center gap-3">
+            <a href="https://github.com/ovexro/dockpanel" className="hidden sm:flex items-center gap-1.5 text-[13px] text-zinc-500 hover:text-white transition-colors">
               <Github className="w-4 h-4" />
-              GitHub
+              {stars !== null && (
+                <span className="flex items-center gap-1 text-xs">
+                  <Star className="w-3 h-3 text-zinc-400 fill-zinc-400" />
+                  {stars >= 1000 ? `${(stars / 1000).toFixed(1)}k` : stars}
+                </span>
+              )}
             </a>
-            <a href="https://docs.dockpanel.dev" className="bg-white text-zinc-950 px-4 py-2 rounded-md text-sm font-semibold hover:bg-zinc-200 transition-colors">
+            <a href="https://docs.dockpanel.dev" className="hidden sm:block text-[13px] font-semibold px-4 py-1.5 rounded-md bg-white text-zinc-900 hover:bg-zinc-200 transition-colors">
               Docs
             </a>
+            <button onClick={() => setMobileMenu(true)} className="md:hidden p-1 text-zinc-400 hover:text-white transition-colors">
+              <Menu className="w-5 h-5" />
+            </button>
           </div>
         </div>
       </nav>
 
-      {/* Hero */}
-      <section className="relative pt-24 pb-32 overflow-hidden">
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-emerald-900/20 via-zinc-950 to-zinc-950"></div>
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10 text-center">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5 }}
+      {/* ── Mobile menu ──────────────────────────────────────────── */}
+      <AnimatePresence>
+        {mobileMenu && (
+          <>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm md:hidden"
+              onClick={() => setMobileMenu(false)}
+            />
+            <motion.div
+              initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 30, stiffness: 300 }}
+              className="fixed top-0 right-0 bottom-0 w-64 z-[70] bg-zinc-900 border-l border-zinc-800 p-6 md:hidden"
+            >
+              <button onClick={() => setMobileMenu(false)} className="absolute top-4 right-4 p-1 text-zinc-500 hover:text-white transition-colors">
+                <XIcon className="w-5 h-5" />
+              </button>
+              <div className="flex flex-col gap-6 mt-12 text-[15px] font-medium">
+                <a href="#features" onClick={() => setMobileMenu(false)} className="text-zinc-300 hover:text-white transition-colors">Features</a>
+                <a href="#compare" onClick={() => setMobileMenu(false)} className="text-zinc-300 hover:text-white transition-colors">Compare</a>
+                <a href="#pricing" onClick={() => setMobileMenu(false)} className="text-zinc-300 hover:text-white transition-colors">Pricing</a>
+                <a href="#faq" onClick={() => setMobileMenu(false)} className="text-zinc-300 hover:text-white transition-colors">FAQ</a>
+                <hr className="border-zinc-800" />
+                <a href="https://github.com/ovexro/dockpanel" className="flex items-center gap-2 text-zinc-300 hover:text-white transition-colors">
+                  <Github className="w-4 h-4" /> GitHub
+                </a>
+                <a href="https://docs.dockpanel.dev" className="flex items-center gap-2 text-zinc-300 hover:text-white transition-colors">
+                  Docs
+                </a>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* ── Hero ──────────────────────────────────────────────────── */}
+      <section className="relative pt-28 sm:pt-36 lg:pt-44 pb-4 overflow-hidden hero-grid">
+        {/* top vignette */}
+        <div className="absolute inset-0 bg-gradient-to-b from-[#09090b] via-transparent to-[#09090b] pointer-events-none" />
+
+        <div className="max-w-7xl mx-auto px-6 relative z-10">
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}
+            className="text-center max-w-3xl mx-auto"
           >
-            <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 text-sm font-medium mb-8 border border-emerald-500/20">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              100% free &amp; open source — no subscriptions, no limits
-            </span>
-            <h1 className="text-5xl md:text-7xl font-extrabold text-white tracking-tight mb-4 leading-tight">
-              The server panel <br className="hidden sm:block" />
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-400">that does everything.</span>
+            <div className="flex items-center justify-center gap-2 mb-6">
+              <span className="inline-flex items-center px-3 py-1 text-[11px] font-medium text-zinc-400 bg-zinc-800/50 border border-zinc-800 rounded-full">
+                Open source
+              </span>
+              <span className="inline-flex items-center px-3 py-1 text-[11px] font-medium text-zinc-500 bg-zinc-900/50 border border-zinc-800/50 rounded-full">
+                Written in Rust
+              </span>
+            </div>
+
+            <h1 className={`text-[3.5rem] sm:text-[5rem] lg:text-[5.5rem] font-bold text-white leading-[1.02] tracking-[-0.04em] mb-7 ${hd}`}>
+              Server management.<br />
+              <span className="text-zinc-500"><Counter value={57} delay={0.5} />&nbsp;megabytes.</span>
             </h1>
-            <p className="text-lg md:text-xl font-semibold text-zinc-400 mb-6 tracking-wide">
-              Your server. Your rules. Your panel.
-            </p>
-            <p className="max-w-2xl mx-auto text-lg md:text-xl text-zinc-400 mb-10 leading-relaxed">
-              151 Docker app templates. Git deploy with zero-downtime. WAF. Passkeys. GPU passthrough. Multi-server management. All running on 57MB of RAM. No vendor lock-in. All free. No other panel comes close.
+
+            <p className="text-lg sm:text-xl text-zinc-400 leading-relaxed mb-10 max-w-2xl mx-auto">
+              Sites, Docker apps, databases, email, monitoring, security, backups, and Git deploys &mdash; one install, one binary, <span className="text-white font-medium">zero cost.</span>
             </p>
 
-            <div className="max-w-2xl mx-auto mb-12">
-              <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-lg p-1 shadow-2xl">
-                <div className="flex items-center px-4 text-zinc-500 font-mono text-sm select-none">
-                  $
-                </div>
-                <code className="flex-1 text-left text-emerald-400 font-mono text-sm sm:text-base overflow-x-auto whitespace-nowrap py-3">
-                  curl -sL https://dockpanel.dev/install.sh | sudo bash
+            <div className="mb-7 flex flex-col items-center">
+              <div className="install-glow inline-flex items-center bg-zinc-900 border border-zinc-800 rounded-lg p-1 hover:border-zinc-700 transition-colors">
+                <span className="px-3 text-zinc-600 font-mono text-sm select-none">$</span>
+                <code className="text-zinc-300 font-mono text-sm pr-3">
+                  curl -sL dockpanel.dev/install.sh | sudo bash
                 </code>
-                <button
-                  onClick={handleCopy}
-                  className="flex items-center gap-2 px-4 py-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-md text-sm font-medium transition-colors"
-                >
-                  {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                  <span className="hidden sm:inline">{copied ? 'Copied' : 'Copy'}</span>
+                <button onClick={handleCopy} className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-md text-xs text-zinc-300 font-medium transition-colors flex items-center gap-1.5">
+                  {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copied ? 'Copied' : 'Copy'}
                 </button>
               </div>
-              <p className="text-sm text-zinc-500 mt-4">
-                Works on Ubuntu 20+, Debian 11+, CentOS 9+, Rocky Linux 9+, Amazon Linux 2023 — x86_64 &amp; ARM64
-              </p>
+              <p className="text-[11px] text-zinc-600 mt-2.5 tracking-wide font-medium">Ubuntu &middot; Debian &middot; CentOS &middot; Rocky &middot; Amazon Linux &middot; ARM64</p>
             </div>
 
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-              <a href="https://docs.dockpanel.dev" className="w-full sm:w-auto flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-zinc-950 px-6 py-3 rounded-lg font-semibold transition-colors">
-                <Play className="w-4 h-4 fill-current" />
-                Get Started
+            <div className="flex items-center justify-center gap-3">
+              <a href="https://docs.dockpanel.dev" className="flex items-center gap-2 bg-white hover:bg-zinc-200 text-zinc-900 px-6 py-3 rounded-lg text-[15px] font-bold transition-colors">
+                Get Started <ArrowRight className="w-4 h-4" />
               </a>
-              <a href="https://github.com/ovexro/dockpanel" className="w-full sm:w-auto flex items-center justify-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-white px-6 py-3 rounded-lg font-semibold transition-colors">
-                <Github className="w-4 h-4" />
-                View on GitHub
+              <a href="https://github.com/ovexro/dockpanel" className="flex items-center gap-2 text-[15px] font-medium text-zinc-300 hover:text-white px-5 py-3 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-900/50 transition-all">
+                <Github className="w-4 h-4" /> Source
               </a>
             </div>
           </motion.div>
 
-          {/* Stats */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.2 }}
-            className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-4 max-w-6xl mx-auto mt-20"
+          {/* Terminal */}
+          <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.7, delay: 0.2 }}
+            className="mt-14"
           >
-            {[
-              { label: 'Total binaries', value: '~41MB' },
-              { label: 'RAM usage', value: '~57MB' },
-              { label: 'Install time', value: '<60s' },
-              { label: 'Homelab ready', value: 'ARM64' },
-              { label: 'API Endpoints', value: '733' },
-              { label: 'E2E Tests', value: '476' },
-              { label: 'App Templates', value: '151' },
-            ].map((stat, i) => (
-              <div key={i} className="bg-zinc-900/50 border border-zinc-800/50 rounded-xl p-6 backdrop-blur-sm">
-                <div className="text-3xl font-bold text-white mb-1">{stat.value}</div>
-                <div className="text-sm text-zinc-400">{stat.label}</div>
+            <AnimatedTerminal />
+          </motion.div>
+
+          {/* Dashboard screenshot */}
+          <motion.div
+            initial={{ opacity: 0, y: 40 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.8, delay: 0.4 }}
+            className="mt-10 relative"
+          >
+            <div className="max-w-5xl mx-auto rounded-xl overflow-hidden border border-zinc-800/60 shadow-2xl shadow-black/60">
+              <div className="h-8 bg-zinc-900 border-b border-zinc-800/60 flex items-center px-3.5 gap-2">
+                <div className="w-2.5 h-2.5 rounded-full bg-[#ff5f57]" />
+                <div className="w-2.5 h-2.5 rounded-full bg-[#febc2e]" />
+                <div className="w-2.5 h-2.5 rounded-full bg-[#28c840]" />
               </div>
-            ))}
+              <img src="/screenshots/dp-dashboard.png" alt="DockPanel Dashboard" className="w-full block" />
+            </div>
+            <div className="absolute bottom-0 left-0 right-0 h-40 bg-gradient-to-t from-[#09090b] to-transparent pointer-events-none" />
           </motion.div>
         </div>
       </section>
 
-      {/* Dashboard Preview */}
-      <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 -mt-10 relative z-20 mb-32">
-        <motion.div
-          initial={{ opacity: 0, y: 40 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.7 }}
-          className="rounded-2xl border border-zinc-800 bg-zinc-950 shadow-2xl overflow-hidden"
-        >
-          {/* Browser Chrome */}
-          <div className="h-12 border-b border-zinc-800 bg-zinc-900 flex items-center px-4 gap-4">
-            <div className="flex gap-2">
-              <div className="w-3 h-3 rounded-full bg-red-500/80"></div>
-              <div className="w-3 h-3 rounded-full bg-yellow-500/80"></div>
-              <div className="w-3 h-3 rounded-full bg-green-500/80"></div>
-            </div>
-            <div className="flex-1 flex justify-center">
-              <div className="bg-zinc-950 border border-zinc-800 rounded-md px-4 py-1 text-xs text-zinc-500 font-mono flex items-center gap-2">
-                <Lock className="w-3 h-3 text-emerald-500" />
-                your-server:8443
-              </div>
-            </div>
-          </div>
-          {/* App UI */}
-          <div className="flex h-[600px]">
-            {/* Sidebar */}
-            <div className="w-64 border-r border-zinc-800 bg-zinc-900/30 p-4 hidden md:flex flex-col gap-1">
-              <div className="flex items-center gap-2 px-2 py-4 mb-4">
-                <div className="w-6 h-6 rounded bg-emerald-500 flex items-center justify-center">
-                  <Server className="w-3 h-3 text-zinc-950" />
-                </div>
-                <span className="font-bold text-white">DockPanel</span>
-              </div>
-              {[
-                { icon: Activity, label: 'Dashboard', active: true },
-                { icon: Globe, label: 'Sites' },
-                { icon: Database, label: 'Databases' },
-                { icon: Box, label: 'Docker Apps' },
-                { icon: ShieldCheck, label: 'Security' },
-                { icon: Terminal, label: 'Terminal' },
-                { icon: Stethoscope, label: 'Diagnostics' },
-              ].map((item, i) => (
-                <div key={i} className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium ${item.active ? 'bg-emerald-500/10 text-emerald-400' : 'text-zinc-400'}`}>
-                  <item.icon className="w-4 h-4" />
-                  {item.label}
-                </div>
-              ))}
-            </div>
-            {/* Main Content */}
-            <div className="flex-1 bg-zinc-950 p-8 overflow-hidden">
-              <h2 className="text-2xl font-bold text-white mb-8">Dashboard</h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                {[
-                  { label: 'Active Sites', value: '12', sub: 'All healthy', icon: Globe, color: 'text-blue-400', bg: 'bg-blue-400/10' },
-                  { label: 'SSL Certs', value: '12', sub: 'Auto-renew', icon: Lock, color: 'text-emerald-400', bg: 'bg-emerald-400/10' },
-                  { label: 'Databases', value: '8', sub: '2.1 GB used', icon: Database, color: 'text-purple-400', bg: 'bg-purple-400/10' },
-                  { label: 'Docker Apps', value: '5', sub: 'All running', icon: Box, color: 'text-orange-400', bg: 'bg-orange-400/10' },
-                  { label: 'Backups', value: '47', sub: 'Last: 2h ago', icon: HardDriveDownload, color: 'text-cyan-400', bg: 'bg-cyan-400/10' },
-                  { label: 'CPU / RAM', value: '3%', sub: '57 MB used', icon: Cpu, color: 'text-pink-400', bg: 'bg-pink-400/10' },
-                ].map((card, i) => (
-                  <div key={i} className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-                    <div className="flex justify-between items-start mb-4">
-                      <div className={`w-10 h-10 rounded-lg ${card.bg} flex items-center justify-center`}>
-                        <card.icon className={`w-5 h-5 ${card.color}`} />
-                      </div>
-                    </div>
-                    <div className="text-3xl font-bold text-white mb-1">{card.value}</div>
-                    <div className="text-sm font-medium text-zinc-400 mb-1">{card.label}</div>
-                    <div className="text-xs text-zinc-500">{card.sub}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </motion.div>
-      </section>
-
-      {/* Features */}
-      <section id="features" className="py-24 bg-zinc-900/30 border-y border-zinc-800/50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center max-w-3xl mx-auto mb-20">
-            <h2 className="text-3xl md:text-5xl font-bold text-white mb-6 tracking-tight">A massive feature set. Zero monthly fees.</h2>
-            <p className="text-lg text-zinc-400">
-              25 integrated systems. 733 API endpoints. Features that competitors charge $8-15/month for — Git deploy, multi-server, reseller accounts, Docker orchestration, WordPress toolkit — all included for free. Built in Rust, not legacy PHP.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-12">
-            {features.map((feature, i) => (
-              <div key={i} className="flex gap-4">
-                <div className="flex-shrink-0 mt-1">
-                  <div className="w-10 h-10 rounded-lg bg-zinc-800 border border-zinc-700 flex items-center justify-center">
-                    <feature.icon className="w-5 h-5 text-emerald-400" />
-                  </div>
-                </div>
-                <div>
-                  <h3 className="text-lg font-semibold text-white mb-2">{feature.title}</h3>
-                  <p className="text-sm text-zinc-400 leading-relaxed">{feature.desc}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* How it works */}
-      <section id="how-it-works" className="py-32">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center max-w-3xl mx-auto mb-20">
-            <h2 className="text-sm font-bold text-emerald-400 uppercase tracking-widest mb-2">How it works</h2>
-            <h3 className="text-3xl md:text-5xl font-bold text-white tracking-tight">Up and running in under 60 seconds</h3>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-12 relative">
-            <div className="hidden md:block absolute top-8 left-[10%] right-[10%] h-px bg-gradient-to-r from-transparent via-zinc-700 to-transparent"></div>
-
+      {/* ── Numbers ──────────────────────────────────────────────── */}
+      <section className="border-y border-zinc-800/60 bg-zinc-950/50 glow-divider">
+        <div className="max-w-7xl mx-auto px-6 py-8">
+          <div className="flex flex-wrap items-center justify-between gap-y-4 gap-x-4">
             {[
-              {
-                step: '01',
-                title: 'Install with one command',
-                desc: 'Run the install script on any fresh VPS. DockPanel detects your OS, installs Docker if needed, and sets everything up automatically.',
-                code: '$ curl -sL https://dockpanel.dev/install.sh | sudo bash'
-              },
-              {
-                step: '02',
-                title: 'Create your account',
-                desc: "Open your browser and navigate to your server's panel URL. Complete the one-time setup wizard to create your admin account.",
-                code: 'https://panel.your-domain.com'
-              },
-              {
-                step: '03',
-                title: 'Add your first site',
-                desc: 'Click "New Site" in the dashboard, enter your domain name, and DockPanel configures Nginx, provisions a free SSL certificate, and gets your site live.',
-                code: 'Dashboard → Sites → New Site'
-              }
-            ].map((step, i) => (
-              <div key={i} className="relative z-10 flex flex-col items-center text-center">
-                <div className="w-16 h-16 rounded-full bg-zinc-950 border-2 border-zinc-800 flex items-center justify-center text-xl font-bold text-emerald-400 mb-6 shadow-xl">
-                  {step.step}
-                </div>
-                <h4 className="text-xl font-bold text-white mb-4">{step.title}</h4>
-                <p className="text-zinc-400 mb-6 flex-1">{step.desc}</p>
-                <div className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-4 text-sm font-mono text-zinc-300 overflow-hidden text-ellipsis whitespace-nowrap">
-                  {step.code}
-                </div>
+              { v: 41, s: '~', e: 'MB', l: 'binary' },
+              { v: 57, s: '~', e: 'MB', l: 'RAM' },
+              { v: 60, s: '<', e: 's', l: 'install' },
+              { v: 151, s: '', e: '', l: 'templates' },
+              { v: 26, s: '', e: '', l: 'modules' },
+              { v: 6, s: '', e: '', l: 'security audits' },
+            ].map((s, i) => (
+              <div key={i} className="flex items-baseline gap-1.5">
+                <span className={`text-2xl font-bold text-white tabular-nums ${hd}`}>
+                  {s.s}<Counter value={s.v} />{s.e}
+                </span>
+                <span className="text-[11px] text-zinc-600 font-medium">{s.l}</span>
               </div>
             ))}
           </div>
         </div>
       </section>
 
-      {/* Comparison */}
-      <section className="py-24 bg-zinc-900/30 border-y border-zinc-800/50 overflow-hidden">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center max-w-3xl mx-auto mb-16">
-            <h2 className="text-sm font-bold text-emerald-400 uppercase tracking-widest mb-2">Comparison</h2>
-            <h3 className="text-3xl md:text-5xl font-bold text-white tracking-tight mb-6">10x lighter. 10x more features.</h3>
-            <p className="text-lg text-zinc-400">
-              cPanel uses 800MB of RAM and charges $15/month. CloudPanel is free but has no Docker, no Git deploy, no CLI. DockPanel gives you more than any of them — on 57MB of RAM — for free.
-            </p>
+      {/* ── How it works ─────────────────────────────────────────── */}
+      <section className="py-20 lg:py-28">
+        <div className="max-w-4xl mx-auto px-6">
+          <motion.div initial={{ opacity: 0, y: 15 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
+            className="text-center mb-14"
+          >
+            <h2 className={`text-[2rem] sm:text-[2.5rem] font-bold text-white leading-tight tracking-tight ${hd}`}>
+              How it works.
+            </h2>
+          </motion.div>
+
+          <div className="grid md:grid-cols-3 gap-6 md:gap-8">
+            {steps.map((step, i) => (
+              <motion.div key={i}
+                initial={{ opacity: 0, y: 15 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.4, delay: i * 0.15 }}
+                className="text-center"
+              >
+                <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 mb-4">
+                  <step.icon className="w-5 h-5 text-zinc-300" />
+                </div>
+                <div className="text-[11px] font-bold text-zinc-600 uppercase tracking-widest mb-2">Step {i + 1}</div>
+                <h3 className={`text-xl font-bold text-white mb-2 ${hd}`}>{step.title}</h3>
+                <p className="text-[14px] text-zinc-500 leading-relaxed">{step.desc}</p>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Feature showcase (bento grid) ────────────────────────── */}
+      <section id="features" className="py-28 lg:py-36 border-t border-zinc-800/60 glow-divider">
+        <div className="max-w-7xl mx-auto px-6">
+          <motion.div initial={{ opacity: 0, y: 15 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
+            className="text-center mb-14"
+          >
+            <h2 className={`text-[2.5rem] sm:text-[3rem] font-bold text-white leading-tight tracking-tight ${hd}`}>
+              What you get.
+            </h2>
+            <p className="text-zinc-500 text-[15px] mt-3">Four pillars. Hundreds of features. One binary.</p>
+          </motion.div>
+
+          <div className="grid md:grid-cols-2 gap-4">
+            {showcase.map((feat, i) => (
+              <motion.div key={i}
+                initial={{ opacity: 0, y: 20 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true, margin: '-40px' }}
+                transition={{ duration: 0.5, delay: i * 0.1 }}
+                className="group rounded-2xl border border-zinc-800/60 bg-zinc-900/30 p-6 hover:border-zinc-600/50 hover:shadow-[0_0_40px_-12px_rgba(255,255,255,0.06)] transition-all duration-500"
+              >
+                <h3 className={`text-xl sm:text-2xl font-bold text-white mb-2 ${hd}`}>{feat.title}</h3>
+                <p className="text-[15px] text-zinc-500 leading-relaxed mb-5">{feat.desc}</p>
+                <div className="cursor-pointer overflow-hidden rounded-lg" onClick={() => setLightbox({ src: feat.shot, alt: feat.alt })}>
+                  <div className="rounded-lg overflow-hidden border border-zinc-800/60 shadow-lg shadow-black/40 transition-transform duration-500 group-hover:scale-[1.02]">
+                    <div className="h-7 bg-zinc-900 border-b border-zinc-800/60 flex items-center px-3 gap-1.5">
+                      <div className="w-2 h-2 rounded-full bg-[#ff5f57]" />
+                      <div className="w-2 h-2 rounded-full bg-[#febc2e]" />
+                      <div className="w-2 h-2 rounded-full bg-[#28c840]" />
+                    </div>
+                    <img src={feat.shot} alt={feat.alt} className="w-full block transition-[filter] duration-500 group-hover:brightness-110" loading="lazy" />
+                  </div>
+                </div>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── All features (compact grid, staggered) ───────────────── */}
+      <section className="py-20 lg:py-28 border-y border-zinc-800/60 bg-zinc-950/50 glow-divider">
+        <div className="max-w-6xl mx-auto px-6">
+          <div className="text-center mb-12">
+            <h2 className={`text-2xl font-bold text-white ${hd}`}>Everything ships included.</h2>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse min-w-[800px]">
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {allFeatures.map(({ name, desc, icon: Icon }, i) => (
+              <motion.div key={i}
+                initial={{ opacity: 0, y: 10 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true, margin: '-10px' }}
+                transition={{ duration: 0.3, delay: Math.floor(i / 3) * 0.06 }}
+                className="flex items-start gap-3 p-4 rounded-xl border border-zinc-800/40 bg-zinc-900/20 hover:border-zinc-600/40 hover:shadow-[0_0_30px_-10px_rgba(255,255,255,0.04)] transition-all duration-300"
+              >
+                <div className="w-8 h-8 rounded-lg bg-zinc-800/50 flex items-center justify-center shrink-0 mt-0.5">
+                  <Icon className="w-4 h-4 text-zinc-500" />
+                </div>
+                <div className="min-w-0">
+                  <span className="text-[13px] font-semibold text-zinc-200 block">{name}</span>
+                  <p className="text-[12px] text-zinc-600 leading-relaxed mt-0.5">{desc}</p>
+                </div>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Visual comparison ────────────────────────────────────── */}
+      <section id="compare" className="py-28 lg:py-36">
+        <div className="max-w-4xl mx-auto px-6">
+          <motion.div initial={{ opacity: 0, y: 15 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
+            className="text-center mb-12"
+          >
+            <h2 className={`text-[2.5rem] sm:text-[3rem] font-bold text-white mb-3 leading-tight tracking-tight ${hd}`}>
+              The numbers.
+            </h2>
+            <p className="text-zinc-500 text-[15px]">Memory usage at idle. Less RAM means more room for your apps.</p>
+          </motion.div>
+
+          <div className="space-y-3 mb-16">
+            <RamBar name="DockPanel" mb={57} max={800} highlight delay={0} />
+            <RamBar name="CloudPanel" mb={250} max={800} delay={0.1} />
+            <RamBar name="Plesk" mb={512} max={800} delay={0.2} />
+            <RamBar name="HestiaCP" mb={512} max={800} delay={0.3} />
+            <RamBar name="cPanel" mb={800} max={800} delay={0.4} />
+          </div>
+
+          <motion.div initial={{ opacity: 0, y: 15 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
+            className="overflow-x-auto rounded-xl border border-zinc-800/60 bg-zinc-900/30"
+          >
+            <table className="w-full text-left min-w-[580px]">
               <thead>
-                <tr>
-                  <th className="p-4 border-b border-zinc-800 text-sm font-semibold text-zinc-400 uppercase tracking-wider">Panel</th>
-                  <th className="p-4 border-b border-zinc-800 text-sm font-semibold text-zinc-400 uppercase tracking-wider">RAM Usage</th>
-                  <th className="p-4 border-b border-zinc-800 text-sm font-semibold text-zinc-400 uppercase tracking-wider">Install Time</th>
-                  <th className="p-4 border-b border-zinc-800 text-sm font-semibold text-zinc-400 uppercase tracking-wider">Disk Size</th>
-                  <th className="p-4 border-b border-zinc-800 text-sm font-semibold text-zinc-400 uppercase tracking-wider">Price</th>
-                  <th className="p-4 border-b border-zinc-800 text-sm font-semibold text-zinc-400 uppercase tracking-wider">Built With</th>
-                  <th className="p-4 border-b border-zinc-800 text-sm font-semibold text-zinc-400 uppercase tracking-wider text-center">Docker-Native</th>
-                  <th className="p-4 border-b border-zinc-800 text-sm font-semibold text-zinc-400 uppercase tracking-wider text-center">Self-Hosted</th>
+                <tr className="border-b border-zinc-800/60">
+                  {['', 'Install', 'Price', 'Docker', 'Self-hosted'].map(h => (
+                    <th key={h} className={`px-5 py-4 text-[10px] font-bold text-zinc-500 uppercase tracking-widest ${h === 'Docker' || h === 'Self-hosted' ? 'text-center' : ''}`}>{h}</th>
+                  ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-800/50">
+              <tbody>
                 {[
-                  { name: 'cPanel', ram: '~800 MB', time: '~45 min', disk: '~2 GB', price: '$15/mo', built: 'Perl/PHP', docker: false, self: true },
-                  { name: 'Plesk', ram: '~512 MB', time: '~20 min', disk: '~1.5 GB', price: '$10/mo', built: 'PHP', docker: false, self: true },
-                  { name: 'RunCloud', ram: 'N/A (SaaS)', time: '~5 min', disk: 'Agent', price: '$8/mo', built: 'PHP', docker: false, self: false },
-                  { name: 'CloudPanel', ram: '~250 MB', time: '~10 min', disk: '~600 MB', price: 'Free', built: 'PHP', docker: false, self: true },
-                  { name: 'HestiaCP', ram: '~512 MB', time: '~2 min', disk: '~2 GB', price: 'Free', built: 'PHP', docker: false, self: true },
-                  { name: 'DockPanel', ram: '~57 MB', time: '<60 sec', disk: '~41 MB', price: 'Free', built: 'Rust', docker: true, self: true, highlight: true },
+                  { n: 'DockPanel', t: '<60 sec', p: 'Free', d: true, s: true, hl: true },
+                  { n: 'cPanel', t: '~45 min', p: '$15/mo', d: false, s: true },
+                  { n: 'Plesk', t: '~20 min', p: '$10/mo', d: false, s: true },
+                  { n: 'RunCloud', t: '~5 min', p: '$8/mo', d: false, s: false },
+                  { n: 'CloudPanel', t: '~10 min', p: 'Free', d: false, s: true },
+                  { n: 'HestiaCP', t: '~2 min', p: 'Free', d: false, s: true },
                 ].map((row, i) => (
-                  <tr key={i} className={row.highlight ? 'bg-emerald-500/5' : ''}>
-                    <td className={`p-4 font-medium ${row.highlight ? 'text-emerald-400' : 'text-white'}`}>{row.name}</td>
-                    <td className="p-4 text-zinc-400">{row.ram}</td>
-                    <td className="p-4 text-zinc-400">{row.time}</td>
-                    <td className="p-4 text-zinc-400">{row.disk}</td>
-                    <td className="p-4 text-zinc-400">{row.price}</td>
-                    <td className="p-4 text-zinc-400">{row.built}</td>
-                    <td className="p-4 text-center">
-                      {row.docker ? <CheckCircle2 className="w-5 h-5 text-emerald-500 mx-auto" /> : <X className="w-5 h-5 text-zinc-600 mx-auto" />}
-                    </td>
-                    <td className="p-4 text-center">
-                      {row.self ? <CheckCircle2 className="w-5 h-5 text-emerald-500 mx-auto" /> : <X className="w-5 h-5 text-zinc-600 mx-auto" />}
-                    </td>
+                  <tr key={i} className={`border-b border-zinc-800/30 last:border-0 transition-colors ${row.hl ? 'bg-white/[0.03]' : i % 2 === 0 ? 'bg-white/[0.01]' : ''} hover:bg-white/[0.03]`}>
+                    <td className={`px-5 py-4 font-semibold text-sm ${row.hl ? 'text-white' : 'text-zinc-300'}`}>{row.n}</td>
+                    <td className="px-5 py-4 text-sm">{row.t}</td>
+                    <td className="px-5 py-4 text-sm">{row.p}</td>
+                    <td className="px-5 py-4 text-center">{row.d ? <CheckCircle2 className="w-4 h-4 text-white mx-auto" /> : <XIcon className="w-4 h-4 text-zinc-700 mx-auto" />}</td>
+                    <td className="px-5 py-4 text-center">{row.s ? <CheckCircle2 className="w-4 h-4 text-white mx-auto" /> : <XIcon className="w-4 h-4 text-zinc-700 mx-auto" />}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+          </motion.div>
         </div>
       </section>
 
-      {/* Pricing */}
-      <section id="pricing" className="py-32">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center max-w-3xl mx-auto mb-16">
-            <h2 className="text-sm font-bold text-emerald-400 uppercase tracking-widest mb-2">Pricing</h2>
-            <h3 className="text-3xl md:text-5xl font-bold text-white tracking-tight mb-6">Free. Forever. Everything included.</h3>
-            <p className="text-lg text-zinc-400">
-              No "starter" tier. No "upgrade for multi-server." No "contact sales for reseller." Every single feature — all 25 systems, all 733 endpoints, all 151 templates — is free and open source under the BSL 1.1 license (converts to MIT in 2030). This is the panel that paid alternatives don't want you to find.
+      {/* ── Pricing ──────────────────────────────────────────────── */}
+      <section id="pricing" className="py-32 lg:py-40 border-t border-zinc-800/60 glow-divider">
+        <div className="max-w-2xl mx-auto px-6 text-center">
+          <motion.div initial={{ opacity: 0, y: 15 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}>
+            <h2 className={`text-7xl sm:text-8xl lg:text-9xl font-bold text-white mt-3 mb-3 tracking-tighter ${hd}`}>
+              $0
+            </h2>
+            <p className="text-xl text-zinc-500 font-medium mb-6">forever</p>
+            <p className="text-[17px] text-zinc-400 mb-10 leading-relaxed max-w-md mx-auto">
+              Every feature. Every server. No tiers, no per-site fees, no usage limits.
+              Open source under BSL 1.1, converting to MIT in 2030.
             </p>
-          </div>
 
-          <div className="max-w-4xl mx-auto">
-            <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-8 md:p-12 shadow-2xl relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-64 h-64 bg-emerald-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
-
-              <div className="flex flex-col md:flex-row gap-12 relative z-10">
-                <div className="flex-1">
-                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-800 text-zinc-300 text-sm font-medium mb-6">
-                    Open Source
-                  </div>
-                  <h4 className="text-3xl font-bold text-white mb-2">DockPanel</h4>
-                  <p className="text-zinc-400 mb-8">Self-hosted server management panel</p>
-
-                  <div className="flex items-baseline gap-2 mb-8">
-                    <span className="text-6xl font-extrabold text-white">$0</span>
-                    <span className="text-xl text-zinc-500 font-medium">forever</span>
-                  </div>
-
-                  <div className="flex flex-col gap-4">
-                    <a href="https://github.com/ovexro/dockpanel" className="w-full flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-zinc-950 px-6 py-4 rounded-xl font-bold text-lg transition-colors">
-                      <Github className="w-5 h-5" />
-                      View on GitHub
-                    </a>
-                    <a href="https://docs.dockpanel.dev" className="w-full flex items-center justify-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-white px-6 py-4 rounded-xl font-bold text-lg transition-colors">
-                      <Play className="w-5 h-5 fill-current" />
-                      Get Started
-                    </a>
-                  </div>
-                </div>
-
-                <div className="flex-1">
-                  <ul className="grid grid-cols-1 sm:grid-cols-2 gap-y-4 gap-x-6 text-sm text-zinc-300">
-                    {[
-                      'Unlimited servers', 'Unlimited sites', 'Free SSL certificates',
-                      'Database management + SQL browser', '151 Docker app templates',
-                      'Backup orchestrator (DB, volumes, encryption, verification)', 'Web terminal & file manager',
-                      'Git deploy with zero-downtime', 'Nixpacks auto-build (30+ languages)',
-                      'Preview environments with TTL', 'DNS management (CF + PowerDNS)',
-                      'Email management (Postfix + Dovecot)', 'Uptime monitoring & alerts',
-                      'Incident management + public status page',
-                      'Secrets manager (AES-256-GCM vaults)',
-                      'Webhook gateway (HMAC verification)',
-                      '6 themes + 3 layouts',
-                      'Security scanning & hardening', '2FA / TOTP + OAuth',
-                      'Auto-healing engine', 'Smart diagnostics', 'Developer CLI',
-                      'Multi-server management', 'Reseller accounts & white-label',
-                      'WordPress Toolkit', 'Migration wizard', 'Traefik reverse proxy option',
-                      'Extension / plugin API', 'Teams & role-based access',
-                      'Activity audit log', 'ARM64 / homelab support'
-                    ].map((item, i) => (
-                      <li key={i} className="flex items-start gap-3">
-                        <Check className="w-5 h-5 text-emerald-500 shrink-0" />
-                        <span>{item}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-12 text-center">
-              <h4 className="text-xl font-bold text-white mb-2">Need professional support?</h4>
-              <p className="text-zinc-400 mb-4">
-                DockPanel is free to use, but if you want priority support, installation help, or custom feature development, we offer optional paid support plans.
-              </p>
-              <a href="mailto:hello@dockpanel.dev" className="text-emerald-400 font-medium hover:text-emerald-300 transition-colors inline-flex items-center gap-1">
-                Contact us at hello@dockpanel.dev
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mb-8">
+              <a href="https://github.com/ovexro/dockpanel" className="flex items-center gap-2 bg-white hover:bg-zinc-200 text-zinc-900 px-6 py-3 rounded-lg text-sm font-bold transition-colors">
+                <Github className="w-4 h-4" /> View on GitHub
+              </a>
+              <a href="https://docs.dockpanel.dev" className="flex items-center gap-2 border border-zinc-800 hover:border-zinc-700 bg-zinc-900/50 text-white px-6 py-3 rounded-lg text-sm font-bold transition-all">
+                Read the docs <ArrowRight className="w-4 h-4" />
               </a>
             </div>
-          </div>
+
+            <p className="text-[13px] text-zinc-600">
+              Need help?{' '}
+              <a href="mailto:hello@dockpanel.dev" className="text-zinc-400 hover:text-white transition-colors underline underline-offset-4 decoration-zinc-800 hover:decoration-zinc-600">
+                hello@dockpanel.dev
+              </a>
+            </p>
+          </motion.div>
         </div>
       </section>
 
-      {/* FAQ */}
-      <section id="faq" className="py-24 bg-zinc-900/30 border-t border-zinc-800/50">
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center mb-16">
-            <h2 className="text-3xl md:text-5xl font-bold text-white tracking-tight mb-4">Frequently asked questions</h2>
+      {/* ── FAQ ──────────────────────────────────────────────────── */}
+      <section id="faq" className="py-24 lg:py-32 border-t border-zinc-800/60 glow-divider">
+        <div className="max-w-2xl mx-auto px-6">
+          <div className="text-center mb-10">
+            <h2 className={`text-2xl font-bold text-white ${hd}`}>FAQ</h2>
           </div>
-
-          <div className="space-y-4">
+          <div>
             {faqs.map((faq, i) => (
-              <div key={i} className="border border-zinc-800 rounded-lg bg-zinc-900/50 overflow-hidden">
-                <button
-                  onClick={() => setOpenFaq(openFaq === i ? null : i)}
-                  className="w-full flex items-center justify-between p-6 text-left focus:outline-none"
+              <div key={i} className="border-b border-zinc-800/40">
+                <button onClick={() => setOpenFaq(openFaq === i ? null : i)}
+                  className="w-full flex items-center justify-between py-5 text-left group"
                 >
-                  <span className="text-lg font-medium text-white">{faq.q}</span>
-                  <ChevronDown className={`w-5 h-5 text-zinc-500 transition-transform duration-200 ${openFaq === i ? 'rotate-180' : ''}`} />
+                  <span className="text-[15px] font-medium text-zinc-200 group-hover:text-white transition-colors">{faq.q}</span>
+                  <ChevronDown className={`w-4 h-4 text-zinc-600 group-hover:text-zinc-400 transition-all duration-200 shrink-0 ml-4 ${openFaq === i ? 'rotate-180' : ''}`} />
                 </button>
                 <AnimatePresence>
                   {openFaq === i && (
-                    <motion.div
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.2 }}
-                    >
-                      <div className="px-6 pb-6 text-zinc-400 leading-relaxed">
-                        {faq.a}
-                      </div>
+                    <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.15 }}>
+                      <p className="pb-5 text-[14px] text-zinc-500 leading-relaxed">{faq.a}</p>
                     </motion.div>
                   )}
                 </AnimatePresence>
@@ -502,54 +686,43 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="border-t border-zinc-800 bg-zinc-950 pt-16 pb-8">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-12 mb-16">
-            <div className="col-span-1 md:col-span-1">
-              <Link to="/" className="flex items-center gap-2 mb-4">
-                <div className="w-8 h-8 rounded-lg bg-emerald-500 flex items-center justify-center">
-                  <Server className="w-5 h-5 text-zinc-950" />
+      {/* ── Footer ───────────────────────────────────────────────── */}
+      <footer className="border-t border-zinc-800/60 pt-14 pb-10">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="grid md:grid-cols-[1fr,auto] gap-10 items-start">
+            <div>
+              <div className="flex items-center gap-2.5 mb-3">
+                <div className="w-7 h-7 rounded-md bg-white flex items-center justify-center">
+                  <Server className="w-4 h-4 text-zinc-900" />
                 </div>
-                <span className="text-xl font-bold text-white tracking-tight">DockPanel</span>
-              </Link>
-              <p className="text-zinc-400 text-sm leading-relaxed">
-                Free, self-hosted, Docker-native server management panel built in Rust.
+                <span className={`text-lg font-bold text-white ${hd}`}>DockPanel</span>
+              </div>
+              <p className="text-[13px] text-zinc-600 max-w-xs leading-relaxed">
+                Lightweight, Docker-native server management.<br />
+                Open source, self-hosted, zero cost.
               </p>
             </div>
-
-            <div>
-              <h4 className="text-white font-semibold mb-4">Product</h4>
-              <ul className="space-y-3 text-sm text-zinc-400">
-                <li><a href="#features" className="hover:text-white transition-colors">Features</a></li>
-                <li><a href="#pricing" className="hover:text-white transition-colors">Pricing</a></li>
-                <li><a href="#faq" className="hover:text-white transition-colors">FAQ</a></li>
-                <li><a href="https://docs.dockpanel.dev" className="hover:text-white transition-colors">Docs</a></li>
-              </ul>
-            </div>
-
-            <div>
-              <h4 className="text-white font-semibold mb-4">Community</h4>
-              <ul className="space-y-3 text-sm text-zinc-400">
-                <li><a href="https://github.com/ovexro/dockpanel" className="hover:text-white transition-colors">GitHub</a></li>
-                <li><a href="https://github.com/ovexro/dockpanel#readme" className="hover:text-white transition-colors">Docs</a></li>
-                <li><a href="https://github.com/ovexro/dockpanel/releases" className="hover:text-white transition-colors">Changelog</a></li>
-              </ul>
-            </div>
-
-            <div>
-              <h4 className="text-white font-semibold mb-4">Legal</h4>
-              <ul className="space-y-3 text-sm text-zinc-400">
-                <li><Link to="/privacy" className="hover:text-white transition-colors">Privacy Policy</Link></li>
-                <li><Link to="/terms" className="hover:text-white transition-colors">Terms of Service</Link></li>
-              </ul>
+            <div className="flex gap-16">
+              <div>
+                <h4 className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-3">Product</h4>
+                <div className="flex flex-col gap-2.5 text-[13px] text-zinc-600">
+                  <a href="#features" className="hover:text-zinc-300 transition-colors">Features</a>
+                  <a href="https://docs.dockpanel.dev" className="hover:text-zinc-300 transition-colors">Docs</a>
+                  <a href="https://github.com/ovexro/dockpanel" className="hover:text-zinc-300 transition-colors">GitHub</a>
+                </div>
+              </div>
+              <div>
+                <h4 className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-3">Legal</h4>
+                <div className="flex flex-col gap-2.5 text-[13px] text-zinc-600">
+                  <Link to="/privacy" className="hover:text-zinc-300 transition-colors">Privacy</Link>
+                  <Link to="/terms" className="hover:text-zinc-300 transition-colors">Terms</Link>
+                </div>
+              </div>
             </div>
           </div>
-
-          <div className="border-t border-zinc-800 pt-8 flex flex-col md:flex-row items-center justify-between gap-4">
-            <p className="text-zinc-500 text-sm">
-              &copy; 2026 DockPanel. Free &amp; open source under the BSL 1.1 License.
-            </p>
+          <div className="mt-10 pt-6 border-t border-zinc-800/40 flex flex-col sm:flex-row items-center justify-between gap-2">
+            <span className="text-[12px] text-zinc-700">&copy; 2026 DockPanel</span>
+            <span className="text-[11px] text-zinc-700">Solo-developed &middot; BSL 1.1</span>
           </div>
         </div>
       </footer>

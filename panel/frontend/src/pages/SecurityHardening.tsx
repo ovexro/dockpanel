@@ -154,10 +154,10 @@ export default function SecurityHardening() {
       )}
 
       {/* Tabs */}
-      <div className="flex gap-6 mb-6 text-sm font-mono border-b border-dark-700">
+      <div className="flex gap-6 mb-6 text-sm font-mono border-b border-dark-700 overflow-x-auto">
         {tabs.map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
-            className={`pb-2 ${tab === t.key ? "border-b-2 border-rust-500 text-dark-50" : "text-dark-400 hover:text-dark-200"}`}>
+            className={`pb-2 whitespace-nowrap ${tab === t.key ? "border-b-2 border-rust-500 text-dark-50" : "text-dark-400 hover:text-dark-200"}`}>
             {t.label}
             {t.key === "approvals" && pendingUsers.length > 0 && (
               <span className="ml-1.5 px-1.5 py-0.5 text-[10px] bg-rust-500 text-white rounded-full">{pendingUsers.length}</span>

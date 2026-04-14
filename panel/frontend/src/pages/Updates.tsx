@@ -19,7 +19,14 @@ interface ApplyResult {
 }
 
 function colorLine(line: string): string {
-  if (/Unpacking |Setting up |Processing /.test(line)) return "text-rust-400";
+  if (/^> .*completed successfully/.test(line)) return "text-rust-400 font-semibold";
+  if (/^> .*completed with errors/.test(line)) return "text-danger-400 font-semibold";
+  if (/^> /.test(line)) return "text-rust-400";
+  if (/^\$ /.test(line)) return "text-dark-400";
+  if (/^Get:\d+/.test(line)) return "text-accent-400";
+  if (/^Fetched /.test(line)) return "text-accent-400 font-medium";
+  if (/(Unpacking|Setting up|Processing triggers) /.test(line)) return "text-rust-400";
+  if (/Restarting services/.test(line)) return "text-rust-400";
   if (/WARNING|W:/.test(line)) return "text-warn-400";
   if (/ERROR|E:/.test(line)) return "text-danger-400";
   return "text-dark-300";
@@ -35,6 +42,9 @@ export default function Updates() {
   const [message, setMessage] = useState({ text: "", type: "" });
   const [rebootRequired, setRebootRequired] = useState(false);
   const [aptOutput, setAptOutput] = useState<string[] | null>(null);
+  const [updateDone, setUpdateDone] = useState<"success" | "error" | null>(null);
+  const [lastChecked, setLastChecked] = useState<Date | null>(null);
+  const [confirmReboot, setConfirmReboot] = useState(false);
   const termRef = useRef<HTMLDivElement>(null);
 
   if (user?.role !== "admin") return <Navigate to="/" replace />;
@@ -50,6 +60,7 @@ export default function Updates() {
         setRebootRequired(countData.reboot_required);
         setPackages(Array.isArray(listData) ? listData : []);
         setChecked(true);
+        setLastChecked(new Date());
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -70,6 +81,7 @@ export default function Updates() {
       setPackages(Array.isArray(data) ? data : []);
       setSelected(new Set());
       setChecked(true);
+      setLastChecked(new Date());
     } catch (e) {
       setMessage({
         text: e instanceof Error ? e.message : "Failed to check for updates",
@@ -83,7 +95,11 @@ export default function Updates() {
   const applyUpdates = async () => {
     setApplying(true);
     setMessage({ text: "", type: "" });
-    setAptOutput(["$ apt upgrade ...", ""]);
+    setUpdateDone(null);
+    const cmdLabel = selected.size > 0
+      ? `$ apt-get install -y ${Array.from(selected).join(" ")}`
+      : "$ apt-get upgrade -y";
+    setAptOutput([cmdLabel, ""]);
     try {
       const body = selected.size > 0 ? { packages: Array.from(selected) } : {};
       const result = await api.post<{ install_id?: string } & ApplyResult>("/system/updates/apply", body);
@@ -110,13 +126,22 @@ export default function Updates() {
             }
             if (step.step === "complete") {
               es.close();
+              const success = step.status === "done";
+              setUpdateDone(success ? "success" : "error");
+              setAptOutput(prev => [
+                ...(prev || []),
+                "",
+                success
+                  ? "> Update completed successfully"
+                  : "> Update completed with errors — check the output above",
+              ]);
               setMessage({
-                text: step.status === "done"
+                text: success
                   ? selected.size > 0
                     ? `Successfully updated ${selected.size} package(s)`
                     : "All packages updated successfully"
                   : "Update completed with errors — check the output below",
-                type: step.status === "done" ? "success" : "error",
+                type: success ? "success" : "error",
               });
               // Refresh package list
               api.get<PackageUpdate[]>("/system/updates")
@@ -137,6 +162,7 @@ export default function Updates() {
         // Fallback: synchronous response (old behavior)
         if (result.output) setAptOutput(result.output.split("\n"));
         setRebootRequired(result.reboot_required);
+        setUpdateDone(result.success ? "success" : "error");
         setMessage({
           text: result.success ? "All packages updated" : "Update completed with errors",
           type: result.success ? "success" : "error",
@@ -156,13 +182,7 @@ export default function Updates() {
   };
 
   const handleReboot = async () => {
-    if (
-      !window.confirm(
-        "Are you sure you want to reboot the server? All services will be temporarily unavailable."
-      )
-    )
-      return;
-
+    setConfirmReboot(false);
     try {
       const result = await api.post<{ success: boolean; message: string }>("/system/reboot");
       setMessage({
@@ -199,9 +219,16 @@ export default function Updates() {
   return (
     <div>
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
-        <p className="text-xs text-dark-300 font-mono">
-          Manage system package updates
-        </p>
+        <div>
+          <p className="text-xs text-dark-300 font-mono">
+            Manage system package updates
+          </p>
+          {lastChecked && !loading && (
+            <p className="text-[10px] text-dark-400 font-mono mt-1">
+              Last checked: {lastChecked.toLocaleTimeString()}
+            </p>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           {packages.length > 0 && (
             <button
@@ -250,12 +277,30 @@ export default function Updates() {
               Recent package updates (such as a new kernel version) require a reboot to be fully applied.
             </p>
           </div>
-          <button
-            onClick={handleReboot}
-            className="px-4 py-2 bg-warn-500 text-dark-900 text-xs font-bold uppercase tracking-wider hover:bg-warn-400 transition-colors shrink-0"
-          >
-            Reboot Now
-          </button>
+          {!confirmReboot ? (
+            <button
+              onClick={() => setConfirmReboot(true)}
+              className="px-4 py-2 bg-warn-500 text-dark-900 text-xs font-bold uppercase tracking-wider hover:bg-warn-400 transition-colors shrink-0"
+            >
+              Reboot Now
+            </button>
+          ) : (
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-xs text-warn-400 font-mono">Are you sure?</span>
+              <button
+                onClick={handleReboot}
+                className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors"
+              >
+                Confirm
+              </button>
+              <button
+                onClick={() => setConfirmReboot(false)}
+                className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -276,11 +321,37 @@ export default function Updates() {
         <div className="mb-6">
           {/* Terminal header */}
           <div className="flex items-center justify-between border border-dark-500 border-b-0 bg-dark-800 px-4 py-2">
-            <span className="text-xs text-dark-300 uppercase tracking-widest font-mono">apt output</span>
-            <div className="flex gap-1.5">
-              <div className="w-2.5 h-2.5 rounded-full bg-dark-500" />
-              <div className="w-2.5 h-2.5 rounded-full bg-dark-500" />
-              <div className="w-2.5 h-2.5 rounded-full bg-dark-500" />
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-dark-300 uppercase tracking-widest font-mono">apt output</span>
+              {applying && (
+                <span className="text-[10px] text-rust-400 font-mono animate-pulse">running...</span>
+              )}
+              {!applying && updateDone === "success" && (
+                <span className="text-[10px] text-rust-400 font-mono">done</span>
+              )}
+              {!applying && updateDone === "error" && (
+                <span className="text-[10px] text-danger-400 font-mono">failed</span>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              {!applying && aptOutput && (
+                <button
+                  onClick={() => { setAptOutput(null); setUpdateDone(null); }}
+                  className="text-[10px] text-dark-400 hover:text-dark-200 font-mono uppercase tracking-wider transition-colors"
+                >
+                  Clear
+                </button>
+              )}
+              <div className="flex gap-1.5">
+                <div className={`w-2.5 h-2.5 rounded-full transition-colors ${
+                  applying ? "bg-warn-400 animate-pulse"
+                  : updateDone === "success" ? "bg-rust-400"
+                  : updateDone === "error" ? "bg-danger-400"
+                  : "bg-dark-500"
+                }`} />
+                <div className="w-2.5 h-2.5 rounded-full bg-dark-500" />
+                <div className="w-2.5 h-2.5 rounded-full bg-dark-500" />
+              </div>
             </div>
           </div>
           {/* Terminal body */}

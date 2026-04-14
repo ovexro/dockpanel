@@ -18,9 +18,9 @@ export default function System() {
           <p className="text-sm text-dark-200 mt-1">System updates, services, and health monitoring</p>
         </div>
       </div>
-      <div className="flex gap-6 mb-6 text-sm font-mono">
-        <button onClick={() => setTab("updates")} className={tab === "updates" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}>Updates</button>
-        <button onClick={() => setTab("health")} className={tab === "health" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}>Health</button>
+      <div className="flex gap-6 mb-6 text-sm font-mono overflow-x-auto">
+        <button onClick={() => setTab("updates")} className={`whitespace-nowrap ${tab === "updates" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}`}>Updates</button>
+        <button onClick={() => setTab("health")} className={`whitespace-nowrap ${tab === "health" ? "border-b-2 border-rust-500 text-dark-50 pb-2" : "text-dark-300 hover:text-dark-100 pb-2"}`}>Health</button>
       </div>
       {tab === "updates" && <UpdatesContent />}
       {tab === "health" && <HealthContent />}
