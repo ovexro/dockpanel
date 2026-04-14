@@ -388,7 +388,7 @@ export default function Apps() {
   }, []);
 
   const loadApps = () => {
-    api.get<DeployedApp[]>("/apps").then(setApps).catch((e) => console.error("Failed to load apps:", e));
+    api.get<DeployedApp[]>("/apps").then(setApps).catch(() => {});
     api.get<StackInfo[]>("/stacks").then(setStacks).catch(() => {});
   };
 

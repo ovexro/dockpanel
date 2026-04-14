@@ -56,7 +56,7 @@ export default function Files() {
   const [uploadMessage, setUploadMessage] = useState("");
 
   useEffect(() => {
-    api.get<Site>(`/sites/${id}`).then(setSite).catch((e) => console.error("Failed to load site:", e));
+    api.get<Site>(`/sites/${id}`).then(setSite).catch(() => {});
   }, [id]);
 
   const loadDir = useCallback(

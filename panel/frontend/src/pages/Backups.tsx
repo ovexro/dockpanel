@@ -63,10 +63,10 @@ export default function Backups() {
   const [savingSchedule, setSavingSchedule] = useState(false);
 
   useEffect(() => {
-    api.get<Site>(`/sites/${id}`).then(setSite).catch((e) => console.error("Failed to load site:", e));
+    api.get<Site>(`/sites/${id}`).then(setSite).catch(() => {});
     loadBackups();
     loadSchedule();
-    api.get<BackupDestination[]>("/backup-destinations").then(setDestinations).catch((e) => console.error("Failed to load destinations:", e));
+    api.get<BackupDestination[]>("/backup-destinations").then(setDestinations).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 

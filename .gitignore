@@ -19,6 +19,9 @@ website/server/node_modules/
 .DS_Store
 Thumbs.db
 
+# Claude Code local settings
+.claude/settings.local.json
+
 # IDE
 .vscode/
 .idea/

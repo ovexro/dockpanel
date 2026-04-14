@@ -59,7 +59,7 @@ export default function Crons() {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   useEffect(() => {
-    api.get<Site>(`/sites/${id}`).then(setSite).catch((e) => console.error("Failed to load site:", e));
+    api.get<Site>(`/sites/${id}`).then(setSite).catch(() => {});
     loadCrons();
   }, [id]);
 
