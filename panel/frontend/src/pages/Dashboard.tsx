@@ -5,6 +5,7 @@ import { formatSize, formatRate, formatUptime, timeAgo } from "../utils/format";
 
 interface SiteDetail {
   id: string;
+  domain?: string;
   status: string;
   backup_schedule?: string;
 }
@@ -208,6 +209,7 @@ export default function Dashboard() {
   const [mailQueue, setMailQueue] = useState<number | null>(null);
   // Feature #4: Quick server action messages
   const [actionMessage, setActionMessage] = useState<{ text: string; type: string } | null>(null);
+  const [confirmAction, setConfirmAction] = useState<string | null>(null);
   // Feature #3: Disk I/O metrics
   const [diskIo, setDiskIo] = useState<{ read_bytes_sec: number; write_bytes_sec: number } | null>(null);
   // Feature #6: Customizable dashboard layout
@@ -501,25 +503,13 @@ export default function Dashboard() {
           </Link>
           {/* Feature #4: Quick Server Actions — hidden on mobile */}
           <div className="h-4 w-px bg-dark-600 hidden sm:block" />
-          <button onClick={async () => {
-            if (!confirm("Restart Nginx? This will briefly interrupt all web traffic.")) return;
-            try { await api.post("/agent/diagnostics/fix", { fix: "restart_nginx" }); setActionMessage({ text: "Nginx restarted", type: "success" }); setTimeout(() => setActionMessage(null), 3000); }
-            catch { setActionMessage({ text: "Failed to restart Nginx", type: "error" }); setTimeout(() => setActionMessage(null), 3000); }
-          }} className="hidden sm:inline-block px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs transition-colors">
+          <button onClick={() => setConfirmAction("nginx")} className="hidden sm:inline-block px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs transition-colors">
             Restart Nginx
           </button>
-          <button onClick={async () => {
-            if (!confirm("Restart PHP-FPM? Active requests may be interrupted.")) return;
-            try { await api.post("/agent/diagnostics/fix", { fix: "restart_php" }); setActionMessage({ text: "PHP-FPM restarted", type: "success" }); setTimeout(() => setActionMessage(null), 3000); }
-            catch { setActionMessage({ text: "Failed to restart PHP-FPM", type: "error" }); setTimeout(() => setActionMessage(null), 3000); }
-          }} className="hidden sm:inline-block px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs transition-colors">
+          <button onClick={() => setConfirmAction("php")} className="hidden sm:inline-block px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs transition-colors">
             Restart PHP
           </button>
-          <button onClick={async () => {
-            if (!confirm("REBOOT SERVER?\n\nAll services will be temporarily unavailable. Are you sure?")) return;
-            try { await api.post("/system/reboot"); setActionMessage({ text: "Server rebooting...", type: "success" }); setTimeout(() => setActionMessage(null), 5000); }
-            catch { setActionMessage({ text: "Failed to reboot server", type: "error" }); setTimeout(() => setActionMessage(null), 3000); }
-          }} className="hidden sm:inline-block px-2.5 py-1.5 bg-danger-500/10 border border-danger-500/20 rounded-lg text-xs text-danger-400 hover:bg-danger-500/20">
+          <button onClick={() => setConfirmAction("reboot")} className="hidden sm:inline-block px-2.5 py-1.5 bg-danger-500/10 border border-danger-500/20 rounded-lg text-xs text-danger-400 hover:bg-danger-500/20">
             Reboot
           </button>
         </div>
@@ -573,6 +563,44 @@ export default function Dashboard() {
           <Link to="/telemetry" className="px-3 py-1.5 bg-rust-500 hover:bg-rust-600 text-white rounded-lg text-xs font-medium transition-colors whitespace-nowrap">
             View Update
           </Link>
+        </div>
+      )}
+
+      {/* Feature #4: Action confirmation bar */}
+      {confirmAction && (
+        <div className={`rounded-lg border px-4 py-3 mb-4 flex items-center justify-between ${
+          confirmAction === "reboot" ? "border-danger-500/30 bg-danger-500/5" : "border-warn-500/30 bg-warn-500/5"
+        }`}>
+          <span className={`text-xs font-mono ${confirmAction === "reboot" ? "text-danger-400" : "text-warn-400"}`}>
+            {confirmAction === "nginx" ? "Restart Nginx? This will briefly interrupt web traffic." :
+             confirmAction === "php" ? "Restart PHP-FPM? Active requests may be interrupted." :
+             "Reboot server? All services will be temporarily unavailable."}
+          </span>
+          <div className="flex items-center gap-2 shrink-0 ml-4">
+            <button onClick={async () => {
+              const action = confirmAction;
+              setConfirmAction(null);
+              try {
+                if (action === "reboot") {
+                  await api.post("/system/reboot");
+                  setActionMessage({ text: "Server rebooting...", type: "success" });
+                  setTimeout(() => setActionMessage(null), 5000);
+                } else {
+                  await api.post("/agent/diagnostics/fix", { fix: action === "nginx" ? "restart_nginx" : "restart_php" });
+                  setActionMessage({ text: action === "nginx" ? "Nginx restarted" : "PHP-FPM restarted", type: "success" });
+                  setTimeout(() => setActionMessage(null), 3000);
+                }
+              } catch {
+                setActionMessage({ text: `Failed to ${action === "reboot" ? "reboot server" : `restart ${action === "nginx" ? "Nginx" : "PHP-FPM"}`}`, type: "error" });
+                setTimeout(() => setActionMessage(null), 3000);
+              }
+            }} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">
+              Confirm
+            </button>
+            <button onClick={() => setConfirmAction(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">
+              Cancel
+            </button>
+          </div>
         </div>
       )}
 
@@ -892,7 +920,7 @@ export default function Dashboard() {
                 {sitesList.slice(0, 12).map((s) => (
                   <Link key={s.id} to={`/sites/${s.id}`} className="bg-dark-800 px-3 py-2 flex items-center gap-2 hover:bg-dark-700/50 transition-colors">
                     <div className={`w-2 h-2 rounded-full shrink-0 ${s.status === "active" ? "bg-rust-500" : "bg-dark-500"}`} />
-                    <span className="text-xs text-dark-100 truncate font-mono">{(s as any).domain || s.id}</span>
+                    <span className="text-xs text-dark-100 truncate font-mono">{s.domain || s.id}</span>
                   </Link>
                 ))}
               </div>
