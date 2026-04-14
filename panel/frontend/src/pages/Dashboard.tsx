@@ -10,6 +10,31 @@ interface SiteDetail {
   backup_schedule?: string;
 }
 
+interface ActivityItem {
+  action: string;
+  target_name?: string;
+  created_at: string;
+}
+
+interface DockerImage {
+  size: number | string;
+  Size?: number | string;
+}
+
+interface DockerImagesResponse {
+  images?: DockerImage[];
+}
+
+interface MailQueueResponse {
+  count?: number;
+  queue?: unknown[];
+}
+
+interface DiskIoResponse {
+  read_bytes_sec: number;
+  write_bytes_sec: number;
+}
+
 function useCountUp(target: number, duration = 800): number {
   const [value, setValue] = useState(0);
   const prev = useRef(0);
@@ -200,7 +225,7 @@ export default function Dashboard() {
   // Feature #1: Docker container overview
   const [dockerInfo, setDockerInfo] = useState<{ total: number; running: number; stopped: number } | null>(null);
   // Feature #2: Recent activity feed
-  const [recentActivity, setRecentActivity] = useState<any[]>([]);
+  const [recentActivity, setRecentActivity] = useState<ActivityItem[]>([]);
   // Feature #6: Bandwidth usage summary
   const [bandwidthTotal, setBandwidthTotal] = useState({ rx: 0, tx: 0 });
   // Feature #8: Docker image disk usage
@@ -282,15 +307,15 @@ export default function Dashboard() {
       .catch(() => {});
     // Feature #2: Recent activity feed
     api
-      .get<any[]>("/activity?limit=5")
+      .get<ActivityItem[]>("/activity?limit=5")
       .then(setRecentActivity)
       .catch(() => {});
     // Feature #8: Docker image disk usage
     api
-      .get<any>("/apps/images")
+      .get<DockerImage[] | DockerImagesResponse>("/apps/images")
       .then((d) => {
-        const images = Array.isArray(d) ? d : (d.images || []);
-        const totalMb = images.reduce((sum: number, img: any) => {
+        const images: DockerImage[] = Array.isArray(d) ? d : ((d as DockerImagesResponse).images || []);
+        const totalMb = images.reduce((sum: number, img: DockerImage) => {
           const size = img.size || img.Size || "0";
           if (typeof size === "number") return sum + size / (1024 * 1024);
           const match = String(size).match(/([\d.]+)\s*(GB|MB|KB)/i);
@@ -307,20 +332,20 @@ export default function Dashboard() {
       .catch(() => {});
     // Feature #3: Disk I/O metrics (endpoint takes ~1s due to sampling)
     api
-      .get<any>("/system/disk-io")
+      .get<DiskIoResponse>("/system/disk-io")
       .then(setDiskIo)
       .catch(() => {});
     // Feature #9: Mail queue count
     api
-      .get<any>("/mail/queue")
+      .get<MailQueueResponse>("/mail/queue")
       .then((d) => {
-        const count = d.count ?? (Array.isArray(d.queue) ? d.queue.length : (Array.isArray(d) ? d.length : 0));
+        const count = d.count ?? (Array.isArray(d.queue) ? d.queue.length : 0);
         setMailQueue(count);
       })
       .catch(() => {});
     // Update check
     api
-      .get<any>("/telemetry/update-status")
+      .get<{ update_available: boolean; update_available_version?: string; update_release_url?: string; current_version?: string }>("/telemetry/update-status")
       .then(setUpdateInfo)
       .catch(() => {});
   }, []);
@@ -935,7 +960,7 @@ export default function Dashboard() {
                 <Link to="/logs" className="text-[10px] text-rust-400 hover:text-rust-300">View all</Link>
               </div>
               <div className="divide-y divide-dark-600">
-                {recentActivity.map((a: any, i: number) => (
+                {recentActivity.map((a, i) => (
                   <div key={i} className="px-4 py-2 flex items-center justify-between text-xs">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${

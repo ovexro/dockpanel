@@ -68,8 +68,8 @@ export default function SecurityHardening() {
       setAuditLog(audit);
       setRecordings(recs.recordings || []);
       setPendingUsers(pending);
-    } catch (e: any) {
-      showMsg("error", e.message || "Failed to load security data");
+    } catch (e) {
+      showMsg("error", e instanceof Error ? e.message : "Failed to load security data");
     } finally {
       setLoading(false);
     }
@@ -86,7 +86,7 @@ export default function SecurityHardening() {
       await api.post("/security/lockdown/deactivate", {});
       showMsg("success", "Lockdown deactivated");
       loadData();
-    } catch (e: any) { showMsg("error", e.message); }
+    } catch (e) { showMsg("error", e instanceof Error ? e.message : "Failed"); }
   };
 
   const triggerPanic = () => {
@@ -106,14 +106,14 @@ export default function SecurityHardening() {
         showMsg("success", "Panic mode activated — all terminals killed, system locked");
       }
       loadData();
-    } catch (e: any) { showMsg("error", e.message); }
+    } catch (e) { showMsg("error", e instanceof Error ? e.message : "Failed"); }
   };
 
   const triggerSnapshot = async () => {
     try {
       const result = await api.post<{ snapshot_dir: string }>("/security/forensic-snapshot", {});
       showMsg("success", `Forensic snapshot saved to ${result.snapshot_dir}`);
-    } catch (e: any) { showMsg("error", e.message); }
+    } catch (e) { showMsg("error", e instanceof Error ? e.message : "Failed"); }
   };
 
   const approveUser = async (id: string) => {
@@ -121,7 +121,7 @@ export default function SecurityHardening() {
       await api.post(`/security/users/${id}/approve`, {});
       showMsg("success", "User approved");
       loadData();
-    } catch (e: any) { showMsg("error", e.message); }
+    } catch (e) { showMsg("error", e instanceof Error ? e.message : "Failed"); }
   };
 
   const severityColor = (s: string) => {

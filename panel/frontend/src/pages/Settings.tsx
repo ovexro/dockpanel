@@ -20,6 +20,39 @@ interface BackupDestination {
   created_at: string;
 }
 
+interface Passkey {
+  id: string;
+  name: string;
+  created_at: string;
+}
+
+interface ApiKey {
+  id: string;
+  name: string;
+  created_at: string;
+}
+
+interface ExportConfig {
+  settings: Record<string, string>;
+  [key: string]: unknown;
+}
+
+interface CleanupResult {
+  cleaned?: string[];
+}
+
+/** WebAuthn PublicKeyCredentialCreationOptions as returned by the server (base64url-encoded) */
+interface WebAuthnPublicKeyOptions {
+  challenge: string | ArrayBuffer;
+  user: { id: string | ArrayBuffer; name: string; displayName: string };
+  rp: { name: string; id?: string };
+  pubKeyCredParams: { type: string; alg: number }[];
+  excludeCredentials?: { id: string | ArrayBuffer; type: string }[];
+  [key: string]: unknown;
+}
+
+type ServiceStatus = Record<string, { installed?: boolean; running?: boolean; active?: boolean; version?: string | null }>;
+
 export default function Settings() {
   const { user } = useAuth();
   const [settings, setSettings] = useState<Record<string, string>>({});
@@ -55,7 +88,7 @@ export default function Settings() {
   const [twoFaLoading, setTwoFaLoading] = useState(false);
 
   // Passkeys
-  const [passkeys, setPasskeys] = useState<any[]>([]);
+  const [passkeys, setPasskeys] = useState<Passkey[]>([]);
   const [passkeyLoading, setPasskeyLoading] = useState(false);
   const [passkeyName, setPasskeyName] = useState("My Passkey");
   const [passkeySupported] = useState(() => !!window.PublicKeyCredential);
@@ -89,7 +122,7 @@ export default function Settings() {
   const [confirmPass, setConfirmPass] = useState("");
 
   // API Keys
-  const [apiKeys, setApiKeys] = useState<any[]>([]);
+  const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [showNewKey, setShowNewKey] = useState(false);
   const [newKeyName, setNewKeyName] = useState("");
   const [newKeyResult, setNewKeyResult] = useState<string | null>(null);
@@ -120,7 +153,7 @@ export default function Settings() {
   const [destSftpPath, setDestSftpPath] = useState("/backups");
   const [savingDest, setSavingDest] = useState(false);
   const [testingDest, setTestingDest] = useState<string | null>(null);
-  const [pendingConfirm, setPendingConfirm] = useState<{ type: string; label: string; data?: any } | null>(null);
+  const [pendingConfirm, setPendingConfirm] = useState<{ type: string; label: string; data?: Record<string, unknown> } | null>(null);
 
   const loadSettings = async () => {
     try {
@@ -183,12 +216,14 @@ export default function Settings() {
           break;
         }
         case "import_config": {
+          if (!data) break;
           await api.post("/settings/import", data.config);
           setMessage({ text: "Config imported", type: "success" });
           window.location.reload();
           break;
         }
         case "delete_destination": {
+          if (!data) break;
           await api.delete(`/backup-destinations/${data.id}`);
           loadDestinations();
           break;
@@ -200,13 +235,14 @@ export default function Settings() {
           break;
         }
         case "revoke_key": {
+          if (!data) break;
           await api.delete(`/api-keys/${data.id}`);
-          setApiKeys(apiKeys.filter((a: any) => a.id !== data.id));
+          setApiKeys(apiKeys.filter((a) => a.id !== data.id));
           break;
         }
       }
-    } catch (e: any) {
-      setMessage({ text: e instanceof Error ? e.message : e.message || "Action failed", type: "error" });
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : "Action failed", type: "error" });
       if (type === "traefik_uninstall") setTraefikInstalling(false);
     }
   };
@@ -220,7 +256,7 @@ export default function Settings() {
 
   const loadPasskeys = async () => {
     try {
-      const data = await api.get<{ passkeys: any[] }>("/auth/passkeys");
+      const data = await api.get<{ passkeys: Passkey[] }>("/auth/passkeys");
       setPasskeys(data.passkeys || []);
     } catch { /* ignore */ }
   };
@@ -251,7 +287,7 @@ export default function Settings() {
     api.get<{ count: number }>("/system/updates/count")
       .then((d) => setUpdateCount(d.count))
       .catch(() => {});
-    api.get<any[]>("/api-keys").then(setApiKeys).catch(() => {});
+    api.get<ApiKey[]>("/api-keys").then(setApiKeys).catch(() => {});
     api.get<{ hostname?: string }>("/system/info")
       .then((d) => { if (d.hostname) setHostname(d.hostname); })
       .catch(() => {});
@@ -681,7 +717,7 @@ export default function Settings() {
           <div className="p-5 flex gap-3">
             <button onClick={async () => {
               try {
-                const data = await api.get<any>("/settings/export");
+                const data = await api.get<ExportConfig>("/settings/export");
                 const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement("a"); a.href = url; a.download = "dockpanel-config.json"; a.click();
@@ -720,7 +756,7 @@ export default function Settings() {
             </div>
             <button onClick={async () => {
               try {
-                const result = await api.post<any>("/system/cleanup");
+                const result = await api.post<CleanupResult>("/system/cleanup");
                 setMessage({ text: `Cleaned: ${result.cleaned?.join(", ") || "done"}`, type: "success" });
               } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
             }} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600">Clean Up</button>
@@ -1422,7 +1458,7 @@ export default function Settings() {
                 {/* Existing passkeys list */}
                 {passkeys.length > 0 && (
                   <div className="space-y-2">
-                    {passkeys.map((pk: any) => (
+                    {passkeys.map((pk) => (
                       <div key={pk.id} className="flex items-center justify-between px-3 py-2 bg-dark-700 rounded-lg border border-dark-600">
                         <div className="flex items-center gap-3">
                           <svg className="w-4 h-4 text-rust-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1514,7 +1550,7 @@ export default function Settings() {
                         setPasskeyLoading(true);
                         try {
                           // 1. Begin registration
-                          const beginData = await api.post<{ publicKey: any }>("/auth/passkey/register/begin", {});
+                          const beginData = await api.post<{ publicKey: WebAuthnPublicKeyOptions }>("/auth/passkey/register/begin", {});
                           const publicKey = beginData.publicKey;
 
                           // 2. Convert base64url to ArrayBuffer
@@ -1532,21 +1568,21 @@ export default function Settings() {
                             return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
                           };
 
-                          publicKey.challenge = b64toBuf(publicKey.challenge);
-                          publicKey.user.id = b64toBuf(publicKey.user.id);
+                          publicKey.challenge = b64toBuf(publicKey.challenge as string);
+                          publicKey.user.id = b64toBuf(publicKey.user.id as string);
                           if (publicKey.excludeCredentials) {
-                            publicKey.excludeCredentials = publicKey.excludeCredentials.map((c: any) => ({
+                            publicKey.excludeCredentials = (publicKey.excludeCredentials as { id: string; type: string }[]).map((c) => ({
                               ...c, id: b64toBuf(c.id),
                             }));
                           }
 
                           // 3. Create credential via browser
-                          const credential = await navigator.credentials.create({ publicKey }) as PublicKeyCredential;
+                          const credential = await navigator.credentials.create({ publicKey: publicKey as unknown as PublicKeyCredentialCreationOptions }) as PublicKeyCredential;
                           const attestation = credential.response as AuthenticatorAttestationResponse;
 
                           // 4. Get transports
-                          const transports = typeof (attestation as any).getTransports === "function"
-                            ? (attestation as any).getTransports() : undefined;
+                          const transports = "getTransports" in attestation && typeof (attestation as AuthenticatorAttestationResponse & { getTransports?: () => string[] }).getTransports === "function"
+                            ? (attestation as AuthenticatorAttestationResponse & { getTransports: () => string[] }).getTransports() : undefined;
 
                           // 5. Complete registration
                           await api.post("/auth/passkey/register/complete", {
@@ -1563,9 +1599,11 @@ export default function Settings() {
                           setMessage({ text: "Passkey registered!", type: "success" });
                           setPasskeyName("My Passkey");
                           loadPasskeys();
-                        } catch (e: any) {
-                          if (e.name !== "NotAllowedError") {
-                            setMessage({ text: e.message || "Failed to register passkey", type: "error" });
+                        } catch (e) {
+                          if (e instanceof DOMException && e.name === "NotAllowedError") {
+                            // User cancelled — ignore
+                          } else {
+                            setMessage({ text: e instanceof Error ? e.message : "Failed to register passkey", type: "error" });
                           }
                         } finally {
                           setPasskeyLoading(false);
@@ -1652,7 +1690,7 @@ export default function Settings() {
                   setNewKeyResult(result.key);
                   setNewKeyName("");
                   setShowNewKey(false);
-                  api.get<any[]>("/api-keys").then(setApiKeys).catch(() => {});
+                  api.get<ApiKey[]>("/api-keys").then(setApiKeys).catch(() => {});
                 } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
               }} className="px-3 py-1.5 bg-rust-500 text-white rounded text-xs font-medium hover:bg-rust-600">Create</button>
             </div>
@@ -1667,7 +1705,7 @@ export default function Settings() {
             </div>
           )}
           <div className="divide-y divide-dark-600">
-            {apiKeys.map((k: any) => (
+            {apiKeys.map((k) => (
               <div key={k.id} className="px-5 py-2.5 flex items-center justify-between text-xs">
                 <div>
                   <span className="text-dark-100">{k.name}</span>
@@ -1678,7 +1716,7 @@ export default function Settings() {
                     try {
                       const r = await api.post<{ key: string }>(`/api-keys/${k.id}/rotate`);
                       setNewKeyResult(r.key);
-                      api.get<any[]>("/api-keys").then(setApiKeys).catch(() => {});
+                      api.get<ApiKey[]>("/api-keys").then(setApiKeys).catch(() => {});
                     } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
                   }} className="text-dark-300 hover:text-dark-100">Rotate</button>
                   <button onClick={() => setPendingConfirm({
@@ -2107,7 +2145,7 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
   setSaving: (v: string | null) => void;
   setMessage: (v: { text: string; type: string }) => void;
 }) {
-  const [status, setStatus] = useState<Record<string, { installed?: boolean; running?: boolean; active?: boolean; version?: string | null }> | null>(null);
+  const [status, setStatus] = useState<ServiceStatus | null>(null);
   const [mailStatus, setMailStatus] = useState<{ installed: boolean; running: boolean } | null>(null);
   const [installing, setInstalling] = useState<string | null>(null);
   const [installId, setInstallId] = useState<string | null>(null);
@@ -2117,8 +2155,8 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
   const [svcPendingConfirm, setSvcPendingConfirm] = useState<{ service: string; label: string } | null>(null);
 
   const refreshStatus = () => {
-    api.get<Record<string, unknown>>("/services/install-status")
-      .then((d) => setStatus(d as any))
+    api.get<ServiceStatus>("/services/install-status")
+      .then((d) => setStatus(d))
       .catch(() => {});
     api.get<{ installed: boolean; running: boolean }>("/mail/status")
       .then((d) => setMailStatus(d))
@@ -2170,17 +2208,17 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
   };
 
   const services = [
-    { id: "php", label: "PHP", desc: "PHP-FPM for dynamic websites (WordPress, Laravel, etc.)", field: "php", checkInstalled: (s: any) => s?.php?.installed, checkRunning: (s: any) => s?.php?.running, extra: (s: any) => s?.php?.version ? `v${s.php.version}` : null },
-    { id: "certbot", label: "Certbot", desc: "Let's Encrypt SSL certificates with auto-renewal", field: "certbot", checkInstalled: (s: any) => s?.certbot?.installed, checkRunning: () => true, extra: () => null },
-    { id: "ufw", label: "UFW Firewall", desc: "Firewall with default rules (SSH, HTTP, HTTPS, mail ports)", field: "ufw", checkInstalled: (s: any) => s?.ufw?.installed, checkRunning: (s: any) => s?.ufw?.active, extra: () => null },
-    { id: "fail2ban", label: "Fail2Ban", desc: "Intrusion prevention with SSH, Nginx, Postfix jails", field: "fail2ban", checkInstalled: (s: any) => s?.fail2ban?.installed, checkRunning: (s: any) => s?.fail2ban?.running, extra: () => null },
-    { id: "powerdns", label: "PowerDNS", desc: "Self-hosted authoritative DNS server with HTTP API", field: "powerdns", checkInstalled: (s: any) => s?.powerdns?.installed, checkRunning: (s: any) => s?.powerdns?.running, extra: () => null },
+    { id: "php", label: "PHP", desc: "PHP-FPM for dynamic websites (WordPress, Laravel, etc.)", field: "php", checkInstalled: (s: ServiceStatus) => s?.php?.installed, checkRunning: (s: ServiceStatus) => s?.php?.running, extra: (s: ServiceStatus) => s?.php?.version ? `v${s.php.version}` : null },
+    { id: "certbot", label: "Certbot", desc: "Let's Encrypt SSL certificates with auto-renewal", field: "certbot", checkInstalled: (s: ServiceStatus) => s?.certbot?.installed, checkRunning: () => true, extra: () => null },
+    { id: "ufw", label: "UFW Firewall", desc: "Firewall with default rules (SSH, HTTP, HTTPS, mail ports)", field: "ufw", checkInstalled: (s: ServiceStatus) => s?.ufw?.installed, checkRunning: (s: ServiceStatus) => s?.ufw?.active, extra: () => null },
+    { id: "fail2ban", label: "Fail2Ban", desc: "Intrusion prevention with SSH, Nginx, Postfix jails", field: "fail2ban", checkInstalled: (s: ServiceStatus) => s?.fail2ban?.installed, checkRunning: (s: ServiceStatus) => s?.fail2ban?.running, extra: () => null },
+    { id: "powerdns", label: "PowerDNS", desc: "Self-hosted authoritative DNS server with HTTP API", field: "powerdns", checkInstalled: (s: ServiceStatus) => s?.powerdns?.installed, checkRunning: (s: ServiceStatus) => s?.powerdns?.running, extra: () => null },
     { id: "mail", label: "Mail Server", desc: "Postfix + Dovecot + OpenDKIM for email hosting", field: "mail", checkInstalled: () => mailStatus?.installed ?? null, checkRunning: () => mailStatus?.running ?? false, extra: () => null },
-    { id: "redis", label: "Redis", desc: "In-memory cache and data store for PHP applications", field: "redis", checkInstalled: (s: any) => s?.redis?.installed, checkRunning: (s: any) => s?.redis?.running, extra: () => null },
-    { id: "nodejs", label: "Node.js", desc: "JavaScript runtime for builds, SSR, and npm packages", field: "nodejs", checkInstalled: (s: any) => s?.nodejs?.installed, checkRunning: () => null, extra: () => null },
-    { id: "composer", label: "Composer", desc: "PHP dependency manager for Laravel, Symfony, Drupal", field: "composer", checkInstalled: (s: any) => s?.composer?.installed, checkRunning: () => null, extra: () => null },
-    { id: "waf", label: "WAF (ModSecurity)", desc: "Web Application Firewall with OWASP CRS — blocks SQL injection, XSS, and OWASP Top 10", field: "waf", checkInstalled: (s: any) => s?.waf?.installed, checkRunning: () => null, extra: () => null },
-    { id: "cloudflared", label: "Cloudflare Tunnel", desc: "Expose sites without port forwarding — zero-trust access via Cloudflare's network", field: "cloudflared", checkInstalled: (s: any) => s?.cloudflared?.installed, checkRunning: (s: any) => s?.cloudflared?.running, extra: () => null },
+    { id: "redis", label: "Redis", desc: "In-memory cache and data store for PHP applications", field: "redis", checkInstalled: (s: ServiceStatus) => s?.redis?.installed, checkRunning: (s: ServiceStatus) => s?.redis?.running, extra: () => null },
+    { id: "nodejs", label: "Node.js", desc: "JavaScript runtime for builds, SSR, and npm packages", field: "nodejs", checkInstalled: (s: ServiceStatus) => s?.nodejs?.installed, checkRunning: () => null, extra: () => null },
+    { id: "composer", label: "Composer", desc: "PHP dependency manager for Laravel, Symfony, Drupal", field: "composer", checkInstalled: (s: ServiceStatus) => s?.composer?.installed, checkRunning: () => null, extra: () => null },
+    { id: "waf", label: "WAF (ModSecurity)", desc: "Web Application Firewall with OWASP CRS — blocks SQL injection, XSS, and OWASP Top 10", field: "waf", checkInstalled: (s: ServiceStatus) => s?.waf?.installed, checkRunning: () => null, extra: () => null },
+    { id: "cloudflared", label: "Cloudflare Tunnel", desc: "Expose sites without port forwarding — zero-trust access via Cloudflare's network", field: "cloudflared", checkInstalled: (s: ServiceStatus) => s?.cloudflared?.installed, checkRunning: (s: ServiceStatus) => s?.cloudflared?.running, extra: () => null },
   ];
 
   return (
@@ -2432,7 +2470,7 @@ function SSHKeys() {
           <button disabled={adding || !newKey.startsWith("ssh-")} onClick={async () => {
             setAdding(true); setMsg({ text: "", type: "" });
             try { await api.post("/ssh-keys", { key: newKey }); setNewKey(""); const d = await api.get<{ keys: typeof keys }>("/ssh-keys"); setKeys(d.keys || []); setMsg({ text: "Key added", type: "success" }); }
-            catch (e: any) { setMsg({ text: e?.message || "Failed", type: "error" }); }
+            catch (e) { setMsg({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
             finally { setAdding(false); }
           }} className="px-3 py-2 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600 disabled:opacity-50 shrink-0">
             {adding ? "Adding..." : "Add Key"}
@@ -2502,7 +2540,7 @@ function IPWhitelist() {
       await api.post("/panel-whitelist", { ips: list });
       setIps(list);
       setMsg({ text: list.length > 0 ? `Whitelist saved (${list.length} IPs)` : "Whitelist cleared", type: "success" });
-    } catch (e: any) { setMsg({ text: e?.message || "Failed", type: "error" }); }
+    } catch (e) { setMsg({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
     finally { setSaving(false); }
   };
 

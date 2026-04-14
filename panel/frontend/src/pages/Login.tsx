@@ -53,7 +53,7 @@ export default function Login() {
       // 2. Convert base64url fields to ArrayBuffer
       publicKey.challenge = base64urlToBuffer(publicKey.challenge);
       if (publicKey.allowCredentials) {
-        publicKey.allowCredentials = publicKey.allowCredentials.map((c: any) => ({
+        publicKey.allowCredentials = publicKey.allowCredentials.map((c: { id: string; type: string }) => ({
           ...c, id: base64urlToBuffer(c.id),
         }));
       }
@@ -85,8 +85,8 @@ export default function Login() {
 
       // Refresh auth state and navigate
       window.location.href = "/";
-    } catch (err: any) {
-      if (err.name !== "NotAllowedError") {
+    } catch (err) {
+      if (err instanceof Error && err.name !== "NotAllowedError") {
         setError(err.message || "Passkey authentication failed");
       }
     } finally {

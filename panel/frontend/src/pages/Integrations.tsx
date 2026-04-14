@@ -5,9 +5,29 @@ import { api } from "../api";
 import WebhookGatewayContent from "./WebhookGateway";
 import ExtensionsContent from "./Extensions";
 
+interface WhmcsConfig {
+  configured: boolean;
+  api_url: string;
+  api_identifier: string;
+  webhook_secret?: string;
+}
+
+interface WhmcsService {
+  whmcs_service_id: number;
+  plan: string;
+  status: string;
+}
+
+interface MigrationItem {
+  id: string;
+  container_name: string;
+  status: string;
+  progress_pct: number;
+}
+
 function WhmcsContent() {
-  const [config, setConfig] = useState<any>(null);
-  const [services, setServices] = useState<any[]>([]);
+  const [config, setConfig] = useState<WhmcsConfig | null>(null);
+  const [services, setServices] = useState<WhmcsService[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState({ text: "", type: "" });
   const [apiUrl, setApiUrl] = useState("");
@@ -19,8 +39,8 @@ function WhmcsContent() {
     (async () => {
       try {
         const [cfg, svc] = await Promise.all([
-          api.get<any>("/whmcs/config"),
-          api.get<any>("/whmcs/services").catch(() => ({ services: [] })),
+          api.get<WhmcsConfig>("/whmcs/config"),
+          api.get<{ services: WhmcsService[] }>("/whmcs/services").catch(() => ({ services: [] as WhmcsService[] })),
         ]);
         setConfig(cfg);
         setServices(svc.services || []);
@@ -38,7 +58,7 @@ function WhmcsContent() {
     try {
       await api.put("/whmcs/config", { api_url: apiUrl, api_identifier: apiIdent, api_secret: apiSecret });
       setMsg({ text: "WHMCS configured", type: "success" });
-      const cfg = await api.get<any>("/whmcs/config");
+      const cfg = await api.get<WhmcsConfig>("/whmcs/config");
       setConfig(cfg);
     } catch (e) { setMsg({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
     setSaving(false);
@@ -96,7 +116,7 @@ function WhmcsContent() {
               <th className="text-left px-4 py-2 text-xs text-dark-300 uppercase">Status</th>
             </tr></thead>
             <tbody>
-              {services.map((s: any) => (
+              {services.map((s) => (
                 <tr key={s.whmcs_service_id} className="border-b border-dark-700">
                   <td className="px-4 py-2 text-dark-200">#{s.whmcs_service_id}</td>
                   <td className="px-4 py-2 text-dark-200">{s.plan}</td>
@@ -112,11 +132,11 @@ function WhmcsContent() {
 }
 
 function MigrationsContent() {
-  const [migrations, setMigrations] = useState<any[]>([]);
+  const [migrations, setMigrations] = useState<MigrationItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.get<any>("/migrations/apps")
+    api.get<{ migrations: MigrationItem[] }>("/migrations/apps")
       .then(d => setMigrations(d.migrations || []))
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -137,7 +157,7 @@ function MigrationsContent() {
               <th className="text-left px-4 py-2 text-xs text-dark-300 uppercase">Progress</th>
             </tr></thead>
             <tbody>
-              {migrations.map((m: any) => (
+              {migrations.map((m) => (
                 <tr key={m.id} className="border-b border-dark-700">
                   <td className="px-4 py-2 text-dark-200">{m.container_name}</td>
                   <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded text-xs ${m.status === "completed" ? "bg-emerald-500/20 text-emerald-400" : m.status === "failed" ? "bg-danger-500/20 text-danger-400" : "bg-accent-500/20 text-accent-400"}`}>{m.status}</span></td>

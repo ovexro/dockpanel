@@ -22,6 +22,23 @@ interface SecurityItem {
   severity?: string;
 }
 
+interface VulnItem {
+  severity: string;
+  title?: string;
+  name?: string;
+}
+
+interface VulnScanResult {
+  total_vulns: number;
+  critical_count: number;
+  high_count: number;
+  vulnerabilities: VulnItem[];
+}
+
+interface SecurityCheckResponse {
+  checks?: SecurityItem[];
+}
+
 export default function WordPressToolkit() {
   const { user } = useAuth();
   if (!user || user.role !== "admin") return <Navigate to="/" replace />;
@@ -31,7 +48,7 @@ export default function WordPressToolkit() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [updating, setUpdating] = useState(false);
   const [scanning, setScanning] = useState<string | null>(null);
-  const [scanResults, setScanResults] = useState<Record<string, any>>({});
+  const [scanResults, setScanResults] = useState<Record<string, VulnScanResult>>({});
   const [securityChecks, setSecurityChecks] = useState<Record<string, SecurityItem[]>>({});
   const [checkingAll, setCheckingAll] = useState(false);
   const [hardening, setHardening] = useState<string | null>(null);
@@ -77,7 +94,7 @@ export default function WordPressToolkit() {
     setScanning(siteId);
     setError("");
     try {
-      const result = await api.post<any>(`/sites/${siteId}/wordpress/vuln-scan`);
+      const result = await api.post<VulnScanResult>(`/sites/${siteId}/wordpress/vuln-scan`);
       setScanResults((prev) => ({ ...prev, [siteId]: result }));
       await fetchSites();
     } catch (e) {
@@ -90,8 +107,8 @@ export default function WordPressToolkit() {
   // Security check for one site
   const handleSecurityCheck = async (siteId: string) => {
     try {
-      const result = await api.get<any>(`/sites/${siteId}/wordpress/security-check`);
-      const checks: SecurityItem[] = Array.isArray(result?.checks) ? result.checks : Array.isArray(result) ? result : [];
+      const result = await api.get<SecurityCheckResponse>(`/sites/${siteId}/wordpress/security-check`);
+      const checks: SecurityItem[] = Array.isArray(result?.checks) ? result.checks : [];
       setSecurityChecks((prev) => ({ ...prev, [siteId]: checks }));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Security check failed");
@@ -427,7 +444,7 @@ export default function WordPressToolkit() {
                     {Array.isArray(scanResults[site.site_id].vulnerabilities) &&
                       scanResults[site.site_id].vulnerabilities.length > 0 && (
                         <div className="mt-2 space-y-1 max-h-32 overflow-y-auto">
-                          {scanResults[site.site_id].vulnerabilities.map((v: any, i: number) => (
+                          {scanResults[site.site_id].vulnerabilities.map((v, i) => (
                             <div
                               key={i}
                               className="flex items-center gap-2 text-xs px-2 py-1 bg-dark-700 rounded"

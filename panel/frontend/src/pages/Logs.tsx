@@ -10,6 +10,37 @@ interface Site {
   domain: string;
 }
 
+interface LogStatsTopUrl {
+  url: string;
+  count: number;
+}
+
+interface LogStats {
+  requests_total: number;
+  errors_5xx: number;
+  status_breakdown: Record<string, number>;
+  top_urls: LogStatsTopUrl[];
+}
+
+interface ErrorCheckResult {
+  status: string;
+  error_rate_percent: number;
+  error_5xx: number;
+  total_requests: number;
+}
+
+interface LogFileEntry {
+  path: string;
+  label: string;
+  size_mb: number;
+}
+
+interface LogSizesResult {
+  total_mb: number;
+  files: LogFileEntry[];
+  logrotate: boolean;
+}
+
 const LOG_TYPES = [
   { value: "nginx_access", label: "Nginx Access" },
   { value: "nginx_error", label: "Nginx Error" },
@@ -70,7 +101,7 @@ function SiteLogsContent() {
 
   // Feature #2: Log Stats
   const [showStats, setShowStats] = useState(false);
-  const [logStats, setLogStats] = useState<any>(null);
+  const [logStats, setLogStats] = useState<LogStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
 
   // Feature #3: Docker logs
@@ -81,12 +112,12 @@ function SiteLogsContent() {
   const [selectedService, setSelectedService] = useState("dockpanel-api");
 
   // Feature #6: Error alerting
-  const [errorCheck, setErrorCheck] = useState<any>(null);
+  const [errorCheck, setErrorCheck] = useState<ErrorCheckResult | null>(null);
   const [checkingErrors, setCheckingErrors] = useState(false);
 
   // Feature #7: Log sizes
   const [showSizes, setShowSizes] = useState(false);
-  const [logSizes, setLogSizes] = useState<any>(null);
+  const [logSizes, setLogSizes] = useState<LogSizesResult | null>(null);
   const [sizesLoading, setSizesLoading] = useState(false);
   const [truncating, setTruncating] = useState<string | null>(null);
   const [pendingTruncate, setPendingTruncate] = useState<string | null>(null);
@@ -122,7 +153,7 @@ function SiteLogsContent() {
     try {
       const site = sites.find((s) => s.id === selectedSite);
       const domain = site?.domain ? `?domain=${site.domain}` : "";
-      const data = await api.get<any>(`/logs/stats${domain}`);
+      const data = await api.get<LogStats>(`/logs/stats${domain}`);
       setLogStats(data);
     } catch {
       setLogStats(null);
@@ -184,7 +215,7 @@ function SiteLogsContent() {
   const handleCheckErrors = async () => {
     setCheckingErrors(true);
     try {
-      const data = await api.post<any>("/logs/check-errors");
+      const data = await api.post<ErrorCheckResult>("/logs/check-errors");
       setErrorCheck(data);
     } catch {
       setErrorCheck(null);
@@ -197,7 +228,7 @@ function SiteLogsContent() {
   const loadLogSizes = async () => {
     setSizesLoading(true);
     try {
-      const data = await api.get<any>("/logs/sizes");
+      const data = await api.get<LogSizesResult>("/logs/sizes");
       setLogSizes(data);
     } catch {
       setLogSizes(null);
@@ -785,7 +816,7 @@ function SiteLogsContent() {
               <div className="bg-dark-700 rounded-lg p-3">
                 <div className="text-xs text-dark-300">Top URLs</div>
                 <div className="text-xs font-mono text-dark-100 mt-1 space-y-0.5 max-h-20 overflow-auto">
-                  {logStats.top_urls?.slice(0, 5).map((u: any, i: number) => (
+                  {logStats.top_urls?.slice(0, 5).map((u, i) => (
                     <div key={i} className="flex justify-between gap-2">
                       <span className="truncate">{u.url}</span>
                       <span className="shrink-0">{u.count}</span>
@@ -833,7 +864,7 @@ function SiteLogsContent() {
           </div>
           {logSizes?.files ? (
             <div className="space-y-1">
-              {logSizes.files.map((f: any) => (
+              {logSizes.files.map((f) => (
                 <div key={f.path} className="flex items-center justify-between bg-dark-700 rounded px-3 py-2">
                   <div className="flex items-center gap-3">
                     <span className="text-sm text-dark-100 font-mono">{f.label}</span>

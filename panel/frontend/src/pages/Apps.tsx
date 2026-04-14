@@ -1348,7 +1348,7 @@ volumes:
                         </button>
                         <button
                           onClick={async () => {
-                            const cfg = await api.get<any>(`/apps/${app.container_id}/sleep-config`);
+                            const cfg = await api.get<{ auto_sleep_enabled: boolean; sleep_after_minutes: number }>(`/apps/${app.container_id}/sleep-config`);
                             const newEnabled = !cfg.auto_sleep_enabled;
                             await api.put(`/apps/${app.container_id}/sleep-config`, {
                               auto_sleep_enabled: newEnabled,

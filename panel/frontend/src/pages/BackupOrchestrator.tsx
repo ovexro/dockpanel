@@ -265,7 +265,7 @@ export default function BackupOrchestrator() {
                       try {
                         await api.post(`/backup-destinations/${d.id}/test`);
                         setMessage({ text: `Connection to "${d.name}" successful`, type: "success" });
-                      } catch (e: any) { setMessage({ text: e.message || "Connection failed", type: "error" }); }
+                      } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Connection failed", type: "error" }); }
                     }} className="px-3 py-1 text-xs font-mono bg-dark-600 hover:bg-dark-500 text-dark-200 rounded">Test</button>
                   </div>
                 ))}

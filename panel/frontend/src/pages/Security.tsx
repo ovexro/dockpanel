@@ -66,6 +66,49 @@ interface Posture {
   latest_scan: ScanSummary | null;
 }
 
+interface SshLoginEntry {
+  time: string;
+  user: string;
+  ip: string;
+  method: string;
+  success: boolean;
+}
+
+interface PanelLoginEntry {
+  time: string;
+  action: string;
+  success: boolean;
+}
+
+interface AuditLogEntry {
+  id: string;
+  severity: string;
+  event_type: string;
+  actor_email: string | null;
+  actor_ip: string | null;
+  geo_country: string | null;
+  created_at: string;
+}
+
+interface RecordingEntry {
+  filename: string;
+  size_bytes: number;
+  created: string | null;
+}
+
+interface PendingUser {
+  id: string;
+  email: string;
+  created_at: string;
+}
+
+interface LockdownStatus {
+  active: boolean;
+  triggered_by?: string;
+  triggered_at?: string;
+  reason?: string;
+}
+
 export default function Security() {
   const { user } = useAuth();
   const [overview, setOverview] = useState<SecurityOverview | null>(null);
@@ -85,19 +128,19 @@ export default function Security() {
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
   const [message, setMessage] = useState({ text: "", type: "" });
   const [tab, setTab] = useState<"overview" | "scans" | "diagnostics" | "audit" | "lockdown" | "recordings" | "approvals">("overview");
-  const [loginAudit, setLoginAudit] = useState<{ panel: any[]; ssh: any[] }>({ panel: [], ssh: [] });
+  const [loginAudit, setLoginAudit] = useState<{ panel: PanelLoginEntry[]; ssh: SshLoginEntry[] }>({ panel: [], ssh: [] });
 
   // Security Hardening state (consolidated from SecurityHardening.tsx)
-  const [lockdown, setLockdown] = useState<{ active: boolean; triggered_by?: string; triggered_at?: string; reason?: string } | null>(null);
-  const [auditLog, setAuditLog] = useState<any[]>([]);
-  const [recordings, setRecordings] = useState<any[]>([]);
-  const [pendingUsers, setPendingUsers] = useState<any[]>([]);
+  const [lockdown, setLockdown] = useState<LockdownStatus | null>(null);
+  const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([]);
+  const [recordings, setRecordings] = useState<RecordingEntry[]>([]);
+  const [pendingUsers, setPendingUsers] = useState<PendingUser[]>([]);
   const [selectedJail, setSelectedJail] = useState<string | null>(null);
   const [bannedIps, setBannedIps] = useState<string[]>([]);
   const [banIp, setBanIp] = useState("");
   const [banJail, setBanJail] = useState("");
   const [panelJail, setPanelJail] = useState(false);
-  const [pendingConfirm, setPendingConfirm] = useState<{ type: string; label: string; data?: any } | null>(null);
+  const [pendingConfirm, setPendingConfirm] = useState<{ type: string; label: string; data?: Record<string, unknown> } | null>(null);
   const [showPortInput, setShowPortInput] = useState(false);
   const [portValue, setPortValue] = useState("");
 
@@ -117,10 +160,10 @@ export default function Security() {
       setScans(sc || []);
       api.get<{ active: boolean }>("/security/panel-jail/status").then(d => setPanelJail(d.active)).catch(() => {});
       // Load hardening data (consolidated from SecurityHardening.tsx)
-      api.get<any>("/security/lockdown").then(setLockdown).catch(() => {});
-      api.get<any[]>("/security/audit-log?limit=50").then(setAuditLog).catch(() => {});
-      api.get<{ recordings: any[] }>("/security/recordings").then(d => setRecordings(d.recordings || [])).catch(() => {});
-      api.get<any[]>("/security/pending-users").then(setPendingUsers).catch(() => {});
+      api.get<LockdownStatus>("/security/lockdown").then(setLockdown).catch(() => {});
+      api.get<AuditLogEntry[]>("/security/audit-log?limit=50").then(setAuditLog).catch(() => {});
+      api.get<{ recordings: RecordingEntry[] }>("/security/recordings").then(d => setRecordings(d.recordings || [])).catch(() => {});
+      api.get<PendingUser[]>("/security/pending-users").then(setPendingUsers).catch(() => {});
     } finally {
       setLoading(false);
     }
@@ -136,14 +179,14 @@ export default function Security() {
 
   const loadLoginAudit = async () => {
     try {
-      const data = await api.get<{ panel: any[]; ssh: any[] }>("/security/login-audit");
+      const data = await api.get<{ panel: PanelLoginEntry[]; ssh: SshLoginEntry[] }>("/security/login-audit");
       setLoginAudit(data);
     } catch {}
   };
 
   const executeConfirm = async () => {
     if (!pendingConfirm) return;
-    const { type, data } = pendingConfirm;
+    const { type, data = {} } = pendingConfirm;
     setPendingConfirm(null);
     try {
       switch (type) {
@@ -168,7 +211,7 @@ export default function Security() {
         case "unban": {
           await api.post("/security/fail2ban/unban", { jail: data.jail, ip: data.ip });
           setMessage({ text: `${data.ip} unbanned from ${data.jail}`, type: "success" });
-          loadBannedIps(data.jail);
+          loadBannedIps(String(data.jail));
           loadData();
           break;
         }
@@ -176,7 +219,7 @@ export default function Security() {
           await api.post("/security/fail2ban/ban", { jail: data.jail, ip: data.ip });
           setMessage({ text: `${data.ip} banned in ${data.jail}`, type: "success" });
           setBanIp("");
-          if (selectedJail === data.jail) loadBannedIps(data.jail);
+          if (selectedJail === data.jail) loadBannedIps(String(data.jail));
           loadData();
           break;
         }
@@ -211,8 +254,8 @@ export default function Security() {
           break;
         }
       }
-    } catch (e: any) {
-      setMessage({ text: e instanceof Error ? e.message : e.message || "Action failed", type: "error" });
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : "Action failed", type: "error" });
     }
   };
 
@@ -1053,7 +1096,7 @@ export default function Security() {
                   <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Status</th>
                 </tr></thead>
                 <tbody className="divide-y divide-dark-600">
-                  {loginAudit.ssh.map((e: any, i: number) => (
+                  {loginAudit.ssh.map((e, i) => (
                     <tr key={i} className="table-row-hover">
                       <td className="px-5 py-2 text-xs text-dark-200 font-mono">{e.time}</td>
                       <td className="px-5 py-2 text-sm text-dark-50 font-mono">{e.user}</td>
@@ -1085,7 +1128,7 @@ export default function Security() {
                   <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Status</th>
                 </tr></thead>
                 <tbody className="divide-y divide-dark-600">
-                  {loginAudit.panel.map((e: any, i: number) => (
+                  {loginAudit.panel.map((e, i) => (
                     <tr key={i} className="table-row-hover">
                       <td className="px-5 py-2 text-xs text-dark-200 font-mono">{new Date(e.time).toLocaleString()}</td>
                       <td className="px-5 py-2 text-sm text-dark-50">{e.action}</td>
@@ -1225,7 +1268,7 @@ export default function Security() {
               </div>
               <div className="flex gap-2">
                 {lockdown?.active ? (
-                  <button onClick={async () => { try { await api.post("/security/lockdown/deactivate", {}); setMessage({ text: "Lockdown deactivated", type: "success" }); loadData(); } catch (e: any) { setMessage({ text: e.message, type: "error" }); }}}
+                  <button onClick={async () => { try { await api.post("/security/lockdown/deactivate", {}); setMessage({ text: "Lockdown deactivated", type: "success" }); loadData(); } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }}}
                     className="px-4 py-2 text-sm font-mono bg-green-600 hover:bg-green-700 text-white rounded-lg">Unlock System</button>
                 ) : (
                   <button onClick={() => setPendingConfirm({ type: "lockdown", label: "Activate lockdown? All non-admin access will be blocked." })}
@@ -1233,7 +1276,7 @@ export default function Security() {
                 )}
                 <button onClick={() => setPendingConfirm({ type: "panic", label: "EMERGENCY: Kill all terminals, block non-admins, disable registration?" })}
                   className="px-3 py-2 text-sm font-mono bg-red-600 hover:bg-red-700 text-white rounded-lg">Panic Button</button>
-                <button onClick={async () => { try { const r = await api.post<{ snapshot_dir: string }>("/security/forensic-snapshot", {}); setMessage({ text: `Snapshot saved: ${r.snapshot_dir}`, type: "success" }); } catch (e: any) { setMessage({ text: e.message, type: "error" }); }}}
+                <button onClick={async () => { try { const r = await api.post<{ snapshot_dir: string }>("/security/forensic-snapshot", {}); setMessage({ text: `Snapshot saved: ${r.snapshot_dir}`, type: "success" }); } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }}}
                   className="px-3 py-2 text-sm font-mono bg-dark-700 hover:bg-dark-600 text-dark-200 rounded-lg border border-dark-500">Forensic Snapshot</button>
               </div>
             </div>
@@ -1254,7 +1297,7 @@ export default function Security() {
                   <th className="px-4 py-2">Severity</th><th className="px-4 py-2">Event</th><th className="px-4 py-2">Actor</th><th className="px-4 py-2">IP</th><th className="px-4 py-2">Location</th><th className="px-4 py-2">Time</th>
                 </tr></thead>
                 <tbody>
-                  {auditLog.map((e: any) => (
+                  {auditLog.map((e) => (
                     <tr key={e.id} className="border-b border-dark-700 hover:bg-dark-750">
                       <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase ${e.severity === "critical" ? "text-red-400 bg-red-500/10" : e.severity === "warning" ? "text-yellow-400 bg-yellow-500/10" : "text-blue-400 bg-blue-500/10"}`}>{e.severity}</span></td>
                       <td className="px-4 py-2 font-mono text-dark-200">{e.event_type}</td>
@@ -1284,7 +1327,7 @@ export default function Security() {
               <th className="px-4 py-2">Filename</th><th className="px-4 py-2">Size</th><th className="px-4 py-2">Created</th>
             </tr></thead>
             <tbody>
-              {recordings.map((r: any, i: number) => (
+              {recordings.map((r, i) => (
                 <tr key={i} className="border-b border-dark-700 hover:bg-dark-750">
                   <td className="px-4 py-2 font-mono text-dark-200">{r.filename}</td>
                   <td className="px-4 py-2 text-dark-400">{(r.size_bytes / 1024).toFixed(1)} KB</td>
@@ -1307,12 +1350,12 @@ export default function Security() {
                 <th className="px-4 py-2">Email</th><th className="px-4 py-2">Registered</th><th className="px-4 py-2">Actions</th>
               </tr></thead>
               <tbody>
-                {pendingUsers.map((u: any) => (
+                {pendingUsers.map((u) => (
                   <tr key={u.id} className="border-b border-dark-700">
                     <td className="px-4 py-2 text-dark-200">{u.email}</td>
                     <td className="px-4 py-2 text-dark-400 text-xs">{new Date(u.created_at).toLocaleString()}</td>
                     <td className="px-4 py-2">
-                      <button onClick={async () => { try { await api.post(`/security/users/${u.id}/approve`, {}); setMessage({ text: "User approved", type: "success" }); loadData(); } catch (e: any) { setMessage({ text: e.message, type: "error" }); }}}
+                      <button onClick={async () => { try { await api.post(`/security/users/${u.id}/approve`, {}); setMessage({ text: "User approved", type: "success" }); loadData(); } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }}}
                         className="px-3 py-1 text-xs font-mono bg-green-600 hover:bg-green-700 text-white rounded">Approve</button>
                     </td>
                   </tr>

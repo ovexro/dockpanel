@@ -51,6 +51,54 @@ interface QueueItem {
   status: string;
 }
 
+interface MailBackup {
+  file: string;
+  email: string;
+  size: number;
+}
+
+interface DnsCheckItem {
+  status: string;
+  type: string;
+  expected?: string;
+  actual?: string;
+}
+
+interface MailLogStats {
+  sent: number;
+  received: number;
+  bounced: number;
+  rejected: number;
+}
+
+interface MailLogEntry {
+  time: string;
+  message: string;
+  level?: string;
+  from?: string;
+  to?: string;
+  status?: string;
+  message_id?: string;
+}
+
+interface MailLogs {
+  stats: MailLogStats;
+  recent: MailLogEntry[];
+}
+
+interface StorageAccount {
+  email: string;
+  bytes: number;
+  mb: number;
+}
+
+interface TlsStatus {
+  inbound_tls: string;
+  outbound_tls: string;
+  inbound_enforced: boolean;
+  outbound_enforced: boolean;
+}
+
 export default function Mail() {
   const { user } = useAuth();
   if (!user || user.role !== "admin") return <Navigate to="/" replace />;
@@ -115,15 +163,15 @@ export default function Mail() {
   const [tls, setTls] = useState<{ inbound_tls: string; outbound_tls: string; inbound_enforced: boolean; outbound_enforced: boolean } | null>(null);
 
   // Mailbox backups
-  const [backups, setBackups] = useState<any[]>([]);
+  const [backups, setBackups] = useState<MailBackup[]>([]);
   const [backingUp, setBackingUp] = useState<string | null>(null);
 
   // DNS verification
-  const [dnsCheck, setDnsCheck] = useState<{ checks: any[]; all_pass: boolean } | null>(null);
+  const [dnsCheck, setDnsCheck] = useState<{ checks: DnsCheckItem[]; all_pass: boolean } | null>(null);
   const [checkingDns, setCheckingDns] = useState(false);
 
   // Mail logs
-  const [mailLogs, setMailLogs] = useState<{ stats: any; recent: any[] } | null>(null);
+  const [mailLogs, setMailLogs] = useState<MailLogs | null>(null);
 
   // Storage usage
   const [storage, setStorage] = useState<Record<string, { bytes: number; mb: number }>>({});
@@ -132,7 +180,7 @@ export default function Mail() {
   const [showBulkImport, setShowBulkImport] = useState(false);
   const [bulkImportText, setBulkImportText] = useState("");
   const [importing, setImporting] = useState(false);
-  const [pendingConfirm, setPendingConfirm] = useState<{ type: string; label: string; data?: any } | null>(null);
+  const [pendingConfirm, setPendingConfirm] = useState<{ type: string; label: string; data?: Record<string, unknown> } | null>(null);
 
   const loadMailStatus = async () => {
     try {
@@ -187,20 +235,20 @@ export default function Mail() {
   };
 
   const loadMailLogs = async () => {
-    try { const data = await api.get<any>("/mail/logs"); setMailLogs(data); }
+    try { const data = await api.get<MailLogs>("/mail/logs"); setMailLogs(data); }
     catch { setMailLogs(null); }
   };
 
   const loadStorage = () => {
-    api.get<{ accounts: any[] }>("/mail/storage").then(d => {
-      const map: Record<string, any> = {};
-      d.accounts.forEach((a: any) => { map[a.email] = { bytes: a.bytes, mb: a.mb }; });
+    api.get<{ accounts: StorageAccount[] }>("/mail/storage").then(d => {
+      const map: Record<string, { bytes: number; mb: number }> = {};
+      d.accounts.forEach((a) => { map[a.email] = { bytes: a.bytes, mb: a.mb }; });
       setStorage(map);
     }).catch(() => {});
   };
 
   const loadBackups = async () => {
-    try { const data = await api.get<{ backups: any[] }>("/mail/backups"); setBackups(data.backups); }
+    try { const data = await api.get<{ backups: MailBackup[] }>("/mail/backups"); setBackups(data.backups); }
     catch { setBackups([]); }
   };
 
@@ -212,7 +260,7 @@ export default function Mail() {
     api.get<{ installed: boolean; running: boolean; port: number }>("/mail/webmail/status").then(setWebmail).catch(() => {});
     api.get<{ configured: boolean; relayhost: string }>("/mail/relay/status").then(setRelay).catch(() => {});
     api.get<{ configured: boolean; rate: string }>("/mail/rate-limit/status").then(setRateLimit).catch(() => {});
-    api.get<any>("/mail/tls/status").then(setTls).catch(() => {});
+    api.get<TlsStatus>("/mail/tls/status").then(setTls).catch(() => {});
     loadBackups();
   }, []);
   useEffect(() => { if (tab === "queue") loadQueue(); }, [tab]);
@@ -331,21 +379,26 @@ export default function Mail() {
     try {
       switch (type) {
         case "delete_domain": {
-          await api.delete(`/mail/domains/${data.id}`);
-          if (selectedDomain?.id === data.id) { setSelectedDomain(null); setAccounts([]); setAliases([]); }
+          const id = data?.id as string;
+          await api.delete(`/mail/domains/${id}`);
+          if (selectedDomain?.id === id) { setSelectedDomain(null); setAccounts([]); setAliases([]); }
           loadDomains();
           setMessage({ text: "Domain removed", type: "success" });
           break;
         }
         case "delete_account": {
-          await api.delete(`/mail/domains/${data.domainId}/accounts/${data.accountId}`);
-          loadDomainData(data.domainId);
+          const domainId = data?.domainId as string;
+          const accountId = data?.accountId as string;
+          await api.delete(`/mail/domains/${domainId}/accounts/${accountId}`);
+          loadDomainData(domainId);
           setMessage({ text: "Mailbox deleted", type: "success" });
           break;
         }
         case "delete_alias": {
-          await api.delete(`/mail/domains/${data.domainId}/aliases/${data.aliasId}`);
-          loadDomainData(data.domainId);
+          const domainId = data?.domainId as string;
+          const aliasId = data?.aliasId as string;
+          await api.delete(`/mail/domains/${domainId}/aliases/${aliasId}`);
+          loadDomainData(domainId);
           break;
         }
         case "remove_webmail": {
@@ -355,18 +408,18 @@ export default function Mail() {
           break;
         }
         case "restore_backup": {
-          await api.post("/mail/restore", { email: data.email, file: data.file });
+          await api.post("/mail/restore", { email: data?.email as string, file: data?.file as string });
           setMessage({ text: "Mailbox restored", type: "success" });
           break;
         }
         case "delete_backup": {
-          await api.post("/mail/backups/delete", { file: data.file });
+          await api.post("/mail/backups/delete", { file: data?.file as string });
           loadBackups();
           break;
         }
       }
-    } catch (e: any) {
-      setMessage({ text: e instanceof Error ? e.message : e.message || "Action failed", type: "error" });
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : "Action failed", type: "error" });
     }
   };
 
@@ -964,7 +1017,7 @@ export default function Mail() {
                           <h4 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Mailbox Backups</h4>
                         </div>
                         <div className="divide-y divide-dark-600">
-                          {backups.map((b: any) => (
+                          {backups.map((b) => (
                             <div key={b.file} className="px-4 py-2 flex items-center justify-between text-xs">
                               <div>
                                 <span className="text-dark-100 font-mono">{b.email}</span>
@@ -1064,7 +1117,7 @@ export default function Mail() {
                         if (!selectedDomain) return;
                         setCheckingDns(true);
                         try {
-                          const data = await api.get<any>(`/mail/domains/${selectedDomain.id}/dns-check`);
+                          const data = await api.get<{ checks: DnsCheckItem[]; all_pass: boolean }>(`/mail/domains/${selectedDomain.id}/dns-check`);
                           setDnsCheck(data);
                         } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Check failed", type: "error" }); }
                         finally { setCheckingDns(false); }
@@ -1076,9 +1129,9 @@ export default function Mail() {
                     {dnsCheck && (
                       <div className="mb-4 bg-dark-900 border border-dark-500 p-4 space-y-2">
                         <p className={`text-sm font-medium ${dnsCheck.all_pass ? "text-rust-400" : "text-warn-400"}`}>
-                          {dnsCheck.all_pass ? "All DNS records verified" : `${dnsCheck.checks.filter((c: any) => c.status === "pass").length}/${dnsCheck.checks.length} records verified`}
+                          {dnsCheck.all_pass ? "All DNS records verified" : `${dnsCheck.checks.filter((c) => c.status === "pass").length}/${dnsCheck.checks.length} records verified`}
                         </p>
-                        {dnsCheck.checks.map((c: any, i: number) => (
+                        {dnsCheck.checks.map((c, i) => (
                           <div key={i} className="flex items-center gap-3 text-sm">
                             <div className={`w-2.5 h-2.5 rounded-full ${c.status === "pass" ? "bg-rust-500" : "bg-danger-400"}`} />
                             <span className="font-mono text-dark-100 w-16">{c.type}</span>
@@ -1177,7 +1230,7 @@ export default function Mail() {
                             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Recent Activity</h3>
                           </div>
                           <div className="divide-y divide-dark-600 max-h-96 overflow-y-auto">
-                            {mailLogs.recent.map((entry: any, i: number) => (
+                            {mailLogs.recent.map((entry, i) => (
                               <div key={i} className="px-5 py-2 flex items-start gap-3">
                                 <span className="text-xs text-dark-300 font-mono shrink-0 mt-0.5">{entry.time}</span>
                                 <span className={`text-xs font-mono break-all ${entry.level === "error" ? "text-danger-400" : "text-dark-200"}`}>{entry.message}</span>
