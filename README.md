@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>The most feature-packed free server panel ever built.</strong><br>
-  Self-hosted. Docker-native. Written in Rust. ~57MB RAM. 733 API endpoints. 151 app templates. 476 E2E tests. ~41MB binaries. Zero subscriptions.
+  Self-hosted. Docker-native. Written in Rust. ~57MB RAM. 733 API endpoints. 151 app templates. 425 E2E tests. ~41MB binaries. Zero subscriptions.
 </p>
 
 <p align="center">

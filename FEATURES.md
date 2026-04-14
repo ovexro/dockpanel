@@ -179,7 +179,7 @@
 | Total RAM | ~57 MB | 2026-03-19 |
 | App templates | 151 (14 categories) | 2026-03-28 |
 | API endpoints | 733 (465 backend + 268 agent) | 2026-03-31 |
-| E2E tests | 476 (8 test suites) | 2026-03-31 |
-| Frontend pages | 50 | 2026-03-28 |
+| E2E tests | 425 (8 test suites) | 2026-04-14 |
+| Frontend pages | 51 | 2026-04-14 |
 | DB migrations | 81 | 2026-03-31 |
 | Background services | 11 | 2026-03-22 |

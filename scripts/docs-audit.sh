@@ -18,11 +18,13 @@ echo ""
 # Template count (from agent docker_apps.rs id: definitions)
 ACTUAL_TEMPLATES=$(grep -c 'id: "' panel/agent/src/services/docker_apps.rs 2>/dev/null || echo "?")
 
-# E2E test assertions (across all test files)
-ACTUAL_E2E=$(grep -cE '^\s*(assert|check|test_|expect)' tests/*.sh 2>/dev/null | awk -F: '{s+=$2} END {print s}')
+# E2E test assertions (across all test files — invocations of test_api, test_it, ok, check, assert, etc.)
+ACTUAL_E2E=$(grep -chE '^\s*(test_api|test_contains|test_it|ok|fail|check|assert|expect|skip)\s+' tests/*.sh 2>/dev/null | awk '{s+=$1} END {print s}')
 
-# API endpoint count (async handler functions in backend routes)
-ACTUAL_ENDPOINTS=$(grep -cE 'async fn ' panel/backend/src/routes/*.rs 2>/dev/null | awk -F: '{s+=$2} END {print s}')
+# API endpoint count (.route() registrations in backend + agent)
+ACTUAL_ENDPOINTS_BACKEND=$(grep -rcE '\.route\(' panel/backend/src/ 2>/dev/null | awk -F: '{s+=$2} END {print s}')
+ACTUAL_ENDPOINTS_AGENT=$(grep -rcE '\.route\(' panel/agent/src/ 2>/dev/null | awk -F: '{s+=$2} END {print s}')
+ACTUAL_ENDPOINTS=$((ACTUAL_ENDPOINTS_BACKEND + ACTUAL_ENDPOINTS_AGENT))
 
 # Frontend page count
 ACTUAL_PAGES=$(ls panel/frontend/src/pages/*.tsx 2>/dev/null | wc -l)
