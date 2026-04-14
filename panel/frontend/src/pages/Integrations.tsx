@@ -64,12 +64,25 @@ function WhmcsContent() {
     setSaving(false);
   };
 
-  if (loading) return <p className="text-dark-400 text-sm">Loading...</p>;
+  if (loading) return (
+    <div className="space-y-4 animate-pulse">
+      <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
+        <div className="h-4 bg-dark-700 rounded w-40 mb-4" />
+        <div className="space-y-3">
+          <div className="h-9 bg-dark-700 rounded" />
+          <div className="grid grid-cols-2 gap-3">
+            <div className="h-9 bg-dark-700 rounded" />
+            <div className="h-9 bg-dark-700 rounded" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div className="space-y-4">
       {msg.text && (
-        <div className={`px-4 py-3 rounded-lg text-sm border ${msg.type === "success" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-danger-500/10 text-danger-400 border-danger-500/20"}`}>
+        <div className={`px-4 py-3 rounded-lg text-sm border ${msg.type === "success" ? "bg-rust-500/10 text-rust-400 border-rust-500/20" : "bg-danger-500/10 text-danger-400 border-danger-500/20"}`}>
           {msg.text}
         </div>
       )}
@@ -120,7 +133,7 @@ function WhmcsContent() {
                 <tr key={s.whmcs_service_id} className="border-b border-dark-700">
                   <td className="px-4 py-2 text-dark-200">#{s.whmcs_service_id}</td>
                   <td className="px-4 py-2 text-dark-200">{s.plan}</td>
-                  <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded text-xs ${s.status === "active" ? "bg-emerald-500/20 text-emerald-400" : "bg-warn-500/20 text-warn-400"}`}>{s.status}</span></td>
+                  <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded text-xs ${s.status === "active" ? "bg-rust-500/20 text-rust-400" : "bg-warn-500/20 text-warn-400"}`}>{s.status}</span></td>
                 </tr>
               ))}
             </tbody>
@@ -147,7 +160,12 @@ function MigrationsContent() {
       <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
         <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-3">App Migrations</h3>
         <p className="text-sm text-dark-200 mb-4">Migrate Docker containers between servers. Start migrations from the Apps page on a specific server.</p>
-        {loading ? <p className="text-dark-400 text-sm">Loading...</p> : migrations.length === 0 ? (
+        {loading ? (
+          <div className="animate-pulse space-y-2">
+            <div className="h-8 bg-dark-700 rounded" />
+            <div className="h-8 bg-dark-700 rounded" />
+          </div>
+        ) : migrations.length === 0 ? (
           <p className="text-dark-400 text-sm">No migrations yet.</p>
         ) : (
           <table className="w-full text-sm">
@@ -160,7 +178,7 @@ function MigrationsContent() {
               {migrations.map((m) => (
                 <tr key={m.id} className="border-b border-dark-700">
                   <td className="px-4 py-2 text-dark-200">{m.container_name}</td>
-                  <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded text-xs ${m.status === "completed" ? "bg-emerald-500/20 text-emerald-400" : m.status === "failed" ? "bg-danger-500/20 text-danger-400" : "bg-accent-500/20 text-accent-400"}`}>{m.status}</span></td>
+                  <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded text-xs ${m.status === "completed" ? "bg-rust-500/20 text-rust-400" : m.status === "failed" ? "bg-danger-500/20 text-danger-400" : "bg-accent-500/20 text-accent-400"}`}>{m.status}</span></td>
                   <td className="px-4 py-2 text-dark-300">{m.progress_pct}%</td>
                 </tr>
               ))}

@@ -226,6 +226,7 @@ export default function Settings() {
           if (!data) break;
           await api.delete(`/backup-destinations/${data.id}`);
           loadDestinations();
+          setMessage({ text: "Destination removed", type: "success" });
           break;
         }
         case "revoke_sessions": {
@@ -238,6 +239,7 @@ export default function Settings() {
           if (!data) break;
           await api.delete(`/api-keys/${data.id}`);
           setApiKeys(apiKeys.filter((a) => a.id !== data.id));
+          setMessage({ text: "API key revoked", type: "success" });
           break;
         }
       }
@@ -1858,7 +1860,8 @@ export default function Settings() {
                   try {
                     await api.put("/settings", { security_lockdown_threshold: e.target.value });
                     setSettings(prev => ({ ...prev, security_lockdown_threshold: e.target.value }));
-                  } catch {}
+                    setMessage({ text: "Threshold updated", type: "success" });
+                  } catch (err) { setMessage({ text: err instanceof Error ? err.message : "Failed to save", type: "error" }); }
                 }}
                 className="w-16 px-2 py-1 border border-dark-500 rounded text-sm text-center focus:ring-2 focus:ring-accent-500 outline-none bg-dark-700"
               />
@@ -2454,13 +2457,19 @@ function SSHKeys() {
       </div>
       <div className="p-5 space-y-3">
         {msg.text && <div className={`px-3 py-2 rounded text-xs ${msg.type === "success" ? "bg-rust-500/10 text-rust-400" : "bg-danger-500/10 text-danger-400"}`}>{msg.text}</div>}
+        {keys.length === 0 && (
+          <p className="text-xs text-dark-400 text-center py-2">No SSH keys configured</p>
+        )}
         {keys.map((k) => (
           <div key={k.fingerprint} className="flex items-center justify-between bg-dark-900 border border-dark-500 px-4 py-2">
             <div className="min-w-0">
               <span className="text-xs text-dark-50 font-mono block truncate">{k.comment || k.key}</span>
               <span className="text-[10px] text-dark-300 font-mono">{k.fingerprint}</span>
             </div>
-            <button onClick={async () => { await api.delete(`/ssh-keys/${encodeURIComponent(k.fingerprint)}`); setKeys(keys.filter(x => x.fingerprint !== k.fingerprint)); }} className="p-1 text-dark-300 hover:text-danger-400 shrink-0 ml-2">
+            <button onClick={async () => {
+              try { await api.delete(`/ssh-keys/${encodeURIComponent(k.fingerprint)}`); setKeys(keys.filter(x => x.fingerprint !== k.fingerprint)); setMsg({ text: "Key removed", type: "success" }); }
+              catch (e) { setMsg({ text: e instanceof Error ? e.message : "Failed to remove key", type: "error" }); }
+            }} className="p-1 text-dark-300 hover:text-danger-400 shrink-0 ml-2">
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
           </div>
@@ -2497,7 +2506,7 @@ function AutoUpdates() {
     try {
       await api.post(status.enabled ? "/auto-updates/disable" : "/auto-updates/enable", {});
       setStatus({ ...status, installed: true, enabled: !status.enabled });
-    } catch { /* ignore */ }
+    } catch { /* toggle failed — state not changed */ }
     finally { setToggling(false); }
   };
 
@@ -2552,6 +2561,9 @@ function IPWhitelist() {
       </div>
       <div className="p-5 space-y-3">
         {msg.text && <div className={`px-3 py-2 rounded text-xs ${msg.type === "success" ? "bg-rust-500/10 text-rust-400" : "bg-danger-500/10 text-danger-400"}`}>{msg.text}</div>}
+        {ips.length === 0 && (
+          <p className="text-xs text-dark-400 text-center py-2">No IP whitelist — all IPs can access the panel</p>
+        )}
         {ips.map((ip, i) => (
           <div key={i} className="flex items-center justify-between bg-dark-900 border border-dark-500 px-3 py-1.5">
             <span className="text-xs text-dark-50 font-mono">{ip}</span>

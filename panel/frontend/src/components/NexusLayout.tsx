@@ -161,6 +161,11 @@ export default function NexusLayout() {
                       {state.firingCount}
                     </span>
                   )}
+                  {item.to === "/incidents" && state.incidentCount > 0 && (
+                    <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-warn-500 text-white rounded-full min-w-[20px] text-center">
+                      {state.incidentCount}
+                    </span>
+                  )}
                 </>
               )}
             </NavLink>

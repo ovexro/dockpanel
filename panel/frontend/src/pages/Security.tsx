@@ -508,7 +508,7 @@ export default function Security() {
             tab === "lockdown" ? "bg-dark-800 text-dark-50 shadow-sm" : "text-dark-200 hover:text-dark-100"
           }`}
         >
-          {lockdown?.active ? "🔒 Lockdown" : "Lockdown"}
+          {lockdown?.active ? "Lockdown (Active)" : "Lockdown"}
         </button>
         <button
           onClick={() => setTab("recordings")}
@@ -725,6 +725,11 @@ export default function Security() {
                   {panelJail && <p className="text-xs text-dark-300 mt-1">Bans IPs after 5 failed logins</p>}
                 </div>
               </>
+            )}
+            {!posture && !overview && (
+              <div className="col-span-full text-center py-8">
+                <p className="text-dark-300 text-sm">Unable to load security overview. Check that the agent is running.</p>
+              </div>
             )}
           </div>
 
@@ -1255,7 +1260,7 @@ export default function Security() {
       {/* Lockdown Tab (consolidated from SecurityHardening) */}
       {tab === "lockdown" && (
         <div className="space-y-4">
-          <div className={`bg-dark-800 rounded-lg border p-6 ${lockdown?.active ? "border-red-500/50" : "border-dark-500"}`}>
+          <div className={`bg-dark-800 rounded-lg border p-6 ${lockdown?.active ? "border-danger-500/50" : "border-dark-500"}`}>
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="text-dark-50 font-medium">System Lockdown</h3>
@@ -1264,18 +1269,18 @@ export default function Security() {
                     ? `Active since ${lockdown.triggered_at ? new Date(lockdown.triggered_at).toLocaleString() : "unknown"}`
                     : "System is operating normally"}
                 </p>
-                {lockdown?.reason && <p className="text-sm text-yellow-400 mt-1">{lockdown.reason}</p>}
+                {lockdown?.reason && <p className="text-sm text-warn-400 mt-1">{lockdown.reason}</p>}
               </div>
               <div className="flex gap-2">
                 {lockdown?.active ? (
                   <button onClick={async () => { try { await api.post("/security/lockdown/deactivate", {}); setMessage({ text: "Lockdown deactivated", type: "success" }); loadData(); } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }}}
-                    className="px-4 py-2 text-sm font-mono bg-green-600 hover:bg-green-700 text-white rounded-lg">Unlock System</button>
+                    className="px-4 py-2 text-sm font-mono bg-rust-500 hover:bg-rust-600 text-white rounded-lg">Unlock System</button>
                 ) : (
                   <button onClick={() => setPendingConfirm({ type: "lockdown", label: "Activate lockdown? All non-admin access will be blocked." })}
-                    className="px-4 py-2 text-sm font-mono bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg">Activate Lockdown</button>
+                    className="px-4 py-2 text-sm font-mono bg-warn-500 hover:bg-warn-600 text-white rounded-lg">Activate Lockdown</button>
                 )}
                 <button onClick={() => setPendingConfirm({ type: "panic", label: "EMERGENCY: Kill all terminals, block non-admins, disable registration?" })}
-                  className="px-3 py-2 text-sm font-mono bg-red-600 hover:bg-red-700 text-white rounded-lg">Panic Button</button>
+                  className="px-3 py-2 text-sm font-mono bg-danger-500 hover:bg-danger-600 text-white rounded-lg">Panic Button</button>
                 <button onClick={async () => { try { const r = await api.post<{ snapshot_dir: string }>("/security/forensic-snapshot", {}); setMessage({ text: `Snapshot saved: ${r.snapshot_dir}`, type: "success" }); } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }}}
                   className="px-3 py-2 text-sm font-mono bg-dark-700 hover:bg-dark-600 text-dark-200 rounded-lg border border-dark-500">Forensic Snapshot</button>
               </div>
@@ -1298,8 +1303,8 @@ export default function Security() {
                 </tr></thead>
                 <tbody>
                   {auditLog.map((e) => (
-                    <tr key={e.id} className="border-b border-dark-700 hover:bg-dark-750">
-                      <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase ${e.severity === "critical" ? "text-red-400 bg-red-500/10" : e.severity === "warning" ? "text-yellow-400 bg-yellow-500/10" : "text-blue-400 bg-blue-500/10"}`}>{e.severity}</span></td>
+                    <tr key={e.id} className="border-b border-dark-700 hover:bg-dark-700">
+                      <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase ${e.severity === "critical" ? "text-danger-400 bg-danger-500/10" : e.severity === "warning" ? "text-warn-400 bg-warn-500/10" : "text-accent-400 bg-accent-500/10"}`}>{e.severity}</span></td>
                       <td className="px-4 py-2 font-mono text-dark-200">{e.event_type}</td>
                       <td className="px-4 py-2 text-dark-300">{e.actor_email || "-"}</td>
                       <td className="px-4 py-2 text-dark-400 font-mono text-xs">{e.actor_ip || "-"}</td>
@@ -1328,7 +1333,7 @@ export default function Security() {
             </tr></thead>
             <tbody>
               {recordings.map((r, i) => (
-                <tr key={i} className="border-b border-dark-700 hover:bg-dark-750">
+                <tr key={i} className="border-b border-dark-700 hover:bg-dark-700">
                   <td className="px-4 py-2 font-mono text-dark-200">{r.filename}</td>
                   <td className="px-4 py-2 text-dark-400">{(r.size_bytes / 1024).toFixed(1)} KB</td>
                   <td className="px-4 py-2 text-dark-500 text-xs">{r.created || "-"}</td>
@@ -1356,7 +1361,7 @@ export default function Security() {
                     <td className="px-4 py-2 text-dark-400 text-xs">{new Date(u.created_at).toLocaleString()}</td>
                     <td className="px-4 py-2">
                       <button onClick={async () => { try { await api.post(`/security/users/${u.id}/approve`, {}); setMessage({ text: "User approved", type: "success" }); loadData(); } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }}}
-                        className="px-3 py-1 text-xs font-mono bg-green-600 hover:bg-green-700 text-white rounded">Approve</button>
+                        className="px-3 py-1 text-xs font-mono bg-rust-500 hover:bg-rust-600 text-white rounded">Approve</button>
                     </td>
                   </tr>
                 ))}

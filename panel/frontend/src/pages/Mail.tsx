@@ -399,6 +399,7 @@ export default function Mail() {
           const aliasId = data?.aliasId as string;
           await api.delete(`/mail/domains/${domainId}/aliases/${aliasId}`);
           loadDomainData(domainId);
+          setMessage({ text: "Alias deleted", type: "success" });
           break;
         }
         case "remove_webmail": {
@@ -415,6 +416,7 @@ export default function Mail() {
         case "delete_backup": {
           await api.post("/mail/backups/delete", { file: data?.file as string });
           loadBackups();
+          setMessage({ text: "Backup deleted", type: "success" });
           break;
         }
       }
@@ -1145,7 +1147,7 @@ export default function Mail() {
 
                     <p className="text-xs text-dark-200 mb-4">Add these records to your DNS provider for {selectedDomain.domain} to send and receive email properly.</p>
                     {dnsRecords.length === 0 ? (
-                      <p className="text-dark-300 text-sm text-center py-8">Loading DNS records...</p>
+                      <p className="text-dark-300 text-sm text-center py-8">No DNS records generated yet</p>
                     ) : (
                       <div className="space-y-3">
                         {dnsRecords.map((rec, i) => (
@@ -1178,7 +1180,10 @@ export default function Mail() {
                       <h3 className="text-xs text-dark-300 uppercase tracking-widest">Mail Queue</h3>
                       <div className="flex gap-2">
                         <button onClick={loadQueue} className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded-lg text-xs font-medium hover:bg-dark-600">Refresh</button>
-                        <button onClick={async () => { await api.post("/mail/queue/flush", {}); loadQueue(); setMessage({ text: "Queue flushed", type: "success" }); }} className="px-3 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600">Flush All</button>
+                        <button onClick={async () => {
+                          try { await api.post("/mail/queue/flush", {}); loadQueue(); setMessage({ text: "Queue flushed", type: "success" }); }
+                          catch (e) { setMessage({ text: e instanceof Error ? e.message : "Flush failed", type: "error" }); }
+                        }} className="px-3 py-1.5 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600">Flush All</button>
                       </div>
                     </div>
                     {queue.length === 0 ? (
@@ -1194,7 +1199,10 @@ export default function Mail() {
                               <span className="text-sm text-dark-50 font-mono block truncate">{item.sender} → {item.recipients}</span>
                               <span className="text-xs text-dark-300">{item.size} · {item.arrival_time} · {item.status}</span>
                             </div>
-                            <button onClick={async () => { await api.delete(`/mail/queue/${item.id}`); loadQueue(); }} className="p-1.5 text-dark-300 hover:text-danger-400 shrink-0 ml-2">
+                            <button onClick={async () => {
+                              try { await api.delete(`/mail/queue/${item.id}`); loadQueue(); setMessage({ text: "Message removed from queue", type: "success" }); }
+                              catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed to remove", type: "error" }); }
+                            }} className="p-1.5 text-dark-300 hover:text-danger-400 shrink-0 ml-2">
                               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" /></svg>
                             </button>
                           </div>
@@ -1210,6 +1218,24 @@ export default function Mail() {
                     <div className="flex justify-end">
                       <button onClick={loadMailLogs} className="px-3 py-1.5 bg-dark-700 text-dark-100 rounded text-xs font-medium hover:bg-dark-600">Refresh</button>
                     </div>
+                    {!mailLogs && (
+                      <div className="space-y-3 animate-pulse">
+                        <div className="grid grid-cols-4 gap-3">
+                          {[1,2,3,4].map(i => (
+                            <div key={i} className="bg-dark-800 rounded-lg border border-dark-500 p-4">
+                              <div className="h-3 bg-dark-700 rounded w-16 mx-auto mb-2" />
+                              <div className="h-7 bg-dark-700 rounded w-12 mx-auto" />
+                            </div>
+                          ))}
+                        </div>
+                        <div className="bg-dark-800 rounded-lg border border-dark-500 p-4">
+                          <div className="h-3 bg-dark-700 rounded w-32 mb-3" />
+                          <div className="space-y-2">
+                            {[1,2,3].map(i => <div key={i} className="h-4 bg-dark-700 rounded w-full" />)}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                     {mailLogs && (
                       <>
                         <div className="grid grid-cols-4 gap-3">

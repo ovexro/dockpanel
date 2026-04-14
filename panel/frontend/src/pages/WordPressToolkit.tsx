@@ -53,6 +53,7 @@ export default function WordPressToolkit() {
   const [checkingAll, setCheckingAll] = useState(false);
   const [hardening, setHardening] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
 
   // Fetch WP sites
   const fetchSites = useCallback(async () => {
@@ -81,6 +82,8 @@ export default function WordPressToolkit() {
         target,
       });
       await fetchSites();
+      setError("");
+      setSuccess(`Updated ${selected.size} site(s) successfully`);
       setSelected(new Set());
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Bulk update failed");
@@ -130,6 +133,7 @@ export default function WordPressToolkit() {
     setError("");
     try {
       await api.post(`/sites/${siteId}/wordpress/harden`, { fixes });
+      setSuccess("Hardening applied successfully");
       // Re-check after hardening
       await handleSecurityCheck(siteId);
     } catch (e) {
@@ -204,6 +208,17 @@ export default function WordPressToolkit() {
         </div>
       </div>
 
+      {/* Success */}
+      {success && (
+        <div className="mb-4 px-4 py-3 rounded-lg text-sm border bg-rust-500/10 text-rust-400 border-rust-500/20 flex items-center justify-between">
+          <span>{success}</span>
+          <button onClick={() => setSuccess("")} className="text-rust-400 hover:text-rust-300 ml-4">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      )}
       {/* Error */}
       {error && (
         <div className="mb-4 px-4 py-3 rounded-lg text-sm border bg-danger-500/10 text-danger-400 border-danger-500/20 flex items-center justify-between">

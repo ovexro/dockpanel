@@ -102,7 +102,11 @@ export default function Login() {
       .catch(() => {});
   }, []);
 
-  if (loading) return null;
+  if (loading) return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="w-6 h-6 border-2 border-dark-600 border-t-rust-500 rounded-full animate-spin" />
+    </div>
+  );
   if (user) return <Navigate to="/" replace />;
   if (needsSetup) return <Navigate to="/setup" replace />;
 

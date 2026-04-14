@@ -145,10 +145,13 @@ export default function IncidentManagement() {
     }
   };
 
+  const [pendingDelete, setPendingDelete] = useState<{ type: "incident" | "component"; id: string; label: string } | null>(null);
+
   const deleteIncident = async (id: string) => {
     try {
       await api.delete(`/incidents/${id}`);
       setIncidents(incidents.filter(i => i.id !== id));
+      setMessage({ text: "Incident deleted", type: "success" });
     } catch (e) {
       setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
     }
@@ -180,6 +183,7 @@ export default function IncidentManagement() {
     try {
       await api.delete(`/status-page/components/${id}`);
       setComponents(components.filter(c => c.id !== id));
+      setMessage({ text: "Component deleted", type: "success" });
     } catch (e) {
       setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
     }
@@ -217,9 +221,26 @@ export default function IncidentManagement() {
       </div>
 
       {message.text && (
-        <div className={`mb-4 px-4 py-3 rounded-lg text-sm border font-mono ${
+        <div className={`mb-4 px-4 py-3 rounded-lg text-sm border font-mono flex items-center justify-between ${
           message.type === "success" ? "bg-rust-500/10 text-rust-400 border-rust-500/20" : "bg-danger-500/10 text-danger-400 border-danger-500/20"
-        }`}>{message.text}</div>
+        }`}>
+          <span>{message.text}</span>
+          <button onClick={() => setMessage({ text: "", type: "" })} className="ml-2 hover:opacity-70">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>
+          </button>
+        </div>
+      )}
+
+      {pendingDelete && (
+        <div className="mb-4 px-4 py-3 rounded-lg border border-danger-500/30 bg-danger-500/5 flex items-center justify-between">
+          <span className="text-xs font-mono text-danger-400">{pendingDelete.label}</span>
+          <div className="flex items-center gap-2 shrink-0 ml-4">
+            <button onClick={() => { const { type, id } = pendingDelete; setPendingDelete(null); type === "incident" ? deleteIncident(id) : deleteComponent(id); }}
+              className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">Confirm</button>
+            <button onClick={() => setPendingDelete(null)}
+              className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
+          </div>
+        </div>
       )}
 
       <div className="flex gap-1 mb-6 border-b border-dark-600">
@@ -344,7 +365,7 @@ export default function IncidentManagement() {
                       className="px-3 py-1 bg-accent-500/10 text-accent-400 rounded-md text-xs font-medium font-mono hover:bg-accent-500/20">
                       Updates
                     </button>
-                    <button onClick={() => deleteIncident(inc.id)}
+                    <button onClick={() => setPendingDelete({ type: "incident", id: inc.id, label: `Delete incident "${inc.title}"?` })}
                       className="px-3 py-1 bg-danger-500/10 text-danger-400 rounded-md text-xs font-medium font-mono hover:bg-danger-500/20">
                       Delete
                     </button>
@@ -430,7 +451,7 @@ export default function IncidentManagement() {
                       <td className="px-5 py-4 text-sm text-dark-200 font-mono">{c.group_name || "-"}</td>
                       <td className="px-5 py-4 text-sm text-dark-200 font-mono">{c.monitor_ids?.length || 0} linked</td>
                       <td className="px-5 py-4">
-                        <button onClick={() => deleteComponent(c.id)}
+                        <button onClick={() => setPendingDelete({ type: "component", id: c.id, label: `Delete component "${c.name}"?` })}
                           className="px-3 py-1 bg-danger-500/10 text-danger-400 rounded-md text-xs font-medium font-mono hover:bg-danger-500/20">Delete</button>
                       </td>
                     </tr>
@@ -442,6 +463,11 @@ export default function IncidentManagement() {
         </div>
       )}
 
+      {tab === "settings" && !config && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 p-8 text-center">
+          <p className="text-dark-300 text-sm">Unable to load status page settings. Try refreshing.</p>
+        </div>
+      )}
       {tab === "settings" && config && (
         <div className="bg-dark-800 rounded-lg border border-dark-500 p-5 space-y-4">
           <div className="grid grid-cols-2 gap-3">

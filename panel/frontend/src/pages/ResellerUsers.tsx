@@ -102,7 +102,7 @@ export default function ResellerUsers() {
         <div className="px-4 py-3 bg-danger-500/10 border border-danger-500/30 rounded-lg text-sm text-danger-400">{error}</div>
       )}
       {success && (
-        <div className="px-4 py-3 bg-green-500/10 border border-green-500/30 rounded-lg text-sm text-green-400">{success}</div>
+        <div className="px-4 py-3 bg-rust-500/10 border border-rust-500/30 rounded-lg text-sm text-rust-400">{success}</div>
       )}
 
       {pendingDelete && (

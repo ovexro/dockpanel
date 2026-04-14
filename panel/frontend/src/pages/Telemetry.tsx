@@ -130,7 +130,7 @@ export default function Telemetry() {
       flash("Configuration saved", "success");
       loadConfig();
     } catch (e: unknown) {
-      flash((e as Error).message || "Failed to save", "error");
+      flash(e instanceof Error ? e.message : "Failed to save", "error");
     } finally {
       setSaving(false);
     }
@@ -143,7 +143,7 @@ export default function Telemetry() {
       flash("Telemetry events being sent", "success");
       setTimeout(loadEvents, 3000);
     } catch (e: unknown) {
-      flash((e as Error).message || "Failed to send", "error");
+      flash(e instanceof Error ? e.message : "Failed to send", "error");
     } finally {
       setSending(false);
     }
@@ -155,7 +155,7 @@ export default function Telemetry() {
       setPreviewData(data);
       setShowPreview(true);
     } catch (e: unknown) {
-      flash((e as Error).message || "Failed to generate preview", "error");
+      flash(e instanceof Error ? e.message : "Failed to generate preview", "error");
     }
   };
 
@@ -171,7 +171,7 @@ export default function Telemetry() {
       URL.revokeObjectURL(url);
       flash("Report exported", "success");
     } catch (e: unknown) {
-      flash((e as Error).message || "Failed to export", "error");
+      flash(e instanceof Error ? e.message : "Failed to export", "error");
     }
   };
 
@@ -192,7 +192,7 @@ export default function Telemetry() {
       loadEvents();
       loadStats();
     } catch (e: unknown) {
-      flash((e as Error).message || "Failed to clear", "error");
+      flash(e instanceof Error ? e.message : "Failed to clear", "error");
     } finally {
       setClearing(false);
     }
@@ -205,7 +205,7 @@ export default function Telemetry() {
       flash("Update check started", "success");
       setTimeout(loadConfig, 5000);
     } catch (e: unknown) {
-      flash((e as Error).message || "Failed to check", "error");
+      flash(e instanceof Error ? e.message : "Failed to check", "error");
     } finally {
       setChecking(false);
     }
@@ -227,7 +227,7 @@ export default function Telemetry() {
         <div>
           <h1 className="page-header-title">Telemetry & Updates</h1>
           <p className="text-xs text-dark-400 mt-0.5">
-            Diagnostic reporting and version management — v{config.current_version}
+            Diagnostic reporting and version management{config.current_version ? ` — v${config.current_version}` : ""}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -241,7 +241,7 @@ export default function Telemetry() {
       </div>
 
       {message.text && (
-        <div className={`mb-4 px-4 py-2.5 rounded-lg border text-sm ${message.type === "success" ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-red-500/10 border-red-500/20 text-red-400"}`}>
+        <div className={`mb-4 px-4 py-2.5 rounded-lg border text-sm ${message.type === "success" ? "bg-rust-500/10 border-rust-500/20 text-rust-400" : "bg-danger-500/10 border-danger-500/20 text-danger-400"}`}>
           {message.text}
         </div>
       )}

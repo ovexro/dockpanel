@@ -86,6 +86,7 @@ export default function Monitors() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [checks, setChecks] = useState<CheckRecord[]>([]);
   const [incidents, setIncidents] = useState<Incident[]>([]);
@@ -199,6 +200,7 @@ export default function Monitors() {
       setPrevAutoName("");
       setCustomHeaders([]);
       setShowHeaders(false);
+      setSuccess("Monitor created");
       fetchMonitors();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create monitor");
@@ -210,6 +212,7 @@ export default function Monitors() {
   const handleToggle = async (id: string, enabled: boolean) => {
     try {
       await api.put(`/monitors/${id}`, { enabled: !enabled });
+      setSuccess(!enabled ? "Monitor enabled" : "Monitor paused");
       fetchMonitors();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Toggle failed");
@@ -221,6 +224,7 @@ export default function Monitors() {
       await api.delete(`/monitors/${id}`);
       setDeleteTarget(null);
       if (expanded === id) setExpanded(null);
+      setSuccess("Monitor deleted");
       fetchMonitors();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Delete failed");
@@ -338,6 +342,12 @@ export default function Monitors() {
 
       <div className="p-6 lg:p-8">
 
+      {success && (
+        <div className="bg-rust-500/10 text-rust-400 text-sm px-4 py-3 rounded-lg border border-rust-500/20 mb-4">
+          {success}
+          <button onClick={() => setSuccess("")} className="ml-2 font-medium hover:underline">Dismiss</button>
+        </div>
+      )}
       {error && (
         <div className="bg-danger-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-danger-500/20 mb-4">
           {error}

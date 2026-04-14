@@ -150,7 +150,7 @@ export default function ContainerPolicies() {
       </div>
 
       {message.text && (
-        <div className={`px-4 py-3 rounded-lg text-sm border ${message.type === "success" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-danger-500/10 text-danger-400 border-danger-500/20"}`}>
+        <div className={`px-4 py-3 rounded-lg text-sm border ${message.type === "success" ? "bg-rust-500/10 text-rust-400 border-rust-500/20" : "bg-danger-500/10 text-danger-400 border-danger-500/20"}`}>
           {message.text}
         </div>
       )}

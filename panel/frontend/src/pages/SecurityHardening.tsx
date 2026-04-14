@@ -125,9 +125,9 @@ export default function SecurityHardening() {
   };
 
   const severityColor = (s: string) => {
-    if (s === "critical") return "text-red-400 bg-red-500/10";
-    if (s === "warning") return "text-yellow-400 bg-yellow-500/10";
-    return "text-blue-400 bg-blue-500/10";
+    if (s === "critical") return "text-danger-400 bg-danger-500/10";
+    if (s === "warning") return "text-warn-400 bg-warn-500/10";
+    return "text-accent-400 bg-accent-500/10";
   };
 
   const tabs: { key: Tab; label: string }[] = [
@@ -148,14 +148,14 @@ export default function SecurityHardening() {
           <button onClick={triggerSnapshot} className="px-3 py-1.5 text-xs font-mono bg-dark-700 hover:bg-dark-600 text-dark-200 rounded-lg border border-dark-500">
             Forensic Snapshot
           </button>
-          <button onClick={triggerPanic} className="px-3 py-1.5 text-xs font-mono bg-red-600 hover:bg-red-700 text-white rounded-lg">
+          <button onClick={triggerPanic} className="px-3 py-1.5 text-xs font-mono bg-danger-500 hover:bg-danger-600 text-white rounded-lg">
             Panic Button
           </button>
         </div>
       </div>
 
       {message.text && (
-        <div className={`mb-4 px-4 py-3 rounded-lg text-sm border ${message.type === "success" ? "bg-rust-500/10 text-rust-400 border-rust-500/20" : "bg-red-500/10 text-red-400 border-red-500/20"}`}>
+        <div className={`mb-4 px-4 py-3 rounded-lg text-sm border ${message.type === "success" ? "bg-rust-500/10 text-rust-400 border-rust-500/20" : "bg-danger-500/10 text-danger-400 border-danger-500/20"}`}>
           {message.text}
         </div>
       )}
@@ -195,7 +195,7 @@ export default function SecurityHardening() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
             <p className="text-xs font-mono text-dark-400 mb-2">Lockdown Status</p>
-            <div className={`text-lg font-bold ${lockdown?.active ? "text-red-400" : "text-green-400"}`}>
+            <div className={`text-lg font-bold ${lockdown?.active ? "text-danger-400" : "text-rust-400"}`}>
               {lockdown?.active ? "ACTIVE" : "Inactive"}
             </div>
             {lockdown?.active && <p className="text-xs text-dark-400 mt-1">{lockdown.reason}</p>}
@@ -210,7 +210,7 @@ export default function SecurityHardening() {
           </div>
           <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
             <p className="text-xs font-mono text-dark-400 mb-2">Pending Approvals</p>
-            <div className={`text-lg font-bold ${pendingUsers.length > 0 ? "text-yellow-400" : "text-dark-50"}`}>
+            <div className={`text-lg font-bold ${pendingUsers.length > 0 ? "text-warn-400" : "text-dark-50"}`}>
               {pendingUsers.length}
             </div>
           </div>
@@ -239,7 +239,7 @@ export default function SecurityHardening() {
       {/* Lockdown Tab */}
       {tab === "lockdown" && (
         <div className="space-y-4">
-          <div className={`bg-dark-800 rounded-lg border p-6 ${lockdown?.active ? "border-red-500/50" : "border-dark-500"}`}>
+          <div className={`bg-dark-800 rounded-lg border p-6 ${lockdown?.active ? "border-danger-500/50" : "border-dark-500"}`}>
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="text-dark-50 font-medium">System Lockdown</h3>
@@ -248,14 +248,14 @@ export default function SecurityHardening() {
                     ? `Lockdown active since ${lockdown.triggered_at ? new Date(lockdown.triggered_at).toLocaleString() : "unknown"}`
                     : "System is operating normally"}
                 </p>
-                {lockdown?.reason && <p className="text-sm text-yellow-400 mt-1">{lockdown.reason}</p>}
+                {lockdown?.reason && <p className="text-sm text-warn-400 mt-1">{lockdown.reason}</p>}
               </div>
               {lockdown?.active ? (
-                <button onClick={deactivateLockdown} className="px-4 py-2 text-sm font-mono bg-green-600 hover:bg-green-700 text-white rounded-lg">
+                <button onClick={deactivateLockdown} className="px-4 py-2 text-sm font-mono bg-rust-500 hover:bg-rust-600 text-white rounded-lg">
                   Unlock System
                 </button>
               ) : (
-                <button onClick={activateLockdown} className="px-4 py-2 text-sm font-mono bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg">
+                <button onClick={activateLockdown} className="px-4 py-2 text-sm font-mono bg-warn-500 hover:bg-warn-600 text-white rounded-lg">
                   Activate Lockdown
                 </button>
               )}
@@ -356,7 +356,7 @@ export default function SecurityHardening() {
                     <td className="px-4 py-2.5 text-dark-400 text-xs">{new Date(u.created_at).toLocaleString()}</td>
                     <td className="px-4 py-2.5">
                       <button onClick={() => approveUser(u.id)}
-                        className="px-3 py-1 text-xs font-mono bg-green-600 hover:bg-green-700 text-white rounded">
+                        className="px-3 py-1 text-xs font-mono bg-rust-500 hover:bg-rust-600 text-white rounded">
                         Approve
                       </button>
                     </td>
