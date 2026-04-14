@@ -46,6 +46,7 @@ export default function Extensions() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [testResult, setTestResult] = useState("");
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
   const [creating, setCreating] = useState(false);
   const [newKey, setNewKey] = useState<{ api_key: string; webhook_secret: string } | null>(null);
 
@@ -96,8 +97,14 @@ export default function Extensions() {
     }
   };
 
-  const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Delete extension "${name}"?`)) return;
+  const handleDelete = (id: string, name: string) => {
+    setPendingDelete({ id, name });
+  };
+
+  const executeDelete = async () => {
+    if (!pendingDelete) return;
+    const { id } = pendingDelete;
+    setPendingDelete(null);
     try {
       await api.delete(`/extensions/${id}`);
       await fetchExtensions();
@@ -153,6 +160,15 @@ export default function Extensions() {
       </div>
 
       {error && <div className="px-4 py-3 bg-danger-500/10 border border-danger-500/30 rounded-lg text-sm text-danger-400">{error}</div>}
+      {pendingDelete && (
+        <div className="border border-danger-500/30 bg-danger-500/5 rounded-lg px-4 py-3 flex items-center justify-between">
+          <span className="text-xs text-danger-400 font-mono">Delete extension "{pendingDelete.name}"?</span>
+          <div className="flex items-center gap-2 shrink-0 ml-4">
+            <button onClick={executeDelete} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">Confirm</button>
+            <button onClick={() => setPendingDelete(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
+          </div>
+        </div>
+      )}
       {testResult && <div className="px-4 py-3 bg-dark-700 border border-dark-500 rounded-lg text-sm text-dark-100">{testResult}</div>}
 
       {/* New key display */}

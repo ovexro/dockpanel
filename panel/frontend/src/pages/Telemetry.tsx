@@ -175,8 +175,15 @@ export default function Telemetry() {
     }
   };
 
+  const [pendingClear, setPendingClear] = useState<number | "all" | null>(null);
+
   const clearEvents = async (days?: number) => {
-    if (!confirm(days ? `Clear events older than ${days} days?` : "Clear ALL telemetry events?")) return;
+    setPendingClear(days ?? "all");
+  };
+
+  const executeClear = async () => {
+    const days = pendingClear === "all" ? undefined : (pendingClear ?? undefined);
+    setPendingClear(null);
     setClearing(true);
     try {
       const url = days ? `/telemetry/events?before_days=${days}` : "/telemetry/events";
@@ -325,6 +332,19 @@ export default function Telemetry() {
               Clear All
             </button>
           </div>
+
+          {/* Confirm clear bar */}
+          {pendingClear !== null && (
+            <div className="border border-danger-500/30 bg-danger-500/5 rounded-lg px-4 py-3 mb-4 flex items-center justify-between">
+              <span className="text-xs text-danger-400 font-mono">
+                {pendingClear === "all" ? "Clear ALL telemetry events?" : `Clear events older than ${pendingClear} days?`}
+              </span>
+              <div className="flex items-center gap-2 shrink-0 ml-4">
+                <button onClick={executeClear} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">Confirm</button>
+                <button onClick={() => setPendingClear(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
+              </div>
+            </div>
+          )}
 
           {/* Events table */}
           {events.length === 0 ? (

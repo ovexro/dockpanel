@@ -40,6 +40,7 @@ export default function Cdn() {
   const [stats, setStats] = useState<CdnStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState({ text: "", type: "" });
+  const [pendingDelete, setPendingDelete] = useState(false);
 
   // Add zone form
   const [showAddZone, setShowAddZone] = useState(false);
@@ -130,8 +131,14 @@ export default function Cdn() {
     }
   };
 
-  const handleDelete = async () => {
-    if (!selectedZone || !confirm(`Remove CDN zone for ${selectedZone.domain}?`)) return;
+  const handleDelete = () => {
+    if (!selectedZone) return;
+    setPendingDelete(true);
+  };
+
+  const executeDelete = async () => {
+    if (!selectedZone) return;
+    setPendingDelete(false);
     try {
       await api.delete(`/cdn/zones/${selectedZone.id}`);
       setSelectedZone(null);
@@ -234,6 +241,17 @@ export default function Cdn() {
             : "bg-danger-500/10 text-danger-400 border-danger-500/20"
         }`}>
           {message.text}
+        </div>
+      )}
+
+      {/* Confirm delete bar */}
+      {pendingDelete && selectedZone && (
+        <div className="border border-danger-500/30 bg-danger-500/5 rounded-lg px-4 py-3 flex items-center justify-between">
+          <span className="text-xs text-danger-400 font-mono">Remove CDN zone for {selectedZone.domain}?</span>
+          <div className="flex items-center gap-2 shrink-0 ml-4">
+            <button onClick={executeDelete} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">Confirm</button>
+            <button onClick={() => setPendingDelete(false)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
+          </div>
         </div>
       )}
 
