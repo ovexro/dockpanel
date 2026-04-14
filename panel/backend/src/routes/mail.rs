@@ -1618,10 +1618,10 @@ fn sha512_crypt(password: &str) -> String {
     use sha2::{Sha512, Digest};
     use rand::Rng;
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let salt: String = (0..16)
         .map(|_| {
-            let idx = rng.gen_range(0..64);
+            let idx = rng.random_range(0..64);
             b"./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"[idx] as char
         })
         .collect();

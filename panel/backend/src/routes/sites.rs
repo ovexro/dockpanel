@@ -654,8 +654,8 @@ pub async fn create(
                 let cms_user = body.admin_user.clone().unwrap_or_else(|| "admin".to_string());
                 let cms_pass = body.admin_password.clone().unwrap_or_else(|| {
                     use rand::Rng;
-                    let mut rng = rand::thread_rng();
-                    (0..16).map(|_| rng.sample(rand::distributions::Alphanumeric) as char).collect()
+                    let mut rng = rand::rng();
+                    (0..16).map(|_| rng.sample(rand::distr::Alphanumeric) as char).collect()
                 });
                 let cms_logs = logs.clone();
                 let cms_jwt_secret = state.config.jwt_secret.clone();
@@ -665,8 +665,8 @@ pub async fn create(
                     let db_user_name = db_name.clone();
                     let db_password: String = {
                         use rand::Rng;
-                        let mut rng = rand::thread_rng();
-                        (0..20).map(|_| rng.sample(rand::distributions::Alphanumeric) as char).collect()
+                        let mut rng = rand::rng();
+                        (0..20).map(|_| rng.sample(rand::distr::Alphanumeric) as char).collect()
                     };
 
                     // 1. Create database (if needed)

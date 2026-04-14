@@ -893,10 +893,10 @@ struct TwoFaClaims {
 /// Generate 10 recovery codes (8 chars each, hex).
 fn generate_recovery_codes() -> Vec<String> {
     use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (0..10)
         .map(|_| {
-            let bytes: [u8; 4] = rng.r#gen();
+            let bytes: [u8; 4] = rng.random();
             hex::encode(bytes)
         })
         .collect()
