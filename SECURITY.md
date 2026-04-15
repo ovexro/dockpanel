@@ -77,6 +77,7 @@ DockPanel is designed with defense in depth. Key security properties include:
 - **Terminal sandboxing** — Terminal sessions run with `PR_SET_NO_NEW_PRIVS`, restricted bash shells, and a command blocklist to prevent privilege escalation and dangerous operations.
 - **Per-image CVE scanning with deploy gating** — Optional but built-in. Every running Docker app can be scanned against Anchore's grype vulnerability database; a configurable soft deploy gate refuses new deploys on images exceeding a critical/high/medium threshold. Scanner binary is self-contained inside `/var/lib/dockpanel/scanners/` (not `/usr/local/bin`) so it lives entirely within the agent's hardened sandbox. Defaults off; admins opt in from Settings → Services.
 - **Signed releases + per-binary SBOM** (v2.7.10+) — Every binary and its accompanying SPDX SBOM is signed in CI using cosign keyless via Sigstore. No long-lived signing key exists; the cert is bound to the GitHub Actions OIDC identity of the release workflow and recorded in the public Rekor transparency log.
+- **Per-image SBOM generation** (v2.7.11+) — Optional but built-in. Operators can generate an SPDX 2.3 JSON SBOM for any deployed Docker app's image on demand (syft). The composition companion to per-image CVE scanning — useful for supply-chain audits and EU CRA compliance asks. Like grype, syft installs self-contained inside `/var/lib/dockpanel/scanners/`. Defaults off; admins opt in from Settings → Services.
 
 ## Verifying release signatures
 

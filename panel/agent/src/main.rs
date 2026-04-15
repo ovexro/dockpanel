@@ -141,6 +141,7 @@ async fn main() {
         .merge(routes::logs::router())
         .merge(routes::docker_apps::router())
         .merge(routes::image_scan::router())
+        .merge(routes::sbom::router())
         .merge(routes::security::router())
         .merge(routes::crons::router())
         .merge(routes::php::router())

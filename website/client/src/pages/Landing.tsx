@@ -198,6 +198,7 @@ const allFeatures = [
   { name: 'WAF (ModSecurity)', desc: 'OWASP CRS v4 \u2014 per-site detection or prevention', icon: ShieldCheck },
   { name: 'Image CVE Scanning', desc: 'Per-app grype scans, deploy gate, scheduled rescan', icon: ScanSearch },
   { name: 'Signed Releases + SBOM', desc: 'cosign keyless via Sigstore, SPDX 2.3 SBOMs, Rekor transparency log', icon: BadgeCheck },
+  { name: 'Per-Image SBOM', desc: 'On-demand SPDX 2.3 download per deployed container (syft)', icon: Package },
   { name: 'Backup Orchestrator', desc: 'Scheduled, encrypted, verified, with S3 support', icon: HardDriveDownload },
   { name: 'Smart Diagnostics', desc: '6 check categories with one-click auto-fix', icon: Stethoscope },
   { name: 'GPU Passthrough', desc: 'NVIDIA Container Toolkit detection & monitoring', icon: Cpu },

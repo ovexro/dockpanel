@@ -47,6 +47,7 @@ pub mod resellers;
 pub mod secrets;
 pub mod iac;
 pub mod image_scans;
+pub mod sboms;
 pub mod passkeys;
 pub mod webhook_gateway;
 pub mod telemetry;
@@ -673,6 +674,13 @@ pub fn router() -> Router<AppState> {
         .route("/api/image-scan/scan", post(image_scans::scan_image))
         .route("/api/image-scan/recent", get(image_scans::list_recent))
         .route("/api/apps/{name}/scan", get(image_scans::get_app_scan).post(image_scans::scan_app))
+        // SBOMs (composition; companion to image-scan vulnerability data)
+        .route("/api/sbom/settings", get(sboms::get_settings))
+        .route("/api/sbom/install", post(sboms::install_scanner))
+        .route("/api/sbom/uninstall", post(sboms::uninstall_scanner))
+        .route("/api/sbom/generate", post(sboms::generate))
+        .route("/api/sbom/image/{image}", get(sboms::get_image_sbom))
+        .route("/api/apps/{name}/sbom", get(sboms::download_app_sbom).post(sboms::generate_app))
         // System
         .route("/api/health", get(system::health))
         .route("/api/system/info", get(system::info))

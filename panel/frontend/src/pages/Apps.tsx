@@ -400,6 +400,7 @@ export default function Apps() {
   const [scanFindings, setScanFindings] = useState<Record<string, ScanFinding>>({});
   const [scanDrawerImage, setScanDrawerImage] = useState<string | null>(null);
   const [scanRescanning, setScanRescanning] = useState<string | null>(null);
+  const [sbomLoading, setSbomLoading] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -433,6 +434,35 @@ export default function Apps() {
 
   const openScanDrawer = (image: string) => {
     setScanDrawerImage(image);
+  };
+
+  const downloadSbom = async (containerId: string, image: string) => {
+    setSbomLoading(containerId);
+    try {
+      const result = await api.post<{ image: string; generated_at: string; spdx: unknown }>(
+        `/apps/${containerId}/sbom`,
+        {}
+      );
+      const blob = new Blob([JSON.stringify(result.spdx, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const safe = containerId.replace(/[^A-Za-z0-9._-]/g, "_");
+      a.href = url;
+      a.download = `${safe}.spdx.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setMessage({ text: `SBOM downloaded for ${image}`, type: "success" });
+    } catch (e) {
+      const msg = (e as Error).message || "unknown";
+      const hint = msg.includes("not installed") ? " — install syft from Settings → Services → SBOM" : "";
+      setMessage({ text: `SBOM failed: ${msg}${hint}`, type: "error" });
+    } finally {
+      setSbomLoading(null);
+    }
   };
 
   const scanSeverityClass = (f: ScanFinding | undefined): string => {
@@ -2504,13 +2534,23 @@ volumes:
                     <span>Scanned {new Date(finding.scanned_at).toLocaleString()}</span>
                   </div>
                   {matchedApp && (
-                    <button
-                      onClick={() => rescanApp(matchedApp.container_id, scanDrawerImage)}
-                      disabled={scanRescanning === matchedApp.container_id}
-                      className="mb-4 px-3 py-1.5 text-xs font-medium bg-rust-600 text-white rounded hover:bg-rust-700 disabled:opacity-50"
-                    >
-                      {scanRescanning === matchedApp.container_id ? "Scanning..." : "Rescan now"}
-                    </button>
+                    <div className="flex gap-2 mb-4">
+                      <button
+                        onClick={() => rescanApp(matchedApp.container_id, scanDrawerImage)}
+                        disabled={scanRescanning === matchedApp.container_id}
+                        className="px-3 py-1.5 text-xs font-medium bg-rust-600 text-white rounded hover:bg-rust-700 disabled:opacity-50"
+                      >
+                        {scanRescanning === matchedApp.container_id ? "Scanning..." : "Rescan now"}
+                      </button>
+                      <button
+                        onClick={() => downloadSbom(matchedApp.container_id, scanDrawerImage)}
+                        disabled={sbomLoading === matchedApp.container_id}
+                        title="Generate and download an SPDX 2.3 SBOM for this image (syft)"
+                        className="px-3 py-1.5 text-xs font-medium bg-dark-600 text-dark-50 rounded hover:bg-dark-500 disabled:opacity-50"
+                      >
+                        {sbomLoading === matchedApp.container_id ? "Generating SBOM..." : "Download SBOM"}
+                      </button>
+                    </div>
                   )}
                   {finding.vulnerabilities.length > 0 ? (
                     <div className="border border-dark-600 rounded overflow-hidden">

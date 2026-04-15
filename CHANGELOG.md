@@ -4,6 +4,34 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.7.11] - 2026-04-15
+
+### Added
+
+- **Per-image SBOM generation (syft).** Second half of the Phase 1 supply-chain
+  story (after v2.7.10's signed releases). Generate an SPDX 2.3 JSON SBOM for
+  any deployed Docker app's image — the composition companion to image
+  vulnerability scanning. Defaults to **off**; admins opt in from
+  Settings → Services → SBOM Generation.
+  - **Install button** pulls Anchore's signed syft installer into
+    `/var/lib/dockpanel/scanners/syft` (same self-contained, sandbox-safe
+    pattern as grype — works under `ProtectSystem=strict`).
+  - **Download SBOM button** in each app's scan drawer. Click runs syft against
+    the app's image (10 – 60 s on first generation), persists the SPDX
+    document, and triggers a browser download of `<app>.spdx.json`.
+  - **Persistence** — `image_sbom` table holds one row per image, overwritten
+    on regeneration. Stored as JSONB so the API serves the SPDX document
+    directly without re-parsing on the agent.
+  - **API surface** mirrors `/api/image-scan/...` shape:
+    `/api/sbom/{settings,install,uninstall,generate,image/{ref}}` plus
+    `/api/apps/{name}/sbom` for both POST (generate) and GET (download).
+  - **Agent image-ref validator** rejects shell metacharacters before invoking
+    syft — defence-in-depth against shell-injection via user-supplied refs.
+
+This is the operator-facing half: every container running on the panel now has
+a one-click supply-chain artifact to satisfy compliance asks (EU CRA Sep 2026)
+and to feed external tooling like Dependency-Track or Grype-on-SBOM.
+
 ## [2.7.10] - 2026-04-15
 
 ### Added

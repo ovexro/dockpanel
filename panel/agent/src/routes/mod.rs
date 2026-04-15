@@ -15,6 +15,7 @@ pub mod health;
 pub mod iac;
 pub mod image_scan;
 pub mod logs;
+pub mod sbom;
 pub mod mail;
 pub mod migration;
 pub mod nginx;

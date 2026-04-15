@@ -14,6 +14,7 @@ pub mod files;
 pub mod git_build;
 pub mod image_scanner;
 pub mod logs;
+pub mod sbom_scanner;
 pub mod migration;
 pub mod nginx;
 pub mod phone_home;

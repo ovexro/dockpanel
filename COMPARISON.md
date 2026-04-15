@@ -22,6 +22,7 @@ An honest comparison. We're not shy about where DockPanel leads — and we're up
 | **OAuth/SSO** | Yes | No | No | No | No | No |
 | **Per-image CVE scanning** | **Yes (grype, deploy-gated)** | No | No | No | No | No |
 | **Signed releases + SBOM** | **Yes (cosign keyless, SPDX 2.3)** | No | No | No | No | No |
+| **Per-image SBOM generation** | **Yes (syft, on-demand SPDX 2.3 download)** | No | No | No | No | No |
 
 ## Where DockPanel Wins — Massively
 
