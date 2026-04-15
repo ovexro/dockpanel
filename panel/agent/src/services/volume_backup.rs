@@ -180,17 +180,3 @@ pub fn delete_volume_backup(container_name: &str, filename: &str) -> Result<(), 
     Ok(())
 }
 
-/// Get the full filesystem path for a volume backup file.
-pub fn get_backup_path(container_name: &str, filename: &str) -> Result<String, String> {
-    if !is_safe_filename(filename) {
-        return Err("Invalid backup filename".into());
-    }
-    let filepath = backup_dir(container_name).join(filename);
-    if !filepath.exists() {
-        return Err("Backup file not found".into());
-    }
-    filepath
-        .to_str()
-        .map(|s| s.to_string())
-        .ok_or_else(|| "Invalid path encoding".to_string())
-}

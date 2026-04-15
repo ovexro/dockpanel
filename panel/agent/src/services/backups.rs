@@ -13,12 +13,6 @@ pub struct BackupInfo {
     pub sha256: Option<String>,
 }
 
-impl BackupInfo {
-    fn new(filename: String, size_bytes: u64, created_at: String) -> Self {
-        Self { filename, size_bytes, created_at, sha256: None }
-    }
-}
-
 /// Validate backup filename (prevent path traversal).
 fn is_safe_filename(name: &str) -> bool {
     !name.is_empty()

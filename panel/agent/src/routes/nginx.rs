@@ -166,6 +166,10 @@ async fn put_site(
                 let workers = config.php_max_workers.unwrap_or(5);
                 if let Err(e) = services::nginx::write_php_pool_config(&domain, ver, memory, workers) {
                     tracing::warn!("Failed to write PHP pool config for {domain}: {e}");
+                } else {
+                    // Reload PHP-FPM so the new per-site pool is actually picked up.
+                    // Non-fatal: reload_php_fpm already swallows reload failures.
+                    let _ = services::nginx::reload_php_fpm(ver).await;
                 }
             }
         }

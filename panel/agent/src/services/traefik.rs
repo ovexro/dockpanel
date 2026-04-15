@@ -216,39 +216,6 @@ pub async fn status(docker: &Docker) -> TraefikStatus {
     }
 }
 
-/// Build Traefik Docker labels for a service.
-pub fn build_labels(domain: &str, container_port: u16, ssl: bool) -> HashMap<String, String> {
-    let safe = domain.replace('.', "-").replace(':', "-");
-    let mut labels = HashMap::new();
-
-    labels.insert("traefik.enable".to_string(), "true".to_string());
-    labels.insert(format!("traefik.http.routers.{safe}.rule"), format!("Host(`{domain}`)"));
-    labels.insert(format!("traefik.http.routers.{safe}.entrypoints"), "web".to_string());
-    labels.insert(format!("traefik.http.services.{safe}.loadbalancer.server.port"), container_port.to_string());
-
-    if ssl {
-        labels.insert(format!("traefik.http.routers.{safe}-secure.rule"), format!("Host(`{domain}`)"));
-        labels.insert(format!("traefik.http.routers.{safe}-secure.entrypoints"), "websecure".to_string());
-        labels.insert(format!("traefik.http.routers.{safe}-secure.tls.certresolver"), "letsencrypt".to_string());
-        // Redirect HTTP to HTTPS
-        labels.insert(format!("traefik.http.routers.{safe}.middlewares"), format!("{safe}-redirect"));
-        labels.insert(format!("traefik.http.middlewares.{safe}-redirect.redirectscheme.scheme"), "https".to_string());
-    }
-
-    labels
-}
-
-/// Connect a container to the proxy network.
-pub async fn connect_to_network(docker: &Docker, container_id: &str) -> Result<(), String> {
-    docker.connect_network(PROXY_NETWORK, bollard::network::ConnectNetworkOptions {
-        container: container_id,
-        ..Default::default()
-    })
-    .await
-    .map_err(|e| format!("Failed to connect to proxy network: {e}"))?;
-    Ok(())
-}
-
 /// Write a Traefik dynamic route config file for an app.
 /// Traefik auto-reloads file configs via the file provider (--providers.file.watch=true).
 pub fn write_route_config(domain: &str, backend_port: u16, ssl: bool) -> Result<(), String> {

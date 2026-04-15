@@ -40,7 +40,14 @@ pub fn router() -> Router<AppState> {
 #[derive(Deserialize)]
 pub struct UploadRequest {
     pub path: String,
-    pub content_base64: String,
+    /// Base64-encoded file content. Accepts `content` (frontend name) or
+    /// `content_base64` (legacy agent name) for backwards compatibility.
+    #[serde(alias = "content_base64")]
+    pub content: String,
+    /// Optional filename. When present, it is joined onto `path` so the
+    /// caller can send the directory in `path` and the basename separately.
+    #[serde(default)]
+    pub filename: Option<String>,
 }
 
 async fn file_upload(
@@ -57,7 +64,7 @@ async fn file_upload(
 
     // Decode base64 content first (fail fast before any FS ops)
     let bytes = base64::engine::general_purpose::STANDARD
-        .decode(&body.content_base64)
+        .decode(&body.content)
         .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid base64 content"))?;
 
     // Enforce 50MB size limit for all uploads
@@ -65,9 +72,22 @@ async fn file_upload(
         return Err(err(StatusCode::PAYLOAD_TOO_LARGE, "File too large (max 50MB)"));
     }
 
+    // Resolve the target relative path. When a filename is provided we treat
+    // `path` as the containing directory and join the basename onto it.
+    let target_rel = match &body.filename {
+        Some(name) if !name.is_empty() => {
+            if name.contains('/') || name.contains('\\') || name.contains("..") || name.contains('\0') {
+                return Err(err(StatusCode::BAD_REQUEST, "Invalid filename"));
+            }
+            let dir = body.path.trim_matches('/');
+            if dir.is_empty() { name.clone() } else { format!("{dir}/{name}") }
+        }
+        _ => body.path.clone(),
+    };
+
     let full_path = if domain == "_server" {
         // Server-level upload: validate no traversal manually
-        let p = format!("/{}", body.path.trim_start_matches('/'));
+        let p = format!("/{}", target_rel.trim_start_matches('/'));
         if p.contains("..") || p.contains('\0') {
             return Err(err(StatusCode::BAD_REQUEST, "Path traversal not allowed"));
         }
@@ -102,7 +122,7 @@ async fn file_upload(
         path_buf
     } else {
         // Site upload: use resolve_safe_path to prevent TOCTOU race
-        file_svc::resolve_safe_path(&domain, &body.path)
+        file_svc::resolve_safe_path(&domain, &target_rel)
             .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?
     };
 

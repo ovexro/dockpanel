@@ -1,4 +1,3 @@
-use crate::safe_cmd::safe_command;
 use axum::{
     extract::{Path, Query},
     http::StatusCode,
@@ -9,13 +8,6 @@ use serde::Deserialize;
 
 use super::{is_valid_domain, AppState};
 use crate::services::files;
-
-#[derive(Deserialize)]
-struct UploadRequest {
-    path: String,
-    content: String, // base64-encoded
-    filename: String,
-}
 
 #[derive(Deserialize)]
 struct PathQuery {
@@ -204,61 +196,6 @@ async fn download_file(
         ],
         bytes,
     ))
-}
-
-/// POST /files/{domain}/upload — Upload a file (base64-encoded content).
-async fn upload_file(
-    Path(domain): Path<String>,
-    Json(body): Json<UploadRequest>,
-) -> Result<Json<serde_json::Value>, ApiErr> {
-    if !is_valid_domain(&domain) {
-        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
-    }
-    if body.filename.contains("..") || body.filename.contains('/') || body.filename.contains('\\') {
-        return Err(err(StatusCode::BAD_REQUEST, "Invalid filename"));
-    }
-
-    // Use resolve_safe_path to prevent TOCTOU race (validate before create_dir_all)
-    let upload_rel = if body.path.is_empty() || body.path == "/" || body.path == "." {
-        body.filename.clone()
-    } else {
-        format!("{}/{}", body.path.trim_start_matches('/'), body.filename)
-    };
-    let full_path = files::resolve_safe_path(&domain, &upload_rel)
-        .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
-
-    // Ensure parent directory exists (safe — path already validated)
-    if let Some(parent) = full_path.parent() {
-        tokio::fs::create_dir_all(parent).await.ok();
-    }
-
-    // Decode base64
-    use base64::Engine;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(&body.content)
-        .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid base64 content"))?;
-
-    // Limit: 50MB
-    if bytes.len() > 50 * 1024 * 1024 {
-        return Err(err(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "File too large (max 50MB)",
-        ));
-    }
-
-    tokio::fs::write(&full_path, &bytes)
-        .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Write failed: {e}")))?;
-
-    // Fix ownership
-    let path_str = full_path.to_string_lossy().to_string();
-    let _ = safe_command("chown")
-        .args(["www-data:www-data", &path_str])
-        .output()
-        .await;
-
-    tracing::info!("File uploaded: {} ({} bytes)", path_str, bytes.len());
-    Ok(Json(serde_json::json!({ "ok": true, "size": bytes.len() })))
 }
 
 pub fn router() -> Router<AppState> {

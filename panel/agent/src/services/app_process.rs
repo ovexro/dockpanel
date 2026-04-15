@@ -172,31 +172,3 @@ pub fn remove_app_service(domain: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Restart the app service.
-pub fn restart_app_service(domain: &str) -> Result<(), String> {
-    let svc = service_name(domain);
-    let output = safe_command_sync("systemctl")
-        .args(["restart", &svc])
-        .output()
-        .map_err(|e| format!("Failed to restart {svc}: {e}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Failed to restart {svc}: {stderr}"));
-    }
-
-    Ok(())
-}
-
-/// Get the status of an app service.
-pub fn app_service_status(domain: &str) -> String {
-    let svc = service_name(domain);
-    let output = safe_command_sync("systemctl")
-        .args(["is-active", &svc])
-        .output();
-
-    match output {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        Err(_) => "unknown".to_string(),
-    }
-}
