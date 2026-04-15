@@ -20,6 +20,14 @@ ProtectHome=yes
 PrivateTmp=yes
 ProtectKernelLogs=yes
 ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictNamespaces=~user
 MemoryMax=512M
 LimitNOFILE=65535
 

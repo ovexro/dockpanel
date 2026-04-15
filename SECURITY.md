@@ -78,6 +78,19 @@ DockPanel is designed with defense in depth. Key security properties include:
 
 ## Past Security Work
 
+### Audit Round 7: Regression + Fresh CVE Sweep (April 2026)
+
+Seven-surface parallel audit with a twelve-day CVE refresh (2026-04-03 to 2026-04-15). Re-swept every rule (R1–R36) against current code and checked for new disclosures in the Rust ecosystem, Docker, nginx, PostgreSQL, Postfix, Dovecot, certbot, React, and hosting-panel peers.
+
+- **tar symlink following** — Three backup paths (full-site, WordPress pre-update snapshot, mailbox) created archives without `--no-dereference`. Symlinks inside the site root would have been archived as target content. Added `--no-dereference` to all three.
+- **Cron command filter** — Newline/carriage-return explicitly rejected (was implicit via the blocklist); hardens against scheduled-job injection on storage-layer bypass.
+- **Terminal command denylist** — Added `chroot`, `pivot_root`, `capsh`, `mknod`, `debugfs`, `kexec` to the web-terminal block patterns (were absent; users with terminal access could invoke them).
+- **Agent systemd unit hardening** — `ProtectKernelTunables`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`, `RestrictRealtime`, `RestrictSUIDSGID`, `LockPersonality`, `RestrictNamespaces=~CLONE_NEWUSER` added to `dockpanel-agent.service`.
+- **Frontend URL validation** — Telemetry's update-release link and the public status page's operator-supplied logo now reject any scheme except `http(s)://`, preventing `javascript:` / `data:` XSS via backend-controlled fields.
+- **Security-scan alert pileup** — Each weekly scan fired a fresh alert without resolving the previous one, so unacknowledged alerts compounded and the escalation loop re-notified every 2–5 minutes. New scans now auto-resolve prior firing/acknowledged security alerts before firing their own, so the most recent scan is always the single source of truth.
+
+Dep + ops floor check: `rustls-webpki` already at 0.103.12 (covers RUSTSEC-2026-0098/0099). Audit 6's 29-rule pattern set otherwise remains clean. Auth/IDOR sweep over 45+ resource handlers: zero findings.
+
 ### Audit Round 6: Fresh Zero-Assumptions Audit (March 2026)
 
 A complete from-scratch security audit with six parallel agents treating the codebase as entirely unknown. This covered all 222 Rust files and 506 TypeScript files with zero prior assumptions. **30 findings** fixed across 24 files:
@@ -127,7 +140,7 @@ The initial comprehensive security audit identified and resolved **117 vulnerabi
 - Privilege escalation
 - Input validation gaps
 
-All identified issues across all six audit rounds have been fixed. Combined total: **260+ vulnerabilities** found and resolved.
+All identified issues across all seven audit rounds have been fixed. Combined total: **270+ vulnerabilities** found and resolved.
 
 ## Contact
 

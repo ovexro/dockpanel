@@ -4,6 +4,38 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.7.8] - 2026-04-15
+
+### Security (Audit Round 7)
+- **tar backups now use `--no-dereference`** — full-site backups, WordPress
+  pre-update snapshots, and mailbox archives no longer follow symlinks inside
+  the site root. A symlink pointed at `/etc` would previously have been
+  archived as the target's content.
+- **Cron command filter explicitly rejects `\n` and `\r`** — was implicit
+  before; defense-in-depth against scheduled-job newline injection.
+- **Web-terminal command blocklist extended** — `chroot`, `pivot_root`,
+  `capsh`, `mknod`, `debugfs`, `kexec` added to the pattern list.
+- **Agent systemd unit hardened** — `ProtectKernelTunables`,
+  `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`, `RestrictRealtime`,
+  `RestrictSUIDSGID`, `LockPersonality`, `RestrictNamespaces=~CLONE_NEWUSER`.
+- **Frontend URL guards** — Telemetry's update-release link and the public
+  status page's operator-supplied logo URL now require `http(s)://` schemes,
+  blocking `javascript:` / `data:` URLs routed through backend-controlled
+  config fields.
+
+### Fixed
+- **Security-scan alert pileup eliminated.** The weekly security scanner fired
+  a new alert on every run without resolving prior firing alerts, so
+  unacknowledged alerts compounded and the escalation loop re-notified every
+  2–5 minutes. New scans now auto-resolve prior firing/acknowledged security
+  alerts before firing their own result.
+
+### Improved
+- **README / COMPARISON / docs RAM claim updated** — previous "~57MB" figure
+  was stale. Fresh Vultr VPS measurement: panel services alone idle at ~19 MB
+  (agent 12 MB + API 7 MB), or ~85 MB including the bundled PostgreSQL.
+  Landing-page RAM bar now shows 19 MB.
+
 ## [2.7.7] - 2026-04-15
 
 ### Fixed

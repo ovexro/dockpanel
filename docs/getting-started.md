@@ -2,7 +2,7 @@
 
 ## What is DockPanel?
 
-DockPanel is a free, self-hosted, Docker-native server management panel built in Rust. It lets you manage sites, databases, Docker apps, SSL certificates, backups, email, DNS, and security from a single web interface or CLI. It installs in under 60 seconds, uses about 57MB of RAM, and runs on x86_64 and ARM64 servers with no subscriptions or artificial limits.
+DockPanel is a free, self-hosted, Docker-native server management panel built in Rust. It lets you manage sites, databases, Docker apps, SSL certificates, backups, email, DNS, and security from a single web interface or CLI. It installs in under 60 seconds, the panel services themselves idle at about ~19MB of RAM (about ~85MB total with the bundled PostgreSQL), and it runs on x86_64 and ARM64 servers with no subscriptions or artificial limits.
 
 ## System Requirements
 

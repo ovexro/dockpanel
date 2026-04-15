@@ -46,9 +46,9 @@ const TERMINAL_BLOCKED_PATTERNS: &[&str] = &[
     // Service manipulation
     "systemctl ", "service ",
     // Kernel modules
-    "insmod ", "modprobe ", "rmmod ",
-    // Container escape
-    "docker ", "nsenter ", "unshare ",
+    "insmod ", "modprobe ", "rmmod ", "kexec ",
+    // Container / namespace / capability escape
+    "docker ", "nsenter ", "unshare ", "chroot ", "pivot_root ", "capsh ", "mknod ", "debugfs ",
     // Disk/mount operations
     "mount ", "umount ", "fdisk ", "parted ",
     // SSH key manipulation
@@ -68,7 +68,7 @@ const TERMINAL_BLOCKED_PATTERNS: &[&str] = &[
 /// Check if a command string is safe for cron execution.
 /// Rejects shell metacharacters and dangerous patterns.
 pub fn is_safe_cron_command(cmd: &str) -> bool {
-    if cmd.is_empty() || cmd.len() > 4096 || cmd.contains('\0') {
+    if cmd.is_empty() || cmd.len() > 4096 || cmd.contains('\0') || cmd.contains('\n') || cmd.contains('\r') {
         return false;
     }
 

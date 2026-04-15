@@ -189,6 +189,16 @@ async fn run_scan(pool: &PgPool, agent: &AgentClient) {
     let _ = sqlx::query("DELETE FROM security_scans WHERE created_at < NOW() - INTERVAL '90 days'")
         .execute(pool).await;
 
+    // Auto-resolve prior firing security alerts so the new scan's result is
+    // the single source of truth — avoids the "every 2–5 min escalation on
+    // three stale alerts" pileup the user saw on 2026-04-15.
+    let _ = sqlx::query(
+        "UPDATE alerts SET status = 'resolved', resolved_at = NOW() \
+         WHERE alert_type = 'security' AND status IN ('firing', 'acknowledged')",
+    )
+    .execute(pool)
+    .await;
+
     // Send alerts if critical or warning findings
     if critical > 0 || warning > 0 {
         send_scan_alerts(pool, critical, warning, total).await;

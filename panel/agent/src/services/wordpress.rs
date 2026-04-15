@@ -387,7 +387,7 @@ pub async fn create_update_snapshot(domain: &str) -> Result<String, String> {
     let tar = tokio::time::timeout(
         std::time::Duration::from_secs(120),
         safe_command("tar")
-            .args(["czf", &snapshot_path, "-C", "/var/www", &format!("{domain}/public")])
+            .args(["--no-dereference", "czf", &snapshot_path, "-C", "/var/www", &format!("{domain}/public")])
             .output()
     ).await
         .map_err(|_| "Snapshot tar timed out".to_string())?

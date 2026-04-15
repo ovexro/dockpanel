@@ -1200,7 +1200,7 @@ async fn mailbox_backup(Json(body): Json<MailboxBackupRequest>) -> Result<Json<s
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(300),
-        safe_command("tar").args(["czf", &backup_file, "-C", &format!("/var/vmail/{domain}"), user]).output()
+        safe_command("tar").args(["--no-dereference", "czf", &backup_file, "-C", &format!("/var/vmail/{domain}"), user]).output()
     ).await
         .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Backup timed out"))?
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Backup failed: {e}")))?;

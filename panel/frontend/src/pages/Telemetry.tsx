@@ -31,6 +31,11 @@ interface TelemetryConfig {
   update_checked_at?: string;
 }
 
+function safeHttpUrl(url: string | undefined): string | null {
+  if (!url) return null;
+  return /^https:\/\/[a-z0-9.-]+\//i.test(url) ? url : null;
+}
+
 const EVENT_TYPE_COLORS: Record<string, string> = {
   panic: "bg-red-500/20 text-red-400 border-red-500/30",
   error: "bg-red-500/10 text-red-400 border-red-500/20",
@@ -260,8 +265,8 @@ export default function Telemetry() {
               </span>
             </div>
           </div>
-          {config.update_release_url && (
-            <a href={config.update_release_url} target="_blank" rel="noopener noreferrer"
+          {safeHttpUrl(config.update_release_url) && (
+            <a href={safeHttpUrl(config.update_release_url)!} target="_blank" rel="noopener noreferrer"
               className="px-3 py-1.5 bg-rust-500 hover:bg-rust-600 text-white rounded-lg text-xs font-medium transition-colors">
               View Release
             </a>
@@ -460,8 +465,8 @@ export default function Telemetry() {
                 <h3 className="text-sm font-medium text-dark-100">
                   Release Notes — v{config.update_available_version}
                 </h3>
-                {config.update_release_url && (
-                  <a href={config.update_release_url} target="_blank" rel="noopener noreferrer"
+                {safeHttpUrl(config.update_release_url) && (
+                  <a href={safeHttpUrl(config.update_release_url)!} target="_blank" rel="noopener noreferrer"
                     className="text-xs text-rust-400 hover:text-rust-300 transition-colors">
                     View on GitHub
                   </a>

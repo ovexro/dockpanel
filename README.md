@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>The most feature-packed free server panel ever built.</strong><br>
-  Self-hosted. Docker-native. Written in Rust. ~57MB RAM. 733 API endpoints. 151 app templates. 425 E2E tests. ~41MB binaries. Zero subscriptions.
+  Self-hosted. Docker-native. Written in Rust. Panel services run on <strong>~19MB of RAM</strong>. 733 API endpoints. 151 app templates. 425 E2E tests. ~41MB binaries. Zero subscriptions.
 </p>
 
 <p align="center">
@@ -36,7 +36,7 @@ Supports Ubuntu 20+, Debian 11+, CentOS 9+, Rocky 9+, Fedora 39+, Amazon Linux 2
 
 ## Why DockPanel?
 
-No other free panel gives you Git push-to-deploy with blue-green zero-downtime updates, 151 one-click Docker app templates, a WAF, passkey login, GPU passthrough, multi-server management, reseller accounts, a developer CLI, and Infrastructure as Code — all running on ~57MB of RAM. DockPanel does.
+No other free panel gives you Git push-to-deploy with blue-green zero-downtime updates, 151 one-click Docker app templates, a WAF, passkey login, GPU passthrough, multi-server management, reseller accounts, a developer CLI, and Infrastructure as Code — all while the panel services themselves use under 20MB of RAM. DockPanel does.
 
 | | DockPanel | HestiaCP | CloudPanel | RunCloud |
 |---|---|---|---|---|
@@ -47,7 +47,7 @@ No other free panel gives you Git push-to-deploy with blue-green zero-downtime u
 | **Multi-server** | **Unlimited** | No | No | Yes |
 | **Reseller + white-label** | **Yes** | Reseller only | No | No |
 | **CLI + IaC** | **Full CLI + YAML export** | Limited | No | No |
-| **RAM usage** | **~57MB** | ~200MB+ | ~150MB+ | SaaS |
+| **RAM usage (panel)** | **~19MB** | ~200MB+ | ~150MB+ | SaaS |
 | **ARM64 / Homelab** | **Yes** | Partial | No | No |
 | **Self-hosted** | **Yes** | Yes | Yes | No |
 
@@ -225,7 +225,7 @@ Browser → React 19 SPA → Nginx
                            └── /*     → Frontend (static files)
 ```
 
-**3 Rust binaries**: Agent (~20MB), API (~19MB), CLI (~1.8MB). Total RAM: ~57MB. 11 background services.
+**3 Rust binaries**: Agent (~21MB), API (~20MB), CLI (~1MB). Runtime RAM: ~12MB agent + ~7MB API ≈ 19MB for the panel itself; ~85MB with the bundled PostgreSQL. 11 background services.
 
 | Component | Tech | Role |
 |-----------|------|------|

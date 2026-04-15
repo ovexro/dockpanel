@@ -116,7 +116,9 @@ export default function PublicStatusPage() {
       <div className="max-w-3xl mx-auto px-4 py-10">
         {/* Header */}
         <div className="text-center mb-8">
-          {data.logo_url && <img src={data.logo_url} alt="" className="h-10 mx-auto mb-4" />}
+          {data.logo_url && /^https?:\/\/[a-z0-9.-]+\//i.test(data.logo_url) && (
+            <img src={data.logo_url} alt="" className="h-10 mx-auto mb-4" />
+          )}
           <h1 className="text-2xl font-bold font-mono text-white">{data.title}</h1>
           <p className="text-sm text-dark-400 font-mono mt-1">{data.description}</p>
         </div>

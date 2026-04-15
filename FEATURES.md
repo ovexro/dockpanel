@@ -174,9 +174,10 @@
 | Agent binary | 20 MB | 2026-03-23 |
 | API binary | 19 MB | 2026-03-23 |
 | CLI binary | 1.8 MB | 2026-03-23 |
-| Agent RAM (RSS) | ~30 MB | 2026-03-19 |
-| API RAM (RSS) | ~27 MB | 2026-03-19 |
-| Total RAM | ~57 MB | 2026-03-19 |
+| Agent RAM (RSS) | ~12 MB | 2026-04-15 |
+| API RAM (RSS) | ~7 MB | 2026-04-15 |
+| Panel services RAM (agent + API) | ~19 MB | 2026-04-15 |
+| Full-stack RAM (with bundled PostgreSQL) | ~85 MB | 2026-04-15 |
 | App templates | 151 (14 categories) | 2026-03-28 |
 | API endpoints | 733 (465 backend + 268 agent) | 2026-03-31 |
 | E2E tests | 425 (8 test suites) | 2026-04-14 |
