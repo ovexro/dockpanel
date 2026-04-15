@@ -37,6 +37,11 @@ struct DeployRequest {
     /// Enable GPU passthrough (requires NVIDIA Container Toolkit)
     #[serde(default)]
     gpu_enabled: bool,
+    /// Specific GPU device indices (e.g., [0, 2]) to assign to this container.
+    /// When None or empty with gpu_enabled=true, all GPUs are assigned (legacy
+    /// behavior). When Some(non-empty), only the listed indices are passed
+    /// through via Docker's device_ids field. Ignored when gpu_enabled=false.
+    gpu_indices: Option<Vec<u32>>,
 }
 
 /// GET /apps/templates — List all available app templates.
@@ -66,7 +71,7 @@ async fn deploy(
     }
 
     let result =
-        docker_apps::deploy_app(&body.template_id, &body.name, body.port, body.env, body.domain.as_deref(), body.memory_mb, body.cpu_percent, body.user_id.as_deref(), body.gpu_enabled)
+        docker_apps::deploy_app(&body.template_id, &body.name, body.port, body.env, body.domain.as_deref(), body.memory_mb, body.cpu_percent, body.user_id.as_deref(), body.gpu_enabled, body.gpu_indices.clone())
             .await
             .map_err(|e| {
                 (

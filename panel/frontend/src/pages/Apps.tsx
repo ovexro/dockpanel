@@ -24,6 +24,18 @@ interface AppTemplate {
   gpu_recommended?: boolean;
 }
 
+interface GpuDevice {
+  index: number;
+  name: string;
+}
+
+interface GpuInfo {
+  available: boolean;
+  gpus: GpuDevice[];
+}
+
+type GpuMode = "none" | "all" | "specific";
+
 interface DeployedApp {
   container_id: string;
   name: string;
@@ -310,6 +322,9 @@ export default function Apps() {
   const [memoryMb, setMemoryMb] = useState("");
   const [cpuPercent, setCpuPercent] = useState("");
   const [gpuEnabled, setGpuEnabled] = useState(false);
+  const [availableGpus, setAvailableGpus] = useState<GpuDevice[]>([]);
+  const [gpuMode, setGpuMode] = useState<GpuMode>("none");
+  const [gpuSelectedIndices, setGpuSelectedIndices] = useState<number[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [message, setMessage] = useState({ text: "", type: "" });
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -409,13 +424,17 @@ export default function Apps() {
       api.get<DeployedApp[]>("/apps").catch(() => []),
       api.get<StackInfo[]>("/stacks").catch(() => []),
       api.get<ScanFinding[]>("/image-scan/recent").catch(() => []),
-    ]).then(([tmpl, deployed, stacksData, scans]) => {
+      api.get<GpuInfo>("/apps/gpu-info").catch(() => null),
+    ]).then(([tmpl, deployed, stacksData, scans, gpuInfo]) => {
       setTemplates(tmpl);
       setApps(deployed);
       setStacks(stacksData);
       const map: Record<string, ScanFinding> = {};
       for (const s of scans) map[s.image] = s;
       setScanFindings(map);
+      if (gpuInfo && gpuInfo.available && gpuInfo.gpus.length > 0) {
+        setAvailableGpus(gpuInfo.gpus.map(g => ({ index: g.index, name: g.name })));
+      }
       setLoading(false);
     });
   }, []);
@@ -496,7 +515,10 @@ export default function Apps() {
     setAppPort(tmpl.default_port);
     setAppDomain("");
     setSslEmail("");
-    setGpuEnabled(!!tmpl.gpu_recommended);
+    const wantGpu = !!tmpl.gpu_recommended && availableGpus.length > 0;
+    setGpuEnabled(wantGpu);
+    setGpuMode(wantGpu ? "all" : "none");
+    setGpuSelectedIndices([]);
     const defaults: Record<string, string> = {};
     tmpl.env_vars.forEach((v) => {
       defaults[v.name] = v.default;
@@ -519,6 +541,9 @@ export default function Apps() {
         ...(memoryMb ? { memory_mb: parseInt(memoryMb) } : {}),
         ...(cpuPercent ? { cpu_percent: parseInt(cpuPercent) } : {}),
         ...(gpuEnabled ? { gpu_enabled: true } : {}),
+        ...(gpuEnabled && gpuMode === "specific" && gpuSelectedIndices.length > 0
+          ? { gpu_indices: gpuSelectedIndices }
+          : {}),
       };
       if (enableHealthCheck && healthCmd) {
         deployBody.health_check = {
@@ -1839,10 +1864,84 @@ volumes:
               </div>
 
               {/* GPU Passthrough */}
-              <label className="flex items-center gap-2 text-sm font-medium text-dark-100 mt-2">
-                <input type="checkbox" checked={gpuEnabled} onChange={e => setGpuEnabled(e.target.checked)} className="rounded border-dark-500" />
-                Enable GPU passthrough <span className="text-dark-300 font-normal text-xs">(requires NVIDIA Container Toolkit)</span>
-              </label>
+              <div className="mt-2">
+                <label className="flex items-center gap-2 text-sm font-medium text-dark-100">
+                  <input
+                    type="checkbox"
+                    checked={gpuEnabled}
+                    onChange={e => {
+                      const on = e.target.checked;
+                      setGpuEnabled(on);
+                      if (on && gpuMode === "none") setGpuMode("all");
+                      if (!on) { setGpuMode("none"); setGpuSelectedIndices([]); }
+                    }}
+                    className="rounded border-dark-500"
+                  />
+                  Enable GPU passthrough
+                  {selected?.gpu_recommended && (
+                    <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                      Recommended
+                    </span>
+                  )}
+                </label>
+                {gpuEnabled && availableGpus.length === 0 && (
+                  <p className="mt-1 ml-6 text-xs text-warn-400">
+                    No NVIDIA GPUs detected on this host. Deploy will still set GPU passthrough — verify NVIDIA Container Toolkit is installed.
+                  </p>
+                )}
+                {gpuEnabled && availableGpus.length > 1 && (
+                  <div className="mt-2 ml-6 space-y-2">
+                    <div className="flex gap-3 text-xs">
+                      <label className="flex items-center gap-1.5 text-dark-200 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="gpu-mode"
+                          checked={gpuMode === "all"}
+                          onChange={() => { setGpuMode("all"); setGpuSelectedIndices([]); }}
+                        />
+                        All GPUs <span className="text-dark-400">({availableGpus.length})</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 text-dark-200 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="gpu-mode"
+                          checked={gpuMode === "specific"}
+                          onChange={() => setGpuMode("specific")}
+                        />
+                        Specific GPU(s)
+                      </label>
+                    </div>
+                    {gpuMode === "specific" && (
+                      <div className="space-y-1 border border-dark-600 rounded-md p-2 bg-dark-900">
+                        {availableGpus.map(gpu => {
+                          const checked = gpuSelectedIndices.includes(gpu.index);
+                          return (
+                            <label key={gpu.index} className="flex items-center gap-2 text-xs text-dark-200 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={e => {
+                                  setGpuSelectedIndices(prev =>
+                                    e.target.checked
+                                      ? [...prev, gpu.index].sort((a, b) => a - b)
+                                      : prev.filter(i => i !== gpu.index)
+                                  );
+                                }}
+                              />
+                              <span className="font-mono text-dark-300">GPU {gpu.index}</span>
+                              <span className="truncate">{gpu.name}</span>
+                            </label>
+                          );
+                        })}
+                        {gpuSelectedIndices.length === 0 && (
+                          <p className="text-[11px] text-warn-400 mt-1">Pick at least one GPU, or switch to All.</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+                <p className="mt-1 ml-6 text-xs text-dark-300">Requires NVIDIA Container Toolkit on the host.</p>
+              </div>
 
               {/* Health Check Configuration (Feature #9) */}
               <div>

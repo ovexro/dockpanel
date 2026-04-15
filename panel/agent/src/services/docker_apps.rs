@@ -2388,6 +2388,7 @@ pub async fn deploy_app(
     cpu_percent: Option<u64>,
     user_id: Option<&str>,
     gpu_enabled: bool,
+    gpu_indices: Option<Vec<u32>>,
 ) -> Result<DeployResult, String> {
     let template = TEMPLATES
         .iter()
@@ -2505,12 +2506,24 @@ pub async fn deploy_app(
         }
     }
 
-    // GPU passthrough (requires NVIDIA Container Toolkit installed on host)
+    // GPU passthrough (requires NVIDIA Container Toolkit installed on host).
+    // Two modes: all-GPUs (count: -1) vs specific indices (device_ids).
+    // Setting both fields would be rejected by the daemon, so they're mutually
+    // exclusive — device_ids wins when present, count is set otherwise.
     if gpu_enabled {
+        let specific_ids: Option<Vec<String>> = gpu_indices
+            .as_ref()
+            .filter(|v| !v.is_empty())
+            .map(|v| v.iter().map(|i| i.to_string()).collect());
+        let (count_field, device_ids_field, log_target) = match &specific_ids {
+            Some(ids) => (None, Some(ids.clone()), format!("specific GPU(s) [{}]", ids.join(","))),
+            None => (Some(-1_i64), None, "all available GPUs".to_string()),
+        };
         host_config.device_requests = Some(vec![
             bollard::service::DeviceRequest {
                 driver: Some("nvidia".to_string()),
-                count: Some(-1), // All GPUs
+                count: count_field,
+                device_ids: device_ids_field,
                 capabilities: Some(vec![vec!["gpu".to_string(), "compute".to_string(), "utility".to_string()]]),
                 ..Default::default()
             }
@@ -2519,7 +2532,7 @@ pub async fn deploy_app(
         if let Some(ref mut caps) = host_config.cap_add {
             caps.push("SYS_ADMIN".to_string());
         }
-        tracing::info!("GPU passthrough enabled for container {container_name}");
+        tracing::info!("GPU passthrough enabled for container {container_name}: {log_target}");
     }
 
     if !binds.is_empty() {
