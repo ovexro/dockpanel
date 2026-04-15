@@ -291,9 +291,10 @@ if ! curl -sf --max-time 30 http://127.0.0.1:3080/api/health > /dev/null 2>&1; t
 fi
 log "Health check: /api/health OK"
 
-# Auth subsystem (setup-status is unauthenticated, tests DB connectivity)
-if ! curl -sf --max-time 30 -X POST http://127.0.0.1:3080/api/auth/setup-status \
-    -H "Content-Type: application/json" > /dev/null 2>&1; then
+# Auth subsystem (setup-status is unauthenticated, tests DB connectivity).
+# Note: this endpoint is GET-only — using POST returns 405 and triggered an
+# unconditional rollback on every update before this fix.
+if ! curl -sf --max-time 30 http://127.0.0.1:3080/api/auth/setup-status > /dev/null 2>&1; then
     rollback
 fi
 log "Health check: /api/auth/setup-status OK"

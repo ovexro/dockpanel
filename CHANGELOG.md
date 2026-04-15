@@ -4,6 +4,20 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.7.13] - 2026-04-15
+
+### Fixed
+
+- **`scripts/update.sh` rolled back every upgrade** — the post-deploy
+  health check POSTed to `/api/auth/setup-status`, but that endpoint is
+  GET-only and returned 405 Method Not Allowed on every run, triggering
+  the rollback path even when the new binaries were healthy. Caught by
+  the v2.7.12 fresh-VPS test (the first end-to-end `update.sh` exercise
+  in several releases). Operators on v2.7.11 or v2.7.12 who pulled via
+  `update.sh` would have been silently held back; manual re-pull or
+  reinstall via `install.sh` was unaffected. Fix: switch the check to
+  GET.
+
 ## [2.7.12] - 2026-04-15
 
 ### Added
