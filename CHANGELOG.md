@@ -4,6 +4,30 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.7.14] - 2026-04-15
+
+### Fixed
+
+- **`scripts/update.sh` now self-refreshes from the latest release tag.**
+  The v2.7.13 fix to the rollback bug only helped operators who manually
+  refreshed their on-disk copy of update.sh, because update.sh wasn't
+  in the binary release tarball and never overwrote itself during an
+  upgrade. v2.7.14 closes the chicken-and-egg: when run with
+  `INSTALL_FROM_RELEASE=1`, update.sh fetches the latest tag's
+  `scripts/update.sh` from raw.githubusercontent.com, replaces its own
+  on-disk copy if it differs, and re-execs. A `SELF_REFRESHED=1` env
+  guard prevents infinite loops.
+
+  **Operators currently stuck on v2.7.11 or v2.7.12** (where the broken
+  health check rolls every upgrade back) need to bootstrap once:
+  ```
+  sudo curl -fsSL https://raw.githubusercontent.com/ovexro/dockpanel/main/scripts/update.sh \
+       -o /opt/dockpanel/scripts/update.sh
+  sudo INSTALL_FROM_RELEASE=1 bash /opt/dockpanel/scripts/update.sh
+  ```
+  After the first successful upgrade, future runs self-refresh
+  automatically.
+
 ## [2.7.13] - 2026-04-15
 
 ### Fixed

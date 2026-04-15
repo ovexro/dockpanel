@@ -38,6 +38,35 @@ CLI_BIN="/usr/local/bin/dockpanel"
 INSTALL_FROM_RELEASE="${INSTALL_FROM_RELEASE:-0}"
 GITHUB_REPO="ovexro/dockpanel"
 
+# ── Self-refresh ──────────────────────────────────────────────────────────
+# In binary-release mode, the on-disk copy of this script can lag the
+# repo by several releases (it's only refreshed by re-running install.sh).
+# That means a bug in update.sh — like the 405-rollback bug fixed in
+# v2.7.13 — strands operators unable to upgrade. Pull the latest script
+# from the latest release tag and re-exec ourselves before running any
+# update logic. SELF_REFRESHED=1 prevents an infinite re-exec loop.
+if [ "${SELF_REFRESHED:-0}" != "1" ] && [ "$INSTALL_FROM_RELEASE" = "1" ]; then
+    LATEST_TAG=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" 2>/dev/null \
+        | grep -m1 '"tag_name"' | cut -d'"' -f4 || true)
+    if [ -n "$LATEST_TAG" ]; then
+        REMOTE_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/${LATEST_TAG}/scripts/update.sh"
+        TMP=$(mktemp)
+        if curl -fsSL "$REMOTE_URL" -o "$TMP" 2>/dev/null && [ -s "$TMP" ]; then
+            # Compare to current to avoid an unnecessary re-exec on every run
+            if ! cmp -s "$TMP" "${BASH_SOURCE[0]}"; then
+                log "Refreshing update.sh from $LATEST_TAG (current copy is stale)"
+                cp "$TMP" "${BASH_SOURCE[0]}" 2>/dev/null || true
+                rm -f "$TMP"
+                export SELF_REFRESHED=1
+                exec bash "${BASH_SOURCE[0]}" "$@"
+            fi
+            rm -f "$TMP"
+        else
+            rm -f "$TMP"
+        fi
+    fi
+fi
+
 # Auto-detect: if no source available, use release binaries
 if [ "$INSTALL_FROM_RELEASE" != "1" ] && [ ! -d "$AGENT_SRC/src" ]; then
     log "No source found — switching to pre-built binary download"
