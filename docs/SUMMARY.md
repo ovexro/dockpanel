@@ -16,6 +16,7 @@
   - [Integrations](guides/webhook-gateway.md)
   - [Notifications](guides/notifications.md)
   - [Security Hardening](guides/security-hardening.md)
+  - [Image Vulnerability Scanning](guides/image-scanning.md)
   - [Themes & Layouts](guides/themes.md)
   - [Sessions](guides/sessions.md)
 - [API Reference](api-reference.md)

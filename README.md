@@ -36,7 +36,7 @@ Supports Ubuntu 20+, Debian 11+, CentOS 9+, Rocky 9+, Fedora 39+, Amazon Linux 2
 
 ## Why DockPanel?
 
-No other free panel gives you Git push-to-deploy with blue-green zero-downtime updates, 151 one-click Docker app templates, a WAF, passkey login, GPU passthrough, multi-server management, reseller accounts, a developer CLI, and Infrastructure as Code — all while the panel services themselves use under 20MB of RAM. DockPanel does.
+No other free panel gives you Git push-to-deploy with blue-green zero-downtime updates, 151 one-click Docker app templates, per-image CVE scanning with deploy gating, a WAF, passkey login, GPU passthrough, multi-server management, reseller accounts, a developer CLI, and Infrastructure as Code — all while the panel services themselves use under 20MB of RAM. DockPanel does.
 
 | | DockPanel | HestiaCP | CloudPanel | RunCloud |
 |---|---|---|---|---|
@@ -188,7 +188,8 @@ No other free panel gives you Git push-to-deploy with blue-green zero-downtime u
 - **Firewall** — UFW management with smart port opener.
 - **Fail2Ban** — View/ban/unban IPs, panel-specific jail.
 - **SSH Hardening** — Disable password/root login, change port — one click.
-- **Vulnerability Scanning** — Container scanning, file integrity, security headers.
+- **Vulnerability Scanning** — File integrity, security headers, full-server audits.
+- **Per-Image CVE Scanning** — Scan every running Docker app's image with Anchore grype. Severity badge per app row on the Apps page. Scheduled background rescans (configurable interval). Soft deploy gate refuses deploys on images exceeding a critical/high/medium threshold. Grype installs self-contained into `/var/lib/dockpanel/scanners/` from the Settings UI. **Defaults to off** — opt in from Settings → Services → Image Vulnerability Scanning.
 - **Auto-Healing** — Restart crashed services, clean disk, renew expiring SSL, auto-sleep idle containers.
 
 ### Developer Experience
@@ -236,7 +237,7 @@ Browser → React 19 SPA → Nginx
 
 ## Security
 
-DockPanel has undergone six rounds of security auditing (260+ vulnerabilities found and fixed). Credentials are encrypted at rest with AES-256-GCM. All child processes run with sanitized environments. See [SECURITY.md](SECURITY.md) for details.
+DockPanel has undergone seven rounds of security auditing (280+ vulnerabilities found and fixed). Credentials are encrypted at rest with AES-256-GCM. All child processes run with sanitized environments. Per-image CVE scanning (grype) with optional deploy gating catches vulnerable images before they ship. See [SECURITY.md](SECURITY.md) for details.
 
 ## Development
 

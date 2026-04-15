@@ -4,6 +4,46 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.7.9] - 2026-04-15
+
+### Added
+
+- **Per-image vulnerability scanning (grype).** First feature in the Phase 1
+  "Trust by Default" cycle. Scans every Docker app's image for known CVEs and
+  surfaces a severity badge per app row on the Apps page, next to the existing
+  update badge. Click a row to see the full CVE table (CVE ID, severity,
+  package, installed version, fixed version). Defaults to **off** so existing
+  installs see no behaviour change on upgrade — admins opt in from
+  Settings → Services → Image Vulnerability Scanning.
+  - **Install button** pulls Anchore's signed grype installer into
+    `/var/lib/dockpanel/scanners/` (self-contained — doesn't pollute
+    `/usr/local/bin` and works under the hardened agent sandbox). The
+    vulnerability database primes during install.
+  - **Scheduled scans** rescan every running app's image in the background at
+    a configurable interval (default 24h, range 1–720h).
+  - **Soft deploy gate** refuses new deploys if the template's image has a
+    recent scan exceeding a threshold (`critical` / `high` / `medium`). First
+    encounter of an image triggers a best-effort background scan so the next
+    deploy enforces the gate without blocking the first one.
+  - **Scan-on-demand** from the per-app drawer. Ad-hoc scan of any image via
+    `POST /api/image-scan/scan`.
+  - **Agent image-ref validator** rejects shell metacharacters before invoking
+    grype — defence-in-depth against shell-injection via user-supplied image
+    references.
+
+### Fixed
+
+- **`/var/lib/dockpanel` was missing from the hardened agent sandbox's
+  `ReadWritePaths`.** Audit 7 introduced `ProtectSystem=strict` on the agent
+  unit file (`panel/agent/dockpanel-agent.service`) but only listed
+  `/etc/nginx`, `/etc/dockpanel`, `/var/run/dockpanel`, `/var/backups/dockpanel`,
+  `/var/www`, `/var/log`, `/etc/letsencrypt` — which meant git builds, terminal
+  recordings, mail backups, Docker app volumes, and the new image scanner would
+  all have silently failed if anyone deployed the hardened unit verbatim. Added
+  `/var/lib/dockpanel` to the path list. (Installer scripts still emit
+  `ProtectSystem=no` units, so fresh installs from `install.sh` / `update.sh`
+  were not affected.)
+
 ## [2.7.8] - 2026-04-15
 
 ### Security (Audit Round 7)

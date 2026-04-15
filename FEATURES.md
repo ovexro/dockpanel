@@ -1,6 +1,6 @@
 # DockPanel Feature Manifest
 
-> **Last verified**: 2026-03-31 | **Version**: v2.7.0 | **Total**: 60+ major features, ~280 capabilities
+> **Last verified**: 2026-04-15 | **Version**: v2.7.9 | **Total**: 60+ major features, ~280 capabilities
 >
 > This file is the single source of truth for what DockPanel offers.
 > Update it whenever features are added, changed, or removed.
@@ -43,6 +43,7 @@
 | **Fail2Ban** | Jail management, ban/unban, panel jail | `routes/security.rs` | `security.rs` | (in Security) |
 | **SSH Hardening** | Disable password/root, change port, key management | `routes/security.rs` | `security.rs` | (in Security) |
 | **Security Scanning** | Automated audits with posture scoring | `routes/security_scans.rs` | — | (in Security) |
+| **Image Vulnerability Scanning** | Per-app CVE scanning with grype (self-contained install into `/var/lib/dockpanel/scanners/`), severity badge per app row, scheduled background rescans, soft deploy gate at critical/high/medium threshold. Defaults off. | `routes/image_scans.rs`, `services/image_scanner.rs` | `services/image_scanner.rs`, `routes/image_scan.rs` | `Apps.tsx` (badge + drawer), `Settings.tsx` (ImageScanSettings) |
 | **Credential Encryption** | All stored credentials encrypted at rest with AES-256-GCM | `services/credential_crypto.rs` | — | — |
 | **Content Security Policy** | CSP headers on frontend nginx config | — | — | `nginx.conf` |
 | **Safe Command Execution** | `env_clear()` on all child processes to prevent environment hijacking | — | `safe_command.rs` | — |
@@ -102,6 +103,7 @@
 | `preview_cleanup` | 300s | Remove expired preview environments |
 | `backup_policy_executor` | per policy | Execute backup policies (retention, scheduling) |
 | `backup_verifier` | per policy | Verify backup integrity after creation |
+| `image_scan_sweeper` | 30min | Rescan every running app's image past the configured interval (opt-in) |
 
 ## CLI Commands
 

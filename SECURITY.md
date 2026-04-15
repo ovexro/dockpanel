@@ -75,6 +75,7 @@ DockPanel is designed with defense in depth. Key security properties include:
 - **Input sanitization** — All user-supplied data is validated and sanitized before being passed to system commands.
 - **Systemd hardening** — Generated service units apply systemd security directives to limit the blast radius of any compromise.
 - **Terminal sandboxing** — Terminal sessions run with `PR_SET_NO_NEW_PRIVS`, restricted bash shells, and a command blocklist to prevent privilege escalation and dangerous operations.
+- **Per-image CVE scanning with deploy gating** — Optional but built-in. Every running Docker app can be scanned against Anchore's grype vulnerability database; a configurable soft deploy gate refuses new deploys on images exceeding a critical/high/medium threshold. Scanner binary is self-contained inside `/var/lib/dockpanel/scanners/` (not `/usr/local/bin`) so it lives entirely within the agent's hardened sandbox. Defaults off; admins opt in from Settings → Services.
 
 ## Past Security Work
 

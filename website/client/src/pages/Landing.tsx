@@ -7,7 +7,7 @@ import {
   KeyRound, Wrench, ClipboardList, Mail, Zap, Users, LogIn,
   Package, ArrowRightLeft, LayoutTemplate, Puzzle, Network,
   ChevronDown, Check, Github, Copy, CheckCircle2, X as XIcon,
-  Palette, Star, ArrowRight, Menu
+  Palette, Star, ArrowRight, Menu, ScanSearch
 } from 'lucide-react';
 
 const hd = "font-['Space_Grotesk',system-ui,sans-serif]";
@@ -174,8 +174,8 @@ const showcase = [
     alt: 'Monitoring dashboard',
   },
   {
-    title: 'Six audits. 260 vulns fixed.',
-    desc: 'ModSecurity WAF, Fail2Ban, real-time scanning, and one-click hardening. Security is the default, not an add-on.',
+    title: 'Seven audits. 280 vulns fixed.',
+    desc: 'ModSecurity WAF, Fail2Ban, per-image CVE scanning with deploy gating, and one-click hardening. Security is the default, not an add-on.',
     shot: '/screenshots/dp-security.png',
     alt: 'Security dashboard',
   },
@@ -196,6 +196,7 @@ const allFeatures = [
   { name: 'Infrastructure as Code', desc: 'YAML export/import for reproducible setups', icon: FileCode2 },
   { name: 'Uptime Monitoring', desc: 'HTTP, TCP, ping probes with incident management', icon: Activity },
   { name: 'WAF (ModSecurity)', desc: 'OWASP CRS v4 \u2014 per-site detection or prevention', icon: ShieldCheck },
+  { name: 'Image CVE Scanning', desc: 'Per-app grype scans, deploy gate, scheduled rescan', icon: ScanSearch },
   { name: 'Backup Orchestrator', desc: 'Scheduled, encrypted, verified, with S3 support', icon: HardDriveDownload },
   { name: 'Smart Diagnostics', desc: '6 check categories with one-click auto-fix', icon: Stethoscope },
   { name: 'GPU Passthrough', desc: 'NVIDIA Container Toolkit detection & monitoring', icon: Cpu },
