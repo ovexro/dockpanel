@@ -1,5 +1,7 @@
 # Security Policy
 
+> A public posture summary (audit count, supply-chain story, recent advisories, response SLA) lives at **[dockpanel.dev/security](https://dockpanel.dev/security)**. This file is the canonical policy.
+
 ## Supported Versions
 
 Only the latest release of DockPanel is supported with security updates. We recommend always running the most recent version to ensure you have the latest fixes and protections.

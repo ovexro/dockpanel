@@ -317,6 +317,7 @@ export default function Landing() {
           <div className="hidden md:flex items-center gap-8 text-[13px] font-medium text-zinc-500">
             <NavLink href="#features" label="Features" active={activeSection === 'features'} />
             <NavLink href="#compare" label="Compare" active={activeSection === 'compare'} />
+            <Link to="/security" className="relative hover:text-white transition-colors pb-1">Security</Link>
             <NavLink href="#pricing" label="Pricing" active={activeSection === 'pricing'} />
             <NavLink href="#faq" label="FAQ" active={activeSection === 'faq'} />
           </div>
@@ -359,6 +360,7 @@ export default function Landing() {
               <div className="flex flex-col gap-6 mt-12 text-[15px] font-medium">
                 <a href="#features" onClick={() => setMobileMenu(false)} className="text-zinc-300 hover:text-white transition-colors">Features</a>
                 <a href="#compare" onClick={() => setMobileMenu(false)} className="text-zinc-300 hover:text-white transition-colors">Compare</a>
+                <Link to="/security" onClick={() => setMobileMenu(false)} className="text-zinc-300 hover:text-white transition-colors">Security</Link>
                 <a href="#pricing" onClick={() => setMobileMenu(false)} className="text-zinc-300 hover:text-white transition-colors">Pricing</a>
                 <a href="#faq" onClick={() => setMobileMenu(false)} className="text-zinc-300 hover:text-white transition-colors">FAQ</a>
                 <hr className="border-zinc-800" />
@@ -462,7 +464,7 @@ export default function Landing() {
               { v: 60, s: '<', e: 's', l: 'install' },
               { v: 151, s: '', e: '', l: 'templates' },
               { v: 26, s: '', e: '', l: 'modules' },
-              { v: 6, s: '', e: '', l: 'security audits' },
+              { v: 7, s: '', e: '', l: 'security audits' },
             ].map((s, i) => (
               <div key={i} className="flex items-baseline gap-1.5">
                 <span className={`text-2xl font-bold text-white tabular-nums ${hd}`}>
@@ -710,6 +712,7 @@ export default function Landing() {
                 <h4 className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-3">Product</h4>
                 <div className="flex flex-col gap-2.5 text-[13px] text-zinc-600">
                   <a href="#features" className="hover:text-zinc-300 transition-colors">Features</a>
+                  <Link to="/security" className="hover:text-zinc-300 transition-colors">Security</Link>
                   <a href="https://docs.dockpanel.dev" className="hover:text-zinc-300 transition-colors">Docs</a>
                   <a href="https://github.com/ovexro/dockpanel" className="hover:text-zinc-300 transition-colors">GitHub</a>
                 </div>
