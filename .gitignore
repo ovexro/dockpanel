@@ -45,3 +45,4 @@ Thumbs.db
 # mdBook build output
 docs/book/
 .cargo/
+dist/

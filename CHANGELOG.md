@@ -4,6 +4,34 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.7.7] - 2026-04-15
+
+### Fixed
+- **File Manager uploads were silently broken.** The wired agent upload handler
+  expected `{path, content_base64}` while the backend (and frontend) sent
+  `{path, filename, content}`. A second handler in `agent/routes/files.rs` had
+  the right shape but was never wired to a router. Fixed the wired handler to
+  accept the real payload (with `content_base64` alias for backwards
+  compatibility) and removed the orphan duplicate.
+- **Per-site PHP-FPM pool config changes never took effect.** Agent called
+  `write_php_pool_config(...)` but never reloaded PHP-FPM afterwards, so custom
+  `php_memory_mb` / `php_max_workers` per site were ignored until a manual
+  restart. Wired `reload_php_fpm` right after the pool write.
+- **Installer silently fell back to IP-only mode over non-interactive SSH.**
+  Piping `install.sh` through an SSH session with no controlling tty made
+  `read < /dev/tty` fail silently and cleared `PANEL_DOMAIN`. Now prints a
+  clear "no tty — set PANEL_DOMAIN to configure" notice and points at the
+  env var.
+- **`/var/lib/dockpanel/recordings` was never created on fresh install.** The
+  terminal-recording API and auto-healer retention sweep both reference it.
+  Added to the installer's `mkdir -p` list.
+
+### Removed
+- Agent dead code: `restart_app_service`, `app_service_status`, `build_labels`,
+  `connect_to_network` (Docker-label routing superseded by file-provider
+  `write_route_config`), `volume_backup::get_backup_path` (duplicate), and
+  `BackupInfo::new`.
+
 ## [2.7.6] - 2026-04-14
 
 ### Improved
