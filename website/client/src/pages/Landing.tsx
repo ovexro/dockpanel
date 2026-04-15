@@ -7,7 +7,7 @@ import {
   KeyRound, Wrench, ClipboardList, Mail, Zap, Users, LogIn,
   Package, ArrowRightLeft, LayoutTemplate, Puzzle, Network,
   ChevronDown, Check, Github, Copy, CheckCircle2, X as XIcon,
-  Palette, Star, ArrowRight, Menu, ScanSearch
+  Palette, Star, ArrowRight, Menu, ScanSearch, BadgeCheck
 } from 'lucide-react';
 
 const hd = "font-['Space_Grotesk',system-ui,sans-serif]";
@@ -197,6 +197,7 @@ const allFeatures = [
   { name: 'Uptime Monitoring', desc: 'HTTP, TCP, ping probes with incident management', icon: Activity },
   { name: 'WAF (ModSecurity)', desc: 'OWASP CRS v4 \u2014 per-site detection or prevention', icon: ShieldCheck },
   { name: 'Image CVE Scanning', desc: 'Per-app grype scans, deploy gate, scheduled rescan', icon: ScanSearch },
+  { name: 'Signed Releases + SBOM', desc: 'cosign keyless via Sigstore, SPDX 2.3 SBOMs, Rekor transparency log', icon: BadgeCheck },
   { name: 'Backup Orchestrator', desc: 'Scheduled, encrypted, verified, with S3 support', icon: HardDriveDownload },
   { name: 'Smart Diagnostics', desc: '6 check categories with one-click auto-fix', icon: Stethoscope },
   { name: 'GPU Passthrough', desc: 'NVIDIA Container Toolkit detection & monitoring', icon: Cpu },

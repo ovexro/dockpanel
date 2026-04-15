@@ -70,9 +70,22 @@ echo -e "${YELLOW}Building frontend...${NC}"
 cd panel/frontend && npm run build 2>&1 | tail -1 && cd ../..
 tar czf "$DIST/dockpanel-frontend.tar.gz" -C panel/frontend dist/
 
+# ─── Generate SBOMs (SPDX JSON) ───
+echo -e "${YELLOW}Generating SBOMs...${NC}"
+if ! command -v cargo-sbom >/dev/null 2>&1; then
+  echo "  Installing cargo-sbom..."
+  cargo install cargo-sbom --locked --version ^0.10 >/dev/null
+fi
+cargo sbom --project-directory panel/agent   --output-format spdx_json_2_3 > "$DIST/dockpanel-agent.spdx.json"
+cargo sbom --project-directory panel/backend --output-format spdx_json_2_3 > "$DIST/dockpanel-api.spdx.json"
+cargo sbom --project-directory panel/cli     --output-format spdx_json_2_3 > "$DIST/dockpanel-cli.spdx.json"
+
 # ─── Generate checksums ───
 echo -e "${YELLOW}Generating checksums...${NC}"
 cd "$DIST" && sha256sum * > SHA256SUMS && cd ../..
+
+# ─── Note on signatures ───
+echo -e "${YELLOW}Note:${NC} local builds are unsigned. Signed releases are produced by GitHub Actions (.github/workflows/release.yml) using cosign keyless via Sigstore."
 
 # ─── Show results ───
 echo ""

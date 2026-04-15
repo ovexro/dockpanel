@@ -190,6 +190,7 @@ No other free panel gives you Git push-to-deploy with blue-green zero-downtime u
 - **SSH Hardening** — Disable password/root login, change port — one click.
 - **Vulnerability Scanning** — File integrity, security headers, full-server audits.
 - **Per-Image CVE Scanning** — Scan every running Docker app's image with Anchore grype. Severity badge per app row on the Apps page. Scheduled background rescans (configurable interval). Soft deploy gate refuses deploys on images exceeding a critical/high/medium threshold. Grype installs self-contained into `/var/lib/dockpanel/scanners/` from the Settings UI. **Defaults to off** — opt in from Settings → Services → Image Vulnerability Scanning.
+- **Signed Releases + SBOM** — Every release binary and its SPDX SBOM is signed in CI with cosign keyless via Sigstore (no long-lived signing key, recorded in the public Rekor transparency log). Verification snippet in [SECURITY.md](SECURITY.md#verifying-release-signatures).
 - **Auto-Healing** — Restart crashed services, clean disk, renew expiring SSL, auto-sleep idle containers.
 
 ### Developer Experience

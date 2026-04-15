@@ -4,6 +4,24 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.7.10] - 2026-04-15
+
+### Added
+
+- **Signed releases via cosign keyless (Sigstore).** Every binary and SBOM in
+  the GitHub release is now signed in CI using the release workflow's OIDC
+  identity — no long-lived signing key exists, and every signature is recorded
+  in the public Rekor transparency log. Verification snippet in
+  [SECURITY.md](SECURITY.md#verifying-release-signatures).
+- **Per-binary SPDX 2.3 SBOMs.** `cargo-sbom` runs in CI for the agent, API,
+  and CLI crates, emitting `dockpanel-{agent,api,cli}.spdx.json` alongside the
+  binaries (also signed). Local builds via `scripts/release.sh` now generate
+  SBOMs too; signing remains CI-only so the OIDC-bound certificate identity is
+  always traceable to this repository's release workflow.
+
+This is the first half of the Phase 1 supply-chain story — the next release
+exposes per-deployed-container SBOMs in-panel.
+
 ## [2.7.9] - 2026-04-15
 
 ### Added

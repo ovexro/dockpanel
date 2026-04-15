@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -84,6 +85,17 @@ jobs:
           echo "Binary sizes (${{ matrix.arch }}):"
           ls -lh release/
 
+      - name: Install cargo-sbom
+        if: matrix.arch == 'amd64'
+        run: cargo install cargo-sbom --locked --version ^0.10
+
+      - name: Generate SBOMs (SPDX JSON)
+        if: matrix.arch == 'amd64'
+        run: |
+          cargo sbom --project-directory panel/agent   --output-format spdx_json_2_3 > release/dockpanel-agent.spdx.json
+          cargo sbom --project-directory panel/backend --output-format spdx_json_2_3 > release/dockpanel-api.spdx.json
+          cargo sbom --project-directory panel/cli     --output-format spdx_json_2_3 > release/dockpanel-cli.spdx.json
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -136,23 +148,34 @@ jobs:
           cp artifacts/binaries-arm64/* release/
           cp artifacts/frontend/dockpanel-frontend.tar.gz release/
 
-          # Create checksums
+          # Create checksums (over binaries + SBOMs, before signatures)
           cd release
-          sha256sum * > checksums.txt
+          sha256sum dockpanel-* > checksums.txt
 
           echo "Release contents:"
           ls -lh
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.1'
+
+      - name: Sign release assets (keyless via Sigstore)
+        run: |
+          cd release
+          for f in $(ls | grep -v '\.sig$' | grep -v '\.pem$'); do
+            echo "Signing $f"
+            cosign sign-blob --yes \
+              --output-signature "${f}.sig" \
+              --output-certificate "${f}.pem" \
+              "$f"
+          done
+          echo "Signed assets:"
+          ls -lh *.sig *.pem
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            release/dockpanel-agent-linux-amd64
-            release/dockpanel-agent-linux-arm64
-            release/dockpanel-api-linux-amd64
-            release/dockpanel-api-linux-arm64
-            release/dockpanel-cli-linux-amd64
-            release/dockpanel-cli-linux-arm64
-            release/dockpanel-frontend.tar.gz
-            release/checksums.txt
+            release/*

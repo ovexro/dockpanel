@@ -44,6 +44,7 @@
 | **SSH Hardening** | Disable password/root, change port, key management | `routes/security.rs` | `security.rs` | (in Security) |
 | **Security Scanning** | Automated audits with posture scoring | `routes/security_scans.rs` | — | (in Security) |
 | **Image Vulnerability Scanning** | Per-app CVE scanning with grype (self-contained install into `/var/lib/dockpanel/scanners/`), severity badge per app row, scheduled background rescans, soft deploy gate at critical/high/medium threshold. Defaults off. | `routes/image_scans.rs`, `services/image_scanner.rs` | `services/image_scanner.rs`, `routes/image_scan.rs` | `Apps.tsx` (badge + drawer), `Settings.tsx` (ImageScanSettings) |
+| **Signed Releases + SBOM** | Every binary and SPDX 2.3 SBOM is signed in CI with cosign keyless via Sigstore (no long-lived key, recorded in Rekor transparency log). cargo-sbom emits per-crate SBOMs. Verification snippet in SECURITY.md. | — | — | — (release artifacts) |
 | **Credential Encryption** | All stored credentials encrypted at rest with AES-256-GCM | `services/credential_crypto.rs` | — | — |
 | **Content Security Policy** | CSP headers on frontend nginx config | — | — | `nginx.conf` |
 | **Safe Command Execution** | `env_clear()` on all child processes to prevent environment hijacking | — | `safe_command.rs` | — |
