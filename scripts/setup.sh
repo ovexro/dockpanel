@@ -345,7 +345,7 @@ create_directories() {
     # (these may not exist yet on a fresh install — services are installed later)
     mkdir -p /etc/postfix /etc/dovecot /var/vmail /var/spool/postfix /run/opendkim
     mkdir -p /var/lib/nginx /etc/letsencrypt /var/lib/dpkg /var/cache/apt /var/lib/apt
-    mkdir -p /etc/php /var/spool/cron /var/lib/dockpanel/git
+    mkdir -p /etc/php /var/spool/cron /var/lib/dockpanel/git /var/lib/dockpanel/recordings
     touch /etc/opendkim.conf /run/nginx.pid 2>/dev/null || true
 
     log "Directories created"
@@ -1060,12 +1060,18 @@ main() {
         echo ""
         echo -e "${BOLD}Enter your panel domain (e.g. panel.example.com)${NC}"
         echo -e "Leave blank to access via IP:${PANEL_PORT} instead"
+        echo -e "${BOLD}Tip:${NC} set PANEL_DOMAIN=... in the environment to skip this prompt"
         echo -n "> "
         if [ -t 0 ]; then
             read -r PANEL_DOMAIN
-        else
-            # When piped via curl, read from terminal directly
+        elif [ -r /dev/tty ]; then
+            # When piped via curl but an interactive terminal is available
             read -r PANEL_DOMAIN < /dev/tty 2>/dev/null || PANEL_DOMAIN=""
+        else
+            # Fully non-interactive (e.g. piped through SSH without tty).
+            # Skip the prompt — caller should have set PANEL_DOMAIN already.
+            echo "(no tty — continuing without a panel domain; set PANEL_DOMAIN to configure)"
+            PANEL_DOMAIN=""
         fi
         PANEL_DOMAIN=$(echo "$PANEL_DOMAIN" | tr -d ' ')
     fi
