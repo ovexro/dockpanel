@@ -9,6 +9,13 @@ use crate::safe_cmd::safe_command;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+// Scanner lives inside the DockPanel data dir so it works under the hardened
+// agent sandbox (ProtectSystem=strict, ProtectHome=yes) without needing write
+// access to /usr/local/bin or $HOME.
+const GRYPE_DIR: &str = "/var/lib/dockpanel/scanners";
+const GRYPE_BIN: &str = "/var/lib/dockpanel/scanners/grype";
+const GRYPE_DB_CACHE: &str = "/var/lib/dockpanel/scanners/grype-db";
+
 #[derive(Serialize, Clone)]
 pub struct ImageScanResult {
     pub image: String,
@@ -32,30 +39,33 @@ pub struct Vuln {
     pub description: Option<String>,
 }
 
-/// True if grype is on PATH.
+/// True if the scanner binary is present at the managed path.
 pub async fn is_installed() -> bool {
-    tokio::time::timeout(Duration::from_secs(5), safe_command("which").arg("grype").output())
-        .await
-        .ok()
-        .and_then(|r| r.ok())
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    tokio::fs::metadata(GRYPE_BIN).await.is_ok()
 }
 
-/// Install grype via Anchore's official installer script.
+/// Install grype via Anchore's official installer script into the DockPanel
+/// data directory so the hardened agent sandbox can read/write it.
 pub async fn install_grype() -> Result<(), String> {
     if is_installed().await {
         return Ok(());
     }
 
-    // Anchore's documented installer: pinned to /usr/local/bin so a broken
-    // download does not corrupt /usr/bin or PATH lookups.
-    let cmd = "curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
-               | sh -s -- -b /usr/local/bin";
+    tokio::fs::create_dir_all(GRYPE_DIR)
+        .await
+        .map_err(|e| format!("create {GRYPE_DIR}: {e}"))?;
+
+    // Anchore's installer writes the binary to the path passed via `-b`. We
+    // pin it inside /var/lib/dockpanel (writable under systemd ProtectSystem=strict)
+    // rather than /usr/local/bin.
+    let cmd = format!(
+        "curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
+         | sh -s -- -b {GRYPE_DIR}"
+    );
 
     let output = tokio::time::timeout(
         Duration::from_secs(180),
-        safe_command("sh").args(["-c", cmd]).output(),
+        safe_command("sh").args(["-c", &cmd]).output(),
     )
     .await
     .map_err(|_| "grype install timed out after 180s".to_string())?
@@ -69,10 +79,14 @@ pub async fn install_grype() -> Result<(), String> {
         ));
     }
 
-    // Prime the vulnerability database (otherwise first scan stalls a user).
+    // Prime the vulnerability database so the first user-facing scan does
+    // not stall on a 200 MB download.
     let _ = tokio::time::timeout(
         Duration::from_secs(180),
-        safe_command("grype").args(["db", "update"]).output(),
+        safe_command(GRYPE_BIN)
+            .args(["db", "update"])
+            .env("GRYPE_DB_CACHE_DIR", GRYPE_DB_CACHE)
+            .output(),
     )
     .await;
 
@@ -81,16 +95,8 @@ pub async fn install_grype() -> Result<(), String> {
 
 /// Remove grype binary and its cached vulnerability database.
 pub async fn uninstall_grype() -> Result<(), String> {
-    let _ = tokio::time::timeout(
-        Duration::from_secs(30),
-        safe_command("sh")
-            .args([
-                "-c",
-                "rm -f /usr/local/bin/grype && rm -rf /root/.cache/grype /root/.grype",
-            ])
-            .output(),
-    )
-    .await;
+    let _ = tokio::fs::remove_file(GRYPE_BIN).await;
+    let _ = tokio::fs::remove_dir_all(GRYPE_DB_CACHE).await;
     Ok(())
 }
 
@@ -114,8 +120,9 @@ pub async fn scan_image(image: &str) -> Result<ImageScanResult, String> {
 
     let output = tokio::time::timeout(
         Duration::from_secs(180),
-        safe_command("grype")
+        safe_command(GRYPE_BIN)
             .args([image, "-o", "json"])
+            .env("GRYPE_DB_CACHE_DIR", GRYPE_DB_CACHE)
             .output(),
     )
     .await

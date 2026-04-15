@@ -13,7 +13,7 @@ StartLimitBurst=5
 StartLimitIntervalSec=60
 Environment=RUST_LOG=info
 RuntimeDirectory=dockpanel
-ReadWritePaths=/etc/nginx /etc/dockpanel /var/run/dockpanel /var/backups/dockpanel /var/www /var/log /etc/letsencrypt
+ReadWritePaths=/etc/nginx /etc/dockpanel /var/run/dockpanel /var/backups/dockpanel /var/lib/dockpanel /var/www /var/log /etc/letsencrypt
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
