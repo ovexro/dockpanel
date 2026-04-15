@@ -21,6 +21,7 @@ interface AppTemplate {
   default_port: number;
   container_port: string;
   env_vars: EnvVar[];
+  gpu_recommended?: boolean;
 }
 
 interface DeployedApp {
@@ -495,6 +496,7 @@ export default function Apps() {
     setAppPort(tmpl.default_port);
     setAppDomain("");
     setSslEmail("");
+    setGpuEnabled(!!tmpl.gpu_recommended);
     const defaults: Record<string, string> = {};
     tmpl.env_vars.forEach((v) => {
       defaults[v.name] = v.default;
@@ -1717,17 +1719,27 @@ volumes:
                 <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${categoryColors[tmpl.category] || "bg-dark-700"}`}>
                   {appIcons[tmpl.id] || <span className="text-sm font-bold text-dark-200">{tmpl.name[0]}</span>}
                 </div>
-                <div>
-                  <h3 className="text-sm font-semibold text-dark-50 group-hover:text-accent-400">
-                    {tmpl.name}
-                  </h3>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <h3 className="text-sm font-semibold text-dark-50 group-hover:text-accent-400 truncate">
+                      {tmpl.name}
+                    </h3>
+                    {tmpl.gpu_recommended && (
+                      <span
+                        title="GPU recommended — passthrough will be auto-enabled on deploy"
+                        className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
+                      >
+                        GPU
+                      </span>
+                    )}
+                  </div>
                   <span className="text-[10px] text-dark-300 uppercase">{tmpl.category}</span>
                 </div>
               </div>
               <p className="text-xs text-dark-200 line-clamp-2">{tmpl.description}</p>
               <div className="flex items-center justify-between mt-3">
-                <span className="text-[10px] text-dark-300 font-mono">{tmpl.image}</span>
-                <span className="text-[10px] text-dark-300">:{tmpl.default_port}</span>
+                <span className="text-[10px] text-dark-300 font-mono truncate">{tmpl.image}</span>
+                <span className="text-[10px] text-dark-300 ml-2 flex-none">:{tmpl.default_port}</span>
               </div>
             </button>
           ))}

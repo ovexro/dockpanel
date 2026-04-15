@@ -241,7 +241,23 @@ pub struct AppTemplate {
     pub container_port: String,
     pub env_vars: Vec<EnvVar>,
     pub volumes: Vec<String>,
+    /// True when the template materially benefits from GPU passthrough
+    /// (LLM/diffusion/ASR inference). Frontend uses this to badge the
+    /// template card and pre-tick the GPU toggle on the deploy form.
+    pub gpu_recommended: bool,
 }
+
+/// Template IDs whose container materially benefits from GPU passthrough.
+/// Source-of-truth list kept here instead of a per-template field to avoid
+/// touching every static AppTemplateDef declaration when this set evolves.
+static GPU_RECOMMENDED_TEMPLATES: &[&str] = &[
+    "ollama",
+    "localai",
+    "vllm",
+    "stable-diffusion-webui",
+    "text-generation-webui",
+    "whisper",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnvVar {
@@ -1024,7 +1040,9 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "LocalAI",
         description: "Self-hosted OpenAI-compatible API for running LLMs, image and audio generation",
         category: "AI",
-        image: "localai/localai:latest-cpu",
+        // GPU-aware default. Operators on CPU-only hosts can switch the image
+        // to localai/localai:latest-cpu via the Image field on the deploy form.
+        image: "localai/localai:latest-gpu-nvidia-cuda-12",
         default_port: 8296,
         container_port: "8080/tcp",
         env_vars: &[],
@@ -1643,7 +1661,8 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Text Generation WebUI",
         description: "Gradio web UI for running large language models (oobabooga)",
         category: "AI",
-        image: "atinoda/text-generation-webui:default-nightly",
+        // Pinned to stable default tag instead of nightly so deploys don't drift
+        image: "atinoda/text-generation-webui:default",
         default_port: 7861,
         container_port: "7860/tcp",
         env_vars: &[
@@ -1720,6 +1739,20 @@ static TEMPLATES: &[AppTemplateDef] = &[
             EnvVarDef { name: "REDIS_HOST", label: "Redis Host", default: "localhost", required: false, secret: false },
         ],
         volumes: &["/app/api/storage"],
+    },
+    AppTemplateDef {
+        id: "vllm",
+        name: "vLLM",
+        description: "High-throughput, memory-efficient LLM inference server with OpenAI-compatible API",
+        category: "AI",
+        image: "vllm/vllm-openai:latest",
+        default_port: 8000,
+        container_port: "8000/tcp",
+        env_vars: &[
+            EnvVarDef { name: "MODEL", label: "Model (HuggingFace ID)", default: "meta-llama/Llama-3.2-1B-Instruct", required: true, secret: false },
+            EnvVarDef { name: "HUGGING_FACE_HUB_TOKEN", label: "HuggingFace Token (gated models)", default: "", required: false, secret: true },
+        ],
+        volumes: &["/root/.cache/huggingface"],
     },
     // ─── Databases (new) ────────────────────────────────────────
     AppTemplateDef {
@@ -2335,6 +2368,7 @@ fn to_app_template(def: &AppTemplateDef) -> AppTemplate {
             })
             .collect(),
         volumes: def.volumes.iter().map(|v| v.to_string()).collect(),
+        gpu_recommended: GPU_RECOMMENDED_TEMPLATES.contains(&def.id),
     }
 }
 
