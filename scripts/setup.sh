@@ -447,6 +447,14 @@ download_binaries() {
     log "Latest release: $RELEASE_TAG"
     local BASE_URL="https://github.com/${GITHUB_REPO}/releases/download/${RELEASE_TAG}"
 
+    # Stop running services before overwriting their binaries. Re-running the
+    # installer with services active causes `curl -o` to fail with "Text file
+    # busy" (exit 23) because Linux refuses to overwrite a running executable.
+    # systemctl stop is a no-op if the unit is inactive or missing.
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl stop dockpanel-api dockpanel-agent 2>/dev/null || true
+    fi
+
     # Download agent
     log "Downloading agent (${DL_ARCH})..."
     curl -sfL "${BASE_URL}/dockpanel-agent-linux-${DL_ARCH}" -o "$AGENT_BIN"
@@ -521,6 +529,12 @@ build_binaries() {
         log "Installing Rust toolchain..."
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y > /dev/null 2>&1
         CARGO_CMD="$HOME/.cargo/bin/cargo"
+    fi
+
+    # Stop running services so cp can overwrite their binaries (see note in
+    # download_binaries — same "Text file busy" trap).
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl stop dockpanel-api dockpanel-agent 2>/dev/null || true
     fi
 
     # Build agent
