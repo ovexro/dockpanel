@@ -136,15 +136,15 @@ test_contains GET /api/security/firewall "Has firewall rules" "active"
 
 echo ""
 echo "── Security: Lockdown Cycle ──"
-# Direct lockdown test (needs explicit Content-Type)
-LOCK_RESP=$(curl -s -X POST "$API/api/security/lockdown/activate" -H "$AUTH" -H "Content-Type: application/json" -d '{"reason":"E2E test"}' -w "\n%{http_code}" 2>/dev/null)
+# Direct lockdown test (cookie auth on mutating routes requires the X-Requested-With CSRF header)
+LOCK_RESP=$(curl -s -X POST "$API/api/security/lockdown/activate" -H "$AUTH" -H "X-Requested-With: XMLHttpRequest" -H "Content-Type: application/json" -d '{"reason":"E2E test"}' -w "\n%{http_code}" 2>/dev/null)
 LOCK_STATUS=$(echo "$LOCK_RESP" | tail -1)
 [ "$LOCK_STATUS" = "200" ] && green "Activate lockdown (200)" || red "Activate lockdown ($LOCK_STATUS)"
 
 LOCK_CHECK=$(curl -s "$API/api/security/lockdown" -H "$AUTH" 2>/dev/null)
 echo "$LOCK_CHECK" | grep -q '"active":true' && green "Lockdown is active" || red "Lockdown not active: $LOCK_CHECK"
 
-UNLOCK_RESP=$(curl -s -X POST "$API/api/security/lockdown/deactivate" -H "$AUTH" -H "Content-Type: application/json" -d '{}' -w "\n%{http_code}" 2>/dev/null)
+UNLOCK_RESP=$(curl -s -X POST "$API/api/security/lockdown/deactivate" -H "$AUTH" -H "X-Requested-With: XMLHttpRequest" -H "Content-Type: application/json" -d '{}' -w "\n%{http_code}" 2>/dev/null)
 UNLOCK_STATUS=$(echo "$UNLOCK_RESP" | tail -1)
 [ "$UNLOCK_STATUS" = "200" ] && green "Deactivate lockdown (200)" || red "Deactivate lockdown ($UNLOCK_STATUS)"
 
@@ -204,7 +204,7 @@ test_contains GET /api/servers "Has local server" "id"
 
 echo ""
 echo "── Database Migration ──"
-test_it() { if docker exec dockpanel-postgres psql -U dockpanel -d dockpanel -c "$1" > /dev/null 2>&1; then green "$2"; else red "$2"; fi; TOTAL=$((TOTAL+1)); }
+test_it() { if docker exec dockpanel-postgres psql -U dockpanel -d dockpanel -c "$1" > /dev/null 2>&1; then green "$2"; else red "$2"; fi; }
 test_it "SELECT 1 FROM security_audit_log LIMIT 0" "security_audit_log table exists"
 test_it "SELECT active FROM lockdown_state WHERE id = 1" "lockdown_state table exists"
 test_it "SELECT 1 FROM suspicious_events LIMIT 0" "suspicious_events table exists"
