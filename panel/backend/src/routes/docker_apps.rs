@@ -126,6 +126,9 @@ pub async fn deploy(
         }
     }
 
+    // Image scan deploy gate (no-op unless admin opted in via Settings)
+    crate::routes::image_scans::preflight_gate(&state.db, &agent, &body.template_id).await?;
+
     // Pass user_id to agent for labeling
     let user_id_for_agent = claims.sub.to_string();
 

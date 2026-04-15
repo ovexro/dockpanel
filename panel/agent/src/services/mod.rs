@@ -12,6 +12,7 @@ pub mod docker_apps;
 pub mod encryption;
 pub mod files;
 pub mod git_build;
+pub mod image_scanner;
 pub mod logs;
 pub mod migration;
 pub mod nginx;

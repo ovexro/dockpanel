@@ -46,6 +46,7 @@ pub mod migration;
 pub mod resellers;
 pub mod secrets;
 pub mod iac;
+pub mod image_scans;
 pub mod passkeys;
 pub mod webhook_gateway;
 pub mod telemetry;
@@ -665,6 +666,13 @@ pub fn router() -> Router<AppState> {
         .route("/api/security/scans", get(security_scans::list_scans))
         .route("/api/security/scans/{id}", get(security_scans::get_scan))
         .route("/api/security/posture", get(security_scans::posture))
+        // Image vulnerability scanning (per-image, distinct from full security scans)
+        .route("/api/image-scan/settings", get(image_scans::get_settings).put(image_scans::update_settings))
+        .route("/api/image-scan/install", post(image_scans::install_scanner))
+        .route("/api/image-scan/uninstall", post(image_scans::uninstall_scanner))
+        .route("/api/image-scan/scan", post(image_scans::scan_image))
+        .route("/api/image-scan/recent", get(image_scans::list_recent))
+        .route("/api/apps/{name}/scan", get(image_scans::get_app_scan).post(image_scans::scan_app))
         // System
         .route("/api/health", get(system::health))
         .route("/api/system/info", get(system::info))

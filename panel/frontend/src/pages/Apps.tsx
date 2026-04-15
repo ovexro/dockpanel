@@ -61,6 +61,27 @@ interface ComposeDeployResult {
   services: { name: string; container_id: string; status: string; error: string | null }[];
 }
 
+interface ScanVuln {
+  cve: string;
+  severity: string;
+  package: string;
+  installed_version: string;
+  fixed_version: string | null;
+  description: string | null;
+}
+
+interface ScanFinding {
+  image: string;
+  scanner: string;
+  critical_count: number;
+  high_count: number;
+  medium_count: number;
+  low_count: number;
+  unknown_count: number;
+  vulnerabilities: ScanVuln[];
+  scanned_at: string;
+}
+
 const categoryColors: Record<string, string> = {
   CMS: "bg-accent-500/15",
   Database: "bg-rust-500/15",
@@ -374,18 +395,64 @@ export default function Apps() {
   const [expandedStack, setExpandedStack] = useState<string | null>(null);
   const [stackActionLoading, setStackActionLoading] = useState<string | null>(null);
 
+  // Image vulnerability scan results — keyed by image ref. Hydrated once
+  // alongside templates/apps; updated on per-app rescan.
+  const [scanFindings, setScanFindings] = useState<Record<string, ScanFinding>>({});
+  const [scanDrawerImage, setScanDrawerImage] = useState<string | null>(null);
+  const [scanRescanning, setScanRescanning] = useState<string | null>(null);
+
   useEffect(() => {
     Promise.all([
       api.get<AppTemplate[]>("/apps/templates").catch(() => []),
       api.get<DeployedApp[]>("/apps").catch(() => []),
       api.get<StackInfo[]>("/stacks").catch(() => []),
-    ]).then(([tmpl, deployed, stacksData]) => {
+      api.get<ScanFinding[]>("/image-scan/recent").catch(() => []),
+    ]).then(([tmpl, deployed, stacksData, scans]) => {
       setTemplates(tmpl);
       setApps(deployed);
       setStacks(stacksData);
+      const map: Record<string, ScanFinding> = {};
+      for (const s of scans) map[s.image] = s;
+      setScanFindings(map);
       setLoading(false);
     });
   }, []);
+
+  const rescanApp = async (containerId: string, image: string) => {
+    setScanRescanning(containerId);
+    try {
+      const result = await api.post<ScanFinding>(`/apps/${containerId}/scan`, {});
+      setScanFindings(prev => ({ ...prev, [image]: result }));
+      setMessage({ text: `Scanned ${image}`, type: "success" });
+    } catch (e) {
+      setMessage({ text: `Scan failed: ${(e as Error).message || "unknown"}`, type: "error" });
+    } finally {
+      setScanRescanning(null);
+    }
+  };
+
+  const openScanDrawer = (image: string) => {
+    setScanDrawerImage(image);
+  };
+
+  const scanSeverityClass = (f: ScanFinding | undefined): string => {
+    if (!f) return "bg-dark-700 text-dark-300";
+    if (f.critical_count > 0) return "bg-danger-500/15 text-danger-400";
+    if (f.high_count > 0) return "bg-warn-500/15 text-warn-400";
+    if (f.medium_count > 0) return "bg-warn-500/10 text-warn-300";
+    if (f.low_count + f.unknown_count > 0) return "bg-accent-500/10 text-accent-400";
+    return "bg-rust-500/15 text-rust-400";
+  };
+
+  const scanSeverityLabel = (f: ScanFinding | undefined): string => {
+    if (!f) return "Not scanned";
+    if (f.critical_count > 0) return `${f.critical_count}C / ${f.high_count}H`;
+    if (f.high_count > 0) return `${f.high_count}H / ${f.medium_count}M`;
+    if (f.medium_count > 0) return `${f.medium_count}M`;
+    const minor = f.low_count + f.unknown_count;
+    if (minor > 0) return `${minor}L`;
+    return "Clean";
+  };
 
   const loadApps = () => {
     api.get<DeployedApp[]>("/apps").then(setApps).catch(() => {});
@@ -1196,6 +1263,17 @@ volumes:
                             <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4-4m0 0l-4 4m4-4v12" /></svg>
                             Update
                           </span>
+                        )}
+                        {app.image && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); openScanDrawer(app.image!); }}
+                            className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium ${scanSeverityClass(scanFindings[app.image])} hover:opacity-80`}
+                            title={scanFindings[app.image]
+                              ? `Last scanned ${new Date(scanFindings[app.image].scanned_at).toLocaleString()}`
+                              : "Image not yet scanned"}
+                          >
+                            {scanSeverityLabel(scanFindings[app.image])}
+                          </button>
                         )}
                         <select
                           value={appTags[app.container_id] || ''}
@@ -2378,6 +2456,127 @@ volumes:
           </div>
         </div>
       )}
+
+      {/* Image vulnerability scan drawer */}
+      {scanDrawerImage && (() => {
+        const finding = scanFindings[scanDrawerImage];
+        const matchedApp = apps.find(a => a.image === scanDrawerImage);
+        return (
+          <div
+            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 dp-modal-overlay"
+            onClick={() => setScanDrawerImage(null)}
+          >
+            <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-3xl max-h-[80vh] overflow-y-auto border border-dark-500 dp-modal" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Image Vulnerability Scan</h3>
+                  <p className="text-sm text-dark-50 font-mono mt-1 break-all">{scanDrawerImage}</p>
+                </div>
+                <button onClick={() => setScanDrawerImage(null)} className="text-dark-300 hover:text-dark-50 text-2xl leading-none">&times;</button>
+              </div>
+
+              {finding ? (
+                <>
+                  <div className="grid grid-cols-5 gap-2 mb-4">
+                    <div className="bg-danger-500/10 rounded p-3 text-center">
+                      <div className="text-2xl font-bold text-danger-400">{finding.critical_count}</div>
+                      <div className="text-[10px] uppercase font-mono text-danger-400 tracking-widest">Critical</div>
+                    </div>
+                    <div className="bg-warn-500/10 rounded p-3 text-center">
+                      <div className="text-2xl font-bold text-warn-400">{finding.high_count}</div>
+                      <div className="text-[10px] uppercase font-mono text-warn-400 tracking-widest">High</div>
+                    </div>
+                    <div className="bg-warn-500/5 rounded p-3 text-center">
+                      <div className="text-2xl font-bold text-warn-300">{finding.medium_count}</div>
+                      <div className="text-[10px] uppercase font-mono text-warn-300 tracking-widest">Medium</div>
+                    </div>
+                    <div className="bg-accent-500/10 rounded p-3 text-center">
+                      <div className="text-2xl font-bold text-accent-400">{finding.low_count}</div>
+                      <div className="text-[10px] uppercase font-mono text-accent-400 tracking-widest">Low</div>
+                    </div>
+                    <div className="bg-dark-700 rounded p-3 text-center">
+                      <div className="text-2xl font-bold text-dark-200">{finding.unknown_count}</div>
+                      <div className="text-[10px] uppercase font-mono text-dark-300 tracking-widest">Unknown</div>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between mb-3 text-xs text-dark-300">
+                    <span>Scanner: <span className="font-mono text-dark-200">{finding.scanner}</span></span>
+                    <span>Scanned {new Date(finding.scanned_at).toLocaleString()}</span>
+                  </div>
+                  {matchedApp && (
+                    <button
+                      onClick={() => rescanApp(matchedApp.container_id, scanDrawerImage)}
+                      disabled={scanRescanning === matchedApp.container_id}
+                      className="mb-4 px-3 py-1.5 text-xs font-medium bg-rust-600 text-white rounded hover:bg-rust-700 disabled:opacity-50"
+                    >
+                      {scanRescanning === matchedApp.container_id ? "Scanning..." : "Rescan now"}
+                    </button>
+                  )}
+                  {finding.vulnerabilities.length > 0 ? (
+                    <div className="border border-dark-600 rounded overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="bg-dark-900 text-dark-300 uppercase font-mono tracking-widest">
+                            <th className="text-left px-3 py-2">CVE</th>
+                            <th className="text-left px-3 py-2">Severity</th>
+                            <th className="text-left px-3 py-2">Package</th>
+                            <th className="text-left px-3 py-2">Installed</th>
+                            <th className="text-left px-3 py-2">Fixed in</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-dark-600">
+                          {finding.vulnerabilities.slice(0, 200).map((v, i) => (
+                            <tr key={`${v.cve}-${v.package}-${i}`} className="hover:bg-dark-700/30">
+                              <td className="px-3 py-2 font-mono text-dark-50">{v.cve}</td>
+                              <td className="px-3 py-2">
+                                <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                  v.severity === "critical" ? "bg-danger-500/15 text-danger-400" :
+                                  v.severity === "high" ? "bg-warn-500/15 text-warn-400" :
+                                  v.severity === "medium" ? "bg-warn-500/10 text-warn-300" :
+                                  "bg-accent-500/10 text-accent-400"
+                                }`}>{v.severity}</span>
+                              </td>
+                              <td className="px-3 py-2 text-dark-200">{v.package}</td>
+                              <td className="px-3 py-2 text-dark-300 font-mono">{v.installed_version}</td>
+                              <td className="px-3 py-2 text-dark-200 font-mono">{v.fixed_version || "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {finding.vulnerabilities.length > 200 && (
+                        <div className="px-3 py-2 text-[10px] text-dark-300 bg-dark-900 text-center">
+                          Showing first 200 of {finding.vulnerabilities.length} findings
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-center py-8 text-dark-300 text-sm">No findings recorded for this scan.</div>
+                  )}
+                </>
+              ) : (
+                <div className="text-center py-8">
+                  <p className="text-dark-300 text-sm mb-4">No scan recorded for this image.</p>
+                  {matchedApp && (
+                    <button
+                      onClick={() => rescanApp(matchedApp.container_id, scanDrawerImage)}
+                      disabled={scanRescanning === matchedApp.container_id}
+                      className="px-4 py-2 text-sm font-medium bg-rust-600 text-white rounded hover:bg-rust-700 disabled:opacity-50"
+                    >
+                      {scanRescanning === matchedApp.container_id ? "Scanning..." : "Scan now"}
+                    </button>
+                  )}
+                  {!matchedApp && (
+                    <p className="text-xs text-dark-300">
+                      Scanner not installed? Enable it in Settings → Image Scanning.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
       </div>
     </div>
   );

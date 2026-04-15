@@ -306,6 +306,9 @@ async fn main() {
     spawn_supervised("security_scanner", &shutdown_tx, move |rx| services::security_scanner::run(s_db.clone(), s_agent.clone(), rx));
 
     let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
+    spawn_supervised("image_scanner", &shutdown_tx, move |rx| services::image_scanner::run(s_db.clone(), s_agent.clone(), rx));
+
+    let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
     spawn_supervised("alert_engine", &shutdown_tx, move |rx| services::alert_engine::run(s_db.clone(), s_agent.clone(), rx));
 
     let (s_db, s_agent) = (state.db.clone(), state.agent.clone());

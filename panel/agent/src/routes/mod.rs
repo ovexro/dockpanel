@@ -13,6 +13,7 @@ pub mod docker_apps;
 pub mod files;
 pub mod health;
 pub mod iac;
+pub mod image_scan;
 pub mod logs;
 pub mod mail;
 pub mod migration;
