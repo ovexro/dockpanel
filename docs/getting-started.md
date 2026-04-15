@@ -62,7 +62,7 @@ If you have a domain pointed to your server, you can access the panel at `https:
 After your first login, here is what to do next:
 
 - [ ] **Create your first site** -- Go to Sites, click New Site, enter a domain, and choose a runtime (static, PHP, Node.js, or Python). DockPanel configures Nginx and provisions SSL automatically.
-- [ ] **Deploy a Docker app** -- Go to Docker Apps, browse 151 one-click templates across 14 categories (AI, CMS, databases, media, monitoring, and more), and deploy one with a single click.
+- [ ] **Deploy a Docker app** -- Go to Docker Apps, browse 152 one-click templates across 14 categories (AI, CMS, databases, media, monitoring, and more), and deploy one with a single click.
 - [ ] **Enable 2FA** -- Go to Settings and enable TOTP two-factor authentication. Save the 10 recovery codes somewhere safe.
 - [ ] **Set up backups** -- Go to Backups and create a backup schedule. Optionally configure an S3-compatible remote destination.
 - [ ] **Run diagnostics** -- Check the Dashboard for your server health score, or run `dockpanel diagnose` from the terminal to identify any issues.

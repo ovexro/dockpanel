@@ -205,7 +205,7 @@ Execute SQL query.
 ## Docker Apps (25 endpoints)
 
 ### `GET /api/apps/templates`
-List available app templates (151 templates across 14 categories). **Admin only.**
+List available app templates (152 templates across 14 categories). **Admin only.**
 
 ### `POST /api/apps/deploy`
 Deploy a Docker app. **Admin only.**

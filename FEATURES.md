@@ -18,7 +18,7 @@
 | **Incident Management** | Incident lifecycle (investigating→resolved→postmortem), timeline updates, severity, affected components, postmortem | `routes/incidents.rs` | — | `IncidentManagement.tsx` | `managed_incidents`, `incident_updates`, `managed_incident_components` |
 | **Public Status Page** | Customizable status page with component groups, incident history, subscriber notifications, overall status | `routes/incidents.rs` | — | `PublicStatusPage.tsx` | `status_page_config`, `status_page_components`, `status_page_subscribers` |
 | **Cron Jobs** | Cron scheduling with manual execution and history | `routes/crons.rs` | `crons.rs` | `Crons.tsx` | (via agent crontab) |
-| **Docker Apps** | 151 templates across 14 categories, Compose stacks, container lifecycle, registry, image tag change, live resource limits, GPU passthrough | `routes/docker_apps.rs`, `stacks.rs` | `docker_apps.rs` | `Apps.tsx` | `docker_stacks` |
+| **Docker Apps** | 152 templates across 14 categories, Compose stacks, container lifecycle, registry, image tag change, live resource limits, GPU passthrough | `routes/docker_apps.rs`, `stacks.rs` | `docker_apps.rs` | `Apps.tsx` | `docker_stacks` |
 | **Git Deploy** | Push-to-deploy, blue-green, Nixpacks (30+ langs), preview envs, one-time scheduled deploys | `routes/git_deploys.rs` | `git_build.rs` | `GitDeploys.tsx` | `git_deploys`, `git_deploy_history`, `git_previews` |
 | **WordPress Toolkit** | Multi-site dashboard, vuln scanning (14 known), hardening (7 checks), bulk updates | `routes/wordpress.rs` | `wordpress.rs`, `wp_vulnerability.rs` | `WordPressToolkit.tsx`, `WordPress.tsx` | `wp_vuln_scans`, `wp_hardening` |
 | **Migration Wizard** | Import from cPanel/HestiaCP — sites, databases, mail. Plesk (beta) | `routes/migration.rs` | `migration.rs` | `Migration.tsx` | `migrations` |
@@ -150,7 +150,8 @@
 |---------|-------------|---------|-------|----------|
 | **Auto-Sleep** | Stop idle containers after configurable inactivity, manual sleep/wake | `routes/docker_apps.rs`, `auto_healer.rs` | stop/start | `Apps.tsx` |
 | **Auto-Update Detection** | Registry digest comparison, update badges, one-click update | `routes/docker_apps.rs` | `docker_apps.rs` | `Apps.tsx` |
-| **GPU Passthrough** | NVIDIA Container Toolkit detection, --gpus flag on deploy | `routes/docker_apps.rs` | `docker_apps.rs` | `Apps.tsx` |
+| **GPU Passthrough** | NVIDIA Container Toolkit detection; per-container assignment (all GPUs or specific indices — pin app A to GPU 0, app B to GPU 1 on multi-GPU hosts) | `routes/docker_apps.rs` | `docker_apps.rs` | `Apps.tsx` |
+| **GPU Monitoring** | Per-GPU utilization/VRAM/temperature/power/fan/driver/pstate from nvidia-smi, plus per-process VRAM table with PID→container resolution | `routes/docker_apps.rs` (`/apps/gpu-info`) | `docker_apps.rs` | `System.tsx` |
 | **Horizontal Auto-Scaling** | Rule-based CPU thresholds, min/max replicas, cooldown | `routes/iac.rs` | — | (via Integrations) |
 
 ## Integrations (Advanced)
@@ -182,7 +183,7 @@
 | API RAM (RSS) | ~7 MB | 2026-04-15 |
 | Panel services RAM (agent + API) | ~19 MB | 2026-04-15 |
 | Full-stack RAM (with bundled PostgreSQL) | ~85 MB | 2026-04-15 |
-| App templates | 151 (14 categories) | 2026-03-28 |
+| App templates | 152 (14 categories) | 2026-03-28 |
 | API endpoints | 733 (465 backend + 268 agent) | 2026-03-31 |
 | E2E tests | 425 (8 test suites) | 2026-04-14 |
 | Frontend pages | 51 | 2026-04-14 |

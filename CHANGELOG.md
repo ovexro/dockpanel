@@ -4,6 +4,50 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.7.12] - 2026-04-15
+
+### Added
+
+- **Per-container GPU assignment.** Multi-GPU hosts can now pin specific
+  NVIDIA devices to specific containers — pin Ollama to GPU 0, vLLM to
+  GPU 1, Stable Diffusion to GPU 2. The deploy form auto-detects available
+  GPUs (via the existing `/apps/gpu-info`) and shows a multi-select picker
+  on hosts with two or more devices. Single-GPU hosts keep the original
+  simple toggle. Backed by Docker's `DeviceRequest.device_ids`; assignment
+  persists across `update_app()` recreations because Docker preserves the
+  host_config when pulling a new image.
+- **vLLM template (AI / Machine Learning).** High-throughput, memory-
+  efficient LLM inference server with an OpenAI-compatible API. Defaults
+  to `meta-llama/Llama-3.2-1B-Instruct` and accepts an optional
+  `HUGGING_FACE_HUB_TOKEN` for gated models. Fills the most-glaring AI
+  template gap (the inference-engine peer to Ollama).
+- **`gpu_recommended` flag on app templates.** Templates that materially
+  benefit from GPU passthrough (Ollama, LocalAI, vLLM, Stable Diffusion
+  WebUI, Text Generation WebUI, Whisper) now ship a flag that surfaces a
+  small "GPU" badge on the template card and pre-ticks the GPU passthrough
+  toggle on the deploy form. Frontends/orchestrators (Open WebUI,
+  LiteLLM, Flowise, Langflow, Dify) intentionally remain unflagged.
+
+### Changed
+
+- **LocalAI default image switched to GPU variant.**
+  `localai/localai:latest-cpu` → `localai/localai:latest-gpu-nvidia-cuda-12`.
+  The previous default silently ignored the GPU passthrough toggle on
+  every deploy. Operators on CPU-only hosts can switch back via the Image
+  field on the deploy form.
+- **Text Generation WebUI pinned** from `:default-nightly` to `:default`
+  so shipped deploys don't drift on rebuild.
+
+### Public
+
+- **dockpanel.dev/security launched.** Public security posture page —
+  audit count, signed-releases / SBOM story, response SLA, all 7 audit
+  rounds with headline fixes, recent advisories, defense-in-depth grid,
+  vulnerability-report CTA. Counter-positions DockPanel against the
+  Coolify/CyberPanel narratives. Linked from main nav (between Compare
+  and Pricing) and footer Product column. SECURITY.md cross-references
+  the page at the top.
+
 ## [2.7.11] - 2026-04-15
 
 ### Added

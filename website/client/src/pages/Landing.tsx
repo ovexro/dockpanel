@@ -162,7 +162,7 @@ function NavLink({ href, label, active }: { href: string; label: string; active:
 /* ── Data ─────────────────────────────────────────────────────────── */
 const showcase = [
   {
-    title: '151 templates. One click.',
+    title: '152 templates. One click.',
     desc: 'WordPress, Postgres, Grafana, n8n, Immich \u2014 pick a template. SSL, reverse proxy, and networking are configured automatically.',
     shot: '/screenshots/dp-apps.png',
     alt: 'Docker Apps gallery',
@@ -191,7 +191,7 @@ const allFeatures = [
   { name: 'Site Management', desc: 'PHP, Node, Python, static & reverse proxy', icon: Globe },
   { name: 'Free SSL & Wildcard', desc: "Auto-renew via Let's Encrypt & Cloudflare DNS", icon: Lock },
   { name: 'MySQL & PostgreSQL', desc: 'Create, backup, restore, point-in-time recovery', icon: Database },
-  { name: '151 Docker Templates', desc: 'One-click deploy across 14 categories', icon: Box },
+  { name: '152 Docker Templates', desc: 'One-click deploy across 14 categories', icon: Box },
   { name: 'Web Terminal', desc: 'Full PTY with privilege drop & command filtering', icon: Terminal },
   { name: 'Infrastructure as Code', desc: 'YAML export/import for reproducible setups', icon: FileCode2 },
   { name: 'Uptime Monitoring', desc: 'HTTP, TCP, ping probes with incident management', icon: Activity },
@@ -228,7 +228,7 @@ const steps = [
 const faqs = [
   { q: 'Is it really free?', a: 'Every feature, every server, no limits. Licensed under BSL 1.1, which converts to MIT in 2030. There is no premium tier.' },
   { q: 'System requirements?', a: '512 MB RAM, 1 CPU, 10 GB disk. Runs on Ubuntu, Debian, CentOS, Rocky, and Amazon Linux. ARM64 works too.' },
-  { q: 'How is this different from cPanel?', a: "cPanel uses ~800 MB of RAM, costs $15/month, and doesn't support Docker. DockPanel's panel services idle around ~19 MB (about ~85 MB with the bundled PostgreSQL), cost nothing, and ship with 151 Docker templates, a WAF, passkey authentication, Git deploys, a CLI, and multi-server management." },
+  { q: 'How is this different from cPanel?', a: "cPanel uses ~800 MB of RAM, costs $15/month, and doesn't support Docker. DockPanel's panel services idle around ~19 MB (about ~85 MB with the bundled PostgreSQL), cost nothing, and ship with 152 Docker templates, a WAF, passkey authentication, Git deploys, a CLI, and multi-server management." },
   { q: 'What happens if DockPanel goes down?', a: 'Your sites keep running. Nginx and Docker are independent processes \u2014 the panel is just the management layer. It auto-restarts via systemd if it ever stops.' },
   { q: 'Can I manage multiple servers?', a: 'As many as you want. Install a lightweight agent on each server and manage them all from one dashboard.' },
   { q: 'Why Rust?', a: "~41 MB of binaries on disk, ~19 MB of RAM for the panel services at idle (measured on a fresh Vultr VPS), no JVM, no Node, no Python dependency to maintain. On a $5 VPS, that's the difference between running 20 sites and running 2." },
@@ -462,7 +462,7 @@ export default function Landing() {
               { v: 41, s: '~', e: 'MB', l: 'binary' },
               { v: 57, s: '~', e: 'MB', l: 'RAM' },
               { v: 60, s: '<', e: 's', l: 'install' },
-              { v: 151, s: '', e: '', l: 'templates' },
+              { v: 152, s: '', e: '', l: 'templates' },
               { v: 26, s: '', e: '', l: 'modules' },
               { v: 7, s: '', e: '', l: 'security audits' },
             ].map((s, i) => (
