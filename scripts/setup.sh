@@ -1064,9 +1064,12 @@ main() {
         echo -n "> "
         if [ -t 0 ]; then
             read -r PANEL_DOMAIN
-        elif [ -r /dev/tty ]; then
-            # When piped via curl but an interactive terminal is available
-            read -r PANEL_DOMAIN < /dev/tty 2>/dev/null || PANEL_DOMAIN=""
+        # `[ -r /dev/tty ]` returns true on Linux even when the process has no
+        # controlling tty. Probe with an actual open so we don't print a confusing
+        # "No such device or address" error to stderr.
+        elif { : </dev/tty; } 2>/dev/null; then
+            # Piped via curl but an interactive terminal is reachable
+            read -r PANEL_DOMAIN < /dev/tty || PANEL_DOMAIN=""
         else
             # Fully non-interactive (e.g. piped through SSH without tty).
             # Skip the prompt — caller should have set PANEL_DOMAIN already.
