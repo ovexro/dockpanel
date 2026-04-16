@@ -115,6 +115,12 @@ export default function Settings() {
   const [testingWebhook, setTestingWebhook] = useState<string | null>(null);
   const [webhookResult, setWebhookResult] = useState<{ type: string; msg: string }>({ type: "", msg: "" });
   const [mutedTypes, setMutedTypes] = useState<string[]>([]);
+  // GPU alert thresholds
+  const [gpuAlertEnabled, setGpuAlertEnabled] = useState(true);
+  const [gpuUtilThreshold, setGpuUtilThreshold] = useState(95);
+  const [gpuUtilDuration, setGpuUtilDuration] = useState(5);
+  const [gpuTempThreshold, setGpuTempThreshold] = useState(85);
+  const [gpuVramThreshold, setGpuVramThreshold] = useState(95);
 
   // Password change
   const [currentPass, setCurrentPass] = useState("");
@@ -265,7 +271,7 @@ export default function Settings() {
 
   const loadNotifyChannels = async () => {
     try {
-      const rules = await api.get<{ notify_email?: boolean; notify_slack_url?: string; notify_discord_url?: string; notify_pagerduty_key?: string; muted_types?: string }[]>("/alert-rules");
+      const rules = await api.get<{ notify_email?: boolean; notify_slack_url?: string; notify_discord_url?: string; notify_pagerduty_key?: string; muted_types?: string; alert_gpu?: boolean; gpu_util_threshold?: number; gpu_util_duration?: number; gpu_temp_threshold?: number; gpu_vram_threshold?: number }[]>("/alert-rules");
       if (rules.length > 0) {
         const r = rules[0];
         setNotifyEmail(r.notify_email !== false);
@@ -275,6 +281,11 @@ export default function Settings() {
         if (r.muted_types) {
           setMutedTypes(r.muted_types.split(',').filter((t: string) => t.trim()));
         }
+        if (r.alert_gpu !== undefined) setGpuAlertEnabled(r.alert_gpu);
+        if (r.gpu_util_threshold) setGpuUtilThreshold(r.gpu_util_threshold);
+        if (r.gpu_util_duration) setGpuUtilDuration(r.gpu_util_duration);
+        if (r.gpu_temp_threshold) setGpuTempThreshold(r.gpu_temp_threshold);
+        if (r.gpu_vram_threshold) setGpuVramThreshold(r.gpu_vram_threshold);
       }
     } catch { /* ignore */ }
   };
@@ -1980,6 +1991,9 @@ export default function Settings() {
                   { key: "backup_failure", label: "Backup" },
                   { key: "ssl_expiry", label: "SSL" },
                   { key: "service_down", label: "Service" },
+                  { key: "gpu_utilization", label: "GPU Util" },
+                  { key: "gpu_temperature", label: "GPU Temp" },
+                  { key: "gpu_vram", label: "GPU VRAM" },
                 ].map(({ key, label }) => (
                   <label key={key} className="flex items-center gap-2 text-sm text-dark-200 cursor-pointer">
                     <input
@@ -1995,6 +2009,56 @@ export default function Settings() {
                 ))}
               </div>
             </div>
+            {/* GPU Alert Thresholds */}
+            <div className="bg-dark-800 rounded-lg border border-dark-600 p-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-medium text-dark-100 font-mono">GPU Alert Thresholds</h3>
+                  <p className="text-xs text-dark-400 mt-0.5">Configure when GPU alerts fire. Only applies to servers with NVIDIA GPUs.</p>
+                </div>
+                <label className="flex items-center gap-2 text-sm text-dark-200 cursor-pointer">
+                  <input type="checkbox" checked={gpuAlertEnabled} onChange={e => setGpuAlertEnabled(e.target.checked)}
+                    className="rounded border-dark-500 bg-dark-900 text-rust-500 focus:ring-rust-500" />
+                  Enabled
+                </label>
+              </div>
+              {gpuAlertEnabled && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-mono text-dark-300 uppercase tracking-widest mb-1">Utilization threshold</label>
+                    <div className="flex items-center gap-2">
+                      <input type="range" min="50" max="100" value={gpuUtilThreshold} onChange={e => setGpuUtilThreshold(Number(e.target.value))}
+                        className="flex-1 accent-rust-500" />
+                      <span className="text-sm text-dark-100 font-mono w-12 text-right">{gpuUtilThreshold}%</span>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-mono text-dark-300 uppercase tracking-widest mb-1">Utilization duration</label>
+                    <div className="flex items-center gap-2">
+                      <input type="range" min="1" max="30" value={gpuUtilDuration} onChange={e => setGpuUtilDuration(Number(e.target.value))}
+                        className="flex-1 accent-rust-500" />
+                      <span className="text-sm text-dark-100 font-mono w-16 text-right">{gpuUtilDuration} min</span>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-mono text-dark-300 uppercase tracking-widest mb-1">Temperature threshold</label>
+                    <div className="flex items-center gap-2">
+                      <input type="range" min="60" max="110" value={gpuTempThreshold} onChange={e => setGpuTempThreshold(Number(e.target.value))}
+                        className="flex-1 accent-rust-500" />
+                      <span className="text-sm text-dark-100 font-mono w-12 text-right">{gpuTempThreshold}°C</span>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-mono text-dark-300 uppercase tracking-widest mb-1">VRAM threshold</label>
+                    <div className="flex items-center gap-2">
+                      <input type="range" min="50" max="100" value={gpuVramThreshold} onChange={e => setGpuVramThreshold(Number(e.target.value))}
+                        className="flex-1 accent-rust-500" />
+                      <span className="text-sm text-dark-100 font-mono w-12 text-right">{gpuVramThreshold}%</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
             <div className="flex justify-end">
               <button
                 onClick={async () => {
@@ -2007,6 +2071,11 @@ export default function Settings() {
                       notify_discord_url: notifyDiscordUrl || null,
                       notify_pagerduty_key: notifyPagerdutyKey || null,
                       muted_types: mutedTypes.join(','),
+                      alert_gpu: gpuAlertEnabled,
+                      gpu_util_threshold: gpuUtilThreshold,
+                      gpu_util_duration: gpuUtilDuration,
+                      gpu_temp_threshold: gpuTempThreshold,
+                      gpu_vram_threshold: gpuVramThreshold,
                     });
                     setMessage({ text: "Notification channels saved", type: "success" });
                   } catch (e) {

@@ -112,22 +112,25 @@ async fn handle_socket(mut socket: WebSocket, agent: AgentHandle) {
     tracing::debug!("WebSocket metrics client connected");
 
     loop {
-        // Fetch all three endpoints concurrently
-        let (system_res, processes_res, network_res) = tokio::join!(
+        // Fetch all four endpoints concurrently
+        let (system_res, processes_res, network_res, gpu_res) = tokio::join!(
             agent.get("/system/info"),
             agent.get("/system/processes"),
             agent.get("/system/network"),
+            agent.get("/apps/gpu-info"),
         );
 
         let system = system_res.unwrap_or_else(|_| serde_json::json!(null));
         let processes = processes_res.unwrap_or_else(|_| serde_json::json!(null));
         let network = network_res.unwrap_or_else(|_| serde_json::json!(null));
+        let gpu = gpu_res.unwrap_or_else(|_| serde_json::json!(null));
 
         let payload = serde_json::json!({
             "type": "metrics",
             "system": system,
             "processes": processes,
             "network": network,
+            "gpu": gpu,
         });
 
         let msg = Message::Text(payload.to_string().into());

@@ -207,6 +207,95 @@ function HealthContent() {
   );
 }
 
+interface GpuHistoryPoint {
+  gpu_index: number;
+  utilization: number;
+  vram_pct: number;
+  vram_used_mb: number;
+  vram_total_mb: number;
+  temperature: number | null;
+  power: number | null;
+  time: string;
+}
+
+function GpuHistoryChart({ gpuIndex, gpuName }: { gpuIndex: number; gpuName: string }) {
+  const [points, setPoints] = useState<GpuHistoryPoint[]>([]);
+  const [metric, setMetric] = useState<"utilization" | "vram_pct" | "temperature" | "power">("utilization");
+
+  useEffect(() => {
+    api.get<{ points: GpuHistoryPoint[] }>("/dashboard/gpu-metrics-history")
+      .then(d => setPoints(d.points.filter(p => p.gpu_index === gpuIndex)))
+      .catch(() => {});
+  }, [gpuIndex]);
+
+  if (points.length === 0) return null;
+
+  const values = points.map(p => {
+    switch (metric) {
+      case "utilization": return p.utilization;
+      case "vram_pct": return p.vram_pct;
+      case "temperature": return p.temperature ?? 0;
+      case "power": return p.power ?? 0;
+    }
+  });
+
+  const max = Math.max(...values, 1);
+  const chartMax = metric === "temperature" ? Math.max(max, 100) : metric === "power" ? max * 1.1 : 100;
+  const unit = metric === "utilization" || metric === "vram_pct" ? "%" : metric === "temperature" ? "°C" : "W";
+  const labels: Record<string, string> = {
+    utilization: "Utilization",
+    vram_pct: "VRAM",
+    temperature: "Temperature",
+    power: "Power Draw",
+  };
+
+  return (
+    <div className="bg-dark-800 rounded-lg border border-dark-600 p-5">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-xs text-dark-400 font-mono uppercase tracking-wider">
+          GPU {gpuIndex} History — {gpuName}
+        </h3>
+        <div className="flex gap-1">
+          {(["utilization", "vram_pct", "temperature", "power"] as const).map(m => (
+            <button key={m} onClick={() => setMetric(m)}
+              className={`px-2 py-0.5 rounded text-xs font-mono ${metric === m ? "bg-rust-500/20 text-rust-400" : "text-dark-400 hover:text-dark-200"}`}>
+              {labels[m]}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="relative h-32">
+        <svg viewBox={`0 0 ${points.length} 100`} preserveAspectRatio="none" className="w-full h-full">
+          <defs>
+            <linearGradient id={`gpu-grad-${gpuIndex}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="rgb(234,88,12)" stopOpacity="0.3" />
+              <stop offset="100%" stopColor="rgb(234,88,12)" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          <path
+            d={`M0,${100 - (values[0] / chartMax) * 100} ${values.map((v, i) => `L${i},${100 - (v / chartMax) * 100}`).join(" ")} L${values.length - 1},100 L0,100 Z`}
+            fill={`url(#gpu-grad-${gpuIndex})`}
+          />
+          <polyline
+            points={values.map((v, i) => `${i},${100 - (v / chartMax) * 100}`).join(" ")}
+            fill="none" stroke="rgb(234,88,12)" strokeWidth="1.5" vectorEffect="non-scaling-stroke"
+          />
+        </svg>
+        <div className="absolute top-0 right-0 text-xs text-dark-400 font-mono">{chartMax.toFixed(0)}{unit}</div>
+        <div className="absolute bottom-0 right-0 text-xs text-dark-400 font-mono">0{unit}</div>
+      </div>
+      <div className="flex justify-between mt-1">
+        <span className="text-xs text-dark-400">{points[0]?.time}</span>
+        <span className="text-xs text-dark-400">
+          Avg: {(values.reduce((a, b) => a + b, 0) / values.length).toFixed(1)}{unit}
+          {" · "}Peak: {Math.max(...values).toFixed(1)}{unit}
+        </span>
+        <span className="text-xs text-dark-400">{points[points.length - 1]?.time}</span>
+      </div>
+    </div>
+  );
+}
+
 function GpuMonitor({ gpuInfo }: { gpuInfo: GpuInfoData }) {
   const vramColor = (used: number, total: number) => {
     if (total === 0) return "text-dark-300";
@@ -323,6 +412,17 @@ function GpuMonitor({ gpuInfo }: { gpuInfo: GpuInfoData }) {
           </div>
         </div>
       )}
+
+      {/* Historical GPU Charts */}
+      <div className="flex items-center gap-2 mb-4 mt-6">
+        <h2 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">GPU History</h2>
+        <span className="text-xs text-dark-400">Last 24 hours</span>
+      </div>
+      {gpuInfo.gpus.map(gpu => (
+        <div key={`hist-${gpu.index}`} className="mb-4">
+          <GpuHistoryChart gpuIndex={gpu.index} gpuName={gpu.name} />
+        </div>
+      ))}
     </div>
   );
 }

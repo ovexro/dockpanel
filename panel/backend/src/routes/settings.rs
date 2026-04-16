@@ -396,7 +396,8 @@ pub async fn export_config(
         "SELECT server_id, cpu_threshold, cpu_duration, memory_threshold, memory_duration, \
          disk_threshold, alert_cpu, alert_memory, alert_disk, alert_offline, \
          alert_backup_failure, alert_ssl_expiry, alert_service_health, \
-         ssl_warning_days, notify_email, cooldown_minutes, muted_types \
+         ssl_warning_days, notify_email, cooldown_minutes, muted_types, \
+         gpu_util_threshold, gpu_util_duration, gpu_temp_threshold, gpu_vram_threshold, alert_gpu \
          FROM alert_rules WHERE user_id = $1 ORDER BY server_id NULLS FIRST"
     )
     .bind(claims.sub)
@@ -424,6 +425,11 @@ pub async fn export_config(
             "notify_email": r.get::<bool, _>("notify_email"),
             "cooldown_minutes": r.get::<i32, _>("cooldown_minutes"),
             "muted_types": r.get::<String, _>("muted_types"),
+            "gpu_util_threshold": r.get::<i32, _>("gpu_util_threshold"),
+            "gpu_util_duration": r.get::<i32, _>("gpu_util_duration"),
+            "gpu_temp_threshold": r.get::<i32, _>("gpu_temp_threshold"),
+            "gpu_vram_threshold": r.get::<i32, _>("gpu_vram_threshold"),
+            "alert_gpu": r.get::<bool, _>("alert_gpu"),
         })
     }).collect();
 

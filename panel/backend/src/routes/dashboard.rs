@@ -313,6 +313,53 @@ pub async fn metrics_history(
     Ok(Json(serde_json::json!({ "points": points })))
 }
 
+/// GET /api/dashboard/gpu-metrics-history — Historical GPU metrics for charts.
+/// Downsampled to ~96 points (one per 15-minute bucket) per GPU for efficient chart rendering.
+pub async fn gpu_metrics_history(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let rows: Vec<(i16, f64, f64, f64, Option<f64>, Option<f64>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT \
+            gpu_index, \
+            AVG(utilization_pct)::float8 AS utilization, \
+            AVG(memory_used_mb)::float8 AS mem_used, \
+            AVG(memory_total_mb)::float8 AS mem_total, \
+            AVG(temperature_c)::float8 AS temp, \
+            AVG(power_draw_w)::float8 AS power, \
+            date_trunc('hour', created_at) + \
+                (EXTRACT(minute FROM created_at)::int / 15) * INTERVAL '15 minutes' AS bucket \
+         FROM gpu_metrics_history \
+         WHERE created_at > NOW() - INTERVAL '24 hours' \
+           AND server_id IN (SELECT id FROM servers WHERE user_id = $1) \
+         GROUP BY gpu_index, bucket \
+         ORDER BY bucket ASC, gpu_index ASC",
+    )
+    .bind(claims.sub)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| internal_error("gpu metrics history", e))?;
+
+    let points: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|(idx, util, mem_used, mem_total, temp, power, ts)| {
+            let vram_pct = if *mem_total > 0.0 { (*mem_used / *mem_total) * 100.0 } else { 0.0 };
+            serde_json::json!({
+                "gpu_index": idx,
+                "utilization": (*util * 10.0).round() / 10.0,
+                "vram_pct": (vram_pct * 10.0).round() / 10.0,
+                "vram_used_mb": (*mem_used).round(),
+                "vram_total_mb": (*mem_total).round(),
+                "temperature": temp.map(|t| (t * 10.0).round() / 10.0),
+                "power": power.map(|p| (p * 10.0).round() / 10.0),
+                "time": ts.format("%H:%M").to_string(),
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "points": points })))
+}
+
 /// GET /api/dashboard/timeline — Unified chronological event feed.
 /// Merges recent events from deploys, backups, incidents, alerts, and security scans.
 pub async fn timeline(

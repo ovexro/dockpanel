@@ -917,6 +917,7 @@ pub fn router() -> Router<AppState> {
         // Dashboard Intelligence
         .route("/api/dashboard/intelligence", get(dashboard::intelligence))
         .route("/api/dashboard/metrics-history", get(dashboard::metrics_history))
+        .route("/api/dashboard/gpu-metrics-history", get(dashboard::gpu_metrics_history))
         .route("/api/dashboard/docker", get(dashboard::docker_summary))
         .route("/api/dashboard/timeline", get(dashboard::timeline))
         .route("/api/dashboard/fleet", get(dashboard::fleet_overview))

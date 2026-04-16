@@ -265,6 +265,7 @@ pub async fn is_alert_enabled(
         "backup_failure" => "alert_backup_failure",
         "ssl_expiry" => "alert_ssl_expiry",
         "service_down" => "alert_service_health",
+        "gpu_utilization" | "gpu_temperature" | "gpu_vram" => "alert_gpu",
         _ => return true,
     };
 
@@ -353,6 +354,47 @@ pub async fn get_thresholds(
     };
 
     row.unwrap_or((90, 5, 90, 5, 85, 60, "30,14,7,3,1".to_string()))
+}
+
+/// Get GPU-specific threshold settings for a user/server.
+/// Returns (gpu_util_threshold, gpu_util_duration, gpu_temp_threshold, gpu_vram_threshold, cooldown).
+pub async fn get_gpu_thresholds(
+    pool: &PgPool,
+    user_id: Uuid,
+    server_id: Option<Uuid>,
+) -> (i32, i32, i32, i32, i32) {
+    let row: Option<(i32, i32, i32, i32, i32)> = if let Some(sid) = server_id {
+        let specific: Option<(i32, i32, i32, i32, i32)> = sqlx::query_as(
+            "SELECT gpu_util_threshold, gpu_util_duration, gpu_temp_threshold, \
+             gpu_vram_threshold, cooldown_minutes \
+             FROM alert_rules WHERE user_id = $1 AND server_id = $2",
+        )
+        .bind(user_id)
+        .bind(sid)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+
+        if specific.is_some() {
+            specific
+        } else {
+            sqlx::query_as(
+                "SELECT gpu_util_threshold, gpu_util_duration, gpu_temp_threshold, \
+                 gpu_vram_threshold, cooldown_minutes \
+                 FROM alert_rules WHERE user_id = $1 AND server_id IS NULL",
+            )
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten()
+        }
+    } else {
+        None
+    };
+
+    row.unwrap_or((95, 5, 85, 95, 60))
 }
 
 /// Fire an alert: check cooldown, record in alerts table, send notification.

@@ -191,6 +191,12 @@ pub struct AlertRuleRow {
     notify_webhook_url: Option<String>,
     /// Comma-separated alert types to suppress from external channels (Gap #69)
     muted_types: String,
+    // GPU alert thresholds (Phase 2 #2)
+    gpu_util_threshold: i32,
+    gpu_util_duration: i32,
+    gpu_temp_threshold: i32,
+    gpu_vram_threshold: i32,
+    alert_gpu: bool,
 }
 
 /// GET /api/alert-rules — Get user's alert rules.
@@ -203,7 +209,8 @@ pub async fn get_rules(
          disk_threshold, alert_cpu, alert_memory, alert_disk, alert_offline, \
          alert_backup_failure, alert_ssl_expiry, alert_service_health, \
          ssl_warning_days, notify_email, notify_slack_url, notify_discord_url, cooldown_minutes, \
-         notify_pagerduty_key, notify_webhook_url, muted_types \
+         notify_pagerduty_key, notify_webhook_url, muted_types, \
+         gpu_util_threshold, gpu_util_duration, gpu_temp_threshold, gpu_vram_threshold, alert_gpu \
          FROM alert_rules WHERE user_id = $1 ORDER BY server_id NULLS FIRST LIMIT 500",
     )
     .bind(claims.sub)
@@ -237,6 +244,12 @@ pub struct UpdateRules {
     pub notify_webhook_url: Option<String>,
     /// Comma-separated alert types to suppress from external channels (Gap #69)
     pub muted_types: Option<String>,
+    // GPU alert thresholds (Phase 2 #2)
+    pub gpu_util_threshold: Option<i32>,
+    pub gpu_util_duration: Option<i32>,
+    pub gpu_temp_threshold: Option<i32>,
+    pub gpu_vram_threshold: Option<i32>,
+    pub alert_gpu: Option<bool>,
 }
 
 /// PUT /api/alert-rules — Create or update global alert rules.
@@ -328,6 +341,11 @@ async fn upsert_rules(
              notify_pagerduty_key = COALESCE($20, notify_pagerduty_key), \
              notify_webhook_url = COALESCE($21, notify_webhook_url), \
              muted_types = COALESCE($22, muted_types), \
+             gpu_util_threshold = COALESCE($23, gpu_util_threshold), \
+             gpu_util_duration = COALESCE($24, gpu_util_duration), \
+             gpu_temp_threshold = COALESCE($25, gpu_temp_threshold), \
+             gpu_vram_threshold = COALESCE($26, gpu_vram_threshold), \
+             alert_gpu = COALESCE($27, alert_gpu), \
              updated_at = NOW() \
              {where_clause}"
         )
@@ -337,12 +355,14 @@ async fn upsert_rules(
          alert_cpu, alert_memory, alert_disk, alert_offline, alert_backup_failure, \
          alert_ssl_expiry, alert_service_health, ssl_warning_days, \
          notify_email, notify_slack_url, notify_discord_url, cooldown_minutes, \
-         notify_pagerduty_key, notify_webhook_url, muted_types) \
+         notify_pagerduty_key, notify_webhook_url, muted_types, \
+         gpu_util_threshold, gpu_util_duration, gpu_temp_threshold, gpu_vram_threshold, alert_gpu) \
          VALUES ($1, $2, \
          COALESCE($3, 90), COALESCE($4, 5), COALESCE($5, 90), COALESCE($6, 5), COALESCE($7, 85), \
          COALESCE($8, TRUE), COALESCE($9, TRUE), COALESCE($10, TRUE), COALESCE($11, TRUE), \
          COALESCE($12, TRUE), COALESCE($13, TRUE), COALESCE($14, TRUE), COALESCE($15, '30,14,7,3,1'), \
-         COALESCE($16, TRUE), $17, $18, COALESCE($19, 60), $20, $21, COALESCE($22, ''))".to_string()
+         COALESCE($16, TRUE), $17, $18, COALESCE($19, 60), $20, $21, COALESCE($22, ''), \
+         COALESCE($23, 95), COALESCE($24, 5), COALESCE($25, 85), COALESCE($26, 95), COALESCE($27, TRUE))".to_string()
     };
 
     sqlx::query(&query)
@@ -368,6 +388,11 @@ async fn upsert_rules(
     .bind(&body.notify_pagerduty_key)
     .bind(&body.notify_webhook_url)
     .bind(&body.muted_types)
+    .bind(body.gpu_util_threshold)
+    .bind(body.gpu_util_duration)
+    .bind(body.gpu_temp_threshold)
+    .bind(body.gpu_vram_threshold)
+    .bind(body.alert_gpu)
     .execute(&state.db)
     .await
     .map_err(|e| internal_error("update server rules", e))?;

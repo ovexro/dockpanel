@@ -26,6 +26,7 @@ pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync:
                 tick_count += 1;
 
                 check_resource_thresholds(&pool).await;
+                check_gpu_thresholds(&pool, &agent).await;
                 check_server_offline(&pool).await;
                 check_ssl_expiry(&pool).await;
 
@@ -445,6 +446,184 @@ fn past_cooldown(
             let elapsed = chrono::Utc::now() - t;
             elapsed.num_minutes() >= cooldown_minutes as i64
         }
+    }
+}
+
+// ─── GPU Thresholds ─────────────────────────────────────────────────────
+
+async fn check_gpu_thresholds(pool: &PgPool, agent: &AgentClient) {
+    let gpu_info = match agent.get("/apps/gpu-info").await {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    if !gpu_info.get("available").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return;
+    }
+    let gpus = match gpu_info.get("gpus").and_then(|v| v.as_array()) {
+        Some(g) if !g.is_empty() => g,
+        _ => return,
+    };
+
+    // Get the local server
+    let server: Option<(Uuid, Uuid, String)> = sqlx::query_as(
+        "SELECT id, user_id, name FROM servers ORDER BY created_at ASC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    let (server_id, user_id, server_name) = match server {
+        Some(s) => s,
+        None => return,
+    };
+
+    let (gpu_util_thresh, gpu_util_dur, gpu_temp_thresh, gpu_vram_thresh, cooldown) =
+        notifications::get_gpu_thresholds(pool, user_id, Some(server_id)).await;
+
+    for gpu in gpus {
+        let idx = gpu.get("index").and_then(|v| v.as_i64()).unwrap_or(0);
+        let name = gpu.get("name").and_then(|v| v.as_str()).unwrap_or("GPU");
+        let util = gpu.get("utilization_gpu_pct").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let temp = gpu.get("temperature_c").and_then(|v| v.as_f64());
+        let mem_used = gpu.get("memory_used_mb").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let mem_total = gpu.get("memory_total_mb").and_then(|v| v.as_f64()).unwrap_or(1.0);
+        let vram_pct = if mem_total > 0.0 { (mem_used / mem_total) * 100.0 } else { 0.0 };
+
+        let state_prefix = format!("gpu_{idx}");
+
+        // GPU utilization threshold (with duration, like CPU)
+        check_gpu_metric(
+            pool, server_id, user_id, &server_name,
+            &format!("{state_prefix}_util"), "gpu_utilization",
+            util, gpu_util_thresh as f64, gpu_util_dur, cooldown,
+            &format!("GPU {idx} ({name}) at {util:.0}% on {server_name}"),
+            &format!("GPU {idx} ({name}) utilization above {gpu_util_thresh}% for {gpu_util_dur} minutes on {server_name}"),
+        ).await;
+
+        // GPU temperature threshold (fire immediately, like disk)
+        if let Some(t) = temp {
+            check_gpu_metric(
+                pool, server_id, user_id, &server_name,
+                &format!("{state_prefix}_temp"), "gpu_temperature",
+                t, gpu_temp_thresh as f64, 1, cooldown,
+                &format!("GPU {idx} ({name}) at {t:.0}°C on {server_name}"),
+                &format!("GPU {idx} ({name}) temperature above {gpu_temp_thresh}°C on {server_name}. Current: {t:.0}°C"),
+            ).await;
+        }
+
+        // VRAM threshold (fire immediately)
+        check_gpu_metric(
+            pool, server_id, user_id, &server_name,
+            &format!("{state_prefix}_vram"), "gpu_vram",
+            vram_pct, gpu_vram_thresh as f64, 1, cooldown,
+            &format!("GPU {idx} ({name}) VRAM at {vram_pct:.0}% on {server_name}"),
+            &format!("GPU {idx} ({name}) VRAM above {gpu_vram_thresh}% on {server_name}. Used: {mem_used:.0}/{mem_total:.0} MB"),
+        ).await;
+    }
+}
+
+/// Generic GPU metric threshold check using the existing alert_state machine.
+async fn check_gpu_metric(
+    pool: &PgPool,
+    server_id: Uuid,
+    user_id: Uuid,
+    server_name: &str,
+    state_key: &str,
+    alert_type: &str,
+    current_value: f64,
+    threshold: f64,
+    required_duration: i32,
+    cooldown_minutes: i32,
+    title: &str,
+    message: &str,
+) {
+    let exceeds = current_value > threshold;
+
+    let state: Option<(String, i32, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+        "SELECT current_state, consecutive_count, last_notified_at \
+         FROM alert_state WHERE server_id = $1 AND alert_type = $2 AND state_key = $3",
+    )
+    .bind(server_id)
+    .bind(alert_type)
+    .bind(state_key)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    let (current_state, consecutive, last_notified) = state
+        .clone()
+        .unwrap_or(("ok".to_string(), 0, None));
+
+    if exceeds {
+        let new_count = consecutive + 1;
+
+        let _ = sqlx::query(
+            "INSERT INTO alert_state (server_id, alert_type, state_key, current_state, consecutive_count, fired_at) \
+             VALUES ($1, $2, $3, CASE WHEN $4 >= $5 THEN 'firing' ELSE 'pending' END, $4, \
+                     CASE WHEN $4 >= $5 THEN NOW() ELSE NULL END) \
+             ON CONFLICT (server_id, alert_type, state_key) WHERE server_id IS NOT NULL \
+             DO UPDATE SET consecutive_count = $4, \
+                          current_state = CASE WHEN $4 >= $5 THEN 'firing' ELSE alert_state.current_state END, \
+                          fired_at = CASE WHEN $4 >= $5 AND alert_state.current_state != 'firing' THEN NOW() ELSE alert_state.fired_at END",
+        )
+        .bind(server_id)
+        .bind(alert_type)
+        .bind(state_key)
+        .bind(new_count)
+        .bind(required_duration)
+        .execute(pool)
+        .await;
+
+        if new_count >= required_duration && (current_state != "firing" || past_cooldown(last_notified, cooldown_minutes)) {
+            let severity = if current_value > threshold * 1.1 { "critical" } else { "warning" };
+
+            fire_alert_with_retry(pool, user_id, Some(server_id), None, alert_type, severity, title, message).await;
+
+            let _ = sqlx::query(
+                "UPDATE alert_state SET last_notified_at = NOW() \
+                 WHERE server_id = $1 AND alert_type = $2 AND state_key = $3",
+            )
+            .bind(server_id)
+            .bind(alert_type)
+            .bind(state_key)
+            .execute(pool)
+            .await;
+        }
+    } else if current_state == "firing" {
+        let _ = sqlx::query(
+            "UPDATE alert_state SET current_state = 'ok', consecutive_count = 0, fired_at = NULL, last_notified_at = NULL \
+             WHERE server_id = $1 AND alert_type = $2 AND state_key = $3",
+        )
+        .bind(server_id)
+        .bind(alert_type)
+        .bind(state_key)
+        .execute(pool)
+        .await;
+
+        let type_label = match alert_type {
+            "gpu_utilization" => "GPU utilization",
+            "gpu_temperature" => "GPU temperature",
+            "gpu_vram" => "GPU VRAM",
+            _ => alert_type,
+        };
+        notifications::resolve_alert(
+            pool, user_id, Some(server_id), None, alert_type,
+            &format!("{type_label} recovered on {server_name}"),
+            &format!("{type_label} has returned to normal ({current_value:.0}) on server {server_name}"),
+        ).await;
+    } else if consecutive > 0 {
+        let _ = sqlx::query(
+            "UPDATE alert_state SET consecutive_count = 0 \
+             WHERE server_id = $1 AND alert_type = $2 AND state_key = $3",
+        )
+        .bind(server_id)
+        .bind(alert_type)
+        .bind(state_key)
+        .execute(pool)
+        .await;
     }
 }
 
