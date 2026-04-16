@@ -199,7 +199,7 @@ async fn deploy(
 
                     match ssl::load_or_create_account(email).await {
                         Ok(account) => {
-                            match ssl::provision_cert(&account, domain).await {
+                            match ssl::provision_cert(&account, domain, None).await {
                                 Ok(_cert_info) => {
                                     let ssl_site_config = SiteConfig {
                                         runtime: "proxy".to_string(),

@@ -1,7 +1,8 @@
 use instant_acme::{
-    Account, AccountCredentials, AuthorizationStatus, ChallengeType, Identifier, LetsEncrypt,
-    NewAccount, NewOrder, OrderStatus,
+    Account, AccountCredentials, AuthorizationStatus, CertificateIdentifier, ChallengeType,
+    Identifier, LetsEncrypt, NewAccount, NewOrder, OrderStatus,
 };
+use rustls::pki_types::CertificateDer;
 use std::path::Path;
 use tera::Tera;
 
@@ -12,11 +13,43 @@ const ACME_ACCOUNT_PATH: &str = "/etc/dockpanel/ssl/acme-account.json";
 const SSL_DIR: &str = "/etc/dockpanel/ssl";
 const ACME_WEBROOT: &str = "/var/www/acme";
 
+/// Options controlling an ACME order — profile selection + ARI replacement chain.
+/// `None` or all-None fields means "classic, no prior cert" (backwards-compatible).
+#[derive(Default, Clone)]
+pub struct ProvisionOpts<'a> {
+    /// ACME profile to request ("classic", "tlsserver", "shortlived"). If the
+    /// CA doesn't support profiles, pass None — otherwise the order will fail.
+    pub profile: Option<&'a str>,
+    /// PEM of the certificate being replaced (RFC 9773 ARI `replaces` hint).
+    /// When set, the CA can correlate the renewal with the prior issuance.
+    pub replaces_pem: Option<&'a str>,
+}
+
 #[derive(serde::Serialize)]
 pub struct CertInfo {
     pub cert_path: String,
     pub key_path: String,
     pub expiry: Option<String>,
+    /// Echoes the profile used for this order (None if none was requested).
+    pub profile: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct ProfileInfo {
+    pub name: String,
+    pub description: String,
+}
+
+/// ARI (RFC 9773) suggestion: when the CA wants us to renew and when it wants
+/// us to check back for a refreshed suggestion.
+#[derive(serde::Serialize)]
+pub struct AriSuggestion {
+    /// Start of the suggested renewal window.
+    pub renewal_at: chrono::DateTime<chrono::Utc>,
+    /// End of the suggested renewal window.
+    pub renewal_before: chrono::DateTime<chrono::Utc>,
+    /// When to re-fetch ARI (CA-hinted retry-after).
+    pub recheck_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(serde::Serialize)]
@@ -86,13 +119,31 @@ pub async fn load_or_create_account(email: &str) -> Result<Account, String> {
 }
 
 /// Provision a Let's Encrypt certificate for a domain using HTTP-01 challenge.
-pub async fn provision_cert(account: &Account, domain: &str) -> Result<CertInfo, String> {
+pub async fn provision_cert(
+    account: &Account,
+    domain: &str,
+    opts: Option<&ProvisionOpts<'_>>,
+) -> Result<CertInfo, String> {
     tracing::info!("Provisioning SSL for {domain}");
 
-    // Create order
+    // Create order with optional profile + ARI replaces hint
     let identifier = Identifier::Dns(domain.to_string());
+    let identifiers = [identifier];
+    let mut new_order = NewOrder::new(&identifiers);
+    if let Some(o) = opts {
+        if let Some(p) = o.profile {
+            new_order = new_order.profile(p);
+        }
+        if let Some(pem) = o.replaces_pem {
+            match cert_identifier_from_pem(pem) {
+                Ok(owned) => new_order = new_order.replaces(owned),
+                Err(e) => tracing::warn!("ARI replaces skipped ({domain}): {e}"),
+            }
+        }
+    }
+    let profile_used = opts.and_then(|o| o.profile).map(String::from);
     let mut order = account
-        .new_order(&NewOrder::new(&[identifier]))
+        .new_order(&new_order)
         .await
         .map_err(|e| format!("Failed to create ACME order: {e}"))?;
 
@@ -205,6 +256,7 @@ pub async fn provision_cert(account: &Account, domain: &str) -> Result<CertInfo,
         cert_path,
         key_path,
         expiry,
+        profile: profile_used,
     })
 }
 
@@ -217,6 +269,7 @@ pub async fn provision_cert_dns01(
     cf_api_token: &str,
     cf_api_email: Option<&str>,
     wildcard: bool,
+    opts: Option<&ProvisionOpts<'_>>,
 ) -> Result<CertInfo, String> {
     let label = if wildcard { "wildcard" } else { "dns01" };
     tracing::info!("Provisioning SSL ({label}) for {domain}");
@@ -227,8 +280,21 @@ pub async fn provision_cert_dns01(
         ids.push(Identifier::Dns(format!("*.{domain}")));
     }
 
+    let mut new_order = NewOrder::new(&ids);
+    if let Some(o) = opts {
+        if let Some(p) = o.profile {
+            new_order = new_order.profile(p);
+        }
+        if let Some(pem) = o.replaces_pem {
+            match cert_identifier_from_pem(pem) {
+                Ok(owned) => new_order = new_order.replaces(owned),
+                Err(e) => tracing::warn!("ARI replaces skipped ({domain}): {e}"),
+            }
+        }
+    }
+    let profile_used = opts.and_then(|o| o.profile).map(String::from);
     let mut order = account
-        .new_order(&NewOrder::new(&ids))
+        .new_order(&new_order)
         .await
         .map_err(|e| format!("ACME order: {e}"))?;
 
@@ -365,7 +431,7 @@ pub async fn provision_cert_dns01(
     let expiry = get_cert_expiry(&cert_path).await;
     tracing::info!("SSL ({label}) provisioned for {domain}");
 
-    Ok(CertInfo { cert_path, key_path, expiry })
+    Ok(CertInfo { cert_path, key_path, expiry, profile: profile_used })
 }
 
 /// Clean up Cloudflare TXT records created during DNS-01 challenge.
@@ -504,4 +570,68 @@ pub async fn enable_ssl_for_site(
 
     tracing::info!("Nginx updated with SSL for {domain}");
     Ok(())
+}
+
+// ── ACME profile + ARI (RFC 9773) helpers ────────────────────────────────
+
+/// List ACME profiles advertised in the server directory. Empty vec means
+/// the CA doesn't support the profiles extension; callers should fall back
+/// to the default profile.
+pub fn list_profiles(account: &Account) -> Vec<ProfileInfo> {
+    account
+        .profiles()
+        .map(|p| ProfileInfo {
+            name: p.name.to_string(),
+            description: p.description.to_string(),
+        })
+        .collect()
+}
+
+/// Fetch ACME Renewal Information (RFC 9773) for a certificate on disk.
+/// Returns None when the cert can't be parsed, when the CA doesn't support
+/// ARI, or on transient fetch failures — callers fall back to a static
+/// threshold in that case.
+pub async fn fetch_ari(account: &Account, cert_pem_path: &str) -> Option<AriSuggestion> {
+    let pem_bytes = tokio::fs::read(cert_pem_path).await.ok()?;
+    let cert_der = first_cert_der(&pem_bytes)?;
+    let cert_der_ref = CertificateDer::from(cert_der.as_slice());
+    let ident = CertificateIdentifier::try_from(&cert_der_ref).ok()?;
+
+    match account.renewal_info(&ident).await {
+        Ok((info, retry_after)) => {
+            let start = offset_to_chrono(info.suggested_window.start)?;
+            let end = offset_to_chrono(info.suggested_window.end)?;
+            let recheck = chrono::Utc::now()
+                + chrono::Duration::from_std(retry_after).unwrap_or(chrono::Duration::hours(6));
+            Some(AriSuggestion {
+                renewal_at: start,
+                renewal_before: end,
+                recheck_at: recheck,
+            })
+        }
+        Err(e) => {
+            tracing::debug!("ARI fetch failed ({cert_pem_path}): {e}");
+            None
+        }
+    }
+}
+
+/// Build a `CertificateIdentifier` from a cert PEM. Parses the first
+/// certificate in the chain (the leaf).
+fn cert_identifier_from_pem(pem: &str) -> Result<CertificateIdentifier<'static>, String> {
+    let der = first_cert_der(pem.as_bytes()).ok_or("no PEM certificate found")?;
+    let der_ref = CertificateDer::from(der.as_slice());
+    CertificateIdentifier::try_from(&der_ref)
+        .map(|id| id.into_owned())
+        .map_err(|e| format!("cert identifier: {e:?}"))
+}
+
+/// Return the first DER-encoded certificate from a PEM blob.
+fn first_cert_der(pem_bytes: &[u8]) -> Option<Vec<u8>> {
+    let (_, pem) = x509_parser::pem::parse_x509_pem(pem_bytes).ok()?;
+    Some(pem.contents)
+}
+
+fn offset_to_chrono(dt: time::OffsetDateTime) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(dt.unix_timestamp(), dt.nanosecond())
 }

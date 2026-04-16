@@ -1,6 +1,6 @@
 # DockPanel Feature Manifest
 
-> **Last verified**: 2026-04-16 | **Version**: v2.7.16 | **Total**: 60+ major features, ~280 capabilities
+> **Last verified**: 2026-04-16 | **Version**: v2.7.17 | **Total**: 60+ major features, ~280 capabilities
 >
 > This file is the single source of truth for what DockPanel offers.
 > Update it whenever features are added, changed, or removed.
@@ -63,7 +63,9 @@
 | **Traefik** | Alternative reverse proxy, auto-SSL, Docker discovery | `routes/system.rs` | `traefik.rs` | (in Settings) | — |
 | **Service Installers** | PHP, Certbot, UFW, Fail2Ban, PowerDNS — one-click | `routes/system.rs` | `service_installer.rs` | (in Settings) | — |
 | **Service Uninstall** | Uninstall routes for all 10 services (PHP, Certbot, UFW, Fail2Ban, PowerDNS, Redis, Node.js, Composer, mail server, PHP versions) | `routes/system.rs` | `service_installer.rs` | (in Settings) | — |
-| **SSL Renew/Delete** | Force-renew and delete SSL certificates via certbot | `routes/ssl.rs` | `ssl.rs` | `Certificates.tsx` | — |
+| **SSL Renew/Delete** | Force-renew and delete SSL certificates via instant_acme (RFC 9773 `replaces` hint on renew) | `routes/ssl.rs` | `ssl.rs` | `Certificates.tsx` | — |
+| **ACME Profile Selection** | RFC 8555 profiles extension — default + per-site override for `classic` (90d), `tlsserver` (45d from 2026-05-13), `shortlived` (~6d) | `routes/ssl.rs` | `ssl.rs` | `Settings.tsx` | `settings` (`acme_default_profile`), `sites.ssl_profile` |
+| **ARI-Driven Renewal** | ACME Renewal Information (RFC 9773) — auto-healer queries CA's suggested renewal window instead of static threshold; profile-aware fallback | `services/auto_healer.rs` | `services/ssl.rs` (`fetch_ari`) | — | `sites.ssl_renewal_at`, `sites.ssl_renewal_checked_at` |
 | **User Suspend/Reset** | Suspend/unsuspend users with session invalidation, admin password reset | `routes/users.rs` | — | (in Settings) | `users` |
 | **System Updates** | OS package updates, auto-updates toggle, reboot | `routes/system.rs` | `updates.rs` | (in Settings) | — |
 

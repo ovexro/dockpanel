@@ -408,7 +408,7 @@ pub async fn deploy_or_update(
                     }
                     match crate::services::ssl::load_or_create_account(email).await {
                         Ok(account) => {
-                            match crate::services::ssl::provision_cert(&account, d).await {
+                            match crate::services::ssl::provision_cert(&account, d, None).await {
                                 Ok(_) => {
                                     let ssl_config = crate::routes::nginx::SiteConfig {
                                         runtime: "proxy".to_string(), root: None,

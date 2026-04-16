@@ -4,6 +4,70 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.7.17] - 2026-04-16
+
+### Added
+
+- **2026-ready ACME (Phase 3 #2 — Tier 1).** DockPanel is now ready for
+  Let's Encrypt's May 13 2026 `tlsserver` → 45-day flip, the existing 6-day
+  `shortlived` profile, and the Feb 2027 / Feb 2028 `classic` reductions.
+  - **RFC 9773 ARI-driven renewal.** The auto-healer now queries the CA's
+    ACME Renewal Information for each cert and honours the suggested
+    renewal window instead of a hard-coded 30-day threshold. Falls back to
+    a profile-aware margin (2d / 15d / 30d) when a CA doesn't advertise
+    ARI. New columns `sites.ssl_renewal_at`, `sites.ssl_renewal_checked_at`.
+  - **ACME profile selection UI.** Settings → ACME Profile lets admins
+    pick the default profile (`classic` / `tlsserver` / `shortlived`) for
+    all new certificates. List auto-populates from the CA's server
+    directory; card hides itself if the CA doesn't advertise the profiles
+    extension. New column `sites.ssl_profile` stores which profile issued
+    each cert.
+  - **Force-renew migrated off certbot CLI.** `/api/ssl/{id}/renew` now
+    issues via `instant_acme` and passes the previous cert as the ARI
+    `replaces` hint, so the CA sees a continuous issuance chain. Legacy
+    certbot-issued certs no longer trigger spurious failures on renew.
+  - **`/api/ssl/profiles`** (admin) lists CA-advertised profiles with
+    descriptions. **`/api/ssl/default-profile`** (admin) sets or clears the
+    panel-wide default. **`/ssl/{domain}/renewal-info`** (agent) exposes
+    the raw ARI suggestion per cert.
+
+### Changed
+
+- Auto-heal SSL copy in Settings replaced stale "3 days" threshold
+  language with accurate ARI + profile-aware explanation.
+- DNS-PERSIST-01 (Q2 2026) intentionally deferred — no Let's Encrypt
+  production date yet; will land once instant-acme exposes the draft API.
+
+## [2.7.16] - 2026-04-16
+
+### Added
+
+- **Prometheus `/api/metrics` scrape endpoint (Phase 3 #1).** Hand-formatted
+  exposition text — no extra crate, respects the lightness axis. Gated by a
+  SHA-256-hashed scrape token (constant-time compare via `subtle`); returns
+  404 when disabled so an off panel doesn't advertise a scrape surface.
+  Exposes `dockpanel_info`, per-server cpu/memory/disk percents, per-GPU
+  utilization / VRAM / temperature / power, per-status site counts, and
+  alerts firing by severity. New `PrometheusSettings` card in Settings
+  with auto-generated token, reveal-once banner, rotate button, and a
+  copy-ready `prometheus.yml` scrape_configs block.
+
+## [2.7.15] - 2026-04-16
+
+### Added
+
+- **GPU history + alerts (Phase 2 #2).** Historical GPU charts in System
+  (utilization, VRAM, temperature, power). Alert engine gains GPU-aware
+  rules: VRAM > 90%, temp > 85°C, utilization pinned at 100% for 15 min.
+- **Ollama model management + vLLM picker + idle-unload (Phase 2 #3).**
+
+### Changed
+
+- **CI on Actions Node 24.** Upgraded action pins to their Node-24-ready
+  versions, including `sigstore/cosign-installer@v4.1.1` (no floating v4
+  tag exists). `cargo install cargo-sbom` is now called with `--force` so
+  restoring a cached `~/.cargo/bin/` doesn't break the release workflow.
+
 ## [2.7.14] - 2026-04-15
 
 ### Fixed

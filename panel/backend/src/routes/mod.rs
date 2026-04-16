@@ -521,6 +521,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/sites/{id}/ssl/dns01", post(ssl::provision_dns01))
         .route("/api/ssl/{id}/renew", post(ssl::renew))
         .route("/api/ssl/{id}", delete(ssl::revoke))
+        .route("/api/ssl/profiles", get(ssl::profiles))
+        .route("/api/ssl/default-profile", post(ssl::set_default_profile))
         // File Manager
         .route("/api/sites/{id}/files", get(files::list_dir).delete(files::delete_entry))
         .route("/api/sites/{id}/files/read", get(files::read_file))

@@ -493,7 +493,7 @@ dependencies = [
 
 [[package]]
 name = "dockpanel-agent"
-version = "2.7.16"
+version = "2.7.17"
 dependencies = [
  "axum",
  "base64",
@@ -515,6 +515,7 @@ dependencies = [
  "sysinfo",
  "tera",
  "tikv-jemallocator",
+ "time",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -1104,7 +1105,9 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "time",
  "tokio",
+ "x509-parser 0.18.1",
 ]
 
 [[package]]

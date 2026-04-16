@@ -11,6 +11,7 @@
   - [Backup Manager](guides/backup-orchestrator.md)
   - [Monitoring & Alerting](guides/monitoring.md)
   - [Prometheus Metrics](guides/prometheus.md)
+  - [ACME Profiles & Renewal](guides/acme-profiles.md)
   - [Status Page](guides/status-page.md)
   - [Incidents](guides/incidents.md)
   - [Secrets Manager](guides/secrets.md)

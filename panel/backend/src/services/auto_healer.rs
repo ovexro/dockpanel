@@ -461,17 +461,33 @@ async fn auto_clean_disk(pool: &PgPool, agent: &AgentClient) {
     }
 }
 
-/// Auto-renew SSL certs expiring within 30 days.
-/// Let's Encrypt certs last 90 days; renewing at 30 days gives a comfortable margin
-/// and aligns with the standard certbot renewal window.
+/// Auto-renew SSL certs using ACME Renewal Information (RFC 9773) when
+/// available, falling back to a profile-aware static threshold.
+///
+/// Two phases per run:
+/// 1. **ARI refresh** — for each SSL site whose suggestion is missing or
+///    stale, fetch `/ssl/{domain}/renewal-info` from the agent and store
+///    the suggested renewal window.
+/// 2. **Renewal** — for sites whose `ssl_renewal_at` has passed (or whose
+///    fallback threshold is hit), call `/ssl/{domain}/renew`.
+///
+/// The agent reads the prior cert PEM from disk and passes it as the ARI
+/// `replaces` hint, so the CA sees a continuous issuance chain.
 async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
-    // Fetch sites with SSL expiring within 30 days, along with owner email and site details
-    // needed to call the agent's /ssl/provision/{domain} endpoint.
-    let sites: Vec<(uuid::Uuid, String, uuid::Uuid, String, Option<i32>, Option<String>, Option<String>)> = match sqlx::query_as(
-        "SELECT s.id, s.domain, s.user_id, s.runtime, s.proxy_port, s.php_version, s.root_path \
+    // Widen the window to 45 days so we pick up short-lived (6-day) and
+    // 45-day-profile certs with enough lead time. ARI trims this further.
+    let sites: Vec<(
+        uuid::Uuid, String, uuid::Uuid, String, Option<i32>, Option<String>, Option<String>,
+        chrono::DateTime<chrono::Utc>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<String>,
+    )> = match sqlx::query_as(
+        "SELECT s.id, s.domain, s.user_id, s.runtime, s.proxy_port, s.php_version, s.root_path, \
+                s.ssl_expiry, s.ssl_renewal_at, s.ssl_renewal_checked_at, s.ssl_profile \
          FROM sites s \
          WHERE s.ssl_enabled = TRUE AND s.ssl_expiry IS NOT NULL \
-         AND s.ssl_expiry < NOW() + INTERVAL '30 days'",
+         AND s.ssl_expiry < NOW() + INTERVAL '45 days'",
     )
     .fetch_all(pool)
     .await
@@ -480,9 +496,77 @@ async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
         Err(_) => return,
     };
 
-    for (site_id, domain, user_id, runtime, proxy_port, php_version, root_path) in &sites {
-        // 6-hour cooldown prevents hammering Let's Encrypt if renewal keeps failing.
-        // With a 30-day threshold, we get ~120 retry windows before expiry.
+    let now = chrono::Utc::now();
+
+    for row in &sites {
+        let (site_id, domain, user_id, runtime, proxy_port, php_version, root_path,
+             ssl_expiry, ssl_renewal_at_initial, ssl_renewal_checked_at, ssl_profile) = row;
+        let mut ssl_renewal_at = *ssl_renewal_at_initial;
+        let email: String = match sqlx::query_scalar(
+            "SELECT email FROM users WHERE id = $1",
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        {
+            Ok(Some(e)) => e,
+            _ => {
+                tracing::warn!("Auto-heal: cannot renew SSL for {domain} — owner email not found");
+                continue;
+            }
+        };
+
+        // Phase 1 — refresh ARI suggestion if stale or missing.
+        let needs_ari = ssl_renewal_checked_at
+            .map(|t| (now - t) > chrono::Duration::hours(6))
+            .unwrap_or(true);
+        if needs_ari {
+            let ari_path = format!(
+                "/ssl/{domain}/renewal-info?email={}",
+                urlencoding::encode(&email)
+            );
+            match agent.get(&ari_path).await {
+                Ok(v) => {
+                    let when = v
+                        .get("suggestion")
+                        .and_then(|s| s.get("renewal_at"))
+                        .and_then(|x| x.as_str())
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .map(|dt| dt.with_timezone(&chrono::Utc));
+
+                    let _ = sqlx::query(
+                        "UPDATE sites \
+                         SET ssl_renewal_at = $1, ssl_renewal_checked_at = NOW(), updated_at = NOW() \
+                         WHERE id = $2",
+                    )
+                    .bind(when)
+                    .bind(site_id)
+                    .execute(pool)
+                    .await;
+                    if let Some(when) = when {
+                        ssl_renewal_at = Some(when);
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!("ARI fetch for {domain} failed: {e}");
+                }
+            }
+        }
+
+        // Decide if this cert is due for renewal.
+        let is_due = match ssl_renewal_at {
+            Some(when) => when <= now,
+            None => {
+                // Fallback: profile-aware margin derived from expiry.
+                let margin = fallback_renewal_margin(ssl_profile.as_deref());
+                (*ssl_expiry - now) <= margin
+            }
+        };
+        if !is_due {
+            continue;
+        }
+
+        // 6-hour cooldown prevents hammering the CA if renewal keeps failing.
         let recent: Option<(i64,)> = sqlx::query_as(
             "SELECT COUNT(*) FROM activity_logs \
              WHERE action = 'auto_heal.renew_ssl' \
@@ -501,22 +585,8 @@ async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
 
         tracing::info!("Auto-heal: renewing SSL for {domain}");
 
-        // Look up the site owner's email for ACME registration
-        let email: String = match sqlx::query_scalar(
-            "SELECT email FROM users WHERE id = $1",
-        )
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await
-        {
-            Ok(Some(e)) => e,
-            _ => {
-                tracing::warn!("Auto-heal: cannot renew SSL for {domain} — owner email not found");
-                continue;
-            }
-        };
-
-        // Build the provision request body (same format as /api/sites/{id}/ssl)
+        // Build the renew request body. The agent reads the prior PEM from
+        // disk and attaches it as the ARI `replaces` hint automatically.
         let mut agent_body = serde_json::json!({
             "email": email,
             "runtime": runtime,
@@ -530,9 +600,11 @@ async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
         if let Some(root) = root_path {
             agent_body["root"] = serde_json::json!(root);
         }
+        if let Some(profile) = ssl_profile.as_deref() {
+            agent_body["profile"] = serde_json::json!(profile);
+        }
 
-        // Call the correct agent endpoint: /ssl/provision/{domain}
-        let agent_path = format!("/ssl/provision/{domain}");
+        let agent_path = format!("/ssl/{domain}/renew");
         let result = agent.post(&agent_path, Some(agent_body)).await;
 
         let success = result.is_ok();
@@ -564,8 +636,11 @@ async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
                     .map(|dt| dt.and_utc());
 
                 if let Some(expiry) = new_expiry {
+                    // Clear ssl_renewal_at so the next auto-heal cycle
+                    // re-fetches ARI against the fresh cert.
                     let _ = sqlx::query(
-                        "UPDATE sites SET ssl_expiry = $1, updated_at = NOW() WHERE id = $2",
+                        "UPDATE sites SET ssl_expiry = $1, ssl_renewal_at = NULL, \
+                         ssl_renewal_checked_at = NULL, updated_at = NOW() WHERE id = $2",
                     )
                     .bind(expiry)
                     .bind(site_id)
@@ -612,6 +687,22 @@ async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
 
             tracing::warn!("Auto-heal: SSL renewal failed for {domain}: {details}");
         }
+    }
+}
+
+/// Fallback renewal margin when the CA doesn't advertise ARI. Maps profile
+/// → days-remaining threshold at which we trigger renewal.
+///
+/// - `shortlived` (~6d): renew at 2d remaining (≈ 2/3 consumed, matches LE's
+///   "renew every 2-3 days" guidance).
+/// - `tlsserver` (45d from 2026-05-13 onward): renew at 15d remaining (1/3).
+/// - `classic` or unknown (90d today, 64d in 2027, 45d in 2028): renew at
+///   30d remaining, which is safe across all three horizons.
+fn fallback_renewal_margin(profile: Option<&str>) -> chrono::Duration {
+    match profile {
+        Some("shortlived") => chrono::Duration::days(2),
+        Some("tlsserver") => chrono::Duration::days(15),
+        _ => chrono::Duration::days(30),
     }
 }
 

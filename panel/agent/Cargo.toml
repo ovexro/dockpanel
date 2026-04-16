@@ -1,6 +1,6 @@
 [package]
 name = "dockpanel-agent"
-version = "2.7.16"
+version = "2.7.17"
 edition = "2024"
 
 [profile.release]
@@ -20,7 +20,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 sysinfo = "0.34"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
-instant-acme = { version = "0.8", features = ["hyper-rustls", "rcgen"] }
+instant-acme = { version = "0.8", features = ["hyper-rustls", "rcgen", "time", "x509-parser"] }
+time = { version = "0.3", features = ["formatting"] }
 x509-parser = "0.16"
 bollard = "0.18"
 tokio-stream = "0.1"
