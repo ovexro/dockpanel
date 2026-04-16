@@ -1452,6 +1452,126 @@ pub fn router() -> Router<AppState> {
         .route("/apps/{container_id}/change-image", post(change_image))
         .route("/apps/{container_id}/update-limits", post(update_container_limits))
         .route("/apps/gpu-info", get(gpu_info))
+        .route("/apps/{container_id}/ollama/models", get(ollama_list_models))
+        .route("/apps/{container_id}/ollama/pull", post(ollama_pull_model))
+        .route("/apps/{container_id}/ollama/delete", post(ollama_delete_model))
+}
+
+// ─── Ollama Model Management ────────────────────────────────────────────
+
+/// GET /apps/{container_id}/ollama/models — List models installed in an Ollama container.
+async fn ollama_list_models(
+    Path(container_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_container_id(&container_id) {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Invalid container ID" }))));
+    }
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        safe_command("docker")
+            .args(["exec", &container_id, "ollama", "list"])
+            .output(),
+    )
+    .await
+    .map_err(|_| (StatusCode::GATEWAY_TIMEOUT, Json(serde_json::json!({"error": "Timed out listing models"}))))?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Ok(Json(serde_json::json!({ "models": [], "error": stderr.trim() })));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let models: Vec<serde_json::Value> = stdout
+        .lines()
+        .skip(1) // skip header row
+        .filter(|l| !l.trim().is_empty())
+        .map(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            serde_json::json!({
+                "name": parts.first().unwrap_or(&""),
+                "id": parts.get(1).unwrap_or(&""),
+                "size": parts.get(2).map(|s| format!("{} {}", s, parts.get(3).unwrap_or(&""))).unwrap_or_default(),
+                "modified": parts.get(4..).map(|p| p.join(" ")).unwrap_or_default(),
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "models": models })))
+}
+
+/// POST /apps/{container_id}/ollama/pull — Pull a model into an Ollama container.
+async fn ollama_pull_model(
+    Path(container_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_container_id(&container_id) {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Invalid container ID" }))));
+    }
+
+    let model = body.get("model").and_then(|v| v.as_str()).unwrap_or("").trim();
+    if model.is_empty() || model.len() > 200 {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Invalid model name" }))));
+    }
+
+    // Validate model name: alphanumeric, hyphens, underscores, colons, slashes, dots
+    if !model.chars().all(|c| c.is_alphanumeric() || "-_:/.".contains(c)) {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Invalid model name characters" }))));
+    }
+
+    // ollama pull can take a long time for large models — 10 minute timeout
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(600),
+        safe_command("docker")
+            .args(["exec", &container_id, "ollama", "pull", model])
+            .output(),
+    )
+    .await
+    .map_err(|_| (StatusCode::GATEWAY_TIMEOUT, Json(serde_json::json!({"error": "Model pull timed out (10m). Try a smaller model or pull manually."}))))?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    Ok(Json(serde_json::json!({
+        "success": output.status.success(),
+        "stdout": stdout.chars().take(50000).collect::<String>(),
+        "stderr": stderr.chars().take(10000).collect::<String>(),
+    })))
+}
+
+/// POST /apps/{container_id}/ollama/delete — Remove a model from an Ollama container.
+async fn ollama_delete_model(
+    Path(container_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !is_valid_container_id(&container_id) {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Invalid container ID" }))));
+    }
+
+    let model = body.get("model").and_then(|v| v.as_str()).unwrap_or("").trim();
+    if model.is_empty() || model.len() > 200 {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Invalid model name" }))));
+    }
+    if !model.chars().all(|c| c.is_alphanumeric() || "-_:/.".contains(c)) {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Invalid model name characters" }))));
+    }
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        safe_command("docker")
+            .args(["exec", &container_id, "ollama", "rm", model])
+            .output(),
+    )
+    .await
+    .map_err(|_| (StatusCode::GATEWAY_TIMEOUT, Json(serde_json::json!({"error": "Timed out"}))))?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+
+    Ok(Json(serde_json::json!({
+        "success": output.status.success(),
+        "message": if output.status.success() { format!("Deleted {model}") } else { String::from_utf8_lossy(&output.stderr).to_string() },
+    })))
 }
 
 /// GET /apps/gpu-info — Full GPU monitoring: utilization, VRAM, temperature, power, per-process usage.

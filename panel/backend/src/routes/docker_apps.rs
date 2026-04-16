@@ -853,6 +853,64 @@ pub async fn exec_command(
     Ok(Json(result))
 }
 
+// ─── Ollama Model Management ────────────────────────────────────────────
+
+/// GET /api/apps/{container_id}/ollama/models — List models in an Ollama container.
+pub async fn ollama_list_models(
+    State(_state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(container_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    if !is_valid_container_id(&container_id) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
+    }
+    let result = agent
+        .get(&format!("/apps/{container_id}/ollama/models"))
+        .await
+        .map_err(|e| agent_error("Ollama list models", e))?;
+    Ok(Json(result))
+}
+
+/// POST /api/apps/{container_id}/ollama/pull — Pull a model into an Ollama container.
+pub async fn ollama_pull_model(
+    State(_state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(container_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    if !is_valid_container_id(&container_id) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
+    }
+    let result = agent
+        .post(&format!("/apps/{container_id}/ollama/pull"), Some(body))
+        .await
+        .map_err(|e| agent_error("Ollama pull model", e))?;
+    Ok(Json(result))
+}
+
+/// POST /api/apps/{container_id}/ollama/delete — Delete a model from an Ollama container.
+pub async fn ollama_delete_model(
+    State(_state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(container_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+    if !is_valid_container_id(&container_id) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
+    }
+    let result = agent
+        .post(&format!("/apps/{container_id}/ollama/delete"), Some(body))
+        .await
+        .map_err(|e| agent_error("Ollama delete model", e))?;
+    Ok(Json(result))
+}
+
 /// GET /api/apps/{container_id}/volumes — Get volume info and sizes.
 pub async fn container_volumes(
     State(_state): State<AppState>,

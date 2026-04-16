@@ -1019,7 +1019,10 @@ static TEMPLATES: &[AppTemplateDef] = &[
         image: "ollama/ollama:latest",
         default_port: 11434,
         container_port: "11434/tcp",
-        env_vars: &[],
+        env_vars: &[
+            EnvVarDef { name: "OLLAMA_KEEP_ALIVE", label: "Model idle timeout", default: "5m", required: false, secret: false },
+            EnvVarDef { name: "OLLAMA_NUM_PARALLEL", label: "Max parallel requests", default: "1", required: false, secret: false },
+        ],
         volumes: &["/root/.ollama"],
     },
     AppTemplateDef {
