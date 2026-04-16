@@ -87,7 +87,7 @@ jobs:
 
       - name: Install cargo-sbom
         if: matrix.arch == 'amd64'
-        run: cargo install cargo-sbom --locked --version ^0.10
+        run: cargo install cargo-sbom --locked --version ^0.10 --force
 
       - name: Generate SBOMs (SPDX JSON)
         if: matrix.arch == 'amd64'
