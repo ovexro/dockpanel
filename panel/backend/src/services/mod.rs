@@ -11,6 +11,7 @@ pub mod image_scanner;
 pub mod extensions;
 pub mod preview_cleanup;
 pub mod metrics_collector;
+pub mod prometheus_exporter;
 pub mod notifications;
 pub mod secrets_crypto;
 pub mod security_scanner;

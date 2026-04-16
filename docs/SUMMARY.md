@@ -10,6 +10,7 @@
   - [Backups](guides/backups.md)
   - [Backup Manager](guides/backup-orchestrator.md)
   - [Monitoring & Alerting](guides/monitoring.md)
+  - [Prometheus Metrics](guides/prometheus.md)
   - [Status Page](guides/status-page.md)
   - [Incidents](guides/incidents.md)
   - [Secrets Manager](guides/secrets.md)

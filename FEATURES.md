@@ -1,6 +1,6 @@
 # DockPanel Feature Manifest
 
-> **Last verified**: 2026-04-15 | **Version**: v2.7.9 | **Total**: 60+ major features, ~280 capabilities
+> **Last verified**: 2026-04-16 | **Version**: v2.7.16 | **Total**: 60+ major features, ~280 capabilities
 >
 > This file is the single source of truth for what DockPanel offers.
 > Update it whenever features are added, changed, or removed.
@@ -56,6 +56,7 @@
 |---------|-------------|---------|-------|----------|--------------------|
 | **Dashboard** | Live CPU/RAM/disk/network, Docker summary, health score | `routes/dashboard.rs` | — | `Dashboard.tsx` | — |
 | **Metrics** | Historical charts (24h), WebSocket live data | `routes/metrics.rs`, `ws_metrics.rs` | `system.rs` | (in Dashboard) | `metrics_collector.rs` |
+| **Prometheus Endpoint** | `/api/metrics` in Prometheus exposition format (gauges for CPU/memory/disk/GPU per server, site counts, firing alerts by severity, build info). Disabled by default; scrape-token gated; constant-time SHA-256 comparison. Reads the latest row from the 30-second collector — zero extra load per scrape. | `routes/prometheus.rs`, `services/prometheus_exporter.rs` | — | `Settings.tsx` (PrometheusSettings) | — |
 | **Alerts** | CPU/mem/disk thresholds, SSL expiry, service health, per-type muting for external channels | `routes/alerts.rs` | — | (in Settings) | `alert_engine.rs` |
 | **Auto-Healing** | Restart crashed services, clean logs, renew SSL | — | — | (in Settings) | `auto_healer.rs` |
 | **Diagnostics** | 6 check categories, one-click fixes | `routes/system.rs` | `diagnostics.rs` | (in Security) | — |

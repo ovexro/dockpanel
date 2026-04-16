@@ -49,6 +49,7 @@ pub mod iac;
 pub mod image_scans;
 pub mod sboms;
 pub mod passkeys;
+pub mod prometheus;
 pub mod webhook_gateway;
 pub mod telemetry;
 pub mod whmcs;
@@ -926,6 +927,9 @@ pub fn router() -> Router<AppState> {
         .route("/api/dashboard/fleet", get(dashboard::fleet_overview))
         // Live metrics WebSocket
         .route("/api/ws/metrics", get(ws_metrics::handler))
+        // Prometheus `/metrics` scrape endpoint (gated by scrape token)
+        .route("/api/metrics", get(prometheus::scrape))
+        .route("/api/prometheus/settings", get(prometheus::get_settings).post(prometheus::update_settings))
         // SSH Keys
         .route("/api/ssh-keys", get(system::list_ssh_keys).post(system::add_ssh_key))
         .route("/api/ssh-keys/{fingerprint}", delete(system::remove_ssh_key))

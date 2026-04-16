@@ -23,6 +23,7 @@ An honest comparison. We're not shy about where DockPanel leads — and we're up
 | **Per-image CVE scanning** | **Yes (grype, deploy-gated)** | No | No | No | No | No |
 | **Signed releases + SBOM** | **Yes (cosign keyless, SPDX 2.3)** | No | No | No | No | No |
 | **Per-image SBOM generation** | **Yes (syft, on-demand SPDX 2.3 download)** | No | No | No | No | No |
+| **Prometheus metrics endpoint** | **Yes (`/api/metrics`, token-gated, OpenMetrics text)** | No | No | No | No | No |
 
 ## Where DockPanel Wins — Massively
 
@@ -35,6 +36,8 @@ An honest comparison. We're not shy about where DockPanel leads — and we're up
 **Business-ready out of the box** — Multi-server management (unlimited), reseller accounts with quotas and white-label branding, OAuth/SSO (Google, GitHub, GitLab), extension API with HMAC-signed webhooks, migration wizard (import from cPanel/Plesk/HestiaCP), and teams with role-based access. Most panels don't have even half of these at any price.
 
 **Per-image CVE scanning with deploy gating** — No other free Docker-native panel ships this. Every running app is scanned against the Anchore grype vulnerability database, a severity badge surfaces on the Apps list, and a configurable gate refuses new deploys on images with critical/high/medium CVEs. Coolify, Dokploy, Portainer CE, and CyberPanel all leave this to third-party tooling. DockPanel ships it in the Settings UI, defaults it off, and makes it one click to enable.
+
+**Prometheus-native observability** — A bearer-token-gated `/api/metrics` endpoint emits CPU, memory, disk, GPU utilization/VRAM/temperature/power, site counts, and firing alerts in standard Prometheus exposition format. Drop the generated scrape config block into your `prometheus.yml` and you're done. No other free Docker-native hosting panel ships a Prometheus endpoint — Coolify, Dokploy, Portainer CE, HestiaCP, and CyberPanel all leave this to third-party exporters. The endpoint reads from the existing 30-second metrics collector, so enabling it adds zero per-scrape agent load.
 
 **Signed releases + SBOM out of the box** — Every release binary and SPDX 2.3 SBOM is signed in CI with cosign keyless via Sigstore. There is no long-lived signing key — the certificate is bound to the GitHub Actions OIDC identity of this repository's release workflow and recorded in the public Rekor transparency log. No other free Docker-native panel ships signed releases or per-binary SBOMs. With the EU CRA's supply-chain requirements landing in 2026, this stops being a nice-to-have.
 
