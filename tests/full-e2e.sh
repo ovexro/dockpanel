@@ -221,6 +221,21 @@ echo "── Filesystem ──"
 lsattr -d /var/lib/dockpanel/audit/ 2>/dev/null | grep -q "a" && green "Audit dir has append-only flag" || red "Audit dir missing append-only flag"
 
 echo ""
+echo "── Tier 2 Cert Pin (sub-suite) ──"
+TIER2_SCRIPT="$(dirname "$0")/tier2-pin-e2e.sh"
+if [ -x "$TIER2_SCRIPT" ]; then
+    if bash "$TIER2_SCRIPT" > /tmp/tier2_output 2>&1; then
+        TIER2_LINE=$(grep -oP '\d+ passed, \d+ failed(?:, \d+ skipped)?' /tmp/tier2_output | tail -1)
+        green "Tier 2 cert pin e2e — ${TIER2_LINE:-passed}"
+    else
+        red "Tier 2 cert pin e2e (see /tmp/tier2_output)"
+        tail -20 /tmp/tier2_output
+    fi
+else
+    skip "Tier 2 cert pin e2e — $TIER2_SCRIPT not executable"
+fi
+
+echo ""
 echo "═══════════════════════════════════════════════"
 echo "  Results: $PASS passed, $FAIL failed, $SKIP skipped ($TOTAL total)"
 echo "═══════════════════════════════════════════════"

@@ -4,6 +4,26 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+
+- **Tier 2 cert-pin E2E test suite (`tests/tier2-pin-e2e.sh`).** Covers
+  every step of the Phase 3 #3 Tier 2 flow end-to-end against the live
+  API: TOFU fingerprint capture on `/api/agent/checkin`, match no-op,
+  MITM 403, malformed-fingerprint 400, admin rotate-cert-pin with and
+  without the `X-Requested-With` CSRF header, `activity_logs` capture
+  of the rotate action, and re-TOFU after rotate. Also includes a
+  dedicated regression guard for the v2.7.18 rustls `CryptoProvider`
+  panic — it inserts a synthetic online server row with
+  `cert_fingerprint` set and a loopback URL with no listener, then
+  `POST /api/servers/{id}/test` and asserts status exactly 502
+  (graceful connect failure) — a panic would surface as 500 and be
+  caught. The suite is self-provisioning: it mints an admin JWT
+  locally from `/etc/dockpanel/api.env` when `DOCKPANEL_TEST_PASSWORD`
+  is unset, and cleans up all DB rows it creates via an `EXIT` trap.
+  Wired into `tests/full-e2e.sh` as a sub-suite at the end of the run.
+
 ## [2.7.19] - 2026-04-17
 
 ### Fixed
