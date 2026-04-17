@@ -497,7 +497,7 @@ dependencies = [
 
 [[package]]
 name = "dockpanel-api"
-version = "2.7.17"
+version = "2.7.18"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -518,6 +518,7 @@ dependencies = [
  "qrcode",
  "rand 0.9.4",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -2009,6 +2010,7 @@ version = "0.23.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69f9466fb2c14ea04357e91413efb882e2a6d4a406e625449bc0a5d360d53a21"
 dependencies = [
+ "aws-lc-rs",
  "log",
  "once_cell",
  "ring",
@@ -2034,6 +2036,7 @@ version = "0.103.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8279bb85272c9f10811ae6a6c547ff594d6a7f3c6c6b02ee9726d1d0dcfcdd06"
 dependencies = [
+ "aws-lc-rs",
  "ring",
  "rustls-pki-types",
  "untrusted 0.9.0",

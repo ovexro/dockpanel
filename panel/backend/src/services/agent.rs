@@ -519,24 +519,125 @@ pub struct RemoteAgentClient {
     cb: CircuitBreaker,
 }
 
+/// Rustls verifier that trusts exactly one self-signed cert, identified by the
+/// SHA-256 hex fingerprint of its DER encoding. Replaces `danger_accept_invalid_certs`
+/// once the panel has captured an agent's fingerprint on first checkin (TOFU).
+#[derive(Debug)]
+struct PinnedFingerprintVerifier {
+    expected: String,
+    provider: Arc<rustls::crypto::CryptoProvider>,
+}
+
+impl PinnedFingerprintVerifier {
+    fn new(expected_hex: String) -> Self {
+        Self {
+            expected: expected_hex.to_ascii_lowercase(),
+            provider: Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
+        }
+    }
+}
+
+impl rustls::client::danger::ServerCertVerifier for PinnedFingerprintVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        use sha2::{Digest, Sha256};
+        use subtle::ConstantTimeEq;
+        let actual = hex::encode(Sha256::digest(end_entity.as_ref()));
+        if actual.as_bytes().ct_eq(self.expected.as_bytes()).into() {
+            Ok(rustls::client::danger::ServerCertVerified::assertion())
+        } else {
+            Err(rustls::Error::General(format!(
+                "agent cert fingerprint mismatch: expected {}, got {}",
+                self.expected, actual
+            )))
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
 impl RemoteAgentClient {
     pub fn new(base_url: String, token: String) -> Self {
-        // TODO: Replace danger_accept_invalid_certs with certificate pinning or CA bundle.
-        // Currently agents use self-signed certs, so we must accept them.
-        // This makes the connection vulnerable to MITM attacks on remote agent communication.
-        // Mitigation: agents should generate a self-signed CA on enrollment and pin it here.
-        let accept_invalid = std::env::var("AGENT_TLS_VERIFY")
-            .map(|v| v == "insecure")
-            .unwrap_or(false);
-        if accept_invalid {
-            tracing::warn!("Remote agent TLS: accepting invalid certificates (AGENT_TLS_VERIFY=insecure). This is NOT recommended for production.");
-        }
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(60))
-            .danger_accept_invalid_certs(accept_invalid)
-            .pool_max_idle_per_host(5)
-            .build()
-            .unwrap_or_default();
+        Self::new_with_pin(base_url, token, None)
+    }
+
+    /// Build a client that optionally pins the agent's TLS cert by SHA-256
+    /// fingerprint. When `fingerprint` is `Some`, TLS verification rejects any
+    /// cert whose DER SHA-256 doesn't match — a stronger guarantee than CA-based
+    /// trust for self-signed agent certs. When `None`, falls back to the legacy
+    /// `AGENT_TLS_VERIFY=insecure` env flag so old agents (without fingerprint
+    /// reporting) still work while their first checkin captures a pin.
+    pub fn new_with_pin(
+        base_url: String,
+        token: String,
+        fingerprint: Option<String>,
+    ) -> Self {
+        let http = if let Some(fp) = fingerprint {
+            let verifier = Arc::new(PinnedFingerprintVerifier::new(fp));
+            let tls_config = rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(verifier)
+                .with_no_client_auth();
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(60))
+                .use_preconfigured_tls(tls_config)
+                .pool_max_idle_per_host(5)
+                .build()
+                .unwrap_or_default()
+        } else {
+            let accept_invalid = std::env::var("AGENT_TLS_VERIFY")
+                .map(|v| v == "insecure")
+                .unwrap_or(false);
+            if !accept_invalid {
+                tracing::warn!(
+                    "Remote agent {base_url} has no pinned fingerprint — TLS will require a valid CA cert. If the agent is self-signed (default), wait for first checkin to capture the pin, or set AGENT_TLS_VERIFY=insecure temporarily."
+                );
+            }
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(60))
+                .danger_accept_invalid_certs(accept_invalid)
+                .pool_max_idle_per_host(5)
+                .build()
+                .unwrap_or_default()
+        };
 
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
@@ -924,8 +1025,8 @@ impl AgentRegistry {
         }
 
         // Fetch from DB and cache
-        let row: Option<(String, String)> = sqlx::query_as(
-            "SELECT agent_url, agent_token FROM servers WHERE id = $1 AND status != 'pending'",
+        let row: Option<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT agent_url, agent_token, cert_fingerprint FROM servers WHERE id = $1 AND status != 'pending'",
         )
         .bind(server_id)
         .fetch_optional(&self.db)
@@ -933,8 +1034,8 @@ impl AgentRegistry {
         .map_err(|e| AgentError::Connection(format!("DB lookup failed: {e}")))?;
 
         match row {
-            Some((url, token)) if !url.is_empty() => {
-                let client = RemoteAgentClient::new(url, token);
+            Some((url, token, fingerprint)) if !url.is_empty() => {
+                let client = RemoteAgentClient::new_with_pin(url, token, fingerprint);
                 self.remote_cache.write().await.insert(server_id, client.clone());
                 Ok(AgentHandle::Remote(client))
             }

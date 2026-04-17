@@ -4,10 +4,25 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [2.7.18] - 2026-04-17
 
 ### Added
 
+- **`RemoteAgentClient` cert-pinning enforcement (Phase 3 #3 — Tier 2,
+  part 2).** Closes the loop: once an agent's fingerprint has been
+  captured by the backend (Tier 2 part 1), every outbound TLS handshake
+  to that agent goes through a custom `rustls::client::danger::ServerCertVerifier`
+  that only accepts a cert whose DER SHA-256 matches the pinned value.
+  Comparison is constant-time via `subtle`; signature verification
+  delegates to `rustls::crypto::aws_lc_rs`. When `cert_fingerprint` is
+  still NULL for a server (e.g. old agent that doesn't report it), the
+  client falls back to the legacy `AGENT_TLS_VERIFY=insecure` env flag
+  for backwards compatibility.
+  - `AgentRegistry::for_server` now reads `cert_fingerprint` from the
+    `servers` row and passes it to `RemoteAgentClient::new_with_pin`.
+    Rotating the pin via `POST /api/servers/{id}/rotate-cert-pin` already
+    invalidates the cached client (shipped in Tier 2 pt1) so the next
+    request rebuilds with the new pin.
 - **Agent TLS + cert fingerprint pinning (Phase 3 #3 — Tier 2, part 1).**
   The agent's multi-server listener now terminates TLS instead of shipping
   auth tokens in plaintext, and the central panel captures each agent's
@@ -33,11 +48,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   - Servers page gains a per-server TLS pin row showing the shortened
     fingerprint (first 16 / last 16 chars, full hash on hover) and a
     "Rotate pin" button with an inline confirmation bar.
-  - **Follow-up queued:** `RemoteAgentClient` pin-enforcement via a
-    custom rustls verifier that only accepts the stored fingerprint —
-    currently the backend still sets `danger_accept_invalid_certs` for
-    outbound connections. That's a ~30-line add and will ship as the
-    next Tier 2 commit.
+  - Pt2 (pin-enforcement in `RemoteAgentClient`) ships in the same
+    release — see the first bullet above.
 - **Unified fleet-wide backup view (Phase 3 #3 — Tier 1).** The Backup
   Orchestrator page gains an **All Backups** tab that lists site, database,
   and volume backups from every server in a single paginated table, with
