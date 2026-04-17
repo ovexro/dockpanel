@@ -61,6 +61,14 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() {
+    // Install rustls CryptoProvider before any TLS usage. Required by rustls 0.23+
+    // when constructing a ClientConfig with a custom ServerCertVerifier (e.g., the
+    // PinnedFingerprintVerifier used for remote-agent TLS pinning). Without this,
+    // the first outbound pinned TLS handshake panics in rustls::crypto::mod.
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("failed to install rustls aws_lc_rs CryptoProvider");
+
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
     let log_format = std::env::var("LOG_FORMAT").unwrap_or_default();
     if log_format == "json" {

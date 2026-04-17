@@ -4,6 +4,25 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.7.19] - 2026-04-17
+
+### Fixed
+
+- **Remote-agent TLS pinning no longer panics the API process.** v2.7.18
+  shipped the `PinnedFingerprintVerifier` for outbound backend→agent TLS
+  but the backend's `main.rs` never installed a process-level rustls
+  `CryptoProvider`. On the first request that actually exercised the
+  pinned path (i.e. a second server enrolled in the fleet with a
+  captured fingerprint), `rustls::ClientConfig::builder()` panicked on
+  `CryptoProvider::get_default()`. Pure single-host installs were not
+  affected; any multi-server deployment using the pinned verifier was.
+  Fix: call `rustls::crypto::aws_lc_rs::default_provider().install_default()`
+  at `dockpanel-api` startup (the agent already did this at `main.rs:24`).
+  Caught by the v2.7.18 fresh-VPS test before v2.7.18 was declared
+  public-ready. No API changes; the Tier 2 part 2 verification flows
+  (TOFU capture, MITM 403, rotate-pin, re-TOFU, PinnedFingerprintVerifier
+  accept/reject) now all succeed end-to-end.
+
 ## [2.7.18] - 2026-04-17
 
 ### Added
