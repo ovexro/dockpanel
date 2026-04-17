@@ -4,6 +4,7 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 mod routes;
 pub mod safe_cmd;
 mod services;
+mod tls;
 
 use axum::{middleware, Router};
 use bollard::Docker;
@@ -186,8 +187,20 @@ async fn main() {
         std::fs::set_permissions(SOCKET_PATH, std::fs::Permissions::from_mode(0o600)).ok();
     }
 
+    // Load or generate the agent TLS cert now, so the fingerprint is available
+    // for both the inbound TLS listener and the outbound phone-home payload.
+    let (tls_config, cert_fingerprint) = match tls::load_or_generate().await {
+        Ok(pair) => pair,
+        Err(e) => {
+            tracing::error!("Failed to load/generate agent TLS cert: {e}");
+            std::process::exit(1);
+        }
+    };
+    tracing::info!("Agent TLS cert fingerprint (SHA-256): {cert_fingerprint}");
+
     // Start phone-home if configured (remote agent mode)
-    let remote_mode = if let Some(ph_config) = services::phone_home::PhoneHomeConfig::from_env() {
+    let remote_mode = if let Some(mut ph_config) = services::phone_home::PhoneHomeConfig::from_env() {
+        ph_config.cert_fingerprint = Some(cert_fingerprint.clone());
         tokio::spawn(services::phone_home::run(ph_config));
         true
     } else {
@@ -208,28 +221,27 @@ async fn main() {
         });
     }
 
-    // Multi-server: start TCP listener for remote panel connections
-    // Set AGENT_LISTEN_TCP=0.0.0.0:9443 to enable (used by remote agent install)
+    // Multi-server: start TLS-wrapped TCP listener for remote panel connections.
+    // Set AGENT_LISTEN_TCP=0.0.0.0:9443 to enable. The listener always terminates
+    // TLS using the self-signed cert at /etc/dockpanel/ssl/agent.{crt,key}; the
+    // central panel pins the cert's SHA-256 fingerprint on first checkin (TOFU).
     if let Ok(tcp_addr) = std::env::var("AGENT_LISTEN_TCP") {
-        if tcp_addr.starts_with("0.0.0.0") {
-            tracing::error!("AGENT_LISTEN_TCP bound to 0.0.0.0 without TLS is REFUSED — agent tokens would be sent in plaintext to all interfaces. Use 127.0.0.1 or set up a TLS reverse proxy. Set AGENT_ALLOW_INSECURE_BIND=true to override (NOT recommended).");
-            if std::env::var("AGENT_ALLOW_INSECURE_BIND").as_deref() != Ok("true") {
+        let parsed_addr: std::net::SocketAddr = match tcp_addr.parse() {
+            Ok(a) => a,
+            Err(e) => {
+                tracing::error!("AGENT_LISTEN_TCP {tcp_addr} is not a valid socket address: {e}");
                 std::process::exit(1);
             }
-            tracing::warn!("AGENT_ALLOW_INSECURE_BIND=true — proceeding with insecure 0.0.0.0 bind. This is NOT safe for production.");
-        }
-        tracing::warn!("AGENT_LISTEN_TCP is enabled WITHOUT TLS — agent token is transmitted in plaintext. Use a VPN or reverse proxy with TLS for remote connections.");
+        };
         let tcp_app = app.clone();
+        let cfg = tls_config.clone();
         tokio::spawn(async move {
-            let tcp_listener = tokio::net::TcpListener::bind(&tcp_addr)
+            tracing::info!("Agent TLS listener on {parsed_addr} (multi-server remote access)");
+            if let Err(e) = axum_server::bind_rustls(parsed_addr, cfg)
+                .serve(tcp_app.into_make_service())
                 .await
-                .unwrap_or_else(|e| {
-                    tracing::error!("Failed to bind TCP listener on {tcp_addr}: {e}");
-                    std::process::exit(1);
-                });
-            tracing::info!("Agent TCP listener on {tcp_addr} (multi-server remote access)");
-            if let Err(e) = axum::serve(tcp_listener, tcp_app).await {
-                tracing::error!("Multi-server TCP server error: {e}");
+            {
+                tracing::error!("Multi-server TLS server error: {e}");
             }
         });
     }

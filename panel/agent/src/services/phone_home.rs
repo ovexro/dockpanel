@@ -8,6 +8,11 @@ pub struct PhoneHomeConfig {
     pub central_url: String,
     pub server_token: String,
     pub server_id: String,
+    /// SHA-256 hex fingerprint of the agent's TLS cert. Sent in every checkin
+    /// so the central panel can pin it (Trust On First Use). Populated by
+    /// `main.rs` after loading the cert; `None` keeps backward compatibility
+    /// with older panels that don't know about pinning.
+    pub cert_fingerprint: Option<String>,
 }
 
 impl PhoneHomeConfig {
@@ -25,6 +30,7 @@ impl PhoneHomeConfig {
             central_url: url.trim_end_matches('/').to_string(),
             server_token: token,
             server_id: id,
+            cert_fingerprint: None,
         })
     }
 }
@@ -100,6 +106,9 @@ pub async fn run(config: PhoneHomeConfig) {
     loop {
         let mut info = collect_system_info();
         info["server_id"] = serde_json::json!(config.server_id);
+        if let Some(fp) = &config.cert_fingerprint {
+            info["cert_fingerprint"] = serde_json::json!(fp);
+        }
 
         match client
             .post(&checkin_url)

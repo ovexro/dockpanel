@@ -22,6 +22,8 @@ export default function Servers() {
   const [editing, setEditing] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ name: "", ip_address: "", agent_url: "" });
   const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
+  const [pendingRotate, setPendingRotate] = useState<{ id: string; name: string } | null>(null);
+  const [rotateResult, setRotateResult] = useState<Record<string, string>>({});
 
   const handleCreate = useCallback(async () => {
     if (!form.name.trim()) return;
@@ -53,6 +55,19 @@ export default function Servers() {
       setError(e instanceof ApiError ? e.message : "Failed to delete server");
     }
   }, [refreshServers]);
+
+  const executeRotate = useCallback(async () => {
+    if (!pendingRotate) return;
+    const { id } = pendingRotate;
+    setPendingRotate(null);
+    try {
+      await api.post(`/servers/${id}/rotate-cert-pin`);
+      setRotateResult((prev) => ({ ...prev, [id]: "Pin cleared — next agent checkin will re-capture." }));
+      await refreshServers();
+    } catch (e) {
+      setRotateResult((prev) => ({ ...prev, [id]: e instanceof ApiError ? e.message : "Rotate failed" }));
+    }
+  }, [pendingRotate, refreshServers]);
 
   const handleTest = useCallback(async (id: string) => {
     setTesting(id);
@@ -124,6 +139,16 @@ export default function Servers() {
           <div className="flex items-center gap-2 shrink-0 ml-4">
             <button onClick={executeDelete} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">Confirm</button>
             <button onClick={() => setPendingDelete(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {pendingRotate && (
+        <div className="border border-warn-500/30 bg-warn-500/5 rounded-lg px-4 py-3 flex items-center justify-between">
+          <span className="text-xs text-warn-400 font-mono">Rotate TLS pin for "{pendingRotate.name}"? This clears the stored fingerprint; the next checkin re-captures (TOFU window). Only do this after a legitimate agent cert rotation.</span>
+          <div className="flex items-center gap-2 shrink-0 ml-4">
+            <button onClick={executeRotate} className="px-3 py-1.5 bg-warn-500 text-dark-950 text-xs font-bold uppercase tracking-wider hover:bg-warn-400 transition-colors">Rotate</button>
+            <button onClick={() => setPendingRotate(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
           </div>
         </div>
       )}
@@ -259,6 +284,34 @@ export default function Servers() {
                 {s.ram_mb && <span>RAM: {(s.ram_mb / 1024).toFixed(1)} GB{s.mem_used_mb != null ? ` (${((s.mem_used_mb / s.ram_mb) * 100).toFixed(0)}%)` : ""}</span>}
                 {s.disk_gb && <span>Disk: {s.disk_gb} GB</span>}
                 {s.uptime_secs && <span>Uptime: {formatUptime(s.uptime_secs)}</span>}
+              </div>
+            )}
+
+            {/* TLS cert pin (remote servers only) */}
+            {!s.is_local && (
+              <div className="mt-3 pt-3 border-t border-dark-700 flex items-center justify-between gap-3 text-xs font-mono">
+                <div className="min-w-0 flex-1">
+                  <span className="text-dark-300 uppercase tracking-widest text-[10px]">TLS pin</span>
+                  {s.cert_fingerprint ? (
+                    <span className="ml-2 text-dark-100 break-all" title={`SHA-256 of agent's inbound TLS cert — captured on first checkin (TOFU). Full: ${s.cert_fingerprint}`}>
+                      {s.cert_fingerprint.slice(0, 16)}…{s.cert_fingerprint.slice(-16)}
+                    </span>
+                  ) : (
+                    <span className="ml-2 text-warn-400">not yet captured</span>
+                  )}
+                </div>
+                <button
+                  onClick={() => setPendingRotate({ id: s.id, name: s.name })}
+                  className="px-3 py-1 bg-dark-700 text-dark-200 rounded text-[11px] hover:bg-dark-600 transition-colors whitespace-nowrap"
+                  title="Clear the pin so the next agent checkin re-captures it. Use after legitimately rotating the agent cert."
+                >
+                  Rotate pin
+                </button>
+              </div>
+            )}
+            {rotateResult[s.id] && (
+              <div className="mt-2 px-3 py-2 rounded text-xs bg-rust-500/10 text-rust-400 font-mono">
+                {rotateResult[s.id]}
               </div>
             )}
           </div>

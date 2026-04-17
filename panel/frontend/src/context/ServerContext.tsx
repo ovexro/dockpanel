@@ -17,6 +17,7 @@ export interface Server {
   mem_used_mb: number | null;
   uptime_secs: number | null;
   last_seen_at: string | null;
+  cert_fingerprint: string | null;
   created_at: string;
 }
 

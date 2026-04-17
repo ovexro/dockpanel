@@ -37,6 +37,7 @@ pub struct Server {
     pub cpu_usage: Option<f32>,
     pub mem_used_mb: Option<i64>,
     pub uptime_secs: Option<i64>,
+    pub cert_fingerprint: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -188,6 +189,52 @@ pub async fn remove(
     .await;
 
     Ok(Json(serde_json::json!({ "ok": true, "name": server.name })))
+}
+
+/// POST /api/servers/{id}/rotate-cert-pin — Clear the stored TLS fingerprint
+/// so the next agent checkin re-captures it (TOFU). Use when an agent's cert
+/// has legitimately changed (rotation, reinstall) — otherwise an unexpected
+/// fingerprint change signals MITM and is refused at checkin time.
+pub async fn rotate_cert_pin(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let server: Server =
+        sqlx::query_as("SELECT * FROM servers WHERE id = $1 AND user_id = $2")
+            .bind(id)
+            .bind(claims.sub)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| internal_error("rotate cert pin", e))?
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, "Server not found"))?;
+
+    sqlx::query("UPDATE servers SET cert_fingerprint = NULL WHERE id = $1")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| internal_error("rotate cert pin", e))?;
+
+    // Invalidate remote agent cache so a refreshed RemoteAgentClient is built
+    // the next time a route needs the agent handle.
+    state.agents.invalidate(id).await;
+
+    activity::log_activity(
+        &state.db,
+        claims.sub,
+        &claims.email,
+        "server.rotate_cert_pin",
+        Some("server"),
+        Some(&server.name),
+        None,
+        None,
+    )
+    .await;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "message": "Cert pin cleared — next agent checkin will re-capture the fingerprint (TOFU).",
+    })))
 }
 
 /// POST /api/servers/{id}/test — Test connection to a remote server's agent.

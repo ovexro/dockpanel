@@ -841,6 +841,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/servers/{id}", get(servers::get_one).put(servers::update).delete(servers::remove))
         .route("/api/servers/{id}/test", post(servers::test_connection))
         .route("/api/servers/{id}/rotate-token", post(servers::rotate_token))
+        .route("/api/servers/{id}/rotate-cert-pin", post(servers::rotate_cert_pin))
         .route("/api/servers/{id}/metrics", get(metrics::server_metrics))
         .route("/api/servers/{id}/commands", get(server_actions::list_commands))
         .route("/api/servers/{id}/commands/dispatch", post(server_actions::dispatch))

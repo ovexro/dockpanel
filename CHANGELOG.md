@@ -8,6 +8,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Agent TLS + cert fingerprint pinning (Phase 3 #3 — Tier 2, part 1).**
+  The agent's multi-server listener now terminates TLS instead of shipping
+  auth tokens in plaintext, and the central panel captures each agent's
+  cert fingerprint on first checkin for later pinning.
+  - Agent loads `/etc/dockpanel/ssl/agent.{crt,key}` at startup (generated
+    at install time by `install-agent.sh`, or generated on first boot via
+    `rcgen` when missing). `AGENT_LISTEN_TCP=0.0.0.0:9443` now binds a
+    TLS listener via `axum-server` + `rustls` — the old plaintext bind
+    and the `AGENT_ALLOW_INSECURE_BIND` escape hatch are removed, since
+    TLS makes the 0.0.0.0 case safe by construction.
+  - Agent computes the SHA-256 (hex) fingerprint of its cert at startup,
+    logs it on first boot, and includes it in every phone-home checkin.
+  - Migration `20260417000000_agent_cert_fingerprint.sql` adds
+    `servers.cert_fingerprint` (nullable varchar(64) + partial index).
+  - Backend `POST /api/agent/checkin` captures the fingerprint on first
+    checkin (Trust On First Use); on subsequent checkins a mismatch is
+    rejected with 403 and logged at ERROR level. Format-validated
+    (64-char lowercase hex) before storage.
+  - New admin endpoint **`POST /api/servers/{id}/rotate-cert-pin`**
+    clears the stored fingerprint so the next checkin re-captures. Use
+    after a legitimate agent cert rotation or reinstall. Invalidates the
+    cached `RemoteAgentClient` and writes an audit log entry.
+  - Servers page gains a per-server TLS pin row showing the shortened
+    fingerprint (first 16 / last 16 chars, full hash on hover) and a
+    "Rotate pin" button with an inline confirmation bar.
+  - **Follow-up queued:** `RemoteAgentClient` pin-enforcement via a
+    custom rustls verifier that only accepts the stored fingerprint —
+    currently the backend still sets `danger_accept_invalid_certs` for
+    outbound connections. That's a ~30-line add and will ship as the
+    next Tier 2 commit.
 - **Unified fleet-wide backup view (Phase 3 #3 — Tier 1).** The Backup
   Orchestrator page gains an **All Backups** tab that lists site, database,
   and volume backups from every server in a single paginated table, with

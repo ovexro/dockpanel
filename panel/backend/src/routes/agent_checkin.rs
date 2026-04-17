@@ -28,6 +28,11 @@ pub struct CheckinRequest {
     /// Unix timestamp (seconds) from the agent. Replay prevention:
     /// requests older than 120 seconds are rejected.
     pub timestamp: Option<i64>,
+    /// SHA-256 hex fingerprint of the agent's inbound TLS cert. Captured on
+    /// first checkin (TOFU), validated on subsequent checkins. Mismatch is
+    /// treated as a potential MITM or re-provisioned agent; the admin must
+    /// rotate the pin via POST /api/servers/{id}/rotate-cert-pin.
+    pub cert_fingerprint: Option<String>,
 }
 
 /// POST /api/agent/checkin — Agent reports system info and heartbeat.
@@ -81,6 +86,52 @@ pub async fn checkin(
                 "Checkin rejected for server {server_id}: timestamp drift {drift}s (limit 120s)"
             );
             return Err(err(StatusCode::BAD_REQUEST, "Request timestamp too old"));
+        }
+    }
+
+    // Cert fingerprint pinning (Trust On First Use).
+    // - If the agent sends a fingerprint and nothing is stored: capture it.
+    // - If the stored fingerprint matches: no-op.
+    // - If the stored fingerprint differs: treat as MITM and refuse checkin.
+    //   The admin must POST /api/servers/{id}/rotate-cert-pin to re-capture.
+    if let Some(fp_raw) = body.cert_fingerprint.as_deref() {
+        let fp = fp_raw.trim().to_ascii_lowercase();
+        let valid_format = fp.len() == 64 && fp.chars().all(|c| c.is_ascii_hexdigit());
+        if !valid_format {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "cert_fingerprint must be a 64-char lowercase hex SHA-256",
+            ));
+        }
+        let (stored,): (Option<String>,) =
+            sqlx::query_as("SELECT cert_fingerprint FROM servers WHERE id = $1")
+                .bind(server_id)
+                .fetch_one(&state.db)
+                .await
+                .map_err(|e| internal_error("checkin cert lookup", e))?;
+        match stored {
+            None => {
+                // TOFU capture
+                sqlx::query("UPDATE servers SET cert_fingerprint = $1 WHERE id = $2")
+                    .bind(&fp)
+                    .bind(server_id)
+                    .execute(&state.db)
+                    .await
+                    .map_err(|e| internal_error("checkin cert capture", e))?;
+                tracing::info!("Captured cert fingerprint for server {server_id}: {fp}");
+            }
+            Some(existing) if existing.as_bytes().ct_eq(fp.as_bytes()).into() => {
+                // Match — nothing to do.
+            }
+            Some(_) => {
+                tracing::error!(
+                    "Checkin REJECTED for server {server_id}: cert fingerprint mismatch (possible MITM or agent re-provisioned). Admin must rotate the pin."
+                );
+                return Err(err(
+                    StatusCode::FORBIDDEN,
+                    "cert fingerprint mismatch — rotate the pin to accept a new cert",
+                ));
+            }
         }
     }
 
