@@ -865,6 +865,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/notifications/{id}/read", post(notifications::mark_read))
         .route("/api/notifications/read-all", post(notifications::mark_all_read))
         // Backup Orchestrator
+        .route("/api/backup-orchestrator/all", get(backup_orchestrator::list_all_backups))
         .route("/api/backup-orchestrator/health", get(backup_orchestrator::health))
         .route("/api/backup-orchestrator/policies", get(backup_orchestrator::list_policies).post(backup_orchestrator::create_policy))
         .route("/api/backup-orchestrator/policies/protect-all", post(backup_orchestrator::protect_all))

@@ -75,6 +75,33 @@ interface Destination {
   dtype: string;
 }
 
+interface ServerRow {
+  id: string;
+  name: string;
+  is_local: boolean;
+}
+
+interface UnifiedBackupRow {
+  id: string;
+  kind: "site" | "database" | "volume";
+  resource_id: string | null;
+  resource_name: string;
+  filename: string;
+  size_bytes: number;
+  created_at: string;
+  server_id: string | null;
+  server_name: string;
+  server_is_local: boolean;
+  encrypted: boolean;
+  uploaded: boolean;
+  extra_type: string | null;
+}
+
+interface UnifiedBackupsResponse {
+  items: UnifiedBackupRow[];
+  total: number;
+}
+
 interface PolicyForm {
   name: string;
   schedule: string;
@@ -93,7 +120,9 @@ interface Database {
   engine: string;
 }
 
-type Tab = "overview" | "policies" | "databases" | "volumes" | "verifications" | "destinations";
+type Tab = "overview" | "all" | "policies" | "databases" | "volumes" | "verifications" | "destinations";
+
+const ALL_PAGE_SIZE = 50;
 
 export default function BackupOrchestrator() {
   const { user } = useAuth();
@@ -106,6 +135,12 @@ export default function BackupOrchestrator() {
   const [verifications, setVerifications] = useState<Verification[]>([]);
   const [destinations, setDestinations] = useState<Destination[]>([]);
   const [databases, setDatabases] = useState<Database[]>([]);
+  const [servers, setServers] = useState<ServerRow[]>([]);
+  const [unified, setUnified] = useState<UnifiedBackupsResponse>({ items: [], total: 0 });
+  const [unifiedFilterServer, setUnifiedFilterServer] = useState<string>("");
+  const [unifiedFilterKind, setUnifiedFilterKind] = useState<"" | "site" | "database" | "volume">("");
+  const [unifiedOffset, setUnifiedOffset] = useState(0);
+  const [unifiedLoading, setUnifiedLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState({ text: "", type: "" });
   const [showPolicyForm, setShowPolicyForm] = useState(false);
@@ -120,7 +155,7 @@ export default function BackupOrchestrator() {
   const loadAll = async () => {
     setLoading(true);
     try {
-      const [h, p, db, vol, ver, dest, dbs] = await Promise.all([
+      const [h, p, db, vol, ver, dest, dbs, srv] = await Promise.all([
         api.get<BackupHealth>("/backup-orchestrator/health").catch(() => null),
         api.get<BackupPolicy[]>("/backup-orchestrator/policies").catch(() => []),
         api.get<DatabaseBackup[]>("/backup-orchestrator/db-backups").catch(() => []),
@@ -128,6 +163,7 @@ export default function BackupOrchestrator() {
         api.get<Verification[]>("/backup-orchestrator/verifications").catch(() => []),
         api.get<Destination[]>("/backup-destinations").catch(() => []),
         api.get<Database[]>("/databases").catch(() => []),
+        api.get<ServerRow[]>("/servers").catch(() => []),
       ]);
       setHealth(h);
       setPolicies(p);
@@ -136,12 +172,37 @@ export default function BackupOrchestrator() {
       setVerifications(ver);
       setDestinations(dest);
       setDatabases(dbs);
+      setServers(srv);
     } catch (e) {
       setMessage({ text: e instanceof Error ? e.message : "Failed to load", type: "error" });
     } finally {
       setLoading(false);
     }
   };
+
+  const loadUnified = async (offset = 0) => {
+    setUnifiedLoading(true);
+    try {
+      const qs = new URLSearchParams({
+        limit: String(ALL_PAGE_SIZE),
+        offset: String(offset),
+      });
+      if (unifiedFilterServer) qs.set("server_id", unifiedFilterServer);
+      if (unifiedFilterKind) qs.set("kind", unifiedFilterKind);
+      const res = await api.get<UnifiedBackupsResponse>(`/backup-orchestrator/all?${qs.toString()}`);
+      setUnified(res);
+      setUnifiedOffset(offset);
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : "Failed to load unified view", type: "error" });
+    } finally {
+      setUnifiedLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (tab === "all") loadUnified(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, unifiedFilterServer, unifiedFilterKind]);
 
   const createPolicy = async () => {
     try {
@@ -190,6 +251,7 @@ export default function BackupOrchestrator() {
 
   const tabs: { key: Tab; label: string }[] = [
     { key: "overview", label: "Overview" },
+    { key: "all", label: "All Backups" },
     { key: "policies", label: "Policies" },
     { key: "databases", label: "DB Backups" },
     { key: "volumes", label: "Volume Backups" },
@@ -230,6 +292,20 @@ export default function BackupOrchestrator() {
 
       {/* Tab Content */}
       {tab === "overview" && health && <OverviewTab health={health} />}
+      {tab === "all" && (
+        <AllBackupsTab
+          data={unified}
+          servers={servers}
+          loading={unifiedLoading}
+          offset={unifiedOffset}
+          pageSize={ALL_PAGE_SIZE}
+          filterServer={unifiedFilterServer}
+          filterKind={unifiedFilterKind}
+          setFilterServer={setUnifiedFilterServer}
+          setFilterKind={setUnifiedFilterKind}
+          onPage={loadUnified}
+        />
+      )}
       {tab === "policies" && (
         <PoliciesTab
           policies={policies} destinations={destinations}
@@ -320,6 +396,155 @@ function OverviewTab({ health }: { health: BackupHealth }) {
                 <span className="text-xs text-warn-400 font-mono">{s.days_since}d since last backup</span>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── All Backups Tab (fleet-wide unified view) ─────────────────────────────
+
+function AllBackupsTab({
+  data, servers, loading, offset, pageSize,
+  filterServer, filterKind, setFilterServer, setFilterKind, onPage,
+}: {
+  data: UnifiedBackupsResponse;
+  servers: ServerRow[];
+  loading: boolean;
+  offset: number;
+  pageSize: number;
+  filterServer: string;
+  filterKind: "" | "site" | "database" | "volume";
+  setFilterServer: (s: string) => void;
+  setFilterKind: (k: "" | "site" | "database" | "volume") => void;
+  onPage: (offset: number) => void;
+}) {
+  const hasNext = offset + data.items.length < data.total;
+  const hasPrev = offset > 0;
+
+  const kindBadge = (kind: UnifiedBackupRow["kind"]) => {
+    const style = kind === "site"
+      ? "bg-rust-500/10 text-rust-400 border-rust-500/20"
+      : kind === "database"
+        ? "bg-accent-500/10 text-accent-400 border-accent-500/20"
+        : "bg-warn-500/10 text-warn-400 border-warn-500/20";
+    return (
+      <span className={`px-2 py-0.5 text-[10px] font-mono uppercase tracking-wider border rounded ${style}`}>
+        {kind}
+      </span>
+    );
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Filters */}
+      <div className="bg-dark-800 rounded-lg border border-dark-500 p-4 flex flex-wrap gap-3 items-end">
+        <div className="flex flex-col">
+          <label className="text-[10px] text-dark-300 uppercase font-mono tracking-widest mb-1">Server</label>
+          <select
+            value={filterServer}
+            onChange={(e) => setFilterServer(e.target.value)}
+            className="bg-dark-700 border border-dark-500 text-dark-50 text-sm font-mono rounded px-2 py-1.5 min-w-[180px]"
+          >
+            <option value="">All servers ({servers.length})</option>
+            {servers.map(s => (
+              <option key={s.id} value={s.id}>{s.name}{s.is_local ? " (local)" : ""}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex flex-col">
+          <label className="text-[10px] text-dark-300 uppercase font-mono tracking-widest mb-1">Kind</label>
+          <select
+            value={filterKind}
+            onChange={(e) => setFilterKind(e.target.value as "" | "site" | "database" | "volume")}
+            className="bg-dark-700 border border-dark-500 text-dark-50 text-sm font-mono rounded px-2 py-1.5 min-w-[140px]"
+          >
+            <option value="">All kinds</option>
+            <option value="site">Site</option>
+            <option value="database">Database</option>
+            <option value="volume">Volume</option>
+          </select>
+        </div>
+        <div className="ml-auto text-xs text-dark-300 font-mono">
+          {loading ? "Loading…" : `${data.total.toLocaleString()} total`}
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+        {data.items.length === 0 && !loading ? (
+          <p className="text-sm text-dark-300 text-center py-8 font-mono">
+            No backups match the current filters.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-dark-700 text-[10px] text-dark-300 uppercase font-mono tracking-widest">
+                  <th className="px-4 py-2 text-left">Kind</th>
+                  <th className="px-4 py-2 text-left">Resource</th>
+                  <th className="px-4 py-2 text-left">Server</th>
+                  <th className="px-4 py-2 text-left">Size</th>
+                  <th className="px-4 py-2 text-left">Created</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-dark-600">
+                {data.items.map(row => (
+                  <tr key={`${row.kind}-${row.id}`} className="hover:bg-dark-700/50">
+                    <td className="px-4 py-2">{kindBadge(row.kind)}</td>
+                    <td className="px-4 py-2">
+                      <div className="text-dark-50 font-mono truncate max-w-[280px]" title={row.resource_name}>
+                        {row.resource_name}
+                      </div>
+                      <div className="flex gap-1.5 mt-0.5">
+                        {row.extra_type && (
+                          <span className="text-[10px] text-dark-300 font-mono">{row.extra_type}</span>
+                        )}
+                        {row.encrypted && (
+                          <span className="text-[9px] px-1 py-0 bg-dark-700 text-accent-400 uppercase tracking-wider rounded" title="Encrypted at rest">enc</span>
+                        )}
+                        {row.uploaded && (
+                          <span className="text-[9px] px-1 py-0 bg-dark-700 text-rust-400 uppercase tracking-wider rounded" title="Pushed to remote destination">remote</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-2">
+                      <span className="text-dark-100 font-mono">{row.server_name}</span>
+                      {row.server_is_local && (
+                        <span className="ml-1 text-[9px] text-dark-300 uppercase tracking-wider">local</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2 text-dark-100 font-mono">{formatSize(row.size_bytes)}</td>
+                    <td className="px-4 py-2 text-dark-200 font-mono">
+                      <div>{formatDate(row.created_at)}</div>
+                      <div className="text-[10px] text-dark-300">{timeAgo(row.created_at)}</div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Pagination */}
+      {(hasPrev || hasNext) && (
+        <div className="flex justify-between items-center text-xs font-mono text-dark-300">
+          <span>
+            Showing {offset + 1}–{offset + data.items.length} of {data.total.toLocaleString()}
+          </span>
+          <div className="flex gap-2">
+            <button
+              onClick={() => onPage(Math.max(0, offset - pageSize))}
+              disabled={!hasPrev || loading}
+              className="px-3 py-1 bg-dark-700 hover:bg-dark-600 disabled:opacity-40 disabled:cursor-not-allowed text-dark-100 rounded"
+            >Prev</button>
+            <button
+              onClick={() => onPage(offset + pageSize)}
+              disabled={!hasNext || loading}
+              className="px-3 py-1 bg-dark-700 hover:bg-dark-600 disabled:opacity-40 disabled:cursor-not-allowed text-dark-100 rounded"
+            >Next</button>
           </div>
         </div>
       )}

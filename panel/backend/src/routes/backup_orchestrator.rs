@@ -100,6 +100,39 @@ pub struct PaginationQuery {
     pub offset: Option<i64>,
 }
 
+// ── Unified Backup View (fleet-wide) ────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+pub struct UnifiedBackupsQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+    pub kind: Option<String>,
+    pub server_id: Option<Uuid>,
+}
+
+#[derive(serde::Serialize, sqlx::FromRow)]
+pub struct UnifiedBackupRow {
+    pub id: Uuid,
+    pub kind: String,
+    pub resource_id: Option<Uuid>,
+    pub resource_name: String,
+    pub filename: String,
+    pub size_bytes: i64,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub server_id: Option<Uuid>,
+    pub server_name: String,
+    pub server_is_local: bool,
+    pub encrypted: bool,
+    pub uploaded: bool,
+    pub extra_type: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct UnifiedBackupsResponse {
+    pub items: Vec<UnifiedBackupRow>,
+    pub total: i64,
+}
+
 // ── Health Dashboard ────────────────────────────────────────────────────────
 
 #[derive(serde::Serialize)]
@@ -124,6 +157,88 @@ pub struct StaleBackup {
     pub resource_name: String,
     pub last_backup: chrono::DateTime<chrono::Utc>,
     pub days_since: i64,
+}
+
+/// GET /api/backup-orchestrator/all — Unified fleet-wide backup list across site, database, and volume backups.
+///
+/// Admin-only, paginated. Optional filters: `kind` (site|database|volume) and `server_id`.
+/// Site backups derive their server via `sites.server_id`; database and volume backups carry
+/// `server_id` directly (nullable — NULL is joined to the unique local server row).
+pub async fn list_all_backups(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+    Query(params): Query<UnifiedBackupsQuery>,
+) -> Result<Json<UnifiedBackupsResponse>, ApiError> {
+    let (limit, offset) = paginate(params.limit, params.offset);
+
+    let kind_filter = match params.kind.as_deref() {
+        None => None,
+        Some("site") | Some("database") | Some("volume") => params.kind.clone(),
+        Some(_) => {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "kind must be one of: site, database, volume",
+            ));
+        }
+    };
+
+    // CTE unions the three backup tables into a common shape.
+    // - Site backups: server_id derived from sites (backups table has no server_id column).
+    // - Database backups: server_id nullable on table; falls through to local via LEFT JOIN.
+    // - Volume backups: server_id nullable on table.
+    let cte = "WITH unified AS ( \
+         SELECT b.id, 'site'::text AS kind, b.site_id AS resource_id, s.domain AS resource_name, \
+                b.filename, b.size_bytes, b.created_at, s.server_id, \
+                FALSE AS encrypted, FALSE AS uploaded, NULL::text AS extra_type \
+           FROM backups b JOIN sites s ON s.id = b.site_id \
+         UNION ALL \
+         SELECT db.id, 'database'::text, db.database_id, db.db_name, \
+                db.filename, db.size_bytes, db.created_at, db.server_id, \
+                db.encrypted, db.uploaded, db.db_type \
+           FROM database_backups db \
+         UNION ALL \
+         SELECT vb.id, 'volume'::text, NULL::uuid, \
+                (vb.container_name || ':' || vb.volume_name) AS resource_name, \
+                vb.filename, vb.size_bytes, vb.created_at, vb.server_id, \
+                vb.encrypted, vb.uploaded, NULL::text \
+           FROM volume_backups vb \
+       )";
+
+    let list_sql = format!(
+        "{cte} SELECT u.id, u.kind, u.resource_id, u.resource_name, u.filename, u.size_bytes, \
+                u.created_at, u.server_id, \
+                COALESCE(srv.name, 'local') AS server_name, \
+                COALESCE(srv.is_local, TRUE) AS server_is_local, \
+                u.encrypted, u.uploaded, u.extra_type \
+           FROM unified u LEFT JOIN servers srv ON srv.id = u.server_id \
+          WHERE ($1::uuid IS NULL OR u.server_id = $1) \
+            AND ($2::text IS NULL OR u.kind = $2) \
+          ORDER BY u.created_at DESC LIMIT $3 OFFSET $4"
+    );
+
+    let items: Vec<UnifiedBackupRow> = sqlx::query_as(&list_sql)
+        .bind(params.server_id)
+        .bind(&kind_filter)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| internal_error("list all backups", e))?;
+
+    let count_sql = format!(
+        "{cte} SELECT COUNT(*)::bigint FROM unified u \
+          WHERE ($1::uuid IS NULL OR u.server_id = $1) \
+            AND ($2::text IS NULL OR u.kind = $2)"
+    );
+
+    let (total,): (i64,) = sqlx::query_as(&count_sql)
+        .bind(params.server_id)
+        .bind(&kind_filter)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| internal_error("list all backups count", e))?;
+
+    Ok(Json(UnifiedBackupsResponse { items, total }))
 }
 
 /// GET /api/backup-orchestrator/health — Global backup health dashboard.

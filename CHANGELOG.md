@@ -4,6 +4,28 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+
+- **Unified fleet-wide backup view (Phase 3 #3 — Tier 1).** The Backup
+  Orchestrator page gains an **All Backups** tab that lists site, database,
+  and volume backups from every server in a single paginated table, with
+  optional filters by server and by kind.
+  - New admin endpoint **`GET /api/backup-orchestrator/all`** joins
+    `backups`, `database_backups`, and `volume_backups` via a UNION CTE
+    and resolves `server_id` to a server name (site backups derive their
+    server from `sites.server_id`; database and volume backups carry the
+    column directly). Query params: `limit`, `offset`, `kind`
+    (`site`|`database`|`volume`), `server_id`. Returns `{ items, total }`.
+  - Per-row badges surface `encrypted` (at-rest encryption enabled) and
+    `remote` (pushed to a backup destination) so fleet admins can spot
+    inconsistencies at a glance.
+  - Closes the last missing north-star bullet for "Operate at Scale":
+    agent enrollment and cross-host placement were already shipped
+    (`ServerScope` + `servers` table + `install-agent.sh`); the unified
+    backup view was the remaining gap.
+
 ## [2.7.17] - 2026-04-16
 
 ### Added
