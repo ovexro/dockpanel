@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Pre-built Grafana dashboard (`dashboards/dockpanel-grafana.json`).**
+  Drop-in companion to the v2.7.16 Prometheus exporter. Covers fleet
+  stats (version / servers reporting / sites / alerts firing by
+  severity / GPUs reporting), per-server CPU / memory / disk timeseries
+  with sensible thresholds, top-servers bar gauges, sites-by-status
+  donut, a collapsible GPUs row (utilization, VRAM%, temperature, power
+  draw), and an alerts-firing stacked-bars timeseries. Uses a
+  `Datasource` template input so it imports cleanly onto any Prometheus
+  that's already scraping `/api/metrics`. UID `dockpanel-fleet` is
+  stable so runbook deep-links survive re-imports. A `Server` template
+  variable lets operators focus on a single host or any subset. See
+  `docs/guides/prometheus.md` "Pre-built Grafana dashboard" for import
+  instructions. Closes the Phase 3 #1 follow-up that paired with the
+  Prometheus endpoint.
 - **Tier 2 cert-pin E2E test suite (`tests/tier2-pin-e2e.sh`).** Covers
   every step of the Phase 3 #3 Tier 2 flow end-to-end against the live
   API: TOFU fingerprint capture on `/api/agent/checkin`, match no-op,

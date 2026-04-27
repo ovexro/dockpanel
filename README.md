@@ -177,6 +177,7 @@ No other free panel gives you Git push-to-deploy with blue-green zero-downtime u
 - **Container Management** — Auto-sleep (scale to zero), auto-update detection, per-user isolation policies, app migration between servers.
 - **Mail** — Postfix + Dovecot + OpenDKIM. Webmail (Roundcube), spam filter (Rspamd), SMTP relay.
 - **Monitoring** — HTTP/TCP/ping uptime checks, SLA tracking, PagerDuty integration.
+- **Prometheus + Grafana** — Token-gated `/api/metrics` scrape endpoint (off by default) plus a drop-in [fleet dashboard](dashboards/dockpanel-grafana.json) covering CPU/memory/disk, GPU utilization/VRAM/temp/power, sites, and alerts. See [docs/guides/prometheus.md](docs/guides/prometheus.md).
 - **Incident Management** — Full lifecycle (investigating, identified, monitoring, resolved, postmortem), severity levels, timeline, affected components.
 - **Public Status Page** — Standalone dark-themed page at `/status`, component groups, email subscribers, overall status auto-computed from checks.
 - **Terminal** — Full SSH with tabs, themes, sharing, session recording.

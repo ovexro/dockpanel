@@ -85,7 +85,30 @@ Emits `severity="none"` with value `0` when no alerts are firing, so scrapers ca
 
 Use this to pivot a Grafana dashboard on DockPanel version for upgrade cutovers.
 
+## Pre-built Grafana dashboard
+
+A drop-in Grafana dashboard ships in the repo at [`dashboards/dockpanel-grafana.json`](https://github.com/ovexro/dockpanel/blob/main/dashboards/dockpanel-grafana.json). It covers:
+
+- Header stats — DockPanel version, servers reporting, sites, alerts firing by severity, GPUs reporting
+- CPU / memory / disk timeseries per server (with thresholds at sensible levels)
+- Top servers by CPU and memory (bar gauges)
+- Sites by status (donut)
+- Collapsible **GPUs** row with utilization, VRAM percentage, temperature, and power draw
+- Alerts firing by severity (stacked bars)
+
+A `Server` template variable lets you focus on a single host or any subset.
+
+### Import
+
+1. Grafana → **Dashboards** → **New** → **Import**
+2. Upload `dockpanel-grafana.json` (or paste its contents)
+3. Pick the Prometheus datasource that's scraping DockPanel and click **Import**
+
+The dashboard's UID is `dockpanel-fleet` so direct links from your runbooks stay stable across re-imports.
+
 ## Example Grafana queries
+
+If you want to build your own panels alongside the pre-built dashboard:
 
 ```promql
 # CPU across the fleet
@@ -95,7 +118,7 @@ avg by (server) (dockpanel_cpu_percent)
 100 * dockpanel_gpu_vram_used_mb / dockpanel_gpu_vram_total_mb
 
 # Firing alert budget
-sum(dockpanel_alerts_firing)
+sum(dockpanel_alerts_firing{severity!="none"})
 ```
 
 ## Why the data is 30s stale
