@@ -13,7 +13,7 @@
     "@xterm/addon-search": "^0.16.0",
     "@xterm/xterm": "^6.0.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "react-dom": "^19.2.5",
     "react-router-dom": "^7.5.0"
   },
   "devDependencies": {
