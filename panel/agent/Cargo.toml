@@ -35,7 +35,7 @@ sha2 = "0.10"
 subtle = "2"
 hex = "0.4"
 base64 = "0.22"
-rand = "0.9"
+rand = "0.10"
 rustix = { version = "1", features = ["termios", "pty", "fs", "process"] }
 libc = "0.2"
 tikv-jemallocator = { version = "0.6", features = ["background_threads"] }
