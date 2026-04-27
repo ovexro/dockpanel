@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Security
+
+- **rustls-webpki 0.103.12 → 0.103.13** in both `dockpanel-api` and
+  `dockpanel-agent` Cargo locks — fixes `RUSTSEC-2026-0104` (reachable
+  panic in CRL parsing). DockPanel calls into rustls-webpki for ACME
+  cert verification and pinned-fingerprint TLS (Phase 3 #3 Tier 2), so
+  a malformed CRL from a malicious or buggy CA could have crashed the
+  process. Patch release, no API changes.
+- **postcss 8.5.8 → 8.5.12** in `panel/frontend` and `website/client`
+  package locks — fixes `GHSA-7fh5-64p2-3v2j` (XSS via unescaped
+  `</style>` in the CSS stringify output). Build-time only; no
+  runtime exposure on shipped panels — but worth keeping current.
+
 ### Added
 
 - **Pre-built Grafana dashboard (`dashboards/dockpanel-grafana.json`).**
