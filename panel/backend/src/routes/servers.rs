@@ -448,3 +448,55 @@ pub async fn rotate_token(
         "message": "Agent token rotated successfully"
     })))
 }
+
+#[derive(serde::Serialize)]
+pub struct UptimeResponse {
+    pub buckets: Vec<bool>,
+    pub window_hours: i32,
+    pub bucket_minutes: i32,
+}
+
+/// GET /api/servers/{id}/uptime — 24h × 10min uptime sparkline derived from
+/// `metrics_history` row presence. A bucket is "online" if at least one
+/// metrics_collector row landed in that 10-minute window for the server.
+/// 144 buckets total, oldest first (index 0 = ~24h ago, last = now).
+pub async fn uptime(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<Json<UptimeResponse>, ApiError> {
+    let owned: Option<bool> =
+        sqlx::query_scalar("SELECT TRUE FROM servers WHERE id = $1 AND user_id = $2")
+            .bind(id)
+            .bind(claims.sub)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| internal_error("check server ownership", e))?;
+    if owned.is_none() {
+        return Err(err(StatusCode::NOT_FOUND, "Server not found"));
+    }
+
+    const BUCKET_SECS: i64 = 600;
+    const TOTAL_BUCKETS: i64 = 144;
+
+    let rows: Vec<(i64,)> = sqlx::query_as(
+        "SELECT DISTINCT FLOOR(EXTRACT(EPOCH FROM created_at) / 600)::bigint AS bucket \
+         FROM metrics_history \
+         WHERE server_id = $1 AND created_at >= NOW() - INTERVAL '24 hours'",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| internal_error("query uptime buckets", e))?;
+
+    let online: std::collections::HashSet<i64> = rows.into_iter().map(|(b,)| b).collect();
+    let now_bucket = chrono::Utc::now().timestamp() / BUCKET_SECS;
+    let start = now_bucket - TOTAL_BUCKETS + 1;
+    let buckets: Vec<bool> = (start..=now_bucket).map(|b| online.contains(&b)).collect();
+
+    Ok(Json(UptimeResponse {
+        buckets,
+        window_hours: 24,
+        bucket_minutes: 10,
+    }))
+}

@@ -110,6 +110,16 @@ export default function Servers() {
     return days > 0 ? `${days}d ${hours}h` : `${hours}h`;
   };
 
+  const relTime = (iso: string | null): string => {
+    if (!iso) return "never";
+    const secs = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (secs < 0) return "just now";
+    if (secs < 60) return `${Math.round(secs)}s ago`;
+    if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
+    if (secs < 86400) return `${(secs / 3600).toFixed(1)}h ago`;
+    return `${(secs / 86400).toFixed(1)}d ago`;
+  };
+
   return (
     <div>
       <div className="page-header">
@@ -219,6 +229,9 @@ export default function Servers() {
                     {s.ip_address || "127.0.0.1"} &middot; {s.status}
                     {s.agent_version && ` &middot; v${s.agent_version}`}
                   </p>
+                  <p className="text-[11px] text-dark-400 mt-0.5 font-mono">
+                    Last seen {relTime(s.last_seen_at)}
+                  </p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -287,6 +300,9 @@ export default function Servers() {
               </div>
             )}
 
+            <UptimeStrip serverId={s.id} />
+
+
             {/* TLS cert pin (remote servers only) */}
             {!s.is_local && (
               <div className="mt-3 pt-3 border-t border-dark-700 flex items-center justify-between gap-3 text-xs font-mono">
@@ -323,6 +339,59 @@ export default function Servers() {
           </div>
         )}
       </div>
+      </div>
+    </div>
+  );
+}
+
+interface UptimeData {
+  buckets: boolean[];
+  window_hours: number;
+  bucket_minutes: number;
+}
+
+function UptimeStrip({ serverId }: { serverId: string }) {
+  const [data, setData] = useState<UptimeData | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.get<UptimeData>(`/servers/${serverId}/uptime`)
+      .then((d) => { if (!cancelled) setData(d); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [serverId]);
+
+  if (!data) return null;
+
+  const total = data.buckets.length;
+  const onlineCount = data.buckets.filter(Boolean).length;
+  const onlinePct = total > 0 ? (onlineCount / total) * 100 : 0;
+
+  return (
+    <div className="mt-3 pt-3 border-t border-dark-700">
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-[10px] uppercase tracking-widest text-dark-300">
+          Uptime · last {data.window_hours}h
+        </span>
+        <span className="text-xs font-mono text-dark-100">
+          {onlinePct.toFixed(1)}%
+        </span>
+      </div>
+      <div className="flex gap-px h-3">
+        {data.buckets.map((up, i) => {
+          const minutesAgoEnd = (total - 1 - i) * data.bucket_minutes;
+          const minutesAgoStart = minutesAgoEnd + data.bucket_minutes;
+          const label = minutesAgoEnd === 0
+            ? `now: ${up ? "online" : "no data"}`
+            : `${minutesAgoStart}–${minutesAgoEnd} min ago: ${up ? "online" : "no data"}`;
+          return (
+            <div
+              key={i}
+              className={`flex-1 rounded-sm ${up ? "bg-rust-500/70" : "bg-dark-600"}`}
+              title={label}
+            />
+          );
+        })}
       </div>
     </div>
   );

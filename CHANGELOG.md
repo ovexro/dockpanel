@@ -21,6 +21,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Servers page: last-seen-at + 24h uptime sparkline.** Each server card
+  now shows a small `Last seen 14s ago` line under the IP/status
+  subtitle (driven by the existing `last_seen_at` column, refreshed on
+  every agent checkin) and a 144-cell horizontal uptime strip — one
+  cell per 10-minute bucket over the last 24 hours, derived from
+  `metrics_history` row presence. Hover any cell for its time window
+  and online/no-data label. New endpoint `GET /api/servers/{id}/uptime`
+  returns `{ buckets: bool[], window_hours, bucket_minutes }`. Owner-
+  scoped (404 on a server that belongs to a different user); same auth
+  shape as the rest of the `/api/servers/*` surface.
 - **Pre-built Grafana dashboard (`dashboards/dockpanel-grafana.json`).**
   Drop-in companion to the v2.7.16 Prometheus exporter. Covers fleet
   stats (version / servers reporting / sites / alerts firing by
