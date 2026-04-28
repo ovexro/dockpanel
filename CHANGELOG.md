@@ -4,7 +4,7 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [2.7.20] - 2026-04-28
 
 ### Security
 
