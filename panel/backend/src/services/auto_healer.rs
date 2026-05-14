@@ -50,6 +50,7 @@ pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync:
         auto_restart_services(&pool, &agent).await;
         auto_clean_disk(&pool, &agent).await;
         auto_renew_ssl(&pool, &agent).await;
+        auto_renew_agent_certs(&pool, &agent).await;
         auto_sleep_idle_containers(&pool, &agent).await;
 
         // Security hardening tasks (run every 2 minutes with auto-healer)
@@ -677,6 +678,8 @@ async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
             )
             .await;
 
+            record_renewal_failure(pool, "site", classify_renewal_error(&details)).await;
+
             crate::services::system_log::log_event(
                 pool,
                 "error",
@@ -693,16 +696,227 @@ async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
 /// Fallback renewal margin when the CA doesn't advertise ARI. Maps profile
 /// → days-remaining threshold at which we trigger renewal.
 ///
-/// - `shortlived` (~6d): renew at 2d remaining (≈ 2/3 consumed, matches LE's
-///   "renew every 2-3 days" guidance).
+/// - `shortlived` (6d LE shortlived profile, live 2026-05-13): renew at 3d
+///   remaining — exactly 50% of the cert lifetime, matching LE's guidance
+///   for the shortlived cadence. (Was 2d prior to the 2026-05-13 flip;
+///   bumped to 3d to hit the 50% mark.)
 /// - `tlsserver` (45d from 2026-05-13 onward): renew at 15d remaining (1/3).
 /// - `classic` or unknown (90d today, 64d in 2027, 45d in 2028): renew at
 ///   30d remaining, which is safe across all three horizons.
 fn fallback_renewal_margin(profile: Option<&str>) -> chrono::Duration {
     match profile {
-        Some("shortlived") => chrono::Duration::days(2),
+        Some("shortlived") => chrono::Duration::days(3),
         Some("tlsserver") => chrono::Duration::days(15),
         _ => chrono::Duration::days(30),
+    }
+}
+
+// ── Cert-renewal failure counter helpers ────────────────────────────────
+
+/// Map a renewal error string to a Prometheus `reason` label value.
+/// Must stay in sync with the label cardinality defined in
+/// `migrations/20260514000000_cert_renewal_failures.sql`.
+fn classify_renewal_error(err: &str) -> &'static str {
+    let e = err.to_ascii_lowercase();
+    if e.contains("rate limit") || e.contains("ratelimited") || e.contains("too many") {
+        "rate_limit"
+    } else if e.contains("dns") || e.contains("nxdomain") || e.contains("resolve") || e.contains("lookup") {
+        "dns_check"
+    } else if e.contains("connection") || e.contains("connect") || e.contains("timeout") || e.contains("network") {
+        "network"
+    } else if e.contains("acme") || e.contains("challenge") || e.contains("order") || e.contains("authorization") {
+        "acme_error"
+    } else {
+        "other"
+    }
+}
+
+/// Atomically increment the `cert_renewal_failures` counter for the given labels.
+/// Silently swallows DB errors — a missing counter row is better than a panic.
+async fn record_renewal_failure(pool: &PgPool, cert_kind: &str, reason: &str) {
+    let _ = sqlx::query(
+        "INSERT INTO cert_renewal_failures (cert_kind, reason, count) VALUES ($1, $2, 1) \
+         ON CONFLICT (cert_kind, reason) \
+         DO UPDATE SET count = cert_renewal_failures.count + 1",
+    )
+    .bind(cert_kind)
+    .bind(reason)
+    .execute(pool)
+    .await;
+}
+
+// ── Tier 2 ACME agent cert renewal ──────────────────────────────────────
+
+/// Auto-renew ACME-issued agent TLS certs (Tier 2 / shortlived profile).
+///
+/// Queries servers with `agent_acme_cert_domain IS NOT NULL` and calls
+/// `POST /ssl/agent/renew` on the local agent when the cert has ≤ 3 days
+/// remaining (50% of the 6-day shortlived validity).
+///
+/// Remote-agent cert renewal requires `AgentRegistry` access, which the
+/// auto_healer doesn't currently receive. See PR body § Questions for review.
+async fn auto_renew_agent_certs(pool: &PgPool, agent: &AgentClient) {
+    let servers: Vec<(
+        uuid::Uuid,
+        uuid::Uuid,
+        String,
+        Option<chrono::DateTime<chrono::Utc>>,
+    )> = match sqlx::query_as(
+        "SELECT id, user_id, agent_acme_cert_domain, agent_acme_cert_expiry \
+         FROM servers \
+         WHERE is_local = TRUE AND agent_acme_cert_domain IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let now = chrono::Utc::now();
+
+    for (server_id, user_id, domain, expiry) in &servers {
+        // Renew when ≤ 3 days remain (50% of 6-day shortlived lifetime).
+        let is_due = match expiry {
+            Some(exp) => (*exp - now).num_days() <= 3,
+            None => true, // No cert yet — provision now.
+        };
+        if !is_due {
+            continue;
+        }
+
+        // 3-hour cooldown between attempts (prevents CA hammering).
+        let recent: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM activity_logs \
+             WHERE action = 'auto_heal.renew_agent_cert' \
+             AND target_name = $1 \
+             AND created_at > NOW() - INTERVAL '3 hours'",
+        )
+        .bind(domain)
+        .fetch_one(pool)
+        .await
+        .unwrap_or((0,));
+        if recent.0 > 0 {
+            continue;
+        }
+
+        tracing::info!("Auto-heal: renewing Tier 2 ACME agent cert for {domain}");
+
+        let email: String = match sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+        {
+            Ok(Some(e)) => e,
+            _ => {
+                tracing::warn!(
+                    "Auto-heal: cannot renew agent cert for {domain} — owner email not found"
+                );
+                continue;
+            }
+        };
+
+        let result = agent
+            .post(
+                "/ssl/agent/renew",
+                Some(serde_json::json!({ "email": email, "domain": domain })),
+            )
+            .await;
+
+        let success = result.is_ok();
+        let details = match &result {
+            Ok(v) => v.to_string(),
+            Err(e) => e.to_string(),
+        };
+
+        let system_id = uuid::Uuid::nil();
+        activity::log_activity(
+            pool,
+            system_id,
+            "auto-healer",
+            "auto_heal.renew_agent_cert",
+            Some("server"),
+            Some(domain),
+            Some(&format!(
+                "server_id={server_id}, success={success}, result={details}"
+            )),
+            None,
+        )
+        .await;
+
+        if success {
+            if let Ok(ref resp) = result {
+                let new_expiry = resp
+                    .get("expiry")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| {
+                        chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f UTC").ok()
+                    })
+                    .map(|dt| dt.and_utc());
+                let new_fp = resp.get("fingerprint").and_then(|v| v.as_str());
+
+                let _ = sqlx::query(
+                    "UPDATE servers \
+                     SET agent_acme_cert_expiry = $1, \
+                         cert_fingerprint = COALESCE($2, cert_fingerprint), \
+                         updated_at = NOW() \
+                     WHERE id = $3",
+                )
+                .bind(new_expiry)
+                .bind(new_fp)
+                .bind(server_id)
+                .execute(pool)
+                .await;
+            }
+            tracing::info!("Auto-heal: Tier 2 ACME agent cert renewed for {domain}");
+        } else {
+            record_renewal_failure(pool, "agent_pinned", classify_renewal_error(&details)).await;
+            crate::services::system_log::log_event(
+                pool,
+                "error",
+                "auto_healer",
+                &format!("Tier 2 ACME agent cert renewal failed for {domain}"),
+                Some(&details),
+            )
+            .await;
+            tracing::warn!(
+                "Auto-heal: agent cert renewal failed for {domain}: {details}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_renewal_error;
+
+    #[test]
+    fn classify_rate_limit() {
+        assert_eq!(classify_renewal_error("ACME rate limit exceeded"), "rate_limit");
+        assert_eq!(classify_renewal_error("too many certificates"), "rate_limit");
+    }
+
+    #[test]
+    fn classify_dns_check() {
+        assert_eq!(classify_renewal_error("DNS lookup failed for example.com"), "dns_check");
+        assert_eq!(classify_renewal_error("NXDOMAIN: no such host"), "dns_check");
+    }
+
+    #[test]
+    fn classify_network() {
+        assert_eq!(classify_renewal_error("connection refused"), "network");
+        assert_eq!(classify_renewal_error("request timed out"), "network");
+    }
+
+    #[test]
+    fn classify_acme_error() {
+        assert_eq!(classify_renewal_error("ACME challenge validation failed"), "acme_error");
+        assert_eq!(classify_renewal_error("order status: invalid"), "acme_error");
+    }
+
+    #[test]
+    fn classify_other() {
+        assert_eq!(classify_renewal_error("unexpected io error: permission denied"), "other");
     }
 }
 

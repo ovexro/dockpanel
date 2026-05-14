@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **Tier 2 ACME cert renewal ramped to LE shortlived cadence (6-day certs).**
+  The auto-healer now calls `POST /ssl/agent/renew` on the local agent when
+  `servers.agent_acme_cert_expiry` is within 3 days (50% of the 6-day
+  shortlived lifetime). The agent provisions a fresh cert via `instant_acme`
+  with `profile = "shortlived"`, writes it to
+  `/etc/dockpanel/ssl/agent-acme.{crt,key}`, and returns the new SHA-256
+  fingerprint so the backend can atomically update `servers.cert_fingerprint`
+  without waiting for the next agent checkin cycle.
+  Two new DB columns (`agent_acme_cert_domain`, `agent_acme_cert_expiry`) on
+  the `servers` table track per-server ACME cert state
+  (`migrations/20260514000000_cert_renewal_failures.sql`). Tier 2 ACME is
+  opt-in: the self-signed rcgen fallback continues to work for servers that
+  do not set `agent_acme_cert_domain`. Live TLS reload deferred — see the
+  PR's Questions for review section.
+
+- **Prometheus counter `dockpanel_cert_renewal_failures_total{cert_kind,reason}`.**
+  Incremented by the auto-healer on every failed ACME renewal attempt.
+  `cert_kind` ∈ `{agent_pinned, panel_public, site}`;
+  `reason` ∈ `{acme_error, dns_check, rate_limit, network, other}`.
+  Counts persist across backend restarts in the new `cert_renewal_failures`
+  DB table and are scraped by the fleet Prometheus exporter at
+  `/api/metrics`. All 15 label combinations are pre-populated at migration
+  time so the metric is always present (with value 0) before any failure
+  occurs.
+
+### Changed
+
+- **Shortlived ACME cert fallback renewal margin corrected from 2 days to 3 days.**
+  The `fallback_renewal_margin("shortlived")` in `auto_healer.rs` now returns
+  `Duration::days(3)` (50% of the 6-day cert lifetime, per LE's shortlived
+  guidance), up from the previous 2 days (≈ 33%). This applies to site certs
+  using `ssl_profile = 'shortlived'` when ARI is unavailable.
+
 ## [2.8.19] - 2026-05-10
 
 ### Fixed

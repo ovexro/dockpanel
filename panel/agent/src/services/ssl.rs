@@ -13,6 +13,12 @@ const ACME_ACCOUNT_PATH: &str = "/etc/dockpanel/ssl/acme-account.json";
 const SSL_DIR: &str = "/etc/dockpanel/ssl";
 const ACME_WEBROOT: &str = "/var/www/acme";
 
+/// On-disk paths for the Tier 2 ACME-issued agent TLS cert.
+/// Separate from the self-signed fallback cert in tls.rs so both can coexist
+/// during a gradual rollout (ACME cert is preferred when present).
+pub const AGENT_ACME_CERT_PATH: &str = "/etc/dockpanel/ssl/agent-acme.crt";
+pub const AGENT_ACME_KEY_PATH: &str = "/etc/dockpanel/ssl/agent-acme.key";
+
 /// Options controlling an ACME order — profile selection + ARI replacement chain.
 /// `None` or all-None fields means "classic, no prior cert" (backwards-compatible).
 #[derive(Default, Clone)]
@@ -570,6 +576,65 @@ pub async fn enable_ssl_for_site(
 
     tracing::info!("Nginx updated with SSL for {domain}");
     Ok(())
+}
+
+// ── Tier 2 ACME agent cert ───────────────────────────────────────────────
+
+/// Provision (or renew) the agent's own TLS certificate via ACME using the
+/// `shortlived` profile (6-day validity, LE flip live 2026-05-13).
+///
+/// The cert is written to `AGENT_ACME_CERT_PATH` / `AGENT_ACME_KEY_PATH`.
+/// The domain must be publicly HTTP-01 resolvable. Live TLS reload is out of
+/// scope for this PR — see PR body § Questions for review.
+pub async fn provision_agent_acme_cert(email: &str, domain: &str) -> Result<CertInfo, String> {
+    let account = load_or_create_account(email).await?;
+
+    let replaces_pem = tokio::fs::read_to_string(AGENT_ACME_CERT_PATH).await.ok();
+
+    let opts = ProvisionOpts {
+        profile: Some("shortlived"),
+        replaces_pem: replaces_pem.as_deref(),
+    };
+
+    // Provision via HTTP-01 (same path as site certs, different target domain).
+    let cert_info = provision_cert(&account, domain, Some(&opts)).await?;
+
+    // Copy into the stable agent-acme paths so the agent can be configured
+    // to prefer this cert over the rcgen self-signed fallback.
+    tokio::fs::copy(&cert_info.cert_path, AGENT_ACME_CERT_PATH)
+        .await
+        .map_err(|e| format!("copy cert to {AGENT_ACME_CERT_PATH}: {e}"))?;
+    tokio::fs::copy(&cert_info.key_path, AGENT_ACME_KEY_PATH)
+        .await
+        .map_err(|e| format!("copy key to {AGENT_ACME_KEY_PATH}: {e}"))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = tokio::fs::set_permissions(
+            AGENT_ACME_KEY_PATH,
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .await;
+    }
+
+    tracing::info!("Tier 2 ACME agent cert (shortlived) provisioned for {domain}");
+
+    Ok(CertInfo {
+        cert_path: AGENT_ACME_CERT_PATH.to_string(),
+        key_path: AGENT_ACME_KEY_PATH.to_string(),
+        expiry: cert_info.expiry,
+        profile: Some("shortlived".to_string()),
+    })
+}
+
+/// SHA-256 fingerprint of the first certificate in a PEM blob (lowercase hex).
+/// Used by the `/ssl/agent/renew` route to return the new pin to the backend
+/// so it can update `servers.cert_fingerprint` without a separate checkin round-trip.
+pub fn fingerprint_from_pem(pem: &[u8]) -> Result<String, String> {
+    use sha2::Digest;
+    let der = first_cert_der(pem).ok_or_else(|| "no certificate found in PEM".to_string())?;
+    Ok(hex::encode(sha2::Sha256::digest(&der)))
 }
 
 // ── ACME profile + ARI (RFC 9773) helpers ────────────────────────────────

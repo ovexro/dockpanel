@@ -330,6 +330,82 @@ async fn renew(
     })))
 }
 
+// ── Tier 2 ACME agent cert ───────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct AgentRenewRequest {
+    email: String,
+    domain: String,
+}
+
+/// POST /ssl/agent/renew — Renew the agent's own TLS cert via ACME (shortlived, 6-day).
+///
+/// Called by the backend's auto-healer when `servers.agent_acme_cert_expiry`
+/// is within 3 days (50% of the shortlived lifetime). The response includes
+/// the new cert's SHA-256 fingerprint so the backend can update the TOFU pin
+/// in `servers.cert_fingerprint` without waiting for the next agent checkin.
+///
+/// Note: the renewed cert is written to disk. Live TLS reload is not
+/// performed in this PR — see PR body § Questions for review.
+async fn renew_agent_cert(
+    Json(body): Json<AgentRenewRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let cert_info = ssl::provision_agent_acme_cert(&body.email, &body.domain)
+        .await
+        .map_err(|e| {
+            tracing::error!("Tier 2 ACME agent cert renewal failed for {}: {e}", body.domain);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e })),
+            )
+        })?;
+
+    // Read the freshly written cert and compute its fingerprint so the
+    // backend can update cert_fingerprint in one round-trip.
+    let cert_pem = tokio::fs::read(ssl::AGENT_ACME_CERT_PATH).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("read agent cert: {e}") })),
+        )
+    })?;
+    let fingerprint = ssl::fingerprint_from_pem(&cert_pem).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+    })?;
+
+    tracing::info!(
+        "Tier 2 ACME agent cert renewed for {} — new fingerprint: {}",
+        body.domain,
+        &fingerprint[..8]
+    );
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "domain": body.domain,
+        "expiry": cert_info.expiry,
+        "fingerprint": fingerprint,
+        "cert_path": cert_info.cert_path,
+        "key_path": cert_info.key_path,
+        "profile": cert_info.profile,
+    })))
+}
+
+/// GET /ssl/agent/status — Return presence and fingerprint of the Tier 2 ACME agent cert.
+async fn agent_cert_status() -> Json<serde_json::Value> {
+    let cert_path = ssl::AGENT_ACME_CERT_PATH;
+    if !std::path::Path::new(cert_path).exists() {
+        return Json(serde_json::json!({ "has_acme_cert": false }));
+    }
+    let pem = tokio::fs::read(cert_path).await.ok();
+    let fingerprint = pem.as_deref().and_then(|b| ssl::fingerprint_from_pem(b).ok());
+    Json(serde_json::json!({
+        "has_acme_cert": true,
+        "fingerprint": fingerprint,
+    }))
+}
+
 /// GET /ssl/profiles — List ACME profiles advertised by the CA.
 async fn profiles(
     axum::extract::Query(q): axum::extract::Query<ProfilesQuery>,
@@ -518,6 +594,11 @@ async fn provision_dns01(
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        // Tier 2 ACME agent cert routes (registered before /{domain} patterns
+        // so the literal "agent" segment is not captured as a domain parameter).
+        .route("/ssl/agent/renew", post(renew_agent_cert))
+        .route("/ssl/agent/status", get(agent_cert_status))
+        // Site cert routes
         .route("/ssl/provision/{domain}", post(provision))
         .route("/ssl/provision-dns01/{domain}", post(provision_dns01))
         .route("/ssl/status/{domain}", get(status))

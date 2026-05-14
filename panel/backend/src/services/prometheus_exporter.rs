@@ -18,6 +18,7 @@ pub async fn render(pool: &PgPool) -> String {
     render_gpu(&mut out, pool).await;
     render_sites(&mut out, pool).await;
     render_alerts(&mut out, pool).await;
+    render_cert_renewal_failures(&mut out, pool).await;
 
     out
 }
@@ -159,6 +160,42 @@ async fn render_alerts(out: &mut String, pool: &PgPool) {
     }
 }
 
+// ── Cert renewal failure counter ────────────────────────────────────────
+
+/// Render `dockpanel_cert_renewal_failures_total` from pre-fetched rows.
+/// Extracted for testability — the async DB fetch is in `render_cert_renewal_failures`.
+fn render_cert_renewal_failures_rows(out: &mut String, rows: &[(String, String, i64)]) {
+    let _ = writeln!(
+        out,
+        "# HELP dockpanel_cert_renewal_failures_total ACME cert renewal failures by kind and reason."
+    );
+    let _ = writeln!(out, "# TYPE dockpanel_cert_renewal_failures_total counter");
+    for (cert_kind, reason, count) in rows {
+        let _ = write!(out, "dockpanel_cert_renewal_failures_total{{cert_kind=\"");
+        push_escaped(out, cert_kind);
+        let _ = write!(out, "\",reason=\"");
+        push_escaped(out, reason);
+        let _ = writeln!(out, "\"}} {count}");
+    }
+}
+
+async fn render_cert_renewal_failures(out: &mut String, pool: &PgPool) {
+    let rows: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT cert_kind, reason, count \
+         FROM cert_renewal_failures \
+         ORDER BY cert_kind, reason",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    if rows.is_empty() {
+        return;
+    }
+
+    render_cert_renewal_failures_rows(out, &rows);
+}
+
 // ── Label-line writers ──────────────────────────────────────────────────
 
 fn write_server_sample(out: &mut String, metric: &str, sid: &uuid::Uuid, name: &str, v: f32) {
@@ -217,5 +254,43 @@ mod tests {
         let mut s = String::new();
         push_escaped(&mut s, "my-server-01");
         assert_eq!(s, "my-server-01");
+    }
+
+    /// Asserts that the cert-renewal failure counter renders correctly and that
+    /// incremented counts appear in the output — the core of the Tier 2 ACME
+    /// failure metric requirement.
+    #[test]
+    fn acme_renewal_failure_metric_increments() {
+        let rows = vec![
+            ("agent_pinned".to_string(), "acme_error".to_string(), 3i64),
+            ("agent_pinned".to_string(), "network".to_string(), 0i64),
+            ("site".to_string(), "network".to_string(), 1i64),
+            ("site".to_string(), "rate_limit".to_string(), 0i64),
+        ];
+        let mut out = String::new();
+        super::render_cert_renewal_failures_rows(&mut out, &rows);
+
+        assert!(
+            out.contains("# TYPE dockpanel_cert_renewal_failures_total counter"),
+            "missing TYPE line"
+        );
+        assert!(
+            out.contains(
+                "dockpanel_cert_renewal_failures_total{cert_kind=\"agent_pinned\",reason=\"acme_error\"} 3"
+            ),
+            "expected count 3 for agent_pinned/acme_error"
+        );
+        assert!(
+            out.contains(
+                "dockpanel_cert_renewal_failures_total{cert_kind=\"site\",reason=\"network\"} 1"
+            ),
+            "expected count 1 for site/network"
+        );
+        assert!(
+            out.contains(
+                "dockpanel_cert_renewal_failures_total{cert_kind=\"agent_pinned\",reason=\"network\"} 0"
+            ),
+            "expected zero-value row for agent_pinned/network"
+        );
     }
 }
