@@ -12,7 +12,7 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-search": "^0.16.0",
     "@xterm/xterm": "^6.0.0",
-    "dompurify": "^3.2.0",
+    "dompurify": "^3.4.11",
     "marked": "^14.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
