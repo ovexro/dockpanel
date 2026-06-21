@@ -47,7 +47,7 @@ ciborium = "0.2"
 p256 = { version = "0.13", features = ["ecdsa"] }
 url = "2"
 serde_yaml_ng = "0.10"
-hkdf = "0.12"
+hkdf = "0.13"
 zeroize = { version = "1", features = ["derive"] }
 # Phase 4 W2: render runbook markdown into HTML for email payloads.
 pulldown-cmark = { version = "0.10", default-features = false, features = ["html"] }
