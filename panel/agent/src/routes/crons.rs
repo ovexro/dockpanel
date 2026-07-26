@@ -55,17 +55,39 @@ async fn sync_crons(
         .map(|s| s.to_string())
         .collect();
 
-    // Add dockpanel crons
+    // Add dockpanel crons.
+    //
+    // A row that fails validation is SKIPPED, not fatal to the whole sync.
+    // This endpoint used to return 400 for the entire batch on the first bad
+    // command, which turned one unusable row into a permanently broken feature:
+    // the panel's own WordPress auto-cron was INSERTed straight into the
+    // database with `> /dev/null 2>&1` in it — a pattern this very filter
+    // blocks — so from the moment a WordPress site existed, every subsequent
+    // add/edit/delete of ANY cron failed with "Command contains disallowed
+    // characters or patterns" and nothing reached the crontab (measured on a
+    // fresh Ubuntu 24.04 box, s268).
+    //
+    // The writer is fixed too, but fixing only the writer would leave every
+    // install that already has the row broken forever, so the reader has to
+    // tolerate it. Skipping keeps the guard's security property exactly as
+    // strong — the command still never reaches the crontab — while costing one
+    // row instead of the feature.
+    let mut skipped: Vec<String> = Vec::new();
     for cron in &crons {
-        if !is_valid_schedule(&cron.schedule) {
-            return Err(err(StatusCode::BAD_REQUEST, &format!("Invalid cron schedule: {}", cron.schedule)));
-        }
-        if cron.command.is_empty() {
-            return Err(err(StatusCode::BAD_REQUEST, "Command cannot be empty"));
-        }
-        // Sanitize: reject shell metacharacters and dangerous patterns
-        if !command_filter::is_safe_cron_command(&cron.command) {
-            return Err(err(StatusCode::BAD_REQUEST, "Command contains disallowed characters or patterns"));
+        let reject = if !is_valid_schedule(&cron.schedule) {
+            Some(format!("invalid schedule {:?}", cron.schedule))
+        } else if cron.command.is_empty() {
+            Some("empty command".to_string())
+        } else if !command_filter::is_safe_cron_command(&cron.command) {
+            Some("command contains disallowed characters or patterns".to_string())
+        } else {
+            None
+        };
+
+        if let Some(why) = reject {
+            tracing::warn!("Cron {} skipped during sync: {why}", cron.id);
+            skipped.push(cron.id.clone());
+            continue;
         }
 
         let label = cron.label.as_deref().unwrap_or("");
@@ -82,8 +104,20 @@ async fn sync_crons(
     write_crontab(&lines.join("\n")).await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
 
-    tracing::info!("Synced {} cron jobs to system crontab", crons.len());
-    Ok(Json(serde_json::json!({ "synced": crons.len() })))
+    let synced = crons.len() - skipped.len();
+    if skipped.is_empty() {
+        tracing::info!("Synced {synced} cron jobs to system crontab");
+    } else {
+        tracing::warn!(
+            "Synced {synced} cron jobs; {} skipped as unsafe and NOT scheduled: {}",
+            skipped.len(),
+            skipped.join(", ")
+        );
+    }
+    // Report the skips rather than swallowing them — a job the operator can see
+    // in the UI but which is not in the crontab is the shape that never runs
+    // and never says why.
+    Ok(Json(serde_json::json!({ "synced": synced, "skipped": skipped })))
 }
 
 /// POST /crons/run — Execute a cron command immediately and return output.

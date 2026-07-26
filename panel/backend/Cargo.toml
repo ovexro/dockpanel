@@ -1,6 +1,6 @@
 [package]
 name = "dockpanel-api"
-version = "2.40.0"
+version = "2.41.0"
 edition = "2024"
 
 [profile.release]
@@ -21,6 +21,11 @@ serde_json = "1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid", "migrate", "macros", "derive"] }
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 argon2 = "0.5"
+# Mailbox passwords on boxes whose Dovecot has no Argon2 built in (RHEL family:
+# Rocky 9.8 ships 2.3.16 without libsodium). NOT hand-rolled — the last attempt
+# to emit a crypt(3) credential by hand produced a hash Dovecot rejected for
+# every password. See dovecot_password_hash_for in routes/mail.rs.
+bcrypt = "0.15"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 chrono = { version = "0.4", features = ["serde"] }

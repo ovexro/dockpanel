@@ -478,8 +478,29 @@ install_dependencies() {
     run "Refreshing package index" pkg_update || true
 
     # EPEL for RHEL-family (needed for certbot, fail2ban, etc.)
+    #
+    # CRB ("CodeReady Builder", called PowerTools on EL8) must be enabled
+    # ALONGSIDE it. EPEL's own installation instructions require it, because
+    # EPEL packages routinely link against libraries EL keeps there — and a
+    # missing CRB does not fail loudly, it fails at the point some LATER package
+    # is installed. Measured on Rocky 9.8 (s268): `opendkim` and
+    # `opendkim-tools` need `libmilter.so.1.0` (sendmail-milter) and
+    # `libmemcached.so.11` (libmemcached-awesome), both CRB-only, so the mail
+    # installer died on "nothing provides …" — while a name-availability probe
+    # said all four packages were available, which is how the product came to
+    # claim the packages resolved here.
     if [ "$PKG_MGR" != "apt" ]; then
         run "Enabling EPEL repository" pkg_install epel-release || true
+        # The repo id is `crb` on EL9+/Rocky/Alma and `powertools` on EL8.
+        # Try both; neither existing is not fatal on its own.
+        if command -v dnf >/dev/null 2>&1; then
+            run "Enabling CRB repository (required by EPEL)" \
+                sh -c 'dnf -y config-manager --set-enabled crb 2>/dev/null \
+                    || dnf -y config-manager --set-enabled powertools 2>/dev/null \
+                    || dnf -y install dnf-plugins-core >/dev/null 2>&1 && \
+                       { dnf -y config-manager --set-enabled crb 2>/dev/null \
+                      || dnf -y config-manager --set-enabled powertools 2>/dev/null; }' || true
+        fi
     fi
 
     local BASE_PKGS="curl, openssl, ca-certificates"

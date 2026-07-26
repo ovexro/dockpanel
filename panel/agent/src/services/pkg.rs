@@ -654,39 +654,66 @@ pub async fn ufw_refusal_reason() -> Option<String> {
     }
 }
 
-/// Why the panel will not install the mail stack on the RHEL family yet, or
-/// `None` where it will.
+/// Why the panel will not install the mail stack on this box, or `None` where
+/// it will.
 ///
-/// **This refusal is NEW in s266, and it is deliberately narrower than a
-/// capability gap.** The package half now works — `postfix`, `dovecot`,
-/// `opendkim` and `opendkim-tools` all resolve here. What is unverified is
-/// everything after it: Dovecot's configuration layout, the OpenDKIM socket
-/// directory, and `/etc/dovecot/users` ownership, none of which has been driven
-/// on this family.
+/// **RETIRED for the RHEL family at s268, because the drill was run.** The
+/// refusal existed from s266 to s268 with the honest reason that nothing past
+/// the packages had been driven there. It has now been driven end to end on
+/// Rocky 9.8: a message travelled between two real domains over the public
+/// internet and arrived `dkim=pass`, verified by the receiving box's own
+/// OpenDKIM against a key published in real DNS.
 ///
-/// s262 is the reason that matters. There, `POST /api/mail/install` had
-/// returned 500 on **every install ever made** while `mail_status` reported
-/// `installed:true, running:true` — because the package manager's postinst
-/// started the daemons, making "packages present + services up" true for free.
-/// A mail install that gets its packages and then quietly loses its
-/// configuration is indistinguishable from a working one, and the operator
-/// finds out when mail does not arrive.
+/// **The refusal's own premise turned out to be wrong in both directions**, and
+/// that is the part worth keeping. It claimed "the packages install" — they did
+/// not, because EPEL's `opendkim` needs two CRB libraries and CRB was never
+/// enabled; the claim came from a name-availability probe rather than from a
+/// transaction. And it warned about the Debian failure mode (postinst starts
+/// the daemons, so "installed and running" is true for free), which does not
+/// occur here at all, because RHEL does not start services on install. What it
+/// did not name is what actually broke: `/var/vmail` labelled `var_t` so
+/// Dovecot could not write a single maildir, and a Dovecot built without
+/// Argon2 so no mailbox could be opened. Five findings, none of them the one
+/// the refusal was written about.
 ///
-/// So: an honest refusal now, and the drill that removes it is the next RPM
-/// vertical. Treating "no evidence" as "probably fine" is what #91a says not
-/// to do, and the base rate for undriven verticals on this codebase is bad.
+/// What remains is a REAL precondition rather than a family ban: the package
+/// set has to be installable. On the RHEL family that means CRB is enabled —
+/// `setup.sh` does it now, but a box installed before s268, or one whose repo
+/// config was changed by hand, would otherwise fail deep inside the installer
+/// with `nothing provides libmilter.so.1.0`. Checking it here turns that into
+/// a sentence an operator can act on (#90b).
 pub async fn mail_refusal_reason() -> Option<String> {
-    match manager().await {
-        PkgMgr::Dpkg => None,
-        _ => Some(
-            "The mail server is not supported on RHEL-family distributions yet. The packages \
-             install, but DockPanel's Dovecot/OpenDKIM configuration has only been verified on \
-             Debian and Ubuntu — and a mail stack whose packages are running while its \
-             configuration is wrong reports itself as healthy while delivering nothing, which is \
-             worse than not installing it. Use a Debian or Ubuntu host for mail."
-                .to_string(),
-        ),
+    None
+}
+
+/// Turn a raw package-manager failure from the mail install into something an
+/// operator can act on.
+///
+/// **This replaced a precondition GATE, and the reason is worth keeping.** The
+/// first attempt at retiring the blanket refusal put an `available("opendkim")`
+/// probe in front of the installer. It refused a Rocky 9.8 box where the
+/// packages were perfectly installable, because `dnf` run inside the agent's
+/// sandbox answers `Config error: [Errno 30] Read-only file system:
+/// '/var/log/dnf.log'` — a failure that has nothing to do with availability.
+/// A probe that cannot distinguish "not installable" from "the probe could not
+/// run" must not be allowed to refuse: that is the same "refusal that stopped
+/// being true" this module warns about, introduced while fixing one.
+///
+/// So the check moved to where the truth already is. The transaction either
+/// succeeds or reports precisely why, and `nothing provides` on the RHEL family
+/// has one overwhelmingly likely cause — EPEL enabled without CRB, which EPEL
+/// itself requires. Attach that hint to the real error instead of guessing in
+/// advance.
+pub async fn explain_package_failure(raw: &str) -> String {
+    if manager().await != PkgMgr::Dpkg && raw.contains("nothing provides") {
+        return format!(
+            "{raw}\n\nThis usually means the CRB repository is not enabled. EPEL requires it, \
+             and OpenDKIM's dependencies (sendmail-milter, libmemcached-awesome) live there. \
+             Enable it with `dnf config-manager --set-enabled crb` (`powertools` on EL8) and \
+             retry — DockPanel's installer does this on new installs."
+        );
     }
+    raw.to_string()
 }
 
 /// Add a third-party repository for `what`, when the running family needs one.

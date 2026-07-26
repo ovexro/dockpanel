@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.40.0.** The version stamp, the template count and every
+> **Reflects v2.41.0.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -399,6 +399,7 @@ survivable. Seven suites, **195 assertions**, all green at the current commit:
 | `ssl-correctness-pin-e2e.sh` | 30 |
 | `nginx-listen-pin-e2e.sh` | 17 |
 | `rpm-install-pin-e2e.sh` | 34 |
+| `mail-rpm-pin-e2e.sh` | 22 |
 
 **On every release** (`release.yml`, `smoke-test.yml`):
 

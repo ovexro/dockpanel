@@ -89,7 +89,12 @@ const DKIM_KEYS_DIR: &str = "/etc/dockpanel/dkim";
 /// dir in services/image_scanner.rs. A systemd drop-in points the daemon here.
 const OPENDKIM_CONF: &str = "/etc/dockpanel/opendkim.conf";
 const OPENDKIM_DROPIN_DIR: &str = "/etc/systemd/system/opendkim.service.d";
-const OPENDKIM_SOCKET_DIR: &str = "/var/spool/postfix/opendkim";
+/// OpenDKIM's milter endpoint, in OpenDKIM's own `Socket` syntax, and the
+/// matching Postfix `smtpd_milters` value. A loopback port rather than a Unix
+/// socket under Postfix's spool — see [`write_opendkim_config`] for why the
+/// spool arrangement is Debian-only and SELinux-forbidden on RHEL.
+const OPENDKIM_SOCKET: &str = "inet:8891@127.0.0.1";
+const OPENDKIM_MILTER: &str = "inet:127.0.0.1:8891";
 const KEY_TABLE: &str = "/etc/dockpanel/dkim/key.table";
 const SIGNING_TABLE: &str = "/etc/dockpanel/dkim/signing.table";
 /// Ports the mail stack listens on once installed. Opened in the firewall by
@@ -148,6 +153,7 @@ async fn mail_status() -> Result<Json<serde_json::Value>, ApiErr> {
     let dovecot_installed = is_installed("dovecot-imapd").await;
     let opendkim_installed = is_installed("opendkim").await;
     let vmail_exists = Path::new(VMAIL_DIR).exists();
+    let password_schemes = dovecot_password_schemes().await;
 
     // Packages present and services up is what apt gives you for free — its
     // postinst starts all three. It is NOT evidence that this installer ran:
@@ -161,8 +167,17 @@ async fn mail_status() -> Result<Json<serde_json::Value>, ApiErr> {
             .map(|c| c.contains("DockPanel mail configuration"))
             .unwrap_or(false);
 
-    let installed = postfix_installed && dovecot_installed && configured;
-    let running = postfix && dovecot && configured;
+    // OpenDKIM counts. It used to be reported in its own sub-object and
+    // excluded from the summary, so a box whose DKIM milter was in a restart
+    // loop answered `installed:true, running:true, configured:true` — with
+    // `opendkim.running:false` sitting in the same response, unread (measured
+    // on Rocky 9.8, s268, where the milter exited 78/CONFIG on every start).
+    // Mail still flows in that state because `milter_default_action = accept`,
+    // so nothing looks wrong until a receiver rejects the unsigned mail. That
+    // is the same "healthy while delivering nothing" shape `configured` was
+    // added to close in s262 — closed one layer further here.
+    let installed = postfix_installed && dovecot_installed && opendkim_installed && configured;
+    let running = postfix && dovecot && opendkim && configured;
 
     Ok(Json(serde_json::json!({
         "installed": installed,
@@ -172,6 +187,10 @@ async fn mail_status() -> Result<Json<serde_json::Value>, ApiErr> {
         "dovecot": { "installed": dovecot_installed, "running": dovecot },
         "opendkim": { "installed": opendkim_installed, "running": opendkim },
         "vmail_user": vmail_exists,
+        // What THIS box's Dovecot can actually verify. The panel hashes
+        // mailbox passwords centrally but the verifier is per-box, so the
+        // scheme has to be chosen from here — see dovecot_password_schemes.
+        "password_schemes": password_schemes,
     })))
 }
 
@@ -201,7 +220,7 @@ async fn mail_install() -> Result<Json<serde_json::Value>, ApiErr> {
     // Debian splits Dovecot into one package per protocol while the RHEL family
     // ships a single `dovecot`, so all three names collapse to one there —
     // handled by the name map rather than by branching here.
-    pkg::install(&[
+    if let Err(e) = pkg::install(&[
         "postfix",
         "dovecot-imapd",
         "dovecot-pop3d",
@@ -210,9 +229,17 @@ async fn mail_install() -> Result<Json<serde_json::Value>, ApiErr> {
         "opendkim-tools",
     ])
     .await
-    .map_err(|e| {
-        err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Package install failed: {e}"))
-    })?;
+    {
+        // `nothing provides …` on the RHEL family almost always means CRB is
+        // not enabled. Say so here rather than gating the installer behind a
+        // probe that cannot run reliably inside the sandbox — see
+        // pkg::explain_package_failure.
+        let detail = pkg::explain_package_failure(&e).await;
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Package install failed: {detail}"),
+        ));
+    }
 
     // 2. Create vmail user (uid/gid 5000).
     // groupadd/useradd write /etc/passwd, /etc/shadow, /etc/group — all too
@@ -220,9 +247,25 @@ async fn mail_install() -> Result<Json<serde_json::Value>, ApiErr> {
     // systemd-run, the same escape used for apt/dpkg (#54-A pattern, v2.8.14).
     let _ = safe_command_unsandboxed("groupadd", &[]).args(["-g", "5000", "vmail"]).output().await;
     let _ = safe_command_unsandboxed("useradd", &[]).args(["-g", "5000", "-u", "5000", "-d", VMAIL_DIR, "-s", "/usr/sbin/nologin", "-m", "vmail"]).output().await;
-    tokio::fs::create_dir_all(VMAIL_DIR).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to create vmail dir: {e}")))?;
-    let _ = safe_command("chown").args(["-R", "vmail:vmail", VMAIL_DIR]).output().await;
+    // Created via the unsandboxed escape, not tokio::fs.
+    //
+    // The agent unit lists `-/var/vmail`, and systemd's `-` prefix means "bind
+    // this read-write IF IT EXISTS". For a directory the agent merely writes
+    // INTO that is fine; for one the agent must CREATE it is not — on a box
+    // where /var/vmail is absent at unit start, the path is simply not in the
+    // namespace and `mkdir` fails with EROFS. Today setup.sh happens to
+    // pre-create it, so the installer's ability to work depends on a mirror in
+    // a different file staying in step (measured s268 by removing the
+    // directory: "Failed to create vmail dir: Read-only file system").
+    let _ = safe_command_unsandboxed("mkdir", &[]).args(["-p", VMAIL_DIR]).output().await;
+    if !Path::new(VMAIL_DIR).exists() {
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Failed to create {VMAIL_DIR} — mail cannot be stored"),
+        ));
+    }
+    let _ = safe_command_unsandboxed("chown", &[]).args(["-R", "vmail:vmail", VMAIL_DIR]).output().await;
+    label_vmail_for_selinux().await;
 
     // 3. Create config directories
     tokio::fs::create_dir_all(DKIM_KEYS_DIR).await
@@ -231,7 +274,7 @@ async fn mail_install() -> Result<Json<serde_json::Value>, ApiErr> {
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to create mail config dir: {e}")))?;
 
     // 4. Write Postfix main.cf additions for virtual mailbox hosting
-    let postfix_config = r#"
+    let postfix_config = format!(r#"
 # DockPanel mail configuration
 virtual_mailbox_domains = /etc/postfix/virtual_domains
 virtual_mailbox_maps = hash:/etc/postfix/virtual_mailbox_maps
@@ -266,9 +309,9 @@ smtpd_forbid_bare_newline = yes
 # OpenDKIM milter
 milter_protocol = 6
 milter_default_action = accept
-smtpd_milters = unix:opendkim/opendkim.sock
-non_smtpd_milters = unix:opendkim/opendkim.sock
-"#;
+smtpd_milters = {OPENDKIM_MILTER}
+non_smtpd_milters = {OPENDKIM_MILTER}
+"#);
 
     // Append to main.cf if not already configured
     let main_cf = tokio::fs::read_to_string("/etc/postfix/main.cf").await.unwrap_or_default();
@@ -277,6 +320,20 @@ non_smtpd_milters = unix:opendkim/opendkim.sock
         write_file_atomic("/etc/postfix/main.cf", &new_content).await
             .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write main.cf: {e}")))?;
     }
+
+    // 4a. Listen on every interface.
+    //
+    // Debian's postfix debconf writes `inet_interfaces = all` during its
+    // "Internet Site" setup; the RHEL package ships `localhost`, so Postfix
+    // bound 127.0.0.1:25 only and NO mail could ever arrive from another host —
+    // with the firewall correctly opened and the installer reporting success
+    // (measured on Rocky 9.8, s268).
+    //
+    // Set with `postconf -e` rather than appended to the config block above:
+    // main.cf already carries a value on the RHEL family, and appending a
+    // second one leaves Postfix warning "overriding earlier entry" on every
+    // single postconf invocation. Correct behaviour, permanent noise.
+    let _ = safe_command("postconf").arg("inet_interfaces=all").output().await;
 
     // 4b. HELO name. Left unset, Postfix uses the short OS hostname, which
     // receivers score heavily against: on a stock cloud image the delivered
@@ -406,19 +463,10 @@ service auth {
     write_file_atomic(&format!("{DKIM_KEYS_DIR}/trusted.hosts"), trusted_hosts).await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write trusted.hosts: {e}")))?;
 
-    // Let Postfix open the 0770 milter socket. /etc/group is outside
-    // ReadWritePaths, so this takes the same systemd-run escape as the
-    // groupadd/useradd above (#54-A pattern).
-    let _ = safe_command_unsandboxed("gpasswd", &[]).args(["-a", "postfix", "opendkim"]).output().await;
-
-    // Create opendkim socket directory in Postfix chroot
-    tokio::fs::create_dir_all(OPENDKIM_SOCKET_DIR).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to create opendkim socket dir: {e}")))?;
-    let _ = safe_command("chown").args(["opendkim:postfix", OPENDKIM_SOCKET_DIR]).output().await;
-    // Drop any socket left by an earlier run. Once the daemon drops privileges
-    // it cannot remove a socket a differently-owned run left behind, and it
-    // refuses to start rather than reuse it ("socket cleanup failed").
-    let _ = tokio::fs::remove_file(format!("{OPENDKIM_SOCKET_DIR}/opendkim.sock")).await;
+    // The milter is a loopback port now, so there is no shared socket
+    // directory to create, no `opendkim` group for Postfix to join, and no
+    // stale socket to clean up. All three went away with the chroot coupling
+    // — see write_opendkim_config.
 
     // 9. Enable and start services
     if let Ok(out) = safe_command("systemctl").args(["enable", "postfix", "dovecot", "opendkim"]).output().await {
@@ -472,31 +520,21 @@ async fn mail_uninstall() -> Result<Json<serde_json::Value>, ApiErr> {
         ).await;
     }
 
-    // 2. Purge packages — unsandboxed for the same reason as install above.
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(300),
-        safe_command_unsandboxed("apt-get", &[])
-            .args(["purge", "-y",
-                   "postfix", "dovecot-imapd", "dovecot-pop3d", "dovecot-lmtpd",
-                   "opendkim", "opendkim-tools"])
-            .output()
-    ).await
-        .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Package removal timed out (300s)"))?
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("apt purge failed: {e}")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(err(StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Package purge failed: {}", stderr.chars().take(200).collect::<String>())));
-    }
-
-    // 3. Autoremove — unsandboxed for the same reason as install above.
-    let _ = tokio::time::timeout(
-        std::time::Duration::from_secs(300),
-        safe_command_unsandboxed("apt-get", &[])
-            .args(["autoremove", "-y"])
-            .output()
-    ).await;
+    // 2. Remove packages through the package abstraction.
+    //
+    // This call site shelled straight to `apt-get purge` and `apt-get
+    // autoremove`. s266 converted the INSTALLERS and missed the uninstaller, so
+    // on an RPM box uninstall failed with "Failed to find executable apt-get" —
+    // a true sentence that tells an operator nothing. `pkg::remove` already
+    // exists and maps the three Debian Dovecot package names onto the single
+    // RPM `dovecot`; counting the call sites, not just fixing the one in front
+    // of you, is what turns a bug into a class (#92b).
+    crate::services::pkg::remove(&[
+        "postfix", "dovecot-imapd", "dovecot-pop3d", "dovecot-lmtpd",
+        "opendkim", "opendkim-tools",
+    ])
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Package removal failed: {e}")))?;
 
     // 4. Remove DockPanel mail config dirs (NOT /var/vmail — user mail data)
     let _ = tokio::fs::remove_dir_all("/etc/dockpanel/mail").await;
@@ -505,6 +543,108 @@ async fn mail_uninstall() -> Result<Json<serde_json::Value>, ApiErr> {
     tracing::info!("Mail server uninstalled (user mail data preserved in /var/vmail)");
 
     Ok(ok("Mail server uninstalled. Note: /var/vmail (user mail data) was NOT removed. Delete it manually if no longer needed."))
+}
+
+/// The password schemes THIS box's Dovecot can verify, upper-cased.
+///
+/// **Argon2id is a build option, not a version.** The panel hashes mailbox
+/// passwords as `{ARGON2ID}` and the code that does it says Dovecot ">= 2.3.11
+/// verifies natively" — which is false in the way that matters. Rocky 9.8
+/// ships Dovecot **2.3.16**, comfortably past that version, built WITHOUT
+/// libsodium: `doveadm pw -l` lists no ARGON2I or ARGON2ID at all, and every
+/// login fails with `Unknown scheme ARGON2ID` while the panel reports the
+/// account created successfully. Debian's 2.3.21 does list them.
+///
+/// That is s259's finding on a different family — a mailbox nobody could open,
+/// with file ownership and password hash both perfect — so the fix is to ask
+/// the box rather than to assume a version implies a capability.
+///
+/// An empty vector means "could not tell" (Dovecot not installed yet, or
+/// `doveadm` missing); callers treat that as "use the safe default" rather
+/// than as "supports nothing".
+async fn dovecot_password_schemes() -> Vec<String> {
+    let Ok(out) = safe_command("doveadm").args(["pw", "-l"]).output().await else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .map(|s| s.trim().to_ascii_uppercase())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Give `/var/vmail` the SELinux type Dovecot is allowed to write.
+///
+/// **This is the one that silently ate every message.** `/var/vmail` is created
+/// by this installer, so it inherits `var_t` from `/var`. Dovecot's delivery
+/// process runs as `dovecot_t`, which the shipped policy permits to write
+/// `mail_spool_t` and not `var_t` — so LMTP fails `mkdir(.../cur)` with
+/// "Permission denied" on a directory whose UNIX ownership is `vmail:vmail`
+/// and mode 0755. Every message is `deferred`, retried, and never delivered,
+/// while `postfix` and `dovecot` are both active and the panel calls the mail
+/// server healthy (measured on Rocky 9.8, s268; settled with `setenforce 0`
+/// per #94a rather than by reading logs).
+///
+/// A no-op where SELinux is not enforcing, which is why it is safe to call on
+/// every distro rather than behind an RPM branch (#94d): `selinuxenabled`
+/// exits non-zero on Debian and the function returns immediately.
+///
+/// `semanage` records the rule so it survives a filesystem relabel;
+/// `restorecon` applies it now. `policycoreutils-python-utils` carries
+/// `semanage` and is not installed by default on a minimal RHEL box, so it is
+/// pulled in first — but its absence is not fatal, because `chcon` still fixes
+/// the running system even when the durable rule cannot be written.
+async fn label_vmail_for_selinux() {
+    let enforcing = safe_command("selinuxenabled")
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !enforcing {
+        return;
+    }
+
+    if safe_command("semanage").arg("--help").output().await.map(|o| !o.status.success()).unwrap_or(true) {
+        let _ = crate::services::pkg::install_available(&["policycoreutils-python-utils"]).await;
+    }
+
+    let spec = format!("{VMAIL_DIR}(/.*)?");
+    let out = safe_command_unsandboxed("semanage", &[])
+        .args(["fcontext", "-a", "-t", "mail_spool_t", &spec])
+        .output()
+        .await;
+    match out {
+        Ok(o) if o.status.success() => tracing::info!("SELinux: {VMAIL_DIR} recorded as mail_spool_t"),
+        // Already recorded is the normal case on a re-install, not a failure.
+        Ok(o) => {
+            let e = String::from_utf8_lossy(&o.stderr);
+            if e.contains("already defined") {
+                tracing::info!("SELinux: {VMAIL_DIR} fcontext rule already present");
+            } else {
+                tracing::warn!("SELinux: could not record fcontext for {VMAIL_DIR}: {}", e.trim());
+            }
+        }
+        Err(e) => tracing::warn!("SELinux: semanage unavailable ({e}) — falling back to chcon"),
+    }
+
+    // Apply now. restorecon uses the rule above; chcon is the fallback when the
+    // rule could not be written, and is enough to make mail flow until a
+    // relabel. Without either, delivery fails silently.
+    let restored = safe_command("restorecon")
+        .args(["-R", VMAIL_DIR])
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !restored {
+        let _ = safe_command("chcon")
+            .args(["-R", "-t", "mail_spool_t", VMAIL_DIR])
+            .output()
+            .await;
+    }
 }
 
 async fn is_service_active(name: &str) -> bool {
@@ -531,15 +671,38 @@ async fn is_installed(package: &str) -> bool {
 /// which is why writing it aborted the whole installer before anything below
 /// step 8 could run.
 async fn write_opendkim_config() -> Result<(), String> {
-    // Run as the packaged `opendkim` user, which owns the keys. With UMask 007
-    // the milter socket is 0770 opendkim:opendkim, so Postfix reaches it by
-    // being a member of that group — the remedy Debian's own shipped config
-    // names in its comments. Adding postfix to the group is done by the caller.
+    // Run as the packaged `opendkim` user, which owns the keys.
+    //
+    // The socket is a LOOPBACK TCP port, not a Unix socket in Postfix's spool.
+    // The old arrangement — `local:/var/spool/postfix/opendkim/opendkim.sock` —
+    // exists only because Debian runs smtpd CHROOTED to /var/spool/postfix, so
+    // the milter has to live inside that tree. On the RHEL family `master.cf`
+    // ships `smtp inet … n …` (not chrooted), the chroot buys nothing, and
+    // SELinux actively forbids the arrangement: the packaged policy runs
+    // OpenDKIM as `dkim_milter_t`, which is denied `search` on
+    // `postfix_spool_t` (measured on Rocky 9.8, s268), so the daemon cannot
+    // create its socket and never starts.
+    //
+    // A loopback port is reachable from inside a chroot and outside one alike,
+    // needs no shared group, no socket directory and no ownership dance — so
+    // BOTH families run the same path (#94d). `dkim_milter_port_t` already
+    // covers 8891 in the shipped policy, so nothing needs relabelling.
+    //
+    // TrustAnchorFile is emitted only when an anchor actually exists.
+    // `/usr/share/dns/root.key` is Debian's (`dns-root-data`); RHEL keeps its
+    // anchor at `/var/lib/unbound/root.key` and may have neither. OpenDKIM
+    // treats a missing anchor as a FATAL config error — `status=78/CONFIG`, so
+    // the daemon never starts and nothing is ever signed (measured s268).
+    let trust_anchor = ["/usr/share/dns/root.key", "/var/lib/unbound/root.key"]
+        .into_iter()
+        .find(|p| Path::new(p).exists())
+        .map(|p| format!("TrustAnchorFile {p}\n"))
+        .unwrap_or_default();
     let conf = format!(
         "Syslog yes\nUserID opendkim\nUMask 007\n\
-         Socket local:{OPENDKIM_SOCKET_DIR}/opendkim.sock\n\
+         Socket {OPENDKIM_SOCKET}\n\
          PidFile /run/opendkim/opendkim.pid\nOversignHeaders From\n\
-         TrustAnchorFile /usr/share/dns/root.key\n\
+         {trust_anchor}\
          KeyTable {KEY_TABLE}\nSigningTable refile:{SIGNING_TABLE}\n\
          ExternalIgnoreList {DKIM_KEYS_DIR}/trusted.hosts\n\
          InternalHosts {DKIM_KEYS_DIR}/trusted.hosts\n"
@@ -548,11 +711,17 @@ async fn write_opendkim_config() -> Result<(), String> {
 
     tokio::fs::create_dir_all(OPENDKIM_DROPIN_DIR).await
         .map_err(|e| format!("Failed to create {OPENDKIM_DROPIN_DIR}: {e}"))?;
-    // ExecStart must be cleared before being redefined, or systemd appends.
-    // No `-f`: the packaged unit is Type=forking, so a foreground daemon never
-    // returns and systemd fails the start on timeout.
+    // The drop-in owns BOTH `Type` and `ExecStart`, so the packaged unit's
+    // choice stops mattering — which is the whole point. Debian ships
+    // `Type=forking` (a foreground daemon never returns and systemd times the
+    // start out) while EPEL ships `Type=simple` with `-f` already in its own
+    // ExecStart (a backgrounding daemon makes systemd reap the parent and log
+    // `Deactivated successfully` while the unit goes INACTIVE — a failure that
+    // does not even register as failed). Pinning Type=simple and passing `-f`
+    // is one arrangement that is correct on both, instead of a flag whose
+    // rightness depends on a file we do not control.
     let dropin = format!(
-        "[Service]\nExecStart=\nExecStart=/usr/sbin/opendkim -x {OPENDKIM_CONF}\n"
+        "[Service]\nType=simple\nExecStart=\nExecStart=/usr/sbin/opendkim -f -x {OPENDKIM_CONF}\n"
     );
     write_file_atomic(&format!("{OPENDKIM_DROPIN_DIR}/dockpanel.conf"), &dropin).await?;
     let _ = safe_command("systemctl").arg("daemon-reload").output().await;
@@ -1067,21 +1236,13 @@ async fn queue_delete(
 async fn rspamd_install() -> Result<Json<serde_json::Value>, ApiErr> {
     tracing::info!("Installing Rspamd spam filter...");
 
-    // Install rspamd — unsandboxed for the same dpkg-lock reason as the
-    // postfix/dovecot install in install_mail.
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(300),
-        safe_command_unsandboxed("apt-get", &[])
-            .args(["-o", "Dpkg::Options::=--force-confnew", "install", "-y", "rspamd", "redis-server"])
-            .output()
-    ).await
-        .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Rspamd installation timed out (300s)"))?
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Install failed: {e}")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Rspamd install failed: {}", &stderr[..200.min(stderr.len())])));
-    }
+    // Install rspamd through the package abstraction. Another call site s266's
+    // conversion missed: it shelled to `apt-get` directly AND passed
+    // `redis-server`, whose RPM package and unit are both `redis` — the exact
+    // trap `pkg::service_name`'s own doc comment describes.
+    crate::services::pkg::install(&["rspamd", "redis-server"])
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Rspamd install failed: {e}")))?;
 
     // Configure Rspamd milter for Postfix
     let main_cf = tokio::fs::read_to_string("/etc/postfix/main.cf").await.unwrap_or_default();
@@ -1098,13 +1259,15 @@ async fn rspamd_install() -> Result<Json<serde_json::Value>, ApiErr> {
             .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Config write failed: {e}")))?;
     }
 
-    // Enable and start
-    if let Ok(out) = safe_command("systemctl").args(["enable", "rspamd", "redis-server"]).output().await {
+    // Enable and start. The Redis UNIT is `redis-server` on Debian and `redis`
+    // on the RHEL family, which is what `pkg::service_name` translates.
+    let redis_unit = crate::services::pkg::service_name("redis-server").await;
+    if let Ok(out) = safe_command("systemctl").args(["enable", "rspamd", &redis_unit]).output().await {
         if !out.status.success() {
             tracing::warn!("Failed to enable rspamd/redis: {}", String::from_utf8_lossy(&out.stderr));
         }
     }
-    for service in &["redis-server", "rspamd"] {
+    for service in &[redis_unit.as_str(), "rspamd"] {
         if let Ok(out) = safe_command("systemctl").args(["restart", service]).output().await {
             if !out.status.success() {
                 tracing::warn!("Failed to restart {service}: {}", String::from_utf8_lossy(&out.stderr));
@@ -1127,7 +1290,9 @@ async fn rspamd_install() -> Result<Json<serde_json::Value>, ApiErr> {
 async fn rspamd_status() -> Json<serde_json::Value> {
     let installed = is_installed("rspamd").await;
     let running = is_service_active("rspamd").await;
-    let redis = is_service_active("redis-server").await;
+    // Same unit-name translation as the installer, or this reports Redis down
+    // on every RHEL box (the unit there is `redis`, not `redis-server`).
+    let redis = is_service_active(&crate::services::pkg::service_name("redis-server").await).await;
     Json(serde_json::json!({ "installed": installed, "running": running, "redis": redis }))
 }
 
@@ -1426,11 +1591,34 @@ async fn relay_remove() -> Result<Json<serde_json::Value>, ApiErr> {
 
 // ── Mail Logs ───────────────────────────────────────────────────────────
 
-/// GET /mail/logs — Parse mail.log for recent activity and stats.
+/// Where this box's MTA log actually lives.
+///
+/// Probed rather than branched on the package manager, because the name is a
+/// property of the running syslog configuration, not of the distro family — a
+/// Debian box with an unusual rsyslog config, or an RHEL box with none at all,
+/// both answer correctly here. Falls back to the Debian name so the failure
+/// mode on a box with neither file is unchanged.
+pub async fn mail_log_path() -> String {
+    for candidate in ["/var/log/mail.log", "/var/log/maillog"] {
+        if Path::new(candidate).exists() {
+            return candidate.to_string();
+        }
+    }
+    "/var/log/mail.log".to_string()
+}
+
+/// GET /mail/logs — Parse the mail log for recent activity and stats.
 async fn mail_logs() -> Result<Json<serde_json::Value>, ApiErr> {
-    // Read last portion of mail.log (tail -5000 to avoid reading huge files)
+    // Debian's rsyslog writes `/var/log/mail.log`; the RHEL family writes
+    // `/var/log/maillog`. Hardcoding the Debian name meant this endpoint
+    // returned `sent:0, received:0` on every RHEL box — measured on Rocky 9.8
+    // minutes after that box had sent and received a DKIM-signed message
+    // (s268). It is the page an operator opens when mail is missing, so it
+    // failed exactly when it was needed.
+    let path = mail_log_path().await;
+    // Read last portion of the log (tail -5000 to avoid reading huge files)
     let output = safe_command("tail")
-        .args(["-n", "5000", "/var/log/mail.log"])
+        .args(["-n", "5000", &path])
         .output().await;
     let content = output.ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())

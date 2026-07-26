@@ -1023,7 +1023,16 @@ pub async fn create(
                                 let cron_domain = cms_domain.clone();
                                 let cron_site_id = site_id;
                                 tokio::spawn(async move {
-                                    let command = format!("cd /var/www/{cron_domain}/public && php wp-cron.php > /dev/null 2>&1");
+                                    // No `> /dev/null 2>&1`: the agent's cron
+                                    // filter blocks "> /dev/", and this row is
+                                    // INSERTed straight into the database
+                                    // without passing through that filter — so
+                                    // the product was writing a job its own
+                                    // guard rejects, and every later cron sync
+                                    // failed for the whole box. cron discards
+                                    // output on its own when MAILTO is empty;
+                                    // the redirect bought nothing.
+                                    let command = format!("cd /var/www/{cron_domain}/public && php wp-cron.php");
                                     let _ = sqlx::query(
                                         "INSERT INTO crons (site_id, label, command, schedule, enabled) \
                                          VALUES ($1, 'WordPress Cron', $2, '*/15 * * * *', true)"

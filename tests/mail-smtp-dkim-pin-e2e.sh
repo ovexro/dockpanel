@@ -65,13 +65,25 @@ if hasre "$CODE" 'write_file_atomic\("/etc/opendkim\.conf"'; then
 else
   ok "nothing writes the distro /etc/opendkim.conf"
 fi
-if has "$CODE" 'ExecStart=/usr/sbin/opendkim -x '; then
+if hasre "$CODE" 'ExecStart=/usr/sbin/opendkim (-f )?-x '; then
   ok "systemd drop-in points opendkim at our config"
 else
   bad "drop-in missing — daemon would read the stock config"
 fi
-if hasre "$CODE" 'ExecStart=/usr/sbin/opendkim -f '; then
-  bad "-f against a Type=forking unit: systemd times the start out"
+# s262 pinned `-f` ABSENT, correctly for Debian, whose packaged unit is
+# Type=forking. s268 measured EPEL's unit as Type=simple, where a flagless
+# ExecStart makes opendkim background itself, systemd reap the parent, and the
+# unit go INACTIVE while logging "Deactivated successfully" — a failure that
+# does not register as failed. So the invariant is not the flag, it is the
+# AGREEMENT between the Type the drop-in declares and the flag it passes.
+dropin_type=$(grep -oE 'Type=[a-z]+\\nExecStart=' <<<"$CODE" | head -1 | sed 's/Type=//; s/\\nExecStart=//')
+dropin_f=$(grep -cE 'ExecStart=/usr/sbin/opendkim -f ' <<<"$CODE")
+if [ "$dropin_type" = "simple" ] && [ "$dropin_f" -ge 1 ]; then
+  ok "drop-in declares Type=simple and passes -f — they agree, on both families"
+elif [ "$dropin_type" = "forking" ] && [ "$dropin_f" -eq 0 ]; then
+  ok "drop-in declares Type=forking and omits -f — they agree"
+elif [ -z "$dropin_type" ]; then
+  bad "the drop-in does not declare Type, so whether -f is right depends on the DISTRO's unit"
 else
   ok "no -f flag (unit is Type=forking)"
 fi
@@ -172,10 +184,18 @@ if hasre "$UNIT" '^ReadWritePaths=.*/etc/opendkim\.conf'; then
 else
   ok "ReadWritePaths NOT widened for opendkim"
 fi
-if has "$CODE" 'safe_command_unsandboxed("gpasswd"'; then
+# The property that matters is that Postfix can REACH the milter, not the
+# mechanism. A unix socket under Postfix's spool is group-owned, so it needs
+# gpasswd AND the unsandboxed escape (/etc/group is read-only to the agent). A
+# loopback port needs neither — and is what s268 moved to, because the spool
+# socket is a Debian-chroot artifact that SELinux forbids on RHEL. Accept
+# either, reject a spool socket with no group grant.
+if hasre "$CODE" 'OPENDKIM_SOCKET: &str = "inet:[0-9]+@127\.0\.0\.1"'; then
+  ok "milter is a loopback port — reachable from inside Postfix's chroot and out, no group needed"
+elif has "$CODE" 'safe_command_unsandboxed("gpasswd"'; then
   ok "group edit uses the documented unsandboxed escape (/etc/group is read-only)"
 else
-  bad "gpasswd sandboxed — postfix never joins the opendkim group"
+  bad "milter socket is group-owned but nothing adds postfix to the group — Postfix cannot reach it"
 fi
 
 echo

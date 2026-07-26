@@ -537,8 +537,12 @@ pub async fn create_account(
         return Err(err(StatusCode::BAD_REQUEST, "Password must be at least 8 characters"));
     }
 
-    // Hash password with Argon2id in Dovecot's {ARGON2ID} scheme form.
-    let password_hash = dovecot_password_hash(&body.password)
+    // Hash in a scheme THIS server's Dovecot can verify — Argon2id where it is
+    // built in, bcrypt where it is not. Hashing in a scheme the verifier does
+    // not know produces an account that is created successfully and can never
+    // be opened.
+    let schemes = agent_password_schemes(&agent).await;
+    let password_hash = dovecot_password_hash_for(&body.password, &schemes)
         .map_err(|e| internal_error("hash mail password", e))?;
 
     // Clamp quota to a sane range (1 MB .. 1 TB): 0/negative would write `storage=0M` / a garbage
@@ -600,7 +604,11 @@ pub async fn update_account(
         if password.len() < 8 {
             return Err(err(StatusCode::BAD_REQUEST, "Password must be at least 8 characters"));
         }
-        let hash = dovecot_password_hash(password)
+        // Same scheme selection as creation — a password CHANGE that reverts to
+        // Argon2id on a box that cannot verify it locks the user out of a
+        // mailbox that was working (#92b: count the call sites).
+        let schemes = agent_password_schemes(&agent).await;
+        let hash = dovecot_password_hash_for(password, &schemes)
             .map_err(|e| internal_error("hash mail password", e))?;
         sqlx::query("UPDATE mail_accounts SET password_hash = $1, updated_at = NOW() WHERE id = $2")
             .bind(&hash)
@@ -1707,6 +1715,69 @@ fn dovecot_password_hash(password: &str) -> Result<String, argon2::password_hash
         .hash_password(password.as_bytes(), &salt)?
         .to_string();
     Ok(format!("{{ARGON2ID}}{phc}"))
+}
+
+/// Hash a mailbox password in a scheme the TARGET BOX's Dovecot can verify.
+///
+/// **The version check in `dovecot_password_hash`'s doc comment is wrong in the
+/// way that matters: Argon2 is a BUILD OPTION, not a version.** Rocky 9.8 ships
+/// Dovecot 2.3.16 — past the ">= 2.3.11" that comment cites — compiled without
+/// libsodium, so `doveadm pw -l` lists no ARGON2ID and every login fails with
+/// `Unknown scheme ARGON2ID` while the panel reports the account created
+/// successfully. That is s259's unopenable mailbox on a different family
+/// (measured on Rocky 9.8, s268).
+///
+/// So the scheme is chosen from what the agent reports its Dovecot supports,
+/// not from what we would prefer:
+///
+/// * `ARGON2ID` when available — unchanged on Debian/Ubuntu, which is every
+///   install that works today, so nobody is downgraded.
+/// * `BLF-CRYPT` (bcrypt) otherwise. It is a real password KDF, present in
+///   every Dovecot build in the scheme list measured on both families, and
+///   `doveadm pw`-compatible.
+///
+/// An empty `supported` means the agent could not tell (Dovecot not installed
+/// yet, `doveadm` missing). That is treated as "keep the strong default"
+/// rather than "supports nothing" — hashing is not the place to guess a
+/// downgrade, and accounts created before the mail stack exists are re-synced
+/// once it does.
+fn dovecot_password_hash_for(
+    password: &str,
+    supported: &[String],
+) -> Result<String, argon2::password_hash::Error> {
+    let knows = |s: &str| supported.iter().any(|x| x.eq_ignore_ascii_case(s));
+    if supported.is_empty() || knows("ARGON2ID") {
+        return dovecot_password_hash(password);
+    }
+    Ok(format!("{{BLF-CRYPT}}{}", bcrypt_crypt(password)))
+}
+
+/// A `$2y$` bcrypt credential, the payload Dovecot's `BLF-CRYPT` scheme reads.
+fn bcrypt_crypt(password: &str) -> String {
+    // Cost 10 matches Dovecot's own `doveadm pw -s BLF-CRYPT` default.
+    bcrypt::hash(password, 10).unwrap_or_default()
+}
+
+/// Ask the agent which password schemes its Dovecot can verify.
+///
+/// Failure to ask is not failure to know something important: an unreachable
+/// agent returns an empty list, and [`dovecot_password_hash_for`] keeps the
+/// strong default in that case.
+async fn agent_password_schemes(agent: &crate::services::agent::AgentHandle) -> Vec<String> {
+    agent
+        .get("/mail/status")
+        .await
+        .ok()
+        .and_then(|v| {
+            v.get("password_schemes").and_then(|s| {
+                s.as_array().map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_ascii_uppercase()))
+                        .collect::<Vec<_>>()
+                })
+            })
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

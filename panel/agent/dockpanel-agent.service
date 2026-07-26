@@ -46,7 +46,15 @@ RestrictNamespaces=~user
 # failure; those mirrors are maintained from memory and had missed /etc/apt for
 # as long as the entry existed. The `-` prefix removes the need for them to be
 # perfect, so a future entry added here cannot silently brick the agent.
-ReadWritePaths=/etc/nginx /etc/dockpanel /var/run/dockpanel /var/backups/dockpanel /var/lib/dockpanel /var/www /var/log /etc/systemd/system /opt -/etc/letsencrypt -/etc/apt -/etc/fail2ban -/etc/powerdns -/etc/modsecurity -/etc/cloudflared -/etc/postfix -/etc/dovecot -/var/spool/postfix -/var/vmail -/var/cache/nginx -/etc/ufw -/var/lib/ufw -/etc/php
+# /var/spool/cron is where `crontab` writes its temp file (mkstemp) before
+# renaming it into place, on BOTH families — Debian keeps the tables in
+# crontabs/ beneath it, the RHEL family directly in it. It was missing here
+# while setup.sh pre-created it, so every cron written through the panel failed
+# with "/var/spool/cron/: mkstemp: Read-only file system" and the API answered
+# 500 (measured on a fresh Ubuntu 24.04 box, s268). The mirror knew about the
+# path and the unit did not — the same enumeration miss as s262's
+# /etc/opendkim.conf, with the two lists disagreeing in the other direction.
+ReadWritePaths=/etc/nginx /etc/dockpanel /var/run/dockpanel /var/backups/dockpanel /var/lib/dockpanel /var/www /var/log /etc/systemd/system /opt -/etc/letsencrypt -/etc/apt -/etc/fail2ban -/etc/powerdns -/etc/modsecurity -/etc/cloudflared -/etc/postfix -/etc/dovecot -/var/spool/postfix -/var/spool/cron -/var/vmail -/var/cache/nginx -/etc/ufw -/var/lib/ufw -/etc/php
 
 MemoryMax=512M
 LimitNOFILE=65535

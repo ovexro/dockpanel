@@ -4,6 +4,91 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.41.0] - 2026-07-26
+
+### Fixed
+
+- **Mail could not work on any RHEL-family box, and the reason it was refused
+  was not the reason it was broken.** From v2.39.0 the panel declined to install
+  the mail server on Rocky/Alma/CentOS with an honest note that nothing past the
+  packages had been driven there. Driving it end to end on two Rocky 9.8 boxes
+  found five separate defects, and disproved the refusal's own premise in both
+  directions: the packages did **not** install (EPEL's `opendkim` needs
+  `libmilter` and `libmemcached`, both in the **CRB** repository, which EPEL
+  requires and `setup.sh` never enabled), and the Debian failure mode the
+  refusal warned about — a package manager's postinst starting the daemons so
+  "installed and running" is true for free — cannot occur on RHEL at all, which
+  does not start services on install.
+
+  What actually broke, none of it named by the refusal:
+
+  - **Postfix listened only on loopback.** `inet_interfaces` was never set
+    anywhere in the tree; Debian's debconf writes `all`, the RHEL package ships
+    `localhost`. No mail could arrive from another host, with the firewall
+    correctly opened and the installer reporting success.
+  - **OpenDKIM never started, so nothing was ever signed.** The config wrote
+    `TrustAnchorFile /usr/share/dns/root.key`, a Debian path; OpenDKIM treats a
+    missing anchor as fatal (`status=78/CONFIG`).
+  - **The `-f` flag was correct for Debian and wrong here.** v2.36.0 removed it
+    because Debian's packaged unit is `Type=forking`; EPEL's is `Type=simple`,
+    where the daemon backgrounds itself, systemd reaps the parent and logs
+    `Deactivated successfully` while the unit goes inactive — a failure that does
+    not register as failed. The drop-in now pins `Type` as well as `ExecStart`,
+    so the distro's choice cannot decide the flag.
+  - **The milter socket lived in Postfix's chroot**, an arrangement that exists
+    only because Debian chroots `smtpd`. RHEL does not, and SELinux forbids it:
+    `dkim_milter_t` is denied `search` on `postfix_spool_t`. The milter is now a
+    loopback port, which is correct on both families and needs no shared group,
+    socket directory or ownership dance.
+  - **Every delivered message was silently discarded.** `/var/vmail` is created
+    by the installer, so it inherited `var_t`, which `dovecot_t` may not write —
+    LMTP failed `mkdir` with "Permission denied" on a directory owned by
+    `vmail:vmail` and mode 0755, and every message was deferred forever while
+    both services were active. It is now labelled `mail_spool_t`.
+  - **No mailbox could be opened.** Mailbox passwords are hashed `{ARGON2ID}`,
+    and Rocky 9.8 ships Dovecot 2.3.16 built *without* Argon2 — the scheme is a
+    build option, not a version, though the code's own comment cited ">= 2.3.11".
+    Every login failed `Unknown scheme ARGON2ID` while the panel reported the
+    account created successfully. The panel now asks the agent which schemes its
+    Dovecot actually supports and picks Argon2id where present, bcrypt where not,
+    so Debian and Ubuntu are unchanged.
+
+  Verified on the wire: a message travelled between two real domains on two
+  Rocky 9.8 boxes and arrived `dkim=pass`, verified by the receiving box's own
+  OpenDKIM against a key published in real DNS, and the mailbox opened over IMAP
+  on the box's real Let's Encrypt certificate. Re-verified on Debian, where the
+  hash stays `{ARGON2ID}` and OpenDKIM still starts under its forking unit.
+
+- **Cron jobs could not be created on any install once a WordPress site
+  existed.** The panel auto-creates a WordPress cron whose command contains
+  `> /dev/null 2>&1`, INSERTed straight into the database — but `> /dev/` is on
+  the agent's own blocked-pattern list, and the sync endpoint validated every
+  row and rejected the whole batch on the first bad one. From the moment a
+  WordPress site was created, adding, editing or deleting *any* cron failed with
+  "Command contains disallowed characters or patterns" and nothing reached the
+  crontab. The writer no longer emits the redirect, and the reader now skips an
+  unsafe row (reporting it) instead of failing the entire sync, so installs that
+  already carry the row recover on upgrade.
+
+- **`/var/spool/cron` was missing from the agent's `ReadWritePaths`** while
+  `setup.sh` pre-created it, so `crontab` could not write its temp file
+  (`mkstemp: Read-only file system`) and cron writes returned 500.
+
+- Mail uninstall and the Rspamd installer still shelled out to `apt-get`
+  directly, so both failed on RPM with "Failed to find executable apt-get"; both
+  now use the package abstraction, and the Redis unit name is translated
+  (`redis-server` on Debian, `redis` on the RHEL family).
+
+- `mail_status` reported `installed: true, running: true` while OpenDKIM was in
+  a restart loop, because OpenDKIM was excluded from the summary verdict.
+
+- The mail log viewer read `/var/log/mail.log` unconditionally, so it showed
+  zero sent and zero received on RHEL, which writes `/var/log/maillog`.
+
+### Changed
+
+- README and marketing screenshots retaken on the `terminal` theme.
+
 ## [2.40.0] - 2026-07-26
 
 ### Fixed
