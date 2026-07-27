@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Logo } from '../components/Logo';
 import {
@@ -13,7 +14,10 @@ const POSTURE = {
   breaches: 0,
   latestAuditRound: 7,
   latestAuditDate: 'April 2026',
-  currentVersion: 'v2.7.11',
+  // NOT hardcoded. It said v2.7.11 — thirty-seven releases stale — because a
+  // version typed into a page is a fact with no owner. It is fetched from the
+  // releases API at render time, and the tile is simply omitted if that fails:
+  // a number nobody can verify is worse than no number.
 };
 
 const SLA = [
@@ -145,6 +149,19 @@ const RECENT_ADVISORIES = [
 ];
 
 export default function Security() {
+  // See the note on POSTURE: the release number is read from GitHub rather
+  // than typed here, so it cannot go stale. Failure leaves it null and the
+  // tile is dropped.
+  const [latestRelease, setLatestRelease] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    fetch('https://api.github.com/repos/ovexro/dockpanel/releases/latest')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (live && d?.tag_name) setLatestRelease(d.tag_name); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, []);
+
   return (
     <div className="min-h-screen bg-[#09090b] text-white">
       {/* Header */}
@@ -184,7 +201,7 @@ export default function Security() {
             { v: POSTURE.audits, l: 'Internal audit rounds' },
             { v: `${POSTURE.findingsClosed}+`, l: 'Findings closed' },
             { v: POSTURE.breaches, l: 'Reported breaches' },
-            { v: POSTURE.currentVersion, l: 'Current release' },
+            ...(latestRelease ? [{ v: latestRelease, l: 'Current release' }] : []),
           ].map((s, i) => (
             <div key={i} className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-5">
               <div className={`text-3xl font-bold tabular-nums text-white ${hd}`}>{s.v}</div>
@@ -395,7 +412,7 @@ export default function Security() {
         </section>
 
         <div className="mt-16 border-t border-zinc-800/60 pt-6 text-[12px] text-zinc-600">
-          Page reflects state at {POSTURE.currentVersion}. Audit and finding counts are tracked in{' '}
+          Audit and finding counts are tracked in{' '}
           <a
             href="https://github.com/ovexro/dockpanel/blob/main/SECURITY.md"
             className="text-[#6b6b74] underline underline-offset-2 hover:text-[#a3a3ad]"
