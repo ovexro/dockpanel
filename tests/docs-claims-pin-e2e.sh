@@ -112,12 +112,14 @@ else
   # the number the page publishes. This is the row most likely to rot: it
   # changes whenever anyone adds a pin.
   rows=0
+  sum=0
   while IFS='|' read -r _ name count _; do
     suite=$(tr -d ' `' <<<"$name")
     want=$(tr -d ' ' <<<"$count")
     [[ "$suite" =~ \.sh$ ]] || continue
     [[ "$want" =~ ^[0-9]+$ ]] || continue
     rows=$((rows+1))
+    sum=$((sum+want))
 
     if [ ! -f "tests/$suite" ]; then
       bad "docs/testing.md names tests/$suite, which does not exist"
@@ -142,6 +144,32 @@ else
     bad "no assertion-table rows parsed out of docs/testing.md — the table shape changed and this check went blind"
   else
     ok "assertion table parsed: $rows suites checked against live output"
+  fi
+
+  # The sentence introducing the table publishes its own totals ("Ten suites,
+  # 260 assertions"). Every row was verified above and that sentence was not, so
+  # it drifted: it read "Seven suites, 195 assertions" over an eight-row table
+  # summing to 228 — two published numbers, both wrong, in front of a table that
+  # was right. A number nothing derives is a number that rots.
+  prose=$(grep -oE '[A-Za-z]+ suites, \*\*[0-9]+ assertions\*\*' "$TESTING" | head -1)
+  if [ -z "$prose" ]; then
+    bad "no 'N suites, M assertions' summary found above the table — if it was removed, drop this check deliberately"
+  else
+    p_assert=$(printf '%s' "$prose" | grep -oE '[0-9]+')
+    p_suites=$(printf '%s' "$prose" | sed -E 's/ suites.*//')
+    words="one two three four five six seven eight nine ten eleven twelve"
+    n=0; want_word=""
+    for w in $words; do n=$((n+1)); [ "$n" -eq "$rows" ] && want_word="$w"; done
+    if [ "$p_assert" != "$sum" ]; then
+      bad "docs/testing.md's summary says $p_assert assertions; its own table sums to $sum"
+    else
+      ok "the summary's assertion total ($p_assert) matches the table it introduces"
+    fi
+    if [ -n "$want_word" ] && [ "$(printf '%s' "$p_suites" | tr 'A-Z' 'a-z')" != "$want_word" ]; then
+      bad "docs/testing.md's summary says '$p_suites suites'; the table has $rows rows ($want_word)"
+    else
+      ok "the summary's suite count matches the $rows rows in the table"
+    fi
   fi
 fi
 

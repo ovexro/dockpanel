@@ -70,6 +70,17 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 AGENT_SRC="$REPO_DIR/panel/agent"
 API_SRC="$REPO_DIR/panel/backend"
 CLI_SRC="$REPO_DIR/panel/cli"
+
+# Directories the agent unit declares in ReadWritePaths, with any `-` prefix
+# stripped. Derived from the unit that is about to be deployed (or, on a layout
+# with no repo tree, the one already installed) so this can never fall behind it.
+# Prints nothing if no unit is readable; callers must tolerate an empty result.
+agent_rwp_dirs() {
+    local unit="$AGENT_SRC/dockpanel-agent.service"
+    [ -f "$unit" ] || unit="/etc/systemd/system/dockpanel-agent.service"
+    [ -f "$unit" ] || return 0
+    sed -n 's/^ReadWritePaths=//p' "$unit" | tr ' ' '\n' | sed 's/^-//' | grep '^/' || true
+}
 FRONTEND_DIR="$REPO_DIR/panel/frontend"
 AGENT_BIN="/usr/local/bin/dockpanel-agent"
 API_BIN="/usr/local/bin/dockpanel-api"
@@ -319,18 +330,29 @@ log "Ensuring required directories exist..."
 mkdir -p /etc/dockpanel/ssl /var/run/dockpanel /var/backups/dockpanel
 mkdir -p /var/www/acme/.well-known/acme-challenge
 mkdir -p /var/lib/dockpanel/git
-# Directories needed by agent ReadWritePaths (created only if missing).
-# v2.8.13 expanded the RWP list — systemd fails the namespace mount on
-# missing entries, so pre-create everything the canonical unit references.
-# v2.28.0 added /etc/php: the agent writes per-site PHP-FPM pools to
-# /etc/php/{ver}/fpm/pool.d, and this loop runs BEFORE the unit is refreshed and
-# reloaded below, so the bind mount is in place by the time the agent restarts.
-# Without the mkdir an existing box that never installed PHP would fail the
-# namespace mount and the agent would not start at all.
-for d in /etc/postfix /etc/dovecot /var/vmail /var/spool/postfix /run/opendkim /var/lib/nginx \
-         /etc/cloudflared /etc/modsecurity /etc/fail2ban /etc/powerdns /etc/letsencrypt \
-         /var/cache/nginx/fastcgi /etc/php \
-         /etc/ufw /var/lib/ufw; do
+# Directories needed by agent ReadWritePaths (created only if missing), DERIVED
+# FROM THE UNIT ABOUT TO BE DEPLOYED rather than hand-copied.
+#
+# systemd fails the namespace mount on a missing UNPREFIXED entry, so the agent
+# would not start at all — loud. The dangerous half is the `-`-prefixed entries,
+# which mean "bind IF IT EXISTS": when absent, systemd skips them silently, the
+# unit starts and reports success, and every write beneath that path fails with
+# `Read-only file system` until the next restart. The namespace is fixed at
+# start, so creating the directory later does not rescue a running agent.
+#
+# This ran BEFORE the unit is refreshed and reloaded below, which is what makes
+# the ordering work: the directories exist by the time the agent restarts.
+#
+# It used to be a literal list, hand-mirrored from setup.sh, and it drifted —
+# /var/spool/cron reached the unit and setup.sh at s268 but never this loop, so
+# an upgraded box with no cron spool got a silently unwritable one and the cron
+# fix s268 shipped "so existing installs recover on upgrade" did not fully land
+# on exactly those installs. Deriving the list closes the class, not the case.
+for d in $(agent_rwp_dirs); do
+    [ -d "$d" ] || mkdir -p "$d" 2>/dev/null || true
+done
+# Paths the agent reaches through an escape hatch, or that are not RWP entries.
+for d in /run/opendkim /var/lib/nginx /var/cache/nginx/fastcgi; do
     [ -d "$d" ] || mkdir -p "$d" 2>/dev/null || true
 done
 echo "d /run/dockpanel 0755 root root -" > /etc/tmpfiles.d/dockpanel.conf 2>/dev/null || true

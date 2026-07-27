@@ -65,6 +65,10 @@ pub struct AppState {
     pub previous_token: Arc<RwLock<Option<(String, std::time::Instant)>>>,
     pub templates: Arc<Tera>,
     pub system: Arc<Mutex<System>>,
+    /// Whole-system CPU usage, sampled on a fixed cadence. Handlers must read
+    /// this rather than refreshing CPU themselves — see [`crate::services::cpu_sampler`]
+    /// for why a per-request refresh reports the caller's timing, not the load.
+    pub cpu: crate::services::cpu_sampler::CpuSampler,
     pub docker: Docker,
     pub network_snapshot: Arc<Mutex<Option<NetworkSnapshot>>>,
 }

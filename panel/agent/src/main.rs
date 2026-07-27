@@ -115,6 +115,12 @@ async fn main() {
     let mut sys = System::new_all();
     sys.refresh_all();
 
+    // CPU usage is sampled on its own fixed cadence rather than inside request
+    // handlers — a per-request refresh measures the gap since some unrelated
+    // caller, which is why an idle box could report ~99%. See the module docs.
+    let cpu_sampler = services::cpu_sampler::CpuSampler::new();
+    cpu_sampler.spawn();
+
     // Initialize shared Docker client
     let docker = Docker::connect_with_local_defaults()
         .expect("Failed to connect to Docker daemon");
@@ -125,6 +131,7 @@ async fn main() {
         previous_token: Arc::new(tokio::sync::RwLock::new(None)),
         templates,
         system: Arc::new(Mutex::new(sys)),
+        cpu: cpu_sampler.clone(),
         docker,
         network_snapshot: Arc::new(Mutex::new(None)),
     };
@@ -222,7 +229,7 @@ async fn main() {
     // Start phone-home if configured (remote agent mode)
     let remote_mode = if let Some(mut ph_config) = services::phone_home::PhoneHomeConfig::from_env() {
         ph_config.cert_fingerprint = Some(cert_fingerprint.clone());
-        tokio::spawn(services::phone_home::run(ph_config));
+        tokio::spawn(services::phone_home::run(ph_config, cpu_sampler.clone()));
         true
     } else {
         false

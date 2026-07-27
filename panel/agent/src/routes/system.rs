@@ -49,11 +49,13 @@ struct NetworkInfo {
 
 async fn system_info(State(state): State<AppState>) -> Json<SystemInfo> {
     let mut sys = state.system.lock().await;
-    sys.refresh_cpu_usage();
     sys.refresh_memory();
-    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
 
-    let cpu_usage = sys.global_cpu_usage();
+    // CPU is NOT refreshed here. A per-request refresh measures the interval
+    // since whichever unrelated caller last hit this endpoint — and this
+    // handler's own work lands inside that interval — so the answer tracked the
+    // request pattern instead of the load. The sampler owns a fixed window.
+    let cpu_usage = state.cpu.usage();
     let mem_total = sys.total_memory();
     let mem_used = sys.used_memory();
 
@@ -92,8 +94,10 @@ async fn system_info(State(state): State<AppState>) -> Json<SystemInfo> {
     let swap_total = sys.total_swap();
     let swap_used = sys.used_swap();
 
-    // Process count
-    let process_count = sys.processes().len();
+    // Process count, counted from /proc directly. Getting it from sysinfo means
+    // refreshing every process's stats — a full walk that cost ~70 ms of CPU per
+    // call and was the contaminant in the CPU window described above.
+    let process_count = crate::services::cpu_sampler::process_count();
 
     Json(SystemInfo {
         hostname: System::host_name().unwrap_or_default(),

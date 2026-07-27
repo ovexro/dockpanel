@@ -1,4 +1,5 @@
-use sysinfo::System;
+use crate::services::cpu_sampler::CpuSampler;
+use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use std::time::Duration;
 
 /// Configuration for phone-home mode (remote agent connecting to central API).
@@ -35,9 +36,26 @@ impl PhoneHomeConfig {
 }
 
 /// Collect system info for checkin payload.
-fn collect_system_info() -> serde_json::Value {
-    let mut sys = System::new_all();
-    sys.refresh_all();
+///
+/// `cpu` supplies the CPU figure. This function used to build a `System::new_all()`
+/// and read `global_cpu_usage()` off it, which reports the delta between the
+/// constructor's refresh and `refresh_all()`'s — a window consisting almost
+/// entirely of this function's own walk of `/proc`. Measured on an idle 12-core
+/// box whose true usage was 4.5%, that pattern returned anywhere from 4.5% to
+/// 22.1% across consecutive runs; on a single-core box the self-inflicted share
+/// is twelve times larger. The value lands in `servers.cpu_usage`, which the
+/// Servers page displays and the alert engine compares against CPU thresholds,
+/// so a fabricated number there fires (or withholds) real alerts.
+fn collect_system_info(cpu: &CpuSampler) -> serde_json::Value {
+    // Only what the payload reads: the CPU list (for its length) and memory.
+    // Refreshing processes here is what corrupted the CPU figure above, and
+    // nothing in the payload needs them.
+    let mut sys = System::new_with_specifics(
+        RefreshKind::nothing()
+            .with_cpu(CpuRefreshKind::nothing())
+            .with_memory(MemoryRefreshKind::everything()),
+    );
+    sys.refresh_memory();
 
     let disks = sysinfo::Disks::new_with_refreshed_list();
     let root_disk = disks
@@ -68,7 +86,7 @@ fn collect_system_info() -> serde_json::Value {
         "disk_usage_pct": disk_usage_pct,
         "agent_version": env!("CARGO_PKG_VERSION"),
         // Live metrics
-        "cpu_usage": sys.global_cpu_usage(),
+        "cpu_usage": cpu.usage(),
         "mem_used_mb": (sys.used_memory() / 1_048_576) as i64,
         "uptime_secs": System::uptime(),
         // Replay prevention: server rejects requests >120s old
@@ -77,7 +95,7 @@ fn collect_system_info() -> serde_json::Value {
 }
 
 /// Run the phone-home loop: periodically POST system info to central API.
-pub async fn run(config: PhoneHomeConfig) {
+pub async fn run(config: PhoneHomeConfig, cpu: CpuSampler) {
     tracing::info!(
         "Phone-home enabled: server_id={}, central={}",
         config.server_id,
@@ -103,7 +121,7 @@ pub async fn run(config: PhoneHomeConfig) {
     let checkin_url = format!("{}/api/agent/checkin", config.central_url);
 
     loop {
-        let mut info = collect_system_info();
+        let mut info = collect_system_info(&cpu);
         info["server_id"] = serde_json::json!(config.server_id);
         if let Some(fp) = &config.cert_fingerprint {
             info["cert_fingerprint"] = serde_json::json!(fp);

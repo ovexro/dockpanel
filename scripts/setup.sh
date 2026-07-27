@@ -52,6 +52,17 @@ AGENT_SRC="$REPO_DIR/panel/agent"
 API_SRC="$REPO_DIR/panel/backend"
 CLI_SRC="$REPO_DIR/panel/cli"
 
+# Directories the agent unit declares in ReadWritePaths, with any `-` prefix
+# stripped. The unit (panel/agent/dockpanel-agent.service) is the single source
+# of truth, so this can never fall behind it the way a hand-copied list does.
+# Prints nothing if no unit is readable; callers must tolerate an empty result.
+agent_rwp_dirs() {
+    local unit="$AGENT_SRC/dockpanel-agent.service"
+    [ -f "$unit" ] || unit="/etc/systemd/system/dockpanel-agent.service"
+    [ -f "$unit" ] || return 0
+    sed -n 's/^ReadWritePaths=//p' "$unit" | tr ' ' '\n' | sed 's/^-//' | grep '^/' || true
+}
+
 # ── Colors ───────────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -653,16 +664,29 @@ create_directories() {
     # Ensure socket directory persists across tmpfiles cleanup/reboot
     echo "d /run/dockpanel 0755 root root -" > /etc/tmpfiles.d/dockpanel.conf
 
-    # Create all directories/files required by systemd ReadWritePaths
-    # (these may not exist yet on a fresh install — services are installed later).
-    # systemd evaluates ReadWritePaths at unit start; missing dirs would fail
-    # the namespace mount, so pre-create everything the canonical agent unit lists.
-    mkdir -p /etc/postfix /etc/dovecot /var/vmail /var/spool/postfix /run/opendkim
-    mkdir -p /var/lib/nginx /etc/letsencrypt /var/lib/dpkg /var/cache/apt /var/lib/apt
-    mkdir -p /etc/php /var/spool/cron /var/lib/dockpanel/git /var/lib/dockpanel/recordings
-    mkdir -p /etc/cloudflared /etc/modsecurity /etc/fail2ban /etc/powerdns
-    mkdir -p /var/cache/nginx/fastcgi
-    mkdir -p /etc/ufw /var/lib/ufw
+    # Create all directories required by the agent unit's ReadWritePaths, DERIVED
+    # FROM THE UNIT rather than hand-mirrored here.
+    #
+    # Two different failure modes make this load-bearing, and the `-` prefix is
+    # what separates them:
+    #   * an UNPREFIXED entry that does not exist fails the namespace mount, and
+    #     the agent does not start at all — loud, and therefore self-correcting.
+    #   * a `-`-prefixed entry means "bind IF IT EXISTS". When it is absent
+    #     systemd skips it silently, the unit starts and reports success, and
+    #     every write under that path fails with `Read-only file system` for the
+    #     lifetime of the namespace. Creating the directory afterwards does not
+    #     help: the mount namespace is fixed at start, so only a restart recovers.
+    #
+    # This list was hand-copied into setup.sh AND update.sh and drifted (s269:
+    # /var/spool/cron reached the unit and setup.sh but never update.sh, so an
+    # upgraded box without a cron spool got a silently unwritable one — the exact
+    # defect s268 had just fixed, re-entering through the upgrade door).
+    # Deriving it from the single-source unit removes the drift, not one instance.
+    _rwp="$(agent_rwp_dirs)"
+    [ -n "$_rwp" ] && mkdir -p $_rwp
+    # Paths the agent reaches through an escape hatch or that are not RWP entries.
+    mkdir -p /run/opendkim /var/lib/nginx /var/lib/dpkg /var/cache/apt /var/lib/apt
+    mkdir -p /var/lib/dockpanel/git /var/lib/dockpanel/recordings /var/cache/nginx/fastcgi
     touch /etc/opendkim.conf /run/nginx.pid 2>/dev/null || true
 
     log "Directories created"
