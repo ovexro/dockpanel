@@ -4,6 +4,50 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.43.0] - 2026-07-27
+
+### Fixed
+
+- **Webmail showed an empty inbox on every install that already had it, and the
+  one mechanism meant to repair that wrote the broken configuration itself.**
+
+  The `/webmail/` nginx fragment is written only when you click Install. v2.36.0
+  fixed a real defect in its contents — without a re-declared header set the
+  location inherits the panel's `frame-ancestors 'none'`, Roundcube's content
+  frame is refused, and the resulting `SecurityError` aborts `list_mailbox`
+  before the message list is ever requested — but that fix reached nobody who
+  had already installed webmail. Worse, `update.sh` carried a hand-copied mirror
+  of the fragment, frozen at the v2.10.1 shape with no header set, and its heal
+  fired only when `sub_filter` was missing: a box with an older fragment was
+  *healed into* the broken shape, and a box with any v2.10.1–v2.35.x fragment
+  failed the guard and was left untouched indefinitely. Both halves of the only
+  recovery path therefore produced or preserved an empty inbox, on a mailbox
+  holding real mail.
+
+  The agent now owns the fragment outright and reconciles it against the current
+  template at startup, so an upgrade is all it takes. The shell mirror is
+  deleted rather than corrected — one writer is the fix. Verified before and
+  after on one box: 0 message rows with the frame blocked, then 3 rows and a
+  message opened and read, from an agent restart alone.
+
+- **The spam filter could not be installed on the RHEL family at all.** `rspamd`
+  is not in EPEL, so on a stock Rocky 9 with EPEL *and* CRB enabled the panel's
+  Install button returned `Unable to find a match: rspamd`. DockPanel now adds
+  upstream's rpm repository — on the RPM family only, since Debian and Ubuntu
+  package rspamd themselves and that path already worked.
+
+- **And once installed, Postfix never consulted it — on every family.** Rspamd
+  was wired into Postfix by replacing the literal
+  `smtpd_milters = unix:opendkim/opendkim.sock`, a value v2.41.0 stopped writing
+  when it moved OpenDKIM's milter to a loopback port. Replacing an absent string
+  returns the original unchanged, so `main.cf` was rewritten byte-identical and
+  the installer reported success; with `milter_default_action = accept`, mail
+  simply flowed unfiltered and nothing was logged. The milter list is now
+  derived from what the file actually contains rather than matched as a literal,
+  and a `main.cf` with no milter list is reported as an error instead of being
+  written back unchanged. Verified on the wire: a GTUBE test message is now
+  rejected by the milter at end-of-message.
+
 ## [2.42.0] - 2026-07-27
 
 ### Fixed

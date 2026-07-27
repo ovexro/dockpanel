@@ -759,6 +759,25 @@ pub async fn add_repo(repo: Repo) -> Result<(), String> {
                -o /etc/yum.repos.d/cloudflared.repo"
                 .to_string()
         }
+        (Repo::Rspamd, true) => {
+            // Never reached by design — see the enum comment. An explicit error
+            // beats silently adding an apt repo the archive already covers.
+            return Err("Rspamd is packaged by Debian and Ubuntu; no extra repository is needed".into());
+        }
+        (Repo::Rspamd, false) => {
+            // rspamd is NOT in EPEL — `dnf install rspamd` on a stock Rocky 9
+            // with EPEL *and* CRB enabled answers "Unable to find a match"
+            // (measured s270). Upstream publishes a per-major-version flat
+            // repo, keyed `centos-<major>` for the whole RHEL family.
+            let major = os_release_value("VERSION_ID")
+                .await
+                .and_then(|v| v.split('.').next().map(str::to_string))
+                .ok_or_else(|| "Cannot detect OS major version from /etc/os-release".to_string())?;
+            format!(
+                "curl -fsSL https://rspamd.com/rpm-stable/centos-{major}/rspamd.repo \
+                   -o /etc/yum.repos.d/rspamd.repo"
+            )
+        }
     };
 
     // **bash, not sh.** On Debian and Ubuntu `/bin/sh` is dash, which answers
@@ -798,6 +817,7 @@ pub async fn remove_repo(repo: Repo) {
             "/etc/apt/sources.list.d/cloudflared.list",
             "/etc/yum.repos.d/cloudflared.repo",
         ],
+        Repo::Rspamd => &["/etc/yum.repos.d/rspamd.repo"],
     };
     for p in paths {
         let _ = tokio::fs::remove_file(p).await;
@@ -808,6 +828,10 @@ pub async fn remove_repo(repo: Repo) {
 pub enum Repo {
     NodeSource,
     Cloudflared,
+    /// Rspamd upstream. **RHEL-family only** — Debian and Ubuntu carry rspamd
+    /// in their own archives (driven at s262), and adding a repo there would
+    /// change the family that already works to fix the one that does not.
+    Rspamd,
 }
 
 /// A value from `/etc/os-release`, or `None` when this release does not carry

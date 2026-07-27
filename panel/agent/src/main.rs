@@ -226,6 +226,13 @@ async fn main() {
     };
     tracing::info!("Agent TLS cert fingerprint (SHA-256): {cert_fingerprint}");
 
+    // Bring a pre-existing /webmail/ nginx fragment up to the current template.
+    // The fragment is written only on the Install click, so without this an
+    // existing install never receives a fix to its contents — which is how
+    // s262's header fix reached no box at all until s270. No-op when webmail
+    // was never installed.
+    tokio::spawn(routes::mail::heal_webmail_nginx());
+
     // Start phone-home if configured (remote agent mode)
     let remote_mode = if let Some(mut ph_config) = services::phone_home::PhoneHomeConfig::from_env() {
         ph_config.cert_fingerprint = Some(cert_fingerprint.clone());

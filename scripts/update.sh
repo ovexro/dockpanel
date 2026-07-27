@@ -605,45 +605,15 @@ if [ "$NGINX_NEEDS_RELOAD" = "1" ] || [ "$NGINX_NEEDS_RESTART" = "1" ]; then
     fi
 fi
 
-# ── v2.10.1: heal pre-v2.10.1 webmail nginx fragment ──────────────
-# v2.8.22 → v2.10.0 wrote a fragment without sub_filter — Roundcube's
-# root-anchored "/?_task=..." URLs leaked through to the panel SPA,
-# so Open landed on the dashboard and login form posted to /. Detect
-# the old shape (no sub_filter) and regenerate with the current
-# template; the agent only writes on Install click, so without this
-# migration users would have to Remove + Install Webmail to recover.
-WEBMAIL_FRAG="/etc/nginx/conf.d/dockpanel-panel.locations/webmail.conf"
-if [ -f "$WEBMAIL_FRAG" ] && ! grep -q "sub_filter" "$WEBMAIL_FRAG"; then
-    RCUBE_PORT=$(docker inspect --format '{{range $p, $b := .NetworkSettings.Ports}}{{range $b}}{{.HostPort}}{{end}}{{end}}' dockpanel-roundcube 2>/dev/null | head -1)
-    [ -z "$RCUBE_PORT" ] && RCUBE_PORT=8888
-    cat > "$WEBMAIL_FRAG" <<EOF
-# DockPanel webmail (Roundcube) reverse-proxy — managed by agent, do not edit
-# v2.10.1: sub_filter rewrites Roundcube's root-anchored URLs (form action,
-# comm_path) under /webmail/ so navigation doesn't land on the panel root.
-location /webmail/ {
-    proxy_pass http://127.0.0.1:${RCUBE_PORT}/;
-    proxy_http_version 1.1;
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-    proxy_set_header X-Forwarded-Host \$host;
-    proxy_set_header Accept-Encoding "";
-    proxy_redirect / /webmail/;
-    sub_filter '"/?_task=' '"/webmail/?_task=';
-    sub_filter_once off;
-    sub_filter_types text/html application/json application/javascript text/javascript;
-    proxy_read_timeout 300s;
-    client_max_body_size 25M;
-}
-EOF
-    if nginx -t > /dev/null 2>&1; then
-        nginx -s reload > /dev/null 2>&1 && log "Healed webmail nginx fragment to v2.10.1 shape (port ${RCUBE_PORT})"
-    else
-        log "WARN: webmail fragment heal failed nginx -t; reverting"
-        rm -f "$WEBMAIL_FRAG"
-    fi
-fi
+# ── webmail nginx fragment: healed by the AGENT, not here ─────────
+# This used to hold a hand-copied mirror of the fragment and rewrite it when
+# `sub_filter` was missing. The mirror froze at the v2.10.1 shape and never
+# learned the header set v2.36.0 added, so its "heal" produced a fragment whose
+# inherited `frame-ancestors 'none'` makes Roundcube render an empty inbox —
+# a repair that wrote the defect. The agent now owns the template outright
+# (`routes::mail::{webmail_nginx_block, heal_webmail_nginx}`) and reconciles the
+# file at startup, which this script triggers when it restarts the agent.
+# Do not reintroduce a copy of the fragment here; one writer is the fix.
 
 # Ensure BASE_URL is set in api.env for CORS.
 # The test MUST stay anchored to the start of the line. An unanchored substring

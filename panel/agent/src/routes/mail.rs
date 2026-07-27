@@ -95,6 +95,11 @@ const OPENDKIM_DROPIN_DIR: &str = "/etc/systemd/system/opendkim.service.d";
 /// spool arrangement is Debian-only and SELinux-forbidden on RHEL.
 const OPENDKIM_SOCKET: &str = "inet:8891@127.0.0.1";
 const OPENDKIM_MILTER: &str = "inet:127.0.0.1:8891";
+/// Rspamd's milter endpoint — the bind of its `rspamd_proxy` worker in milter
+/// mode, which is what Postfix talks to. Named alongside [`OPENDKIM_MILTER`]
+/// on purpose: these two are the only values `smtpd_milters` ever holds, and
+/// keeping them together is what stops one moving without the other.
+const RSPAMD_MILTER: &str = "inet:127.0.0.1:11332";
 const KEY_TABLE: &str = "/etc/dockpanel/dkim/key.table";
 const SIGNING_TABLE: &str = "/etc/dockpanel/dkim/signing.table";
 /// Ports the mail stack listens on once installed. Opened in the firewall by
@@ -1232,9 +1237,72 @@ async fn queue_delete(
 
 // ── Rspamd spam filter ───────────────────────────────────────────────────
 
+/// Append `milter` to Postfix's `smtpd_milters` / `non_smtpd_milters` lists,
+/// preserving whatever endpoint is already configured.
+///
+/// Reads the value that is actually on the line rather than matching a literal,
+/// so a change to [`OPENDKIM_MILTER`] can never silently orphan this edit the
+/// way it did between s268 and s270.
+///
+/// Returns `None` when neither key is present — that means Postfix has no mail
+/// configuration to extend, which the caller must treat as an error rather than
+/// writing a file back unchanged. Idempotent: a milter already in the list is
+/// left exactly once.
+fn add_milter(main_cf: &str, milter: &str) -> Option<String> {
+    let mut found = false;
+    let rewritten: Vec<String> = main_cf
+        .lines()
+        .map(|line| {
+            for key in ["smtpd_milters", "non_smtpd_milters"] {
+                let Some(rest) = line.strip_prefix(key) else { continue };
+                let Some(value) = rest.trim_start().strip_prefix('=') else { continue };
+                found = true;
+                let value = value.trim();
+                if value.split(',').any(|m| m.trim() == milter) {
+                    return line.to_string();
+                }
+                return if value.is_empty() {
+                    format!("{key} = {milter}")
+                } else {
+                    format!("{key} = {value}, {milter}")
+                };
+            }
+            line.to_string()
+        })
+        .collect();
+    if !found {
+        return None;
+    }
+    let mut out = rewritten.join("\n");
+    if main_cf.ends_with('\n') {
+        out.push('\n');
+    }
+    Some(out)
+}
+
 /// POST /mail/rspamd/install — Install and configure Rspamd.
 async fn rspamd_install() -> Result<Json<serde_json::Value>, ApiErr> {
     tracing::info!("Installing Rspamd spam filter...");
+
+    // rspamd is not in EPEL. On a stock Rocky 9 with EPEL *and* CRB enabled,
+    // `dnf install rspamd` answers "Unable to find a match: rspamd" — so the
+    // spam filter could never be installed on the RHEL family at all, and the
+    // panel offered the button anyway (measured s270). Upstream publishes an
+    // rpm repo; add it only when the package is genuinely unreachable, so a
+    // box that already carries rspamd from anywhere else is left alone.
+    //
+    // Gated on the RPM family EXPLICITLY, not on the availability probe alone.
+    // Debian and Ubuntu package rspamd themselves and that path has worked
+    // since s262 — if a probe failure were allowed to reach `add_repo` there it
+    // would break the family that works in order to fix the one that does not,
+    // which is exactly lesson #95c.
+    if crate::services::pkg::manager().await == crate::services::pkg::PkgMgr::Rpm
+        && !crate::services::pkg::available("rspamd").await
+    {
+        crate::services::pkg::add_repo(crate::services::pkg::Repo::Rspamd)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Could not add the Rspamd repository: {e}")))?;
+    }
 
     // Install rspamd through the package abstraction. Another call site s266's
     // conversion missed: it shelled to `apt-get` directly AND passed
@@ -1244,19 +1312,31 @@ async fn rspamd_install() -> Result<Json<serde_json::Value>, ApiErr> {
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Rspamd install failed: {e}")))?;
 
-    // Configure Rspamd milter for Postfix
+    // Wire Rspamd's milter alongside whatever milter is already configured.
+    //
+    // This was a literal string replace against
+    // `smtpd_milters = unix:opendkim/opendkim.sock`. s268 moved OpenDKIM's
+    // milter to a loopback port because the Unix socket lived inside Postfix's
+    // chroot — a Debian arrangement SELinux forbids on RHEL — and this sibling
+    // kept matching the old literal. `str::replace` with an absent needle
+    // returns the string UNCHANGED, so main.cf was rewritten byte-identical,
+    // the handler reported success, and Postfix never consulted Rspamd on ANY
+    // family. Deriving the edit from the line that is actually present cannot
+    // rot the same way; see [`add_milter`].
     let main_cf = tokio::fs::read_to_string("/etc/postfix/main.cf").await.unwrap_or_default();
-    if !main_cf.contains("rspamd") {
-        // Add Rspamd milter (alongside OpenDKIM)
-        let new_cf = main_cf.replace(
-            "smtpd_milters = unix:opendkim/opendkim.sock",
-            "smtpd_milters = unix:opendkim/opendkim.sock, inet:localhost:11332"
-        ).replace(
-            "non_smtpd_milters = unix:opendkim/opendkim.sock",
-            "non_smtpd_milters = unix:opendkim/opendkim.sock, inet:localhost:11332"
-        );
-        write_file_atomic("/etc/postfix/main.cf", &new_cf).await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Config write failed: {e}")))?;
+    match add_milter(&main_cf, RSPAMD_MILTER) {
+        Some(new_cf) => {
+            if new_cf != main_cf {
+                write_file_atomic("/etc/postfix/main.cf", &new_cf).await
+                    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Config write failed: {e}")))?;
+            }
+        }
+        // No milter list at all means the mail server was never installed.
+        // Silently writing nothing is what produced the defect above.
+        None => return Err(err(
+            StatusCode::PRECONDITION_FAILED,
+            "Postfix has no smtpd_milters setting — install the mail server before the spam filter",
+        )),
     }
 
     // Enable and start. The Redis UNIT is `redis-server` on Debian and `redis`
@@ -1352,20 +1432,22 @@ fn panel_server_name() -> Option<String> {
     None
 }
 
-/// Write the `/webmail/` reverse-proxy nginx fragment into the panel-locations
-/// drop-in dir, validate with `nginx -t`, reload on success. Unlinks the
-/// fragment if validation fails — never leaves nginx in a broken state.
-async fn write_webmail_nginx(port: u16) -> Result<(), ApiErr> {
-    if let Err(e) = std::fs::create_dir_all(WEBMAIL_NGINX_DIR) {
-        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to create {WEBMAIL_NGINX_DIR}: {e}")));
-    }
+/// The `/webmail/` reverse-proxy fragment, for a given Roundcube host port.
+///
+/// **The single source of this file's contents.** `scripts/update.sh` used to
+/// carry a hand-copied mirror of it, which is precisely how it rotted: the
+/// mirror was frozen at the v2.10.1 shape and never learned the header set
+/// v2.36.0 added, so its "heal" wrote a fragment that renders the inbox empty.
+/// Callers that need the file on disk go through [`write_webmail_nginx`] or
+/// [`heal_webmail_nginx`]; nothing else may spell this block out.
+fn webmail_nginx_block(port: u16) -> String {
     // v2.10.1: Roundcube emits root-anchored URLs (form action="/?_task=...",
     // JS comm_path="/?_task=..."). Without sub_filter, browser navigation
     // and AJAX from Roundcube hit the panel's `location /` (the React SPA),
     // not /webmail/ — symptom: Open lands on dashboard, login form posts
     // to /?_task=login. proxy_redirect handles 30x Location: headers from
     // Roundcube; sub_filter rewrites embedded URLs in HTML/JSON bodies.
-    let block = format!(
+    format!(
         "# DockPanel webmail (Roundcube) reverse-proxy — managed by agent, do not edit\n\
          # v2.10.1: sub_filter rewrites Roundcube's root-anchored URLs (form action,\n\
          # comm_path) under /webmail/ so navigation doesn't land on the panel root.\n\
@@ -1400,7 +1482,17 @@ async fn write_webmail_nginx(port: u16) -> Result<(), ApiErr> {
          \x20   add_header Content-Security-Policy \"frame-ancestors 'self'\" always;\n\
          \x20   add_header X-XSS-Protection \"1; mode=block\" always;\n\
          }}\n"
-    );
+    )
+}
+
+/// Write the `/webmail/` reverse-proxy nginx fragment into the panel-locations
+/// drop-in dir, validate with `nginx -t`, reload on success. Unlinks the
+/// fragment if validation fails — never leaves nginx in a broken state.
+async fn write_webmail_nginx(port: u16) -> Result<(), ApiErr> {
+    if let Err(e) = std::fs::create_dir_all(WEBMAIL_NGINX_DIR) {
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to create {WEBMAIL_NGINX_DIR}: {e}")));
+    }
+    let block = webmail_nginx_block(port);
     if let Err(e) = std::fs::write(WEBMAIL_NGINX_CONF, &block) {
         return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write {WEBMAIL_NGINX_CONF}: {e}")));
     }
@@ -1415,6 +1507,56 @@ async fn write_webmail_nginx(port: u16) -> Result<(), ApiErr> {
         tracing::warn!("nginx reload failed after webmail install: {e}");
     }
     Ok(())
+}
+
+/// Bring an existing `/webmail/` fragment up to the current template.
+///
+/// The fragment is written only on the Install click, so a fix to its contents
+/// reaches nobody who already installed webmail. That is how s262's fix — the
+/// re-declared header set, without which the location inherits the panel's
+/// `frame-ancestors 'none'`, the Roundcube content frame is refused, and
+/// `clear_message_list` throws a SecurityError that aborts `list_mailbox`
+/// before the list is ever requested — never arrived on a single existing box.
+/// `update.sh` had a heal for the *previous* shape and it made this worse: it
+/// fired only when `sub_filter` was absent and wrote the v2.10.1 shape, which
+/// is exactly the shape that renders the inbox empty.
+///
+/// Runs at agent startup, so an upgrade is all it takes. Rewrites only when the
+/// on-disk bytes differ from the template, and only when the fragment already
+/// exists — this never installs webmail for someone who does not have it.
+pub async fn heal_webmail_nginx() {
+    if !Path::new(WEBMAIL_NGINX_CONF).exists() {
+        return;
+    }
+    let Ok(current) = std::fs::read_to_string(WEBMAIL_NGINX_CONF) else { return };
+
+    // Keep the port the box is actually serving on. Falling back to the default
+    // would silently repoint the proxy at nothing on a box that chose another.
+    let port = current
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("proxy_pass http://127.0.0.1:"))
+        .and_then(|rest| rest.split('/').next())
+        .and_then(|p| p.trim().parse::<u16>().ok())
+        .unwrap_or(8888);
+
+    let desired = webmail_nginx_block(port);
+    if current == desired {
+        return;
+    }
+    if std::fs::write(WEBMAIL_NGINX_CONF, &desired).is_err() {
+        return;
+    }
+    match safe_command("nginx").args(["-t"]).output().await {
+        Ok(out) if out.status.success() => {
+            let _ = safe_command("nginx").args(["-s", "reload"]).output().await;
+            tracing::info!("Healed the /webmail/ nginx fragment to the current template (port {port})");
+        }
+        _ => {
+            // Never leave nginx unable to start: put back exactly what was there.
+            let _ = std::fs::write(WEBMAIL_NGINX_CONF, &current);
+            tracing::warn!("Webmail fragment heal failed nginx -t; restored the previous fragment");
+        }
+    }
 }
 
 async fn remove_webmail_nginx() {
@@ -1996,4 +2138,56 @@ async fn write_dovecot_users(content: &str) -> Result<(), String> {
     let _ = safe_command("chown").args(["root:dovecot", &tmp_path]).output().await;
     tokio::fs::rename(&tmp_path, DOVECOT_USERS).await.map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The regression this helper exists for: between s268 and s270 the value
+    /// on the line was `inet:127.0.0.1:8891`, and the old code matched the
+    /// literal `unix:opendkim/opendkim.sock`. Whatever OpenDKIM's endpoint is,
+    /// Rspamd's must end up beside it.
+    #[test]
+    fn appends_beside_whatever_milter_is_already_there() {
+        for existing in [OPENDKIM_MILTER, "unix:opendkim/opendkim.sock", "inet:localhost:8891"] {
+            let cf = format!("mydomain = x\nsmtpd_milters = {existing}\nnon_smtpd_milters = {existing}\n");
+            let out = add_milter(&cf, RSPAMD_MILTER).expect("milter keys present");
+            assert!(out.contains(&format!("smtpd_milters = {existing}, {RSPAMD_MILTER}")), "got: {out}");
+            assert!(out.contains(&format!("non_smtpd_milters = {existing}, {RSPAMD_MILTER}")), "got: {out}");
+            assert!(out.ends_with('\n'));
+        }
+    }
+
+    #[test]
+    fn is_idempotent() {
+        let cf = format!("smtpd_milters = {OPENDKIM_MILTER}\nnon_smtpd_milters = {OPENDKIM_MILTER}\n");
+        let once = add_milter(&cf, RSPAMD_MILTER).unwrap();
+        let twice = add_milter(&once, RSPAMD_MILTER).unwrap();
+        assert_eq!(once, twice);
+        assert_eq!(twice.matches(RSPAMD_MILTER).count(), 2);
+    }
+
+    /// No milter list at all means mail was never installed. Returning `None`
+    /// is what lets the caller fail loudly instead of writing back a file it
+    /// did not change — the silent no-op that hid the defect for two ships.
+    #[test]
+    fn absent_keys_report_absence_rather_than_a_no_op() {
+        assert!(add_milter("mydomain = example.com\n", RSPAMD_MILTER).is_none());
+        assert!(add_milter("", RSPAMD_MILTER).is_none());
+    }
+
+    /// A commented-out or lookalike key must not be treated as the setting.
+    #[test]
+    fn ignores_comments_and_lookalike_keys() {
+        assert!(add_milter("# smtpd_milters = inet:127.0.0.1:8891\n", RSPAMD_MILTER).is_none());
+        assert!(add_milter("smtpd_milters_extra = x\n", RSPAMD_MILTER).is_none());
+    }
+
+    #[test]
+    fn fills_an_empty_list_without_a_leading_comma() {
+        let out = add_milter("smtpd_milters =\n", RSPAMD_MILTER).unwrap();
+        assert!(out.contains(&format!("smtpd_milters = {RSPAMD_MILTER}")), "got: {out}");
+        assert!(!out.contains(", "), "got: {out}");
+    }
 }
