@@ -10,7 +10,6 @@ import {
   Palette, Star, ArrowRight, Menu, ScanSearch, BadgeCheck
 } from 'lucide-react';
 
-const hd = "font-['Space_Grotesk',system-ui,sans-serif]";
 
 /* ── Animated counter ─────────────────────────────────────────────── */
 function Counter({ value, suffix = '', delay = 0 }: { value: number; suffix?: string; delay?: number }) {
@@ -73,7 +72,11 @@ function AnimatedTerminal() {
           { text: '  Configuring nginx & PostgreSQL...', cls: 'text-zinc-600', delay: 500 },
           { text: '  Starting services...', cls: 'text-zinc-600', delay: 400 },
           { text: '\u00A0', cls: '', delay: 250 },
-          { text: '\u2713 DockPanel v2.8.0 installed in 47s', cls: 'text-emerald-400 font-medium', delay: 350 },
+          // No version number here. It said "v2.8.0" \u2014 thirty-six releases
+          // stale \u2014 because a hardcoded version in a decorative animation is
+          // something nobody ever remembers to bump. The elapsed time is the
+          // point of the line anyway.
+          { text: '\u2713 DockPanel installed in 47s', cls: 'text-emerald-400 font-medium', delay: 350 },
           { text: '  Panel \u2192 https://your-server:3080', cls: 'text-zinc-300', delay: 200 },
         ];
 
@@ -93,18 +96,20 @@ function AnimatedTerminal() {
   }, [inView]);
 
   return (
-    <div ref={ref} className="w-full max-w-2xl mx-auto rounded-xl overflow-hidden border border-zinc-800 bg-zinc-950 shadow-2xl shadow-black/50">
-      <div className="h-9 bg-zinc-900 border-b border-zinc-800 flex items-center px-3.5 gap-2">
-        <div className="w-2.5 h-2.5 rounded-full bg-[#ff5f57]" />
-        <div className="w-2.5 h-2.5 rounded-full bg-[#febc2e]" />
-        <div className="w-2.5 h-2.5 rounded-full bg-[#28c840]" />
-        <span className="flex-1 text-center text-[11px] text-zinc-600 font-medium select-none">Terminal</span>
+    // No macOS traffic lights. This product manages Linux servers, and a fake
+    // Mac window frame around a root shell is a costume \u2014 it was on the hero
+    // terminal and on all five product screenshots. What replaces it is the
+    // thing a real session actually shows: who you are and where you are.
+    <div ref={ref} className="w-full max-w-3xl border border-[#1e1e22] bg-[#0d0d0f]">
+      <div className="mono text-[11px] text-[#3f3f46] px-4 py-2.5 border-b border-[#1e1e22] flex items-center justify-between">
+        <span>root@srv1:~</span>
+        <span aria-hidden="true">{phase === 'done' ? 'exit 0' : 'ssh'}</span>
       </div>
       <div className="p-4 sm:p-5 font-mono text-[13px] leading-relaxed min-h-[220px]">
         {phase === 'typing' && (
           <div>
-            <span className="text-zinc-600">$ </span>
-            <span className="text-zinc-300">{typing}</span>
+            <span className="text-[#3f3f46]">$ </span>
+            <span className="text-[#e4e4e7]">{typing}</span>
             <span className="terminal-cursor">{'\u2588'}</span>
           </div>
         )}
@@ -282,7 +287,7 @@ export default function Landing() {
   };
 
   return (
-    <div className="noise min-h-screen bg-[#09090b] text-zinc-400 selection:bg-white/15 selection:text-white overflow-x-hidden">
+    <div className="min-h-screen bg-[#0a0a0b] text-[#a3a3ad] selection:bg-white/15 selection:text-white overflow-x-hidden">
 
       {/* ── Lightbox ─────────────────────────────────────────────── */}
       <AnimatePresence>
@@ -312,7 +317,7 @@ export default function Landing() {
             <div className="w-7 h-7 rounded-md bg-white flex items-center justify-center">
               <Server className="w-4 h-4 text-zinc-900" />
             </div>
-            <span className={`text-lg font-bold text-white ${hd}`}>DockPanel</span>
+            <span className="text-[17px] font-semibold text-[#f4f4f5] tracking-[-0.01em]">DockPanel</span>
           </Link>
           <div className="hidden md:flex items-center gap-8 text-[13px] font-medium text-zinc-500">
             <NavLink href="#features" label="Features" active={activeSection === 'features'} />
@@ -376,220 +381,283 @@ export default function Landing() {
         )}
       </AnimatePresence>
 
-      {/* ── Hero ──────────────────────────────────────────────────── */}
-      <section className="relative pt-28 sm:pt-36 lg:pt-44 pb-4 overflow-hidden hero-grid">
-        {/* top vignette */}
-        <div className="absolute inset-0 bg-gradient-to-b from-[#09090b] via-transparent to-[#09090b] pointer-events-none" />
+      {/* ── Hero ──────────────────────────────────────────────────────────
+          Rebuilt s271. It was a centred column: two pill badges, an 88px
+          headline, a centred subhead, a centred command, two centred
+          buttons. Every landing page in this category looks like that.
 
-        <div className="max-w-7xl mx-auto px-6 relative z-10">
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}
-            className="text-center max-w-3xl mx-auto"
-          >
-            <div className="flex items-center justify-center gap-2 mb-6">
-              <span className="inline-flex items-center px-3 py-1 text-[11px] font-medium text-zinc-400 bg-zinc-800/50 border border-zinc-800 rounded-full">
-                Open source
-              </span>
-              <span className="inline-flex items-center px-3 py-1 text-[11px] font-medium text-zinc-500 bg-zinc-900/50 border border-zinc-800/50 rounded-full">
-                Written in Rust
-              </span>
-            </div>
-
-            <h1 className={`text-[3.5rem] sm:text-[5rem] lg:text-[5.5rem] font-bold text-white leading-[1.02] tracking-[-0.04em] mb-7 ${hd}`}>
-              Server management.<br />
-              <span className="text-zinc-500"><Counter value={57} delay={0.5} />&nbsp;megabytes.</span>
-            </h1>
-
-            <p className="text-lg sm:text-xl text-zinc-400 leading-relaxed mb-10 max-w-2xl mx-auto">
-              Sites, Docker apps, databases, email, monitoring, security, backups, and Git deploys &mdash; one install, one binary, <span className="text-white font-medium">zero cost.</span>
-            </p>
-
-            <div className="mb-7 flex flex-col items-center">
-              <div className="install-glow inline-flex items-center bg-zinc-900 border border-zinc-800 rounded-lg p-1 hover:border-zinc-700 transition-colors">
-                <span className="px-3 text-zinc-600 font-mono text-sm select-none">$</span>
-                <code className="text-zinc-300 font-mono text-sm pr-3">
-                  curl -sL dockpanel.dev/install.sh | sudo bash
-                </code>
-                <button onClick={handleCopy} className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-md text-xs text-zinc-300 font-medium transition-colors flex items-center gap-1.5">
-                  {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                  {copied ? 'Copied' : 'Copy'}
-                </button>
-              </div>
-              <p className="text-[11px] text-zinc-600 mt-2.5 tracking-wide font-medium">Ubuntu &middot; Debian &middot; CentOS &middot; Rocky &middot; AlmaLinux &middot; Fedora &middot; ARM64</p>
-            </div>
-
-            <div className="flex items-center justify-center gap-3">
-              <a href="https://docs.dockpanel.dev" className="flex items-center gap-2 bg-white hover:bg-zinc-200 text-zinc-900 px-6 py-3 rounded-lg text-[15px] font-bold transition-colors">
-                Get Started <ArrowRight className="w-4 h-4" />
-              </a>
-              <a href="https://github.com/ovexro/dockpanel" className="flex items-center gap-2 text-[15px] font-medium text-zinc-300 hover:text-white px-5 py-3 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-900/50 transition-all">
-                <Github className="w-4 h-4" /> Source
-              </a>
-            </div>
-          </motion.div>
-
-          {/* Terminal */}
-          <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.7, delay: 0.2 }}
-            className="mt-14"
-          >
-            <AnimatedTerminal />
-          </motion.div>
-
-          {/* Dashboard screenshot */}
-          <motion.div
-            initial={{ opacity: 0, y: 40 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.8, delay: 0.4 }}
-            className="mt-10 relative"
-          >
-            <div className="max-w-5xl mx-auto rounded-xl overflow-hidden border border-zinc-800/60 shadow-2xl shadow-black/60">
-              <div className="h-8 bg-zinc-900 border-b border-zinc-800/60 flex items-center px-3.5 gap-2">
-                <div className="w-2.5 h-2.5 rounded-full bg-[#ff5f57]" />
-                <div className="w-2.5 h-2.5 rounded-full bg-[#febc2e]" />
-                <div className="w-2.5 h-2.5 rounded-full bg-[#28c840]" />
-              </div>
-              <img src="/screenshots/dp-dashboard.png" alt="DockPanel Dashboard" className="w-full block" />
-            </div>
-            <div className="absolute bottom-0 left-0 right-0 h-40 bg-gradient-to-t from-[#09090b] to-transparent pointer-events-none" />
-          </motion.div>
-        </div>
-      </section>
-
-      {/* ── Numbers ──────────────────────────────────────────────── */}
-      <section className="border-y border-zinc-800/60 bg-zinc-950/50 glow-divider">
-        <div className="max-w-7xl mx-auto px-6 py-8">
-          <div className="flex flex-wrap items-center justify-between gap-y-4 gap-x-4">
-            {[
-              { v: 41, s: '~', e: 'MB', l: 'binary' },
-              { v: 57, s: '~', e: 'MB', l: 'RAM' },
-              { v: 60, s: '<', e: 's', l: 'install' },
-              { v: 153, s: '', e: '', l: 'templates' },
-              { v: 26, s: '', e: '', l: 'modules' },
-              { v: 7, s: '', e: '', l: 'security audits' },
-            ].map((s, i) => (
-              <div key={i} className="flex items-baseline gap-1.5">
-                <span className={`text-2xl font-bold text-white tabular-nums ${hd}`}>
-                  {s.s}<Counter value={s.v} />{s.e}
-                </span>
-                <span className="text-[11px] text-zinc-600 font-medium">{s.l}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ── How it works ─────────────────────────────────────────── */}
-      <section className="py-20 lg:py-28">
-        <div className="max-w-4xl mx-auto px-6">
-          <motion.div initial={{ opacity: 0, y: 15 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
-            className="text-center mb-14"
-          >
-            <h2 className={`text-[2rem] sm:text-[2.5rem] font-bold text-white leading-tight tracking-tight ${hd}`}>
-              How it works.
-            </h2>
-          </motion.div>
-
-          <div className="grid md:grid-cols-3 gap-6 md:gap-8">
-            {steps.map((step, i) => (
-              <motion.div key={i}
-                initial={{ opacity: 0, y: 15 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ duration: 0.4, delay: i * 0.15 }}
-                className="text-center"
-              >
-                <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 mb-4">
-                  <step.icon className="w-5 h-5 text-zinc-300" />
-                </div>
-                <div className="text-[11px] font-bold text-zinc-600 uppercase tracking-widest mb-2">Step {i + 1}</div>
-                <h3 className={`text-xl font-bold text-white mb-2 ${hd}`}>{step.title}</h3>
-                <p className="text-[14px] text-zinc-500 leading-relaxed">{step.desc}</p>
-              </motion.div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ── Feature showcase (bento grid) ────────────────────────── */}
-      <section id="features" className="py-28 lg:py-36 border-t border-zinc-800/60 glow-divider">
+          The thesis here is the SPEC SHEET, because the product's entire
+          argument is a set of measurements — and a spec sheet is left-aligned
+          by nature. The headline states the claim, the figures beside it are
+          the evidence, and the install command is the largest interactive
+          thing on the screen because copying it is the only thing a visitor
+          is here to do.                                                    */}
+      <section className="relative pt-24 sm:pt-32 lg:pt-40 pb-4">
         <div className="max-w-7xl mx-auto px-6">
-          <motion.div initial={{ opacity: 0, y: 15 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
-            className="text-center mb-14"
+          <motion.div
+            initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+            className="grid lg:grid-cols-12 gap-y-12 lg:gap-x-16 items-start"
           >
-            <h2 className={`text-[2.5rem] sm:text-[3rem] font-bold text-white leading-tight tracking-tight ${hd}`}>
-              What you get.
-            </h2>
-            <p className="text-zinc-500 text-[15px] mt-3">Four pillars. Hundreds of features. One binary.</p>
+            <div className="lg:col-span-7">
+              {/* Was two pill badges. A licence and an implementation language
+                  are facts, so they are set as facts, in the margin. */}
+              <p className="eyebrow mb-7">Open source &nbsp;·&nbsp; Written in Rust</p>
+
+              {/* Every clause here is checkable against the table beside it.
+                  A first draft read "…one binary you can fit on a floppy",
+                  which is a nice sentence about a 41 MB binary and a 1.44 MB
+                  disk, i.e. false by a factor of twenty-eight. Specific beats
+                  clever, and on a page whose entire argument is measurement,
+                  one decorative exaggeration discredits the real figures. */}
+              <h1 className="text-[2.5rem] sm:text-[3.25rem] lg:text-[3.75rem] font-semibold text-[#f4f4f5] leading-[1.06] tracking-[-0.03em]">
+                Everything a server needs,
+                <br />in one static binary
+                <span className="text-[#6b6b74]">
+                  <br />with nothing underneath.
+                </span>
+              </h1>
+
+              <p className="mt-7 text-[17px] sm:text-lg leading-relaxed text-[#a3a3ad] max-w-xl">
+                Sites, Docker apps, databases, email, monitoring, security, backups
+                and Git deploys. One install, no runtime to keep alive, nothing to pay.
+              </p>
+            </div>
+
+            {/* The evidence, as an instrument reads it. Mono, tabular, ruled —
+                and labelled precisely enough that "57 MB" can no longer be
+                mistaken for the download size, which is what the old headline
+                did by putting the RAM figure next to the product name. */}
+            <dl className="lg:col-span-5 mono text-sm border-t border-[#1e1e22]">
+              {[
+                ['binary on disk', '41', 'MB', 'statically linked, no libc'],
+                ['memory at idle', '57', 'MB', 'measured on the demo box'],
+                ['install to login', '47', 's', 'Ubuntu 24.04, 1 vCPU'],
+                ['runtime deps', '0', '', 'no Node, no Python, no PHP'],
+              ].map(([label, n, unit, note]) => (
+                <div key={label} className="flex items-baseline justify-between gap-4 py-3.5 border-b border-[#1e1e22]">
+                  <dt className="text-[#6b6b74] shrink-0">{label}</dt>
+                  <dd className="flex items-baseline gap-3 min-w-0">
+                    <span className="hidden sm:block text-[11px] text-[#3f3f46] truncate">{note}</span>
+                    <span className="tnum text-[#f4f4f5] tabular-nums text-base">
+                      {n}<span className="text-[#6b6b74] ml-0.5">{unit}</span>
+                    </span>
+                  </dd>
+                </div>
+              ))}
+            </dl>
           </motion.div>
 
-          <div className="grid md:grid-cols-2 gap-4">
+          {/* The command. Full width of the text column, monospaced, and big
+              enough to read across a room — it is the product's front door. */}
+          <motion.div
+            initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.12, ease: [0.16, 1, 0.3, 1] }}
+            className="mt-14 max-w-3xl"
+          >
+            <div className="flex items-stretch border border-[#1e1e22] bg-[#101012] hover:border-[#2a2a30] transition-colors">
+              <span className="mono select-none px-4 sm:px-5 flex items-center text-[#3f3f46] border-r border-[#1e1e22]">$</span>
+              <code className="mono flex-1 min-w-0 overflow-x-auto whitespace-nowrap px-4 sm:px-5 py-4 text-[13px] sm:text-[15px] text-[#f4f4f5]">
+                curl -sL dockpanel.dev/install.sh | sudo bash
+              </code>
+              <button
+                onClick={handleCopy}
+                aria-label="Copy the install command"
+                className="mono shrink-0 px-4 sm:px-5 text-xs text-[#a3a3ad] hover:text-[#f4f4f5] hover:bg-[#16161a] border-l border-[#1e1e22] transition-colors flex items-center gap-2"
+              >
+                {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                {copied ? 'copied' : 'copy'}
+              </button>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-3">
+              <a href="https://docs.dockpanel.dev" className="text-sm font-medium text-[#f4f4f5] underline decoration-[#3f3f46] hover:decoration-[#f4f4f5] underline-offset-4 transition-colors">
+                Read the docs
+              </a>
+              <a href="https://github.com/ovexro/dockpanel" className="text-sm font-medium text-[#a3a3ad] hover:text-[#f4f4f5] transition-colors inline-flex items-center gap-1.5">
+                <Github className="w-3.5 h-3.5" /> Source
+              </a>
+              <p className="mono text-[11px] text-[#3f3f46] ml-auto">
+                ubuntu · debian · rocky · alma · centos · fedora · arm64
+              </p>
+            </div>
+          </motion.div>
+
+          {/* The dashboard, shown at a size where it can actually be read.
+              The macOS traffic-light chrome is gone: this product runs on
+              Linux servers, and a fake Mac window frame is a costume. */}
+          <motion.figure
+            initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, delay: 0.24, ease: [0.16, 1, 0.3, 1] }}
+            className="mt-20 lg:mt-24"
+          >
+            <img
+              src="/screenshots/dp-dashboard.png"
+              alt="The DockPanel dashboard: CPU, memory and disk over 24 hours, with uptime, sites, databases and container counts beneath."
+              className="w-full block border border-[#1e1e22]"
+            />
+            {/* Names no host. The demo box is private, and a landing page is
+                the wrong place to point traffic at it. */}
+            <figcaption className="mono text-[11px] text-[#3f3f46] mt-3">
+              the dashboard, unmodified — a real box, real numbers
+            </figcaption>
+          </motion.figure>
+        </div>
+      </section>
+
+      {/* ── Install ───────────────────────────────────────────────────────
+          Was two sections: a strip of six evenly-spaced counters, then
+          "How it works." as three centred columns of icon chips under
+          STEP 1 / STEP 2 / STEP 3.
+
+          The counter strip went because the hero's spec table already states
+          those figures, better labelled — and repeating a number is how the
+          two copies start disagreeing.
+
+          The steps went because an icon in a rounded square is a picture of
+          nothing. Installing IS a terminal session, so the terminal plays it:
+          the real command, the real output, the real elapsed time. The three
+          steps survive as what they actually are — a caption naming what
+          happens after the command returns.                                */}
+      <section className="rule py-20 lg:py-28">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="measure">
+            <p className="eyebrow lg:pt-2">Install</p>
+
+            <div className="min-w-0">
+              <h2 className="text-[1.75rem] sm:text-[2.25rem] font-semibold text-[#f4f4f5] leading-[1.15] tracking-[-0.02em] max-w-2xl">
+                One command, and the box is serving.
+              </h2>
+              <p className="mt-4 text-[#a3a3ad] max-w-xl leading-relaxed">
+                No package repository to add, no runtime to install first, and nothing
+                to configure before it will start.
+              </p>
+
+              <div className="mt-10">
+                <AnimatedTerminal />
+              </div>
+
+              <dl className="mt-10 grid sm:grid-cols-3 gap-x-10 gap-y-6 max-w-3xl">
+                {steps.map((step) => (
+                  <div key={step.title}>
+                    <dt className="mono text-[13px] text-[#f4f4f5] mb-1.5">{step.title}</dt>
+                    <dd className="text-[14px] text-[#6b6b74] leading-relaxed">{step.desc}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Feature showcase ──────────────────────────────────────────────
+          The strongest material on the page was already here: real
+          screenshots of a real product, with copy that has a voice. Two
+          things were wasting it — a fake Mac window frame on every shot, and
+          a two-up grid that rendered each one ~330px wide, at which size the
+          product UI is grey texture rather than evidence.
+
+          One per row now, full measure, alternating which side the text sits
+          on so the eye has somewhere to go. Nothing was added; the existing
+          content was simply given the room to be legible.                  */}
+      <section id="features" className="rule py-24 lg:py-32">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="measure mb-16 lg:mb-20">
+            <p className="eyebrow lg:pt-2">What you get</p>
+            <h2 className="text-[1.75rem] sm:text-[2.25rem] font-semibold text-[#f4f4f5] leading-[1.15] tracking-[-0.02em] max-w-2xl">
+              Four things most panels sell separately, or not at all.
+            </h2>
+          </div>
+
+          <div className="space-y-20 lg:space-y-28">
             {showcase.map((feat, i) => (
               <motion.div key={i}
-                initial={{ opacity: 0, y: 20 }}
+                initial={{ opacity: 0, y: 16 }}
                 whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true, margin: '-40px' }}
-                transition={{ duration: 0.5, delay: i * 0.1 }}
-                className="group rounded-2xl border border-zinc-800/60 bg-zinc-900/30 p-6 hover:border-zinc-600/50 hover:shadow-[0_0_40px_-12px_rgba(255,255,255,0.06)] transition-all duration-500"
+                viewport={{ once: true, margin: '-60px' }}
+                transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+                className="grid lg:grid-cols-12 gap-y-6 lg:gap-x-12 items-start"
               >
-                <h3 className={`text-xl sm:text-2xl font-bold text-white mb-2 ${hd}`}>{feat.title}</h3>
-                <p className="text-[15px] text-zinc-500 leading-relaxed mb-5">{feat.desc}</p>
-                <div className="cursor-pointer overflow-hidden rounded-lg" onClick={() => setLightbox({ src: feat.shot, alt: feat.alt })}>
-                  <div className="rounded-lg overflow-hidden border border-zinc-800/60 shadow-lg shadow-black/40 transition-transform duration-500 group-hover:scale-[1.02]">
-                    <div className="h-7 bg-zinc-900 border-b border-zinc-800/60 flex items-center px-3 gap-1.5">
-                      <div className="w-2 h-2 rounded-full bg-[#ff5f57]" />
-                      <div className="w-2 h-2 rounded-full bg-[#febc2e]" />
-                      <div className="w-2 h-2 rounded-full bg-[#28c840]" />
-                    </div>
-                    <img src={feat.shot} alt={feat.alt} className="w-full block transition-[filter] duration-500 group-hover:brightness-110" loading="lazy" />
-                  </div>
+                <div className={`lg:col-span-4 ${i % 2 === 1 ? 'lg:order-2' : ''}`}>
+                  <p className="mono text-[11px] text-[#3f3f46] mb-3 tnum">
+                    {String(i + 1).padStart(2, '0')} / {String(showcase.length).padStart(2, '0')}
+                  </p>
+                  <h3 className="text-xl sm:text-2xl font-semibold text-[#f4f4f5] mb-3 leading-snug tracking-[-0.015em]">
+                    {feat.title}
+                  </h3>
+                  <p className="text-[15px] text-[#a3a3ad] leading-relaxed">{feat.desc}</p>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => setLightbox({ src: feat.shot, alt: feat.alt })}
+                  aria-label={`Enlarge: ${feat.alt}`}
+                  className={`lg:col-span-8 block w-full text-left border border-[#1e1e22] hover:border-[#2a2a30] transition-colors ${i % 2 === 1 ? 'lg:order-1' : ''}`}
+                >
+                  <img src={feat.shot} alt={feat.alt} className="w-full block" loading="lazy" />
+                </button>
               </motion.div>
             ))}
           </div>
         </div>
       </section>
 
-      {/* ── All features (compact grid, staggered) ───────────────── */}
-      <section className="py-20 lg:py-28 border-y border-zinc-800/60 bg-zinc-950/50 glow-divider">
-        <div className="max-w-6xl mx-auto px-6">
-          <div className="text-center mb-12">
-            <h2 className={`text-2xl font-bold text-white ${hd}`}>Everything ships included.</h2>
-          </div>
+      {/* ── The full list ─────────────────────────────────────────────────
+          Was 26 bordered cards, each with a rounded-square lucide icon. The
+          icons were chosen loosely — a lightning bolt for webhooks, a palette
+          for themes, a globe for a CDN — so they carried no information and
+          took the eye first anyway.
 
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {allFeatures.map(({ name, desc, icon: Icon }, i) => (
-              <motion.div key={i}
-                initial={{ opacity: 0, y: 10 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true, margin: '-10px' }}
-                transition={{ duration: 0.3, delay: Math.floor(i / 3) * 0.06 }}
-                className="flex items-start gap-3 p-4 rounded-xl border border-zinc-800/40 bg-zinc-900/20 hover:border-zinc-600/40 hover:shadow-[0_0_30px_-10px_rgba(255,255,255,0.04)] transition-all duration-300"
-              >
-                <div className="w-8 h-8 rounded-lg bg-zinc-800/50 flex items-center justify-center shrink-0 mt-0.5">
-                  <Icon className="w-4 h-4 text-zinc-500" />
-                </div>
-                <div className="min-w-0">
-                  <span className="text-[13px] font-semibold text-zinc-200 block">{name}</span>
-                  <p className="text-[12px] text-zinc-600 leading-relaxed mt-0.5">{desc}</p>
-                </div>
-              </motion.div>
-            ))}
+          What a reader wants from a list of 26 modules is to scan it, so it
+          is a list: ruled rows, name and description on one line, nothing
+          competing. The count is stated because 26 is itself the argument. */}
+      <section className="rule py-20 lg:py-28">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="measure">
+            <p className="eyebrow lg:pt-2 tnum">{allFeatures.length} modules</p>
+
+            <div className="min-w-0">
+              <h2 className="text-[1.75rem] sm:text-[2.25rem] font-semibold text-[#f4f4f5] leading-[1.15] tracking-[-0.02em] max-w-2xl">
+                All of it ships in the box.
+              </h2>
+              <p className="mt-4 text-[#a3a3ad] max-w-xl leading-relaxed">
+                Nothing here is an add-on, a paid tier, or a plugin you have to find.
+              </p>
+
+              <ul className="mt-10 border-t border-[#1e1e22] grid md:grid-cols-2 md:gap-x-12">
+                {allFeatures.map(({ name, desc }) => (
+                  <li key={name} className="border-b border-[#1e1e22] py-3.5 flex items-baseline gap-4">
+                    <span className="mono text-[13px] text-[#f4f4f5] shrink-0 w-[8.5rem] sm:w-[10rem]">{name}</span>
+                    <span className="text-[13px] text-[#6b6b74] leading-relaxed min-w-0">{desc}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
         </div>
       </section>
 
-      {/* ── Visual comparison ────────────────────────────────────── */}
-      <section id="compare" className="py-28 lg:py-36">
-        <div className="max-w-4xl mx-auto px-6">
-          <motion.div initial={{ opacity: 0, y: 15 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
-            className="text-center mb-12"
-          >
-            <h2 className={`text-[2.5rem] sm:text-[3rem] font-bold text-white mb-3 leading-tight tracking-tight ${hd}`}>
-              The numbers.
-            </h2>
-            <p className="text-zinc-500 text-[15px]">Memory usage at idle. Less RAM means more room for your apps.</p>
-          </motion.div>
+      {/* ── Comparison ────────────────────────────────────────────────────
+          The RAM bars were already the best idea on the page — a real
+          measurement, drawn to scale, where the product's whole claim is
+          legible in one glance. They keep their prominence; only the framing
+          changed, from a centred "The numbers." to a heading that says what
+          the reader is looking at.                                         */}
+      <section id="compare" className="rule py-24 lg:py-32">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="measure mb-14">
+            <p className="eyebrow lg:pt-2">Compared</p>
+            <div className="min-w-0">
+              <h2 className="text-[1.75rem] sm:text-[2.25rem] font-semibold text-[#f4f4f5] leading-[1.15] tracking-[-0.02em] max-w-2xl">
+                Memory at idle, drawn to scale.
+              </h2>
+              <p className="mt-4 text-[#a3a3ad] max-w-xl leading-relaxed">
+                Every megabyte the panel holds is a megabyte your applications do not get.
+              </p>
+            </div>
+          </div>
 
-          <div className="space-y-3 mb-16">
+          <div className="max-w-4xl space-y-3 mb-16">
             <RamBar name="DockPanel" mb={19} max={800} highlight delay={0} />
             <RamBar name="CloudPanel" mb={250} max={800} delay={0.1} />
             <RamBar name="Plesk" mb={512} max={800} delay={0.2} />
@@ -598,13 +666,13 @@ export default function Landing() {
           </div>
 
           <motion.div initial={{ opacity: 0, y: 15 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
-            className="overflow-x-auto rounded-xl border border-zinc-800/60 bg-zinc-900/30"
+            className="max-w-4xl overflow-x-auto border border-[#1e1e22]"
           >
             <table className="w-full text-left min-w-[580px]">
               <thead>
-                <tr className="border-b border-zinc-800/60">
+                <tr className="border-b border-[#1e1e22]">
                   {['', 'Install', 'Price', 'Docker', 'Self-hosted'].map(h => (
-                    <th key={h} className={`px-5 py-4 text-[10px] font-bold text-zinc-500 uppercase tracking-widest ${h === 'Docker' || h === 'Self-hosted' ? 'text-center' : ''}`}>{h}</th>
+                    <th key={h} className={`px-5 py-4 mono text-[11px] font-normal text-[#3f3f46] uppercase tracking-[0.14em] ${h === 'Docker' || h === 'Self-hosted' ? 'text-center' : ''}`}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -631,57 +699,72 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* ── Pricing ──────────────────────────────────────────────── */}
-      <section id="pricing" className="py-32 lg:py-40 border-t border-zinc-800/60 glow-divider">
-        <div className="max-w-2xl mx-auto px-6 text-center">
-          <motion.div initial={{ opacity: 0, y: 15 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}>
-            <h2 className={`text-7xl sm:text-8xl lg:text-9xl font-bold text-white mt-3 mb-3 tracking-tighter ${hd}`}>
-              $0
-            </h2>
-            <p className="text-xl text-zinc-500 font-medium mb-6">forever</p>
-            <p className="text-[17px] text-zinc-400 mb-10 leading-relaxed max-w-md mx-auto">
-              Every feature. Every server. No tiers, no per-site fees, no usage limits.
-              Open source under BSL 1.1, converting to MIT in 2030.
-            </p>
+      {/* ── Price ─────────────────────────────────────────────────────────
+          A 9xl "$0" centred on the page was the one place the design raised
+          its voice, and it raised it about a number that is zero. The
+          interesting claim is not the digit, it is the list of things that
+          are not metered — so the terms are set as terms, and the figure
+          sits in the margin column like every other measurement.          */}
+      <section id="pricing" className="rule py-24 lg:py-32">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="measure">
+            <p className="eyebrow lg:pt-2">Price</p>
 
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mb-8">
-              <a href="https://github.com/ovexro/dockpanel" className="flex items-center gap-2 bg-white hover:bg-zinc-200 text-zinc-900 px-6 py-3 rounded-lg text-sm font-bold transition-colors">
-                <Github className="w-4 h-4" /> View on GitHub
-              </a>
-              <a href="https://docs.dockpanel.dev" className="flex items-center gap-2 border border-zinc-800 hover:border-zinc-700 bg-zinc-900/50 text-white px-6 py-3 rounded-lg text-sm font-bold transition-all">
-                Read the docs <ArrowRight className="w-4 h-4" />
-              </a>
+            <div className="min-w-0">
+              <h2 className="text-[1.75rem] sm:text-[2.25rem] font-semibold text-[#f4f4f5] leading-[1.15] tracking-[-0.02em] max-w-2xl">
+                Free, and specific about it.
+              </h2>
+
+              <dl className="mt-9 max-w-2xl border-t border-[#1e1e22] mono text-[13px]">
+                {[
+                  ['per month', '$0'],
+                  ['per server', '$0'],
+                  ['per site', '$0'],
+                  ['feature tiers', 'none'],
+                  ['usage limits', 'none'],
+                  ['licence', 'BSL 1.1 → MIT in 2030'],
+                ].map(([k, v]) => (
+                  <div key={k} className="flex items-baseline justify-between gap-6 py-3 border-b border-[#1e1e22]">
+                    <dt className="text-[#6b6b74]">{k}</dt>
+                    <dd className="text-[#f4f4f5] tnum">{v}</dd>
+                  </div>
+                ))}
+              </dl>
+
+              <div className="mt-9 max-w-2xl flex flex-wrap items-center gap-x-6 gap-y-3">
+                <a href="https://github.com/ovexro/dockpanel" className="inline-flex items-center gap-2 text-sm font-medium text-[#f4f4f5] underline decoration-[#3f3f46] hover:decoration-[#f4f4f5] underline-offset-4 transition-colors">
+                  <Github className="w-3.5 h-3.5" /> View on GitHub
+                </a>
+                <a href="https://docs.dockpanel.dev" className="text-sm font-medium text-[#a3a3ad] hover:text-[#f4f4f5] transition-colors">
+                  Read the docs
+                </a>
+                <p className="mono text-[11px] text-[#3f3f46] ml-auto">
+                  stuck? <a href="mailto:hello@dockpanel.dev" className="text-[#6b6b74] hover:text-[#f4f4f5] underline underline-offset-4 decoration-[#3f3f46] transition-colors">hello@dockpanel.dev</a>
+                </p>
+              </div>
             </div>
-
-            <p className="text-[13px] text-zinc-600">
-              Need help?{' '}
-              <a href="mailto:hello@dockpanel.dev" className="text-zinc-400 hover:text-white transition-colors underline underline-offset-4 decoration-zinc-800 hover:decoration-zinc-600">
-                hello@dockpanel.dev
-              </a>
-            </p>
-          </motion.div>
+          </div>
         </div>
       </section>
 
       {/* ── FAQ ──────────────────────────────────────────────────── */}
-      <section id="faq" className="py-24 lg:py-32 border-t border-zinc-800/60 glow-divider">
-        <div className="max-w-2xl mx-auto px-6">
-          <div className="text-center mb-10">
-            <h2 className={`text-2xl font-bold text-white ${hd}`}>FAQ</h2>
-          </div>
-          <div>
+      <section id="faq" className="rule py-20 lg:py-28">
+        <div className="max-w-7xl mx-auto px-6 measure">
+          <p className="eyebrow lg:pt-2">Questions</p>
+          <div className="min-w-0 max-w-3xl border-t border-[#1e1e22]">
             {faqs.map((faq, i) => (
-              <div key={i} className="border-b border-zinc-800/40">
+              <div key={i} className="border-b border-[#1e1e22]">
                 <button onClick={() => setOpenFaq(openFaq === i ? null : i)}
-                  className="w-full flex items-center justify-between py-5 text-left group"
+                  aria-expanded={openFaq === i}
+                  className="w-full flex items-center justify-between gap-4 py-5 text-left group"
                 >
-                  <span className="text-[15px] font-medium text-zinc-200 group-hover:text-white transition-colors">{faq.q}</span>
-                  <ChevronDown className={`w-4 h-4 text-zinc-600 group-hover:text-zinc-400 transition-all duration-200 shrink-0 ml-4 ${openFaq === i ? 'rotate-180' : ''}`} />
+                  <span className="text-[15px] font-medium text-[#e4e4e7] group-hover:text-white transition-colors">{faq.q}</span>
+                  <ChevronDown className={`w-4 h-4 text-[#3f3f46] group-hover:text-[#a3a3ad] transition-all duration-200 shrink-0 ${openFaq === i ? 'rotate-180' : ''}`} />
                 </button>
                 <AnimatePresence>
                   {openFaq === i && (
-                    <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.15 }}>
-                      <p className="pb-5 text-[14px] text-zinc-500 leading-relaxed">{faq.a}</p>
+                    <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.15 }} className="overflow-hidden">
+                      <p className="pb-5 text-[14px] text-[#6b6b74] leading-relaxed max-w-2xl">{faq.a}</p>
                     </motion.div>
                   )}
                 </AnimatePresence>
@@ -700,7 +783,7 @@ export default function Landing() {
                 <div className="w-7 h-7 rounded-md bg-white flex items-center justify-center">
                   <Server className="w-4 h-4 text-zinc-900" />
                 </div>
-                <span className={`text-lg font-bold text-white ${hd}`}>DockPanel</span>
+                <span className="text-[17px] font-semibold text-[#f4f4f5] tracking-[-0.01em]">DockPanel</span>
               </div>
               <p className="text-[13px] text-zinc-600 max-w-xs leading-relaxed">
                 Lightweight, Docker-native server management.<br />

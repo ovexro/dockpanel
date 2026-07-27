@@ -4,7 +4,7 @@ import {
   ScanSearch, BadgeCheck, Lock, Package, AlertTriangle, ExternalLink,
 } from 'lucide-react';
 
-const hd = "font-['Space_Grotesk',system-ui,sans-serif]";
+const hd = "font-['IBM_Plex_Sans',system-ui,sans-serif] tracking-[-0.02em]";
 
 const POSTURE = {
   audits: 7,

@@ -6,10 +6,37 @@ html {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* ── Type ──────────────────────────────────────────────────────────────
+   IBM Plex, one family in two voices. Drawn for technical and systems
+   documentation, which is this subject's actual world, and picked over the
+   grotesque-of-the-month precisely because sans and mono share their
+   skeleton: a product whose whole argument is "one thing, not a stack of
+   things" should not be set in two unrelated families.
+
+   The MONO is the instrument voice — every measurement, label, eyebrow and
+   command. The SANS is for prose. That split is the page's structure: if it
+   is a number the machine reported, it is set in mono.                    */
+:root {
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  /* Ink. Deliberately narrow: near-black ground, four greys, one white.
+     There is no accent hue on this page — the product has no brand colour
+     to fake, and the restraint is the point. Green appears in exactly one
+     place, where the terminal itself reports success. */
+  --ink-bg:    #0a0a0b;
+  --ink-panel: #101012;
+  --ink-line:  #1e1e22;
+  --ink-dim:   #6b6b74;
+  --ink-body:  #a3a3ad;
+  --ink-loud:  #f4f4f5;
+}
+
 body {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
-  background: #09090b;
-  color: #a1a1aa;
+  font-family: var(--font-sans);
+  background: var(--ink-bg);
+  color: var(--ink-body);
+  font-feature-settings: 'ss02' 1;
 }
 
 ::selection {
@@ -17,46 +44,54 @@ body {
   color: white;
 }
 
-code, pre {
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+code, pre, .mono {
+  font-family: var(--font-mono);
 }
 
-/* ── Noise grain overlay ─────────────────────────────────────────── */
-.noise::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  pointer-events: none;
-  opacity: 0.025;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  background-repeat: repeat;
-  background-size: 256px 256px;
+/* Measurements are read in columns, so their digits must line up. */
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* The one structural device on the page: a small mono label, letterspaced,
+   sitting in the left margin. It marks what KIND of thing a section is —
+   which is information, not decoration. */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
 }
 
-/* ── Hero grid lines ─────────────────────────────────────────────── */
-.hero-grid {
-  background-image:
-    linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
-  background-size: 64px 64px;
+/* ── Removed s271: four ambient effects that encoded nothing ────────────
+   A fixed noise-grain overlay, a 64px hero grid, a centred "glow divider"
+   and a pulsing box-shadow on the install command. Each was atmosphere
+   applied to the page rather than anything the page had to say, and
+   together they were most of what made a deliberately minimal design read
+   as generated. What replaces them is one rule and one measure: a hairline
+   at full bleed, and a left margin that every section shares.
+
+   ── The page rule ─────────────────────────────────────────────────────
+   Sections are separated by an actual line, edge to edge, not a fading
+   smudge. It is the same hairline the product's own UI uses.             */
+.rule {
+  border-top: 1px solid var(--ink-line);
 }
 
-/* ── Section divider ─────────────────────────────────────────────── */
-.glow-divider {
-  position: relative;
+/* ── The margin column ─────────────────────────────────────────────────
+   The single structural idea: a fixed-width left column carrying the
+   section's mono label, with the content set beside it. Everything on the
+   page hangs off this one left edge instead of floating down the centre,
+   which is what gives a minimal layout a spine. Collapses to stacked on
+   narrow screens, where a margin column would just steal width.          */
+.measure {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem 3rem;
 }
-
-.glow-divider::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 500px;
-  max-width: 60%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08) 50%, transparent);
+@media (min-width: 1024px) {
+  .measure {
+    grid-template-columns: 8.5rem minmax(0, 1fr);
+  }
 }
 
 /* ── Terminal cursor blink ────────────────────────────────────────── */
@@ -70,14 +105,22 @@ code, pre {
   color: #e4e4e7;
 }
 
-/* ── Install command subtle glow ──────────────────────────────────── */
-@keyframes install-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
-  50% { box-shadow: 0 0 40px -10px rgba(255,255,255,0.06); }
+/* Nothing on this page animates unless it is reporting something. Anyone who
+   has asked their system not to animate is taken at their word. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
-.install-glow {
-  animation: install-pulse 4s ease-in-out infinite;
+/* Keyboard focus must be visible against a near-black ground. */
+:focus-visible {
+  outline: 2px solid var(--ink-loud);
+  outline-offset: 3px;
+  border-radius: 2px;
 }
 
 /* ── Scrollbar ────────────────────────────────────────────────────── */
