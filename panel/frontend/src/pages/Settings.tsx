@@ -1805,6 +1805,35 @@ export default function Settings() {
                 <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-transform ${settings.self_registration_enabled === "true" ? "translate-x-5.5 left-0.5" : "left-0.5"}`} />
               </button>
             </div>
+            {/* OAuth Auto-Registration.
+                Surfaced at s275. This setting existed and was writable through
+                the settings API, but had NO control anywhere in the panel — so
+                an operator could turn Self-Registration off above and still have
+                new accounts created by anyone who could reach a configured OAuth
+                provider, through a switch they could not see.
+
+                Note the comparison: `!== "false"`, not `=== "true"`. The backend
+                default for this key is OPEN (an absent row means allowed), which
+                is the opposite of the toggle above it. Rendering it the same way
+                would show OFF while the server still said yes — a control that
+                lies in the reassuring direction. */}
+            <div className="px-5 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">OAuth Auto-Registration</p>
+                <p className="text-xs text-dark-400">Create an account on first OAuth sign-in. Turning Self-Registration off also blocks this.</p>
+              </div>
+              <button onClick={async () => {
+                const current = settings.oauth_auto_create !== "false";
+                const newVal = !current;
+                try {
+                  await api.put("/settings", { oauth_auto_create: newVal ? "true" : "false" });
+                  setSettings(prev => ({ ...prev, oauth_auto_create: newVal ? "true" : "false" }));
+                  setMessage({ text: `OAuth auto-registration ${newVal ? "enabled" : "disabled"}`, type: "success" });
+                } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+              }} className={`relative w-11 h-6 rounded-full transition-colors ${settings.oauth_auto_create !== "false" ? "bg-rust-500" : "bg-dark-600"}`}>
+                <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-transform ${settings.oauth_auto_create !== "false" ? "translate-x-5.5 left-0.5" : "left-0.5"}`} />
+              </button>
+            </div>
             {/* Registration Approval */}
             <div className="px-5 py-3 flex items-center justify-between">
               <div>

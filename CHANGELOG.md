@@ -6,6 +6,83 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.45.0] - 2026-07-27
+
+A release about controls that do not cover what they appear to cover.
+
+The previous release found that the documented demo-deploy script had been
+unable to run for eight releases, because a fix applied by derivation to two
+installers never reached a third copy that lived outside this repository. That
+copy is now in it, and the mechanism that could not see it has been rebuilt to
+discover its subjects instead of naming them. Along the way, a question about
+whether registration was disabled on one panel turned up a second control with
+the same shape: visible, believed, and silently bypassed by a sibling.
+
+### Security
+
+- **Turning off self-registration did not turn off registration.** The panel has
+  two doors into an account. `POST /api/auth/register` reads
+  `self_registration_enabled` and defaults **closed** — an absent row means
+  disabled — and it has a visible toggle in Settings. The OAuth callback
+  auto-creates a user on first sign-in, read `oauth_auto_create`, and defaulted
+  **open** — an absent row meant *allowed* — and it had **no control anywhere in
+  the panel**, though it was writable through the settings API.
+
+  Both rows are absent on a fresh install, so the panel's answer to "is
+  registration open?" depended on which door you knocked on. An operator who
+  switched the visible toggle off and later configured a GitHub or Google
+  provider — an ordinary thing to do — had self-registration silently back on
+  through a switch they could not see or reach.
+
+  An explicit `self_registration_enabled=false` now closes the OAuth path too:
+  off means off, whichever door. This deliberately reads the *explicit* value
+  rather than the effective one, so an install that never touched the row keeps
+  its current behaviour and no working OAuth deployment breaks on upgrade — only
+  operators who actually asked for registration to be off get what they asked
+  for.
+
+- **`oauth_auto_create` is no longer a DB-only switch.** It gates account
+  creation and now has a toggle beside Self-Registration. Note that it renders an
+  absent row as **on**, matching the server's default rather than its neighbour's
+  — a control that showed "off" while signups succeeded would be worse than no
+  control at all, because it would end the investigation.
+
+### Added
+
+- **`scripts/deploy-demo.sh`.** The third path that installs DockPanel onto a
+  running machine — after `setup.sh` (fresh install) and `update.sh` (upgrade in
+  place) — deploying from published release assets rather than a checkout. It
+  existed outside this repository, which is exactly why it rotted: no pin, no CI
+  job and no documentation check can see a file that is not in the tree. It takes
+  its panel hostname and repo path from the caller, so it describes the contract
+  rather than one box.
+
+- **`tests/registration-gates-pin-e2e.sh`** (14 assertions). Holds both doors
+  above to the same answer: the defaults, the ordering of each gate against the
+  `INSERT` it protects, that every gate has an operator control that actually
+  writes it, and that each control renders the default its own server uses.
+
+### Fixed
+
+- **The regression pins named their subjects, so they could not see a new one.**
+  `sandbox-paths-pin-e2e.sh` pinned `setup.sh`, `update.sh`, `install-agent.sh`
+  and `agent-self-update.sh` by name. That is how the third copy of the agent
+  unit went unnoticed for eighteen releases, and how the fourth copy of the
+  `ReadWritePaths` derivation went unnoticed for eight. The suite now
+  **discovers** them: any script that touches `ReadWritePaths` is a copy and
+  joins the assertions by existing, and the same rule covers every script that
+  populates the frontend dist. Discovery that finds fewer subjects than are known
+  to exist fails, rather than reporting a clean run over nothing.
+
+- **`{panel}/install-agent.sh` had no check, while its sibling did.** The
+  scheduled live-surfaces check has verified `dockpanel.dev/install.sh` since
+  2.44.0 — that a missing file answers `200` with SPA fallback HTML rather than
+  `404`, so the advertised command pipes a web page into `bash`. The URL the
+  panel's own Add-Server dialog prints has the identical failure mode and nothing
+  watched it; it was reproduced by hand at the previous release. It is now
+  checked on the same schedule, including that the served installer is
+  byte-identical to `scripts/install-agent.sh`.
+
 ## [2.44.1] - 2026-07-27
 
 A dependency-and-provenance release, and the numbers work from the previous

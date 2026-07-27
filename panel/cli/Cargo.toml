@@ -1,6 +1,6 @@
 [package]
 name = "dockpanel"
-version = "2.44.1"
+version = "2.45.0"
 edition = "2024"
 description = "CLI for DockPanel — self-hosted server management"
 

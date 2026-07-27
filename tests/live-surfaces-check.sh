@@ -126,6 +126,81 @@ fi
 rm -f "$INSTALL_TMP"
 
 echo
+echo "── 1b. Class B — the SIBLING installer URL, one surface over ──"
+
+# Section 1 checks dockpanel.dev/install.sh. It was written at s272 for a failure
+# mode that is not specific to that URL: nginx serves the SPA with a try_files
+# fallback, so a MISSING file answers 200 with index.html rather than 404, and
+# the advertised command pipes a web page into bash.
+#
+# s274 hit exactly that on the other one. The panel's own Add-Server dialog
+# prints `curl -sSL {panel}/install-agent.sh | sudo bash -s -- …`, and fetching
+# it the way an operator does returned HTTP 200 and 643 bytes of <!DOCTYPE html>
+# — because deploy-demo.sh never copied the file into the frontend dist. Section
+# 1 could not have seen it: it was written for one URL, and a check written for
+# one URL does not generalise to the sibling URL with the same failure mode.
+#
+# The panel host comes from PANEL (workflow: secrets.PANEL_URL) and is
+# deliberately NOT hardcoded here. A panel is somebody's server; this repository
+# is public, and the workflow log of a public repository is public. A secret is
+# masked in that log, a variable is not.
+PANEL="${PANEL:-}"
+
+if [ -z "$PANEL" ]; then
+  # Not a vacuous pass. The semantics are section 3's: the failure says NOBODY IS
+  # CHECKING, which is a true and actionable statement, rather than "the panel is
+  # broken". An arm that silently skips is how the sibling URL went unwatched in
+  # the first place.
+  bad "PANEL is not set, so nothing is checking that {panel}/install-agent.sh serves a script — this is the exact gap s274 found by hand. Set the PANEL_URL secret on the repository."
+else
+  PANEL_TMP=$(mktemp)
+  # Only the path is printed, never the host. The secret is masked by Actions,
+  # but a check that depends on masking to keep a hostname private is one
+  # transformation away from leaking it.
+  if "${CURL[@]}" -o "$PANEL_TMP" "$PANEL/install-agent.sh" 2>/dev/null; then
+    ok "the panel's /install-agent.sh answers"
+
+    if head -1 "$PANEL_TMP" | grep -q '^#!'; then
+      ok "it begins with a shebang"
+    else
+      bad "the panel's /install-agent.sh returned 200 but does not start with a shebang — the SPA fallback is answering, and the Add-Server command pipes a web page into sudo bash"
+      note "first line: $(head -1 "$PANEL_TMP" | cut -c1-80)"
+    fi
+
+    if head -c 2000 "$PANEL_TMP" | grep -qiE '<!doctype html|<html'; then
+      bad "the panel's /install-agent.sh is serving HTML — this is issue #56's shape and s274 reproduced it"
+    else
+      ok "it is not HTML"
+    fi
+
+    if grep -q 'dockpanel' "$PANEL_TMP"; then
+      ok "it mentions dockpanel"
+    else
+      bad "the panel serves a shell script at /install-agent.sh that never mentions dockpanel"
+    fi
+
+    # And it must be THIS commit's installer. A stale copy left in the dist by an
+    # older deploy is the quieter half of the same defect: it answers, it is a
+    # script, and it installs an agent nobody released.
+    if [ -f scripts/install-agent.sh ]; then
+      live_sum=$(sha256sum "$PANEL_TMP" | cut -d' ' -f1)
+      repo_sum=$(sha256sum scripts/install-agent.sh | cut -d' ' -f1)
+      if [ "$live_sum" = "$repo_sum" ]; then
+        ok "the served agent installer is byte-identical to scripts/install-agent.sh"
+      else
+        bad "the served agent installer differs from scripts/install-agent.sh — the panel is handing operators an installer this commit does not contain"
+        note "served $live_sum vs repo $repo_sum"
+      fi
+    else
+      bad "scripts/install-agent.sh is missing — the Add-Server command has no source in this repo"
+    fi
+  else
+    bad "the panel's /install-agent.sh does not answer — the command the Add-Server dialog prints is dead"
+  fi
+  rm -f "$PANEL_TMP"
+fi
+
+echo
 echo "── 2. Class B — both sites answer, on certificates with life left ──"
 
 for url in "$SITE" "$DOCS"; do

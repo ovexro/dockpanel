@@ -346,5 +346,188 @@ else
 fi
 
 echo
+echo "── 7. every copy, DISCOVERED rather than named (s275) ──"
+
+# Sections 2-6 pin setup.sh, update.sh, install-agent.sh and agent-self-update.sh
+# BY NAME. That is the defect this section exists to close, and it has now bitten
+# twice in the same suite: §5 was added at s271 because install-agent.sh — the
+# third copy — was never named here and hand-wrote an unsandboxed unit for
+# eighteen releases. Then s274 found a FOURTH copy, deploy-demo.sh, which had
+# been unable to run since v2.37.0 for exactly the reason §3 exists: it never
+# stripped the '-' prefix, so it ran `mkdir -p -/etc/letsencrypt` and died. Eight
+# releases. It was invisible to every mechanism here because it lived OUTSIDE the
+# repository, and a named list cannot name a file that is not in the tree.
+#
+# Naming the copies is what keeps failing. So this section DISCOVERS them: any
+# script that mentions ReadWritePaths is a copy, and joins these assertions by
+# existing. A fifth one is covered the day it is written.
+#
+# (agent-self-update.sh is the proof this is not theoretical — it strips the
+# prefix correctly and was never named in sections 2-5 either. It was right by
+# luck and unwatched by design.)
+
+# These arms grep for shapes that this very suite, and the scripts it reads,
+# DESCRIBE IN PROSE — the header of deploy-demo.sh spells `mkdir -p -/etc/…`
+# because that is the bug it exists to explain. A pin that reads raw source
+# matches the explanation and fires on the comment, which is how a pin earns a
+# reputation for false positives and then gets deleted. So look at CODE.
+#
+# Full-line comments only: stripping everything after a '#' would also blank the
+# inside of strings, and a check that removes more than it should fails in the
+# direction that passes. A trailing comment can still fool these arms; the
+# convention in this tree is that explanation goes on its own line.
+code_of() { grep -v '^[[:space:]]*#' "$1"; }
+
+# Counted, never `grep -q`, and the reason is a trap this suite walked straight
+# into. Under `set -o pipefail`, `code_of f | grep -q PATTERN` reports FAILURE on
+# a successful match: grep -q exits at the first hit, the producer upstream dies
+# of SIGPIPE (141), and pipefail takes the pipeline's status from it. The effect
+# is silent and selective — a file whose match is near the top gets dropped while
+# one whose match is near the bottom survives, because the producer had already
+# finished. The first run of this section discovered three of five copies that
+# way and every per-file assertion below it still read green.
+#
+# `grep -c` consumes all of its input, so there is no early exit and no signal.
+code_count() { local f="$1"; shift; grep -v '^[[:space:]]*#' "$f" | grep -c "$@"; }
+
+RWP_SCRIPTS=$(for f in scripts/*.sh; do
+  [ "$(code_count "$f" -e 'ReadWritePaths')" -gt 0 ] && echo "$f"
+done | sort || true)
+RWP_COUNT=$(printf '%s\n' "$RWP_SCRIPTS" | grep -c . || true)
+
+# An arm that discovers nothing must FAIL, not pass vacuously — the s272/s273
+# lesson. A glob that silently matched no files would otherwise report a clean
+# suite while checking zero copies.
+if [ "$RWP_COUNT" -ge 4 ]; then
+  ok "discovered $RWP_COUNT scripts that touch ReadWritePaths: $(printf '%s' "$RWP_SCRIPTS" | tr '\n' ' ')"
+else
+  bad "discovery found only $RWP_COUNT scripts touching ReadWritePaths — four are known to exist, so this arm has gone blind rather than the copies having gone away"
+fi
+
+# 7a. Every discovered copy strips the prefix. This is the assertion that would
+# have caught deploy-demo.sh in v2.37.0 instead of eight releases later.
+for f in $RWP_SCRIPTS; do
+  if [ "$(code_count "$f" -F -e "sed 's/^-//'")" -gt 0 ]; then
+    ok "$f strips systemd's optional-path '-' prefix"
+  else
+    bad "$f mentions ReadWritePaths but never strips the '-' prefix — the shape that made deploy-demo.sh unrunnable for eight releases"
+  fi
+done
+
+# 7b. And none of them can pass a still-prefixed path to mkdir. Catches the case
+# where a script strips in one place and forgets in another.
+for f in $RWP_SCRIPTS; do
+  if [ "$(code_count "$f" -E -e 'mkdir[^|]*-/')" -gt 0 ]; then
+    bad "$f passes a '-'-prefixed path to mkdir, which reads it as options"
+  else
+    ok "$f never hands mkdir a '-'-prefixed path"
+  fi
+done
+
+# 7c. The copies that use the shared helper must use the SAME helper. Comparing
+# the function bodies byte for byte is what makes "derivation" mean one
+# derivation rather than three that happen to agree today.
+HELPER_FILES=$(grep -l 'agent_rwp_dirs()' scripts/*.sh 2>/dev/null | sort || true)
+HELPER_N=$(printf '%s\n' "$HELPER_FILES" | grep -c . || true)
+if [ "$HELPER_N" -ge 3 ]; then
+  ok "$HELPER_N scripts define agent_rwp_dirs"
+else
+  bad "only $HELPER_N scripts define agent_rwp_dirs — setup.sh, update.sh and deploy-demo.sh all should"
+fi
+
+REF_SUM=""; HELPER_DRIFT=0
+for f in $HELPER_FILES; do
+  s=$(sed -n '/^agent_rwp_dirs() {/,/^}/p' "$f" | sha256sum | cut -d' ' -f1)
+  if [ -z "$REF_SUM" ]; then
+    REF_SUM="$s"
+  elif [ "$s" != "$REF_SUM" ]; then
+    bad "$f's agent_rwp_dirs body differs from the others — the three copies have started to drift apart again"
+    HELPER_DRIFT=1
+  fi
+done
+if [ "$HELPER_DRIFT" -eq 0 ] && [ -n "$REF_SUM" ]; then
+  ok "all $HELPER_N agent_rwp_dirs bodies are byte-identical"
+fi
+
+# 7d. The copy that started this is IN THE TREE. Pinned by name deliberately:
+# this one assertion is about the file's location, which is the property that
+# made it unreachable, and a discovery-based check cannot assert that something
+# it cannot see ought to be visible.
+if [ -f scripts/deploy-demo.sh ]; then
+  ok "deploy-demo.sh lives in scripts/, where a pin can reach it"
+else
+  bad "scripts/deploy-demo.sh is gone — if the demo deploy moved back out of the repo it is unpinnable again, which is how it rotted for eight releases"
+fi
+
+# It must not carry a hostname or a checkout path of its own: the moment it does,
+# it is describing one box rather than the contract, and the box-specific wrapper
+# is the thing that belongs outside the tree.
+if grep -qE '/home/[a-z]|[a-z0-9-]+\.dockpanel\.dev' scripts/deploy-demo.sh; then
+  bad "scripts/deploy-demo.sh hardcodes a home directory or a panel hostname — those belong in the caller, not in the repo"
+else
+  ok "scripts/deploy-demo.sh hardcodes no path or hostname of its own"
+fi
+
+echo
+echo "── 8. install-agent.sh reaches the frontend dist, on EVERY path (s274) ──"
+
+# The panel's Add-Server dialog prints `curl -sSL {panel}/install-agent.sh |
+# sudo bash`. nginx serves the SPA with a try_files fallback, so when that file
+# is absent from the frontend dist the URL answers HTTP 200 WITH index.html and
+# the operator pipes a web page into bash. Not a 404 — a 200 of SPA fallback
+# HTML, issue #56's exact shape.
+#
+# setup.sh and update.sh both deploy it. deploy-demo.sh did not, for the whole
+# time it existed, and the demo's own Add-Server dialog was handing out a command
+# that returned 643 bytes of <!DOCTYPE html>. Found at s274 by fetching it the
+# way an operator does.
+#
+# Same discovery rule as §7: any script that populates the frontend dist owes
+# this step, and joins the check by existing.
+# Discovery is on the DIST-ROOT ASSIGNMENT, not on a literal path. The three
+# scripts spell the same directory three different ways —
+#   setup.sh        FE_ROOT="${FRONTEND_DIR}/dist"
+#   update.sh       FE_DIST="${REPO_DIR}/panel/frontend/dist"
+#   deploy-demo.sh  FE_DIST="$REPO_DIR/panel/frontend/dist"
+# — so the first draft of this arm, matching `frontend/dist`, found two of three
+# and MISSED setup.sh, the one installer every user runs. It said so instead of
+# passing, which is the only reason the gap was visible.
+FE_SCRIPTS=$(for f in scripts/*.sh; do
+  [ "$(code_count "$f" -Ei -e '(frontend|fe_dir|fe_root|fe_dist)[^=]*=.*/dist')" -gt 0 ] && echo "$f"
+done | sort || true)
+FE_COUNT=$(printf '%s\n' "$FE_SCRIPTS" | grep -c . || true)
+
+if [ "$FE_COUNT" -ge 3 ]; then
+  ok "discovered $FE_COUNT scripts that populate the frontend dist: $(printf '%s' "$FE_SCRIPTS" | tr '\n' ' ')"
+else
+  bad "discovery found only $FE_COUNT scripts touching the frontend dist — setup.sh, update.sh and deploy-demo.sh all do, so this arm has gone blind"
+fi
+
+for f in $FE_SCRIPTS; do
+  # Anchored on the COPY ITSELF — a `cp` or `install` command whose destination
+  # is install-agent.sh — not on the filename appearing somewhere in the script.
+  #
+  # The first draft asked only whether the name appeared in code, and every one
+  # of these scripts also ANNOUNCES the step (`echo "=== drop install-agent.sh
+  # …"`, `log "Refreshed install-agent.sh in $FE_DIST"`). Deleting the actual
+  # copy and leaving the announcement kept the pin green — the check passed on a
+  # script that had stopped doing the thing while still saying it did. Found by
+  # mutating it. A presence check is not an operation check (#100e).
+  if [ "$(code_count "$f" -E -e '^[[:space:]]*(cp|install)[[:space:]].*install-agent\.sh')" -gt 0 ]; then
+    ok "$f copies install-agent.sh into the frontend dist"
+  else
+    bad "$f populates the frontend dist but performs no copy of install-agent.sh — {panel}/install-agent.sh will answer 200 with SPA HTML, and the Add-Server command pipes that into bash"
+  fi
+done
+
+# The source it copies must exist. A step that copies a file that was renamed
+# away is a step that silently does nothing.
+if [ -f scripts/install-agent.sh ]; then
+  ok "scripts/install-agent.sh exists, so those copy steps have a source"
+else
+  bad "scripts/install-agent.sh is missing — every deploy step above copies nothing and the URL falls back to the SPA"
+fi
+
+echo
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

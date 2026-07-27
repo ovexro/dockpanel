@@ -248,7 +248,37 @@ pub async fn callback(
             u
         }
         None => {
-            // Auto-create user
+            // Auto-create user.
+            //
+            // TWO gates, because there are two ways to open this door and until
+            // s275 they disagreed with each other.
+            //
+            // `self_registration_enabled` (routes/auth.rs) governs password
+            // registration and defaults CLOSED — an absent row means disabled.
+            // `oauth_auto_create` governed this path and defaulted OPEN — an
+            // absent row meant allowed. Both rows are absent on a fresh install,
+            // so the panel's answer to "is registration open?" depended on which
+            // door you knocked on. An operator who turned the visible
+            // Self-Registration toggle off and later configured a provider had
+            // self-registration silently back on, through a setting that had no
+            // UI control at all.
+            //
+            // So an EXPLICIT `self_registration_enabled=false` now closes this
+            // path too: off means off, whichever door. This deliberately reads
+            // the explicit value rather than the effective one — an install that
+            // never set the row keeps today's behaviour, so no existing OAuth
+            // deployment breaks on upgrade; only operators who actually asked
+            // for registration to be off get what they asked for.
+            let self_reg: Option<(String,)> = sqlx::query_as(
+                "SELECT value FROM settings WHERE key = 'self_registration_enabled'"
+            )
+            .fetch_optional(&state.db).await
+                .map_err(|e| internal_error("self-registration setting", e))?;
+            if self_reg.map(|(v,)| v == "false").unwrap_or(false) {
+                return Err(err(StatusCode::FORBIDDEN,
+                    "Registration is disabled. Contact your administrator."));
+            }
+
             let auto_create: Option<(String,)> = sqlx::query_as(
                 "SELECT value FROM settings WHERE key = 'oauth_auto_create'"
             )

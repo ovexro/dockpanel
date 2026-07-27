@@ -72,6 +72,13 @@ jobs:
           # and hosted runners share addresses, so without this the check reports
           # a rate limit as though the product were broken.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The panel whose /install-agent.sh is checked by section 1b. A SECRET
+          # rather than a variable, and rather than a literal in the suite: this
+          # repository is public and so are its workflow logs, and a panel is
+          # somebody's server. Actions masks a secret in the log; it does not
+          # mask a variable. When it is unset the arm fails saying nobody is
+          # checking, which is the honest report rather than a silent skip.
+          PANEL: ${{ secrets.PANEL_URL }}
         run: bash tests/live-surfaces-check.sh
 
       # A scheduled job that fails silently is the same as no job. GitHub emails
