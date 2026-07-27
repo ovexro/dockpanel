@@ -404,6 +404,38 @@ survivable. Eleven suites, **302 assertions**, all green at the current commit:
 | `sandbox-paths-pin-e2e.sh` | 39 |
 | `webmail-spam-pin-e2e.sh` | 18 |
 
+**On a schedule, from outside** (`live-surfaces.yml`, daily). Every layer above
+runs because something changed, which is exactly why none of them could catch the
+things that go wrong while nothing changes: a certificate approaching expiry, an
+install one-liner that quietly starts returning a web page instead of a script, a
+marketing site still serving the bundle it was built from three weeks ago, or a
+measurement nobody has retaken since it stopped being true.
+
+That last one is not hypothetical. The panel's own memory footprint was published
+as `~19 MB` on three separate surfaces for four months, against a real reading of
+`~49 MB`; the social card advertised a 10 MB binary for thirty-four releases; the
+security page named a release thirty-seven versions old. Each was eventually
+found by a person happening to read the page, which is not a mechanism.
+
+So `tests/live-surfaces-check.sh` runs daily on a GitHub runner — deliberately
+not on the server that hosts the sites, since a check running there would fetch
+its own origin and never see the CDN in front of it. It asserts that:
+
+- the advertised install one-liner still returns a shell script, byte-identical
+  to the one in this repository, rather than the single-page app's fallback HTML;
+- both sites answer on certificates with more than a fortnight of life left;
+- the marketing site serves exactly what this commit builds — compared by hash,
+  fetched from outside, because "committed", "built" and "served" are three
+  different things and any two of them agreeing has twice proved nothing here;
+- the published release's binaries are still the size the register claims;
+- the one waived npm advisory is still unfixed inside its major version, which is
+  the condition its waiver was written against;
+- and no measurement or competitor figure has gone longer than its budget without
+  a human confirming it.
+
+It is not in the assertion table above because it needs the network and the world,
+so its result is a statement about today rather than about this commit.
+
 **On every release** (`release.yml`, `smoke-test.yml`):
 
 - Static musl binaries for amd64 and arm64 — zero glibc dependency, so a distro's

@@ -4,6 +4,64 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+No code changed. What changed is that most of the numbers this project published
+about itself were wrong, and there is now a mechanism that notices.
+
+### Fixed
+
+- **The panel's memory footprint had been published as `~19 MB` since April. It
+  is `~49 MB`.**
+
+  The figure appeared on the README masthead, the README comparison table, the
+  README architecture note, `COMPARISON.md`, `docs/getting-started.md` and the
+  marketing site. It was measured once, on one box, and then copied. A real
+  reading by cgroup accounting gives ~14 MB for the API and ~35 MB for the agent;
+  with the bundled PostgreSQL the stack is ~109 MB, not the published ~85 MB.
+
+  The comparison against cPanel and CloudPanel was also unfair in our favour: it
+  set DockPanel's services, without a database, against competitors' figures that
+  include theirs. Stack against stack it is about 7x lighter rather than 10x —
+  still the strongest claim on the page, and now one that survives being checked.
+
+- Binaries were published as `~41 MB` total; the v2.44.0 release assets are
+  22 MB (API), 21 MB (agent) and 1.7 MB (CLI) — 45 MB. The install animation on
+  the front page announced a 41 MB download for a 22 MB binary.
+
+- `776 API endpoints` was a number nothing derived, and its own decomposition
+  (`496 backend + 280 agent`) matched the source on neither side. It is 809
+  routes — 527 and 282 — and it is now counted rather than remembered.
+
+- `454 E2E tests`, `89 DB migrations` and `11 background services` were likewise
+  stale or undefined. They are 302 regression assertions across eleven suites,
+  97 migrations, and 15 supervised background services.
+
+- Two entries of the same FAQ list on the front page gave different answers for
+  the same measurement, three lines apart.
+
+### Added
+
+- **A measurement register** (`FEATURES.md` → "Verified Metrics"). Every number
+  this project publishes about itself is written down once, with its derivation:
+  computed from source, read from the published release, or measured on a real
+  box. `docs-claims-pin-e2e.sh` now fails the build when a surface states a
+  figure the register does not, when a derived figure no longer matches source,
+  or when a corrected figure reappears anywhere.
+
+- **A scheduled check** (`live-surfaces-check.sh`, `live-surfaces.yml`, daily).
+  Documentation rot sorts into classes that need different mechanisms, and the
+  one that drifts with *time* rather than commits had none — no push-triggered
+  job can notice an expiring certificate, an install one-liner that started
+  serving HTML, or a site still publishing the bundle it was built from three
+  weeks ago. It runs from a GitHub runner rather than the origin, so the CDN in
+  front of the sites is inside the test rather than behind it.
+
+- Claims that no machine can verify — competitor pricing and memory, whether the
+  screenshots still resemble the product — now carry a last-verified date and a
+  budget, and expire. The failure does not assert the claim is wrong; it reports
+  that nobody has looked in long enough that we no longer know.
+
 ## [2.44.0] - 2026-07-27
 
 ### Security

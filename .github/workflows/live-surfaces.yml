@@ -1,0 +1,106 @@
+name: Live Surfaces
+
+# The mechanism for the rot class CI structurally cannot see.
+#
+# Every other workflow here runs because something changed. That is precisely why
+# none of them could ever have caught the things this one is for: an expired
+# certificate, an install one-liner that started 404ing, a competitor's pricing
+# page, a marketing site still serving the bundle it was built from three weeks
+# ago. Nothing in this repository changes when any of those go wrong, so no
+# push-triggered job will ever run to notice.
+#
+# The register of published claims (FEATURES.md) sorts documentation rot into
+# four classes and insists each needs its own mechanism. Class A — drifts on code
+# change — has had `docs-claims` since s263. Class B — drifts with TIME — had
+# nothing at all until s272, and the evidence for what that costs is a matter of
+# record: an OG card advertising a 10 MB binary for thirty-four releases, a
+# /security page naming a version thirty-seven releases old, and the panel's own
+# memory footprint published at ~19 MB against a real reading of ~49 MB, on three
+# surfaces at once, for four months.
+#
+# Every one of those was eventually found by a person reading the page.
+#
+# It runs from a GitHub runner ON PURPOSE. The sites are served from the same box
+# that builds them, so a check running there would fetch its own origin and never
+# see the Cloudflare edge in front of it — which is exactly the layer that served
+# a stale image through a correct build at s268.
+
+on:
+  schedule:
+    # 07:15 UTC daily. Deliberately not on the hour: GitHub queues scheduled jobs
+    # by the minute and the top of the hour is heavily contended, which delays
+    # runs and, for a check whose whole subject is freshness, makes the report
+    # arrive when nobody is looking.
+    - cron: '15 7 * * *'
+  workflow_dispatch:
+  # Also on any push that touches what the check reads or asserts, so a change to
+  # the register or the site source is verified against the live world before it
+  # has a day to sit there being wrong.
+  push:
+    branches: [main]
+    paths:
+      - 'FEATURES.md'
+      - 'website/client/**'
+      - 'tests/live-surfaces-check.sh'
+      - '.github/workflows/live-surfaces.yml'
+
+concurrency:
+  group: live-surfaces
+  cancel-in-progress: false
+
+jobs:
+  live-surfaces:
+    name: Class B + C — the published surfaces still match this commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: website/client/package-lock.json
+
+      - name: Check the live surfaces
+        env:
+          # Two arms read the GitHub API — the release assets the register's
+          # binary sizes come from, and the advisory the react-router waiver is
+          # conditioned on. Unauthenticated that is 60 requests an hour per IP,
+          # and hosted runners share addresses, so without this the check reports
+          # a rate limit as though the product were broken.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash tests/live-surfaces-check.sh
+
+      # A scheduled job that fails silently is the same as no job. GitHub emails
+      # the person who last touched the cron when a scheduled run fails, which is
+      # the notification path this relies on; the summary below is so the failure
+      # is legible without opening the log.
+      - name: Explain a failure in the run summary
+        if: failure()
+        run: |
+          {
+            echo "## A published surface has drifted"
+            echo
+            echo "This check compares the live sites, the published release and the"
+            echo "claims in \`FEATURES.md\` against **this commit**. It failing does not"
+            echo "necessarily mean code is broken — it means something published is no"
+            echo "longer true, or a claim has gone too long without anyone confirming"
+            echo "it still is."
+            echo
+            echo "Read the step log above: each assertion says what it expected and"
+            echo "what it found."
+            echo
+            echo "The usual causes, in rough order of likelihood:"
+            echo
+            echo "- **dockpanel.dev is serving a stale bundle.** The marketing site is"
+            echo "  built by hand. Run \`npm run build\` in \`website/client\` on the"
+            echo "  origin box, then purge the Cloudflare cache."
+            echo "- **A measurement expired.** Retake it on a real box and update the"
+            echo "  register in \`FEATURES.md\`; do not simply move the date."
+            echo "- **A figure was edited on one surface and not the register.**"
+            echo "- **A certificate is close to expiry**, which means renewal is not"
+            echo "  running rather than that the certificate is wrong."
+          } >> "$GITHUB_STEP_SUMMARY"

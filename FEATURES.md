@@ -183,18 +183,69 @@
 
 ## Verified Metrics
 
-| Metric | Value | Verified |
-|--------|-------|----------|
-| Agent binary | 20 MB | 2026-03-23 |
-| API binary | 19 MB | 2026-03-23 |
-| CLI binary | 1.8 MB | 2026-03-23 |
-| Agent RAM (RSS) | ~12 MB | 2026-04-15 |
-| API RAM (RSS) | ~7 MB | 2026-04-15 |
-| Panel services RAM (agent + API) | ~19 MB | 2026-04-15 |
-| Full-stack RAM (with bundled PostgreSQL) | ~85 MB | 2026-04-15 |
-| App templates | 153 (14 categories) | 2026-03-28 |
-| API endpoints | 776 (496 backend + 280 agent) | 2026-04-30 |
-| E2E tests | 454 (10 test suites incl. tier2-pin + chain-report-all-kinds sub-suites) | 2026-04-30 |
-| Frontend pages | 51 | 2026-04-14 |
-| DB migrations | 89 | 2026-04-30 |
-| Background services | 11 | 2026-03-22 |
+This table is the **measurement register**: every number DockPanel publishes about
+itself — on this file, on the README, in the docs, and on dockpanel.dev — is quoted
+from here, and `tests/docs-claims-pin-e2e.sh` fails the build when any surface
+states a different figure for a metric named below.
+
+`MB` means **MiB** (2²⁰ bytes) throughout — the unit `ls -lh`, `free -h` and
+`docker stats` print. Mixing that with decimal MB is how the site ended up quoting
+a binary size in one convention and a memory figure in the other.
+
+The `Source` column is the derivation, and it decides which mechanism keeps the row
+honest:
+
+- **derived** — computed from source by `tests/docs-claims-pin-e2e.sh` on every
+  commit. The command is in that suite, beside the assertion.
+- **release** — read from the published release assets via the GitHub API by
+  `tests/live-surfaces-check.sh`, which runs on a schedule rather than on a commit.
+- **measured** — a reading taken on a real box, which no CI job can reproduce.
+  These carry a date and expire: the scheduled check fails once one is older than
+  its budget, because a measurement nobody has retaken is a claim, not a fact.
+
+| Metric | Value | Source | Verified |
+|--------|-------|--------|----------|
+| API binary | 22 MB | release | v2.44.0 |
+| Agent binary | 21 MB | release | v2.44.0 |
+| CLI binary | 1.7 MB | release | v2.44.0 |
+| Panel binaries, all three | 45 MB | release | v2.44.0 |
+| API RAM (RSS) | ~14 MB | measured | 2026-07-27 |
+| Agent RAM (RSS) | ~35 MB | measured | 2026-07-27 |
+| Panel services RAM (agent + API) | ~49 MB | measured | 2026-07-27 |
+| Full-stack RAM (with bundled PostgreSQL) | ~109 MB | measured | 2026-07-27 |
+| App templates | 153 | derived | every commit |
+| HTTP routes | 809 (527 backend + 282 agent) | derived | every commit |
+| Regression-pin assertions | 302 (11 suites) | derived | every commit |
+| Frontend pages | 51 | derived | every commit |
+| DB migrations | 97 | derived | every commit |
+| Supervised background services | 15 | derived | every commit |
+
+Five of these were wrong when the register was built (s272), some by a factor of
+three, and one — the panel's own memory footprint, the headline claim of the
+project — had been published at `~19 MB` since April against a real reading of
+`~49 MB`. They were wrong on every surface at once, in both directions, which is
+what a hand-maintained number does. Hence the register.
+
+## Claims That Expire
+
+Some published facts cannot rot on a commit and cannot be derived from anything
+in this repository, because they are about the world rather than about DockPanel:
+what a competitor charges, how much memory a competitor uses, whether a
+screenshot still resembles the product. No CI job will ever catch these, because
+CI only runs when something changes here, and nothing here changes when a
+competitor raises its price.
+
+So they expire instead. `tests/live-surfaces-check.sh` runs on a schedule rather
+than on a commit, and fails once a claim is older than its budget. The failure
+does not mean the claim is wrong — it means nobody has looked in long enough that
+we no longer know.
+
+| Claim | Where | Last verified | Budget (days) |
+|-------|-------|---------------|---------------|
+| Competitor RAM: cPanel 800 MB, Plesk 512 MB, HestiaCP 512 MB, CloudPanel 250 MB | COMPARISON.md, README.md, dockpanel.dev | 2026-03-21 | 180 |
+| Competitor pricing and plan limits | COMPARISON.md, README.md | 2026-04-15 | 180 |
+| Screenshots still resemble the shipped UI | README.md, dockpanel.dev | 2026-07-26 | 90 |
+| The advertised install one-liner is the one we support | README.md, dockpanel.dev | 2026-07-27 | 180 |
+
+The register's `measured` rows above expire too, on a 120-day budget declared in
+that script.

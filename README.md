@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>The most feature-packed free server panel ever built.</strong><br>
-  Self-hosted. Docker-native. Written in Rust. Panel services run on <strong>~19MB of RAM</strong>. 776 API endpoints. 153 app templates. 454 E2E tests. ~41MB binaries. Zero subscriptions.
+  Self-hosted. Docker-native. Written in Rust. Panel services run on <strong>~49MB of RAM</strong>. 809 HTTP routes. 153 app templates. 302 regression assertions. ~45MB binaries. Zero subscriptions.
 </p>
 
 <p align="center">
@@ -53,7 +53,7 @@ No other free panel gives you Git push-to-deploy with blue-green zero-downtime u
 | **Multi-server** | **Unlimited** | No | No | Yes |
 | **Reseller + white-label** | **Yes** | Reseller only | No | No |
 | **CLI + IaC** | **Full CLI + YAML export** | Limited | No | No |
-| **RAM usage (panel)** | **~19MB** | ~200MB+ | ~150MB+ | SaaS |
+| **RAM usage (panel)** | **~49MB** | ~200MB+ | ~150MB+ | SaaS |
 | **ARM64 / Homelab** | **Yes** | Partial | No | No |
 | **Self-hosted** | **Yes** | Yes | Yes | No |
 
@@ -244,7 +244,7 @@ Browser → React 19 SPA → Nginx
                            └── /*     → Frontend (static files)
 ```
 
-**3 Rust binaries**: Agent (~21MB), API (~20MB), CLI (~1MB). Runtime RAM: ~12MB agent + ~7MB API ≈ 19MB for the panel itself; ~85MB with the bundled PostgreSQL. 11 background services.
+**3 Rust binaries**: Agent (~21MB), API (~22MB), CLI (~1.7MB). Runtime RAM: ~35MB agent + ~14MB API ≈ 49MB for the panel itself; ~109MB with the bundled PostgreSQL. 15 supervised background services.
 
 | Component | Tech | Role |
 |-----------|------|------|

@@ -68,16 +68,11 @@ for f in "${MD_SURFACES[@]}" "${WEB_SURFACES[@]}"; do
   done < <(grep -ohE "$CLAIM_RE" "$f" 2>/dev/null)
 done
 
-# The marketing site also carries the count as a bare stat-tile value, which the
-# prose pattern above cannot see.
-if [ -f website/client/src/pages/Landing.tsx ]; then
-  tile=$(grep -oE "\{ v: [0-9]+, s: '', e: '', l: 'templates' \}" website/client/src/pages/Landing.tsx | grep -oE 'v: [0-9]+' | grep -oE '[0-9]+')
-  if [ -n "$tile" ] && [ "$tile" != "$N_TEMPLATES" ]; then
-    bad "Landing.tsx stat tile says $tile templates, catalogue holds $N_TEMPLATES"
-    drift=1
-  fi
-fi
-
+# The marketing site used to carry the count a second time as a bare stat-tile
+# value, which the prose pattern above could not see, so it had its own arm here.
+# That tile was removed in s271 and the arm then matched nothing on every run —
+# a check that cannot fail, sitting in the suite looking like coverage. It is
+# gone; §6 covers the site instead, by way of the register.
 [ "$drift" -eq 0 ] && ok "every template-count claim on all three surfaces reads $N_TEMPLATES"
 
 echo
@@ -308,6 +303,253 @@ else
       bad "ARM64 support is claimed but $SMOKE has no smoke-arm64 job"
     fi
   fi
+fi
+
+echo
+echo "── 6. Every published figure is quoted from the measurement register ──"
+
+# FEATURES.md §"Verified Metrics" is the register: the one place a number about
+# DockPanel is written down.
+#
+# s271 audited every figure on the marketing page by hand and corrected six of
+# them. s272 found three still wrong in the same file — two of them entries of
+# the same FAQ list, three lines apart, giving different answers for the same
+# measurement — and found that the GitHub and docs surfaces, which that audit
+# never opened, were still publishing the panel's own memory footprint at
+# ~19 MB against a real reading of ~49 MB. Five register rows were wrong, one by
+# a factor of three.
+#
+# Auditing a page of numbers does not converge. Writing each number down once
+# does. So this section enforces two properties: the register agrees with the
+# source it claims to describe, and no surface states a figure the register does
+# not.
+
+REGISTER=FEATURES.md
+MEAS=website/client/src/measurements.ts
+
+declare -A REG REG_SRC
+reg_rows=0
+while IFS='|' read -r _ metric value source _; do
+  metric=$(sed -e 's/^ *//' -e 's/ *$//' -e 's/\*\*//g' <<<"$metric")
+  value=$(sed -e 's/^ *//' -e 's/ *$//' <<<"$value")
+  source=$(tr -d ' ' <<<"$source")
+  [ "$metric" = "Metric" ] && continue
+  num=$(grep -oE '[0-9]+(\.[0-9]+)?' <<<"$value" | head -1)
+  [ -z "$metric" ] || [ -z "$num" ] && continue
+  REG["$metric"]="$num"
+  REG_SRC["$metric"]="$source"
+  reg_rows=$((reg_rows+1))
+done < <(awk '/^## Verified Metrics/ {inside=1; next} inside && /^## / {exit} inside && /^\|/ {print}' "$REGISTER")
+
+if [ "$reg_rows" -lt 10 ]; then
+  bad "parsed only $reg_rows rows out of $REGISTER's register — the table shape changed and this whole section went blind"
+else
+  ok "measurement register parsed: $reg_rows metrics from $REGISTER"
+fi
+
+# --- 6a. Every metric the register calls "derived" must match its derivation ---
+#
+# The derivation lives here, beside the assertion, so that reading the check
+# tells you what the number means. A register row marked `derived` with no case
+# below is a FAILURE rather than a skip: otherwise adding a metric would quietly
+# create the blind spot this suite exists to prevent.
+
+derive() {
+  case "$1" in
+    "App templates")
+      echo "$N_TEMPLATES" ;;
+    "HTTP routes")
+      # Routes registered on the two axum routers. The published figure used to
+      # be "776 API endpoints (496 backend + 280 agent)" — a decomposition that
+      # summed correctly and matched source on neither side.
+      echo $(( $(grep -rhoE '\.route\("[^"]+"' panel/backend/src --include='*.rs' 2>/dev/null | wc -l) \
+              + $(grep -rhoE '\.route\("[^"]+"' panel/agent/src   --include='*.rs' 2>/dev/null | wc -l) )) ;;
+    "Regression-pin assertions")
+      # Re-summed from docs/testing.md's own table, independently of §3.
+      awk -F'|' '/^\| *`[a-z0-9-]+\.sh` *\|/ { gsub(/ /,"",$3); s+=$3 } END { print s+0 }' docs/testing.md ;;
+    "Frontend pages")
+      find panel/frontend/src/pages -maxdepth 1 -name '*.tsx' 2>/dev/null | wc -l ;;
+    "DB migrations")
+      find panel/backend/migrations -maxdepth 1 -name '*.sql' 2>/dev/null | wc -l ;;
+    "Supervised background services")
+      grep -cE '^ *spawn_supervised\("' panel/backend/src/main.rs 2>/dev/null ;;
+    *)
+      return 1 ;;
+  esac
+}
+
+derived_checked=0
+for metric in "${!REG[@]}"; do
+  [ "${REG_SRC[$metric]}" = "derived" ] || continue
+  if ! got=$(derive "$metric"); then
+    bad "the register marks '$metric' as derived, but this suite has no derivation for it — add one, or the row is published on nothing"
+    continue
+  fi
+  got=$(tr -d ' \n' <<<"$got")
+  derived_checked=$((derived_checked+1))
+  if [ "$got" = "${REG[$metric]}" ]; then
+    ok "$metric: register says ${REG[$metric]}, source derives $got"
+  else
+    bad "$metric: register says ${REG[$metric]}, source derives $got"
+  fi
+done
+
+if [ "$derived_checked" -eq 0 ]; then
+  bad "no derived metric was checked — either the register lost its Source column or every row stopped being derivable"
+else
+  ok "$derived_checked derived metrics re-computed from source"
+fi
+
+# --- 6b. The marketing site quotes the register rather than restating it ---
+#
+# website/client/src/measurements.ts is the SPA's single copy of these figures;
+# every page imports it, so the intra-page contradiction s272 found is no longer
+# expressible. What remains checkable is that the SPA's copy still agrees with
+# the register — the one seam left between them.
+
+# Read a value out of one nested block, so that `api` under `binary` and `api`
+# under `ram` cannot satisfy each other's assertion.
+meas_value() {
+  awk -v blk="$1" -v key="$2" '
+    $0 ~ "^  " blk ": \\{" { inside = 1; next }
+    inside && /^  \},/     { exit }
+    inside && $0 ~ "^ +" key ": " {
+      line = $0
+      sub(/^[^:]+: */, "", line)
+      sub(/,.*$/, "", line)
+      print line
+      exit
+    }
+  ' "$MEAS"
+}
+
+check_spa() {
+  local metric="$1" blk="$2" key="$3"
+  local want="${REG[$metric]:-}"
+  if [ -z "$want" ]; then
+    bad "the register has no '$metric' row — the site check for $blk.$key lost its anchor"
+    return
+  fi
+  local got; got=$(meas_value "$blk" "$key")
+  if [ -z "$got" ]; then
+    bad "$MEAS has no $blk.$key — the site's copy of '$metric' moved and this check went blind"
+  elif [ "$got" = "$want" ]; then
+    ok "$MEAS quotes $metric as $want"
+  else
+    bad "$MEAS says $blk.$key = $got; the register says '$metric' is $want"
+  fi
+}
+
+if [ ! -f "$MEAS" ]; then
+  bad "$MEAS is missing — the marketing site has gone back to writing its own numbers"
+else
+  check_spa "API binary"                               binary api
+  check_spa "Agent binary"                             binary agent
+  check_spa "CLI binary"                               binary cli
+  check_spa "Panel binaries, all three"                binary total
+  check_spa "API RAM (RSS)"                            ram    api
+  check_spa "Agent RAM (RSS)"                          ram    agent
+  check_spa "Panel services RAM (agent + API)"         ram    services
+  check_spa "Full-stack RAM (with bundled PostgreSQL)" ram    fullStack
+fi
+
+# --- 6c. Every surface that publishes a figure still carries the current one ---
+#
+# The markdown surfaces cannot import anything, so the seam there is a presence
+# check: a file listed below must contain the register's value for that metric.
+# Change the register and forget a surface, and that surface no longer contains
+# the new number — which is exactly the drift, and it fails here.
+#
+# The map is deliberately explicit rather than a scan. A scan would have to read
+# English to tell "the panel idles at 49 MB" from "cPanel uses 800 MB", and a
+# regex that tries and quietly matches nothing is the failure mode this suite
+# keeps finding elsewhere.
+
+declare -A SURFACES=(
+  ["Panel services RAM (agent + API)"]="README.md COMPARISON.md docs/getting-started.md"
+  ["Full-stack RAM (with bundled PostgreSQL)"]="COMPARISON.md docs/getting-started.md"
+  ["Panel binaries, all three"]="README.md COMPARISON.md"
+  ["App templates"]="README.md"
+  ["HTTP routes"]="README.md"
+  ["Regression-pin assertions"]="README.md docs/testing.md"
+  ["Supervised background services"]="README.md"
+)
+
+surface_checks=0
+for metric in "${!SURFACES[@]}"; do
+  want="${REG[$metric]:-}"
+  if [ -z "$want" ]; then
+    bad "the register has no '$metric' row, but surfaces are mapped to it — the map and the register disagree"
+    continue
+  fi
+  for f in ${SURFACES[$metric]}; do
+    if [ ! -f "$f" ]; then
+      bad "$f is mapped as publishing '$metric' but does not exist"
+      continue
+    fi
+    surface_checks=$((surface_checks+1))
+    if grep -qE "(^|[^0-9.])${want}([^0-9.]|\$)" "$f"; then
+      ok "$f carries the register's $metric ($want)"
+    else
+      bad "$f publishes '$metric' but does not contain the register's value $want — it is quoting an older measurement"
+    fi
+  done
+done
+
+if [ "$surface_checks" -eq 0 ]; then
+  bad "no surface was checked against the register — the map is empty and this arm proves nothing"
+else
+  ok "$surface_checks surface/metric pairs checked against the register"
+fi
+
+# --- 6d. The superseded figures must not come back ---
+#
+# 6c is a presence check, and mutation testing showed exactly where that is not
+# enough: README states the panel's memory footprint in THREE places, so reverting
+# one of them to the old ~19MB left the other two carrying the current value and
+# the file still "contained" it. The arm passed while the masthead — the most-read
+# line in the project — was wrong again.
+#
+# So the corrected figures get the same treatment §4 gives a disproved claim: an
+# assertion that the old one cannot reappear. These are matched as full published
+# strings rather than bare digits, because 11 and 41 occur innocently everywhere
+# and a pin that fires on a coincidence gets disabled, which is worse than no pin.
+
+declare -A SUPERSEDED=(
+  ["~19MB"]="the panel's memory footprint, published for four months against a real reading of ~49MB"
+  ["~19 MB"]="the panel's memory footprint, published for four months against a real reading of ~49MB"
+  ["~85MB"]="full-stack memory; the real figure with PostgreSQL is ~109MB"
+  ["~85 MB"]="full-stack memory; the real figure with PostgreSQL is ~109MB"
+  ["~41MB"]="binaries on disk; the published release totals ~45MB"
+  ["~41 MB"]="binaries on disk; the published release totals ~45MB"
+  ["776 API endpoints"]="a count whose own decomposition matched source on neither side; it is 809 routes"
+  ["454 E2E tests"]="a total nothing derived; the derived figure is 302 regression assertions"
+  ["11 background services"]="there are 15 supervised background services"
+)
+
+STALE_SURFACES=(README.md COMPARISON.md FEATURES.md docs/getting-started.md
+                docs/testing.md website/client/src/measurements.ts
+                website/client/src/pages/Landing.tsx)
+
+stale_hits=0
+stale_checked=0
+for phrase in "${!SUPERSEDED[@]}"; do
+  for f in "${STALE_SURFACES[@]}"; do
+    [ -f "$f" ] || continue
+    stale_checked=$((stale_checked+1))
+    # FEATURES.md explains the correction in prose, so it is allowed to name the
+    # old figure inside a line that also says what replaced it.
+    if grep -nF -- "$phrase" "$f" 2>/dev/null | grep -qv 'against a real reading\|had been published at'; then
+      bad "$f has gone back to publishing '$phrase' — $(printf '%s' "${SUPERSEDED[$phrase]}")"
+      stale_hits=$((stale_hits+1))
+    fi
+  done
+done
+
+if [ "$stale_checked" -eq 0 ]; then
+  bad "no surface was scanned for superseded figures — this arm proves nothing"
+elif [ "$stale_hits" -eq 0 ]; then
+  ok "none of the ${#SUPERSEDED[@]} superseded figures has reappeared on any of the ${#STALE_SURFACES[@]} surfaces"
 fi
 
 echo

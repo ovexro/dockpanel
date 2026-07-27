@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, useInView, useSpring, useMotionValue } from 'motion/react';
 import { Link } from 'react-router-dom';
 import { Logo } from '../components/Logo';
+import { measurements as m } from '../measurements';
 import {
   Terminal, Server, ShieldCheck, Database, Globe, Lock, Box,
   FileCode2, Activity, Stethoscope, HardDriveDownload, Cpu,
@@ -88,7 +89,7 @@ function AnimatedTerminal() {
 
         const output: { text: string; cls: string; delay: number }[] = [
           { text: '  Detecting OS... Ubuntu 24.04 LTS', cls: 'text-zinc-600', delay: 400 },
-          { text: '  Downloading dockpanel-api (41 MB)...', cls: 'text-zinc-600', delay: 600 },
+          { text: `  Downloading dockpanel-api (${m.binary.api} MB)...`, cls: 'text-zinc-600', delay: 600 },
           { text: '  Downloading dockpanel-agent...', cls: 'text-zinc-600', delay: 350 },
           { text: '  Configuring nginx & PostgreSQL...', cls: 'text-zinc-600', delay: 500 },
           { text: '  Starting services...', cls: 'text-zinc-600', delay: 400 },
@@ -97,7 +98,12 @@ function AnimatedTerminal() {
           // stale \u2014 because a hardcoded version in a decorative animation is
           // something nobody ever remembers to bump. The elapsed time is the
           // point of the line anyway.
-          { text: '\u2713 DockPanel installed in 47s', cls: 'text-emerald-400 font-medium', delay: 350 },
+          //
+          // The download size on the line above was left behind by that same
+          // edit: the version came out for being un-bumpable and the "41 MB"
+          // beside it, wrong by a factor of two, stayed. Both were decoration;
+          // only one was noticed. It is quoted from the register now.
+          { text: `\u2713 DockPanel installed in ${m.installSeconds}s`, cls: 'text-emerald-400 font-medium', delay: 350 },
           { text: '  Panel \u2192 https://your-server:3080', cls: 'text-zinc-300', delay: 200 },
         ];
 
@@ -152,8 +158,8 @@ function RamBar({ name, mb, max, highlight = false, delay = 0 }: {
   const width = (mb / max) * 100;
 
   // The figure sits OUTSIDE the fill, in a fixed column, for the reason this
-  // chart exists: DockPanel is 19 MB of an 800 MB scale, so its bar is about
-  // 2% wide and a label printed inside it was clipped to nothing — the one
+  // chart exists: DockPanel is a small fraction of an 800 MB scale, so its bar
+  // is narrow and a label printed inside it was clipped to nothing — the one
   // number the chart is making an argument about was the only one you could
   // not read. Putting every figure in the same right-hand column also means
   // they align, which is what makes a set of measurements comparable at all.
@@ -190,7 +196,7 @@ function NavLink({ href, label, active }: { href: string; label: string; active:
 /* ── Data ─────────────────────────────────────────────────────────── */
 const showcase = [
   {
-    title: '153 templates. One click.',
+    title: `${m.templates} templates. One click.`,
     desc: 'WordPress, Postgres, Grafana, n8n, Immich \u2014 pick a template. SSL, reverse proxy, and networking are configured automatically.',
     shot: '/screenshots/dp-apps.png',
     alt: 'Docker Apps gallery',
@@ -219,7 +225,7 @@ const allFeatures = [
   { name: 'Site Management', desc: 'PHP, Node, Python, static & reverse proxy', icon: Globe },
   { name: 'Free SSL & Wildcard', desc: "Auto-renew via Let's Encrypt & Cloudflare DNS", icon: Lock },
   { name: 'MySQL & PostgreSQL', desc: 'Create, backup, restore, point-in-time recovery', icon: Database },
-  { name: '153 Docker Templates', desc: 'One-click deploy across 14 categories', icon: Box },
+  { name: `${m.templates} Docker Templates`, desc: 'One-click deploy across 14 categories', icon: Box },
   { name: 'Web Terminal', desc: 'Full PTY with privilege drop & command filtering', icon: Terminal },
   { name: 'Infrastructure as Code', desc: 'YAML export/import for reproducible setups', icon: FileCode2 },
   { name: 'Uptime Monitoring', desc: 'HTTP, TCP, ping probes with incident management', icon: Activity },
@@ -256,10 +262,14 @@ const steps = [
 const faqs = [
   { q: 'Is it really free?', a: 'Every feature, every server, no limits. Licensed under BSL 1.1, which converts to MIT in 2030. There is no premium tier.' },
   { q: 'System requirements?', a: '512 MB RAM, 1 CPU, 10 GB disk. Runs on Ubuntu, Debian, CentOS, Rocky, AlmaLinux, and Fedora. ARM64 works too.' },
-  { q: 'How is this different from cPanel?', a: "cPanel uses ~800 MB of RAM, costs $15/month, and doesn't support Docker. DockPanel's two services take about 52 MB between them, or roughly 109 MB counting the bundled PostgreSQL, cost nothing, and ship with 153 Docker templates, a WAF, passkey authentication, Git deploys, a CLI, and multi-server management." },
+  { q: 'How is this different from cPanel?', a: `cPanel uses ~${m.competitorRam.cPanel} MB of RAM, costs $15/month, and doesn't support Docker. DockPanel's two services take about ${m.ram.services} MB between them, or roughly ${m.ram.fullStack} MB counting the bundled PostgreSQL, cost nothing, and ship with ${m.templates} Docker templates, a WAF, passkey authentication, Git deploys, a CLI, and multi-server management.` },
   { q: 'What happens if DockPanel goes down?', a: 'Your sites keep running. Nginx and Docker are independent processes \u2014 the panel is just the management layer. It auto-restarts via systemd if it ever stops.' },
   { q: 'Can I manage multiple servers?', a: 'As many as you want. Install a lightweight agent on each server and manage them all from one dashboard.' },
-  { q: 'Why Rust?', a: "~41 MB of binaries on disk, ~19 MB of RAM for the panel services at idle (measured on a fresh Vultr VPS), no JVM, no Node, no Python dependency to maintain. On a $5 VPS, that's the difference between running 20 sites and running 2." },
+  // "On a $5 VPS, that's the difference between running 20 sites and running 2"
+  // used to close this answer. Nothing derives 20 or 2, and a page arguing from
+  // measurement cannot afford a figure it invented. The measured ones make the
+  // point without it.
+  { q: 'Why Rust?', a: `${m.binary.total} MB of binaries on disk and about ${m.ram.services} MB of RAM for the two panel services at idle — no JVM, no Node, no Python runtime to keep patched. The panel is a process you can forget about rather than a stack you maintain.` },
 ];
 
 /* ── Page ─────────────────────────────────────────────────────────── */
@@ -427,8 +437,8 @@ export default function Landing() {
 
               {/* Every clause here is checkable against the table beside it.
                   A first draft read "…one binary you can fit on a floppy",
-                  which is a nice sentence about a 41 MB binary and a 1.44 MB
-                  disk, i.e. false by a factor of twenty-eight. Specific beats
+                  which is a nice sentence about a 22 MB binary and a 1.44 MB
+                  disk, i.e. false by a factor of fifteen. Specific beats
                   clever, and on a page whose entire argument is measurement,
                   one decorative exaggeration discredits the real figures. */}
               <h1 className="text-[2.5rem] sm:text-[3.25rem] lg:text-[3.75rem] font-semibold text-[#f4f4f5] leading-[1.06] tracking-[-0.03em]">
@@ -446,9 +456,9 @@ export default function Landing() {
             </div>
 
             {/* The evidence, as an instrument reads it. Mono, tabular, ruled —
-                and labelled precisely enough that "52 MB" cannot be mistaken
-                for the download size, which is what the old headline did by
-                putting the RAM figure next to the product name.
+                and labelled precisely enough that the memory figure cannot be
+                mistaken for the download size, which is what the old headline
+                did by putting the RAM figure next to the product name.
 
                 THE ONE ANIMATION ON THIS PAGE, and it earns its place by
                 reporting something: the rows arrive in order and each figure
@@ -462,9 +472,9 @@ export default function Landing() {
                 the same preference itself and renders the final value. */}
             <dl className="lg:col-span-5 mono text-sm border-t border-[#1e1e22]">
               {[
-                ['panel binary', 22, 'MB', 'static; +21 MB agent, +1 MB CLI'],
-                ['memory, both services', 52, 'MB', 'api + agent, cgroup accounting'],
-                ['install to login', 47, 's', 'Ubuntu 24.04, 1 vCPU'],
+                ['panel binary', m.binary.api, 'MB', `static; +${m.binary.agent} MB agent, +${m.binary.cli} MB CLI`],
+                ['memory, both services', m.ram.services, 'MB', 'api + agent, cgroup accounting'],
+                ['install to login', m.installSeconds, 's', 'Ubuntu 24.04, 1 vCPU'],
                 ['runtime deps', 0, '', 'no Node, no Python, no PHP'],
               ].map(([label, n, unit, note], i) => (
                 <motion.div
@@ -698,11 +708,11 @@ export default function Landing() {
           </div>
 
           <div className="max-w-4xl space-y-3 mb-16">
-            <RamBar name="DockPanel" mb={109} max={800} highlight delay={0} />
-            <RamBar name="CloudPanel" mb={250} max={800} delay={0.1} />
-            <RamBar name="Plesk" mb={512} max={800} delay={0.2} />
-            <RamBar name="HestiaCP" mb={512} max={800} delay={0.3} />
-            <RamBar name="cPanel" mb={800} max={800} delay={0.4} />
+            <RamBar name="DockPanel" mb={m.ram.fullStack} max={m.competitorRam.cPanel} highlight delay={0} />
+            <RamBar name="CloudPanel" mb={m.competitorRam.cloudPanel} max={m.competitorRam.cPanel} delay={0.1} />
+            <RamBar name="Plesk" mb={m.competitorRam.plesk} max={m.competitorRam.cPanel} delay={0.2} />
+            <RamBar name="HestiaCP" mb={m.competitorRam.hestiaCp} max={m.competitorRam.cPanel} delay={0.3} />
+            <RamBar name="cPanel" mb={m.competitorRam.cPanel} max={m.competitorRam.cPanel} delay={0.4} />
           </div>
 
           <motion.div initial={{ opacity: 0, y: 15 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
