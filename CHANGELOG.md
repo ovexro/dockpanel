@@ -4,6 +4,79 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.42.0] - 2026-07-27
+
+### Fixed
+
+- **The dashboard CPU gauge reported the caller's timing, not the machine's
+  load.** It read 99% on a box `top` showed 94.6% idle, while the 24-hour chart
+  built from the *same* endpoint read 9.7%. Nothing was wrong with the box.
+
+  CPU percentage is a delta over a window, and `/system/info` refreshed CPU
+  inside the request handler — so the window was "time since whichever unrelated
+  caller last hit this endpoint". Five callers share it (the metrics collector
+  every 30s, the dashboard WebSocket loop every ~5s, the dashboard REST tick,
+  the backup scheduler, the Docker-apps page), so each one silently corrupted
+  the others' measurements. Compounding it, the handler walked every process in
+  `/proc` on each call — 70ms of CPU with 583 processes — purely to obtain a
+  *count*, and that walk landed inside the next caller's window, making the
+  endpoint the largest consumer in its own measurement. Below sysinfo's 200ms
+  minimum a refresh is *skipped* rather than rejected, so closely-spaced callers
+  received a stale value with no error anywhere.
+
+  Measured on a single-core box running the published v2.41.0: the same idle
+  machine reported 21.9% at a 0.25s request gap and 1.8% at a 10s gap — a
+  twelvefold swing with no change in load — and reading 0.3s after a six-second
+  burst ended returned 95.5% while the box was idle. That last case is what a
+  user meets: the install saturates the box, the dashboard opens, and the first
+  reading covers the install rather than the present.
+
+  Fixed structurally. A dedicated sampler owns the window: its own CPU-only
+  `System`, a fixed two-second cadence, publishing to an atomic that handlers
+  read for free. The number no longer depends on who asks or how often. On the
+  same box the reported value now stays within a few points of `/proc/stat` at
+  every request spacing, and `/system/info` went from 74–134ms to 3–8ms.
+
+- **Fleet check-ins reported a number made mostly of their own `/proc` walk.**
+  `phone_home` built a `System::new_all()`, called `refresh_all()` immediately
+  after, and read CPU usage off the pair. On an idle 12-core box whose true
+  usage was 4.5%, consecutive runs returned 4.5% to 22.1%. That value is stored
+  as `servers.cpu_usage`, which the Servers page displays and the alert engine
+  compares against CPU thresholds — so it could both raise and withhold alerts
+  on fiction. It now reports the sampled value.
+
+- **A directory the agent must create could be silently unwritable, and one
+  already was on upgraded boxes.** In the agent unit's `ReadWritePaths`, a `-`
+  prefix means "bind if it exists": when the path is absent systemd skips it
+  *silently*, the unit starts and reports success, and every write beneath it
+  fails with `Read-only file system` until the next restart — creating the
+  directory afterwards does not rescue a running service, because the mount
+  namespace is fixed at start.
+
+  The installers pre-create these paths for that reason, and the list was
+  hand-copied into both `setup.sh` and `update.sh`. It had drifted:
+  `/var/spool/cron` reached the unit and `setup.sh` in v2.41.0 but never
+  `update.sh`, so a box that *upgraded* without an existing cron spool got a
+  silently unwritable one — defeating, on exactly those installs, the "existing
+  installs recover on upgrade" property the v2.41.0 cron fix was built for.
+  Driven on a fresh box: with the directory absent at agent start `/crons/sync`
+  answers `crontab command failed` and writes nothing; with it present the same
+  call syncs. Both scripts now derive the list from the unit itself, so the
+  mirror cannot drift from it again.
+
+- `docs/testing.md`'s summary sentence read "Seven suites, 195 assertions" above
+  an eight-row table summing to 228. Every row in that table was verified
+  against live output by `docs-claims-pin-e2e.sh`; the sentence introducing them
+  was not. It is now.
+
+### Internal
+
+- Two new regression pin suites (`cpu-metric-pin-e2e.sh`,
+  `sandbox-paths-pin-e2e.sh`), 32 assertions, each negative-tested to confirm it
+  fails when the defect is reintroduced.
+- `panel/cli/Cargo.lock` had been pinned at 2.38.0 and `package-lock.json` at
+  2.26.0 across several releases; both resynced.
+
 ## [2.41.0] - 2026-07-26
 
 ### Fixed
