@@ -102,6 +102,50 @@ grep -q 'NPM_AUDIT_ALLOWLIST' "$HOOK" \
   && bad "a second npm allowlist is back in the pre-push hook" \
   || ok "there is exactly one reviewed-advisory allowlist"
 
+# The react-router waiver's OWN PREMISES, which are facts about us, not upstream.
+#
+# live-surfaces.yml already re-checks the upstream half daily (has a fix landed
+# inside ^7?). Nothing checked the half the waiver actually rests on: that no
+# frontend here runs the server runtime GHSA-qwww-vcr4-c8h2 needs. Add
+# @react-router/node or framework mode and the waiver silently becomes false
+# while still suppressing a HIGH advisory — the worst direction for a security
+# gate to fail in, and invisible to every other check we own.
+#
+# Discover the frontends from the manifests that actually depend on
+# react-router-dom rather than naming them here: a third frontend must join this
+# pin by existing, not by somebody remembering to add it.
+RR_MANIFESTS=$(find "$REPO" -name package.json \
+                 -not -path '*/node_modules/*' -not -path '*/dist/*' -not -path '*/target/*' \
+                 -exec grep -l '"react-router-dom"' {} + 2>/dev/null | sort)
+RR_COUNT=$(printf '%s' "$RR_MANIFESTS" | grep -c . || true)
+
+# An arm that discovered nothing would pass while proving nothing at all.
+if [ "$RR_COUNT" -gt 0 ]; then
+  ok "found $RR_COUNT frontend(s) depending on react-router-dom to check the waiver against"
+else
+  bad "no manifest depends on react-router-dom — either the dependency is gone (drop the waiver) or this discovery broke"
+fi
+
+for m in $RR_MANIFESTS; do
+  d=$(dirname "$m"); rel=${d#"$REPO"/}
+
+  grep -q '"@react-router/' "$m" \
+    && bad "$rel now depends on a @react-router/* server package — RE-ASSESS the waiver in scripts/npm-audit-gate.mjs, it assumes there is no server runtime" \
+    || ok "$rel has no @react-router/* server runtime package"
+
+  if compgen -G "$d/react-router.config.*" >/dev/null 2>&1; then
+    bad "$rel has a react-router.config.* — framework mode is on, so RSC is reachable; RE-ASSESS the waiver"
+  else
+    ok "$rel has no react-router.config.* (framework mode absent)"
+  fi
+
+  if grep -rqE 'createRequestHandler|"use server"' "$d/src" 2>/dev/null; then
+    bad "$rel now has a request handler or a server action — the waiver's core premise is gone; RE-ASSESS it"
+  else
+    ok "$rel has no createRequestHandler and no server actions"
+  fi
+done
+
 echo
 echo "── B: a site is installed at the scheme it can actually serve ──"
 

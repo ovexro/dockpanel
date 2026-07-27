@@ -105,6 +105,10 @@ const SIGNING_TABLE: &str = "/etc/dockpanel/dkim/signing.table";
 /// Ports the mail stack listens on once installed. Opened in the firewall by
 /// the installer — starting a listener the firewall drops is not an install.
 const MAIL_PORTS: &[&str] = &["25", "587", "465", "143", "993", "110", "995"];
+/// The Roundcube webmail image, deliberately NOT `:latest`. Rationale and the
+/// digest this was verified against live at the single use site in
+/// [`webmail_install`]; pinned here so the version is greppable from one place.
+const ROUNDCUBE_IMAGE: &str = "roundcube/roundcubemail:1.7.x-apache";
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -1608,7 +1612,21 @@ async fn webmail_install(Json(body): Json<serde_json::Value>) -> Result<Json<ser
         "-l".into(), "dockpanel.managed=true".into(),
         "-l".into(), "dockpanel.app.template=roundcube".into(),
         "-l".into(), "dockpanel.app.name=roundcube".into(),
-        "roundcube/roundcubemail:latest".into(),
+        // Pinned off `:latest`, which let a MAJOR Roundcube upgrade land on a
+        // user's mail stack with no warning and no way back — the panel warns
+        // users about exactly this in docker_apps.rs while floating itself.
+        //
+        // `1.7.x` rather than an exact `1.7.2`: this is a web-facing PHP app and
+        // nothing in DockPanel would ever bump a frozen patch tag, so an exact
+        // pin would quietly stop receiving CVE fixes. The `.x` line still gets
+        // upstream's security rebuilds while ruling out the surprise major.
+        //
+        // `-apache` is load-bearing, not decoration: the container is published
+        // on port 80 above, and the -fpm variants do not serve HTTP at all.
+        // Verified by digest at the time of pinning — `latest`, `latest-apache`
+        // and `1.7.2-apache` were all sha256:aed1b9b5dc34, so this changed the
+        // guarantee without changing the image.
+        ROUNDCUBE_IMAGE.into(),
     ]);
 
     let output = safe_command("docker")

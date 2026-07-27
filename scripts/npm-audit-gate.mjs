@@ -29,7 +29,7 @@ const ALLOWLIST = [
   {
     id: 'GHSA-qwww-vcr4-c8h2',
     package: 'react-router',
-    reviewed: '2026-07-25',
+    reviewed: '2026-07-27',
     reason:
       'RSC-mode CSRF bypass. Requires the React Router server runtime — a request ' +
       'handler executing server actions. Both of our frontends are Vite SPAs that ' +
@@ -37,6 +37,14 @@ const ALLOWLIST = [
       '@react-router/node|serve|dev, no createRequestHandler, no ssr config, no ' +
       'server actions. The only fix npm offers is a downgrade to 7.11.0, which is ' +
       'a breaking change to buy protection against a mode we do not run. ' +
+      'Upstream first_patched_version is 8.3.0 — a MAJOR, so no in-range bump ' +
+      'exists and clearing this advisory means migrating both frontends to v8. ' +
+      'Re-derived independently 2026-07-27 and the premises still hold. ' +
+      'BOTH halves of this waiver are now checked rather than trusted: the ' +
+      'upstream half daily by live-surfaces-check.sh section 4 (fails the moment a ' +
+      '7.x fix lands), and the half that is a fact about US — no server runtime ' +
+      'here — by ssl-correctness-pin-e2e.sh section A, which fails if any frontend ' +
+      'gains @react-router/*, a react-router.config.*, or a request handler. ' +
       'Re-check when react-router ships a fix inside the ^7 range.',
   },
 ];

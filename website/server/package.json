@@ -27,6 +27,7 @@
     "typescript": "^5.9.3"
   },
   "overrides": {
-    "path-to-regexp": "^8.4.0"
+    "path-to-regexp": "^8.4.0",
+    "body-parser": "^2.3.0"
   }
 }

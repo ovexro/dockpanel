@@ -6,8 +6,79 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-No code changed. What changed is that most of the numbers this project published
-about itself were wrong, and there is now a mechanism that notices.
+## [2.44.1] - 2026-07-27
+
+A dependency-and-provenance release, and the numbers work from the previous
+commit that had not yet been published under a tag.
+
+Every open advisory against this project was assessed rather than merely bumped,
+and **none of them was ever exploitable here** — which is stated plainly below
+rather than dressed up as a fix. What was genuinely wrong was quieter: an image
+that could change major version under a running mail stack without asking, an
+installer that could silently discard the dependency tree the audit gates had
+scanned, and a waiver whose reasoning nothing checked.
+
+### Security
+
+- **The Roundcube webmail image was `:latest`.** A major Roundcube upgrade could
+  land on a user's mail stack with no warning and no way back — while the panel
+  itself warns users to pin exactly this (`docker_apps.rs` flags `:latest` in any
+  app they deploy). Now `1.7.x-apache`.
+
+  Deliberately the `.x` line rather than an exact patch: this is a web-facing PHP
+  application and nothing in DockPanel would ever bump a frozen tag, so pinning
+  to `1.7.2` would have quietly stopped its security rebuilds. Verified by digest
+  at the time of pinning — `latest`, `latest-apache` and `1.7.2-apache` were all
+  `sha256:aed1b9b5dc34`, so this changed the guarantee without changing the image.
+
+- **Both installers could silently discard the audited dependency tree.**
+  `setup.sh` and `update.sh` ran `npm ci --silent 2>/dev/null || npm install
+  --silent 2>/dev/null` when building the frontend. `npm ci` installs exactly the
+  committed lockfile — the tree the audit gates actually scan; `npm install`
+  re-resolves and can pull versions nothing here has ever seen. Either arm could
+  fail for any reason and say nothing, and if both failed the script died under
+  `set -e` printing no explanation at all.
+
+  The fallback stays, because a box whose lockfile has drifted should still
+  update. It is now loud: the reason `npm ci` failed is shown, and the fallback
+  announces that the tree is being re-resolved and may differ from the audited
+  lockfile.
+
+- **`body-parser` upgraded 2.2.2 → 2.3.0** (GHSA-v422-hmwv-36x6, low), with the
+  floor set in `package.json` and not only in the lockfile.
+
+  *Was it exploitable? No.* The advisory needs an invalid `limit` value to be
+  passed, at which point size enforcement is silently disabled. The only body
+  parser in `website/server` is `express.json()` with no options at all, so there
+  was never a `limit` for us to get wrong.
+
+- **The `react-router` advisory (GHSA-qwww-vcr4-c8h2, high) was re-derived from
+  scratch rather than carried, and the waiver holds.** It requires RSC mode with
+  server actions. Both frontends are Vite SPAs mounting `BrowserRouter`, with no
+  `@react-router/*` server package, no `react-router.config.*`, no
+  `createRequestHandler` and no server actions. Upstream's first patched version
+  is 8.3.0 — a major — so clearing the alert means migrating both frontends, not
+  bumping them, and npm's only in-range offer remains a downgrade to 7.11.0.
+
+  What changed is that the waiver is no longer trusted on its own word. Its
+  upstream half was already re-checked daily; the half that is a fact about *us*
+  — that no frontend here runs a server runtime — is now pinned by
+  `ssl-correctness-pin-e2e.sh`, which fails if any frontend gains the machinery
+  that would make the advisory apply. The frontends are discovered from the
+  manifests that depend on `react-router-dom`, so a third one joins the check by
+  existing rather than by being remembered.
+
+- `spin` moved off a yanked release (0.9.8 → 0.9.9) in the backend lockfile,
+  clearing the last `cargo audit` warning there. *Was it exploitable? No — it was
+  never even compiled.* `cargo tree -i spin` returns nothing and no artifact is
+  produced; it is a phantom lockfile entry like the `rsa` one already documented
+  in `.cargo/audit.toml`. The warning was real, the exposure was not.
+
+  `rustls-pemfile` (RUSTSEC-2025-0134, unmaintained) in the agent is the one
+  finding that genuinely stands: it *is* linked and reachable, parsing
+  certificates in `tls.rs`. But "unmaintained" is not a vulnerability, 2.2.0 is
+  the newest release in existence, and the other consumer is `axum-server`. It
+  stays an accepted, written-down warning rather than a silent one.
 
 ### Fixed
 
@@ -34,7 +105,7 @@ about itself were wrong, and there is now a mechanism that notices.
   routes — 527 and 282 — and it is now counted rather than remembered.
 
 - `454 E2E tests`, `89 DB migrations` and `11 background services` were likewise
-  stale or undefined. They are 302 regression assertions across eleven suites,
+  stale or undefined. They are 309 regression assertions across eleven suites,
   97 migrations, and 15 supervised background services.
 
 - Two entries of the same FAQ list on the front page gave different answers for

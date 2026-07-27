@@ -978,7 +978,20 @@ build_frontend() {
     fi
 
     log "Installing npm dependencies..."
-    (cd "$FRONTEND_DIR" && npm ci --silent 2>/dev/null || npm install --silent 2>/dev/null)
+    # `npm ci` installs EXACTLY the committed package-lock.json — the tree the
+    # audit gates actually scanned. `npm install` re-resolves and can pull
+    # versions no scanner here has ever seen, which silently un-ships a
+    # dependency patch. Keep the fallback (a box whose lock has drifted should
+    # still install) but never let it happen quietly, and never discard the
+    # reason: sending both streams to /dev/null is how the RHEL agent install
+    # failed for a year printing nothing at all.
+    if ! (cd "$FRONTEND_DIR" && npm ci --silent); then
+        warn "npm ci failed (reason above) — falling back to 'npm install'"
+        warn "Dependencies will be RE-RESOLVED; the tree may differ from the audited lockfile"
+        if ! (cd "$FRONTEND_DIR" && npm install --silent); then
+            error "npm install also failed — the frontend build below will likely fail too"
+        fi
+    fi
 
     log "Building frontend..."
     (cd "$FRONTEND_DIR" && npx vite build 2>&1 | tail -3)
