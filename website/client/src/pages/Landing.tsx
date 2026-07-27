@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, useInView, useSpring, useMotionValue } from 'motion/react';
 import { Link } from 'react-router-dom';
+import { Logo } from '../components/Logo';
 import {
   Terminal, Server, ShieldCheck, Database, Globe, Lock, Box,
   FileCode2, Activity, Stethoscope, HardDriveDownload, Cpu,
@@ -130,26 +131,28 @@ function RamBar({ name, mb, max, highlight = false, delay = 0 }: {
   const inView = useInView(ref, { once: true, margin: '-20px' });
   const width = (mb / max) * 100;
 
+  // The figure sits OUTSIDE the fill, in a fixed column, for the reason this
+  // chart exists: DockPanel is 19 MB of an 800 MB scale, so its bar is about
+  // 2% wide and a label printed inside it was clipped to nothing — the one
+  // number the chart is making an argument about was the only one you could
+  // not read. Putting every figure in the same right-hand column also means
+  // they align, which is what makes a set of measurements comparable at all.
   return (
-    <div ref={ref} className="flex items-center gap-4">
-      <span className={`w-24 text-right text-sm font-medium shrink-0 ${highlight ? 'text-white' : 'text-zinc-500'}`}>
+    <div ref={ref} className="flex items-center gap-3 sm:gap-4">
+      <span className={`w-20 sm:w-24 text-right text-sm shrink-0 ${highlight ? 'text-[#f4f4f5] font-medium' : 'text-[#6b6b74]'}`}>
         {name}
       </span>
-      <div className="flex-1 h-8 bg-zinc-900 rounded-md overflow-hidden border border-zinc-800">
+      <div className="flex-1 h-8 bg-[#101012] overflow-hidden border border-[#1e1e22]">
         <motion.div
           initial={{ width: 0 }}
           animate={inView ? { width: `${width}%` } : { width: 0 }}
           transition={{ duration: 0.8, delay, ease: [0.23, 1, 0.32, 1] }}
-          className={`h-full rounded-md flex items-center px-3 ${highlight
-            ? 'bg-white'
-            : 'bg-zinc-800'
-          }`}
-        >
-          <span className={`text-xs font-mono font-medium whitespace-nowrap ${highlight ? 'text-zinc-900' : 'text-zinc-400'}`}>
-            ~{mb} MB
-          </span>
-        </motion.div>
+          className={`h-full ${highlight ? 'bg-[#f4f4f5]' : 'bg-[#2a2a30]'}`}
+        />
       </div>
+      <span className={`mono tnum text-xs w-16 shrink-0 text-right ${highlight ? 'text-[#f4f4f5]' : 'text-[#6b6b74]'}`}>
+        {mb} MB
+      </span>
     </div>
   );
 }
@@ -233,7 +236,7 @@ const steps = [
 const faqs = [
   { q: 'Is it really free?', a: 'Every feature, every server, no limits. Licensed under BSL 1.1, which converts to MIT in 2030. There is no premium tier.' },
   { q: 'System requirements?', a: '512 MB RAM, 1 CPU, 10 GB disk. Runs on Ubuntu, Debian, CentOS, Rocky, AlmaLinux, and Fedora. ARM64 works too.' },
-  { q: 'How is this different from cPanel?', a: "cPanel uses ~800 MB of RAM, costs $15/month, and doesn't support Docker. DockPanel's panel services idle around ~19 MB (about ~85 MB with the bundled PostgreSQL), cost nothing, and ship with 153 Docker templates, a WAF, passkey authentication, Git deploys, a CLI, and multi-server management." },
+  { q: 'How is this different from cPanel?', a: "cPanel uses ~800 MB of RAM, costs $15/month, and doesn't support Docker. DockPanel's two services take about 52 MB between them, or roughly 109 MB counting the bundled PostgreSQL, cost nothing, and ship with 153 Docker templates, a WAF, passkey authentication, Git deploys, a CLI, and multi-server management." },
   { q: 'What happens if DockPanel goes down?', a: 'Your sites keep running. Nginx and Docker are independent processes \u2014 the panel is just the management layer. It auto-restarts via systemd if it ever stops.' },
   { q: 'Can I manage multiple servers?', a: 'As many as you want. Install a lightweight agent on each server and manage them all from one dashboard.' },
   { q: 'Why Rust?', a: "~41 MB of binaries on disk, ~19 MB of RAM for the panel services at idle (measured on a fresh Vultr VPS), no JVM, no Node, no Python dependency to maintain. On a $5 VPS, that's the difference between running 20 sites and running 2." },
@@ -314,9 +317,7 @@ export default function Landing() {
       <nav className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${scrolled ? 'bg-[#09090b]/80 backdrop-blur-2xl border-b border-zinc-800/60' : 'border-b border-transparent'}`}>
         <div className="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between">
           <Link to="/" className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-md bg-white flex items-center justify-center">
-              <Server className="w-4 h-4 text-zinc-900" />
-            </div>
+            <Logo className="h-6 w-6" />
             <span className="text-[17px] font-semibold text-[#f4f4f5] tracking-[-0.01em]">DockPanel</span>
           </Link>
           <div className="hidden md:flex items-center gap-8 text-[13px] font-medium text-zinc-500">
@@ -430,8 +431,8 @@ export default function Landing() {
                 did by putting the RAM figure next to the product name. */}
             <dl className="lg:col-span-5 mono text-sm border-t border-[#1e1e22]">
               {[
-                ['binary on disk', '41', 'MB', 'statically linked, no libc'],
-                ['memory at idle', '57', 'MB', 'measured on the demo box'],
+                ['panel binary', '22', 'MB', 'static; +21 MB agent, +1 MB CLI'],
+                ['memory, both services', '52', 'MB', 'api + agent, cgroup accounting'],
                 ['install to login', '47', 's', 'Ubuntu 24.04, 1 vCPU'],
                 ['runtime deps', '0', '', 'no Node, no Python, no PHP'],
               ].map(([label, n, unit, note]) => (
@@ -653,12 +654,13 @@ export default function Landing() {
               </h2>
               <p className="mt-4 text-[#a3a3ad] max-w-xl leading-relaxed">
                 Every megabyte the panel holds is a megabyte your applications do not get.
+                Each figure below is the whole stack, database included.
               </p>
             </div>
           </div>
 
           <div className="max-w-4xl space-y-3 mb-16">
-            <RamBar name="DockPanel" mb={19} max={800} highlight delay={0} />
+            <RamBar name="DockPanel" mb={109} max={800} highlight delay={0} />
             <RamBar name="CloudPanel" mb={250} max={800} delay={0.1} />
             <RamBar name="Plesk" mb={512} max={800} delay={0.2} />
             <RamBar name="HestiaCP" mb={512} max={800} delay={0.3} />
@@ -780,9 +782,7 @@ export default function Landing() {
           <div className="grid md:grid-cols-[1fr,auto] gap-10 items-start">
             <div>
               <div className="flex items-center gap-2.5 mb-3">
-                <div className="w-7 h-7 rounded-md bg-white flex items-center justify-center">
-                  <Server className="w-4 h-4 text-zinc-900" />
-                </div>
+                <Logo className="h-6 w-6" />
                 <span className="text-[17px] font-semibold text-[#f4f4f5] tracking-[-0.01em]">DockPanel</span>
               </div>
               <p className="text-[13px] text-zinc-600 max-w-xs leading-relaxed">

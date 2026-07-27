@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { Logo } from '../components/Logo';
 import {
   Server, ShieldCheck, FileCheck2, Clock, Mail, Github,
   ScanSearch, BadgeCheck, Lock, Package, AlertTriangle, ExternalLink,
@@ -150,11 +151,9 @@ export default function Security() {
       <header className="border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-xl">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
           <Link to="/" className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-emerald-500 flex items-center justify-center">
-              <Server className="w-5 h-5 text-zinc-950" />
-            </div>
-            <span className={`text-lg font-bold tracking-tight text-white ${hd}`}>
-              Dock<span className="text-emerald-400">Panel</span>
+            <Logo className="h-6 w-6" />
+            <span className="text-[17px] font-semibold tracking-[-0.01em] text-[#f4f4f5]">
+              DockPanel
             </span>
           </Link>
           <Link to="/" className="text-sm text-zinc-400 transition hover:text-white">
@@ -166,7 +165,7 @@ export default function Security() {
       <main className="mx-auto max-w-5xl px-6 py-16">
         {/* Hero */}
         <section>
-          <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-widest text-emerald-300">
+          <div className="inline-flex items-center gap-2 rounded-full border border-[#1e1e22] bg-[#101012] px-3 py-1 text-[11px] font-semibold uppercase tracking-widest text-[#a3a3ad]">
             <ShieldCheck className="h-3.5 w-3.5" /> Security posture
           </div>
           <h1 className={`mt-4 text-4xl font-bold tracking-tight text-white md:text-5xl ${hd}`}>
@@ -209,7 +208,7 @@ export default function Security() {
               <div key={row.title} className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-5">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-2.5">
-                    <row.icon className="h-5 w-5 text-emerald-400" />
+                    <row.icon className="h-5 w-5 text-[#6b6b74]" />
                     <h3 className="text-[15px] font-semibold text-white">{row.title}</h3>
                   </div>
                   <span className="rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 text-[10px] font-mono text-zinc-400">
@@ -235,7 +234,7 @@ export default function Security() {
                 Docs <ExternalLink className="h-3 w-3" />
               </a>
             </div>
-            <pre className="overflow-x-auto px-4 py-3 text-[12px] leading-relaxed text-emerald-200">
+            <pre className="overflow-x-auto px-4 py-3 text-[12px] leading-relaxed text-[#a3a3ad]">
               <code>{VERIFY_CMD}</code>
             </pre>
           </div>
@@ -245,13 +244,13 @@ export default function Security() {
         <section className="mt-16">
           <h2 className={`text-2xl font-bold text-white ${hd}`}>CVE response SLA</h2>
           <p className="mt-2 text-sm text-zinc-500">
-            From <a href="https://github.com/ovexro/dockpanel/blob/main/SECURITY.md" className="text-emerald-400 underline underline-offset-2 hover:text-emerald-300" target="_blank" rel="noopener noreferrer">SECURITY.md</a>.
+            From <a href="https://github.com/ovexro/dockpanel/blob/main/SECURITY.md" className="text-[#6b6b74] underline underline-offset-2 hover:text-[#a3a3ad]" target="_blank" rel="noopener noreferrer">SECURITY.md</a>.
             We don&apos;t pursue legal action against good-faith researchers.
           </p>
           <div className="mt-6 grid gap-4 md:grid-cols-3">
             {SLA.map((row) => (
               <div key={row.window} className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-5">
-                <div className="flex items-center gap-2 text-emerald-400">
+                <div className="flex items-center gap-2 text-[#6b6b74]">
                   <Clock className="h-4 w-4" />
                   <span className="text-[11px] font-semibold uppercase tracking-widest">{row.window}</span>
                 </div>
@@ -271,7 +270,7 @@ export default function Security() {
             {AUDIT_HISTORY.map((r) => (
               <div key={r.round} className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-5">
                 <div className="flex items-center gap-3">
-                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-500/15 text-[12px] font-bold text-emerald-300">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#101012] border border-[#1e1e22] text-[12px] font-bold text-[#a3a3ad]">
                     {r.round}
                   </span>
                   <h3 className="text-[15px] font-semibold text-white">{r.title}</h3>
@@ -289,7 +288,7 @@ export default function Security() {
             Full write-ups in{' '}
             <a
               href="https://github.com/ovexro/dockpanel/blob/main/SECURITY.md#past-security-work"
-              className="text-emerald-400 underline underline-offset-2 hover:text-emerald-300"
+              className="text-[#6b6b74] underline underline-offset-2 hover:text-[#a3a3ad]"
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -305,7 +304,7 @@ export default function Security() {
             What we&apos;ve shipped to harden the panel. From the{' '}
             <a
               href="https://github.com/ovexro/dockpanel/blob/main/CHANGELOG.md"
-              className="text-emerald-400 underline underline-offset-2 hover:text-emerald-300"
+              className="text-[#6b6b74] underline underline-offset-2 hover:text-[#a3a3ad]"
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -320,7 +319,7 @@ export default function Security() {
                   i % 2 === 0 ? 'bg-zinc-950/60' : 'bg-zinc-950/30'
                 }`}
               >
-                <span className="w-20 font-mono text-[12px] text-emerald-400">{a.ver}</span>
+                <span className="w-20 font-mono text-[12px] text-[#6b6b74]">{a.ver}</span>
                 <span className="w-24 text-[12px] text-zinc-600">{a.date}</span>
                 <span className="text-zinc-300">{a.text}</span>
               </div>
@@ -348,7 +347,7 @@ export default function Security() {
               ['No telemetry, ever', 'Self-hosted means self-hosted.'],
             ].map(([t, d]) => (
               <div key={t} className="flex items-start gap-3 rounded-lg border border-zinc-800/60 bg-zinc-950/40 p-4">
-                <Lock className="mt-0.5 h-4 w-4 flex-none text-emerald-400" />
+                <Lock className="mt-0.5 h-4 w-4 flex-none text-[#6b6b74]" />
                 <div>
                   <div className="text-[13px] font-semibold text-white">{t}</div>
                   <div className="mt-0.5 text-[12px] text-zinc-500">{d}</div>
@@ -359,9 +358,9 @@ export default function Security() {
         </section>
 
         {/* Report a vulnerability */}
-        <section className="mt-16 rounded-xl border border-emerald-500/30 bg-emerald-500/[0.04] p-8">
+        <section className="mt-16 rounded-xl border border-[#1e1e22] bg-[#101012] p-8">
           <div className="flex items-center gap-3">
-            <AlertTriangle className="h-5 w-5 text-emerald-400" />
+            <AlertTriangle className="h-5 w-5 text-[#6b6b74]" />
             <h2 className={`text-xl font-bold text-white ${hd}`}>Report a vulnerability</h2>
           </div>
           <p className="mt-3 text-[14px] leading-relaxed text-zinc-300">
@@ -399,7 +398,7 @@ export default function Security() {
           Page reflects state at {POSTURE.currentVersion}. Audit and finding counts are tracked in{' '}
           <a
             href="https://github.com/ovexro/dockpanel/blob/main/SECURITY.md"
-            className="text-emerald-400 underline underline-offset-2 hover:text-emerald-300"
+            className="text-[#6b6b74] underline underline-offset-2 hover:text-[#a3a3ad]"
             target="_blank"
             rel="noopener noreferrer"
           >
@@ -408,7 +407,7 @@ export default function Security() {
           and the{' '}
           <a
             href="https://github.com/ovexro/dockpanel/blob/main/CHANGELOG.md"
-            className="text-emerald-400 underline underline-offset-2 hover:text-emerald-300"
+            className="text-[#6b6b74] underline underline-offset-2 hover:text-[#a3a3ad]"
             target="_blank"
             rel="noopener noreferrer"
           >
