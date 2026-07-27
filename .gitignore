@@ -46,3 +46,7 @@ Thumbs.db
 docs/book/
 .cargo/
 dist/
+
+# Staged from scripts/install-agent.sh by the frontend prebuild step — a build
+# artefact, never a second committed copy of the installer.
+panel/frontend/public/install-agent.sh

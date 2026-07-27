@@ -1,10 +1,11 @@
 {
   "name": "dockpanel-frontend",
   "private": true,
-  "version": "2.45.0",
+  "version": "2.45.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/stage-install-agent.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview"
   },

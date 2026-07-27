@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.45.0.** The version stamp, the template count and every
+> **Reflects v2.45.1.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -388,7 +388,7 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. Twelve suites, **345 assertions**, all green at the current commit:
+survivable. Twelve suites, **348 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
@@ -401,7 +401,7 @@ survivable. Twelve suites, **345 assertions**, all green at the current commit:
 | `rpm-install-pin-e2e.sh` | 34 |
 | `mail-rpm-pin-e2e.sh` | 22 |
 | `cpu-metric-pin-e2e.sh` | 17 |
-| `sandbox-paths-pin-e2e.sh` | 61 |
+| `sandbox-paths-pin-e2e.sh` | 64 |
 | `webmail-spam-pin-e2e.sh` | 18 |
 | `registration-gates-pin-e2e.sh` | 14 |
 

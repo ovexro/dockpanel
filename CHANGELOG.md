@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.45.1] - 2026-07-27
+
+The check added in 2.45.0 found a real defect within minutes of being deployed,
+and it was a deeper cause than the one it was written for.
+
+### Fixed
+
+- **`npm run build` silently un-deployed the agent installer.**
+  `install-agent.sh` lived only in `panel/frontend/dist/`, put there by
+  `setup.sh`, `update.sh` or `deploy-demo.sh`. Vite empties `outDir` on every
+  build — so building the frontend, an ordinary operation with nothing to do
+  with the fleet, **deleted the file from the live panel**, and the command the
+  Add-Server dialog prints returned `200` with SPA fallback HTML until an
+  installer happened to run again.
+
+  2.45.0 read this as "one deploy path forgot a step" and fixed that path. The
+  real defect was that the artefact only ever lived in a directory that a routine
+  command wipes. The frontend build now stages it from the single source in
+  `scripts/` on every build — the same thing the marketing site has always done
+  with `website/client/public/install.sh`. The staged copy is a build artefact
+  and is gitignored, so it cannot become a second installer that drifts.
+
+  The stager **fails** when the source is missing rather than skipping: a silent
+  skip reproduces the defect exactly, and its symptom is an operator piping a web
+  page into `sudo bash`.
+
 ## [2.45.0] - 2026-07-27
 
 A release about controls that do not cover what they appear to cover.

@@ -529,5 +529,64 @@ else
 fi
 
 echo
+echo "── 9. the BUILD re-emits it, because the build is what deletes it (s275) ──"
+
+# The root cause underneath section 8, found by the live-surfaces arm added in
+# the same release, minutes after it was deployed.
+#
+# install-agent.sh lived ONLY in panel/frontend/dist. Vite empties outDir on
+# every build, so `npm run build` — an ordinary command with nothing to do with
+# the fleet — DELETED the installer from the live panel, and the Add-Server
+# command served 200 with SPA fallback HTML until some installer happened to run
+# again. s274 read this as "deploy-demo.sh forgot a step" and fixed that one
+# path. The real defect is that the artefact only ever lived in a directory a
+# routine command wipes.
+#
+# The marketing site had already solved it: website/client/public/install.sh is
+# copied into dist by every build. The panel now does the same, staged from the
+# single source in scripts/ rather than a second committed copy.
+FE_PKG=panel/frontend/package.json
+STAGER=panel/frontend/scripts/stage-install-agent.mjs
+
+if [ -f "$STAGER" ]; then
+  ok "the frontend has a stage-install-agent step"
+else
+  bad "$STAGER is gone — a frontend rebuild will empty dist/ and silently un-deploy the Add-Server installer"
+fi
+
+# Wired to the BUILD, not merely present. An unreferenced script is not a step.
+if grep -qF 'stage-install-agent' "$FE_PKG"; then
+  ok "the frontend build invokes it (prebuild)"
+else
+  bad "$FE_PKG does not run the stager — the script exists but no build calls it, so dist/ loses the installer again"
+fi
+
+# It must read the SINGLE source. A stager copying from a checked-in duplicate
+# would make a fifth copy of an installer, which is the mistake this tree keeps
+# repeating (four copies of the ReadWritePaths derivation, three of the unit).
+if [ -f "$STAGER" ] && grep -qF 'scripts/install-agent.sh' "$STAGER"; then
+  ok "it stages from scripts/install-agent.sh, the single source"
+else
+  bad "the stager no longer reads scripts/install-agent.sh — it is copying from somewhere else, which means a second copy exists"
+fi
+
+# And it must FAIL when the source is absent rather than skipping. A silent skip
+# reproduces the defect exactly: build succeeds, panel serves HTML, operator
+# pipes a web page into sudo bash.
+if [ -f "$STAGER" ] && grep -qE 'process\.exit\(1\)' "$STAGER"; then
+  ok "it exits non-zero when the source is missing, rather than skipping"
+else
+  bad "the stager does not fail on a missing source — a silent skip ships a panel whose Add-Server URL returns SPA HTML"
+fi
+
+# The staged copy is a build artefact. If it ever gets committed it becomes a
+# second source that can drift from scripts/install-agent.sh.
+if grep -qF 'panel/frontend/public/install-agent.sh' .gitignore; then
+  ok "the staged copy is gitignored, so it cannot become a second committed source"
+else
+  bad "panel/frontend/public/install-agent.sh is not gitignored — it will be committed and become a copy that drifts"
+fi
+
+echo
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
