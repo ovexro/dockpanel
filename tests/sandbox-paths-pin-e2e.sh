@@ -155,5 +155,196 @@ else
 fi
 
 echo
+echo "── 5. the THIRD installer, which these pins could not see (s271) ──"
+
+# Sections 1-4 pin the unit, setup.sh and update.sh. install-agent.sh — the only
+# documented way to add a remote server, and therefore the installer that built
+# the entire fleet — was never named here, so it hand-wrote its own unit for
+# eighteen releases with the sandbox switched off and nothing failed. A suite
+# that covers two of three copies reads as coverage.
+INSTALL_AGENT=scripts/install-agent.sh
+SELF_UPDATE=scripts/agent-self-update.sh
+AGENT_UNIT_RS=panel/agent/src/services/agent_unit.rs
+AGENT_MAIN=panel/agent/src/main.rs
+
+for f in "$INSTALL_AGENT" "$SELF_UPDATE" "$AGENT_UNIT_RS" "$AGENT_MAIN"; do
+  [ -f "$f" ] || { echo "missing file: $f"; exit 1; }
+done
+
+# 5a. No hand-written unit anywhere in the fleet installer. Each switch is
+# checked by name: the copy set all four, and a partial restoration is still a
+# regression.
+for directive in NoNewPrivileges ProtectSystem ProtectHome PrivateTmp; do
+  if grep -qE "^[[:space:]]*${directive}=no" "$INSTALL_AGENT"; then
+    bad "$INSTALL_AGENT sets ${directive}=no again — that is the shape every fleet member ran unsandboxed under"
+  else
+    ok "$INSTALL_AGENT does not disable ${directive}"
+  fi
+done
+
+if grep -qE '^\[Service\]' "$INSTALL_AGENT"; then
+  bad "$INSTALL_AGENT contains a unit body again — the third copy is back"
+else
+  ok "$INSTALL_AGENT contains no unit body at all"
+fi
+
+# 5b. It takes the unit from the binary it just downloaded. Anchored on the flag
+# followed by the redirect, not on the flag as a substring: `--print-unit` alone
+# still matches `--print-unit-x`, and a pin that survives a rename is worth
+# nothing (s270's `const RSPAMD_MILTER`).
+if grep -qF -- '--print-unit >' "$INSTALL_AGENT"; then
+  ok "$INSTALL_AGENT obtains the unit from the agent binary"
+else
+  bad "$INSTALL_AGENT no longer asks the binary for the unit — it is writing one from somewhere"
+fi
+
+# The flag is a contract between three files. If main.rs stops answering to the
+# exact string the installers send, install-agent.sh refuses every install and
+# the self-update silently stops refreshing the unit.
+if grep -qF '"--print-unit"' "$AGENT_MAIN"; then
+  ok "the agent answers to the same flag the installers invoke"
+else
+  bad "main.rs no longer handles \"--print-unit\" — the installers ask for a unit nothing emits"
+fi
+
+# 5c. And REFUSES rather than falling back. A fallback here is what the whole
+# defect was: a locally-invented unit that nobody compared to the real one.
+if grep -A 8 -- '--print-unit' "$INSTALL_AGENT" | grep -qE '^[[:space:]]*exit 1'; then
+  ok "$INSTALL_AGENT exits non-zero when the binary cannot emit a unit"
+else
+  bad "$INSTALL_AGENT does not fail when --print-unit fails — an absent unit must be an error, never a guess"
+fi
+
+# 5d. The derived directory list, same rule as setup.sh/update.sh in section 2.
+# /etc/nginx is UNPREFIXED and an agent-only box has no nginx, so without this
+# the hardened unit makes every fleet member unstartable.
+if grep -q 'ReadWritePaths=' "$INSTALL_AGENT" && grep -qF "sed 's/^-//'" "$INSTALL_AGENT"; then
+  ok "$INSTALL_AGENT derives its mkdir list from the installed unit, prefix stripped"
+else
+  bad "$INSTALL_AGENT does not derive the writable-path directories — /etc/nginx alone would make the agent unstartable on a fleet member"
+fi
+
+# Anchored on the guarded grep ITSELF, not on `|| true` appearing anywhere in
+# the next few lines — the mkdir loop below it carries its own `|| true`, so the
+# window form passed with the guard deleted. Found by mutating it (#97h).
+if grep -qF "{ grep '^/' || true; }" "$INSTALL_AGENT"; then
+  ok "$INSTALL_AGENT's derivation tolerates a no-match under pipefail"
+else
+  bad "$INSTALL_AGENT can abort at install time when the grep matches nothing (set -euo pipefail)"
+fi
+
+# 5e. The two defects driving it on a real Rocky 9 box exposed (s271).
+#
+# `get.docker.com` sends the RHEL clones to download.docker.com/linux/rocky,
+# which carries no docker-ce — s264 fixed that in setup.sh for v2.37.0 and the
+# fix never reached THIS installer, so adding a remote RHEL server had never
+# once worked. Pin the el-clone repo by the baseurl both installers must use.
+if grep -qF 'download.docker.com/linux/centos' "$INSTALL_AGENT"; then
+  ok "$INSTALL_AGENT uses the el-clone Docker repo on the RHEL family"
+else
+  bad "$INSTALL_AGENT is back to get.docker.com for RHEL — linux/rocky has no docker-ce, so the install dies at step 2"
+fi
+
+# One clause, not two: the first draft OR-ed a window match against the message
+# and stayed green with the message deleted, because the window found an
+# unrelated `exit 1`. An assertion satisfiable two ways tests neither.
+if grep -q 'Error: Docker could not be installed' "$INSTALL_AGENT"; then
+  ok "$INSTALL_AGENT says so when Docker cannot be installed"
+else
+  bad "$INSTALL_AGENT fails silently when Docker is missing — every stream in that step goes to /dev/null"
+fi
+
+# A binary older than the flag does NOT reject it: it ignores every argument and
+# starts the DAEMON, so an unbounded call hangs the installer for ever instead
+# of refusing. Measured on a real box before the bound existed.
+for f in "$INSTALL_AGENT" "$SELF_UPDATE"; do
+  if grep -qE 'timeout [0-9]+ .*--print-unit' "$f"; then
+    ok "$f bounds --print-unit, so an older binary refuses instead of hanging"
+  else
+    bad "$f calls --print-unit unbounded — against a pre-s271 binary that starts the daemon and never returns"
+  fi
+done
+
+# And the same hazard closed at the source, for every version after this one.
+if grep -qE 'unknown option' "$AGENT_MAIN"; then
+  ok "the agent rejects an unknown option instead of starting the daemon"
+else
+  bad "an unrecognised flag once again falls through to the daemon, which binds the agent socket"
+fi
+
+echo
+echo "── 6. the unit reaches boxes that ALREADY exist (lesson #97a) ──"
+
+# The whole point. A corrected installer reaches only NEW servers; the binary is
+# the one thing that reaches the fleet. Anchored on the declaration's colon —
+# `has 'const RSPAMD_MILTER'` stayed green when the constant was renamed
+# RSPAMD_MILTER_X (s270), and a substring pin is worth nothing.
+if grep -qE 'AGENT_UNIT: &str = include_str!' "$AGENT_UNIT_RS"; then
+  ok "the agent compiles the unit in from the same file the installers copy"
+else
+  bad "the agent no longer embeds the unit — install-agent.sh has nothing to ask for"
+fi
+
+if grep -qF 'include_str!("../../dockpanel-agent.service")' "$AGENT_UNIT_RS"; then
+  ok "it embeds THAT unit, not a copy kept beside it"
+else
+  bad "the embedded unit no longer points at panel/agent/dockpanel-agent.service — a fourth mirror"
+fi
+
+if grep -qE 'agent_unit::heal_agent_unit\(\)' "$AGENT_MAIN"; then
+  ok "the heal is spawned at agent startup"
+else
+  bad "heal_agent_unit is never called — an existing fleet member never receives the unit"
+fi
+
+# A heal that writes the unit but leaves the directories missing turns a silent
+# security gap into a dead agent. Pin the ordering as a property of the source.
+HEAL_MK=$(grep -n 'create_dir_all' "$AGENT_UNIT_RS" | head -1 | cut -d: -f1)
+HEAL_WR=$(grep -n 'fs::write(UNIT_PATH' "$AGENT_UNIT_RS" | head -1 | cut -d: -f1)
+if [ -n "$HEAL_MK" ] && [ -n "$HEAL_WR" ] && [ "$HEAL_MK" -lt "$HEAL_WR" ]; then
+  ok "the heal creates the directories (line $HEAL_MK) before writing the unit (line $HEAL_WR)"
+else
+  bad "the heal writes the unit before creating its directories — the next start fails the namespace mount"
+fi
+
+if grep -qF 'LoadError' "$AGENT_UNIT_RS"; then
+  ok "the heal asks systemd whether it accepted the unit, rather than assuming"
+else
+  bad "the heal does not check LoadError — a rejected unit would be left in place"
+fi
+
+# 6b. The self-update applies it at the SAME restart, and can put it back.
+if grep -qF -- '--print-unit >' "$SELF_UPDATE"; then
+  ok "$SELF_UPDATE installs the unit from the new binary"
+else
+  bad "$SELF_UPDATE no longer refreshes the unit — the sandbox waits for some later restart"
+fi
+
+SU_UNIT=$(grep -n 'install -m 644 "\$WORK/unit"' "$SELF_UPDATE" | head -1 | cut -d: -f1)
+SU_RESTART=$(grep -n '^systemctl restart dockpanel-agent' "$SELF_UPDATE" | head -1 | cut -d: -f1)
+if [ -n "$SU_UNIT" ] && [ -n "$SU_RESTART" ] && [ "$SU_UNIT" -lt "$SU_RESTART" ]; then
+  ok "$SELF_UPDATE swaps the unit (line $SU_UNIT) before the restart (line $SU_RESTART) that applies it"
+else
+  bad "$SELF_UPDATE's unit swap no longer precedes the restart — the new sandbox would not take effect"
+fi
+
+# `grep -qF UNIT_BACKUP` matched UNIT_BACKUP_UNUSED and stayed green with the
+# rollback gutted — the same substring trap as s270's `const RSPAMD_MILTER`.
+# Anchored on the variable as DEREFERENCED, closing quote included.
+if grep -A 30 'stage="rollback"' "$SELF_UPDATE" | grep -qF '"$UNIT_BACKUP"'; then
+  ok "$SELF_UPDATE restores the previous unit on rollback"
+else
+  bad "$SELF_UPDATE rolls back the binary but not the unit — the old binary would start under the same bad unit"
+fi
+
+# 6c. One unit, two roles. Without the '-' the panel box refuses to start;
+# without the line the fleet member loses its token and never phones home.
+if grep -qF 'EnvironmentFile=-/etc/dockpanel/agent.env' "$UNIT"; then
+  ok "the unit reads agent.env optionally, so it serves a panel box and a fleet member"
+else
+  bad "the unit's EnvironmentFile is missing or no longer optional — one of the two roles cannot start"
+fi
+
+echo
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

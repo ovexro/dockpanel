@@ -4,6 +4,66 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.44.0] - 2026-07-27
+
+### Security
+
+- **Every server added through "Add Server" has been running the agent with no
+  sandbox at all, under a comment saying otherwise.**
+
+  `install-agent.sh` — the only documented way to add a remote server, and so the
+  installer that built every fleet in existence — hand-wrote its own copy of the
+  systemd unit. That copy set all four of systemd's headline protection switches
+  to off, declared no writable-path list whatsoever, and omitted eight further
+  hardening directives the real unit sets, beneath the line "Create systemd
+  service (matching local agent hardening)". It matched nothing. The panel box
+  and every box upgraded through `update.sh` were correctly confined; the remote
+  servers those panels manage were not, from v2.28.0 to here.
+
+  There is now one unit. `panel/agent/dockpanel-agent.service` is compiled into
+  the agent (`--print-unit`) exactly as `agent-self-update.sh` already was, so it
+  cannot drift from the binary that runs under it, and all three installers
+  obtain it from the same place instead of keeping copies. The unit gained an
+  optional `EnvironmentFile=-`, which is what lets one file serve both a panel
+  box and an agent-only box.
+
+- **And the fix reaches servers that already exist**, which is the part that
+  would otherwise have made it worthless: a corrected installer only ever
+  changes what the *next* server gets, and the agent self-update had never
+  touched the unit. The agent now reconciles its own unit at startup, and the
+  self-update installs the new one before the restart that applies it — with the
+  previous unit restored if the agent does not come back. Directories named by
+  `ReadWritePaths` are derived and created before either swap, because an
+  unprefixed entry that does not exist makes the unit unstartable and an
+  agent-only box has no `/etc/nginx`.
+
+  Verified before and after on one Rocky 9 box (SELinux Enforcing) registered to
+  a real panel over a real certificate. Before: `ReadWritePaths=` empty and every
+  protection off. After the binary landed and the agent restarted: `/usr` and
+  `/root` read-only inside its namespace, `/etc/nginx` writable, `/tmp` private,
+  `NoNewPrivs` set on the process — and the server still `online`.
+
+### Fixed
+
+- **Adding a remote server has never worked on Rocky, AlmaLinux or CentOS**, and
+  it failed without saying anything. `install-agent.sh` installed Docker with
+  `get.docker.com`, which points those distributions at
+  `download.docker.com/linux/rocky` — a path that carries no `docker-ce`, so the
+  run ended at `Unable to find a match`. v2.37.0 fixed exactly this in the panel
+  installer and the fix never reached the agent installer, which is the same
+  copy-drift the change above is about. Every stream in that step was redirected
+  to `/dev/null`, so what a user saw was the script stopping at
+  `[2/7] Installing dependencies...` with no error at all. The RHEL clones now
+  use the same repository the panel installer uses, and a Docker install that
+  did not work now says so and stops.
+
+- **An agent binary older than the flag it is asked for no longer hangs the
+  installer.** Until now the agent ignored its arguments entirely, so asking an
+  older one for `--print-unit` started the *daemon* — it bound the agent socket
+  and never returned, leaving the install stuck at `[7/7]` for ever. Both callers
+  now bound the call, and the agent rejects an unrecognised option instead of
+  starting up. (Running it with no arguments still starts the agent, as before.)
+
 ## [2.43.0] - 2026-07-27
 
 ### Fixed

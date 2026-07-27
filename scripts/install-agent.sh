@@ -95,11 +95,53 @@ pkg_install() {
 echo "[2/7] Installing dependencies..."
 detect_pkg_manager
 
-# Install Docker
+# Install Docker.
+#
+# `get.docker.com` points the RHEL clones at
+# download.docker.com/linux/<id>/… — and `linux/rocky` carries no `docker-ce`
+# at all, while there is no `almalinux` branch to point at. So on those
+# families the script adds a repo, refreshes the cache, and ends with
+# `Error: Unable to find a match: docker-ce docker-ce-cli`. s264 found this and
+# fixed it in setup.sh (v2.37.0) with an el-clone repo aimed at `linux/centos`;
+# the fix never reached THIS installer, so adding a remote RHEL server has been
+# impossible the whole time — measured on a stock Rocky 9, s271.
+#
+# The panel's own installer is the source of the shape below; keep them the same.
 if ! command -v docker &> /dev/null; then
-    curl -fsSL https://get.docker.com | sh > /dev/null 2>&1
+    DOCKER_OS_ID=""
+    [ -f /etc/os-release ] && DOCKER_OS_ID=$(. /etc/os-release && echo "${ID:-}")
+    case "$DOCKER_OS_ID" in
+        rocky|almalinux|centos|rhel|ol)
+            cat > /etc/yum.repos.d/docker-ce.repo << 'REPOEOF'
+[docker-ce-stable]
+name=Docker CE Stable - $basearch
+baseurl=https://download.docker.com/linux/centos/$releasever/$basearch/stable
+enabled=1
+gpgcheck=1
+gpgkey=https://download.docker.com/linux/centos/gpg
+REPOEOF
+            # --allowerasing because RHEL-family cloud images commonly preinstall
+            # podman/runc, which containerd.io obsoletes, and dnf aborts the whole
+            # transaction on a conflict rather than substituting.
+            dnf install -y -q --allowerasing docker-ce docker-ce-cli containerd.io \
+                docker-buildx-plugin docker-compose-plugin
+            ;;
+        *)
+            curl -fsSL https://get.docker.com | sh > /dev/null 2>&1
+            ;;
+    esac
 fi
 systemctl enable --now docker > /dev/null 2>&1 || true
+
+# Say so, rather than dying at "[2/7] Installing dependencies..." with every
+# stream sent to /dev/null. That is exactly how the RHEL failure above stayed
+# invisible: `set -e` aborted the script mid-step and printed nothing at all.
+if ! command -v docker &> /dev/null; then
+    echo "Error: Docker could not be installed on this server (${DOCKER_OS_ID:-unknown})."
+    echo "  The agent manages containers, so the install cannot continue without it."
+    echo "  Install Docker by hand and re-run this script."
+    exit 1
+fi
 
 # Install curl and openssl if missing
 pkg_install curl openssl
@@ -151,36 +193,58 @@ if [[ ! -f /etc/dockpanel/ssl/agent.crt ]]; then
     chmod 600 /etc/dockpanel/ssl/agent.key
 fi
 
-# Create systemd service (matching local agent hardening)
-echo "[7/7] Creating systemd service..."
-cat > /etc/systemd/system/dockpanel-agent.service << 'UNIT'
-[Unit]
-Description=DockPanel Agent
-After=network.target docker.service
-Wants=docker.service
-StartLimitBurst=5
-StartLimitIntervalSec=60
+# Install the systemd unit — TAKEN FROM THE BINARY, not written here.
+#
+# This step used to hand-write a third copy of the unit into a heredoc, and that
+# copy switched every one of systemd's protection directives off, listed no
+# writable paths at all, and omitted eight more hardening directives the real
+# unit sets — under a comment claiming it matched the local agent's hardening.
+# It matched nothing: every server the panel manages remotely ran the agent with
+# no sandbox, from s253 to s271. The directives are deliberately not spelled out
+# in this comment: tests/sandbox-paths-pin-e2e.sh greps this file for them, and
+# a pin that matches its own explanation cannot fail.
+#
+# The panel's own installers (setup.sh, update.sh) deploy
+# panel/agent/dockpanel-agent.service by copying that file. This script has no
+# repo tree — it is fetched from the panel and downloads a release binary — so
+# it asks the binary it just downloaded, which carries the unit via include_str!
+# for exactly the reason agent-self-update.sh does: it cannot then drift from
+# the binary that runs it. One unit, three installers, no mirrors.
+#
+# The `timeout` is load-bearing, not caution. A binary that predates the flag
+# does not reject it — it ignores every argument and starts the DAEMON, which
+# binds the agent socket and never returns. Without the bound, this installer
+# hangs for ever at "[7/7]" against an older release instead of refusing, which
+# is what it did when first driven on a real box (s271).
+echo "[7/7] Installing systemd service..."
+if ! timeout 15 /usr/local/bin/dockpanel-agent --print-unit > /tmp/dockpanel-agent.service.$$ 2>/dev/null \
+   || ! grep -q '^ExecStart=/usr/local/bin/dockpanel-agent' /tmp/dockpanel-agent.service.$$; then
+    rm -f /tmp/dockpanel-agent.service.$$
+    echo "Error: the downloaded agent could not emit its systemd unit."
+    echo "  '/usr/local/bin/dockpanel-agent --print-unit' produced nothing usable, which"
+    echo "  means the release binary predates this installer. Writing a unit here instead"
+    echo "  is what shipped an unsandboxed agent to every remote server for eighteen"
+    echo "  releases, so this installer refuses to guess one."
+    exit 1
+fi
+install -m 644 /tmp/dockpanel-agent.service.$$ /etc/systemd/system/dockpanel-agent.service
+rm -f /tmp/dockpanel-agent.service.$$
 
-[Service]
-Type=simple
-ExecStartPre=/bin/sh -c 'mkdir -p /run/dockpanel /var/lib/dockpanel/git'
-ExecStart=/usr/local/bin/dockpanel-agent
-EnvironmentFile=/etc/dockpanel/agent.env
-Environment=RUST_LOG=info
-Restart=always
-RestartSec=5
-NoNewPrivileges=no
-ProtectSystem=no
-ProtectHome=no
-PrivateTmp=no
-ProtectKernelLogs=yes
-ProtectKernelModules=yes
-MemoryMax=512M
-LimitNOFILE=65535
-
-[Install]
-WantedBy=multi-user.target
-UNIT
+# Every directory the unit's ReadWritePaths names, DERIVED FROM THE UNIT.
+#
+# An UNPREFIXED entry that does not exist fails the namespace mount and the
+# agent does not start at all — /etc/apt did this to every RPM-family box
+# (s264), and /etc/nginx would do it here, because an agent-only server has no
+# nginx and nothing above creates that path. A `-`-prefixed entry is worse when
+# missing, not better: systemd skips it silently, the unit starts, reports
+# success, and every write beneath it fails read-only until the next restart
+# (s269). So both halves are created, and the `-` is stripped rather than
+# filtered on.
+AGENT_RWP="$(sed -n 's/^ReadWritePaths=//p' /etc/systemd/system/dockpanel-agent.service \
+             | tr ' ' '\n' | sed 's/^-//' | { grep '^/' || true; })"
+for d in $AGENT_RWP; do
+    [ -d "$d" ] || mkdir -p "$d" 2>/dev/null || true
+done
 
 # Allow agent port through firewall
 if command -v ufw &> /dev/null; then

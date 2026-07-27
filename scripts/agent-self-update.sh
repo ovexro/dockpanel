@@ -233,6 +233,55 @@ fi
 
 log "binary swapped ($SIZE bytes)"
 
+# ── 3b. Bring the systemd unit along with the binary ─────────────────────
+# The unit is compiled into the agent (`--print-unit`), from the same file
+# setup.sh and update.sh copy — so this is not a fourth mirror, it is the one
+# source arriving by the one delivery path that reaches a fleet member.
+#
+# WHY HERE, and not only at agent startup: the agent also reconciles its unit
+# when it boots (services/agent_unit.rs), but a sandbox written after the
+# process has started does not apply to that process — it would wait for some
+# LATER restart, which on a box that is already current may be weeks away. Doing
+# it here means the restart below is the one that applies it, and the
+# verify-running + rollback steps that follow already cover the outcome.
+#
+# Every fleet member installed before s271 is running a unit install-agent.sh
+# hand-wrote with systemd's protection directives switched off and no writable
+# path list at all. This is how they get the real one. (The directives are not
+# named here on purpose — the pin suite greps the installers for them.)
+stage="unit"
+UNIT_PATH=/etc/systemd/system/dockpanel-agent.service
+UNIT_BACKUP=""
+# Bounded for the same reason install-agent.sh bounds it: a binary that predates
+# the flag ignores it and starts the daemon instead, which would hang this
+# updater for ever inside its transient unit rather than skipping the step.
+if timeout 15 "$AGENT_BIN" --print-unit > "$WORK/unit" 2>/dev/null \
+   && grep -q '^ExecStart=/usr/local/bin/dockpanel-agent' "$WORK/unit"; then
+    if ! cmp -s "$WORK/unit" "$UNIT_PATH" 2>/dev/null; then
+        # The directories first, always. An unprefixed ReadWritePaths entry that
+        # does not exist fails the namespace mount and the agent does not start
+        # at all (/etc/apt did this to every RPM box, s264; /etc/nginx would do
+        # it to every agent-only box). A `-`-prefixed one that is missing is
+        # skipped silently and every write beneath it fails read-only (s269), so
+        # the prefix is stripped rather than filtered on.
+        RWP="$(sed -n 's/^ReadWritePaths=//p' "$WORK/unit" | tr ' ' '\n' | sed 's/^-//' | { grep '^/' || true; })"
+        for d in $RWP; do
+            [ -d "$d" ] || mkdir -p "$d" 2>/dev/null || true
+        done
+        UNIT_BACKUP="${WORK}/unit.previous"
+        cp -a "$UNIT_PATH" "$UNIT_BACKUP" 2>/dev/null || UNIT_BACKUP=""
+        if install -m 644 "$WORK/unit" "$UNIT_PATH"; then
+            systemctl daemon-reload || log "daemon-reload returned non-zero after the unit swap"
+            log "systemd unit updated from the new binary"
+        else
+            UNIT_BACKUP=""
+            log "could not install the new unit at $UNIT_PATH; keeping the existing one"
+        fi
+    fi
+else
+    log "the new binary did not emit a unit (--print-unit); keeping the existing one"
+fi
+
 # ── 4. Restart and prove the version actually changed ────────────────────
 # The whole point. "The service came back up" is a step, not an outcome
 # (lesson #49) — the outcome is what /health reports afterwards.
@@ -256,6 +305,21 @@ if [ "$NEW_VERSION" != "$TARGET_CLEAN" ]; then
     # file is what the agent reports about ITSELF after the attempt, so an
     # operator can tell "we put you back" from "you are on a binary that does
     # not start".
+    # Put the UNIT back before the binary, and before any restart. Restoring
+    # only the binary would be a restore that cannot restore (lesson #48): if
+    # what stopped the agent coming up was the new unit — a ReadWritePaths entry
+    # this box cannot satisfy, say — then the old binary starting under it fails
+    # exactly the same way, and the rollback would report a box it had not
+    # actually rescued.
+    if [ -n "$UNIT_BACKUP" ] && [ -f "$UNIT_BACKUP" ]; then
+        if install -m 644 "$UNIT_BACKUP" "$UNIT_PATH"; then
+            systemctl daemon-reload || log "daemon-reload returned non-zero during unit rollback"
+            log "restored the previous systemd unit"
+        else
+            log "COULD NOT RESTORE THE PREVIOUS UNIT at $UNIT_PATH — this box needs attention"
+        fi
+    fi
+
     restored="no backup was taken"
     if [ -f "$BACKUP" ]; then
         # `mv` again: the new agent may well be running from that path right now.

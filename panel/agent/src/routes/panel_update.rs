@@ -422,7 +422,11 @@ fn read_agent_update_result() -> Option<serde_json::Value> {
 /// Stages `agent-self-update.sh` can only reach once it has ALREADY replaced the
 /// binary. A failure at one of these has cost a download, a swap and two
 /// restarts of this service; a failure before them cost a download at most.
-const POST_SWAP_STAGES: &[&str] = &["swap", "restart", "verify-running", "rollback"];
+/// `unit` belongs here even though it replaces a text file rather than the
+/// binary: it runs AFTER the swap, so a run that died in it has already left a
+/// new binary on disk, and it can itself leave a unit the agent cannot start
+/// under. Retrying that unattended is the loop this list exists to stop.
+const POST_SWAP_STAGES: &[&str] = &["swap", "unit", "restart", "verify-running", "rollback"];
 
 /// Did a previous run already fail this exact target *after* replacing the
 /// binary? Returns the stage and reason if so.
@@ -593,10 +597,17 @@ mod tests {
             if l.starts_with('#') {
                 continue;
             }
+            // The hazard is writing onto the file that is CURRENTLY EXECUTING,
+            // which fails ETXTBSY. So the rule is about the destination, not
+            // about `cp` as such: nothing may copy onto $AGENT_BIN. Copying the
+            // live binary INTO the backup path is the documented exception
+            // (reading a running executable is always allowed), and s271 added
+            // a second, unrelated copy — the systemd unit into its rollback
+            // backup, a plain text file no process holds open.
             if l.starts_with("cp ") || l.starts_with("cp -") {
                 assert!(
-                    l.contains("\"$BACKUP\""),
-                    "the only copy allowed reads the live binary into the backup path: {l}"
+                    !l.contains("\"$AGENT_BIN\"") || l.contains("\"$BACKUP\""),
+                    "nothing may copy onto the executing binary: {l}"
                 );
             }
         }
@@ -770,10 +781,11 @@ mod tests {
     /// mismatch costs nothing and should still be retried.
     #[test]
     fn a_target_that_already_failed_after_the_swap_is_not_retried_unattended() {
-        for stage in ["swap", "restart", "verify-running", "rollback"] {
+        for stage in ["swap", "unit", "restart", "verify-running", "rollback"] {
             assert!(
                 POST_SWAP_STAGES.contains(&stage),
-                "{stage} replaces or restores the binary and must count as destructive"
+                "{stage} replaces or restores the binary or the unit it starts under, \
+                 and must count as destructive"
             );
         }
         for stage in ["download", "verify", "arch", "probe", "init"] {

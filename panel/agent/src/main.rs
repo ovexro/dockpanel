@@ -20,6 +20,34 @@ const CONFIG_DIR: &str = "/etc/dockpanel";
 
 #[tokio::main]
 async fn main() {
+    // `--print-unit` emits the compiled-in systemd unit and exits. This is how
+    // `install-agent.sh` obtains the unit for a fleet member: it already
+    // downloads this binary, and the unit travels inside it, so the two can
+    // never disagree. It used to hand-write its own copy with the sandbox
+    // switched off, and that copy is what every fleet member has been running.
+    //
+    // Handled before anything else runs. Note the standing hazard this does NOT
+    // change: an UNRECOGNISED argument still falls through to the daemon, which
+    // binds the agent socket — never run this binary by hand on a box that is
+    // already serving one (there is still no `--version`; read /health instead).
+    if std::env::args().skip(1).any(|a| a == "--print-unit") {
+        print!("{}", services::agent_unit::AGENT_UNIT);
+        std::process::exit(0);
+    }
+    // An unrecognised option must be an ERROR, not a daemon. Every version
+    // before this one ignored its arguments entirely and went straight to
+    // binding the agent socket, so `dockpanel-agent --anything` silently
+    // started a second agent — and an installer asking an older binary for
+    // `--print-unit` hung for ever instead of being refused (measured, s271).
+    // Only `--`-prefixed arguments are judged; bare arguments keep their old
+    // behaviour, since nothing passes any.
+    if let Some(bad) = std::env::args().skip(1).find(|a| a.starts_with("--")) {
+        eprintln!("dockpanel-agent: unknown option '{bad}'");
+        eprintln!("The only option is --print-unit, which prints the systemd unit and exits.");
+        eprintln!("Running it with no arguments starts the agent daemon.");
+        std::process::exit(2);
+    }
+
     // Install rustls CryptoProvider before any TLS usage
     rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
@@ -232,6 +260,13 @@ async fn main() {
     // s262's header fix reached no box at all until s270. No-op when webmail
     // was never installed.
     tokio::spawn(routes::mail::heal_webmail_nginx());
+
+    // Same shape, one file over: the agent's OWN unit is written only by an
+    // installer, so the sandbox `install-agent.sh` never applied could not
+    // reach a single fleet member that already existed. The binary is the one
+    // thing that does reach them (six-hourly self-update), so it carries the
+    // unit. No-op when the bytes already match, which is every panel box.
+    tokio::spawn(services::agent_unit::heal_agent_unit());
 
     // Start phone-home if configured (remote agent mode)
     let remote_mode = if let Some(mut ph_config) = services::phone_home::PhoneHomeConfig::from_env() {

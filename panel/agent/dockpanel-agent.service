@@ -1,12 +1,26 @@
 [Unit]
 Description=DockPanel Agent
-After=network.target nginx.service
-Wants=nginx.service
+# Both roles this binary is installed in are covered here, because there is only
+# one unit: the panel box (setup.sh/update.sh) and a fleet member
+# (install-agent.sh). `Wants=` is a WEAK dependency — naming a unit that is not
+# installed logs a line and starts anyway — so an agent-only box with no nginx
+# and a panel box are both satisfied by the same two names. install-agent.sh
+# used to hand-write a THIRD copy of this file instead, with the entire sandbox
+# turned off under a comment claiming it matched local hardening (s253→s271).
+After=network.target nginx.service docker.service
+Wants=nginx.service docker.service
 StartLimitBurst=5
 StartLimitIntervalSec=60
 
 [Service]
 Type=simple
+# Fleet members keep AGENT_TOKEN / AGENT_LISTEN_TCP / DOCKPANEL_CENTRAL_URL here;
+# the panel box has no such file and does not need one. The `-` prefix means
+# "read it if it exists" — the same semantics the ReadWritePaths list below
+# leans on, and the reason ONE unit can serve both roles. Without the prefix a
+# panel box would refuse to start; without the line at all a fleet member would
+# start with no token and no central URL and never phone home again.
+EnvironmentFile=-/etc/dockpanel/agent.env
 # RuntimeDirectory= creates /run/dockpanel before namespace setup AND preserves it
 # across stop/start cycles — fixes upgrade-path /run/dockpanel disappearance (v2.8.14).
 RuntimeDirectory=dockpanel
