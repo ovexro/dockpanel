@@ -12,27 +12,47 @@ import {
 } from 'lucide-react';
 
 
-/* ── Animated counter ─────────────────────────────────────────────── */
+/* ── Settling counter ─────────────────────────────────────────────────
+   The one animation on this page, and its whole job is to show a
+   measurement being TAKEN rather than printed: the figures arrive in order
+   and each decelerates onto its value, which is what a reading settling
+   looks like. It runs once and nothing loops.
+
+   A plain rAF tween rather than motion's `useSpring`: no library timing
+   semantics to reason about, and the state is observable at any instant,
+   which matters for a component whose entire behaviour is temporal.      */
 function Counter({ value, suffix = '', delay = 0 }: { value: number; suffix?: string; delay?: number }) {
-  const ref = useRef(null);
+  const ref = useRef<HTMLSpanElement>(null);
   const inView = useInView(ref, { once: true, margin: '-40px' });
-  const motionVal = useMotionValue(0);
-  const spring = useSpring(motionVal, { stiffness: 50, damping: 20 });
-  const [display, setDisplay] = useState('0');
+  const [display, setDisplay] = useState(0);
 
   useEffect(() => {
     if (!inView) return;
-    if (delay > 0) {
-      const t = setTimeout(() => motionVal.set(value), delay * 1000);
-      return () => clearTimeout(t);
-    }
-    motionVal.set(value);
-  }, [inView, value, motionVal, delay]);
 
-  useEffect(() => {
-    const unsubscribe = spring.on('change', (v: number) => setDisplay(Math.round(v).toString()));
-    return unsubscribe;
-  }, [spring]);
+    // A media query cannot stop a JS tween, so honour the preference here:
+    // anyone who asked not to be animated gets the figure straight away.
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      setDisplay(value);
+      return;
+    }
+
+    let raf = 0;
+    let start = 0;
+    const DURATION = 900;
+    // Decelerating, so the number slows into place the way a reading settles
+    // rather than stopping dead.
+    const ease = (t: number) => 1 - Math.pow(1 - t, 3);
+
+    const tick = (now: number) => {
+      if (!start) start = now;
+      const t = Math.min((now - start) / DURATION, 1);
+      setDisplay(Math.round(ease(t) * value));
+      if (t < 1) raf = requestAnimationFrame(tick);
+    };
+
+    const timer = setTimeout(() => { raf = requestAnimationFrame(tick); }, delay * 1000);
+    return () => { clearTimeout(timer); cancelAnimationFrame(raf); };
+  }, [inView, value, delay]);
 
   return <span ref={ref}>{display}{suffix}</span>;
 }
@@ -426,25 +446,43 @@ export default function Landing() {
             </div>
 
             {/* The evidence, as an instrument reads it. Mono, tabular, ruled —
-                and labelled precisely enough that "57 MB" can no longer be
-                mistaken for the download size, which is what the old headline
-                did by putting the RAM figure next to the product name. */}
+                and labelled precisely enough that "52 MB" cannot be mistaken
+                for the download size, which is what the old headline did by
+                putting the RAM figure next to the product name.
+
+                THE ONE ANIMATION ON THIS PAGE, and it earns its place by
+                reporting something: the rows arrive in order and each figure
+                SETTLES on its value rather than being printed, which is what
+                an instrument taking a reading looks like. A page whose whole
+                argument is measurement should show the measurement happening.
+                It runs once, on load, and nothing loops.
+
+                Motion is off entirely for anyone who has asked for that — the
+                CSS media query cannot stop a JS spring, so the counter checks
+                the same preference itself and renders the final value. */}
             <dl className="lg:col-span-5 mono text-sm border-t border-[#1e1e22]">
               {[
-                ['panel binary', '22', 'MB', 'static; +21 MB agent, +1 MB CLI'],
-                ['memory, both services', '52', 'MB', 'api + agent, cgroup accounting'],
-                ['install to login', '47', 's', 'Ubuntu 24.04, 1 vCPU'],
-                ['runtime deps', '0', '', 'no Node, no Python, no PHP'],
-              ].map(([label, n, unit, note]) => (
-                <div key={label} className="flex items-baseline justify-between gap-4 py-3.5 border-b border-[#1e1e22]">
-                  <dt className="text-[#6b6b74] shrink-0">{label}</dt>
+                ['panel binary', 22, 'MB', 'static; +21 MB agent, +1 MB CLI'],
+                ['memory, both services', 52, 'MB', 'api + agent, cgroup accounting'],
+                ['install to login', 47, 's', 'Ubuntu 24.04, 1 vCPU'],
+                ['runtime deps', 0, '', 'no Node, no Python, no PHP'],
+              ].map(([label, n, unit, note], i) => (
+                <motion.div
+                  key={label as string}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.35, delay: 0.25 + i * 0.13 }}
+                  className="flex items-baseline justify-between gap-4 py-3.5 border-b border-[#1e1e22]"
+                >
+                  <dt className="text-[#6b6b74] shrink-0">{label as string}</dt>
                   <dd className="flex items-baseline gap-3 min-w-0">
-                    <span className="hidden sm:block text-[11px] text-[#3f3f46] truncate">{note}</span>
+                    <span className="hidden sm:block text-[11px] text-[#3f3f46] truncate">{note as string}</span>
                     <span className="tnum text-[#f4f4f5] tabular-nums text-base">
-                      {n}<span className="text-[#6b6b74] ml-0.5">{unit}</span>
+                      <Counter value={n as number} delay={0.3 + i * 0.13} />
+                      <span className="text-[#6b6b74] ml-0.5">{unit as string}</span>
                     </span>
                   </dd>
-                </div>
+                </motion.div>
               ))}
             </dl>
           </motion.div>
