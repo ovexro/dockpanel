@@ -6,6 +6,78 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.46.0] - 2026-07-28
+
+Every operator setting is a claim made in three places — the code that reads it,
+the API that decides it may be written, and the control that renders it. Nothing
+made those three agree, and they had drifted in both directions.
+
+### Fixed
+
+- **Terminal session recording ignored its own toggle.** The switch saved,
+  reported "Session recording disabled", and changed nothing: the agent opened a
+  `.cast` file for every session unconditionally and the panel had no way to tell
+  it otherwise. The decision now travels as a signed claim inside the terminal
+  ticket — deliberately not a query parameter, since the browser holds that
+  ticket and connects to the agent directly, and a parameter would let a user
+  switch off the recording of their own session. Agents older than 2.46.0 ignore
+  the claim and keep recording; update the agent for the toggle to take effect
+  on a fleet member.
+
+- **Canary file monitoring ignored its own toggle** in the same way, and the
+  monitoring itself was gated by the wrong switch. Suspicious-event ingestion,
+  auto-lockdown expiry and canary checks all sat under `auto_heal_enabled`, so
+  turning off auto-healing silently turned off security monitoring nobody had
+  asked to stop. They now run on their own.
+
+- **The panel IP allowlist could not be set, and rejected the ranges it
+  documented.** `allowed_panel_ips` gates login, and the guide told operators to
+  set it in Settings — where no control existed and the API answered `400
+  Unknown setting`. It also compared the client address to each entry as a
+  string, so the CIDR ranges the same guide promised matched nothing and locked
+  the operator out rather than restricting access. It now matches by range for
+  IPv4 and IPv6, validates every entry on save so a typo cannot lock you out,
+  and has a control. It fails closed when the proxy sends no `X-Real-IP`; the
+  guide now says so, and how to recover.
+
+- **The site-creation rate limit was disabled by its own seed.**
+  `security_site_rate_limit` is seeded `3` and was read as a boolean, so `3` was
+  not `true`, and the ceiling became 999 per hour. An install without the row
+  limited to 3; an install with it did not limit at all. It is read as the count
+  it always was, `0` turns it off, and it has a control.
+
+- **Exporting a config and importing it dropped your security posture.** The
+  writable-key whitelist was spelled out twice and the copies had drifted:
+  `import_config`'s was missing the registration gates and every `security_*`
+  toggle, under a comment claiming it used the same list as `update`. One list
+  now serves both.
+
+### Added
+
+- Controls for settings that were previously only reachable by editing the
+  database: the panel IP allowlist, the server-terminal kill switch, the
+  auto-lockdown window (the threshold's other half — the rule reads "5 events in
+  10 minutes" and only the 5 was adjustable), and the site-creation rate limit.
+
+- `tests/settings-controls-pin-e2e.sh` — 17 assertions that **discover** their
+  subjects rather than naming them: the whitelist is parsed out of the source,
+  configurable knobs are found by the helper that reads them, and every arm fails
+  when discovery finds fewer subjects than are known to exist. It fails if a
+  writable key is read by nothing, if a knob is unsettable, if a toggle's
+  comparison disagrees with the server's own default, or if a numerically-seeded
+  key is read as a boolean.
+
+### Removed
+
+- Three controls that fronted features which were never built: a timezone
+  selector claiming to "affect displayed timestamps throughout the panel", an
+  email footer "appended to notification emails", and an events webhook that
+  "receives POST for site.create, app.deploy, security.scan". All three saved
+  successfully and none was read by any code. They will return with the
+  behaviour they promise. Values already stored are left in place; the two dead
+  seeds no operator could have set (`security_db_backup_retention_days`,
+  `security_backup_chain_enabled`) are dropped by migration.
+
 ## [2.45.1] - 2026-07-27
 
 The check added in 2.45.0 found a real defect within minutes of being deployed,
