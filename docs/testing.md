@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.47.3.** The version stamp, the template count and every
+> **Reflects v2.47.4.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -372,7 +372,14 @@ found things from coming back.
 
 **On every commit** (`ci.yml`, `codeql.yml`):
 
-- **294 unit tests** across the agent, backend and CLI crates.
+- **339 unit tests** across the crates — 252 in the backend, 87 in the agent.
+  (The CLI crate carries none of its own today.) Re-derive rather than trust
+  this line: `for c in agent backend cli; do (cd panel/$c && cargo test
+  --release); done` and sum the `test result:` lines. Nothing recomputes this
+  figure on a push — unlike the regression-pin total below, which
+  `docs-claims-pin-e2e.sh` re-reads from each suite — so it is exactly the kind
+  of number that goes quietly stale, and it had: this line still read 294 when
+  the count was measured for v2.47.4.
 - **`cargo audit` on all three crates, enforcing.** A real advisory fails the
   build. Two accepted, upstream-blocked items are ignored narrowly, in a
   committed config, with the reason written down.
@@ -388,7 +395,7 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. Fifteen suites, **458 assertions**, all green at the current commit:
+survivable. Sixteen suites, **494 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
@@ -407,6 +414,7 @@ survivable. Fifteen suites, **458 assertions**, all green at the current commit:
 | `settings-controls-pin-e2e.sh` | 17 |
 | `auth-doors-pin-e2e.sh` | 15 |
 | `nginx-headers-pin-e2e.sh` | 78 |
+| `update-rollback-pin-e2e.sh` | 36 |
 
 **On a schedule, from outside** (`live-surfaces.yml`, daily). Every layer above
 runs because something changed, which is exactly why none of them could catch the

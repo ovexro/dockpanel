@@ -61,6 +61,70 @@ const IN_FLIGHT_WINDOW_MIN: i64 = 15;
 /// for the in-process state.
 const LOG_TAIL_MAX: usize = 64;
 
+/// Where `update.sh` records what actually happened.
+///
+/// This file is the ONLY honest channel for the local update path, and the
+/// reason is structural: `update.sh` re-execs itself into a PID1-owned transient
+/// unit with `exec systemd-run` and no `--wait`, so the child spawned below exits
+/// **0 within milliseconds** — measured at ~29 ms against an update that ran
+/// 54 s. That zero describes the handoff, never the work.
+///
+/// The agent side learned this at s232 and reads `last-agent-update.json`; the
+/// restore path learned it at s231 and reads `last-restore.json`. The local
+/// panel path was the sibling call site that never got it, so a run that failed
+/// *before* the api was stopped left no trace anywhere the operator could see:
+/// no restart came to carry a verdict, this process had already observed a
+/// successful exit, and the UI sat on a frozen `last_log_line` until the
+/// 15-minute in-flight window lapsed.
+const PANEL_UPDATE_RESULT_PATH: &str = "/var/lib/dockpanel/last-panel-update.json";
+
+/// How long to keep watching for `update.sh`'s verdict after the detached
+/// handoff. Matches the `child.wait` budget: an update that has not reported
+/// within 15 minutes is covered by the in-flight window and the boot-time
+/// finalizer instead.
+const RESULT_WATCH_SECS: u64 = 900;
+
+/// The verdict `update.sh` left behind, if any. Permissive by construction —
+/// a half-written or absent file must read as "no verdict", never as a failure.
+pub async fn last_panel_update_result() -> Option<serde_json::Value> {
+    let raw = tokio::fs::read_to_string(PANEL_UPDATE_RESULT_PATH).await.ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// `Some(false)` only when the updater explicitly recorded a failure for a run
+/// that finished at or after `since`.
+///
+/// The `since` bound is what stops a verdict from a *previous* update being read
+/// as this one's: the file is overwritten in place, so without it every new run
+/// would inherit the last one's outcome until it wrote its own.
+async fn panel_update_verdict_since(since: DateTime<Utc>) -> Option<(bool, String, String)> {
+    verdict_from_value(&last_panel_update_result().await?, since)
+}
+
+/// The parsing half, split out so it can be tested against the exact bytes
+/// `update.sh` writes rather than against a hand-written approximation of them.
+/// The two halves of this channel are in different languages and different
+/// repositories of habit; a test that invents its own fixture pins the invention.
+fn verdict_from_value(
+    v: &serde_json::Value,
+    since: DateTime<Utc>,
+) -> Option<(bool, String, String)> {
+    let finished = v.get("finished_at").and_then(|f| f.as_str())?;
+    let finished: DateTime<Utc> = finished.parse().ok()?;
+    // One second of slack: the file carries whole seconds, so a run that starts
+    // and fails inside the same second would otherwise be discarded.
+    if finished + chrono::Duration::seconds(1) < since {
+        return None;
+    }
+    let ok = v.get("ok").and_then(|o| o.as_bool())?;
+    let stage = v.get("stage").and_then(|s| s.as_str()).unwrap_or("unknown");
+    let detail = v
+        .get("detail")
+        .and_then(|d| d.as_str())
+        .unwrap_or("no detail recorded");
+    Some((ok, stage.to_string(), detail.to_string()))
+}
+
 // ── State ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
@@ -372,49 +436,125 @@ pub async fn start_panel_update(
         stream_update_output(handle_clone, stdout, stderr).await;
         // We may not reach here — update.sh kills the api midway. If we
         // do, log the exit status so the operator sees it in journals.
-        match tokio::time::timeout(Duration::from_secs(900), child.wait()).await {
+        // A NON-zero exit here is still real information: the script (or PID1)
+        // refused outright, so nothing is running and the update definitively
+        // did not happen. A ZERO exit means only that the work was handed off —
+        // it is never "the work succeeded", because `exec systemd-run` without
+        // `--wait` returns the moment PID1 accepts the job (lesson #49).
+        let handed_off = match tokio::time::timeout(
+            Duration::from_secs(RESULT_WATCH_SECS),
+            child.wait(),
+        )
+        .await
+        {
             Ok(Ok(status)) => {
-                tracing::info!(
-                    "update.sh (target {target_clone}) exited with status {status}"
-                );
-                // Reaching here at all means update.sh died before it stopped
-                // the api — i.e. it failed early (a bad download, a missing
-                // file), so no binary was swapped and no .bak rollback ran.
-                // Nothing else closes out the row in that case, so the operator
-                // was left staring at `in_flight` until the 15-minute window
-                // lapsed, with the real error only in the journal. Finalising
-                // to_version == from_version is what `current_state` already
-                // reads as "attempted <target>, still on <current>" (RolledBack).
-                if !status.success() {
+                tracing::info!("update.sh (target {target_clone}) child exited with {status}");
+                if status.success() {
+                    true
+                } else {
                     tracing::error!(
-                        "update.sh (target {target_clone}) FAILED with {status} — \
+                        "update.sh (target {target_clone}) could not start ({status}) — \
                          panel left on the previous version"
                     );
-                    *handle_for_exit.write().await = UpdateState::Idle;
-                    let current = env!("CARGO_PKG_VERSION");
-                    if let Err(e) = sqlx::query(
-                        "UPDATE panel_snapshots SET to_version = $1 \
-                         WHERE id = $2 AND to_version IS NULL",
-                    )
-                    .bind(current)
-                    .bind(snapshot_id_for_exit)
-                    .execute(&pool_for_exit)
-                    .await
-                    {
-                        tracing::warn!("failed to finalize failed-update snapshot: {e}");
-                    }
+                    false
                 }
             }
             Ok(Err(e)) => {
                 tracing::warn!("update.sh wait failed: {e}");
+                false
             }
             Err(_) => {
                 tracing::warn!("update.sh wait timed out after 15min");
+                false
+            }
+        };
+
+        // Ask the updater what happened, rather than the process that launched
+        // it. If the update SUCCEEDS this loop never finishes: update.sh stops
+        // dockpanel-api, which is the process running this task, and the next
+        // boot's `finalize_pending_on_startup` closes the row. The case being
+        // rescued is the opposite one — a failure BEFORE the api is stopped,
+        // where no restart will ever come to close anything.
+        let mut verdict = None;
+        if handed_off {
+            let deadline =
+                std::time::Instant::now() + Duration::from_secs(RESULT_WATCH_SECS);
+            while std::time::Instant::now() < deadline {
+                if let Some(v) = panel_update_verdict_since(started_at).await {
+                    verdict = Some(v);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        }
+
+        match &verdict {
+            // Recorded success while this process is somehow still alive. Leave
+            // the row alone: the restart is what proves a version change, and
+            // `finalize_pending_on_startup` reads it from the running binary.
+            Some((true, _, _)) => {
+                tracing::info!(
+                    "update.sh (target {target_clone}) recorded success; awaiting restart"
+                );
+            }
+            Some((false, stage, detail)) => {
+                tracing::error!(
+                    "update.sh (target {target_clone}) FAILED at stage '{stage}': {detail}"
+                );
+                finalize_failed_update(
+                    &pool_for_exit,
+                    &handle_for_exit,
+                    snapshot_id_for_exit,
+                )
+                .await;
+            }
+            // No verdict and no restart. Either PID1 refused the handoff, or the
+            // updater died so hard it could not even write its own result file.
+            // Both leave the panel on the version it started on, and both leave
+            // a row that nothing else will ever close.
+            None => {
+                tracing::error!(
+                    "update.sh (target {target_clone}) left no verdict and this process \
+                     was never restarted — treating the update as failed"
+                );
+                finalize_failed_update(
+                    &pool_for_exit,
+                    &handle_for_exit,
+                    snapshot_id_for_exit,
+                )
+                .await;
             }
         }
     });
 
     Ok(in_flight)
+}
+
+/// Close out an update that did not land: drop back to Idle and stamp the row
+/// so it stops reading as in-flight.
+///
+/// Finalising `to_version` to the version we are STILL running is what
+/// `current_state` already reads as "attempted <target>, still on <current>"
+/// (`RolledBack`). Without it the operator was left staring at an in-flight
+/// update until the 15-minute window lapsed, with the real error only in the
+/// transient unit's journal.
+async fn finalize_failed_update(
+    pool: &PgPool,
+    handle: &UpdateStateHandle,
+    snapshot_id: Uuid,
+) {
+    *handle.write().await = UpdateState::Idle;
+    let current = env!("CARGO_PKG_VERSION");
+    if let Err(e) = sqlx::query(
+        "UPDATE panel_snapshots SET to_version = $1 WHERE id = $2 AND to_version IS NULL",
+    )
+    .bind(current)
+    .bind(snapshot_id)
+    .execute(pool)
+    .await
+    {
+        tracing::warn!("failed to finalize failed-update snapshot: {e}");
+    }
 }
 
 /// Stream `update.sh` stdout + stderr into the handle's `last_log_line`.
@@ -923,6 +1063,153 @@ async fn update_one_server(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `update.sh` as it will actually be shipped. Read from the repo rather
+    /// than embedded, because unlike the restore procedure this one is deployed
+    /// as a file and invoked by path.
+    const UPDATE_SH: &str = include_str!("../../../../scripts/update.sh");
+
+    /// The verdict file has to exist on both ends or it is not a channel.
+    ///
+    /// `update.sh` re-execs into a transient unit with `exec systemd-run` and no
+    /// `--wait`, so the child this service waits on exits 0 in milliseconds
+    /// while the real update runs for minutes. An update that fails BEFORE the
+    /// api is stopped therefore has no other way to report: no restart comes to
+    /// carry a verdict, and the exit status belongs to systemd-run.
+    #[test]
+    fn the_updater_and_the_orchestrator_agree_on_where_the_verdict_lives() {
+        assert!(
+            UPDATE_SH.contains("last-panel-update.json"),
+            "update.sh must record its outcome somewhere that outlives it"
+        );
+        assert!(
+            PANEL_UPDATE_RESULT_PATH.ends_with("last-panel-update.json"),
+            "the orchestrator must read the file update.sh writes"
+        );
+    }
+
+    /// Every exit path, not just the ones someone remembered to instrument.
+    /// A `set -e` abort, a SIGTERM and a failed curl all have to leave a verdict
+    /// behind, which is what an EXIT trap is for.
+    #[test]
+    fn the_updater_writes_a_verdict_from_a_trap() {
+        assert!(
+            UPDATE_SH.contains("trap _dockpanel_on_exit EXIT"),
+            "the verdict must be written from an EXIT trap, not only from the happy path"
+        );
+        assert!(
+            UPDATE_SH.contains("_dockpanel_write_result true \"complete\""),
+            "a successful update must record success"
+        );
+        assert!(
+            UPDATE_SH.contains("_dockpanel_write_result false \"rollback\""),
+            "an in-flight rollback must be distinguishable from a clean success"
+        );
+    }
+
+    /// The detached unit must outlive the api it is about to stop.
+    ///
+    /// `--wait` would block systemd-run inside the very cgroup being killed, and
+    /// `--pipe` (which implies `--wait`) would additionally wire the unit's
+    /// stdout to a process about to die — so the updater would take SIGPIPE on
+    /// its next log line, in the middle of the binary swap. Neither is the fix
+    /// for reading the outcome; the result file is.
+    ///
+    /// Counts EXECUTABLE lines only. The script explains at length why it does
+    /// not use these flags, and a negative pin that reads raw source fails the
+    /// moment someone documents the thing it pins — the comment naming the trap
+    /// would itself trip the assertion.
+    #[test]
+    fn the_updater_does_not_try_to_wait_on_its_own_detached_unit() {
+        assert!(
+            UPDATE_SH.contains("exec systemd-run"),
+            "the updater must escape the api's control group"
+        );
+        let code: Vec<&str> = UPDATE_SH
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .collect();
+        for forbidden in ["--wait", "--pipe"] {
+            let offender = code.iter().find(|l| l.contains(forbidden));
+            assert!(
+                offender.is_none(),
+                "{forbidden} would tie the detached unit's life to the api being \
+                 stopped: {}",
+                offender.unwrap_or(&"")
+            );
+        }
+    }
+
+    /// A zero exit from the handoff must never be promoted to a success claim.
+    /// This is lesson #49, and the agent side has carried the same pin since
+    /// s232 — the local path is the sibling call site that had never got it.
+    #[test]
+    fn a_zero_exit_from_the_handoff_is_not_a_successful_update() {
+        let src = include_str!("panel_update.rs");
+        assert!(
+            src.contains("never \"the work succeeded\""),
+            "the reason a zero exit proves nothing must stay written down next to the code"
+        );
+        // The failure finalizer must be reachable from the verdict, not only
+        // from the child's status — that is the whole defect.
+        assert!(
+            src.contains("panel_update_verdict_since"),
+            "the outcome must be read from the updater's own record"
+        );
+    }
+
+    /// Captured verbatim from a real `update.sh` run — a non-root invocation
+    /// that aborted at the preflight check, so nothing hand-instrumented wrote
+    /// it. Using the updater's own bytes is the point: the writer is shell and
+    /// the reader is Rust, and a fixture invented on the Rust side would pin the
+    /// invention rather than the contract.
+    const REAL_VERDICT: &str = r#"{"target_version":"v2.47.4","ok":false,"stage":"preflight","detail":"update aborted at stage 'preflight' with exit code 1","finished_at":"2026-07-28T17:33:32Z"}"#;
+
+    #[test]
+    fn the_orchestrator_can_read_what_the_updater_actually_writes() {
+        let v: serde_json::Value =
+            serde_json::from_str(REAL_VERDICT).expect("update.sh must emit valid JSON");
+        let before = "2026-07-28T17:30:00Z".parse::<DateTime<Utc>>().unwrap();
+        let (ok, stage, detail) =
+            verdict_from_value(&v, before).expect("a verdict from after the run must be read");
+        assert!(!ok, "a failed update must read as failed");
+        assert_eq!(stage, "preflight");
+        assert!(detail.contains("exit code 1"), "the detail must survive: {detail}");
+    }
+
+    /// A verdict left by a PREVIOUS run must not be read as this one's. The file
+    /// is overwritten in place, so without a lower bound every new update would
+    /// inherit the last one's outcome until it wrote its own — and the outcome
+    /// it would inherit is a FAILURE that finalises the row and drops the state
+    /// back to Idle while the real update is still running.
+    #[test]
+    fn a_stale_verdict_is_not_attributed_to_a_new_run() {
+        let v: serde_json::Value = serde_json::from_str(REAL_VERDICT).unwrap();
+        let long_after = "2026-07-28T18:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        assert!(
+            verdict_from_value(&v, long_after).is_none(),
+            "a verdict finished before the run started is not this run's"
+        );
+    }
+
+    /// Absent or half-written files must read as "no verdict yet", never as a
+    /// failure — the orchestrator polls this while an update is in flight, and
+    /// a torn read must not finalise a running update as failed.
+    #[test]
+    fn a_missing_or_torn_verdict_is_not_a_failure() {
+        let since = Utc::now();
+        for junk in [
+            serde_json::json!({}),
+            serde_json::json!({"ok": false}),
+            serde_json::json!({"finished_at": "not-a-date", "ok": false}),
+            serde_json::json!({"finished_at": "2026-07-28T17:33:32Z"}),
+        ] {
+            assert!(
+                verdict_from_value(&junk, since).is_none(),
+                "incomplete verdict must not read as a failure: {junk}"
+            );
+        }
+    }
 
     #[test]
     fn target_version_regex_accepts_canonical_shapes() {

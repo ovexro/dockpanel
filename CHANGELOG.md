@@ -6,6 +6,58 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.47.4] - 2026-07-28
+
+Closes the two remaining defects in the update subsystem. One could silently undo
+a rollback; the other made a failed update look like an update still running.
+
+### Fixed
+
+- **A failure while finishing a rollback could quietly undo that rollback.** The
+  restore reverts the database, then puts the previous binaries back. Between
+  those two steps it verifies the restored schema and records the rollback — and
+  if either step failed, the exit trap restarted `dockpanel-api` to avoid leaving
+  the panel down. But the binary it restarted was still the *newer* one, so it
+  migrated the just-reverted database forward again. The panel came back on the
+  schema the operator had rolled away from, while the result file reported the
+  rollback as FAILED.
+
+  Three changes. The steps after the database commits now report rather than
+  abort, because once the transaction has applied there is nothing left to
+  protect by stopping and a box stranded between two versions to lose. The exit
+  trap now refuses to start the API while the database has been reverted and the
+  binaries have not, leaving it stopped deliberately and naming the pre-rollback
+  dump to recover from — the panel being down is obvious and reversible, a
+  database migrated forward behind a failed-rollback verdict is neither. And the
+  API binary is restored first, so the window is as short as it can be.
+
+- **An update that failed early reported nothing at all.** `update.sh` re-execs
+  itself into a transient systemd unit so it survives stopping the service it was
+  launched from. That hands off in about 29ms while the real update runs for
+  around a minute, so the panel was reading the exit status of the handoff rather
+  than of the update. For an update that succeeds this is harmless — the panel is
+  restarted and works out what happened on the way back up. For one that fails
+  *before* the services are stopped, such as a bad download or a failed database
+  backup, nothing is ever restarted, so nothing ever reported it: the operator
+  watched an update sit in progress, frozen on its first log line, until the
+  fifteen-minute window expired.
+
+  `update.sh` now records its outcome to `/var/lib/dockpanel/last-panel-update.json`
+  on every exit path — including aborts and signals — and the panel reads that
+  instead of inferring from the process it launched. A completed in-flight
+  rollback is recorded distinctly from a failed one, since a panel healthy on its
+  previous version does not need anyone woken up. The outcome is shown in
+  System → Telemetry beside the rollback verdict.
+
+### Testing
+
+- New `tests/update-rollback-pin-e2e.sh` (36 assertions, CI job `update-rollback`).
+  It drives `restore-snapshot.sh` end to end against a scratch tree with stubbed
+  services, so the guard that decides whether to leave a panel stopped is
+  executed rather than merely read. Verified against the previous release's
+  behaviour, where 15 of its assertions fail — including "the API was not
+  restarted", which fails there precisely because the old trap restarts it.
+
 ## [2.47.3] - 2026-07-28
 
 Corrects a defect in 2.47.2's own migration — the mechanism that carries 2.47.2's

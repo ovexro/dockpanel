@@ -38,15 +38,68 @@ if [ -z "${DOCKPANEL_UPDATE_DETACHED:-}" ] && command -v systemd-run >/dev/null 
     fi
 fi
 
+# ── The verdict file ──────────────────────────────────────────────────────
+# Why this exists (F1, s231→s282): the panel orchestrator spawns this script and
+# waits on the child. But the block above `exec systemd-run`s without `--wait`,
+# and systemd-run returns 0 the instant PID1 ACCEPTS the job — measured at ~29ms
+# against a real update that runs ~54s. So the orchestrator's child exits 0
+# almost immediately, its stdout pipe hits EOF one line in, and the exit status
+# it observes belongs to systemd-run rather than to the update.
+#
+# For a SUCCESSFUL update that does not matter much: this script stops
+# dockpanel-api, the orchestrator dies with it, and the next boot works out what
+# happened. The case that was broken is a failure BEFORE the services are
+# stopped — a bad download, a missing file, a failed database backup. The api is
+# never stopped, so no restart ever comes to carry a verdict; the orchestrator
+# saw exit 0 and finalises nothing; and the operator watches an in-flight update
+# frozen on "Re-executing outside the panel's service cgroup…" until the
+# 15-minute window lapses, with the real error only in the transient unit's
+# journal.
+#
+# The fix is the one the agent side already uses (`last-agent-update.json`) and
+# the restore already uses (`last-restore.json`): write the outcome to a file
+# that outlives the process. `--pipe` is NOT the alternative — it implies
+# `--wait` and wires the unit's stdout to a caller that is about to be killed, so
+# the updater would take SIGPIPE on its next log line, mid binary swap.
+DOCKPANEL_STATE_DIR="${DOCKPANEL_STATE_DIR:-/var/lib/dockpanel}"
+_dockpanel_result="$DOCKPANEL_STATE_DIR/last-panel-update.json"
+_dockpanel_stage="preflight"
+_dockpanel_finished=0
+
+_dockpanel_json_escape() {
+    printf '%s' "$1" | tr -d '\000-\010\013\014\016-\037' \
+        | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' '
+}
+
+_dockpanel_write_result() {
+    local ok="$1" stage="$2" detail="$3"
+    mkdir -p "$DOCKPANEL_STATE_DIR" 2>/dev/null || return 0
+    local tmp="$_dockpanel_result.tmp"
+    printf '{"target_version":"%s","ok":%s,"stage":"%s","detail":"%s","finished_at":"%s"}\n' \
+        "$(_dockpanel_json_escape "${DOCKPANEL_VERSION:-}")" "$ok" "$stage" \
+        "$(_dockpanel_json_escape "$detail")" \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp" 2>/dev/null || return 0
+    chmod 0600 "$tmp" 2>/dev/null || true
+    mv "$tmp" "$_dockpanel_result" 2>/dev/null || true
+}
+
 # Safety net: if we get killed or fail after the services are stopped but before
 # they are started again, bring them back rather than leaving the box dark.
 _dockpanel_services_stopped=0
-_dockpanel_restore() {
+_dockpanel_on_exit() {
+    local code=$?
     if [ "$_dockpanel_services_stopped" = "1" ]; then
         systemctl start dockpanel-agent dockpanel-api 2>/dev/null || true
     fi
+    # Every exit path leaves a verdict, including the ones nobody wrote by hand:
+    # a `set -e` abort, a SIGTERM, a failed curl. Without this the only paths
+    # that reported anything were the ones that happened to be instrumented.
+    if [ "$_dockpanel_finished" != "1" ]; then
+        _dockpanel_write_result false "$_dockpanel_stage" \
+            "update aborted at stage '$_dockpanel_stage' with exit code $code"
+    fi
 }
-trap _dockpanel_restore EXIT INT TERM
+trap _dockpanel_on_exit EXIT INT TERM
 
 # ── Colors ────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'
@@ -165,6 +218,7 @@ echo -e "${GREEN}${BOLD}DockPanel Updater${NC}"
 echo ""
 
 # ── Sync repo to origin/main ──────────────────────────────────────────────
+_dockpanel_stage="sync-repo"
 # Both modes need a fresh tree: the canonical systemd unit
 # (panel/agent/dockpanel-agent.service), nginx templates, install-agent.sh,
 # and a few other repo-resident files are deployed from $REPO_DIR. Without a
@@ -192,6 +246,7 @@ if [ -d "$REPO_DIR/.git" ]; then
 fi
 
 # ── Backup database before upgrade ────────────────────────────────────────
+_dockpanel_stage="db-backup"
 BACKUP_DIR="/var/backups/dockpanel/db"
 mkdir -p "$BACKUP_DIR"
 log "Backing up database..."
@@ -203,6 +258,7 @@ else
 fi
 
 # ── Build or download binaries ────────────────────────────────────────────
+_dockpanel_stage="binaries"
 if [ "$INSTALL_FROM_RELEASE" = "1" ]; then
     # Download pre-built binaries from GitHub Releases
     ARCH=$(uname -m)
@@ -339,6 +395,7 @@ else
 fi
 
 # ── Ensure required directories exist (may be new in this version) ────────
+_dockpanel_stage="directories"
 log "Ensuring required directories exist..."
 mkdir -p /etc/dockpanel/ssl /var/run/dockpanel /var/backups/dockpanel
 mkdir -p /var/www/acme/.well-known/acme-challenge
@@ -432,6 +489,7 @@ if command -v getenforce &> /dev/null && [ "$(getenforce 2>/dev/null)" = "Enforc
 fi
 
 # ── Refresh systemd service files (may have changed between versions) ─────
+_dockpanel_stage="systemd-units"
 log "Updating systemd service files..."
 # Agent unit — deploy from repo (single source of truth: panel/agent/dockpanel-agent.service)
 # v2.8.13: existing installs upgrading from v2.8.12 or earlier get the strict sandbox here.
@@ -496,6 +554,7 @@ if [ -f "${REPO_DIR}/scripts/install-agent.sh" ] && [ -d "$FE_DIST" ]; then
 fi
 
 # ── Migrate panel nginx config to bind IPv6 (fixes site-vhost dual-stack hijack) ──
+_dockpanel_stage="nginx-migrations"
 # v2.8.3: agent site templates declare `listen [::]:443 ssl;` (dual-stack), but
 # pre-v2.8.3 setup.sh bound the panel to IPv4 only. The first SSL site to be
 # provisioned then became the de-facto default for IPv6 traffic — WordPress
@@ -783,6 +842,7 @@ if [ -f /etc/dockpanel/api.env ] && ! grep -qE '^BASE_URL=.+' /etc/dockpanel/api
 fi
 
 # ── Deploy binaries ───────────────────────────────────────────────────────
+_dockpanel_stage="deploy"
 # Note: ~2-5s downtime during binary swap is expected for self-hosted deployments.
 log "Backing up current binaries..."
 cp "$AGENT_BIN" "${AGENT_BIN}.bak" 2>/dev/null || true
@@ -882,10 +942,20 @@ rollback() {
     if [ "$restore_failed" = "1" ]; then
         error "ROLLBACK INCOMPLETE — the panel may still be running the failed build."
         error "Inspect /usr/local/bin/dockpanel-{api,agent} and restore manually."
+        _dockpanel_finished=1
+        _dockpanel_write_result false "rollback" \
+            "health check failed after the swap AND the rollback did not complete — the panel may still be running the failed build; inspect /usr/local/bin/dockpanel-{api,agent}"
         exit 1
     fi
 
     warn "Rolled back to previous binaries"
+    # A completed rollback is a DIFFERENT outcome from a failed one, and the
+    # orchestrator has to be able to tell them apart: this box is healthy and
+    # running its previous version, which is not something that needs an
+    # operator at 3am.
+    _dockpanel_finished=1
+    _dockpanel_write_result false "rollback" \
+        "health check failed after the swap; rolled back to the previous binaries and the panel is running again"
     exit 1
 }
 
@@ -929,6 +999,11 @@ if ! dockpanel --version > /dev/null 2>&1; then
 fi
 
 log "Health checks passed"
+_dockpanel_stage="complete"
+_dockpanel_finished=1
+_dockpanel_write_result true "complete" \
+    "updated to ${DOCKPANEL_VERSION:-latest} and passed the post-deploy health checks"
+
 # Clean up backups
 rm -f "${AGENT_BIN}.bak" "${API_BIN}.bak" "${CLI_BIN}.bak"
 

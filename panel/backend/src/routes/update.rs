@@ -36,6 +36,14 @@ pub struct StatusResponse {
     /// like no rollback.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_restore: Option<serde_json::Value>,
+    /// Verdict of the most recent `update.sh` run, if one has ever run.
+    ///
+    /// Same reason as `last_restore`: a successful update kills this process, so
+    /// the outcome cannot come back through the request that started it. It is
+    /// also the ONLY channel for an update that failed *before* the api was
+    /// stopped — nothing restarts, so nothing else ever reports it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_panel_update: Option<serde_json::Value>,
 }
 
 pub async fn get_status(
@@ -60,6 +68,7 @@ pub async fn get_status(
         available_version: available_version.map(|r| r.0),
         channel: channel.map(|r| r.0).unwrap_or_else(|| "stable".into()),
         last_restore: panel_snapshot::last_restore_result().await,
+        last_panel_update: panel_update::last_panel_update_result().await,
     }))
 }
 

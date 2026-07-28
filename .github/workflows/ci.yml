@@ -255,3 +255,17 @@ jobs:
       # public surfaces were hand-edited files with no copy anywhere until s281.
       - name: The committed site vhosts are present and host-agnostic
         run: bash scripts/sync-site-vhosts.sh --check
+
+  update-rollback:
+    name: Update & Rollback Contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Drives restore-snapshot.sh end to end against a scratch tree with
+      # stubbed systemctl/docker/curl. It needs no box and no build, but it must
+      # run somewhere other than the author's machine: the guard it exercises
+      # decides whether a panel is left stopped, and the one thing worse than
+      # that guard being wrong is it never having been executed.
+      - name: A rollback cannot undo itself, and a failed update reports
+        run: bash tests/update-rollback-pin-e2e.sh

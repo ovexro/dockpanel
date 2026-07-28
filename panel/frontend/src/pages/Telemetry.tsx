@@ -72,6 +72,18 @@ interface UpdateStateView {
     detail: string;
     finished_at: string;
   } | null;
+  /// Verdict of the last `update.sh` run. Same reason as `last_restore`, plus
+  /// one the restore does not have: an update that fails BEFORE the api is
+  /// stopped never restarts anything, so this file is the ONLY place it is
+  /// reported. Without it such a run showed as an in-flight update frozen on
+  /// its first log line until the 15-minute window lapsed.
+  last_panel_update?: {
+    target_version: string;
+    ok: boolean;
+    stage: string;
+    detail: string;
+    finished_at: string;
+  } | null;
 }
 
 interface FleetRunRow {
@@ -1007,6 +1019,26 @@ export default function Telemetry() {
                 {creatingSnapshot ? "Snapshotting..." : "Snapshot Now"}
               </button>
             </div>
+            {/* Outcome of the last update.sh run. An update that fails before
+                the api is stopped restarts nothing, so no other surface ever
+                learns it failed — this is the only report it gets. */}
+            {updateState?.last_panel_update && (
+              <div className={`mb-3 rounded-lg border px-3 py-2 text-xs ${
+                updateState.last_panel_update.ok
+                  ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                  : "bg-red-500/10 border-red-500/30 text-red-300"
+              }`}>
+                <div className="font-medium">
+                  {updateState.last_panel_update.ok
+                    ? `Last update completed${updateState.last_panel_update.target_version ? ` (${updateState.last_panel_update.target_version})` : ""}`
+                    : `Last update FAILED at stage "${updateState.last_panel_update.stage}"`}
+                </div>
+                <div className="mt-1 text-dark-300 break-words">{updateState.last_panel_update.detail}</div>
+                <div className="mt-1 font-mono text-[10px] text-dark-500">
+                  {new Date(updateState.last_panel_update.finished_at).toLocaleString()}
+                </div>
+              </div>
+            )}
             {/* Outcome of the last restore. A rollback stops the panel, so the
                 request that starts it can never report how it went — without
                 this the operator cannot tell a failed rollback from one that
@@ -1023,10 +1055,25 @@ export default function Telemetry() {
                     : `Last rollback FAILED at stage "${updateState.last_restore.stage}"`}
                 </div>
                 <div className="mt-1 text-dark-300 break-words">{updateState.last_restore.detail}</div>
-                {!updateState.last_restore.ok && (
+                {/* Only shown when the restore itself says nothing changed. It
+                    describes the PRE-commit failure paths, and once a restore
+                    can also stop after the transaction has applied, printing it
+                    unconditionally would reassure the operator in exactly the
+                    cases where the reassurance is false. */}
+                {!updateState.last_restore.ok
+                  && updateState.last_restore.detail?.includes("nothing changed") && (
                   <div className="mt-1 text-dark-400">
                     The database is applied in a single transaction — a failure before the
                     "database" stage completes leaves it exactly as it was.
+                  </div>
+                )}
+                {!updateState.last_restore.ok
+                  && updateState.last_restore.detail?.includes("LEFT STOPPED") && (
+                  <div className="mt-1 text-dark-400">
+                    The panel API is stopped deliberately: the database was reverted but the
+                    binaries were not, and starting the installed build would migrate the
+                    database forward and undo this rollback. Restore the pre-rollback dump
+                    named above, or finish putting the previous binaries back, before starting it.
                   </div>
                 )}
                 <div className="mt-1 font-mono text-[10px] text-dark-500">

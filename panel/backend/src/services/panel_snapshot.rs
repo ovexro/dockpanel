@@ -857,7 +857,11 @@ mod tests {
                     || l.contains("systemd-cat")
                     || l.contains("daemon-reload")
                     || l.contains("systemctl stop")
-                    || l.contains("cp -a /etc/dockpanel")
+                    // The pre-restore copy of the config directory. Matched on
+                    // `.prerestore.` rather than on a literal path, because the
+                    // path became a variable and this pin then failed on a
+                    // rename that changed nothing about why the line is safe.
+                    || l.contains(".prerestore.")
                     || l.contains("grep -c");
                 assert!(
                     tolerated,
@@ -875,6 +879,79 @@ mod tests {
         assert!(RESTORE_SCRIPT.contains("trap on_exit EXIT INT TERM"));
         assert!(RESTORE_SCRIPT.contains("write_result"));
         assert!(RESTORE_SCRIPT.contains(RESTORE_RESULT_PATH));
+    }
+
+    /// A rollback must not be able to undo itself (s231).
+    ///
+    /// `database-verify` and `record-rollback` both run AFTER the restore
+    /// transaction has committed and BEFORE the binaries are swapped back. The
+    /// exit trap restarted `dockpanel-api` unconditionally, so a failure in
+    /// either one restarted the still-installed NEWER api against a database
+    /// that had just been reverted — and that api migrated it forward again,
+    /// quietly undoing the rollback while the result file said FAILED.
+    ///
+    /// Two independent guarantees, both required:
+    ///   1. the trap consults the window before restarting the api, and
+    ///   2. nothing between the commit and the swap raises in the first place.
+    #[test]
+    fn restore_script_never_restarts_the_api_over_a_reverted_database() {
+        assert!(
+            RESTORE_SCRIPT.contains("rollback_would_be_undone"),
+            "the window between the database commit and the binary swap must be named"
+        );
+        let trap_at = RESTORE_SCRIPT
+            .find("on_exit() {")
+            .expect("the exit trap must exist");
+        let trap = &RESTORE_SCRIPT[trap_at..];
+        let trap_end = trap.find("\ntrap ").unwrap_or(trap.len());
+        let trap = &trap[..trap_end];
+        assert!(
+            trap.contains("rollback_would_be_undone"),
+            "the exit trap must consult the window before restarting the api"
+        );
+        // The agent may still come back — it holds no database. The api may not.
+        let restarts_api = trap
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .filter(|l| l.contains("systemctl start dockpanel-api"))
+            .count();
+        assert_eq!(
+            restarts_api, 1,
+            "the api must be restarted from exactly one branch of the trap — the \
+             one that has established the database and the binaries still agree"
+        );
+    }
+
+    /// After the commit, aborting cannot undo anything and can only strand the
+    /// box between two versions. So the post-commit checks REPORT.
+    #[test]
+    fn restore_script_reports_rather_than_aborts_after_the_database_commits() {
+        let committed = RESTORE_SCRIPT
+            .find("db_committed=1")
+            .expect("the commit point must be marked");
+        let swap = RESTORE_SCRIPT
+            .find("stage=\"binaries\"")
+            .expect("the binary swap must be a named stage");
+        assert!(committed < swap, "the commit must precede the swap");
+
+        // Everything the script does in that window, minus comments.
+        let window = &RESTORE_SCRIPT[committed..swap];
+        for (i, line) in window.lines().enumerate() {
+            let l = line.trim_start();
+            if l.starts_with('#') {
+                continue;
+            }
+            assert!(
+                !l.contains("fail \""),
+                "line {} of the post-commit window raises instead of degrading, \
+                 which strands the box between two versions: {l}",
+                i + 1
+            );
+        }
+        assert!(
+            window.contains("degrade \""),
+            "the post-commit window must still REPORT what went wrong"
+        );
     }
 
     /// Refuse a dump that is already short before anything is destroyed.
