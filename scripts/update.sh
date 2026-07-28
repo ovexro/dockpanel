@@ -661,6 +661,68 @@ for conf in /etc/nginx/sites-enabled/dockpanel-panel.conf /etc/nginx/conf.d/dock
     fi
 done
 
+# ── v2.47.2: repeat the security headers on /assets/ on EXISTING panel vhosts ──
+# Same delivery class as the migration above, and this session's own lesson
+# applied to this session's own change: setup.sh started repeating the server
+# header set inside `location /assets/` in v2.47.2, and setup.sh runs only at
+# install time. Without a migration, every panel already in the field goes on
+# serving its JS and CSS bundles with NO X-Content-Type-Options — the one header
+# that actually matters for a script response, missing from the only responses
+# that are scripts — because a location block's add_headers REPLACE the server
+# block's set rather than merging with it, and this block set only Cache-Control.
+#
+# It also emitted two Cache-Control lines saying different things (max-age from
+# `expires 1y`, `public, immutable` from the add_header). One directive replaces
+# both. Deliberately NOT `always` on it: an error response must not be cached,
+# or a 404 during an update is remembered for a year.
+#
+# As above, the repeated headers are copied FROM THE VHOST BEING MIGRATED rather
+# than written from this script, so an older install keeps its own policy instead
+# of being silently handed today's on one class of response; and a vhost with no
+# server-level add_header is skipped rather than guessed at.
+#
+# Two passes over the file (awk NR==FNR), unlike the single pass above: the
+# server-level add_headers are written AFTER the /assets/ block, so they are not
+# yet known at the point the block has to be rewritten.
+for conf in /etc/nginx/sites-enabled/dockpanel-panel.conf /etc/nginx/conf.d/dockpanel-panel.conf; do
+    [ -f "$conf" ] || continue
+    grep -q "location /assets/" "$conf" || continue
+    grep -q 'max-age=31536000, immutable' "$conf" && continue
+    if ! grep -qE '^    add_header ' "$conf"; then
+        log "WARN: $conf has no server-level add_header — skipped /assets/ header migration (rewriting it would strip the security headers)"
+        continue
+    fi
+    if awk '
+        NR == FNR { if (/^    add_header /) hdr[++n] = $0; next }
+        /^    location \/assets\/ \{/ && !done {
+            print "    # Hashed filenames, so a year is safe. ONE Cache-Control: the expires";
+            print "    # directive emitted its own on top of the add_header and the two went out";
+            print "    # as separate lines saying different things. Not \"always\" — an error";
+            print "    # response must not be cached, or a 404 mid-update is kept for a year.";
+            print "    # Every add_header below REPEATS this vhost'"'"'s own server-level set: a";
+            print "    # location block replaces that set rather than merging with it, so without";
+            print "    # them every script this panel serves goes out with no nosniff.";
+            print "    location /assets/ {";
+            print "        add_header Cache-Control \"public, max-age=31536000, immutable\";";
+            for (i = 1; i <= n; i++) { h = hdr[i]; sub(/^    /, "        ", h); print h }
+            print "    }";
+            skip = 1; done = 1; next
+        }
+        skip && /^    \}/ { skip = 0; next }
+        skip { next }
+        { print }
+    ' "$conf" "$conf" > "$conf.new" && [ -s "$conf.new" ] \
+        && grep -q 'max-age=31536000, immutable' "$conf.new" \
+        && ! grep -q 'expires 1y' "$conf.new"; then
+        mv "$conf.new" "$conf"
+        log "Repeated the security headers on /assets/ in $conf"
+        NGINX_NEEDS_RELOAD=1
+    else
+        rm -f "$conf.new"
+        log "WARN: failed to rewrite the /assets/ block in $conf — skipped"
+    fi
+done
+
 if [ "$NGINX_NEEDS_RELOAD" = "1" ] || [ "$NGINX_NEEDS_RESTART" = "1" ]; then
     if nginx -t > /dev/null 2>&1; then
         if [ "$NGINX_NEEDS_RESTART" = "1" ]; then

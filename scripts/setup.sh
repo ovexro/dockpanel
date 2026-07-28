@@ -1311,9 +1311,26 @@ ${PANEL_TLS_BLOCK}
         add_header X-XSS-Protection "1; mode=block" always;
     }
 
+    # Hashed bundle filenames, so a year is safe. ONE Cache-Control: the expires
+    # directive emits its own (max-age=31536000) on top of any add_header, and
+    # the pair went out as two separate header lines saying different things.
+    # Deliberately NOT "always" on the cache header — an error response must not
+    # be cached, or a 404 during an update would be remembered for a year.
+    #
+    # The security headers below are a REPEAT, not an addition: a location
+    # block's add_headers replace the server block's set outright rather than
+    # merging with it, so without them every script and stylesheet this panel
+    # serves goes out with NO nosniff — the one header that matters most for a
+    # script response, on the only responses that are scripts.
     location /assets/ {
-        expires 1y;
-        add_header Cache-Control "public, immutable";
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' wss:; frame-ancestors 'none';" always;
+        add_header X-XSS-Protection "1; mode=block" always;
     }
 
     # Drop-in location blocks for path-mounted tools (webmail, etc.)

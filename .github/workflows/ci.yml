@@ -224,3 +224,34 @@ jobs:
 
       - name: Published claims match the source
         run: bash tests/docs-claims-pin-e2e.sh
+
+  # s278 found index.html served with no cache directive at all, so every deploy
+  # was invisible to returning visitors while the documented curl check read
+  # green — curl has no cache. s280 gave that fix a delivery path for boxes that
+  # had already installed. Neither shipped with a pin, and this project's history
+  # is that an unpinned fix regresses.
+  #
+  # The suite serves the REAL template with a REAL nginx, because the defect
+  # class here is not visible in the source: a location block's add_headers
+  # REPLACE the server block's set rather than merging with it, so a block that
+  # reads fine in isolation silently strips six headers off the response. It also
+  # asserts a 200 before reading any header — the s280 harness returned 403 for
+  # every request and eleven of its twelve assertions still passed, because these
+  # headers are `always` and nginx emits them on error pages too.
+  nginx-contract:
+    name: Nginx Response Contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install nginx
+        run: sudo apt-get update && sudo apt-get install -y nginx
+
+      - name: The served headers match the shipped templates
+        run: bash tests/nginx-headers-pin-e2e.sh
+
+      # Off-box this cannot diff against the live vhosts, so it asserts the
+      # committed copies exist and carry no host-specific value. The three
+      # public surfaces were hand-edited files with no copy anywhere until s281.
+      - name: The committed site vhosts are present and host-agnostic
+        run: bash scripts/sync-site-vhosts.sh --check

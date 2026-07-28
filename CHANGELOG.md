@@ -6,6 +6,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.47.2] - 2026-07-28
+
+A security release for a header that was missing from exactly the responses it
+exists to protect, plus the first regression pin for the whole nginx contract.
+
+### Fixed
+
+- **Every panel served its JavaScript and CSS with no `X-Content-Type-Options:
+  nosniff`.** The header was declared at the server level and looked correct
+  anywhere you cared to check — but the `location /assets/` block set a cache
+  header of its own, and in nginx a location block's `add_header` directives
+  *replace* the server block's set rather than merging with it. So the one
+  directory whose responses are scripts was the one directory that lost the
+  header telling a browser not to guess at their type. `/assets/` carried none
+  of the seven headers the rest of the vhost sends.
+
+  This is measured, not estimated: served through a real nginx, the generated
+  panel vhost returned a bundle with zero security headers. The same shape was
+  in `panel/frontend/nginx.conf` (three of its five) and
+  `website/client/nginx.conf` (none of its four). All three now repeat their own
+  server block's set in full.
+
+- **`/assets/` responses carried two contradictory `Cache-Control` lines.**
+  `expires 1y` emits its own (`max-age=31536000`) on top of the block's
+  `add_header Cache-Control "public, immutable"`, so the response went out with
+  both, saying different things. One directive replaces both, and it is
+  deliberately not `always`: an error response must never be cached, or a 404
+  during an update is remembered for a year.
+
+- **The fix reaches boxes that are already running.** As in 2.47.1, a change to
+  `setup.sh` alone would reach only installs created after it, because the
+  updater never re-runs the installer. `update.sh` gained a second in-place vhost
+  migration; like the first, the headers it writes are parsed out of the vhost
+  being migrated rather than taken from the script, so an older install keeps its
+  own policy instead of being silently handed today's on one class of response. A
+  vhost with no server-level header is skipped and logged rather than guessed at,
+  and the migration is idempotent.
+
+### Added
+
+- **`tests/nginx-headers-pin-e2e.sh`** — the response contract is now pinned, on
+  both surfaces that can produce it: the template `setup.sh` writes at install
+  time, and the migration `update.sh` applies to a box that installed before the
+  fix existed. It serves them through a real nginx, because this defect class is
+  invisible in the source — a location block that reads fine in isolation
+  silently strips six headers off the response.
+
+  Every serving assertion proves HTTP 200 *before* reading a header. The harness
+  written for 2.47.1 returned 403 for every request and eleven of its twelve
+  assertions still passed, because these headers are declared `always` and nginx
+  emits them on error pages too. Runs in CI as `nginx-contract`.
+
+- **`deploy/nginx/`** — the vhosts for the project's own three public surfaces,
+  under version control for the first time, with a check mode that detects drift
+  against the box. They had been hand-edited files with no copy anywhere, which
+  is how the 2.47.0 document-cache fix came to be applied to one of them and not
+  to the other two that had the identical defect.
+
 ## [2.47.1] - 2026-07-28
 
 A delivery release. The fix it carries was written last session and, on its own,
