@@ -1286,6 +1286,31 @@ ${PANEL_TLS_BLOCK}
         try_files \$uri \$uri/ /index.html;
     }
 
+    # The document must revalidate, or an update does not reach the operator.
+    # Without a cache directive here the browser falls back to HEURISTIC
+    # freshness — roughly a tenth of the age of the file — so on a panel that
+    # has been running for a month, index.html is treated as fresh for about
+    # three days. Its script tag names a hashed bundle under /assets/, which is
+    # served immutable, and the previous bundle is still on disk because the
+    # update untars over the directory rather than replacing it. So nothing
+    # breaks and nothing 404s: the operator simply keeps running the OLD
+    # frontend against the NEW backend, after an update that reported success.
+    # A stale panel that looks healthy is harder to notice than a broken one.
+    #
+    # Every add_header below is a REPEAT, not an addition. A location block's
+    # add_headers replace the server block's set outright rather than merging
+    # with it, and this is the response that carries the CSP.
+    location = /index.html {
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' wss:; frame-ancestors 'none';" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+    }
+
     location /assets/ {
         expires 1y;
         add_header Cache-Control "public, immutable";
