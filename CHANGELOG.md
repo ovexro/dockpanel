@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.47.1] - 2026-07-28
+
+A delivery release. The fix it carries was written last session and, on its own,
+could never have reached a panel that was already running — which was every
+panel except the ones installed after it landed.
+
+### Fixed
+
+- **The panel served `index.html` with no cache directive, so an update could be
+  invisible to the operator who applied it.** With nothing set on the document, a
+  browser falls back to *heuristic* freshness — roughly a tenth of the file's age
+  — so on a panel that has been up a month it will not ask the server about that
+  page for about three days. What it keeps serving in that window names the
+  previous hashed bundle under `/assets/`, which is still on disk, because the
+  frontend untars over the directory rather than replacing it. So nothing 404s
+  and nothing white-screens: the operator updates, is told it worked, and goes on
+  running the old frontend against the new backend. A stale panel that looks
+  healthy is harder to notice than a broken one.
+
+  The install template gained the fix immediately, and new installs have had it
+  ever since, because the installer tracks `main`. **Existing boxes had no path
+  to it at all** — `setup.sh` writes the vhost only at install time and the
+  updater never re-runs it. `update.sh` now migrates the panel vhost in place,
+  the same way it has handled previous nginx changes. The headers it repeats are
+  copied from the vhost being migrated rather than from the script, because a
+  location block's `add_header` directives *replace* the server block's set
+  instead of merging with it: writing today's list would have stripped the CSP
+  off the one response that carries it, and would have quietly given an older
+  install a different policy on a single response. A vhost with no server-level
+  header is skipped and logged rather than guessed at.
+
+  Verified by serving the migrated config with a real nginx: `/index.html`, the
+  SPA root, and a deep client route all return `Cache-Control: no-cache` with all
+  seven security headers intact, and `/assets/` stays `public, immutable`. The
+  migration is idempotent.
+
 ## [2.47.0] - 2026-07-28
 
 Found by driving v2.46.0 on throwaway servers rather than reading it: a fresh

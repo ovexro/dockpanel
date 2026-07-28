@@ -601,6 +601,66 @@ for conf in /etc/nginx/sites-enabled/dockpanel-panel.conf /etc/nginx/conf.d/dock
     fi
 done
 
+# ── v2.47.1: give index.html a cache directive on EXISTING panel vhosts ───
+# setup.sh started writing `location = /index.html { Cache-Control: no-cache }`
+# in v2.47.1, but setup.sh only ever runs at INSTALL time and this script never
+# re-runs it. Without a migration the fix therefore reaches new boxes only, and
+# every panel already in the field keeps serving index.html with no cache
+# directive at all: the browser falls back to HEURISTIC freshness — roughly a
+# tenth of the file's age, so days on a panel that has been up a month — and in
+# that window keeps naming the PREVIOUS hashed bundle, which is still on disk
+# because the frontend untars OVER the directory rather than replacing it.
+# Nothing 404s. The operator updates, is told it worked, and goes on running the
+# old frontend against the new backend. That is s270's delivery class: a fix
+# written into the install-time template only is a fix nobody who already
+# installed will ever receive.
+#
+# The repeated add_headers are copied FROM THE VHOST BEING MIGRATED, not from
+# this script. A location block's add_headers REPLACE the server block's set
+# rather than merging with it, so the block has to re-state whatever that box
+# already sends — otherwise this migration would strip the CSP off the one
+# response that carries it, a worse bug than the one being fixed. Copying the
+# box's own set (rather than today's) also keeps an old vhost from being
+# silently given a different CSP on a single response. If no server-level
+# add_header is found the migration is skipped rather than guessed at.
+for conf in /etc/nginx/sites-enabled/dockpanel-panel.conf /etc/nginx/conf.d/dockpanel-panel.conf; do
+    [ -f "$conf" ] || continue
+    grep -q "location = /index.html" "$conf" && continue
+    # Server-level headers are indented 4; location-level ones 8, so an exact
+    # four-space prefix selects the parent set without matching nested blocks.
+    if ! grep -qE '^    add_header ' "$conf"; then
+        log "WARN: $conf has no server-level add_header — skipped index.html cache migration (injecting it would strip the security headers)"
+        continue
+    fi
+    # Inject before the FIRST top-level `}`. The panel vhost has exactly one
+    # (verified: one `server {` at column 0), the same assumption the
+    # panel-locations migration above already relies on.
+    if awk '
+        /^    add_header / { hdr[++n] = $0 }
+        /^}/ && !done {
+            print "    # Without a cache directive the browser applies heuristic freshness and";
+            print "    # serves a stale index.html, naming an older hashed bundle that is still";
+            print "    # on disk — so an updated panel goes on running the previous frontend.";
+            print "    # Every add_header here is a REPEAT: a location block replaces the";
+            print "    # server block'"'"'s set rather than merging with it.";
+            print "    location = /index.html {";
+            print "        add_header Cache-Control \"no-cache\" always;";
+            for (i = 1; i <= n; i++) { sub(/^    /, "        ", hdr[i]); print hdr[i] }
+            print "    }";
+            print "";
+            done = 1
+        }
+        { print }
+    ' "$conf" > "$conf.new" && [ -s "$conf.new" ] && grep -q "location = /index.html" "$conf.new"; then
+        mv "$conf.new" "$conf"
+        log "Added index.html cache directive to $conf"
+        NGINX_NEEDS_RELOAD=1
+    else
+        rm -f "$conf.new"
+        log "WARN: failed to inject index.html cache block into $conf — skipped"
+    fi
+done
+
 if [ "$NGINX_NEEDS_RELOAD" = "1" ] || [ "$NGINX_NEEDS_RESTART" = "1" ]; then
     if nginx -t > /dev/null 2>&1; then
         if [ "$NGINX_NEEDS_RESTART" = "1" ]; then
@@ -611,10 +671,10 @@ if [ "$NGINX_NEEDS_RELOAD" = "1" ] || [ "$NGINX_NEEDS_RESTART" = "1" ]; then
                 log "WARN: panel is still not listening on ${PANEL_BIND_IP}:443 — a site vhost may shadow it"
             fi
         else
-            nginx -s reload > /dev/null 2>&1 && log "Nginx reloaded after IPv6 listen + panel-locations migration"
+            nginx -s reload > /dev/null 2>&1 && log "Nginx reloaded after config migrations"
         fi
     else
-        log "WARN: nginx -t failed after IPv6 listen + panel-locations migration; not reloading. Check sites-enabled/."
+        log "WARN: nginx -t failed after config migrations; not reloading. Check sites-enabled/."
     fi
 fi
 
