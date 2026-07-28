@@ -1,4 +1,5 @@
-import { LegalDoc, legalLink, type LegalSection } from '../components/LegalDoc';
+import { docLink } from '../components/DocChrome';
+import { LegalDoc, type LegalSection } from '../components/LegalDoc';
 
 /**
  * As with the privacy policy: the terms themselves are untouched and the date
@@ -22,7 +23,7 @@ const SECTIONS: LegalSection[] = [
         DockPanel is released under the Business Source License 1.1 (BSL 1.1). You are free to use,
         copy, modify, and self-host the software for non-production or evaluation purposes. The license
         converts to MIT on 2030-03-25. The full license text is available in the{' '}
-        <a href={LICENSE_URL} className={legalLink} target="_blank" rel="noopener noreferrer">
+        <a href={LICENSE_URL} className={docLink} target="_blank" rel="noopener noreferrer">
           GitHub repository
         </a>
         .
@@ -79,7 +80,7 @@ const SECTIONS: LegalSection[] = [
         Community support is available through{' '}
         <a
           href="https://github.com/ovexro/dockpanel/issues"
-          className={legalLink}
+          className={docLink}
           target="_blank"
           rel="noopener noreferrer"
         >
@@ -110,7 +111,7 @@ const SECTIONS: LegalSection[] = [
         For questions about these terms, please open an issue on our{' '}
         <a
           href="https://github.com/ovexro/dockpanel"
-          className={legalLink}
+          className={docLink}
           target="_blank"
           rel="noopener noreferrer"
         >
@@ -131,7 +132,7 @@ export default function TermsOfService() {
       standfirst={
         <>
           DockPanel is free, open-source software licensed under the{' '}
-          <a href={LICENSE_URL} className={legalLink} target="_blank" rel="noopener noreferrer">
+          <a href={LICENSE_URL} className={docLink} target="_blank" rel="noopener noreferrer">
             Business Source License 1.1
           </a>{' '}
           (which converts to MIT on 2030-03-25). By using DockPanel, you agree to the following terms.

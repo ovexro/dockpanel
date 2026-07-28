@@ -344,7 +344,7 @@ export default function Landing() {
       </AnimatePresence>
 
       {/* ── Nav ───────────────────────────────────────────────────── */}
-      <nav className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${scrolled ? 'bg-[#09090b]/80 backdrop-blur-2xl border-b border-zinc-800/60' : 'border-b border-transparent'}`}>
+      <nav className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${scrolled ? 'bg-[#0a0a0b]/80 backdrop-blur-2xl border-b border-zinc-800/60' : 'border-b border-transparent'}`}>
         <div className="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between">
           <Link to="/" className="flex items-center gap-2.5">
             <Logo className="h-6 w-6" />

@@ -1,4 +1,5 @@
-import { LegalDoc, legalLink, type LegalSection } from '../components/LegalDoc';
+import { docLink } from '../components/DocChrome';
+import { LegalDoc, type LegalSection } from '../components/LegalDoc';
 
 /**
  * Wording is unchanged from the version this page has served since March. Only
@@ -57,7 +58,7 @@ const SECTIONS: LegalSection[] = [
         address, request headers) as part of CDN delivery and DDoS protection. Please refer to{' '}
         <a
           href="https://www.cloudflare.com/privacypolicy/"
-          className={legalLink}
+          className={docLink}
           target="_blank"
           rel="noopener noreferrer"
         >
@@ -87,7 +88,7 @@ const SECTIONS: LegalSection[] = [
         If you have questions about this privacy policy, you can open an issue on our{' '}
         <a
           href="https://github.com/ovexro/dockpanel"
-          className={legalLink}
+          className={docLink}
           target="_blank"
           rel="noopener noreferrer"
         >

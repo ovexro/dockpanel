@@ -1,12 +1,26 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Logo } from '../components/Logo';
-import {
-  Server, ShieldCheck, FileCheck2, Clock, Mail, Github,
-  ScanSearch, BadgeCheck, Lock, Package, AlertTriangle, ExternalLink,
-} from 'lucide-react';
+import { Github, Mail } from 'lucide-react';
+import { DocSection, DocShell, DocTitle, docLink } from '../components/DocChrome';
 
-const hd = "font-['IBM_Plex_Sans',system-ui,sans-serif] tracking-[-0.02em]";
+/**
+ * The security page, on the site's spine.
+ *
+ * It was the last page on a dialect of its own. Rebuilt Jul 27 16:29 — twenty-
+ * nine minutes before the `.measure`/`.rule`/`.eyebrow` spine landed in
+ * `Landing.tsx` at 16:58 — it used none of it: ground #09090b against the
+ * token's #0a0a0b, a pill for an eyebrow, a local font constant restating what
+ * index.css already sets on `body`, and no footer, so the page was a dead end.
+ * s277 cleared it by mtime, which answers when it was touched rather than what
+ * it is built on.
+ *
+ * Nothing it claims changed. Every figure, date, bullet and heading below is
+ * the string that was already published — restyling is not amending, and a
+ * security page is the last place to quietly restate a claim. What changed is
+ * the drawing: the bordered cards with a lucide glyph apiece are ruled rows,
+ * for the reason `Landing.tsx` gives where it retired the same pattern — an
+ * icon chosen loosely carries no information and takes the eye first anyway.
+ * Measurements are mono and tabular because they are measurements.
+ */
 
 const POSTURE = {
   audits: 7,
@@ -16,7 +30,7 @@ const POSTURE = {
   latestAuditDate: 'April 2026',
   // NOT hardcoded. It said v2.7.11 — thirty-seven releases stale — because a
   // version typed into a page is a fact with no owner. It is fetched from the
-  // releases API at render time, and the tile is simply omitted if that fails:
+  // releases API at render time, and the row is simply omitted if that fails:
   // a number nobody can verify is worse than no number.
 };
 
@@ -87,7 +101,7 @@ const AUDIT_HISTORY = [
   {
     round: 1,
     date: 'March 2026',
-    title: 'Initial comprehensive audit (Rounds 1\u20132)',
+    title: 'Initial comprehensive audit (Rounds 1–2)',
     bullets: [
       '117 vulnerabilities resolved across 45 files',
       'command injection, path traversal, configuration injection',
@@ -98,16 +112,14 @@ const AUDIT_HISTORY = [
 
 const SUPPLY_CHAIN = [
   {
-    icon: BadgeCheck,
     title: 'Signed releases (Sigstore + cosign)',
     since: 'v2.7.10+',
     text:
       'Every binary and SBOM in every GitHub release is signed in CI with cosign keyless. ' +
-      'No long-lived signing key exists — the certificate is bound to the release workflow\u2019s ' +
+      'No long-lived signing key exists — the certificate is bound to the release workflow’s ' +
       'GitHub Actions OIDC identity and recorded in the public Rekor transparency log.',
   },
   {
-    icon: Package,
     title: 'Per-binary SBOMs',
     since: 'v2.7.10+',
     text:
@@ -115,7 +127,6 @@ const SUPPLY_CHAIN = [
       'every release. Each SBOM is also signed and verifiable with the same cosign command.',
   },
   {
-    icon: ScanSearch,
     title: 'Per-image SBOM generation',
     since: 'v2.7.11+',
     text:
@@ -123,11 +134,10 @@ const SUPPLY_CHAIN = [
       '(syft). Useful for supply-chain audits and EU CRA compliance asks (mandatory September 2026).',
   },
   {
-    icon: ShieldCheck,
     title: 'Per-image CVE scanning',
     since: 'v2.7.9+',
     text:
-      'grype scans every running app\u2019s image and surfaces a severity badge per app row. ' +
+      'grype scans every running app’s image and surfaces a severity badge per app row. ' +
       'A configurable soft deploy gate refuses new deploys above critical/high/medium thresholds.',
   },
 ];
@@ -148,10 +158,32 @@ const RECENT_ADVISORIES = [
   { ver: '2.7.x',  date: '2026-03',    text: 'Audit Round 3: research-driven sweep against real-world panel CVEs — 55 findings, env_clear() on 341 Command::new() calls, AES-256-GCM credentials at rest.' },
 ];
 
+const DEFAULTS: [string, string][] = [
+  ['Unix socket agent', 'Agent never exposed to the network.'],
+  ['Argon2 password hashing', 'Memory-hard, GPU-resistant.'],
+  ['AES-256-GCM credentials at rest', 'DB, SMTP, S3/SFTP, OAuth, TOTP, DKIM.'],
+  ['JWT auth + IDOR ownership checks', 'On every resource handler.'],
+  ['env_clear() on Command::new()', 'No LD_PRELOAD / PATH hijacking.'],
+  ['Rate-limited auth endpoints', 'Brute-force resistance.'],
+  ['CSP on frontend nginx', 'XSS + injection mitigation.'],
+  ['Systemd-hardened agent unit', 'ProtectSystem=strict + 10 protect/restrict directives.'],
+  ['Terminal sandbox', 'PR_SET_NO_NEW_PRIVS, restricted bash, command blocklist.'],
+  ['No telemetry, ever', 'Self-hosted means self-hosted.'],
+];
+
+const SECURITY_MD = 'https://github.com/ovexro/dockpanel/blob/main/SECURITY.md';
+const CHANGELOG_MD = 'https://github.com/ovexro/dockpanel/blob/main/CHANGELOG.md';
+
+/** Section headings. Sized as sections rather than clauses — these are units. */
+const h2 =
+  'text-[1.5rem] sm:text-[1.75rem] font-semibold leading-[1.15] tracking-[-0.02em] text-[#f4f4f5]';
+/** The line under a heading that says what the section is for. */
+const standfirst = 'mt-3 text-[14px] leading-relaxed text-[#a3a3ad]';
+
 export default function Security() {
   // See the note on POSTURE: the release number is read from GitHub rather
   // than typed here, so it cannot go stale. Failure leaves it null and the
-  // tile is dropped.
+  // row is dropped.
   const [latestRelease, setLatestRelease] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
@@ -162,276 +194,253 @@ export default function Security() {
     return () => { live = false; };
   }, []);
 
-  return (
-    <div className="min-h-screen bg-[#09090b] text-white">
-      {/* Header */}
-      <header className="border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
-          <Link to="/" className="flex items-center gap-2.5">
-            <Logo className="h-6 w-6" />
-            <span className="text-[17px] font-semibold tracking-[-0.01em] text-[#f4f4f5]">
-              DockPanel
-            </span>
-          </Link>
-          <Link to="/" className="text-sm text-zinc-400 transition hover:text-white">
-            &larr; Back to home
-          </Link>
-        </div>
-      </header>
+  const posture: [string, string][] = [
+    ['internal audit rounds', String(POSTURE.audits)],
+    ['findings closed', `${POSTURE.findingsClosed}+`],
+    ['reported breaches', String(POSTURE.breaches)],
+    ...(latestRelease ? ([['current release', latestRelease]] as [string, string][]) : []),
+  ];
 
-      <main className="mx-auto max-w-5xl px-6 py-16">
-        {/* Hero */}
-        <section>
-          <div className="inline-flex items-center gap-2 rounded-full border border-[#1e1e22] bg-[#101012] px-3 py-1 text-[11px] font-semibold uppercase tracking-widest text-[#a3a3ad]">
-            <ShieldCheck className="h-3.5 w-3.5" /> Security posture
-          </div>
-          <h1 className={`mt-4 text-4xl font-bold tracking-tight text-white md:text-5xl ${hd}`}>
-            Security is the product.
-          </h1>
-          <p className="mt-4 max-w-2xl text-zinc-400 leading-relaxed">
+  return (
+    <DocShell>
+      <DocTitle
+        eyebrow="Security posture"
+        title="Security is the product."
+        standfirst={
+          <>
             Every other panel that skipped this page eventually wrote a postmortem instead.
             DockPanel takes the opposite approach: continuous internal audits, supply-chain
             transparency, signed releases, and a public response SLA. Here&apos;s the receipts.
-          </p>
-        </section>
+          </>
+        }
+      />
 
-        {/* Posture stats */}
-        <section className="mt-10 grid grid-cols-2 gap-4 sm:grid-cols-4">
-          {[
-            { v: POSTURE.audits, l: 'Internal audit rounds' },
-            { v: `${POSTURE.findingsClosed}+`, l: 'Findings closed' },
-            { v: POSTURE.breaches, l: 'Reported breaches' },
-            ...(latestRelease ? [{ v: latestRelease, l: 'Current release' }] : []),
-          ].map((s, i) => (
-            <div key={i} className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-5">
-              <div className={`text-3xl font-bold tabular-nums text-white ${hd}`}>{s.v}</div>
-              <div className="mt-1 text-[12px] text-zinc-500">{s.l}</div>
+      {/* ── Posture ───────────────────────────────────────────────────────
+          Four bordered tiles with a 3xl figure apiece became four rows of a
+          ruled list, which is the shape a set of measurements already has
+          everywhere else on this site. Tabular figures so the digits line up,
+          which is what makes them comparable at all.                       */}
+      <DocSection id="posture" label="Posture" contentClassName="max-w-2xl">
+        <dl className="mono border-t border-[#1e1e22] text-[13px]">
+          {posture.map(([k, v]) => (
+            <div
+              key={k}
+              className="flex items-baseline justify-between gap-6 border-b border-[#1e1e22] py-3"
+            >
+              <dt className="text-[#6b6b74]">{k}</dt>
+              <dd className="tnum text-[#f4f4f5]">{v}</dd>
             </div>
           ))}
-        </section>
-        <p className="mt-3 text-[12px] text-zinc-600">
-          Latest audit: Round {POSTURE.latestAuditRound} ({POSTURE.latestAuditDate}). Counts cover all rounds combined.
+        </dl>
+        <p className="mt-4 text-[12px] leading-relaxed text-[#6b6b74]">
+          Latest audit: Round {POSTURE.latestAuditRound} ({POSTURE.latestAuditDate}). Counts
+          cover all rounds combined.
+        </p>
+      </DocSection>
+
+      {/* ── Provenance ────────────────────────────────────────────────── */}
+      <DocSection id="supply-chain" label="Provenance" contentClassName="max-w-3xl">
+        <h2 className={h2}>Supply chain</h2>
+        <p className={standfirst}>
+          What we ship, signed. What you run, scannable. EU CRA compliance lands September 2026 —
+          DockPanel is ready today.
         </p>
 
-        {/* Supply chain */}
-        <section className="mt-16">
-          <h2 className={`text-2xl font-bold text-white ${hd}`}>Supply chain</h2>
-          <p className="mt-2 text-sm text-zinc-500">
-            What we ship, signed. What you run, scannable. EU CRA compliance lands September 2026 —
-            DockPanel is ready today.
-          </p>
-          <div className="mt-6 grid gap-4 md:grid-cols-2">
-            {SUPPLY_CHAIN.map((row) => (
-              <div key={row.title} className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-5">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-2.5">
-                    <row.icon className="h-5 w-5 text-[#6b6b74]" />
-                    <h3 className="text-[15px] font-semibold text-white">{row.title}</h3>
-                  </div>
-                  <span className="rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 text-[10px] font-mono text-zinc-400">
-                    {row.since}
-                  </span>
-                </div>
-                <p className="mt-3 text-[13px] leading-relaxed text-zinc-400">{row.text}</p>
+        <ul className="mt-8 border-t border-[#1e1e22]">
+          {SUPPLY_CHAIN.map((row) => (
+            <li key={row.title} className="border-b border-[#1e1e22] py-4">
+              <div className="flex items-baseline justify-between gap-4">
+                <h3 className="text-[14px] font-semibold text-[#f4f4f5]">{row.title}</h3>
+                <span className="mono shrink-0 text-[11px] text-[#3f3f46]">{row.since}</span>
               </div>
-            ))}
-          </div>
+              <p className="mt-2 text-[13px] leading-relaxed text-[#6b6b74]">{row.text}</p>
+            </li>
+          ))}
+        </ul>
 
-          <div className="mt-6 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950">
-            <div className="flex items-center justify-between border-b border-zinc-800 bg-zinc-900/60 px-4 py-2">
-              <span className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">
-                Verify a downloaded binary
-              </span>
-              <a
-                href="https://github.com/ovexro/dockpanel/blob/main/SECURITY.md#verifying-release-signatures"
-                className="flex items-center gap-1 text-[11px] text-zinc-500 hover:text-white"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Docs <ExternalLink className="h-3 w-3" />
-              </a>
+        {/* The one thing on this page a reader can run. It is a command, so it
+            is set as one — no rounded panel, just the rule and the mono. */}
+        <figure className="mt-8 border border-[#1e1e22]">
+          <figcaption className="flex items-center justify-between gap-4 border-b border-[#1e1e22] px-4 py-2.5">
+            <span className="eyebrow">Verify a downloaded binary</span>
+            <a
+              href={`${SECURITY_MD}#verifying-release-signatures`}
+              className="mono text-[11px] text-[#6b6b74] transition-colors hover:text-[#f4f4f5]"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Docs &#8599;
+            </a>
+          </figcaption>
+          <pre className="overflow-x-auto px-4 py-3.5 text-[12px] leading-relaxed text-[#a3a3ad]">
+            <code>{VERIFY_CMD}</code>
+          </pre>
+        </figure>
+      </DocSection>
+
+      {/* ── Response ──────────────────────────────────────────────────── */}
+      <DocSection id="sla" label="Response" contentClassName="max-w-3xl">
+        <h2 className={h2}>CVE response SLA</h2>
+        <p className={standfirst}>
+          From{' '}
+          <a href={SECURITY_MD} className={docLink} target="_blank" rel="noopener noreferrer">
+            SECURITY.md
+          </a>
+          . We don&apos;t pursue legal action against good-faith researchers.
+        </p>
+
+        <dl className="mt-8 border-t border-[#1e1e22]">
+          {SLA.map((row) => (
+            <div
+              key={row.window}
+              className="flex flex-col gap-1 border-b border-[#1e1e22] py-3.5 sm:flex-row sm:items-baseline sm:gap-6"
+            >
+              <dt className="mono tnum shrink-0 text-[13px] text-[#f4f4f5] sm:w-[7rem]">
+                {row.window}
+              </dt>
+              <dd className="min-w-0 text-[13px] leading-relaxed text-[#6b6b74]">{row.text}</dd>
             </div>
-            <pre className="overflow-x-auto px-4 py-3 text-[12px] leading-relaxed text-[#a3a3ad]">
-              <code>{VERIFY_CMD}</code>
-            </pre>
-          </div>
-        </section>
+          ))}
+        </dl>
+      </DocSection>
 
-        {/* SLA */}
-        <section className="mt-16">
-          <h2 className={`text-2xl font-bold text-white ${hd}`}>CVE response SLA</h2>
-          <p className="mt-2 text-sm text-zinc-500">
-            From <a href="https://github.com/ovexro/dockpanel/blob/main/SECURITY.md" className="text-[#6b6b74] underline underline-offset-2 hover:text-[#a3a3ad]" target="_blank" rel="noopener noreferrer">SECURITY.md</a>.
-            We don&apos;t pursue legal action against good-faith researchers.
-          </p>
-          <div className="mt-6 grid gap-4 md:grid-cols-3">
-            {SLA.map((row) => (
-              <div key={row.window} className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-5">
-                <div className="flex items-center gap-2 text-[#6b6b74]">
-                  <Clock className="h-4 w-4" />
-                  <span className="text-[11px] font-semibold uppercase tracking-widest">{row.window}</span>
-                </div>
-                <p className="mt-2 text-[13px] leading-relaxed text-zinc-300">{row.text}</p>
+      {/* ── Audits ────────────────────────────────────────────────────── */}
+      <DocSection id="audits" label="Audits" contentClassName="max-w-3xl">
+        <h2 className={h2}>What we audit ourselves for</h2>
+        <p className={standfirst}>
+          Seven rounds. Each linked back to fixes in the public CHANGELOG. Most-recent first.
+        </p>
+
+        <div className="mt-8 border-t border-[#1e1e22]">
+          {AUDIT_HISTORY.map((r) => (
+            <article key={r.round} className="border-b border-[#1e1e22] py-5">
+              <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+                <span className="mono tnum shrink-0 text-[13px] text-[#f4f4f5]">
+                  Round {r.round}
+                </span>
+                <h3 className="min-w-0 text-[14px] font-semibold text-[#f4f4f5]">{r.title}</h3>
+                <span className="mono ml-auto shrink-0 text-[11px] text-[#3f3f46]">{r.date}</span>
               </div>
-            ))}
-          </div>
-        </section>
+              <ul className="mt-3 space-y-1.5 text-[13px] leading-relaxed text-[#6b6b74]">
+                {r.bullets.map((b, i) => (
+                  <li key={i} className="flex gap-3">
+                    <span aria-hidden="true" className="mono select-none text-[#3f3f46]">
+                      &mdash;
+                    </span>
+                    <span className="min-w-0">{b}</span>
+                  </li>
+                ))}
+              </ul>
+            </article>
+          ))}
+        </div>
 
-        {/* Audit history */}
-        <section className="mt-16">
-          <h2 className={`text-2xl font-bold text-white ${hd}`}>What we audit ourselves for</h2>
-          <p className="mt-2 text-sm text-zinc-500">
-            Seven rounds. Each linked back to fixes in the public CHANGELOG. Most-recent first.
-          </p>
-          <div className="mt-6 space-y-4">
-            {AUDIT_HISTORY.map((r) => (
-              <div key={r.round} className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-5">
-                <div className="flex items-center gap-3">
-                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#101012] border border-[#1e1e22] text-[12px] font-bold text-[#a3a3ad]">
-                    {r.round}
-                  </span>
-                  <h3 className="text-[15px] font-semibold text-white">{r.title}</h3>
-                  <span className="ml-auto text-[12px] text-zinc-500">{r.date}</span>
-                </div>
-                <ul className="mt-3 space-y-1.5 pl-10 text-[13px] leading-relaxed text-zinc-400">
-                  {r.bullets.map((b, i) => (
-                    <li key={i} className="list-disc marker:text-zinc-700">{b}</li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </div>
-          <div className="mt-4 text-[12px] text-zinc-600">
-            Full write-ups in{' '}
-            <a
-              href="https://github.com/ovexro/dockpanel/blob/main/SECURITY.md#past-security-work"
-              className="text-[#6b6b74] underline underline-offset-2 hover:text-[#a3a3ad]"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              SECURITY.md &rarr; Past Security Work
-            </a>.
-          </div>
-        </section>
-
-        {/* Recent advisories */}
-        <section className="mt-16">
-          <h2 className={`text-2xl font-bold text-white ${hd}`}>Recent advisories addressed</h2>
-          <p className="mt-2 text-sm text-zinc-500">
-            What we&apos;ve shipped to harden the panel. From the{' '}
-            <a
-              href="https://github.com/ovexro/dockpanel/blob/main/CHANGELOG.md"
-              className="text-[#6b6b74] underline underline-offset-2 hover:text-[#a3a3ad]"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              CHANGELOG
-            </a>.
-          </p>
-          <div className="mt-6 overflow-hidden rounded-lg border border-zinc-800">
-            {RECENT_ADVISORIES.map((a, i) => (
-              <div
-                key={i}
-                className={`flex flex-col gap-1 px-5 py-3 text-[13px] sm:flex-row sm:items-center sm:gap-4 ${
-                  i % 2 === 0 ? 'bg-zinc-950/60' : 'bg-zinc-950/30'
-                }`}
-              >
-                <span className="w-20 font-mono text-[12px] text-[#6b6b74]">{a.ver}</span>
-                <span className="w-24 text-[12px] text-zinc-600">{a.date}</span>
-                <span className="text-zinc-300">{a.text}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        {/* Architecture summary */}
-        <section className="mt-16">
-          <h2 className={`text-2xl font-bold text-white ${hd}`}>Defense in depth</h2>
-          <p className="mt-2 text-sm text-zinc-500">
-            The properties every DockPanel install ships with by default.
-          </p>
-          <div className="mt-6 grid gap-3 md:grid-cols-2">
-            {[
-              ['Unix socket agent', 'Agent never exposed to the network.'],
-              ['Argon2 password hashing', 'Memory-hard, GPU-resistant.'],
-              ['AES-256-GCM credentials at rest', 'DB, SMTP, S3/SFTP, OAuth, TOTP, DKIM.'],
-              ['JWT auth + IDOR ownership checks', 'On every resource handler.'],
-              ['env_clear() on Command::new()', 'No LD_PRELOAD / PATH hijacking.'],
-              ['Rate-limited auth endpoints', 'Brute-force resistance.'],
-              ['CSP on frontend nginx', 'XSS + injection mitigation.'],
-              ['Systemd-hardened agent unit', 'ProtectSystem=strict + 10 protect/restrict directives.'],
-              ['Terminal sandbox', 'PR_SET_NO_NEW_PRIVS, restricted bash, command blocklist.'],
-              ['No telemetry, ever', 'Self-hosted means self-hosted.'],
-            ].map(([t, d]) => (
-              <div key={t} className="flex items-start gap-3 rounded-lg border border-zinc-800/60 bg-zinc-950/40 p-4">
-                <Lock className="mt-0.5 h-4 w-4 flex-none text-[#6b6b74]" />
-                <div>
-                  <div className="text-[13px] font-semibold text-white">{t}</div>
-                  <div className="mt-0.5 text-[12px] text-zinc-500">{d}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        {/* Report a vulnerability */}
-        <section className="mt-16 rounded-xl border border-[#1e1e22] bg-[#101012] p-8">
-          <div className="flex items-center gap-3">
-            <AlertTriangle className="h-5 w-5 text-[#6b6b74]" />
-            <h2 className={`text-xl font-bold text-white ${hd}`}>Report a vulnerability</h2>
-          </div>
-          <p className="mt-3 text-[14px] leading-relaxed text-zinc-300">
-            Please don&apos;t open a public GitHub issue for security vulnerabilities. Email us
-            with reproduction steps, impact, and any PoC. We acknowledge within 48 hours and
-            credit researchers (with permission) who follow responsible disclosure.
-          </p>
-          <div className="mt-5 flex flex-wrap gap-3">
-            <a
-              href="mailto:security@dockpanel.dev"
-              className="inline-flex items-center gap-2 rounded-md bg-white px-4 py-2 text-[13px] font-semibold text-zinc-900 transition hover:bg-zinc-200"
-            >
-              <Mail className="h-4 w-4" /> security@dockpanel.dev
-            </a>
-            <a
-              href="https://github.com/ovexro/dockpanel/security/advisories/new"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900/50 px-4 py-2 text-[13px] font-semibold text-zinc-200 transition hover:border-zinc-700"
-            >
-              <Github className="h-4 w-4" /> GitHub Security Advisory
-            </a>
-            <a
-              href="https://github.com/ovexro/dockpanel/blob/main/SECURITY.md"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900/50 px-4 py-2 text-[13px] font-semibold text-zinc-200 transition hover:border-zinc-700"
-            >
-              <FileCheck2 className="h-4 w-4" /> Full SECURITY.md
-            </a>
-          </div>
-        </section>
-
-        <div className="mt-16 border-t border-zinc-800/60 pt-6 text-[12px] text-zinc-600">
-          Audit and finding counts are tracked in{' '}
+        <p className="mt-5 text-[12px] text-[#6b6b74]">
+          Full write-ups in{' '}
           <a
-            href="https://github.com/ovexro/dockpanel/blob/main/SECURITY.md"
-            className="text-[#6b6b74] underline underline-offset-2 hover:text-[#a3a3ad]"
+            href={`${SECURITY_MD}#past-security-work`}
+            className={docLink}
             target="_blank"
             rel="noopener noreferrer"
           >
+            SECURITY.md &rarr; Past Security Work
+          </a>
+          .
+        </p>
+      </DocSection>
+
+      {/* ── Advisories ────────────────────────────────────────────────── */}
+      <DocSection id="advisories" label="Advisories" contentClassName="max-w-3xl">
+        <h2 className={h2}>Recent advisories addressed</h2>
+        <p className={standfirst}>
+          What we&apos;ve shipped to harden the panel. From the{' '}
+          <a href={CHANGELOG_MD} className={docLink} target="_blank" rel="noopener noreferrer">
+            CHANGELOG
+          </a>
+          .
+        </p>
+
+        <div className="mt-8 border-t border-[#1e1e22]">
+          {RECENT_ADVISORIES.map((a, i) => (
+            <div
+              key={i}
+              className="flex flex-col gap-1 border-b border-[#1e1e22] py-3.5 sm:flex-row sm:items-baseline sm:gap-6"
+            >
+              <span className="mono tnum shrink-0 text-[12px] text-[#f4f4f5] sm:w-[3.5rem]">
+                {a.ver}
+              </span>
+              <span className="mono tnum shrink-0 text-[12px] text-[#3f3f46] sm:w-[5rem]">
+                {a.date}
+              </span>
+              <span className="min-w-0 text-[13px] leading-relaxed text-[#6b6b74]">{a.text}</span>
+            </div>
+          ))}
+        </div>
+      </DocSection>
+
+      {/* ── Defaults ──────────────────────────────────────────────────── */}
+      <DocSection id="defaults" label="By default" contentClassName="max-w-3xl">
+        <h2 className={h2}>Defense in depth</h2>
+        <p className={standfirst}>The properties every DockPanel install ships with by default.</p>
+
+        <dl className="mt-8 grid border-t border-[#1e1e22] md:grid-cols-2 md:gap-x-12">
+          {DEFAULTS.map(([t, d]) => (
+            <div key={t} className="border-b border-[#1e1e22] py-3.5">
+              <dt className="mono text-[13px] text-[#f4f4f5]">{t}</dt>
+              <dd className="mt-1 text-[13px] leading-relaxed text-[#6b6b74]">{d}</dd>
+            </div>
+          ))}
+        </dl>
+      </DocSection>
+
+      {/* ── Disclosure ────────────────────────────────────────────────── */}
+      <DocSection id="disclosure" label="Disclosure" contentClassName="max-w-2xl">
+        <h2 className={h2}>Report a vulnerability</h2>
+        <p className="mt-3 text-[15px] leading-relaxed text-[#a3a3ad]">
+          Please don&apos;t open a public GitHub issue for security vulnerabilities. Email us
+          with reproduction steps, impact, and any PoC. We acknowledge within 48 hours and
+          credit researchers (with permission) who follow responsible disclosure.
+        </p>
+        <div className="mt-7 flex flex-wrap items-center gap-x-6 gap-y-3">
+          <a
+            href="mailto:security@dockpanel.dev"
+            className="mono inline-flex items-center gap-2 text-[13px] text-[#f4f4f5] underline decoration-[#3f3f46] underline-offset-4 transition-colors hover:decoration-[#f4f4f5]"
+          >
+            <Mail className="h-3.5 w-3.5" /> security@dockpanel.dev
+          </a>
+          <a
+            href="https://github.com/ovexro/dockpanel/security/advisories/new"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 text-[13px] font-medium text-[#a3a3ad] transition-colors hover:text-[#f4f4f5]"
+          >
+            <Github className="h-3.5 w-3.5" /> GitHub Security Advisory
+          </a>
+          <a
+            href={SECURITY_MD}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[13px] font-medium text-[#a3a3ad] transition-colors hover:text-[#f4f4f5]"
+          >
+            Full SECURITY.md
+          </a>
+        </div>
+      </DocSection>
+
+      {/* ── Sources ───────────────────────────────────────────────────── */}
+      <DocSection id="sources" label="Sources" contentClassName="max-w-2xl">
+        <p className="text-[13px] leading-relaxed text-[#6b6b74]">
+          Audit and finding counts are tracked in{' '}
+          <a href={SECURITY_MD} className={docLink} target="_blank" rel="noopener noreferrer">
             SECURITY.md
           </a>{' '}
           and the{' '}
-          <a
-            href="https://github.com/ovexro/dockpanel/blob/main/CHANGELOG.md"
-            className="text-[#6b6b74] underline underline-offset-2 hover:text-[#a3a3ad]"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
+          <a href={CHANGELOG_MD} className={docLink} target="_blank" rel="noopener noreferrer">
             CHANGELOG
-          </a>.
-        </div>
-      </main>
-    </div>
+          </a>
+          .
+        </p>
+      </DocSection>
+    </DocShell>
   );
 }
