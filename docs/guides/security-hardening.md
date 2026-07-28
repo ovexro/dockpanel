@@ -271,6 +271,10 @@ When enabled, new user registrations require admin approval before the user can 
 
 If the system detects a configurable number of suspicious events within a time window (default: 5 events in 10 minutes), lockdown activates automatically. Configure **both** halves — **Auto-Lockdown Threshold** and **Auto-Lockdown Window** — in **Settings** > **Account** > **Security Hardening**.
 
+Lockdown blocks non-admin access until it expires (24 hours) or an admin deactivates it from **Security** > **Lockdown**. Note that the default threshold is low and a single burst can reach it, so raise the threshold or widen the window if your panel sees legitimate bursts of flagged activity.
+
+> **Changed in 2.46.0.** Suspicious-event counting, lockdown expiry and canary monitoring used to be gated by the **auto-healing** switch, so turning auto-healing off silently disabled all three. They now run independently. If you had auto-healing off, auto-lockdown becomes active on upgrade — configure the threshold deliberately rather than relying on that side effect.
+
 ### Site Creation Rate Limit
 
 One user may create at most **Site Creation Rate Limit** sites per hour (default 3); set it to 0 to remove the limit. Hitting it records a suspicious event, which feeds auto-lockdown. Configure it in **Settings** > **Account** > **Security Hardening**.

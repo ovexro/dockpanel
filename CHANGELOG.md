@@ -30,6 +30,18 @@ made those three agree, and they had drifted in both directions.
   turning off auto-healing silently turned off security monitoring nobody had
   asked to stop. They now run on their own.
 
+  **Upgrade impact, worth reading before you update.** On a box with auto-healing
+  **off**, those three were dormant — and this release wakes them. Suspicious
+  events start being counted, so **auto-lockdown can now fire where it never
+  could before**, and lockdown blocks non-admin access until it expires (24h) or
+  an admin clears it. That is the intended behaviour — a security control should
+  not be switched off by an unrelated setting — but it is a change in what your
+  box does. If you do not want it, set the auto-lockdown threshold deliberately
+  in **Settings → Security Hardening** rather than leaving auto-healing off as an
+  accidental kill switch. Verified on our own demo, where auto-healing was off:
+  the monitoring came up with the upgrade and locked down on the first burst of
+  suspicious events.
+
 - **The panel IP allowlist could not be set, and rejected the ranges it
   documented.** `allowed_panel_ips` gates login, and the guide told operators to
   set it in Settings — where no control existed and the API answered `400
