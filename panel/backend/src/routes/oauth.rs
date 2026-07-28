@@ -6,6 +6,7 @@ use axum::{
 use std::collections::HashMap;
 use uuid::Uuid;
 
+use crate::auth::AdminUser;
 use crate::error::{internal_error, err, ApiError};
 use crate::AppState;
 
@@ -25,6 +26,26 @@ struct OAuthProvider {
     token_url: &'static str,
     userinfo_url: &'static str,
     scopes: &'static str,
+}
+
+/// The providers this panel can be configured for. Named once so the settings
+/// UI offers exactly the set `get_provider` accepts — a fourth card for a
+/// provider the backend does not know would be a control that cannot work.
+pub const OAUTH_PROVIDERS: &[&str] = &["google", "github", "gitlab"];
+
+/// The redirect URI this panel sends to the provider, and therefore the one an
+/// operator must register at the provider's console.
+///
+/// It is built here rather than at each call site because there are now three:
+/// `authorize` sends it, `callback` re-sends it for the token exchange (the
+/// provider rejects the exchange when the two disagree), and the settings UI
+/// displays it so the operator can copy it. The UI is the reason this is a
+/// function: a screen that guesses the URI from the browser's own origin would
+/// be confidently wrong whenever BASE_URL differs from the address the admin
+/// happens to be browsing, and the resulting `redirect_uri_mismatch` names
+/// neither side. Three copies of one `format!` is how they drift apart.
+pub fn redirect_uri(base_url: &str, provider_name: &str) -> String {
+    format!("{base_url}/api/auth/oauth/{provider_name}/callback")
 }
 
 fn get_provider(name: &str) -> Option<OAuthProvider> {
@@ -49,6 +70,35 @@ fn get_provider(name: &str) -> Option<OAuthProvider> {
         }),
         _ => None,
     }
+}
+
+/// GET /api/settings/oauth-redirects — the redirect URIs to register, admin only.
+///
+/// Deliberately returns only what `GET /api/settings` cannot: the client ids and
+/// the masked secrets already come from there, and a second source for them
+/// would be a second thing to keep in step.
+///
+/// `base_url` is reported so the UI can say *why* when it is empty. BASE_URL is
+/// read with `unwrap_or_default()`, so an unset one is not an error at boot — it
+/// silently makes every redirect URI relative, which no provider accepts. The
+/// operator then sees a login button that fails at the provider with a message
+/// about the panel's address, having never been told the panel does not know it.
+pub async fn redirect_uris(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<axum::Json<serde_json::Value>, ApiError> {
+    let base = &state.config.base_url;
+
+    let uris: serde_json::Map<String, serde_json::Value> = OAUTH_PROVIDERS
+        .iter()
+        .map(|p| ((*p).to_string(), serde_json::Value::String(redirect_uri(base, p))))
+        .collect();
+
+    Ok(axum::Json(serde_json::json!({
+        "base_url": base,
+        "base_url_configured": !base.is_empty(),
+        "redirect_uris": uris,
+    })))
 }
 
 /// GET /api/auth/oauth/{provider} — Redirect to OAuth provider
@@ -81,7 +131,7 @@ pub async fn authorize(
         states.insert(csrf_state.clone(), (provider_name.clone(), std::time::Instant::now()));
     }
 
-    let redirect_uri = format!("{}/api/auth/oauth/{provider_name}/callback", state.config.base_url);
+    let redirect_uri = redirect_uri(&state.config.base_url, &provider_name);
 
     let auth_url = format!(
         "{}?client_id={}&redirect_uri={}&scope={}&state={}&response_type=code",
@@ -157,7 +207,7 @@ pub async fn callback(
         &client_secret_enc, &state.config.jwt_secret,
     );
 
-    let redirect_uri = format!("{}/api/auth/oauth/{provider_name}/callback", state.config.base_url);
+    let redirect_uri = redirect_uri(&state.config.base_url, &provider_name);
 
     // Exchange code for token
     let http = reqwest::Client::new();

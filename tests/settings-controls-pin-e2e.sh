@@ -89,9 +89,40 @@ KNOB_PAIRS=$(perl -0777 -ne 'while (/get_setting_(?:bool|i64)\s*\(\s*[^,]+,\s*"(
 KNOBS=$(printf '%s\n' "$KNOB_PAIRS" | awk 'NF{print $1}' | sort -u)
 KNOBS_N=$(printf '%s\n' "$KNOBS" | grep -c . || true)
 
-# Keys with an operator control, discovered from the frontend tree.
-FE_KEYS=$(grep -rhoE 'settings\.[a-z][a-z0-9_]{3,}|"[a-z][a-z0-9_]{3,}": *(newVal|next|e\.target\.value)' \
-          --include=*.tsx "$FE" | grep -oE '[a-z][a-z0-9_]{3,}' | sort -u)
+# The frontend tree with comments removed, which is what §9 searches.
+#
+# A pin that greps raw source matches PROSE. Three of the cards this suite now
+# guards describe the keys they set in a comment above themselves, and the 503
+# from routes/billing.rs quotes a key name verbatim — so a key deleted from the
+# JSX but still named in the paragraph explaining it would keep reading as
+# "controlled" forever. That is the failure this suite exists to catch, arriving
+# through the suite's own front door.
+#
+# Block comments go because that is where JSX prose lives ({/* … */}); `//` is
+# stripped only at the start of a line, never mid-line, or the `//` of every
+# https:// URL would take the rest of its line with it — including, in this
+# tree, the line holding a provider's console link.
+FE_SRC=$(mktemp)
+trap 'rm -f "$FE_SRC"' EXIT
+find "$FE" -name '*.tsx' -exec cat {} + \
+  | perl -0777 -pe 's{/\*.*?\*/}{}gs' \
+  | grep -vE '^\s*//' > "$FE_SRC"
+
+# Keys constructed at the call site rather than spelled out, e.g.
+# `oauth_${p.id}_client_id` or `notif_template_${c.id}`. Recorded as
+# "<prefix> <suffix>" so a key can be credited when it matches both ends; the
+# families this covers are exactly the ones a literal grep cannot see.
+FE_TEMPLATES=$(grep -ohE '`[a-z0-9_]+\$\{[^}]*\}[a-z0-9_]*`' "$FE_SRC" \
+               | sed -E 's/^`([a-z0-9_]+)\$\{[^}]*\}([a-z0-9_]*)`$/\1 \2/' | sort -u)
+
+# Keys a purpose-built backend route sets on the operator's behalf, so the panel
+# offers a control that never PUTs to /api/settings. `reverse_proxy` is the live
+# example: the nginx/Traefik selector calls /traefik/install, and routes/system.rs
+# writes the key. Discovered rather than exempted — an exemption list is the
+# checklist this suite's header refuses to grow.
+BE_WRITTEN=$(grep -rhoE "INSERT INTO settings \(key[^)]*\) VALUES \('[a-z0-9_]+'" --include=*.rs "$BE" \
+             | grep -oE "'[a-z0-9_]+'" | tr -d "'" | sort -u)
+BE_WRITTEN_N=$(printf '%s\n' "$BE_WRITTEN" | grep -c . || true)
 
 echo "── discovery ──"
 echo "  writable keys: $ALLOWED_N   backend-read keys: $READ_N   get_setting_* knobs: $KNOBS_N"
@@ -283,6 +314,64 @@ if [ "$(grep -cE 'get_setting_bool\(&pool, "security_canary_enabled"' "$HEALER" 
   ok "canary monitoring consults its own toggle"
 else
   bad "security_check_canary_files is unconditional again — its toggle is inert"
+fi
+
+# ── §9 — every writable key has an operator control (the D2 class, UI half) ──
+# ALLOWED_KEYS' own comment has promised since s276 that "every entry should also
+# have a control in the panel — tests/settings-controls-pin-e2e.sh fails when one
+# does not". It did not. This suite computed the frontend's key list into a
+# variable and then never read it, so the half of D2 that says "read for
+# behaviour, writable by nobody" was pinned while the half that says "writable,
+# but by an API call nobody can make from the panel" was not — and fourteen keys
+# had drifted through the gap: the six oauth_*_client_id/_client_secret behind a
+# real login door, the four notification templates, the three Stripe price IDs,
+# and hide_branding, whose value four components honoured and no screen set.
+#
+# A control counts when the frontend SENDS the key, not merely when it mentions
+# it: as an object-literal key (`{ panel_name: panelName }`), as an index
+# assignment (`body.pdns_api_key = …`), or built from a prefix and suffix around
+# a template hole (`oauth_${p.id}_client_id`) — plus the backend-route clause
+# above. A read is deliberately not enough, and hide_branding is why: the panel
+# fetched it, four components changed their rendering on it, and no screen could
+# set it. An arm that accepted `data.hide_branding` as proof of a control would
+# have called that key controlled for as long as it stayed broken.
+#
+# Being sent is necessary, not sufficient — §1/§3 judge whether the control then
+# tells the truth. This arm only answers "can an operator reach it at all".
+echo "── §9 every writable key has a control in the panel ──"
+if [ "$BE_WRITTEN_N" -ge 8 ]; then
+  ok "discovered $BE_WRITTEN_N settings keys written by purpose-built backend routes (>= 8 known to exist)"
+else
+  bad "only $BE_WRITTEN_N backend-route-written keys discovered — the INSERT scan broke; keys set outside settings.rs will now read as uncontrolled"
+fi
+UNCONTROLLED=""
+CONTROLLED_N=0
+for k in $ALLOWED; do
+  # `[^:]` after the colon keeps TypeScript's `foo::bar` and `a ? b : c` out; the
+  # leading class keeps `data.smtp_host` (a read) from matching as a write.
+  w=$(grep -cE "(^|[^A-Za-z0-9_.\"])\"?$k\"? *:[^:]" "$FE_SRC" || true)
+  a=$(grep -cE "\.$k *=[^=]" "$FE_SRC" || true)
+  hit=$((w + a))
+  if [ "$hit" -eq 0 ] && [ -n "$FE_TEMPLATES" ]; then
+    while read -r pre suf; do
+      [ -z "$pre" ] && continue
+      if [[ "$k" == "$pre"*"$suf" ]]; then hit=1; break; fi
+    done <<< "$FE_TEMPLATES"
+  fi
+  # -c, never -q: under pipefail a `grep -q` match SIGPIPEs printf and the
+  # pipeline reports failure for a successful match. Same reason as §2.
+  be=$(printf '%s\n' "$BE_WRITTEN" | grep -cxF "$k" || true)
+  [ "$hit" -eq 0 ] && [ "$be" -gt 0 ] && hit=1
+  if [ "$hit" -eq 0 ]; then
+    UNCONTROLLED="$UNCONTROLLED $k"
+  else
+    CONTROLLED_N=$((CONTROLLED_N+1))
+  fi
+done
+if [ -z "$UNCONTROLLED" ]; then
+  ok "all $CONTROLLED_N writable keys are settable from the panel — none is API-only"
+else
+  bad "writable but with NO control in the panel —$UNCONTROLLED — configurable only by hand-crafting a PUT, which is not a feature an operator has (D2)"
 fi
 
 echo

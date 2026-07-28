@@ -649,6 +649,75 @@ export default function Telemetry() {
 
   const totalPages = Math.ceil(total / limit);
 
+  // The two update-path verdicts, newest first. Built here rather than inline so
+  // the Updates tab can order them against each other; each is still rendered
+  // exactly once.
+  const updateVerdicts = [
+    updateState?.last_panel_update ? {
+      at: updateState.last_panel_update.finished_at,
+      el: (
+        <div key="panel-update" className={`rounded-lg border px-3 py-2 text-xs ${
+          updateState.last_panel_update.ok
+            ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+            : "bg-red-500/10 border-red-500/30 text-red-300"
+        }`}>
+          <div className="font-medium">
+            {updateState.last_panel_update.ok
+              ? `Last update completed${updateState.last_panel_update.target_version ? ` (${updateState.last_panel_update.target_version})` : ""}`
+              : `Last update FAILED at stage "${updateState.last_panel_update.stage}"`}
+          </div>
+          <div className="mt-1 text-dark-300 break-words">{updateState.last_panel_update.detail}</div>
+          <div className="mt-1 font-mono text-[10px] text-dark-500">
+            {new Date(updateState.last_panel_update.finished_at).toLocaleString()}
+          </div>
+        </div>
+      ),
+    } : null,
+    updateState?.last_restore ? {
+      at: updateState.last_restore.finished_at,
+      el: (
+        <div key="restore" className={`rounded-lg border px-3 py-2 text-xs ${
+          updateState.last_restore.ok
+            ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+            : "bg-red-500/10 border-red-500/30 text-red-300"
+        }`}>
+          <div className="font-medium">
+            {updateState.last_restore.ok
+              ? "Last rollback completed"
+              : `Last rollback FAILED at stage "${updateState.last_restore.stage}"`}
+          </div>
+          <div className="mt-1 text-dark-300 break-words">{updateState.last_restore.detail}</div>
+          {/* Only shown when the restore itself says nothing changed. It
+              describes the PRE-commit failure paths, and once a restore
+              can also stop after the transaction has applied, printing it
+              unconditionally would reassure the operator in exactly the
+              cases where the reassurance is false. */}
+          {!updateState.last_restore.ok
+            && updateState.last_restore.detail?.includes("nothing changed") && (
+            <div className="mt-1 text-dark-400">
+              The database is applied in a single transaction — a failure before the
+              "database" stage completes leaves it exactly as it was.
+            </div>
+          )}
+          {!updateState.last_restore.ok
+            && updateState.last_restore.detail?.includes("LEFT STOPPED") && (
+            <div className="mt-1 text-dark-400">
+              The panel API is stopped deliberately: the database was reverted but the
+              binaries were not, and starting the installed build would migrate the
+              database forward and undo this rollback. Restore the pre-rollback dump
+              named above, or finish putting the previous binaries back, before starting it.
+            </div>
+          )}
+          <div className="mt-1 font-mono text-[10px] text-dark-500">
+            {updateState.last_restore.snapshot_id} · {new Date(updateState.last_restore.finished_at).toLocaleString()}
+          </div>
+        </div>
+      ),
+    } : null,
+  ]
+    .filter((v): v is { at: string; el: React.ReactElement } => v !== null)
+    .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+
   return (
     <div className="p-4 sm:p-6 lg:p-8 animate-fade-up">
       <div className="page-header">
@@ -853,6 +922,20 @@ export default function Telemetry() {
       {/* Updates tab */}
       {tab === "updates" && (
         <div className="space-y-4">
+          {/* Verdicts of the last update and the last rollback, most recent
+              first, ABOVE everything else on the tab.
+              They rendered inside the Snapshots card until v2.48.0 — seventh of
+              seven, so the one operator who most needs them, the one whose
+              update just failed, scrolled past Version Status, Release Notes,
+              Channel, Agent Auto-Update, Apply and the snapshot list to reach
+              the sentence explaining why the panel is stopped.
+              Ordered by finished_at rather than by kind: a rollback usually
+              follows a failed update, but not always, and a fixed order would
+              put a stale verdict above a fresh one. */}
+          {(updateVerdicts.length > 0) && (
+            <div className="space-y-3">{updateVerdicts.map(v => v.el)}</div>
+          )}
+
           <div className="bg-dark-800 border border-dark-600 rounded-lg p-4">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-medium text-dark-100">Version Status</h3>
@@ -1019,68 +1102,6 @@ export default function Telemetry() {
                 {creatingSnapshot ? "Snapshotting..." : "Snapshot Now"}
               </button>
             </div>
-            {/* Outcome of the last update.sh run. An update that fails before
-                the api is stopped restarts nothing, so no other surface ever
-                learns it failed — this is the only report it gets. */}
-            {updateState?.last_panel_update && (
-              <div className={`mb-3 rounded-lg border px-3 py-2 text-xs ${
-                updateState.last_panel_update.ok
-                  ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
-                  : "bg-red-500/10 border-red-500/30 text-red-300"
-              }`}>
-                <div className="font-medium">
-                  {updateState.last_panel_update.ok
-                    ? `Last update completed${updateState.last_panel_update.target_version ? ` (${updateState.last_panel_update.target_version})` : ""}`
-                    : `Last update FAILED at stage "${updateState.last_panel_update.stage}"`}
-                </div>
-                <div className="mt-1 text-dark-300 break-words">{updateState.last_panel_update.detail}</div>
-                <div className="mt-1 font-mono text-[10px] text-dark-500">
-                  {new Date(updateState.last_panel_update.finished_at).toLocaleString()}
-                </div>
-              </div>
-            )}
-            {/* Outcome of the last restore. A rollback stops the panel, so the
-                request that starts it can never report how it went — without
-                this the operator cannot tell a failed rollback from one that
-                never ran. Shown for failures AND successes. */}
-            {updateState?.last_restore && (
-              <div className={`mb-3 rounded-lg border px-3 py-2 text-xs ${
-                updateState.last_restore.ok
-                  ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
-                  : "bg-red-500/10 border-red-500/30 text-red-300"
-              }`}>
-                <div className="font-medium">
-                  {updateState.last_restore.ok
-                    ? "Last rollback completed"
-                    : `Last rollback FAILED at stage "${updateState.last_restore.stage}"`}
-                </div>
-                <div className="mt-1 text-dark-300 break-words">{updateState.last_restore.detail}</div>
-                {/* Only shown when the restore itself says nothing changed. It
-                    describes the PRE-commit failure paths, and once a restore
-                    can also stop after the transaction has applied, printing it
-                    unconditionally would reassure the operator in exactly the
-                    cases where the reassurance is false. */}
-                {!updateState.last_restore.ok
-                  && updateState.last_restore.detail?.includes("nothing changed") && (
-                  <div className="mt-1 text-dark-400">
-                    The database is applied in a single transaction — a failure before the
-                    "database" stage completes leaves it exactly as it was.
-                  </div>
-                )}
-                {!updateState.last_restore.ok
-                  && updateState.last_restore.detail?.includes("LEFT STOPPED") && (
-                  <div className="mt-1 text-dark-400">
-                    The panel API is stopped deliberately: the database was reverted but the
-                    binaries were not, and starting the installed build would migrate the
-                    database forward and undo this rollback. Restore the pre-rollback dump
-                    named above, or finish putting the previous binaries back, before starting it.
-                  </div>
-                )}
-                <div className="mt-1 font-mono text-[10px] text-dark-500">
-                  {updateState.last_restore.snapshot_id} · {new Date(updateState.last_restore.finished_at).toLocaleString()}
-                </div>
-              </div>
-            )}
             {snapshots.length === 0 ? (
               <div className="text-xs text-dark-400 py-3 text-center">
                 No snapshots yet. Pre-update snapshots appear here automatically when you Apply Update.

@@ -22,9 +22,15 @@ struct SettingRow {
 /// so exporting a config and importing it silently dropped your security posture
 /// while its comment claimed it used "the same whitelist as update()".
 ///
-/// A key belongs here when an operator is meant to change it. Every entry should
-/// also have a control in the panel — `tests/settings-controls-pin-e2e.sh` fails
-/// when one does not, and when a key here is read by nothing.
+/// A key belongs here when an operator is meant to change it. Every entry must
+/// also have a control in the panel — `tests/settings-controls-pin-e2e.sh` §9
+/// fails when one does not, and §1 fails when a key here is read by nothing.
+///
+/// The §9 half of that sentence was untrue from s276 until v2.48.0: the suite
+/// computed the frontend's key list into a variable and never read it, so this
+/// comment described a check that did not exist while fourteen keys — the OAuth
+/// client credentials, the notification templates, the Stripe price IDs and
+/// hide_branding — were settable only by hand-crafting a PUT.
 pub const ALLOWED_KEYS: &[&str] = &[
     "panel_name", "smtp_host", "smtp_port", "smtp_username", "smtp_password",
     "smtp_from", "smtp_from_name", "smtp_encryption",

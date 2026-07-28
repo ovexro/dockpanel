@@ -6,6 +6,67 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.48.0] - 2026-07-28
+
+Fourteen settings the panel read but no screen could set — including the OAuth
+client credentials behind the sign-in buttons — now have controls, and the check
+that was supposed to have prevented that now exists.
+
+### Added
+
+- **OAuth sign-in is configurable from the panel.** The client ID and secret for
+  Google, GitHub and GitLab were writable through the settings API, masked on
+  read, encrypted at rest and consumed by the login route — every part of the
+  path built except a screen to type them into. Settings → Account now carries a
+  card per provider, with the state of each shown plainly (Active / Incomplete /
+  Not configured).
+
+  It also prints **the exact redirect URI to register at the provider**, fetched
+  from the server rather than composed in the browser: the panel builds that URI
+  from `BASE_URL`, and an admin browsing on a different address would otherwise
+  be shown, and would register, a URI the panel never sends. When `BASE_URL` is
+  unset the card says so — until now that produced a relative redirect URI, which
+  no provider accepts, with nothing anywhere explaining why sign-in failed.
+
+  Saving a client ID without a secret is refused rather than accepted. The public
+  branding endpoint lists a provider as soon as its client ID is non-empty, so a
+  half-configured save puts a working-looking button on the login page for every
+  logged-out visitor, which then dead-ends at the callback.
+
+- **Notification templates have an editor.** The four `notif_template_*` keys are
+  read on every alert and substituted into; they had no control, so the feature
+  was reachable only by whoever could hand-craft a PUT. Settings → Alert Channels
+  now has one field per channel, with the four supported placeholders listed.
+
+- **Stripe plan price IDs have inputs.** Checkout answered "Price not configured
+  for the pro plan — set it in settings" while no page could. The card also
+  reports when `STRIPE_SECRET_KEY` is absent from `api.env`, because that half of
+  billing is not a panel setting and the price IDs do nothing without it.
+
+- **A white-label toggle.** `hide_branding` was returned by the branding endpoint
+  and honoured by the sidebar, the header and the login page — a switch three
+  surfaces obeyed and no screen could throw.
+
+### Fixed
+
+- **The verdict of a failed update is no longer the last thing on the page.** The
+  update and rollback result cards rendered inside the Snapshots panel, seventh
+  of seven on the Updates tab, so an operator whose update had just failed
+  scrolled past six cards to reach the sentence explaining why the panel was
+  stopped. They are now first, ordered by time so the newer of the two leads.
+
+- **`ALLOWED_KEYS`' comment claimed a test that did not exist.** It said the pin
+  suite "fails when [an entry has no control]". The suite discovered the
+  frontend's key list into a variable and never read it — so the drift it named
+  was the drift it could not see, and fourteen keys accumulated behind a green
+  run. The arm now exists and fails against the pre-fix tree naming all fourteen.
+
+  It tests that the frontend *sends* a key, not that it mentions one: a read is
+  not a control, which is exactly how `hide_branding` stayed invisible while
+  three components read it. Keys a purpose-built route writes instead — the
+  nginx/Traefik selector, which posts to `/traefik/install` — are discovered from
+  the backend rather than exempted by name.
+
 ## [2.47.4] - 2026-07-28
 
 Closes the two remaining defects in the update subsystem. One could silently undo

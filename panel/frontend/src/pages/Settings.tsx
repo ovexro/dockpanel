@@ -54,6 +54,39 @@ interface WebAuthnPublicKeyOptions {
 
 type ServiceStatus = Record<string, { installed?: boolean; running?: boolean; active?: boolean; version?: string | null }>;
 
+interface OAuthRedirects {
+  base_url: string;
+  base_url_configured: boolean;
+  redirect_uris: Record<string, string>;
+}
+
+/** Must stay the set routes/oauth.rs::OAUTH_PROVIDERS accepts — a card for a
+ *  provider `get_provider` does not know is a control that cannot work. */
+const OAUTH_PROVIDERS = [
+  { id: "google", label: "Google", console: "https://console.cloud.google.com/apis/credentials" },
+  { id: "github", label: "GitHub", console: "https://github.com/settings/developers" },
+  { id: "gitlab", label: "GitLab", console: "https://gitlab.com/-/user_settings/applications" },
+] as const;
+
+/** The four channels services/notifications.rs looks up a template for. */
+const NOTIF_CHANNELS = [
+  { id: "email", label: "Email", hint: "HTML body. Replaces the default alert email entirely.", rows: 5 },
+  { id: "slack", label: "Slack", hint: "Sent as the `text` field. Default: *{{title}}* then the message.", rows: 3 },
+  { id: "discord", label: "Discord", hint: "Sent as `content`. Default: **{{title}}** then the message.", rows: 3 },
+  { id: "webhook", label: "Generic webhook", hint: "Becomes the `message` field of the JSON payload.", rows: 3 },
+] as const;
+
+/** Placeholders services/notifications.rs::format_message substitutes. Anything
+ *  else is passed through verbatim — an operator typing {{host}} gets "{{host}}". */
+const NOTIF_PLACEHOLDERS = ["{{title}}", "{{message}}", "{{severity}}", "{{timestamp}}"] as const;
+
+/** The plans routes/billing.rs builds `stripe_price_{plan}` from. */
+const STRIPE_PLANS = [
+  { id: "starter", label: "Starter" },
+  { id: "pro", label: "Pro" },
+  { id: "agency", label: "Agency" },
+] as const;
+
 export default function Settings() {
   const { user } = useAuth();
   const [settings, setSettings] = useState<Record<string, string>>({});
@@ -166,6 +199,33 @@ export default function Settings() {
   const [testingDest, setTestingDest] = useState<string | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<{ type: string; label: string; data?: Record<string, unknown> } | null>(null);
 
+  // OAuth sign-in providers. The keys behind these were writable through the
+  // settings API and read by routes/oauth.rs since the feature shipped, with no
+  // control anywhere — so the panel's only unconfigurable door was an
+  // authentication one. Same shape as the s275 note on OAuth Auto-Registration
+  // below: the switch existed, the operator could not see it.
+  const [oauthCreds, setOauthCreds] = useState<Record<string, { id: string; secret: string }>>(
+    Object.fromEntries(OAUTH_PROVIDERS.map(p => [p.id, { id: "", secret: "" }]))
+  );
+  const [oauthRedirects, setOauthRedirects] = useState<OAuthRedirects | null>(null);
+  const [copiedRedirect, setCopiedRedirect] = useState<string | null>(null);
+
+  // Notification templates (Gap #70) — read by services/notifications.rs.
+  const [notifTemplates, setNotifTemplates] = useState<Record<string, string>>(
+    Object.fromEntries(NOTIF_CHANNELS.map(c => [c.id, ""]))
+  );
+
+  // Stripe plan price IDs — routes/billing.rs looks each one up by
+  // `stripe_price_{plan}` and its comment already said "admin configures via
+  // Settings page", which was not true of any page.
+  const [stripePrices, setStripePrices] = useState<Record<string, string>>(
+    Object.fromEntries(STRIPE_PLANS.map(p => [p.id, ""]))
+  );
+  // Whether STRIPE_SECRET_KEY is present in api.env. The price IDs below are
+  // settings; the secret key is not, so the two halves of billing are configured
+  // in different places and only one of them is on this page.
+  const [billingEnabled, setBillingEnabled] = useState<boolean | null>(null);
+
   const loadSettings = async () => {
     try {
       const data = await api.get<Record<string, string>>("/settings");
@@ -183,6 +243,18 @@ export default function Settings() {
       setReverseProxy(data.reverse_proxy || "nginx");
       setPdnsApiUrl(data.pdns_api_url || "");
       setPdnsApiKey(data.pdns_api_key || "");
+      setOauthCreds(Object.fromEntries(OAUTH_PROVIDERS.map(p => [p.id, {
+        id: data[`oauth_${p.id}_client_id`] || "",
+        // Arrives as the mask when stored; the backend skips that sentinel on
+        // write, so an untouched field cannot blank a configured secret.
+        secret: data[`oauth_${p.id}_client_secret`] || "",
+      }])));
+      setNotifTemplates(Object.fromEntries(
+        NOTIF_CHANNELS.map(c => [c.id, data[`notif_template_${c.id}`] || ""])
+      ));
+      setStripePrices(Object.fromEntries(
+        STRIPE_PLANS.map(p => [p.id, data[`stripe_price_${p.id}`] || ""])
+      ));
     } catch (e) {
       setMessage({
         text: e instanceof Error ? e.message : "Failed to load settings",
@@ -312,6 +384,12 @@ export default function Settings() {
       .catch(() => {});
     api.get<{ hostname?: string }>("/system/info")
       .then((d) => { if (d.hostname) setHostname(d.hostname); })
+      .catch(() => {});
+    api.get<OAuthRedirects>("/settings/oauth-redirects")
+      .then(setOauthRedirects)
+      .catch(() => {});
+    api.get<{ billing_enabled?: boolean }>("/billing/plan")
+      .then((d) => setBillingEnabled(!!d.billing_enabled))
       .catch(() => {});
     healthTimer.current = setInterval(loadHealth, 30000);
     return () => clearInterval(healthTimer.current);
@@ -738,14 +816,96 @@ export default function Settings() {
                 ))}
               </div>
             </div>
+            {/* hide_branding was the third key in this card's own family with no
+                control: GET /api/branding returns it, and NexusLayout,
+                CommandLayout and Login all hide the DockPanel mark when it is
+                set — a white-label switch every consumer honoured and nobody
+                could throw. Default is closed (an absent row reads false), so
+                this compares === "true", unlike the default-open toggles in the
+                Security Hardening card. */}
+            <div className="flex items-center justify-between pt-1">
+              <div>
+                <p className="text-sm text-dark-100">Hide DockPanel Branding</p>
+                <p className="text-xs text-dark-400">Remove the DockPanel name from the sidebar, header and login page</p>
+              </div>
+              <button onClick={() => setSettings({ ...settings, hide_branding: settings.hide_branding === "true" ? "false" : "true" })}
+                className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${settings.hide_branding === "true" ? "bg-rust-500" : "bg-dark-600"}`}>
+                <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-transform ${settings.hide_branding === "true" ? "translate-x-5.5 left-0.5" : "left-0.5"}`} />
+              </button>
+            </div>
             <button onClick={async () => {
               try {
-                await api.put("/settings", { logo_url: settings.logo_url || "", accent_color: settings.accent_color || "" });
+                await api.put("/settings", {
+                  logo_url: settings.logo_url || "",
+                  accent_color: settings.accent_color || "",
+                  hide_branding: settings.hide_branding === "true" ? "true" : "false",
+                });
                 setMessage({ text: "Branding saved", type: "success" });
               } catch (err) { setMessage({ text: err instanceof Error ? err.message : "Failed", type: "error" }); }
             }} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50">Save Branding</button>
           </div>
         </div>
+
+        {/* Stripe plan pricing.
+            routes/billing.rs builds the key from the plan being checked out, and
+            when the row is missing answers 503 "Price not configured for the pro
+            plan. Set '…' in settings." — an error naming a setting no page could
+            set, next to a comment reading "admin configures via Settings page".
+            This is that page.
+            The key names are deliberately not spelled out here: §9 of
+            tests/settings-controls-pin-e2e.sh greps this tree for them, and a
+            key named only in prose would credit a control that does not exist. */}
+        {user?.role === "admin" && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Stripe Plan Pricing</h3>
+            <p className="text-xs text-dark-200 mt-0.5">Stripe Price IDs used at checkout. A plan with no price ID cannot be subscribed to.</p>
+          </div>
+          {billingEnabled === false && (
+            <div className="px-5 py-3 border-b border-dark-600 bg-dark-900/40">
+              <p className="text-xs text-dark-300">
+                <span className="text-dark-100 font-medium">Billing is off.</span> The price IDs below are stored but unused until
+                <code className="font-mono mx-1">STRIPE_SECRET_KEY</code> is set in <code className="font-mono">/etc/dockpanel/api.env</code> —
+                that half of the configuration is not a panel setting.
+              </p>
+            </div>
+          )}
+          <div className="p-5 space-y-3">
+            {STRIPE_PLANS.map(p => (
+              <div key={p.id}>
+                <label htmlFor={`stripe-price-${p.id}`} className="block text-sm font-medium text-dark-100 mb-1">{p.label}</label>
+                <input
+                  id={`stripe-price-${p.id}`}
+                  type="text"
+                  value={stripePrices[p.id] || ""}
+                  onChange={e => setStripePrices(prev => ({ ...prev, [p.id]: e.target.value }))}
+                  placeholder="price_1AbCdEfGhIjKlMnO"
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+                />
+              </div>
+            ))}
+            <button
+              onClick={async () => {
+                setSaving("stripe");
+                try {
+                  const body = Object.fromEntries(
+                    STRIPE_PLANS.map(p => [`stripe_price_${p.id}`, (stripePrices[p.id] || "").trim()])
+                  );
+                  await api.put("/settings", body);
+                  setSettings(prev => ({ ...prev, ...body }));
+                  setMessage({ text: "Plan pricing saved", type: "success" });
+                } catch (e) {
+                  setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
+                } finally {
+                  setSaving(null);
+                }
+              }}
+              disabled={saving === "stripe"}
+              className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+            >{saving === "stripe" ? "Saving..." : "Save Pricing"}</button>
+          </div>
+        </div>
+        )}
 
         {/* Feature #5: Configuration Backup */}
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
@@ -2024,6 +2184,143 @@ export default function Settings() {
           </div>
         </div>
         )}
+
+        {/* OAuth Sign-In Providers.
+            The six oauth_*_client_id/_client_secret keys were in ALLOWED_KEYS,
+            masked on read, encrypted on write and consumed by routes/oauth.rs —
+            every part of the path built except the screen. So the panel's one
+            unconfigurable setting was a login door, which s277 had just finished
+            putting the IP allowlist and lockdown gates on.
+
+            The redirect URI below is fetched from the server, not composed from
+            window.location: it is built from BASE_URL, and a panel reached at an
+            address other than its configured one would otherwise print a URI the
+            server never sends. */}
+        {user?.role === "admin" && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-4">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">OAuth Sign-In</h3>
+            <p className="text-xs text-dark-200 mt-0.5">Let users sign in with an external provider. Each configured provider adds a button to the login page.</p>
+          </div>
+          {oauthRedirects && !oauthRedirects.base_url_configured && (
+            <div className="px-5 py-3 border-b border-dark-600 bg-danger-500/5">
+              <p className="text-xs text-danger-400">
+                <span className="font-medium">BASE_URL is not set</span> in <code className="font-mono">/etc/dockpanel/api.env</code>.
+                Redirect URIs are relative without it and no provider will accept one, so sign-in fails after the operator
+                has already registered the app. Set it and restart <code className="font-mono">dockpanel-api</code> before configuring below.
+              </p>
+            </div>
+          )}
+          <div className="divide-y divide-dark-700">
+            {OAUTH_PROVIDERS.map(p => {
+              const creds = oauthCreds[p.id] || { id: "", secret: "" };
+              const idSet = creds.id.trim() !== "";
+              const secretSet = creds.secret.trim() !== "";
+              const status = idSet && secretSet ? "active" : idSet || secretSet ? "incomplete" : "unset";
+              const redirect = oauthRedirects?.redirect_uris?.[p.id] || "";
+              return (
+                <div key={p.id} className="px-5 py-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm text-dark-100">{p.label}</p>
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono uppercase tracking-wider ${
+                        status === "active" ? "bg-rust-500/10 text-rust-400"
+                        : status === "incomplete" ? "bg-danger-500/10 text-danger-400"
+                        : "bg-dark-700 text-dark-400"
+                      }`}>
+                        {status === "active" ? "Active" : status === "incomplete" ? "Incomplete" : "Not configured"}
+                      </span>
+                    </div>
+                    <a href={p.console} target="_blank" rel="noreferrer" className="text-xs text-rust-400 hover:text-rust-300">
+                      {p.label} console →
+                    </a>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label htmlFor={`oauth-${p.id}-id`} className="block text-xs font-medium text-dark-300 mb-1">Client ID</label>
+                      <input
+                        id={`oauth-${p.id}-id`}
+                        type="text"
+                        value={creds.id}
+                        onChange={e => setOauthCreds(prev => ({ ...prev, [p.id]: { ...prev[p.id], id: e.target.value } }))}
+                        placeholder="Client ID from the provider"
+                        className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor={`oauth-${p.id}-secret`} className="block text-xs font-medium text-dark-300 mb-1">Client Secret</label>
+                      <input
+                        id={`oauth-${p.id}-secret`}
+                        type="password"
+                        value={creds.secret}
+                        onChange={e => setOauthCreds(prev => ({ ...prev, [p.id]: { ...prev[p.id], secret: e.target.value } }))}
+                        placeholder="Client secret"
+                        className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none"
+                      />
+                    </div>
+                  </div>
+                  {redirect && (
+                    <div>
+                      <p className="text-xs text-dark-400 mb-1">Register this redirect URI at {p.label}:</p>
+                      <div className="flex gap-2">
+                        <code className="flex-1 px-2 py-1.5 bg-dark-900 rounded text-xs font-mono text-dark-100 break-all">{redirect}</code>
+                        <button
+                          onClick={() => { navigator.clipboard.writeText(redirect); setCopiedRedirect(p.id); }}
+                          className="px-2 py-1 bg-dark-700 rounded text-xs text-dark-200 shrink-0 hover:bg-dark-600"
+                        >{copiedRedirect === p.id ? "Copied" : "Copy"}</button>
+                      </div>
+                    </div>
+                  )}
+                  <div className="flex justify-end">
+                    <button
+                      onClick={async () => {
+                        const id = creds.id.trim();
+                        const secret = creds.secret.trim();
+                        // A client ID alone is the trap worth refusing: the public
+                        // branding endpoint lists a provider as soon as its
+                        // client_id is non-empty, so a half-save puts a working
+                        // button on the login page that dead-ends at the callback
+                        // with "OAuth not fully configured" — visible to every
+                        // logged-out visitor, diagnosable by nobody.
+                        if (id && !secret) {
+                          setMessage({ text: `${p.label}: a client secret is required — with only a client ID the button appears on the login page and sign-in fails at the callback`, type: "error" });
+                          return;
+                        }
+                        if (!id && secret && secret !== "********") {
+                          setMessage({ text: `${p.label}: a client ID is required to use this secret`, type: "error" });
+                          return;
+                        }
+                        const body: Record<string, string> = { [`oauth_${p.id}_client_id`]: id };
+                        // The mask means "unchanged" — the backend skips it. Send
+                        // the secret only when it is a real new value, and clear
+                        // it explicitly when the ID is being removed, so disabling
+                        // a provider does not leave its secret behind.
+                        if (!id) {
+                          body[`oauth_${p.id}_client_secret`] = "";
+                        } else if (secret && secret !== "********") {
+                          body[`oauth_${p.id}_client_secret`] = secret;
+                        }
+                        try {
+                          await api.put("/settings", body);
+                          setSettings(prev => ({ ...prev, ...body }));
+                          if (!id) {
+                            setOauthCreds(prev => ({ ...prev, [p.id]: { id: "", secret: "" } }));
+                            setMessage({ text: `${p.label} sign-in disabled`, type: "success" });
+                          } else {
+                            setOauthCreds(prev => ({ ...prev, [p.id]: { ...prev[p.id], secret: "********" } }));
+                            setMessage({ text: `${p.label} sign-in configured`, type: "success" });
+                          }
+                        } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                      }}
+                      className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+                    >{idSet ? "Save" : "Save / Disable"}</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        )}
         </>)}
 
         {/* Notification Channels */}
@@ -2243,6 +2540,65 @@ export default function Settings() {
             saved successfully and neither was ever read — no code appends the
             footer, and nothing POSTs anywhere. Removed rather than left lying;
             they come back with the code that honours them. */}
+
+        {/* Notification Templates (Gap #70).
+            The mirror image of the card removed above: these four keys ARE read
+            — services/notifications.rs::format_message looks up
+            notif_template_{channel} on every alert and substitutes into it — and
+            had no control, so the feature existed only for whoever could reach
+            the settings API by hand. */}
+        {user?.role === "admin" && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-4">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Notification Templates</h3>
+            <p className="text-xs text-dark-200 mt-0.5">Custom message format per channel. Leave a field empty to use the built-in format.</p>
+          </div>
+          <div className="p-5 space-y-4">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-dark-400">Placeholders:</span>
+              {NOTIF_PLACEHOLDERS.map(ph => (
+                <code key={ph} className="px-1.5 py-0.5 bg-dark-900 rounded text-xs font-mono text-rust-400">{ph}</code>
+              ))}
+              <span className="text-xs text-dark-400">— anything else is sent literally.</span>
+            </div>
+            {NOTIF_CHANNELS.map(c => (
+              <div key={c.id}>
+                <label htmlFor={`notif-tmpl-${c.id}`} className="block text-sm font-medium text-dark-100 mb-1">{c.label}</label>
+                <p className="text-xs text-dark-400 mb-1">{c.hint}</p>
+                <textarea
+                  id={`notif-tmpl-${c.id}`}
+                  rows={c.rows}
+                  value={notifTemplates[c.id] || ""}
+                  onChange={e => setNotifTemplates(prev => ({ ...prev, [c.id]: e.target.value }))}
+                  placeholder="Leave empty for the default format"
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+                />
+              </div>
+            ))}
+            <div className="flex justify-end">
+              <button
+                onClick={async () => {
+                  setSaving("templates");
+                  try {
+                    const body = Object.fromEntries(
+                      NOTIF_CHANNELS.map(c => [`notif_template_${c.id}`, notifTemplates[c.id] || ""])
+                    );
+                    await api.put("/settings", body);
+                    setSettings(prev => ({ ...prev, ...body }));
+                    setMessage({ text: "Notification templates saved", type: "success" });
+                  } catch (e) {
+                    setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
+                  } finally {
+                    setSaving(null);
+                  }
+                }}
+                disabled={saving === "templates"}
+                className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
+              >{saving === "templates" ? "Saving..." : "Save Templates"}</button>
+            </div>
+          </div>
+        </div>
+        )}
         </>)}
 
         {/* Services tab: Service Installers (incl. PowerDNS config), System Health */}
