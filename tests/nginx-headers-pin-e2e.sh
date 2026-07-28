@@ -232,6 +232,35 @@ R=$(run_migrations "$TMP/v471.conf")
 check "  and re-running is a byte-identical no-op" \
       "$(cmp -s "$TMP/v471.once" "$TMP/v471.conf" && echo same || echo changed)$R" "same0"
 
+# A vhost with `expires` in some OTHER location must still migrate. The
+# migration's own post-condition originally grepped the whole file for
+# `expires`, which would have skipped this box silently — a fix that reaches
+# nobody, which is the failure this suite exists to prevent.
+cat > "$TMP/otherexpires.conf" <<'EOF'
+server {
+    listen 8080;
+    root /var/www/panel;
+
+    location /media/ {
+        expires 1y;
+        add_header Cache-Control "public";
+    }
+
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    add_header X-Content-Type-Options "nosniff" always;
+}
+EOF
+R=$(run_migrations "$TMP/otherexpires.conf")
+check "a vhost with 'expires' in another location still migrates" "$R" "1"
+check "  /assets/ was rewritten" \
+      "$(block '^    location /assets/ [{]' "$TMP/otherexpires.conf" | grep -c 'max-age=31536000')" "1"
+check "  the unrelated /media/ block was left alone" \
+      "$(block '^    location /media/ [{]' "$TMP/otherexpires.conf" | grep -c 'expires 1y')" "1"
+
 # A vhost with no server-level add_header is skipped, not guessed at.
 cat > "$TMP/headerless.conf" <<'EOF'
 server {

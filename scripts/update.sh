@@ -713,7 +713,8 @@ for conf in /etc/nginx/sites-enabled/dockpanel-panel.conf /etc/nginx/conf.d/dock
         { print }
     ' "$conf" "$conf" > "$conf.new" && [ -s "$conf.new" ] \
         && grep -q 'max-age=31536000, immutable' "$conf.new" \
-        && ! grep -q 'expires 1y' "$conf.new"; then
+        && ! awk '/^    location \/assets\/ \{/ {f=1} f {print} f && /^    \}/ {exit}' \
+             "$conf.new" | grep -q 'expires '; then
         mv "$conf.new" "$conf"
         log "Repeated the security headers on /assets/ in $conf"
         NGINX_NEEDS_RELOAD=1
