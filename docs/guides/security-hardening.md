@@ -131,7 +131,13 @@ Go to **Settings** > **Security** > **Disable 2FA**. You must enter a valid TOTP
 
 Restrict panel access to specific IP addresses. When configured, login attempts from non-whitelisted IPs are rejected before password validation.
 
-Set the `allowed_panel_ips` setting in **Settings** with a comma-separated list of IPs or CIDR ranges. Leave empty to allow all IPs.
+Set **Panel IP Allowlist** in **Settings** > **Account** > **Security Hardening** to a comma-separated list of IPs or CIDR ranges (`203.0.113.4, 10.0.0.0/8, 2001:db8::/32`). Leave it empty to allow all IPs. Entries are validated on save, so a malformed range is rejected rather than stored.
+
+The check reads the client address from the `X-Real-IP` header. **If your reverse proxy does not set it, a non-empty allowlist rejects every login**, including yours — the check fails closed on purpose, since an allowlist that cannot identify the caller must not admit them. Confirm logins work from an allowlisted address before you rely on it. To recover from a lockout, clear the value directly in the database:
+
+```sql
+DELETE FROM settings WHERE key = 'allowed_panel_ips';
+```
 
 ## SSH Hardening
 
@@ -249,7 +255,9 @@ View the log in **Security** > **Lockdown** tab (Audit Log section).
 
 ### Terminal Session Recording
 
-All terminal sessions are recorded in asciicast v2 format. Recordings are stored at `/var/lib/dockpanel/recordings/` and listed in **Security** > **Recordings** tab. Retention: 30 days.
+Terminal sessions are recorded in asciicast v2 format while **Terminal Session Recording** is on in **Settings** > **Account** > **Security Hardening**. Recordings are stored at `/var/lib/dockpanel/recordings/` and listed in **Security** > **Recordings** tab. Retention: 30 days.
+
+The panel decides per session and tells the agent inside the signed connection ticket, so a user cannot opt their own session out. Turning the toggle off stops new recordings; it does not delete existing ones. Fleet members running an agent older than v2.46.0 ignore the setting and keep recording — update the agent for the toggle to take effect there.
 
 ### Geo-IP Login Alerts
 
@@ -261,11 +269,15 @@ When enabled, new user registrations require admin approval before the user can 
 
 ### Auto-Lockdown
 
-If the system detects a configurable number of suspicious events within a time window (default: 5 events in 10 minutes), lockdown activates automatically. Configure the threshold in **Settings** > **Account** > **Security Hardening**.
+If the system detects a configurable number of suspicious events within a time window (default: 5 events in 10 minutes), lockdown activates automatically. Configure **both** halves — **Auto-Lockdown Threshold** and **Auto-Lockdown Window** — in **Settings** > **Account** > **Security Hardening**.
+
+### Site Creation Rate Limit
+
+One user may create at most **Site Creation Rate Limit** sites per hour (default 3); set it to 0 to remove the limit. Hitting it records a suspicious event, which feeds auto-lockdown. Configure it in **Settings** > **Account** > **Security Hardening**.
 
 ### Canary Files
 
-DockPanel places hidden canary files in sensitive directories (`/etc/`, `/root/`, `/home/`, `/var/www/`). If these files are accessed, an alert is triggered. The system checks canary file access times every 2 minutes.
+While **Canary File Monitoring** is on, DockPanel checks hidden canary files in sensitive directories (`/etc/`, `/root/`, `/home/`, `/var/www/`) every 2 minutes and alerts if their access times change. Canary monitoring, suspicious-event ingestion and auto-lockdown expiry run independently of the auto-healer's own switch.
 
 ### Backup Integrity Chain
 

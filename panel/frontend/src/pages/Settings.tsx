@@ -67,6 +67,7 @@ export default function Settings() {
 
   // Form state
   const [panelName, setPanelName] = useState("");
+  const [panelIps, setPanelIps] = useState("");
   const [smtpProvider, setSmtpProvider] = useState("custom");
   const [smtpHost, setSmtpHost] = useState("");
   const [smtpPort, setSmtpPort] = useState("");
@@ -167,6 +168,7 @@ export default function Settings() {
       const data = await api.get<Record<string, string>>("/settings");
       setSettings(data);
       setPanelName(data.panel_name || "");
+      setPanelIps(data.allowed_panel_ips || "");
       setSmtpHost(data.smtp_host || "");
       setSmtpPort(data.smtp_port || "");
       setSmtpUser(data.smtp_username || "");
@@ -670,29 +672,11 @@ export default function Settings() {
           </div>
         </div>
 
-        {/* Feature #1: Timezone */}
-        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
-          <div className="px-5 py-3 border-b border-dark-600">
-            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Timezone</h3>
-          </div>
-          <div className="p-5">
-            <select value={settings.timezone || "UTC"} onChange={async (e) => {
-              try {
-                await api.put("/settings", { timezone: e.target.value });
-                setSettings({ ...settings, timezone: e.target.value });
-                setMessage({ text: "Timezone updated", type: "success" });
-              } catch (err) { setMessage({ text: err instanceof Error ? err.message : "Failed", type: "error" }); }
-            }} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none">
-              {["UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
-                "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Bucharest", "Europe/Moscow",
-                "Asia/Tokyo", "Asia/Shanghai", "Asia/Kolkata", "Asia/Dubai",
-                "Australia/Sydney", "Pacific/Auckland"].map(tz => (
-                <option key={tz} value={tz}>{tz}</option>
-              ))}
-            </select>
-            <p className="text-xs text-dark-300 mt-1">Affects displayed timestamps throughout the panel</p>
-          </div>
-        </div>
+        {/* A timezone selector lived here until v2.46.0, claiming to "affect
+            displayed timestamps throughout the panel". Nothing read the key —
+            not the backend, not this frontend — so every timestamp stayed UTC.
+            Removed rather than left lying; re-add it together with the
+            formatting it promises, not before. */}
 
         {/* Feature #2: Branding */}
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
@@ -1941,6 +1925,83 @@ export default function Settings() {
                 className="w-16 px-2 py-1 border border-dark-500 rounded text-sm text-center focus:ring-2 focus:ring-accent-500 outline-none bg-dark-700"
               />
             </div>
+            {/* Lockdown window — the other half of the threshold rule. It had no
+                control at all until v2.46.0, so the sentence "5 in 10 min" was
+                only half adjustable. Default mirrors the server's own (10). */}
+            <div className="px-5 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">Auto-Lockdown Window</p>
+                <p className="text-xs text-dark-400">Minutes those suspicious events must fall within (default: 10)</p>
+              </div>
+              <input type="number" min="1" max="1440" value={settings.security_lockdown_window_minutes || "10"}
+                onChange={async (e) => {
+                  try {
+                    await api.put("/settings", { security_lockdown_window_minutes: e.target.value });
+                    setSettings(prev => ({ ...prev, security_lockdown_window_minutes: e.target.value }));
+                    setMessage({ text: "Lockdown window updated", type: "success" });
+                  } catch (err) { setMessage({ text: err instanceof Error ? err.message : "Failed to save", type: "error" }); }
+                }}
+                className="w-16 px-2 py-1 border border-dark-500 rounded text-sm text-center focus:ring-2 focus:ring-accent-500 outline-none bg-dark-700"
+              />
+            </div>
+            <div className="px-5 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">Site Creation Rate Limit</p>
+                <p className="text-xs text-dark-400">Max sites one user may create per hour (default: 3, 0 = no limit)</p>
+              </div>
+              <input type="number" min="0" max="999" value={settings.security_site_rate_limit || "3"}
+                onChange={async (e) => {
+                  try {
+                    await api.put("/settings", { security_site_rate_limit: e.target.value });
+                    setSettings(prev => ({ ...prev, security_site_rate_limit: e.target.value }));
+                    setMessage({ text: "Rate limit updated", type: "success" });
+                  } catch (err) { setMessage({ text: err instanceof Error ? err.message : "Failed to save", type: "error" }); }
+                }}
+                className="w-16 px-2 py-1 border border-dark-500 rounded text-sm text-center focus:ring-2 focus:ring-accent-500 outline-none bg-dark-700"
+              />
+            </div>
+            {/* Server terminal kill switch. The stored key is INVERTED
+                (`server_terminal_disabled`) and the server treats an absent row as
+                "not disabled", so the toggle reads `!== "true"` — writing it the
+                other way round would draw this OFF on every fresh install while
+                the terminal was in fact open. */}
+            <div className="px-5 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">Server Terminal</p>
+                <p className="text-xs text-dark-400">Full-server shell for admins. Off leaves per-site terminals working.</p>
+              </div>
+              <button onClick={async () => {
+                const enabled = settings.server_terminal_disabled !== "true";
+                const next = enabled ? "true" : "false";
+                try {
+                  await api.put("/settings", { server_terminal_disabled: next });
+                  setSettings(prev => ({ ...prev, server_terminal_disabled: next }));
+                  setMessage({ text: `Server terminal ${enabled ? "disabled" : "enabled"}`, type: "success" });
+                } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+              }} className={`relative w-11 h-6 rounded-full transition-colors ${settings.server_terminal_disabled !== "true" ? "bg-rust-500" : "bg-dark-600"}`}>
+                <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-transform ${settings.server_terminal_disabled !== "true" ? "translate-x-5.5 left-0.5" : "left-0.5"}`} />
+              </button>
+            </div>
+            <div className="px-5 py-3">
+              <p className="text-sm text-dark-100">Panel IP Allowlist</p>
+              <p className="text-xs text-dark-400 mb-2">
+                Comma-separated IPs or CIDR ranges that may log in. Empty allows every address.
+                Requires your reverse proxy to send <code className="font-mono">X-Real-IP</code>; if it does not,
+                a non-empty list locks everyone out and only a database edit restores access.
+              </p>
+              <div className="flex gap-2">
+                <input type="text" value={panelIps} onChange={e => setPanelIps(e.target.value)}
+                  placeholder="203.0.113.4, 10.0.0.0/8, 2001:db8::/32"
+                  className="flex-1 px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none" />
+                <button onClick={async () => {
+                  try {
+                    await api.put("/settings", { allowed_panel_ips: panelIps });
+                    setSettings(prev => ({ ...prev, allowed_panel_ips: panelIps }));
+                    setMessage({ text: panelIps.trim() ? "IP allowlist saved" : "IP allowlist cleared — all addresses allowed", type: "success" });
+                  } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                }} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600">Save</button>
+              </div>
+            </div>
           </div>
         </div>
         )}
@@ -2157,42 +2218,12 @@ export default function Settings() {
           </div>
         </div>
 
-        {/* Feature #8: Email Footer + Feature #13: Events Webhook */}
-        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-4">
-          <div className="px-5 py-3 border-b border-dark-600">
-            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Additional Settings</h3>
-          </div>
-          <div className="p-5 space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-dark-100 mb-1">Email Footer Text</label>
-              <input type="text" value={settings.email_footer || ""} onChange={e => setSettings({ ...settings, email_footer: e.target.value })}
-                placeholder="Sent by DockPanel" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
-              <p className="text-xs text-dark-300 mt-1">Custom footer text appended to notification emails</p>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-dark-100 mb-1">Panel Events Webhook</label>
-              <input type="url" value={settings.events_webhook_url || ""} onChange={e => setSettings({ ...settings, events_webhook_url: e.target.value })}
-                placeholder="https://example.com/webhook" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none" />
-              <p className="text-xs text-dark-300 mt-1">Receives POST for site.create, app.deploy, security.scan events</p>
-            </div>
-            <div className="flex justify-end">
-              <button onClick={async () => {
-                setSaving("notifyExtra");
-                setMessage({ text: "", type: "" });
-                try {
-                  await api.put("/settings", {
-                    email_footer: settings.email_footer || "",
-                    events_webhook_url: settings.events_webhook_url || "",
-                  });
-                  setMessage({ text: "Settings saved", type: "success" });
-                } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-                finally { setSaving(null); }
-              }} disabled={saving === "notifyExtra"} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50">
-                {saving === "notifyExtra" ? "Saving..." : "Save"}
-              </button>
-            </div>
-          </div>
-        </div>
+        {/* An "Additional Settings" card lived here until v2.46.0 with two inputs:
+            an email footer "appended to notification emails" and an events webhook
+            that "receives POST for site.create, app.deploy, security.scan". Both
+            saved successfully and neither was ever read — no code appends the
+            footer, and nothing POSTs anywhere. Removed rather than left lying;
+            they come back with the code that honours them. */}
         </>)}
 
         {/* Services tab: Service Installers (incl. PowerDNS config), System Health */}

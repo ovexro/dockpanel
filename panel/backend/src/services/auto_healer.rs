@@ -52,20 +52,24 @@ pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync:
         }
 
         // Only run auto-healing if enabled globally
-        let enabled = is_enabled(&pool).await;
-        if !enabled {
-            continue;
+        if is_enabled(&pool).await {
+            auto_restart_services(&pool, &agent).await;
+            auto_clean_disk(&pool, &agent).await;
+            auto_renew_ssl(&pool, &agent).await;
+            auto_sleep_idle_containers(&pool, &agent).await;
         }
 
-        auto_restart_services(&pool, &agent).await;
-        auto_clean_disk(&pool, &agent).await;
-        auto_renew_ssl(&pool, &agent).await;
-        auto_sleep_idle_containers(&pool, &agent).await;
-
-        // Security hardening tasks (run every 2 minutes with auto-healer)
+        // Security hardening tasks share the healer's 2-minute tick but NOT its
+        // switch: `auto_heal_enabled` names auto-healing, and until v2.46.0
+        // turning it off also silently stopped suspicious-event ingestion,
+        // auto-lockdown expiry and canary monitoring. Same reasoning as the
+        // retention cleanup above, which was already carved out.
         security_ingest_suspicious_events(&pool).await;
         security_check_lockdown_expiry(&pool).await;
-        security_check_canary_files(&pool).await;
+        if super::security_hardening::get_setting_bool(&pool, "security_canary_enabled", true).await
+        {
+            security_check_canary_files(&pool).await;
+        }
     }
 }
 

@@ -372,7 +372,7 @@ pub async fn alert_lockdown(pool: &PgPool, reason: &str, triggered_by: &str) {
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-async fn get_setting_i64(pool: &PgPool, key: &str, default: i64) -> i64 {
+pub async fn get_setting_i64(pool: &PgPool, key: &str, default: i64) -> i64 {
     sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = $1")
         .bind(key)
         .fetch_optional(pool)

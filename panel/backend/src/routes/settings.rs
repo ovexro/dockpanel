@@ -16,6 +16,47 @@ struct SettingRow {
     value: String,
 }
 
+/// The single writable-settings whitelist, shared by `update` and `import_config`.
+/// It used to be spelled out separately in each, and the two had already drifted:
+/// import's copy was missing the registration gates and every `security_*` toggle,
+/// so exporting a config and importing it silently dropped your security posture
+/// while its comment claimed it used "the same whitelist as update()".
+///
+/// A key belongs here when an operator is meant to change it. Every entry should
+/// also have a control in the panel — `tests/settings-controls-pin-e2e.sh` fails
+/// when one does not, and when a key here is read by nothing.
+pub const ALLOWED_KEYS: &[&str] = &[
+    "panel_name", "smtp_host", "smtp_port", "smtp_username", "smtp_password",
+    "smtp_from", "smtp_from_name", "smtp_encryption",
+    "stripe_price_starter", "stripe_price_pro", "stripe_price_agency",
+    "agent_auto_update_enabled",
+    "pdns_api_url", "pdns_api_key",
+    "auto_heal_enabled", "status_page_enabled", "enforce_2fa",
+    "logo_url", "accent_color",
+    "oauth_google_client_id", "oauth_google_client_secret",
+    "oauth_github_client_id", "oauth_github_client_secret",
+    "oauth_gitlab_client_id", "oauth_gitlab_client_secret",
+    "oauth_auto_create", "hide_branding",
+    "reverse_proxy",
+    // Gap #70: Customizable notification templates
+    "notif_template_email", "notif_template_slack",
+    "notif_template_discord", "notif_template_webhook",
+    // Telemetry
+    "telemetry_enabled", "telemetry_endpoint",
+    // Registration + approval gates (read by routes/auth.rs)
+    "self_registration_enabled", "security_approval_required",
+    // Security toggles (read by services/security_hardening.rs)
+    "security_geo_alert_enabled", "security_session_recording",
+    "security_db_backup_enabled", "security_canary_enabled",
+    "security_lockdown_threshold", "security_lockdown_window_minutes",
+    "security_site_rate_limit",
+    // Access gates that were readable-but-unsettable until v2.46.0: the login IP
+    // allowlist (routes/auth.rs) and the server-terminal kill switch
+    // (routes/terminal.rs). Both were documented or relied upon while no API
+    // accepted them and no control existed.
+    "allowed_panel_ips", "server_terminal_disabled",
+];
+
 /// GET /api/settings — Returns all settings as a key/value map (admin only).
 pub async fn list(
     State(state): State<AppState>,
@@ -52,36 +93,26 @@ pub async fn update(
     Json(body): Json<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
 
-    // Whitelist allowed setting keys
-    let allowed_keys = [
-        "panel_name", "smtp_host", "smtp_port", "smtp_username", "smtp_password",
-        "smtp_from", "smtp_from_name", "smtp_encryption",
-        "stripe_price_starter", "stripe_price_pro", "stripe_price_agency",
-        "agent_auto_update_enabled",
-        "pdns_api_url", "pdns_api_key",
-        "auto_heal_enabled", "status_page_enabled", "enforce_2fa",
-        "timezone", "logo_url", "accent_color",
-        "email_footer", "events_webhook_url",
-        "oauth_google_client_id", "oauth_google_client_secret",
-        "oauth_github_client_id", "oauth_github_client_secret",
-        "oauth_gitlab_client_id", "oauth_gitlab_client_secret",
-        "oauth_auto_create", "hide_branding",
-        "reverse_proxy",
-        // Gap #70: Customizable notification templates
-        "notif_template_email", "notif_template_slack",
-        "notif_template_discord", "notif_template_webhook",
-        // Telemetry
-        "telemetry_enabled", "telemetry_endpoint",
-        // Registration + approval gates (read by routes/auth.rs)
-        "self_registration_enabled", "security_approval_required",
-        // Security toggles (read by services/security_hardening.rs)
-        "security_geo_alert_enabled", "security_session_recording",
-        "security_db_backup_enabled", "security_canary_enabled",
-        "security_lockdown_threshold",
-    ];
     for key in body.keys() {
-        if !allowed_keys.contains(&key.as_str()) {
+        if !ALLOWED_KEYS.contains(&key.as_str()) {
             return Err(err(StatusCode::BAD_REQUEST, &format!("Unknown setting: {key}")));
+        }
+    }
+
+    // Reject a malformed IP allowlist BEFORE storing it. Every entry must be one
+    // `panel_ip_allowed` can match, or the operator locks themselves out of the
+    // panel and the only way back in is editing the settings table by hand.
+    if let Some(list) = body.get("allowed_panel_ips") {
+        if let Some(bad) = list
+            .split(',')
+            .map(str::trim)
+            .filter(|e| !e.is_empty())
+            .find(|e| !crate::helpers::valid_panel_ip_entry(e))
+        {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                &format!("Invalid IP or CIDR in allowed_panel_ips: {bad}"),
+            ));
         }
     }
 
@@ -535,24 +566,9 @@ pub async fn import_config(
     let settings_obj = body.get("settings").and_then(|s| s.as_object())
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Invalid format: missing 'settings' object"))?;
 
-    // Filter imported settings through the same whitelist as update()
-    let allowed_keys = [
-        "panel_name", "smtp_host", "smtp_port", "smtp_username", "smtp_password",
-        "smtp_from", "smtp_from_name", "smtp_encryption",
-        "stripe_price_starter", "stripe_price_pro", "stripe_price_agency",
-        "agent_auto_update_enabled",
-        "pdns_api_url", "pdns_api_key",
-        "auto_heal_enabled", "status_page_enabled", "enforce_2fa",
-        "timezone", "logo_url", "accent_color",
-        "email_footer", "events_webhook_url",
-        "oauth_google_client_id", "oauth_google_client_secret",
-        "oauth_github_client_id", "oauth_github_client_secret",
-        "oauth_gitlab_client_id", "oauth_gitlab_client_secret",
-        "oauth_auto_create", "hide_branding",
-        "reverse_proxy",
-        "notif_template_email", "notif_template_slack",
-        "notif_template_discord", "notif_template_webhook",
-    ];
+    // Filter imported settings through the same whitelist as update() — literally
+    // the same list now, not a second copy that drifts away from it.
+    let allowed_keys = ALLOWED_KEYS;
 
     const SENSITIVE_KEYS: &[&str] = &["smtp_password", "pdns_api_key"];
 

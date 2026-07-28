@@ -33,6 +33,12 @@ struct TermQuery {
 struct TerminalTicket {
     sub: String,
     purpose: String,
+    /// Whether this session may be recorded. A SIGNED claim, never a query
+    /// param — the browser holds the ticket and dials the agent directly, so a
+    /// param would let the user switch off the recording of their own session.
+    /// Absent means an older panel minted the ticket: keep recording, which is
+    /// what that panel already expected.
+    record: Option<bool>,
 }
 
 /// GET /terminal/ws — WebSocket terminal.
@@ -79,8 +85,12 @@ async fn ws_handler(
             )
             .ok()
             .filter(|data| data.claims.purpose == "terminal")
-            .map(|data| data.claims.sub)
+            .map(|data| (data.claims.sub, data.claims.record.unwrap_or(true)))
         });
+    let (user_email, record) = match user_email {
+        Some((email, record)) => (Some(email), record),
+        None => (None, true),
+    };
     if user_email.is_none() {
         let _ = ACTIVE_TERMINALS.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| Some(v.saturating_sub(1)));
         return Response::builder()
@@ -109,7 +119,7 @@ async fn ws_handler(
     let cols = q.cols.unwrap_or(80);
     let rows = q.rows.unwrap_or(24);
 
-    ws.on_upgrade(move |socket| handle_terminal(socket, domain, user_email, cols, rows))
+    ws.on_upgrade(move |socket| handle_terminal(socket, domain, user_email, cols, rows, record))
 }
 
 /// Open a PTY pair and spawn a shell in the child side.
@@ -292,7 +302,7 @@ fn open_pty_shell(cwd: &str, cols: u16, rows: u16, site_domain: Option<&str>) ->
     Ok((master_fd, pid as u32))
 }
 
-async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: String, cols: u16, rows: u16) {
+async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: String, cols: u16, rows: u16, record: bool) {
     // Determine working directory
     let cwd = if !domain.is_empty() {
         let path = format!("/var/www/{domain}");
@@ -368,17 +378,24 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: Stri
     let is_site_terminal = !domain.is_empty();
     let domain_str = if domain.is_empty() { "server" } else { &domain };
 
-    // Feature 5: Open session recording file
+    // Feature 5: Open session recording file — only when the panel's
+    // `security_session_recording` toggle allows it. Until v2.46.0 this ran
+    // unconditionally and the toggle was inert, so switching it off changed
+    // nothing while the UI reported "Session recording disabled".
     let recording_dir = "/var/lib/dockpanel/recordings";
-    let _ = std::fs::create_dir_all(recording_dir);
     let session_id = uuid::Uuid::new_v4();
     let recording_path = format!("{recording_dir}/{session_id}.cast");
     let recording_start = std::time::Instant::now();
-    let mut recording_file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&recording_path)
-        .ok();
+    let mut recording_file = if record {
+        let _ = std::fs::create_dir_all(recording_dir);
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&recording_path)
+            .ok()
+    } else {
+        None
+    };
 
     // Write asciicast v2 header
     if let Some(ref mut f) = recording_file {

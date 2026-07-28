@@ -117,6 +117,72 @@ fn ip_is_internal(ip: std::net::IpAddr) -> bool {
     }
 }
 
+/// True if `entry` — a plain IP or a CIDR block like `10.0.0.0/8` — covers `client`.
+/// Families must match; a v4 entry never covers a v6 client. Anything unparseable
+/// covers nothing, so a typo denies rather than admits (see `valid_panel_ip_entry`,
+/// which rejects such entries at write time so an operator cannot lock themselves out).
+fn ip_entry_covers(entry: &str, client: std::net::IpAddr) -> bool {
+    let entry = entry.trim();
+    let Some((net, bits)) = entry.split_once('/') else {
+        return entry
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip == client)
+            .unwrap_or(false);
+    };
+    let (Ok(net), Ok(bits)) = (net.trim().parse::<std::net::IpAddr>(), bits.trim().parse::<u32>())
+    else {
+        return false;
+    };
+    match (net, client) {
+        (std::net::IpAddr::V4(n), std::net::IpAddr::V4(c)) => {
+            if bits > 32 {
+                return false;
+            }
+            // A /0 must not shift by 32 (UB-adjacent, and `checked_shl` returns None).
+            let mask = if bits == 0 { 0 } else { u32::MAX << (32 - bits) };
+            u32::from(n) & mask == u32::from(c) & mask
+        }
+        (std::net::IpAddr::V6(n), std::net::IpAddr::V6(c)) => {
+            if bits > 128 {
+                return false;
+            }
+            let mask = if bits == 0 { 0 } else { u128::MAX << (128 - bits) };
+            u128::from(n) & mask == u128::from(c) & mask
+        }
+        _ => false,
+    }
+}
+
+/// True if `client` is covered by any entry of a comma-separated panel IP allowlist.
+/// The caller decides what an EMPTY list means (today: no restriction at all).
+pub fn panel_ip_allowed(list: &str, client: &str) -> bool {
+    let Ok(client) = client.trim().parse::<std::net::IpAddr>() else {
+        // No usable client address (e.g. no `x-real-ip` from the proxy) and a
+        // non-empty allowlist: deny. An allowlist that cannot identify the caller
+        // must fail CLOSED.
+        return false;
+    };
+    list.split(',')
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .any(|e| ip_entry_covers(e, client))
+}
+
+/// True if `entry` is a form `panel_ip_allowed` can actually match. Used to reject a
+/// malformed allowlist at write time — otherwise a typo silently locks every admin out
+/// of the panel, and the only way back in is editing the database by hand.
+pub fn valid_panel_ip_entry(entry: &str) -> bool {
+    let entry = entry.trim();
+    match entry.split_once('/') {
+        None => entry.parse::<std::net::IpAddr>().is_ok(),
+        Some((net, bits)) => match (net.trim().parse::<std::net::IpAddr>(), bits.trim().parse::<u32>()) {
+            (Ok(std::net::IpAddr::V4(_)), Ok(b)) => b <= 32,
+            (Ok(std::net::IpAddr::V6(_)), Ok(b)) => b <= 128,
+            _ => false,
+        },
+    }
+}
+
 /// True if a redirect target `host` is internal: a literal internal IP, `localhost`,
 /// OR a hostname that resolves (blocking) to any internal IP. For use inside a reqwest
 /// redirect-policy closure, which is synchronous and cannot `.await` — so this resolves
@@ -417,5 +483,83 @@ mod ssrf_tests {
     fn v6_public_allowed() {
         assert!(!v6_is_internal("2606:4700:4700::1111".parse::<Ipv6Addr>().unwrap()));
         assert!(!ip_is_internal("2001:4860:4860::8888".parse::<std::net::IpAddr>().unwrap()));
+    }
+}
+
+#[cfg(test)]
+mod panel_ip_allowlist_tests {
+    use super::{panel_ip_allowed, valid_panel_ip_entry};
+
+    #[test]
+    fn exact_addresses_match_either_family() {
+        assert!(panel_ip_allowed("203.0.113.4", "203.0.113.4"));
+        assert!(!panel_ip_allowed("203.0.113.4", "203.0.113.5"));
+        assert!(panel_ip_allowed("2001:db8::1", "2001:db8::1"));
+        // Written differently, same address — string equality (the pre-v2.46.0
+        // behaviour) would reject this one.
+        assert!(panel_ip_allowed("2001:0db8::0001", "2001:db8::1"));
+    }
+
+    #[test]
+    fn cidr_ranges_cover_their_members() {
+        assert!(panel_ip_allowed("10.0.0.0/8", "10.11.12.13"));
+        assert!(!panel_ip_allowed("10.0.0.0/8", "11.0.0.1"));
+        assert!(panel_ip_allowed("192.168.1.0/24", "192.168.1.255"));
+        assert!(!panel_ip_allowed("192.168.1.0/24", "192.168.2.1"));
+        assert!(panel_ip_allowed("2001:db8::/32", "2001:db8:dead:beef::1"));
+        assert!(!panel_ip_allowed("2001:db8::/32", "2001:db9::1"));
+    }
+
+    #[test]
+    fn prefix_boundaries_do_not_overflow() {
+        // /0 covers everything of its family; a 32-bit shift would be UB-adjacent.
+        assert!(panel_ip_allowed("0.0.0.0/0", "8.8.8.8"));
+        assert!(panel_ip_allowed("::/0", "2001:db8::1"));
+        // /32 and /128 are single hosts.
+        assert!(panel_ip_allowed("8.8.8.8/32", "8.8.8.8"));
+        assert!(!panel_ip_allowed("8.8.8.8/32", "8.8.8.9"));
+        // Out-of-range prefixes match nothing rather than panicking.
+        assert!(!panel_ip_allowed("8.8.8.8/33", "8.8.8.8"));
+        assert!(!panel_ip_allowed("2001:db8::/129", "2001:db8::1"));
+    }
+
+    #[test]
+    fn families_do_not_cross() {
+        assert!(!panel_ip_allowed("0.0.0.0/0", "2001:db8::1"));
+        assert!(!panel_ip_allowed("::/0", "8.8.8.8"));
+    }
+
+    #[test]
+    fn lists_are_split_and_trimmed_and_any_entry_admits() {
+        assert!(panel_ip_allowed(" 203.0.113.4 , 10.0.0.0/8 ", "10.1.1.1"));
+        assert!(panel_ip_allowed("203.0.113.4,10.0.0.0/8", "203.0.113.4"));
+        assert!(!panel_ip_allowed("203.0.113.4,10.0.0.0/8", "8.8.8.8"));
+        // Empty entries are ignored, not treated as wildcards.
+        assert!(!panel_ip_allowed(",,", "8.8.8.8"));
+    }
+
+    #[test]
+    fn an_unusable_client_address_is_denied_not_admitted() {
+        // No X-Real-IP from the proxy: an allowlist that cannot identify the
+        // caller must fail CLOSED.
+        assert!(!panel_ip_allowed("10.0.0.0/8", ""));
+        assert!(!panel_ip_allowed("10.0.0.0/8", "not-an-ip"));
+        assert!(!panel_ip_allowed("0.0.0.0/0", ""));
+    }
+
+    #[test]
+    fn garbage_entries_admit_nobody() {
+        assert!(!panel_ip_allowed("not-an-ip", "8.8.8.8"));
+        assert!(!panel_ip_allowed("10.0.0.0/abc", "10.0.0.1"));
+    }
+
+    #[test]
+    fn validation_accepts_what_the_matcher_understands() {
+        for good in ["203.0.113.4", "10.0.0.0/8", "2001:db8::1", "2001:db8::/32", "0.0.0.0/0"] {
+            assert!(valid_panel_ip_entry(good), "{good} should validate");
+        }
+        for bad in ["", "not-an-ip", "10.0.0.0/33", "2001:db8::/129", "10.0.0.0/", "10.0.0.0/-1"] {
+            assert!(!valid_panel_ip_entry(bad), "{bad} should be rejected");
+        }
     }
 }

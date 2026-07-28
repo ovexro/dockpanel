@@ -19,6 +19,10 @@ struct TerminalTicket {
     sub: String,
     purpose: String,
     exp: usize,
+    /// Carries `security_session_recording` to the agent. It rides INSIDE the
+    /// signed ticket because the browser dials the agent directly — as a query
+    /// param the user could suppress the recording of their own session.
+    record: bool,
 }
 
 /// GET /api/terminal/token — Generate a short-lived terminal ticket.
@@ -72,10 +76,17 @@ pub async fn ws_token(
     };
 
     // Generate a short-lived JWT ticket (60 seconds) signed with the agent token
+    let record = crate::services::security_hardening::get_setting_bool(
+        &state.db,
+        "security_session_recording",
+        true,
+    )
+    .await;
     let ticket = TerminalTicket {
         sub: claims.email,
         purpose: "terminal".to_string(),
         exp: (chrono::Utc::now() + chrono::Duration::seconds(60)).timestamp() as usize,
+        record,
     };
 
     let token = encode(

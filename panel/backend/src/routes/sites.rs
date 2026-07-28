@@ -20,6 +20,18 @@ use crate::models::Site;
 use crate::routes::is_valid_domain;
 use crate::routes::reseller_dashboard::check_reseller_quota;
 
+/// Effective per-user site-creation ceiling per hour, shared by `create` and
+/// `clone` so the two cannot drift apart. `security_site_rate_limit` holds the
+/// count; 0 means no limit. Absent row falls back to the seeded default of 3.
+async fn site_rate_limit(pool: &sqlx::PgPool) -> i64 {
+    match crate::services::security_hardening::get_setting_i64(pool, "security_site_rate_limit", 3)
+        .await
+    {
+        n if n <= 0 => i64::MAX,
+        n => n,
+    }
+}
+
 /// Atomically reserve one site slot against the site owner's reseller quota. The
 /// conditional UPDATE ... RETURNING closes the check-then-increment TOCTOU. Returns
 /// Ok(true) if a slot was reserved (release it on a later failure), Ok(false) if the
@@ -215,12 +227,13 @@ pub async fn create(
         return Err(err(StatusCode::SERVICE_UNAVAILABLE, "System is in lockdown mode"));
     }
 
-    // Feature 3: Rate limit site creation (max N per user per hour)
+    // Feature 3: Rate limit site creation (max N per user per hour).
+    // `security_site_rate_limit` is a COUNT, not a flag: the migration seeds it
+    // '3', but until v2.46.0 it was read with get_setting_bool, so '3' != "true"
+    // read as false and the limit became 999 — the seed disabled the very
+    // feature it configures, on every install that ran the migration. 0 = off.
     {
-        let max_sites: i64 = security_hardening::get_setting_bool(&state.db, "security_site_rate_limit", true)
-            .await
-            .then(|| 3i64)
-            .unwrap_or(999);
+        let max_sites: i64 = site_rate_limit(&state.db).await;
         let recent: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM sites WHERE user_id = $1 AND created_at > NOW() - INTERVAL '1 hour'"
         )
@@ -2217,10 +2230,7 @@ pub async fn clone_site(
         return Err(err(StatusCode::SERVICE_UNAVAILABLE, "System is in lockdown mode"));
     }
     {
-        let max_sites: i64 = security_hardening::get_setting_bool(&state.db, "security_site_rate_limit", true)
-            .await
-            .then(|| 3i64)
-            .unwrap_or(999);
+        let max_sites: i64 = site_rate_limit(&state.db).await;
         let recent: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM sites WHERE user_id = $1 AND created_at > NOW() - INTERVAL '1 hour'",
         )

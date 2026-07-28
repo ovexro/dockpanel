@@ -175,9 +175,12 @@ pub async fn login(
     ).fetch_optional(&state.db).await
         .map_err(|e| internal_error("login ip whitelist", e))?;
     if let Some((ips,)) = whitelist {
-        if !ips.is_empty() {
+        if !ips.trim().is_empty() {
+            // Until v2.46.0 this compared the header to each entry as a STRING, so
+            // the CIDR ranges the docs promise never matched anything — an operator
+            // who entered one locked themselves out instead of restricting access.
             let client_ip = headers.get("x-real-ip").and_then(|v| v.to_str().ok()).unwrap_or("");
-            if !ips.split(',').any(|allowed| allowed.trim() == client_ip) {
+            if !crate::helpers::panel_ip_allowed(&ips, client_ip) {
                 return Err(err(StatusCode::FORBIDDEN, "Access denied: IP not whitelisted"));
             }
         }

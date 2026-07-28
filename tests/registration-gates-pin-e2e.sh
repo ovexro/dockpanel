@@ -132,13 +132,19 @@ done
 # the toggle renders, the operator flips it, and the request 400s "Unknown
 # setting".
 #
-# Scoped to the UPDATE function's list. settings.rs holds TWO allowlists — one
-# for PUT /api/settings and one for import_config — with overlapping contents,
-# so a file-wide grep is satisfied by the import list alone and says nothing
-# about whether the toggle can save.
-UPDATE_FN=$(awk '/^pub async fn update\(/{f=1;next} f&&/^pub async fn /{exit} f' "$SETTINGS")
+# Scoped to the ALLOWED_KEYS const. settings.rs used to hold TWO allowlists — one
+# for PUT /api/settings and one for import_config — so this arm read only the
+# update function's copy, because a file-wide grep was satisfied by the import
+# list alone and said nothing about whether the toggle could save. s276 merged
+# them into one const (the two had already drifted); settings-controls-pin-e2e.sh
+# §5 now fails if a second inline list ever reappears.
+#
+# Comment lines are stripped before matching: the const carries prose about which
+# keys it holds, and a pin that greps raw source is satisfied by the explanation
+# of a key rather than the key itself.
+UPDATE_FN=$(sed -n '/pub const ALLOWED_KEYS/,/^\];/p' "$SETTINGS" | grep -v '^\s*//')
 if [ -z "$UPDATE_FN" ]; then
-  bad "could not isolate the update function in $SETTINGS — the allowlist arms below are reading nothing"
+  bad "could not isolate ALLOWED_KEYS in $SETTINGS — the allowlist arms below are reading nothing"
 else
   for key in self_registration_enabled oauth_auto_create; do
     if printf '%s\n' "$UPDATE_FN" | grep -qF "\"$key\""; then
