@@ -520,6 +520,10 @@ pub async fn auth_begin(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Refuse before handing out a challenge, so an excluded address gets the same
+    // answer here as at the password door rather than a usable WebAuthn challenge.
+    super::auth::enforce_panel_ip_allowlist(&state.db, &headers).await?;
+
     purge_expired(&state.passkey_challenges);
 
     let rp_id = get_rp_id_from_headers(&headers, &state);
@@ -551,6 +555,10 @@ pub async fn auth_complete(
     Json(body): Json<AuthCompleteRequest>,
 ) -> Result<(StatusCode, [(axum::http::header::HeaderName, String); 1], Json<serde_json::Value>), ApiError> {
     purge_expired(&state.passkey_challenges);
+
+    // The panel IP allowlist gates the panel, not one handler: this door mints the
+    // same session cookie as the password door, so it owes the same check.
+    super::auth::enforce_panel_ip_allowlist(&state.db, &headers).await?;
 
     let rp_id = get_rp_id_from_headers(&headers, &state);
     let rp_origin = get_rp_origin_from_headers(&headers, &state);

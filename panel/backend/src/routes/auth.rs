@@ -170,21 +170,7 @@ pub async fn login(
     }
 
     // GAP 68: IP whitelist check — block login from non-whitelisted IPs
-    let whitelist: Option<(String,)> = sqlx::query_as(
-        "SELECT value FROM settings WHERE key = 'allowed_panel_ips'"
-    ).fetch_optional(&state.db).await
-        .map_err(|e| internal_error("login ip whitelist", e))?;
-    if let Some((ips,)) = whitelist {
-        if !ips.trim().is_empty() {
-            // Until v2.46.0 this compared the header to each entry as a STRING, so
-            // the CIDR ranges the docs promise never matched anything — an operator
-            // who entered one locked themselves out instead of restricting access.
-            let client_ip = headers.get("x-real-ip").and_then(|v| v.to_str().ok()).unwrap_or("");
-            if !crate::helpers::panel_ip_allowed(&ips, client_ip) {
-                return Err(err(StatusCode::FORBIDDEN, "Access denied: IP not whitelisted"));
-            }
-        }
-    }
+    enforce_panel_ip_allowlist(&state.db, &headers).await?;
 
     let user_opt: Option<User> = sqlx::query_as("SELECT * FROM users WHERE email = $1")
         .bind(&body.email)
@@ -430,6 +416,38 @@ fn issue_session(
     headers: &HeaderMap,
 ) -> Result<(String, String, String), ApiError> {
     issue_session_pub(state, user, headers)
+}
+
+/// Enforce `allowed_panel_ips` for a request that is about to establish a session.
+///
+/// **Call this from every door that can mint one.** The allowlist gates access to the
+/// panel, not access to one handler: until v2.47.0 it lived inline in `login` alone,
+/// so an operator who restricted the panel to their office range still had the
+/// passkey and OAuth doors answering from anywhere. Both of those issue exactly the
+/// same session cookie as the password door.
+///
+/// Fails CLOSED when the proxy sends no `X-Real-IP` — an allowlist that cannot
+/// identify the caller must not admit them (`helpers::panel_ip_allowed`).
+pub async fn enforce_panel_ip_allowlist(
+    db: &sqlx::PgPool,
+    headers: &HeaderMap,
+) -> Result<(), ApiError> {
+    let whitelist: Option<(String,)> = sqlx::query_as(
+        "SELECT value FROM settings WHERE key = 'allowed_panel_ips'"
+    ).fetch_optional(db).await
+        .map_err(|e| internal_error("login ip whitelist", e))?;
+    if let Some((ips,)) = whitelist {
+        if !ips.trim().is_empty() {
+            // Until v2.46.0 this compared the header to each entry as a STRING, so
+            // the CIDR ranges the docs promise never matched anything — an operator
+            // who entered one locked themselves out instead of restricting access.
+            let client_ip = headers.get("x-real-ip").and_then(|v| v.to_str().ok()).unwrap_or("");
+            if !crate::helpers::panel_ip_allowed(&ips, client_ip) {
+                return Err(err(StatusCode::FORBIDDEN, "Access denied: IP not whitelisted"));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Public version for use by passkey auth (same logic).
@@ -1159,6 +1177,15 @@ pub async fn twofa_verify(
     // temp token was minted just before suspension.
     if user.role == "suspended" {
         return Err(err(StatusCode::FORBIDDEN, "Account suspended"));
+    }
+
+    // Same reasoning as the suspension check above, for the other two gates: this
+    // is a second request, holding a 5-minute bearer token, and it is what actually
+    // emits the session cookie. Re-checking means the temp token cannot be carried
+    // to an address the allowlist excludes, or redeemed after a lockdown began.
+    enforce_panel_ip_allowlist(&state.db, &headers).await?;
+    if user.role != "admin" && security_hardening::is_locked_down(&state.db).await {
+        return Err(err(StatusCode::SERVICE_UNAVAILABLE, "System is in lockdown mode"));
     }
 
     let secret_b32_enc = user.totp_secret.as_ref().ok_or_else(|| {

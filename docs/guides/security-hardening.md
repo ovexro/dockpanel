@@ -131,6 +131,8 @@ Go to **Settings** > **Security** > **Disable 2FA**. You must enter a valid TOTP
 
 Restrict panel access to specific IP addresses. When configured, login attempts from non-whitelisted IPs are rejected before password validation.
 
+The allowlist covers **every way of signing in** — password, passkey, the OAuth callback, and the second step of a 2FA login. Before v2.47.0 it guarded the password form alone, so an operator who restricted the panel by IP still had the passkey and SSO paths answering from anywhere. If you set an allowlist on an earlier release, re-check it after upgrading: it is now enforced on doors that previously ignored it.
+
 Set **Panel IP Allowlist** in **Settings** > **Account** > **Security Hardening** to a comma-separated list of IPs or CIDR ranges (`203.0.113.4, 10.0.0.0/8, 2001:db8::/32`). Leave it empty to allow all IPs. Entries are validated on save, so a malformed range is rejected rather than stored.
 
 The check reads the client address from the `X-Real-IP` header. **If your reverse proxy does not set it, a non-empty allowlist rejects every login**, including yours — the check fails closed on purpose, since an allowlist that cannot identify the caller must not admit them. Confirm logins work from an allowlisted address before you rely on it. To recover from a lockout, clear the value directly in the database:
@@ -273,7 +275,21 @@ If the system detects a configurable number of suspicious events within a time w
 
 Lockdown blocks non-admin access until it expires (24 hours) or an admin deactivates it from **Security** > **Lockdown**. Note that the default threshold is low and a single burst can reach it, so raise the threshold or widen the window if your panel sees legitimate bursts of flagged activity.
 
-> **Changed in 2.46.0.** Suspicious-event counting, lockdown expiry and canary monitoring used to be gated by the **auto-healing** switch, so turning auto-healing off silently disabled all three. They now run independently. If you had auto-healing off, auto-lockdown becomes active on upgrade — configure the threshold deliberately rather than relying on that side effect.
+Admins can always sign in, so **Security** > **Lockdown** is the normal way out. If you cannot reach the panel at all, clear it directly in the database:
+
+```sql
+UPDATE lockdown_state SET active = false, triggered_by = NULL, triggered_at = NULL, reason = NULL WHERE id = 1;
+```
+
+To also drop the events that tripped it, so the next check does not immediately re-trigger:
+
+```sql
+DELETE FROM suspicious_events WHERE created_at > NOW() - INTERVAL '10 minutes';
+```
+
+> **Changed in 2.46.0.** Suspicious-event counting, lockdown expiry and canary monitoring used to be gated by the **auto-healing** switch, so turning auto-healing off silently disabled all three. They now run independently. Auto-healing is **off by default**, so this affects any install that never switched it on — not only those that deliberately turned it off. Configure the threshold deliberately rather than relying on that side effect.
+>
+> **Fixed in 2.47.0.** While counting was gated off, the agent still queued suspicious events to disk and nothing drained the file. On 2.46.0 the first check after upgrading read that whole backlog and counted it as having happened at that moment, so a box that had ever seen five suspicious commands locked down immediately — for 24 hours, blocking every non-admin user. 2.47.0 records each event at the time it actually occurred, so an old backlog falls outside the window. If 2.46.0 locked you out, clear it with the SQL above and upgrade.
 
 ### Site Creation Rate Limit
 

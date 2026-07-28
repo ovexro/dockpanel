@@ -987,6 +987,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/settings", get(settings::list).put(settings::update))
         .route("/api/settings/export", get(settings::export_config))
         .route("/api/settings/import", post(settings::import_config))
+        .route("/api/settings/recording-coverage", get(settings::recording_coverage))
         .route("/api/settings/smtp/test", post(settings::test_email))
         .route("/api/settings/test-webhook", post(settings::test_webhook))
         .route("/api/settings/health", get(settings::health))

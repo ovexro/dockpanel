@@ -654,7 +654,7 @@ pub async fn build_fleet_plan(
 /// Sortable numeric key for a `X.Y.Z` (optionally `v`-prefixed) version.
 /// `None` sorts first. Anything unparseable sorts with whatever it parsed,
 /// which keeps a malformed row from jumping to the end of the queue.
-fn semver_key(v: Option<&str>) -> (u8, u64, u64, u64) {
+pub(crate) fn semver_key(v: Option<&str>) -> (u8, u64, u64, u64) {
     let Some(v) = v else {
         return (0, 0, 0, 0);
     };
@@ -998,6 +998,28 @@ mod tests {
         assert_eq!(semver_key(Some("v2.11.7-rc.3")), (1, 2, 11, 7));
         assert_eq!(semver_key(Some("garbage")), (1, 0, 0, 0));
         assert_eq!(semver_key(Some("2.11")), (1, 2, 11, 0));
+    }
+
+    /// `settings::recording_coverage` decides which fleet members will obey the
+    /// terminal-recording toggle by comparing this key against the release that
+    /// began honouring the signed `record` claim. Two edges matter and both are
+    /// easy to get backwards: the release itself must count as covered, and a
+    /// server that has never checked in (no version) must count as NOT covered —
+    /// reporting an unverified member as covered is the exact claim the endpoint
+    /// exists to stop the UI making.
+    #[test]
+    fn recording_gate_boundary_sorts_the_way_coverage_depends_on() {
+        let gate = semver_key(Some("2.46.0"));
+
+        assert!(semver_key(Some("2.45.1")) < gate, "an older agent is not covered");
+        assert!(semver_key(Some("2.9.0")) < gate, "2.9 < 2.46 numerically, not lexicographically");
+        assert!(semver_key(None) < gate, "a server that never checked in is not covered");
+        assert!(semver_key(Some("unknown")) < gate, "an unparseable version is not covered");
+
+        assert!(semver_key(Some("2.46.0")) >= gate, "the gate release itself is covered");
+        assert!(semver_key(Some("2.46.1")) >= gate, "a newer patch is covered");
+        assert!(semver_key(Some("v2.47.0")) >= gate, "a v-prefixed newer release is covered");
+        assert!(semver_key(Some("2.100.0")) >= gate, "2.100 > 2.46 numerically");
     }
 
     /// The fleet orchestrator must decide "updated" from what the agent is

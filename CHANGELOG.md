@@ -6,6 +6,65 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.47.0] - 2026-07-28
+
+Found by driving v2.46.0 on throwaway servers rather than reading it: a fresh
+install, an older release upgraded in place, and a two-server fleet. 2.46.0 gave
+the panel IP allowlist real range matching and a control — this release makes it
+apply to every door that can sign you in, and stops an upgrade from locking your
+users out.
+
+### Fixed
+
+- **Upgrading could lock every non-admin user out of the panel.** Auto-lockdown
+  counts "N suspicious events within M minutes". Before 2.46.0, ingestion of
+  those events sat under `auto_heal_enabled`, which is seeded **off**, so on a
+  stock install the agent wrote them to
+  `/var/lib/dockpanel/suspicious-events.jsonl` and nothing ever drained the file.
+  2.46.0 correctly detached security monitoring from that switch — and the first
+  tick after upgrading then read the entire accumulated backlog and stamped every
+  line with the time it was *read* rather than the time it *happened*. However
+  long the queue took to build, it counted as one instant. Any box that had ever
+  seen five suspicious commands locked down immediately, for 24 hours.
+
+  Driven on an upgraded box: sixteen events generated over about three minutes of
+  real use were recorded 105 milliseconds apart, lockdown engaged, and a
+  non-admin got `503 System is in lockdown mode`. The agent has always written a
+  per-event timestamp; the ingest now honours it, so an old backlog lands outside
+  the window and a genuine burst still trips the rule. **If you upgraded to
+  2.46.0 and were locked out, this is why** — the guide's recovery SQL clears it,
+  and upgrading to 2.47.0 stops it recurring.
+
+- **The panel IP allowlist only guarded the password login.** `allowed_panel_ips`
+  gates access to the panel, but the check lived inline in one handler, and three
+  other endpoints mint exactly the same session cookie: passkey authentication,
+  the OAuth callback, and the second step of a 2FA login. An operator who
+  restricted the panel to their office range still had those answering from
+  anywhere. Verified from an excluded address on a real box: the password door
+  returned `403`, while `passkey/auth/begin` returned `200` and a usable WebAuthn
+  challenge. All four doors now share one implementation, and a regression pin
+  discovers session-minting handlers from the source and fails if one of them
+  lacks the check — so a fifth door cannot be added without it.
+
+- **Lockdown did not apply to the OAuth login path.** Lockdown holds non-admins
+  out until it expires or an admin clears it. The password and passkey paths
+  enforced it; the OAuth callback had no such check, so with SSO configured a
+  lockdown did not cover that route. It now enforces it, with the same admin
+  escape hatch as the other doors.
+
+### Added
+
+- **The session-recording toggle now says which servers it does not control.**
+  Recording is one setting, but each server's agent enforces it: the decision
+  travels as a signed claim in the terminal ticket, and an agent older than
+  2.46.0 does not read that claim and keeps recording. Switching recording off
+  therefore made a fleet-wide promise that was false for any member still behind
+  — the same shape as the toggle that reported success while changing nothing.
+  Confirmed on a two-server fleet: with the panel asking for `record=false`, the
+  2.46.0 agent wrote no `.cast` file and a 2.45.1 agent on the same box wrote one
+  anyway. **Settings → Security** now names any server whose agent predates the
+  gate, so an operator can see the gap instead of being told it does not exist.
+
 ## [2.46.0] - 2026-07-28
 
 Every operator setting is a claim made in three places — the code that reads it,

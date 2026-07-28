@@ -1293,11 +1293,23 @@ async fn security_ingest_suspicious_events(pool: &PgPool) {
             let command = event["command"].as_str();
             let domain = event["domain"].as_str().unwrap_or("");
 
+            // The agent stamps every line with the time the command was actually
+            // run. Ingesting the backlog as if it happened NOW collapses a queue
+            // that may have taken months to build into one instant, which trips the
+            // "N events in M minutes" rule on the first tick — see
+            // `record_suspicious_event_at`. An unparseable or absent timestamp
+            // falls back to now, which is the old behaviour and the safe direction
+            // for an event we cannot place in time.
+            let occurred_at = event["timestamp"]
+                .as_str()
+                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                .map(|t| t.with_timezone(&chrono::Utc));
+
             let details = format!("domain={}, command={}", domain, command.unwrap_or("-"));
 
             // Record suspicious event (may trigger auto-lockdown)
-            let locked = super::security_hardening::record_suspicious_event(
-                pool, event_type, actor_email, None, Some(&details),
+            let locked = super::security_hardening::record_suspicious_event_at(
+                pool, event_type, actor_email, None, Some(&details), occurred_at,
             ).await;
 
             // Audit log

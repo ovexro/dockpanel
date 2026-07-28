@@ -102,6 +102,14 @@ pub async fn callback(
     headers: axum::http::HeaderMap,
     Query(query): Query<CallbackQuery>,
 ) -> Result<Response, ApiError> {
+    // This door mints the same session cookie as the password and passkey doors and
+    // owed the same two gates. It had neither: the panel IP allowlist gates the
+    // panel, and lockdown is supposed to hold non-admins out until it expires —
+    // both were enforced at the other doors and skipped here, so with SSO
+    // configured, restricting the panel by IP and putting it into lockdown each
+    // left this path open.
+    crate::routes::auth::enforce_panel_ip_allowlist(&state.db, &headers).await?;
+
     // Check for OAuth error response from provider
     if let Some(ref error) = query.error {
         let desc = query.error_description.as_deref().unwrap_or("Unknown error");
@@ -316,6 +324,15 @@ pub async fn callback(
     // passkey login) — otherwise suspension is bypassable by logging in via OAuth.
     if user.role == "suspended" {
         return Err(err(StatusCode::FORBIDDEN, "Account suspended"));
+    }
+
+    // Lockdown, same rule and same admin escape hatch as the other two doors: an
+    // admin can always get in to lift it, everyone else waits. Checked here rather
+    // than at the top of the handler because the exemption is per-user.
+    if user.role != "admin"
+        && crate::services::security_hardening::is_locked_down(&state.db).await
+    {
+        return Err(err(StatusCode::SERVICE_UNAVAILABLE, "System is in lockdown mode"));
     }
 
     // If 2FA is enabled, issue a temporary token and redirect to 2FA challenge

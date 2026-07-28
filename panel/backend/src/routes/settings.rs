@@ -806,6 +806,69 @@ pub async fn import_config(
 }
 
 /// GET /api/settings/health — System health check (admin only).
+/// The agent release in which the terminal-recording toggle began to be honoured.
+/// Before it, the agent opened a `.cast` for every session unconditionally and the
+/// panel had no way to tell it otherwise.
+const RECORDING_GATE_MIN_AGENT: &str = "2.46.0";
+
+/// GET /api/settings/recording-coverage — which registered servers will actually
+/// obey the terminal session-recording toggle.
+///
+/// The toggle is one row in `settings`, but it is enforced by each server's agent:
+/// the decision rides as a signed claim in the terminal ticket, and an agent older
+/// than 2.46.0 does not read that claim and keeps recording. So switching recording
+/// off is a fleet-wide *claim* that is false for any member still behind — and the
+/// panel already knows, because every check-in writes `servers.agent_version`.
+///
+/// Reporting "disabled" while a member still records is the same defect class the
+/// toggle itself had before 2.46.0: a control whose confirmation ends the
+/// investigation. This lets the UI say which servers are not covered instead.
+pub async fn recording_coverage(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let rows: Vec<(String, Option<String>, bool)> = sqlx::query_as(
+        "SELECT name, agent_version, is_local FROM servers ORDER BY is_local DESC, name"
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| internal_error("recording coverage", e))?;
+
+    // `servers.agent_version` is written by the check-in a REMOTE agent makes. The
+    // local agent never checks in — it is reached over a unix socket — so its row
+    // is permanently NULL. Reporting that as "unknown, assume lagging" would put a
+    // warning on every single-server install, which is most of them, and a warning
+    // that is always on is one operators learn to scroll past. So ask it: /health
+    // is the only answer that describes what is actually running (s271 shipped a
+    // stale local agent that every other read reported as current).
+    let local_version: Option<String> = match agent.get("/health").await {
+        Ok(v) => v.get("version").and_then(|s| s.as_str()).map(str::to_string),
+        Err(_) => None,
+    };
+
+    let min = crate::services::panel_update::semver_key(Some(RECORDING_GATE_MIN_AGENT));
+    let lagging: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|(name, v, is_local)| {
+            let v = if is_local { local_version.clone().or(v) } else { v };
+            (name, v)
+        })
+        // A remote server that has never checked in still counts as lagging: an
+        // unverified claim is exactly what this endpoint exists to stop making.
+        .filter(|(_, v)| crate::services::panel_update::semver_key(v.as_deref()) < min)
+        .map(|(name, v)| serde_json::json!({
+            "name": name,
+            "agent_version": v.unwrap_or_else(|| "unknown".to_string()),
+        }))
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "min_agent_version": RECORDING_GATE_MIN_AGENT,
+        "lagging": lagging,
+    })))
+}
+
 pub async fn health(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,

@@ -62,6 +62,9 @@ export default function Settings() {
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [healthLoading, setHealthLoading] = useState(true);
   const [message, setMessage] = useState({ text: "", type: "" });
+  // Servers whose agent predates the recording gate and so keep recording no
+  // matter what the toggle says. Empty on a single-server install.
+  const [recordingLagging, setRecordingLagging] = useState<{ name: string; agent_version: string }[]>([]);
   const healthTimer = useRef<ReturnType<typeof setInterval>>(undefined);
   const qrRef = useRef<HTMLDivElement>(null);
 
@@ -304,6 +307,9 @@ export default function Settings() {
       .then((d) => setUpdateCount(d.count))
       .catch(() => {});
     api.get<ApiKey[]>("/api-keys").then(setApiKeys).catch(() => {});
+    api.get<{ lagging: { name: string; agent_version: string }[] }>("/settings/recording-coverage")
+      .then((d) => setRecordingLagging(d.lagging || []))
+      .catch(() => {});
     api.get<{ hostname?: string }>("/system/info")
       .then((d) => { if (d.hostname) setHostname(d.hostname); })
       .catch(() => {});
@@ -1859,6 +1865,19 @@ export default function Settings() {
               <div>
                 <p className="text-sm text-dark-100">Terminal Session Recording</p>
                 <p className="text-xs text-dark-400">Record all terminal sessions for forensic replay</p>
+                {/* The toggle is one row in settings, but each server's agent enforces
+                    it. An agent older than the gate release ignores the signed claim
+                    and records regardless — so without this, switching recording off
+                    reports a fleet-wide success that is false for those members. */}
+                {recordingLagging.length > 0 && (
+                  <p className="text-xs text-amber-400 mt-1">
+                    {settings.security_session_recording === "false"
+                      ? "Still recording on "
+                      : "Not controlled by this toggle on "}
+                    {recordingLagging.map((s) => `${s.name} (agent ${s.agent_version})`).join(", ")}
+                    {" — update the agent there for this setting to apply."}
+                  </p>
+                )}
               </div>
               <button onClick={async () => {
                 const current = settings.security_session_recording !== "false";

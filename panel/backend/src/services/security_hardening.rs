@@ -159,6 +159,10 @@ fn write_to_audit_file(
 
 /// Record a suspicious event and check if auto-lockdown threshold is reached.
 /// Returns true if lockdown was triggered.
+///
+/// Events detected in-process pass `occurred_at: None` and are stamped now. Events
+/// that were queued on disk before the panel could read them pass the time they
+/// actually happened — see [`record_suspicious_event_at`].
 pub async fn record_suspicious_event(
     pool: &PgPool,
     event_type: &str,
@@ -166,15 +170,44 @@ pub async fn record_suspicious_event(
     actor_ip: Option<&str>,
     details: Option<&str>,
 ) -> bool {
-    // Record the event
+    record_suspicious_event_at(pool, event_type, actor_email, actor_ip, details, None).await
+}
+
+/// As [`record_suspicious_event`], but for an event whose occurrence time is known
+/// and is NOT now.
+///
+/// The auto-lockdown rule is "N events within M minutes", counted over `created_at`.
+/// Stamping an ingested backlog with `NOW()` collapses however long it took to
+/// accumulate into a single instant, so a queue that built up over months is counted
+/// as one burst and trips the threshold the moment it is read. That is exactly what
+/// happens on upgrade to 2.46.0: before it, suspicious-event ingestion sat under
+/// `auto_heal_enabled`, which is seeded **false**, so on a stock install the agent
+/// wrote `/var/lib/dockpanel/suspicious-events.jsonl` and nothing ever drained it.
+/// The first tick after upgrading would replay the whole file as if it were
+/// simultaneous and lock every non-admin user out for 24h.
+///
+/// The agent has always written a per-event `timestamp`; the ingest simply dropped
+/// it. Honouring it means an old backlog lands outside the window and a genuine
+/// burst still trips the rule.
+pub async fn record_suspicious_event_at(
+    pool: &PgPool,
+    event_type: &str,
+    actor_email: Option<&str>,
+    actor_ip: Option<&str>,
+    details: Option<&str>,
+    occurred_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> bool {
+    // Record the event. COALESCE keeps the column default for the None case rather
+    // than duplicating "now" in Rust.
     let _ = sqlx::query(
-        "INSERT INTO suspicious_events (event_type, actor_email, actor_ip, details) \
-         VALUES ($1, $2, $3, $4)"
+        "INSERT INTO suspicious_events (event_type, actor_email, actor_ip, details, created_at) \
+         VALUES ($1, $2, $3, $4, COALESCE($5, NOW()))"
     )
     .bind(event_type)
     .bind(actor_email)
     .bind(actor_ip)
     .bind(details)
+    .bind(occurred_at)
     .execute(pool)
     .await;
 
