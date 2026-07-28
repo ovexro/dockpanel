@@ -1,7 +1,7 @@
 {
   "name": "dockpanel-frontend",
   "private": true,
-  "version": "2.47.2",
+  "version": "2.47.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
