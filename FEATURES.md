@@ -215,7 +215,7 @@ honest:
 | Full-stack RAM (with bundled PostgreSQL) | ~109 MB | measured | 2026-07-27 |
 | App templates | 153 | derived | every commit |
 | HTTP routes | 810 (528 backend + 282 agent) | derived | every commit |
-| Regression-pin assertions | 450 (15 suites) | derived | every commit |
+| Regression-pin assertions | 455 (15 suites) | derived | every commit |
 | Frontend pages | 51 | derived | every commit |
 | DB migrations | 98 | derived | every commit |
 | Supervised background services | 15 | derived | every commit |

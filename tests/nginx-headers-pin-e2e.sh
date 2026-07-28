@@ -190,6 +190,48 @@ check "re-running both migrations signals no reload" "$R" "0"
 check "re-running both migrations is byte-identical" \
       "$(cmp -s "$TMP/migrated.once" "$TMP/migrated.conf" && echo same || echo changed)" "same"
 
+# The OTHER live population: a box on v2.47.1, which already has the index.html
+# block (from the template or the seventh migration) but still has the old
+# /assets/. The eighth migration must fix /assets/ and leave the existing block
+# alone — not skip, not duplicate.
+cat > "$TMP/v471.conf" <<'EOF'
+server {
+    listen 8080;
+    root /var/www/panel;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location = /index.html {
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+    }
+
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+}
+EOF
+R=$(run_migrations "$TMP/v471.conf")
+check "a v2.47.1 box still gets the /assets/ fix" "$R" "1"
+check "  and keeps exactly one index.html block (not duplicated)" \
+      "$(grep -c 'location = /index.html' "$TMP/v471.conf")" "1"
+check "  and exactly one /assets/ block" \
+      "$(grep -c 'location /assets/' "$TMP/v471.conf")" "1"
+check "  and its /assets/ now carries nosniff" \
+      "$(block '^    location /assets/ [{]' "$TMP/v471.conf" | grep -c 'X-Content-Type-Options')" "1"
+cp "$TMP/v471.conf" "$TMP/v471.once"
+R=$(run_migrations "$TMP/v471.conf")
+check "  and re-running is a byte-identical no-op" \
+      "$(cmp -s "$TMP/v471.once" "$TMP/v471.conf" && echo same || echo changed)$R" "same0"
+
 # A vhost with no server-level add_header is skipped, not guessed at.
 cat > "$TMP/headerless.conf" <<'EOF'
 server {
