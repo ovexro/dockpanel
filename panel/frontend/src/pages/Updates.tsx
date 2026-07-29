@@ -21,6 +21,10 @@ interface ApplyResult {
 function colorLine(line: string): string {
   if (/^> .*completed successfully/.test(line)) return "text-rust-400 font-semibold";
   if (/^> .*completed with errors/.test(line)) return "text-danger-400 font-semibold";
+  // The connection-loss block is amber, not red: the stream broke, the update
+  // did not.
+  if (/^> (Lost the connection|Connection interrupted|The update itself|reopen this page)/.test(line))
+    return "text-warn-400";
   if (/^> /.test(line)) return "text-rust-400";
   if (/^\$ /.test(line)) return "text-dark-400";
   if (/^Get:\d+/.test(line)) return "text-accent-400";
@@ -105,10 +109,28 @@ export default function Updates() {
       const result = await api.post<{ install_id?: string } & ApplyResult>("/system/updates/apply", body);
 
       if (result.install_id) {
-        // SSE mode — stream progress
+        // SSE mode — stream progress.
+        //
+        // The backend replays the whole log before going live
+        // (snapshot_stream.chain(live_stream)), so a reconnect loses nothing.
+        // That is why onerror below does NOT close the stream on the first
+        // blip: EventSource retries by itself, the replay refills the
+        // terminal, and a momentary drop stops being a dead end. `replaying`
+        // makes the next frame reset the buffer so the replay does not print
+        // every line twice.
         const es = new EventSource(`/api/services/install/${result.install_id}/log`);
+        const MAX_RECONNECTS = 10;
+        let reconnects = 0;
+        let replaying = false;
+
+        es.onopen = () => { reconnects = 0; };
+
         es.onmessage = (event) => {
           try {
+            if (replaying) {
+              replaying = false;
+              setAptOutput([cmdLabel, ""]);
+            }
             const step = JSON.parse(event.data);
             if (step.step === "line") {
               // Live streaming: append each apt output line as it arrives
@@ -155,8 +177,32 @@ export default function Updates() {
           } catch { /* ignore */ }
         };
         es.onerror = () => {
-          es.close();
-          setApplying(false);
+          // readyState CLOSED means EventSource has given up for good — the
+          // endpoint answered non-200 (the log was garbage-collected), and the
+          // spec says not to retry that. CONNECTING means a retry is already in
+          // flight, so say so and wait rather than tearing the terminal down.
+          if (es.readyState === EventSource.CLOSED || reconnects >= MAX_RECONNECTS) {
+            es.close();
+            setApplying(false);
+            setAptOutput(prev => [
+              ...(prev || []),
+              "",
+              "> Lost the connection to this update's output.",
+              "> The update itself is unaffected and continues on the server —",
+              "> reopen this page to see how it finished.",
+            ]);
+            setMessage({
+              text: "Lost the connection to the update's output — the update itself is still running on the server",
+              type: "warning",
+            });
+            return;
+          }
+          reconnects += 1;
+          replaying = true;
+          setAptOutput(prev => [
+            ...(prev || []),
+            `> Connection interrupted — reconnecting (${reconnects}/${MAX_RECONNECTS})…`,
+          ]);
         };
       } else {
         // Fallback: synchronous response (old behavior)
@@ -309,6 +355,10 @@ export default function Updates() {
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
               ? "bg-rust-500/10 text-rust-400 border-rust-500/20"
+              : message.type === "warning"
+              // Losing the output stream is not a failed update, and colouring
+              // it like one is exactly the confusion this page has to avoid.
+              ? "bg-warn-500/10 text-warn-400 border-warn-500/20"
               : "bg-danger-500/10 text-danger-400 border-danger-500/20"
           }`}
         >

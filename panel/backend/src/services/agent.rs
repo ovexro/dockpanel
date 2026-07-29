@@ -28,6 +28,15 @@ const MAX_LONG_CONNECTIONS: usize = 5;
 /// Maximum response size from agent (50MB).
 const MAX_RESPONSE_SIZE: usize = 50 * 1024 * 1024;
 
+/// Effectively-disabled total timeout for streamed remote requests.
+///
+/// reqwest only offers a *total* per-request timeout, and the client default
+/// (60s) is far shorter than a legitimate streamed `apt-get upgrade`. There is
+/// no per-request "no timeout", so it is pushed out of reach and the real bound
+/// becomes the idle watchdog in [`drive_idle_bounded`] — which is the correct
+/// thing to measure for a stream anyway.
+const STREAM_TOTAL_TIMEOUT_SECS: u64 = 24 * 60 * 60;
+
 #[derive(Debug)]
 pub enum AgentError {
     Connection(String),
@@ -103,6 +112,46 @@ impl CircuitBreaker {
             .unwrap_or_default()
             .as_secs();
         self.last_failure_time.store(now, Ordering::Relaxed);
+    }
+}
+
+/// Drives a streaming-NDJSON future under an **idle** deadline rather than a
+/// total-runtime one.
+///
+/// `ticks` is bumped by the caller's wrapped line callback. The watchdog arms a
+/// fresh `idle_timeout_secs` window each time round the loop and only gives up
+/// if the counter did not move across a whole window — so an operation that is
+/// slow but still talking runs to completion, while one that has genuinely
+/// wedged still fails in bounded time.
+///
+/// The callback must do the bumping because this layer never sees the lines:
+/// `request_ndjson_inner` parses them and hands them straight to `on_line`.
+async fn drive_idle_bounded<Fut>(
+    idle_timeout_secs: u64,
+    ticks: Arc<AtomicU64>,
+    fut: Fut,
+) -> Result<(), AgentError>
+where
+    Fut: std::future::Future<Output = Result<(), AgentError>>,
+{
+    tokio::pin!(fut);
+    let idle = Duration::from_secs(idle_timeout_secs);
+
+    loop {
+        let before = ticks.load(Ordering::Relaxed);
+        tokio::select! {
+            // Biased so a future that is ready in the same tick as the timer
+            // reports its own result instead of being called idle.
+            biased;
+            result = &mut fut => return result,
+            _ = tokio::time::sleep(idle) => {
+                if ticks.load(Ordering::Relaxed) == before {
+                    return Err(AgentError::Request(format!(
+                        "agent stream produced no output for {idle_timeout_secs}s"
+                    )));
+                }
+            }
+        }
     }
 }
 
@@ -378,11 +427,20 @@ impl AgentClient {
     /// POST with streaming NDJSON response. Reads the agent response body frame-by-frame,
     /// parses newline-delimited JSON, and calls `on_line` for each parsed JSON value.
     /// Used for long-running operations that stream output (e.g. apt updates).
+    ///
+    /// `idle_timeout_secs` bounds **silence, not total runtime** — the clock is
+    /// rearmed every time a line arrives. This was a flat cap on the whole
+    /// operation, which cannot be set correctly for a stream: `apt-get upgrade`
+    /// finishes in 40s on this box and can legitimately run for the better part
+    /// of an hour on a slow link with a full release of packages, so the old
+    /// 300s ceiling simply failed the long ones while apt carried on
+    /// underneath and the operator was told the update had failed. How long the
+    /// work takes is not evidence of anything; going quiet is.
     pub async fn post_long_ndjson<F>(
         &self,
         path: &str,
         body: Option<serde_json::Value>,
-        timeout_secs: u64,
+        idle_timeout_secs: u64,
         on_line: F,
     ) -> Result<(), AgentError>
     where
@@ -393,12 +451,21 @@ impl AgentClient {
             AgentError::Connection(format!("long operation semaphore closed: {e}"))
         })?;
 
-        let result = tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
-            self.request_ndjson_inner(path, body, on_line),
+        let ticks = Arc::new(AtomicU64::new(0));
+        let probe = {
+            let ticks = ticks.clone();
+            move |json: serde_json::Value| {
+                ticks.fetch_add(1, Ordering::Relaxed);
+                on_line(json);
+            }
+        };
+
+        let result = drive_idle_bounded(
+            idle_timeout_secs,
+            ticks,
+            self.request_ndjson_inner(path, body, probe),
         )
-        .await
-        .map_err(|_| AgentError::Request(format!("agent request timed out after {timeout_secs}s")))?;
+        .await;
 
         match &result {
             Ok(_) => self.cb.record_success(),
@@ -805,11 +872,14 @@ impl RemoteAgentClient {
 
     /// POST with streaming NDJSON response (remote). Reads response chunks and
     /// calls `on_line` for each parsed JSON line. Used for streamed operations.
+    ///
+    /// As with the local client, `idle_timeout_secs` bounds silence rather than
+    /// total runtime — see [`AgentClient::post_long_ndjson`].
     pub async fn post_long_ndjson<F>(
         &self,
         path: &str,
         body: Option<serde_json::Value>,
-        timeout_secs: u64,
+        idle_timeout_secs: u64,
         on_line: F,
     ) -> Result<(), AgentError>
     where
@@ -820,57 +890,74 @@ impl RemoteAgentClient {
             AgentError::Connection(format!("connection semaphore closed: {e}"))
         })?;
 
+        let ticks = Arc::new(AtomicU64::new(0));
+        let probe = {
+            let ticks = ticks.clone();
+            move |json: serde_json::Value| {
+                ticks.fetch_add(1, Ordering::Relaxed);
+                on_line(json);
+            }
+        };
+
         let url = format!("{}{}", self.base_url, path);
         let mut req = self.http.post(&url)
             .header("authorization", format!("Bearer {}", self.token))
-            .timeout(Duration::from_secs(timeout_secs));
+            .timeout(Duration::from_secs(STREAM_TOTAL_TIMEOUT_SECS));
 
         if let Some(b) = body {
             req = req.json(&b);
         }
 
-        let result = req.send().await;
+        let streamed = async move {
+            let resp = req.send().await
+                .map_err(|e| AgentError::Connection(e.to_string()))?;
 
-        match result {
-            Ok(resp) => {
-                self.cb.record_success();
-                let status = resp.status();
-                if !status.is_success() {
-                    let bytes = resp.bytes().await
-                        .map_err(|e| AgentError::Response(e.to_string()))?;
-                    let msg = String::from_utf8_lossy(&bytes).to_string();
-                    return Err(AgentError::Status(status.as_u16(), msg));
-                }
+            let status = resp.status();
+            if !status.is_success() {
+                let bytes = resp.bytes().await
+                    .map_err(|e| AgentError::Response(e.to_string()))?;
+                let msg = String::from_utf8_lossy(&bytes).to_string();
+                return Err(AgentError::Status(status.as_u16(), msg));
+            }
 
-                // Stream response chunks
-                let mut buf = String::new();
-                let mut stream = resp.bytes_stream();
-                use futures::StreamExt;
-                while let Some(chunk) = stream.next().await {
-                    let chunk = chunk.map_err(|e| AgentError::Response(e.to_string()))?;
-                    buf.push_str(&String::from_utf8_lossy(&chunk));
-                    while let Some(pos) = buf.find('\n') {
-                        let line = &buf[..pos];
-                        if !line.is_empty() {
-                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-                                on_line(json);
-                            }
+            // Stream response chunks
+            let mut buf = String::new();
+            let mut stream = resp.bytes_stream();
+            use futures::StreamExt;
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|e| AgentError::Response(e.to_string()))?;
+                buf.push_str(&String::from_utf8_lossy(&chunk));
+                while let Some(pos) = buf.find('\n') {
+                    let line = &buf[..pos];
+                    if !line.is_empty() {
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                            probe(json);
                         }
-                        buf = buf[pos + 1..].to_string();
                     }
+                    buf = buf[pos + 1..].to_string();
                 }
-                if !buf.trim().is_empty() {
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(buf.trim()) {
-                        on_line(json);
-                    }
+            }
+            if !buf.trim().is_empty() {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(buf.trim()) {
+                    probe(json);
                 }
-                Ok(())
             }
-            Err(e) => {
-                self.cb.record_failure();
-                Err(AgentError::Connection(e.to_string()))
-            }
+            Ok(())
+        };
+
+        let result = drive_idle_bounded(idle_timeout_secs, ticks, streamed).await;
+
+        // Success is now recorded only once the stream has actually completed.
+        // The old code called record_success() the moment the response headers
+        // arrived, so a connection that died halfway through the body still
+        // counted as a healthy round-trip to the circuit breaker.
+        match &result {
+            Ok(_) => self.cb.record_success(),
+            Err(AgentError::Connection(_)) => self.cb.record_failure(),
+            _ => {}
         }
+
+        result
     }
 }
 
@@ -941,19 +1028,21 @@ impl AgentHandle {
         }
     }
 
+    /// `idle_timeout_secs` bounds silence, not total runtime — see
+    /// [`AgentClient::post_long_ndjson`].
     pub async fn post_long_ndjson<F>(
         &self,
         path: &str,
         body: Option<serde_json::Value>,
-        timeout_secs: u64,
+        idle_timeout_secs: u64,
         on_line: F,
     ) -> Result<(), AgentError>
     where
         F: Fn(serde_json::Value) + Send + 'static,
     {
         match self {
-            Self::Local(c) => c.post_long_ndjson(path, body, timeout_secs, on_line).await,
-            Self::Remote(c) => c.post_long_ndjson(path, body, timeout_secs, on_line).await,
+            Self::Local(c) => c.post_long_ndjson(path, body, idle_timeout_secs, on_line).await,
+            Self::Remote(c) => c.post_long_ndjson(path, body, idle_timeout_secs, on_line).await,
         }
     }
 

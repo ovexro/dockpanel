@@ -437,6 +437,27 @@ if command -v apt-get &> /dev/null; then
 DPkg::Lock::Timeout "300";
 APT_EOF
 
+    # v2.48.1: exclude the agent from needrestart's auto-restart list. A
+    # panel-driven update runs apt from inside dockpanel-agent; because the
+    # agent links libc, an ordinary libc6 upgrade made needrestart restart
+    # dockpanel-agent.service mid-run and kill the process streaming the
+    # update's own progress. apt itself survived (it runs in a systemd-run
+    # transient scope), but the NDJSON stream died before its final
+    # {"type":"done"} line, so the panel reported a clean 16-package upgrade
+    # as "Update completed with errors" (measured on this box, s286).
+    # Everything else still restarts — only the reporting channel is spared.
+    if [ -d /etc/needrestart ]; then
+        mkdir -p /etc/needrestart/conf.d
+        # Subscript assignment ADDS to the hash the main needrestart.conf
+        # already filled in; `$nrconf{override_rc} = {...}` would replace it
+        # and drop the distro's own exclusions.
+        cat > /etc/needrestart/conf.d/99-dockpanel.conf << 'NR_EOF'
+# Managed by DockPanel — do not edit; rewritten by setup.sh/update.sh.
+$nrconf{override_rc}{qr(^dockpanel-agent)} = 0;
+1;
+NR_EOF
+    fi
+
     # v2.8.19: pre-v2.8.19 cloudflared installs wrote a literal
     # `$(lsb_release -cs)` into /etc/apt/sources.list.d/cloudflared.list
     # (single-quoted bash didn't expand the substitution). Once landed, the

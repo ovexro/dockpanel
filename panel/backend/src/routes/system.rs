@@ -142,6 +142,24 @@ pub async fn updates_list(
     Ok(Json(data))
 }
 
+/// How long an update stream may stay *silent* before it is declared wedged.
+///
+/// This is not a budget for the update — apt is allowed to take as long as it
+/// takes. It only has to say something every ten minutes, which comfortably
+/// covers the quietest legitimate stretches (unpacking a large package,
+/// `Generating locales`, a slow mirror mid-download) while still failing a
+/// genuinely hung run in bounded time.
+const UPDATE_STREAM_IDLE_TIMEOUT_SECS: u64 = 600;
+
+/// How long a finished update's log is kept for late SSE reconnects.
+///
+/// The browser replays the full history on reconnect, so this window is what
+/// lets an operator who lost the connection — closed the laptop, changed
+/// network, hit the tail of a service restart — come back and still find out
+/// whether the update succeeded. At 60s it was shorter than the gap it needed
+/// to cover.
+const UPDATE_LOG_RETENTION_SECS: u64 = 900;
+
 /// POST /api/system/updates/apply — Apply package updates (admin only).
 /// Returns install_id for SSE progress tracking via /api/services/install/{id}/log.
 /// Proxies to agent which runs apt with streaming NDJSON output, forwarded
@@ -232,7 +250,15 @@ pub async fn updates_apply(
             }
         };
 
-        match agent.post_long_ndjson("/system/updates/apply", Some(body), 300, emit_line).await {
+        match agent
+            .post_long_ndjson(
+                "/system/updates/apply",
+                Some(body),
+                UPDATE_STREAM_IDLE_TIMEOUT_SECS,
+                emit_line,
+            )
+            .await
+        {
             Ok(()) => {
                 activity::log_activity(&db, user_id, &email, "system.updates.apply",
                     Some("system"), Some("packages"), None, None).await;
@@ -243,7 +269,7 @@ pub async fn updates_apply(
             }
         }
 
-        tokio::time::sleep(Duration::from_secs(60)).await;
+        tokio::time::sleep(Duration::from_secs(UPDATE_LOG_RETENTION_SECS)).await;
         logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&install_id);
     });
 

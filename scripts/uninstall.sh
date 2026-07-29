@@ -98,6 +98,12 @@ rm -rf /var/www/acme
 # Remove tmpfiles.d config
 rm -f /etc/tmpfiles.d/dockpanel.conf
 
+# Remove the package-manager drop-ins setup.sh/install-agent.sh wrote. Leaving
+# the needrestart override behind would keep excluding a dockpanel-agent that
+# no longer exists, and silently weaken needrestart for whatever replaces it.
+rm -f /etc/needrestart/conf.d/99-dockpanel.conf
+rm -f /etc/apt/apt.conf.d/99-dockpanel-lock-wait.conf
+
 # Remove DockPanel crontab entries
 (crontab -l 2>/dev/null | grep -v "dockpanel" | crontab -) 2>/dev/null || true
 

@@ -70,6 +70,29 @@ echo "[1/7] Architecture: $ARCH_LABEL"
 detect_pkg_manager() {
     if command -v apt-get &> /dev/null; then
         PKG_MGR="apt"
+        # Both of these exist on the panel box via setup.sh, and a fleet member
+        # runs exactly the same agent-driven apt operations, so it needs them
+        # too — this function had neither.
+        #
+        # Lock timeout: without it, any agent install/update racing
+        # unattended-upgrades dies on "Could not get lock /var/lib/dpkg/lock-frontend".
+        mkdir -p /etc/apt/apt.conf.d
+        cat > /etc/apt/apt.conf.d/99-dockpanel-lock-wait.conf << 'APT_EOF'
+DPkg::Lock::Timeout "300";
+APT_EOF
+        # needrestart: the agent links libc, so a plain libc6 upgrade puts
+        # dockpanel-agent.service on needrestart's restart list — killing the
+        # process that is streaming that very update's progress back to the
+        # panel, which then reports a clean update as failed. Exclude only the
+        # agent; every other service still restarts.
+        if [ -d /etc/needrestart ]; then
+            mkdir -p /etc/needrestart/conf.d
+            cat > /etc/needrestart/conf.d/99-dockpanel.conf << 'NR_EOF'
+# Managed by DockPanel — do not edit; rewritten by setup.sh/update.sh.
+$nrconf{override_rc}{qr(^dockpanel-agent)} = 0;
+1;
+NR_EOF
+        fi
     elif command -v dnf &> /dev/null; then
         PKG_MGR="dnf"
     elif command -v yum &> /dev/null; then

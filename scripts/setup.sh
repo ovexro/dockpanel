@@ -273,6 +273,33 @@ preflight_checks() {
 }
 
 # ── Package manager ──────────────────────────────────────────────────────
+# Panel-driven updates run apt from inside dockpanel-agent. apt's needrestart
+# hook restarts every unit linked against an upgraded library — and since the
+# agent links libc, an ordinary libc6 upgrade puts dockpanel-agent.service on
+# that list. needrestart then kills the very process that is streaming the
+# update's own progress. The apt transaction survives (safe_command_unsandboxed
+# runs it in a systemd-run transient scope, so it is not a child of the agent),
+# but the NDJSON stream dies before its final {"type":"done"} line, and the
+# panel reports a fully clean update as "Update completed with errors".
+#
+# Excluding only the agent keeps every other service restarting normally, which
+# is the part that actually matters for security. The agent picks up the new
+# libraries on the next reboot or panel-initiated agent restart.
+dockpanel_needrestart_override() {
+    [ -d /etc/needrestart ] || return 0
+    mkdir -p /etc/needrestart/conf.d
+    # Subscript assignment ADDS to the hash the main needrestart.conf already
+    # filled in; writing `$nrconf{override_rc} = {...}` here would replace it
+    # and silently drop the distro's own exclusions (dbus, display managers…).
+    # No `.service` suffix in the regex — needrestart's own defaults are bare
+    # prefixes, and this matches whether or not the suffix is present.
+    cat > /etc/needrestart/conf.d/99-dockpanel.conf << 'NR_EOF'
+# Managed by DockPanel — do not edit; rewritten by setup.sh/update.sh.
+$nrconf{override_rc}{qr(^dockpanel-agent)} = 0;
+1;
+NR_EOF
+}
+
 detect_pkg_manager() {
     if command -v apt-get &> /dev/null; then
         PKG_MGR="apt"
@@ -285,6 +312,7 @@ detect_pkg_manager() {
         cat > /etc/apt/apt.conf.d/99-dockpanel-lock-wait.conf << 'APT_EOF'
 DPkg::Lock::Timeout "300";
 APT_EOF
+        dockpanel_needrestart_override
     elif command -v dnf &> /dev/null; then
         PKG_MGR="dnf"
     elif command -v yum &> /dev/null; then

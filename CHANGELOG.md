@@ -6,6 +6,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.48.1] - 2026-07-29
+
+A clean 16-package upgrade reported itself as failed, because the update killed
+the process that was reporting on it.
+
+### Fixed
+
+- **The agent no longer gets restarted out from under its own update.** A
+  panel-driven update runs apt from inside `dockpanel-agent`; because the agent
+  links libc, an ordinary `libc6` upgrade put `dockpanel-agent.service` on
+  needrestart's restart list. needrestart then SIGTERMed the process that was
+  streaming that very update's progress. apt itself was untouched — it runs in a
+  `systemd-run` transient scope — but the NDJSON stream died before its final
+  `done` line, so the panel reported a fully successful upgrade as *"Update
+  completed with errors"*.
+
+  needrestart already declines to restart the unit that invoked it, precisely to
+  avoid this; the escape hatch that lifts apt out of the agent's sandbox also
+  lifts it out of the agent's cgroup, so that protection never applied.
+  `setup.sh`, `update.sh` and `install-agent.sh` now drop a needrestart override
+  excluding only `dockpanel-agent` — every other service still restarts, which is
+  the part that matters for security. The agent picks up new libraries on the
+  next reboot or agent restart.
+
+- **Streamed operations are now bounded by silence, not by total runtime.** The
+  update stream carried a flat 300s cap, and the remote client additionally
+  inherited reqwest's 60s total-request timeout. Neither can be set correctly for
+  a stream: `apt-get upgrade` finishes in 40s on a fast box and can legitimately
+  run far longer on a slow link with a full release of packages, so long updates
+  were failed while apt carried on underneath. The bound is now 10 minutes of
+  *no output*, rearmed on every line.
+
+- **The update terminal reconnects instead of silently going dead.** A dropped
+  SSE connection closed the stream and left the page frozen mid-output with no
+  explanation. The backend already replays the whole log on reconnect, so the
+  terminal now retries, rebuilds itself from the replay, and — if it really
+  cannot reattach — says so in amber, making clear the update is still running
+  on the server rather than implying it failed.
+
+- Finished updates' logs are kept 15 minutes instead of 60 seconds, so an
+  operator who lost the connection can still come back and find the result.
+
+- `install-agent.sh` also now writes the apt lock-wait drop-in that `setup.sh`
+  has always written, so fleet members stop failing agent-driven installs that
+  race unattended-upgrades.
+
+- The remote client records a successful round-trip only once a stream has
+  actually completed; it previously counted one the moment response headers
+  arrived, so a connection that died mid-body still looked healthy to the
+  circuit breaker.
+
 ## [2.48.0] - 2026-07-28
 
 Fourteen settings the panel read but no screen could set — including the OAuth
