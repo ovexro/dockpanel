@@ -1,7 +1,28 @@
 #[cfg(test)]
 mod tests {
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    /// Serialises the tests that mutate `BASE_URL` / `CORS_ORIGINS`.
+    ///
+    /// Environment variables are process-global and Rust runs these tests on
+    /// parallel threads of a single process, so without this lock one test's
+    /// `remove_var` lands between another's `set_var` and its assertion. That
+    /// is precisely how `base_url_from_env` failed a CI run while passing every
+    /// time it was run on its own — the worst shape of flake, because it
+    /// implicates whatever commit happened to be under it.
+    ///
+    /// The guard is recovered from poisoning: one failing test should report
+    /// its own assertion, not turn every later test into a poison error.
+    fn env_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn base_url_defaults_to_empty() {
+        let _guard = env_lock();
         // This is the bug we caught: BASE_URL used to default to "https://panel.example.com"
         // which caused Secure cookies over HTTP. Verify the fix.
         unsafe { std::env::remove_var("BASE_URL"); }
@@ -12,6 +33,7 @@ mod tests {
 
     #[test]
     fn base_url_from_env() {
+        let _guard = env_lock();
         unsafe { std::env::set_var("BASE_URL", "https://panel.example.com"); }
         let url = std::env::var("BASE_URL").unwrap_or_default();
         assert_eq!(url, "https://panel.example.com");
@@ -21,6 +43,7 @@ mod tests {
 
     #[test]
     fn cors_empty_when_no_config() {
+        let _guard = env_lock();
         unsafe {
             std::env::remove_var("CORS_ORIGINS");
             std::env::remove_var("BASE_URL");
