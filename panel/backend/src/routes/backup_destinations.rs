@@ -106,13 +106,36 @@ pub async fn update(
 ) -> Result<Json<BackupDestination>, ApiError> {
 
 
-    // If config has masked secrets, merge with existing (already-encrypted) values
-    let mut new_config = body.config.clone();
-    if let Some(ref cfg) = new_config {
-        if let Some(obj) = cfg.as_object() {
-            let has_masked = obj.values().any(|v| v.as_str() == Some("********"));
-            if has_masked {
-                // Load existing config (already encrypted) and merge
+    // ENCRYPT FIRST, THEN carry the masked values across.
+    //
+    // The order matters and the other one is silently destructive. This used to
+    // merge first — copying the stored, ALREADY-ENCRYPTED secret into the config
+    // and then handing the whole object to `encrypt_config_secrets`, which skips
+    // only "" and the mask sentinel. A stored ciphertext is neither, so it was
+    // encrypted a SECOND time. One decrypt on the way out then yields ciphertext,
+    // and the destination authenticates with gibberish while the row looks fine.
+    //
+    // Nothing had ever exercised it: this endpoint had no caller in the panel at
+    // all until the Destinations tab gained an Edit button (GH #93), so the very
+    // first edit of a destination would have corrupted its credential.
+    let encrypted_config = match body.config {
+        None => None,
+        Some(ref incoming) => {
+            // Whatever arrived as plaintext gets encrypted exactly once. Masked
+            // fields are left as the sentinel by design.
+            let mut cfg = encrypt_config_secrets(incoming, &state.config.jwt_secret)?;
+
+            let still_masked: Vec<String> = cfg
+                .as_object()
+                .map(|o| {
+                    o.iter()
+                        .filter(|(_, v)| v.as_str() == Some("********"))
+                        .map(|(k, _)| k.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            if !still_masked.is_empty() {
                 let existing: Option<(serde_json::Value,)> =
                     sqlx::query_as("SELECT config FROM backup_destinations WHERE id = $1")
                         .bind(id)
@@ -120,26 +143,11 @@ pub async fn update(
                         .await
                         .map_err(|e| internal_error("update backup_destinations", e))?;
                 if let Some((existing_cfg,)) = existing {
-                    let mut merged = existing_cfg;
-                    if let Some(merged_obj) = merged.as_object_mut() {
-                        for (k, v) in obj {
-                            if v.as_str() != Some("********") {
-                                merged_obj.insert(k.clone(), v.clone());
-                            }
-                            // If masked ("********"), keep the existing encrypted value
-                        }
-                    }
-                    new_config = Some(merged);
+                    carry_masked_secrets(&mut cfg, &existing_cfg, &still_masked);
                 }
             }
+            Some(cfg)
         }
-    }
-
-    // Encrypt sensitive fields in the new config before storing
-    let encrypted_config = if let Some(cfg) = new_config {
-        Some(encrypt_config_secrets(&cfg, &state.config.jwt_secret)?)
-    } else {
-        None
     };
 
     let dest: BackupDestination = sqlx::query_as(
@@ -259,6 +267,30 @@ pub fn agent_destination_payload(dtype: &str, config: &serde_json::Value) -> ser
     d
 }
 
+/// Replace each still-masked key in `cfg` with the value already stored for it,
+/// verbatim.
+///
+/// "Verbatim" is the whole point: the stored value is ciphertext, and putting it
+/// through the encryptor again is exactly the bug this function exists to make
+/// impossible to write by accident. A key the caller masked but which the stored
+/// config does not have is dropped rather than left as the sentinel, so the mask
+/// can never reach the agent as if it were a credential.
+fn carry_masked_secrets(
+    cfg: &mut serde_json::Value,
+    existing: &serde_json::Value,
+    masked_keys: &[String],
+) {
+    let (Some(obj), Some(stored)) = (cfg.as_object_mut(), existing.as_object()) else {
+        return;
+    };
+    for k in masked_keys {
+        match stored.get(k) {
+            Some(v) => { obj.insert(k.clone(), v.clone()); }
+            None => { obj.remove(k); }
+        }
+    }
+}
+
 /// Sensitive keys within the backup destination config JSON.
 const CONFIG_SENSITIVE_KEYS: &[&str] = &["secret_key", "password"];
 
@@ -298,4 +330,77 @@ fn decrypt_config_secrets(config: &serde_json::Value) -> serde_json::Value {
         }
     }
     cfg
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const JWT: &str = "test-jwt-secret-at-least-32-bytes-long-for-hkdf";
+
+    /// The shape an edit takes when the operator changed the bucket but left the
+    /// secret masked — which is what the Destinations tab sends for every edit
+    /// that does not rotate the credential.
+    #[test]
+    fn a_masked_secret_is_carried_across_not_re_encrypted() {
+        let stored = encrypt_config_secrets(
+            &serde_json::json!({ "bucket": "old", "secret_key": "s3cr3t" }),
+            JWT,
+        )
+        .unwrap();
+        let stored_cipher = stored["secret_key"].as_str().unwrap().to_string();
+        assert_ne!(stored_cipher, "s3cr3t", "precondition: it really was encrypted");
+
+        // What the UI sends back: new bucket, masked secret.
+        let incoming = serde_json::json!({ "bucket": "new", "secret_key": "********" });
+        let mut cfg = encrypt_config_secrets(&incoming, JWT).unwrap();
+        assert_eq!(cfg["secret_key"], "********", "the sentinel is not encrypted");
+
+        carry_masked_secrets(&mut cfg, &stored, &["secret_key".to_string()]);
+
+        assert_eq!(cfg["bucket"], "new");
+        // The bug: merging BEFORE encrypting fed this ciphertext back through the
+        // encryptor, so one decrypt returned ciphertext and the destination
+        // authenticated with gibberish. It must come out byte-identical.
+        assert_eq!(cfg["secret_key"].as_str().unwrap(), stored_cipher);
+        assert_eq!(
+            crate::services::secrets_crypto::decrypt_credential(&stored_cipher, JWT).unwrap(),
+            "s3cr3t",
+            "and one decrypt must still recover the original"
+        );
+    }
+
+    #[test]
+    fn a_rotated_secret_replaces_the_stored_one() {
+        let stored = encrypt_config_secrets(&serde_json::json!({ "secret_key": "old" }), JWT).unwrap();
+        let mut cfg =
+            encrypt_config_secrets(&serde_json::json!({ "secret_key": "new" }), JWT).unwrap();
+        // Nothing is masked, so nothing is carried.
+        carry_masked_secrets(&mut cfg, &stored, &[]);
+        let got = crate::services::secrets_crypto::decrypt_credential(
+            cfg["secret_key"].as_str().unwrap(),
+            JWT,
+        )
+        .unwrap();
+        assert_eq!(got, "new");
+    }
+
+    #[test]
+    fn a_mask_with_nothing_stored_is_dropped_never_passed_through() {
+        // Otherwise "********" would reach the agent as the literal credential.
+        let mut cfg = serde_json::json!({ "host": "h", "password": "********" });
+        carry_masked_secrets(&mut cfg, &serde_json::json!({ "host": "h" }), &["password".to_string()]);
+        assert!(cfg.get("password").is_none());
+    }
+
+    #[test]
+    fn the_agent_payload_carries_its_type() {
+        // Only the `type` fold is asserted here. The decrypt half reads JWT_SECRET
+        // from the process environment, and setting that from a test would race
+        // every other test in the binary — it is covered by the round-trip above
+        // and by the live drive on a real box.
+        let payload = agent_destination_payload("sftp", &serde_json::json!({ "host": "h" }));
+        assert_eq!(payload["type"], "sftp");
+        assert_eq!(payload["host"], "h");
+    }
 }

@@ -300,3 +300,18 @@ jobs:
       # Connection decrypted and reported success.
       - name: Both halves of a feature must be connected to each other
         run: bash tests/backup-destinations-git-env-pin-e2e.sh
+
+  agent-sandbox-paths:
+    name: Agent Sandbox Paths
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pure source analysis. The agent runs ProtectSystem=strict, so a path it
+      # writes but does not declare in ReadWritePaths fails at the KERNEL with
+      # "Read-only file system" — the feature never works, on any install, and
+      # nothing in its own code looks wrong. That has now shipped three times
+      # (/etc/apt, /var/spool/cron, /etc/ssh), each found by a user. This derives
+      # the write paths from the source instead of restating them.
+      - name: A path the agent writes must be a path the sandbox allows
+        run: bash tests/agent-sandbox-paths-pin-e2e.sh

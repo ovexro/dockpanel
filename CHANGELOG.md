@@ -6,6 +6,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.48.4] - 2026-07-30
+
+Two defects that only became visible once something finally exercised the code:
+one endpoint that had never had a caller, and one feature nobody could see the
+error from.
+
+### Fixed
+
+- **Editing a backup destination no longer destroys its stored credential.**
+  `PUT /api/backup-destinations/{id}` merged the mask sentinel by copying the
+  **already-encrypted** value into the config and then encrypting the whole
+  object again. `encrypt_config_secrets` skips only `""` and `"********"`, and a
+  stored ciphertext is neither — so the secret was encrypted twice, one decrypt
+  on the way out returned ciphertext, and the destination authenticated with
+  gibberish while the row looked perfectly normal.
+
+  It had never fired because that endpoint had no caller anywhere in the panel
+  until v2.48.3 gave the Destinations tab an Edit button. The first edit of any
+  destination would have corrupted it. The order is now inverted — encrypt what
+  arrived, then carry masked fields across verbatim — and a masked field with
+  nothing stored behind it is dropped rather than passed through as the literal
+  string `********`.
+
+- **SSH hardening works at all** (reported on #92). Disable root login, disable
+  password authentication and change SSH port all rewrite
+  `/etc/ssh/sshd_config`, and `/etc/ssh` was missing from the agent unit's
+  `ReadWritePaths` while `ProtectSystem=strict` is in force. Every one of them
+  failed with `Failed to write sshd_config: Read-only file system (os error 30)`
+  and the panel answered 502 — on **every install since the sandbox landed**.
+
+  This is the third time this exact enumeration miss has shipped (`/etc/apt`,
+  `/var/spool/cron`, now `/etc/ssh`), so the unit now carries a regression pin
+  rather than another comment: `tests/agent-sandbox-paths-pin-e2e.sh` derives the
+  paths each `safe_command`-adjacent writer touches and fails when one is absent
+  from the unit. Updating reinstalls the unit, so `scripts/update.sh` is enough.
+
+  Worth noting the failure was only *legible* because v2.48.2 stopped flattening
+  the agent's message; before that it read "Agent offline".
+
 ## [2.48.3] - 2026-07-30
 
 Two reports, one shape: a feature whose halves were both present and were not
