@@ -1,6 +1,6 @@
 # DockPanel Feature Manifest
 
-> **Version**: v2.48.6 | **Total**: 60+ major features, ~285 capabilities
+> **Version**: v2.49.0 | **Total**: 60+ major features, ~285 capabilities
 >
 > This file is the single source of truth for what DockPanel offers.
 > Update it whenever features are added, changed, or removed.
@@ -15,7 +15,7 @@
 
 | Feature | Description | Backend | Agent | Frontend | DB Tables |
 |---------|-------------|---------|-------|----------|-----------|
-| **Sites** | Static, PHP (8.1-8.4), Node.js, Python sites with nginx. Domain rename, auto-firewall for proxy ports, Laravel auto-migrations | `routes/sites.rs`, `ssl.rs`, `files.rs`, `deploy.rs` | `nginx.rs`, `php.rs`, `ssl.rs`, `files.rs`, `cms.rs` | `Sites.tsx`, `SiteDetail.tsx`, `Files.tsx` | `sites` |
+| **Sites** | Static, PHP (8.1–8.5), Node.js, Python sites with nginx. Domain rename, auto-firewall for proxy ports, Laravel auto-migrations | `routes/sites.rs`, `ssl.rs`, `files.rs`, `deploy.rs` | `nginx.rs`, `php.rs`, `ssl.rs`, `files.rs`, `cms.rs` | `Sites.tsx`, `SiteDetail.tsx`, `Files.tsx` | `sites` |
 | **Databases** | MySQL/PostgreSQL via Docker, SQL browser, schema viewer, password reset | `routes/databases.rs` | `database.rs` | `Databases.tsx` | `databases` |
 | **Backups** | Scheduled backups, S3/SFTP/B2/GCS remote storage, one-click restore | `routes/backups.rs`, `backup_schedules.rs`, `backup_destinations.rs` | `backups.rs`, `remote_backup.rs` | `Backups.tsx` | `backups`, `backup_schedules`, `backup_destinations` |
 | **Backup Orchestrator** | DB/volume/site backups, AES-256 encryption, restore verification, policies, health dashboard, auto-verifier, **fleet-wide unified view across all servers with server+kind filters**, **end-to-end restore drills (site/db/volume), Restore Confidence SLA card, chain-of-trust JSON+PDF report across site/db/volume backups with per-arch sha256-pinned typst (v2.8.2)** | `routes/backup_orchestrator.rs` | `database_backup.rs`, `volume_backup.rs`, `encryption.rs`, `backup_verify.rs`, `backup_drills.rs`, `chain_report.rs` | `BackupOrchestrator.tsx` | `backup_policies`, `database_backups`, `volume_backups`, `backup_verifications`, `backup_drills` |
@@ -215,7 +215,7 @@ honest:
 | Full-stack RAM (with bundled PostgreSQL) | ~109 MB | measured | 2026-07-27 |
 | App templates | 153 | derived | every commit |
 | HTTP routes | 811 (529 backend + 282 agent) | derived | every commit |
-| Regression-pin assertions | 585 (20 suites) | derived | every commit |
+| Regression-pin assertions | 642 (22 suites) | derived | every commit |
 | Frontend pages | 51 | derived | every commit |
 | DB migrations | 98 | derived | every commit |
 | Supervised background services | 15 | derived | every commit |

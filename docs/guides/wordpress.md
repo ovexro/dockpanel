@@ -79,13 +79,20 @@ DockPanel includes a WordPress Toolkit (sidebar > WordPress) that provides:
 
 **Symptom**: Site creation fails with a message about PHP-FPM socket not found.
 
-**Fix**: Install PHP from the panel or CLI:
+**Fix**: Install the version from the **PHP Version** control itself — on the
+create-site form, or on an existing site's detail page. Since v2.49.0 it lists
+what this server has and offers to install anything it does not, streaming the
+install as it runs.
+
+The Settings → Services PHP tile is a different thing: it installs whatever
+version the distribution offers and takes no version argument, so it cannot be
+used to get a *specific* one.
+
+From the CLI:
 
 ```bash
-# From the CLI
+dockpanel php list
 dockpanel php install 8.3
-
-# Or from the panel: Settings > Service Installers > PHP-FPM
 ```
 
 DockPanel validates that PHP-FPM is available before writing the Nginx config and will tell you exactly which version to install.

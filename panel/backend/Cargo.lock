@@ -529,7 +529,7 @@ dependencies = [
 
 [[package]]
 name = "dockpanel-api"
-version = "2.48.6"
+version = "2.49.0"
 dependencies = [
  "aes-gcm",
  "argon2",

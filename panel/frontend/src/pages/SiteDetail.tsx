@@ -4,6 +4,8 @@ import { api } from "../api";
 import { formatDate } from "../utils/format";
 import { statusColors, runtimeLabelsDetailed as runtimeLabels } from "../constants";
 import { PrereqCallout, useDnsPrereq, prereqBlocks } from "../components/Prerequisite";
+import PhpVersionPicker from "../components/PhpVersionPicker";
+import { useAuth } from "../context/AuthContext";
 
 interface Site {
   id: string;
@@ -44,6 +46,7 @@ interface StagingInfo {
 export default function SiteDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [site, setSite] = useState<Site | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -62,6 +65,10 @@ export default function SiteDetail() {
   } = useDnsPrereq(site && !site.ssl_enabled ? site.domain : "", { autoPoll: true, debounceMs: 0 });
   const [switchingPhp, setSwitchingPhp] = useState(false);
   const [phpMessage, setPhpMessage] = useState("");
+  // What the picker is showing, which is not the same as what the site runs:
+  // an uninstalled version stays selected while its install callout is up, and
+  // only becomes the site's version once the switch actually goes through.
+  const [phpChoice, setPhpChoice] = useState("");
   const [savingLimits, setSavingLimits] = useState(false);
   const [limitsMessage, setLimitsMessage] = useState("");
   const [rateLimit, setRateLimit] = useState<string>("");
@@ -607,41 +614,49 @@ export default function SiteDetail() {
             <div className="px-5 py-4 grid grid-cols-3">
               <dt className="text-sm font-medium text-dark-200">PHP Version</dt>
               <dd className="text-sm col-span-2">
-                <div className="flex items-center gap-3">
-                  <select
-                    value={site.php_version || "8.3"}
-                    onChange={async (e) => {
-                      const newVersion = e.target.value;
-                      if (newVersion === site.php_version) return;
-                      setSwitchingPhp(true);
-                      setPhpMessage("");
-                      try {
-                        const updated = await api.put<Site>(`/sites/${id}/php`, { version: newVersion });
-                        setSite(updated);
-                        setPhpMessage(`Switched to PHP ${newVersion}`);
-                      } catch (err) {
-                        setPhpMessage(err instanceof Error ? err.message : "Switch failed");
-                      } finally {
-                        setSwitchingPhp(false);
-                      }
-                    }}
-                    disabled={switchingPhp}
-                    className="px-2 py-1 border border-dark-500 rounded-md text-sm bg-dark-800 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none disabled:opacity-50"
-                  >
-                    <option value="8.5">PHP 8.5</option>
-                    <option value="8.4">PHP 8.4</option>
-                    <option value="8.3">PHP 8.3</option>
-                    <option value="8.2">PHP 8.2</option>
-                    <option value="8.1">PHP 8.1</option>
-                  </select>
-                  {switchingPhp && (
-                    <span className="text-xs text-dark-200">Switching...</span>
-                  )}
-                  {phpMessage && (
-                    <span className={`text-xs ${phpMessage.includes("Switched") ? "text-rust-400" : "text-danger-400"}`}>
-                      {phpMessage}
-                    </span>
-                  )}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-3">
+                    {/* Picking a version this server does not have used to fire
+                        the switch anyway and surface the agent's refusal. The
+                        picker now knows, holds the selection back, and offers the
+                        install — then switches once the version really works. */}
+                    <PhpVersionPicker
+                      className="max-w-xs"
+                      value={phpChoice || site.php_version || "8.3"}
+                      canInstall={user?.role === "admin"}
+                      disabled={switchingPhp}
+                      onChange={async (newVersion, ready) => {
+                        setPhpChoice(newVersion);
+                        if (!ready || newVersion === site.php_version) return;
+                        setSwitchingPhp(true);
+                        setPhpMessage("");
+                        try {
+                          const updated = await api.put<Site>(`/sites/${id}/php`, { version: newVersion });
+                          setSite(updated);
+                          setPhpMessage(`Switched to PHP ${newVersion}`);
+                        } catch (err) {
+                          setPhpMessage(err instanceof Error ? err.message : "Switch failed");
+                          // Put the control back on what the site is actually
+                          // running. Leaving it on the version that just failed
+                          // states the switch happened, and — because the guard
+                          // above short-circuits when the selection already
+                          // equals the current version — makes retrying the same
+                          // version impossible without picking a third one first.
+                          setPhpChoice(site.php_version || "");
+                        } finally {
+                          setSwitchingPhp(false);
+                        }
+                      }}
+                    />
+                    {switchingPhp && (
+                      <span className="text-xs text-dark-200">Switching...</span>
+                    )}
+                    {phpMessage && (
+                      <span className={`text-xs ${phpMessage.includes("Switched") ? "text-rust-400" : "text-danger-400"}`}>
+                        {phpMessage}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </dd>
             </div>

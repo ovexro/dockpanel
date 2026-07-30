@@ -1,6 +1,6 @@
 [package]
 name = "dockpanel-agent"
-version = "2.48.6"
+version = "2.49.0"
 edition = "2024"
 
 [profile.release]

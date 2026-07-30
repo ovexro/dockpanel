@@ -36,6 +36,7 @@ interface MigrationRecord {
   id: string;
   source: string;
   status: string;
+  server_id: string | null;
   backup_path: string;
   inventory: Inventory | null;
   result: Record<string, unknown> | null;
@@ -49,6 +50,9 @@ interface ProgressStep {
   message?: string;
 }
 
+const fmtElapsed = (s: number) =>
+  s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+
 const fmtSize = (b: number) => {
   if (b > 1e9) return `${(b / 1e9).toFixed(1)} GB`;
   if (b > 1e6) return `${(b / 1e6).toFixed(1)} MB`;
@@ -58,7 +62,12 @@ const fmtSize = (b: number) => {
 
 export default function Migration() {
   const { user } = useAuth();
-  if (!user || user.role !== "admin") return <Navigate to="/" replace />;
+  // The admin redirect used to sit above these hooks. That was survivable while
+  // every hook was a `useState`, but this page now runs effects on mount, and a
+  // conditional return before them makes the hook count differ between the
+  // render where `user` is still loading and the one after it — React's
+  // "rendered more hooks than during the previous render". The guard moved
+  // below the hooks; the redirect is unchanged.
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [source, setSource] = useState("cpanel");
   const [backupPath, setBackupPath] = useState("");
@@ -69,31 +78,147 @@ export default function Migration() {
   const [selectedDbs, setSelectedDbs] = useState<Set<string>>(new Set());
   const [progress, setProgress] = useState<ProgressStep[]>([]);
   const [importing, setImporting] = useState(false);
+  const [analyzingId, setAnalyzingId] = useState<string | null>(null);
+  // When the run began, not when this tab started watching it — a resumed
+  // analysis has to show the age of the work, not the age of the page.
+  const [startedAt, setStartedAt] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
+  const [resumed, setResumed] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
+  // The mount fetch below and the Analyze button both want to own `analyzingId`.
+  // A fast click beats the fetch, and the resume would then quietly replace the
+  // run the operator just started with an older one — same page, same spinner,
+  // wrong migration. A ref, not state: the resume's callback closed over its
+  // render and would never see a state update made after it began.
+  const startedHere = useRef(false);
 
-  // Step 1: Analyze
+  // The analysis has finished on the server, one way or the other. Everything
+  // that used to happen inline after `await` happens here instead, because the
+  // record can now arrive from three places: the initial POST, the poller, or a
+  // run this tab did not start.
+  const settleAnalysis = (rec: MigrationRecord) => {
+    setMigration(rec);
+    setAnalyzingId(null);
+    setAnalyzing(false);
+    if (rec.status === "failed") {
+      const reason = (rec.result as { error?: string } | null)?.error;
+      setError(reason || "Analysis failed");
+      return;
+    }
+    if (rec.inventory) {
+      setSelectedSites(new Set(rec.inventory.sites.map((s) => s.domain)));
+      setSelectedDbs(new Set(rec.inventory.databases.map((d) => d.name)));
+    }
+    setStep(2);
+  };
+
+  // Step 1: Analyze — accepted, then polled.
+  //
+  // This used to hold one request open for the whole analysis, which is minutes
+  // for any real cPanel account. Every gateway in front of the panel gives up
+  // sooner than that, so the browser was shown a timeout — issue #91's `Request
+  // failed (524)`, which is this file's own fallback message rendering a
+  // Cloudflare error page that carried no JSON to read. The work always
+  // continued on the server; nothing was ever able to come back and say so.
   const handleAnalyze = async () => {
     if (!backupPath.trim()) return;
+    startedHere.current = true;
     setError("");
     setAnalyzing(true);
+    setResumed(false);
+    setStartedAt(Date.now());
+    setElapsed(0);
     try {
       const res = await api.post<MigrationRecord>("/migration/analyze", {
         path: backupPath.trim(),
         source,
       });
-      setMigration(res);
-      // Select all items by default
-      if (res.inventory) {
-        setSelectedSites(new Set(res.inventory.sites.map((s) => s.domain)));
-        setSelectedDbs(new Set(res.inventory.databases.map((d) => d.name)));
+      if (res.status === "analyzing") {
+        setMigration(res);
+        setAnalyzingId(res.id);
+      } else {
+        settleAnalysis(res);
       }
-      setStep(2);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Analysis failed");
-    } finally {
       setAnalyzing(false);
     }
   };
+
+  // Poll the record until it stops saying `analyzing`. The verdict lives in the
+  // row rather than in this component, so a refused poll is a network blip and
+  // not an answer — keep asking. The run is bounded on the agent side, so this
+  // always terminates.
+  useEffect(() => {
+    if (!analyzingId) return;
+    let stopped = false;
+
+    const ticker = window.setInterval(
+      () => setElapsed(Math.floor((Date.now() - startedAt) / 1000)),
+      1000,
+    );
+    const poller = window.setInterval(async () => {
+      try {
+        const rec = await api.get<MigrationRecord>(`/migration/${analyzingId}`);
+        if (!stopped && rec.status !== "analyzing") settleAnalysis(rec);
+      } catch (e) {
+        // A transient failure is not an answer — the row outlives this tab, so
+        // keep asking. A 404 or a 403 is: the record is gone, or is not ours, and
+        // no amount of asking changes that. Without this the spinner turned
+        // forever over a run that no longer existed, which is a different way of
+        // telling the operator nothing — and the shape #91 was reported for.
+        if (e instanceof ApiError && (e.status === 403 || e.status === 404)) {
+          setAnalyzingId(null);
+          setAnalyzing(false);
+          setError(
+            e.status === 404
+              ? "This analysis is no longer on the server. Start it again."
+              : e.message,
+          );
+        }
+      }
+    }, 3000);
+
+    return () => {
+      stopped = true;
+      window.clearInterval(ticker);
+      window.clearInterval(poller);
+    };
+  }, [analyzingId, startedAt]);
+
+  // Pick an analysis back up after a reload. Persisting the verdict is only half
+  // the fix; without this the operator still watches a run they can no longer
+  // see, which is the complaint #91 was actually about.
+  const isAdmin = user?.role === "admin";
+  useEffect(() => {
+    if (!isAdmin) return;
+    (async () => {
+      try {
+        const recent = await api.get<MigrationRecord[]>("/migration");
+        // Scoped to the server the operator is looking at. The list is per-user
+        // and not per-server, so on a fleet this would otherwise adopt a run on
+        // a different machine and present it as this one's — with a path from
+        // that server's filesystem in the field.
+        const activeServer = localStorage.getItem("dp-active-server");
+        const live = recent.find(
+          (m) =>
+            m.status === "analyzing" &&
+            (!activeServer || !m.server_id || m.server_id === activeServer),
+        );
+        if (!live || startedHere.current) return;
+        setBackupPath(live.backup_path);
+        setSource(live.source);
+        setMigration(live);
+        setResumed(true);
+        setAnalyzing(true);
+        setStartedAt(new Date(live.created_at).getTime());
+        setElapsed(Math.floor((Date.now() - new Date(live.created_at).getTime()) / 1000));
+        setAnalyzingId(live.id);
+      } catch {
+        /* nothing to resume is the normal case */
+      }
+    })();
+  }, [isAdmin]);
 
   // Step 3: Import
   const handleImport = async () => {
@@ -152,6 +277,9 @@ export default function Migration() {
   useEffect(() => {
     return () => { eventSourceRef.current?.close(); };
   }, []);
+
+  // Every hook above this line, without exception — see the note at the top.
+  if (!isAdmin) return <Navigate to="/" replace />;
 
   const inv = migration?.inventory;
 
@@ -220,6 +348,27 @@ export default function Migration() {
           >
             {analyzing ? "Analyzing..." : "Analyze Backup"}
           </button>
+
+          {analyzing && (
+            <div className="flex items-start gap-3 px-4 py-3 bg-dark-900 border border-dark-600 rounded-lg">
+              <svg className="w-4 h-4 mt-0.5 animate-spin text-rust-400 shrink-0" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 0 1 8-8V0C5.4 0 0 5.4 0 12h4z" />
+              </svg>
+              <div className="text-sm">
+                <p className="text-dark-100">
+                  {resumed
+                    ? "Picking up an analysis that was already running on the server."
+                    : "Unpacking and reading the archive."}{" "}
+                  <span className="font-mono text-dark-200">{fmtElapsed(elapsed)}</span>
+                </p>
+                <p className="text-xs text-dark-400 mt-1">
+                  A full cPanel account takes minutes. This runs on the server, not in this tab —
+                  you can leave the page and come back, and closing the browser will not stop it.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

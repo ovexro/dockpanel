@@ -309,6 +309,11 @@ async fn main() {
     // to_version = CARGO_PKG_VERSION so the UI shows succeeded vs rolled-back.
     services::panel_update::finalize_pending_on_startup(&state.db).await;
 
+    // Same argument, one table over: migration analysis and import both run in a
+    // spawned task, so a restart takes them with no chance to write a verdict.
+    // On boot nothing is running, so any row still claiming to be is stale.
+    routes::migration::finalize_analyzing_on_startup(&state.db).await;
+
     // Shutdown broadcast channel — all background services listen for this signal
     let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
 
@@ -484,10 +489,24 @@ async fn main() {
             if let Ok(mut map) = agent_rl.lock() {
                 map.retain(|_, (_, start)| now.duration_since(*start) < Duration::from_secs(60));
             }
-            // Clean stale provisioning logs (older than 5 minutes)
+            // Clean stale provisioning logs.
+            //
+            // The window has to be longer than the LONGEST job that writes into
+            // this map, because eviction does not stop the job — it silently
+            // detaches it. `emit` looks the id up and finds nothing, so every
+            // remaining step, including the terminal one, goes nowhere; the SSE
+            // stream ends without a verdict and the page watching it waits for a
+            // "complete" that can no longer be sent.
+            //
+            // Five minutes had been shorter than several of them for a while: a
+            // migration import budgets 300s per site and 600s per database, and
+            // a PHP version install can add a third-party repository before it
+            // unpacks fifteen packages. An hour costs a few hundred bytes per
+            // finished job and covers all of them; the terminal-step removals in
+            // each feature are what actually reclaim the common case.
             if let Ok(mut map) = provision.lock() {
                 let before = map.len();
-                map.retain(|_, (_, _, created)| now.duration_since(*created) < Duration::from_secs(300));
+                map.retain(|_, (_, _, created)| now.duration_since(*created) < Duration::from_secs(3600));
                 if map.len() < before {
                     if let Ok(mut owners) = deploy_owners.lock() {
                         owners.retain(|id, _| map.contains_key(id));

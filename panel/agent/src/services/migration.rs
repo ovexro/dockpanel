@@ -4,6 +4,21 @@ use crate::safe_cmd::safe_command;
 
 const MIGRATION_DIR: &str = "/tmp/dockpanel-migration";
 
+/// Ceiling on unpacking one backup archive — for the WHOLE attempt, not per `tar`.
+///
+/// Extraction can run twice: gzip first, then plain tar for an archive that is
+/// not gzipped. Giving each its own fresh budget would make the real worst case
+/// double this, and the panel's budget — set just above this number on the
+/// strength of the name — would then be the one to fire, replacing the sentence
+/// below with a contentless "the agent request timed out". So the second attempt
+/// gets what is LEFT, and this stays the true ceiling on the call.
+///
+/// Generous on purpose: since #91 the panel no longer holds an HTTP request open
+/// across this, so the only cost of a long extraction is a progress indicator
+/// that keeps turning. The number exists to catch the archive that will never
+/// finish, not to hurry the one that will.
+const EXTRACT_TIMEOUT_SECS: u64 = 1800;
+
 /// Validate migration ID format (UUID: alphanumeric + hyphens, max 36 chars).
 fn is_valid_migration_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 36 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
@@ -50,22 +65,79 @@ pub async fn analyze(backup_path: &str, source: &str) -> Result<MigrationInvento
     // Create extraction directory
     std::fs::create_dir_all(&extract_dir).map_err(|e| format!("Failed to create dir: {e}"))?;
 
-    // Extract the backup
+    // Extract the backup.
+    //
+    // Bounded, and bounded HERE rather than only at the caller. Unpacking a
+    // control-panel archive is the one step with no natural ceiling — a corrupt
+    // member or a disk that has stopped answering leaves `tar` waiting forever —
+    // and until #91 nothing on either side of the socket had a limit on it, so
+    // the operation could only ever end by a gateway hanging up on the browser.
+    // Owning the budget here is what lets the panel report *why* it stopped
+    // instead of merely that it did.
+    //
+    // `safe_command` sets no `kill_on_drop`, so a timed-out `tar` would otherwise
+    // keep unpacking into a directory nothing will ever read again.
     tracing::info!("Extracting backup {backup_path} to {extract_dir}");
-    let output = safe_command("tar")
-        .args(["xzf", backup_path, "-C", &extract_dir, "--no-same-owner", "--no-same-permissions"])
-        .output()
-        .await
-        .map_err(|e| format!("Failed to extract: {e}"))?;
+    let extract = |gzip: bool| {
+        let mut cmd = safe_command("tar");
+        cmd.args([
+            if gzip { "xzf" } else { "xf" },
+            backup_path,
+            "-C",
+            &extract_dir,
+            "--no-same-owner",
+            "--no-same-permissions",
+        ]);
+        cmd.kill_on_drop(true);
+        cmd
+    };
+
+    // One deadline for both attempts, so the budget the constant names is the
+    // budget the call actually has.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(EXTRACT_TIMEOUT_SECS);
+    let remaining = |dir: &str| -> Result<std::time::Duration, String> {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            let _ = std::fs::remove_dir_all(dir);
+            return Err(format!(
+                "Extracting {backup_path} exceeded {EXTRACT_TIMEOUT_SECS}s and was stopped. \
+                 The archive is either much larger than this server can unpack in that \
+                 window, or damaged — check it with `tar tzf` (or `tar tf`) and confirm \
+                 there is free space under /tmp."
+            ));
+        }
+        Ok(left)
+    };
+
+    let output = match tokio::time::timeout(remaining(&extract_dir)?, extract(true).output()).await {
+        Ok(r) => r.map_err(|e| format!("Failed to extract: {e}"))?,
+        Err(_) => {
+            let _ = std::fs::remove_dir_all(&extract_dir);
+            return Err(format!(
+                "Extracting {backup_path} exceeded {EXTRACT_TIMEOUT_SECS}s and was stopped. \
+                 The archive is either much larger than this server can unpack in that \
+                 window, or damaged — check it with `tar tzf` and confirm there is \
+                 free space under /tmp."
+            ));
+        }
+    };
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // Try without gzip (plain tar)
-        let output2 = safe_command("tar")
-            .args(["xf", backup_path, "-C", &extract_dir, "--no-same-owner", "--no-same-permissions"])
-            .output()
-            .await
-            .map_err(|e| format!("Extraction failed: {e}"))?;
+        // Try without gzip (plain tar), inside what is left of the same budget.
+        let output2 =
+            match tokio::time::timeout(remaining(&extract_dir)?, extract(false).output()).await {
+                Ok(r) => r.map_err(|e| format!("Extraction failed: {e}"))?,
+                Err(_) => {
+                    let _ = std::fs::remove_dir_all(&extract_dir);
+                    return Err(format!(
+                        "Extracting {backup_path} exceeded {EXTRACT_TIMEOUT_SECS}s and was \
+                         stopped. The archive is either much larger than this server can unpack \
+                         in that window, or damaged — check it with `tar tf` and confirm there \
+                         is free space under /tmp."
+                    ));
+                }
+            };
         if !output2.status.success() {
             let _ = std::fs::remove_dir_all(&extract_dir);
             return Err(format!("Failed to extract backup: {stderr}"));

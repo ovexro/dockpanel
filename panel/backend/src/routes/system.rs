@@ -323,14 +323,30 @@ pub async fn install_status(
     Ok(Json(result))
 }
 
+/// How long the panel gives the agent to finish an install.
+///
+/// Deliberately far above the agent's own `INSTALL_TIMEOUT` (300s in
+/// `services::pkg::transact`), because the agent does work either side of that
+/// clock — refreshing the package index, adding a third-party repo — and the
+/// budget has to cover the whole call, not the part that happens to be measured.
+///
+/// It used to be 60s, from the untimed `post`, over an operation the agent
+/// budgets five minutes for. Nothing was cancelled by that: the agent finished
+/// the install while this side had already written *"agent request timed out
+/// after 60s"* into the log the operator was watching. A caller timeout shorter
+/// than the callee's does not bound anything — it only decides which of the two
+/// gets to describe the outcome, and picks the one that does not know it.
+const INSTALL_AGENT_TIMEOUT_SECS: u64 = 900;
+
 /// Generic service install with provisioning log (async SSE).
-async fn install_service_with_log(
+pub(crate) async fn install_service_with_log(
     state: &AppState,
     agent: AgentHandle,
     claims_sub: Uuid,
     claims_email: &str,
     service_name: &str,
     agent_path: &str,
+    agent_body: Option<serde_json::Value>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let install_id = Uuid::new_v4();
 
@@ -364,15 +380,52 @@ async fn install_service_with_log(
 
         emit("install", &format!("Installing {svc}"), "in_progress", None);
 
-        match agent.post(&path, None).await {
-            Ok(_) => {
-                emit("install", &format!("Installing {svc}"), "done", None);
-                emit("complete", &format!("{svc} installed"), "done", None);
+        match agent
+            .post_long(&path, agent_body, INSTALL_AGENT_TIMEOUT_SECS)
+            .await
+        {
+            Ok(resp) => {
+                // A 200 is not the same as a success, and for PHP it stopped being
+                // the same the moment the agent started judging an install by
+                // whether FPM opened its socket: "the packages are on disk but the
+                // service never came up" is an honest 200 carrying
+                // `success: false`. Reading only the status code would paint that
+                // green with the explanation printed underneath it.
+                //
+                // Absent means success — most installers answer `{"ok": true}` or a
+                // status object with no such field, and treating a missing field as
+                // failure would turn every one of them red.
+                let ok = resp
+                    .get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                // The agent also answers 200 for "already installed" and carries the
+                // distinction in `message`. Passing it through is the difference
+                // between a log that says what happened and one that says it ended.
+                let detail = resp
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                emit(
+                    "install",
+                    &format!("Installing {svc}"),
+                    if ok { "done" } else { "error" },
+                    detail.clone(),
+                );
+                if ok {
+                    emit("complete", &format!("{svc} installed"), "done", detail);
+                    tracing::info!("Service installed: {svc}");
+                } else {
+                    emit("complete", &format!("{svc} did not finish"), "error", detail);
+                    tracing::warn!("Service install reported failure: {svc}");
+                }
+                // Logged either way: the operator asked for an install and one was
+                // attempted, and an attempt that did not finish is the entry most
+                // worth finding later.
                 activity::log_activity(
                     &db, claims_sub, &email, "service.install",
                     Some("system"), Some(&svc), None, None,
                 ).await;
-                tracing::info!("Service installed: {svc}");
             }
             Err(e) => {
                 emit("install", &format!("Installing {svc}"), "error", Some(format!("{e}")));
@@ -396,7 +449,7 @@ pub async fn install_php(
     AdminUser(claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "PHP", "/services/install/php").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "PHP", "/services/install/php", None).await
 }
 
 pub async fn install_certbot(
@@ -404,7 +457,7 @@ pub async fn install_certbot(
     AdminUser(claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "Certbot", "/services/install/certbot").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "Certbot", "/services/install/certbot", None).await
 }
 
 pub async fn install_ufw(
@@ -412,7 +465,7 @@ pub async fn install_ufw(
     AdminUser(claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "UFW Firewall", "/services/install/ufw").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "UFW Firewall", "/services/install/ufw", None).await
 }
 
 /// GET /api/services/install/{install_id}/log — SSE stream of install progress.
@@ -646,7 +699,7 @@ pub async fn install_fail2ban(
     AdminUser(claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "Fail2Ban", "/services/install/fail2ban").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "Fail2Ban", "/services/install/fail2ban", None).await
 }
 
 pub async fn install_redis(
@@ -654,7 +707,7 @@ pub async fn install_redis(
     AdminUser(claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "Redis", "/services/install/redis").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "Redis", "/services/install/redis", None).await
 }
 
 pub async fn install_nodejs(
@@ -662,7 +715,7 @@ pub async fn install_nodejs(
     AdminUser(claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "Node.js", "/services/install/nodejs").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "Node.js", "/services/install/nodejs", None).await
 }
 
 pub async fn install_composer(
@@ -670,7 +723,7 @@ pub async fn install_composer(
     AdminUser(claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "Composer", "/services/install/composer").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "Composer", "/services/install/composer", None).await
 }
 
 pub async fn install_waf(
@@ -678,7 +731,7 @@ pub async fn install_waf(
     AdminUser(claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "WAF (ModSecurity)", "/services/install/waf").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "WAF (ModSecurity)", "/services/install/waf", None).await
 }
 
 pub async fn install_cloudflared(
@@ -686,7 +739,7 @@ pub async fn install_cloudflared(
     AdminUser(claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "Cloudflare Tunnel", "/services/install/cloudflared").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "Cloudflare Tunnel", "/services/install/cloudflared", None).await
 }
 
 // ── Service uninstallers (proxy to agent, async with SSE progress) ───────
@@ -696,7 +749,7 @@ pub async fn uninstall_php(
     AdminUser(claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "PHP (uninstall)", "/services/uninstall/php").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "PHP (uninstall)", "/services/uninstall/php", None).await
 }
 
 pub async fn uninstall_certbot(
@@ -704,7 +757,7 @@ pub async fn uninstall_certbot(
     AdminUser(claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "Certbot (uninstall)", "/services/uninstall/certbot").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "Certbot (uninstall)", "/services/uninstall/certbot", None).await
 }
 
 pub async fn uninstall_ufw(
@@ -712,7 +765,7 @@ pub async fn uninstall_ufw(
     AdminUser(claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "UFW Firewall (uninstall)", "/services/uninstall/ufw").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "UFW Firewall (uninstall)", "/services/uninstall/ufw", None).await
 }
 
 pub async fn uninstall_fail2ban(
@@ -720,7 +773,7 @@ pub async fn uninstall_fail2ban(
     AdminUser(claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "Fail2Ban (uninstall)", "/services/uninstall/fail2ban").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "Fail2Ban (uninstall)", "/services/uninstall/fail2ban", None).await
 }
 
 pub async fn uninstall_powerdns(
@@ -728,7 +781,7 @@ pub async fn uninstall_powerdns(
     AdminUser(claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "PowerDNS (uninstall)", "/services/uninstall/powerdns").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "PowerDNS (uninstall)", "/services/uninstall/powerdns", None).await
 }
 
 pub async fn uninstall_redis(
@@ -736,7 +789,7 @@ pub async fn uninstall_redis(
     AdminUser(claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "Redis (uninstall)", "/services/uninstall/redis").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "Redis (uninstall)", "/services/uninstall/redis", None).await
 }
 
 pub async fn uninstall_nodejs(
@@ -744,7 +797,7 @@ pub async fn uninstall_nodejs(
     AdminUser(claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "Node.js (uninstall)", "/services/uninstall/nodejs").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "Node.js (uninstall)", "/services/uninstall/nodejs", None).await
 }
 
 pub async fn uninstall_composer(
@@ -752,7 +805,7 @@ pub async fn uninstall_composer(
     AdminUser(claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "Composer (uninstall)", "/services/uninstall/composer").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "Composer (uninstall)", "/services/uninstall/composer", None).await
 }
 
 pub async fn uninstall_waf(
@@ -760,7 +813,7 @@ pub async fn uninstall_waf(
     AdminUser(claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "WAF (uninstall)", "/services/uninstall/waf").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "WAF (uninstall)", "/services/uninstall/waf", None).await
 }
 
 pub async fn uninstall_cloudflared(
@@ -768,7 +821,7 @@ pub async fn uninstall_cloudflared(
     AdminUser(claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "Cloudflare Tunnel (uninstall)", "/services/uninstall/cloudflared").await
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "Cloudflare Tunnel (uninstall)", "/services/uninstall/cloudflared", None).await
 }
 
 /// POST /api/traefik/install — Install Traefik reverse proxy.

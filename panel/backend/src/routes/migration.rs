@@ -11,7 +11,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
-use crate::error::{internal_error, err, agent_error, require_admin, ApiError};
+use crate::error::{internal_error, err, require_admin, ApiError};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
 use crate::AppState;
@@ -91,7 +91,34 @@ fn emit_step(
 // POST /api/migration/analyze
 // ──────────────────────────────────────────────────────────────
 
-/// Analyze a panel backup (cPanel/Plesk/HestiaCP) and return inventory.
+/// Panel-side budget for the agent's analyze call.
+///
+/// Deliberately LONGER than the agent's own extraction budget
+/// (`EXTRACT_TIMEOUT_SECS` in the agent's `services::migration`) so that when a
+/// giant archive runs out of time it is the *agent* that says so — naming the
+/// archive and the budget — instead of this side winning the race and reporting
+/// a contentless "agent request timed out". A caller timeout shorter than the
+/// callee's does not bound anything the callee did not already bound; it only
+/// replaces a real diagnosis with a generic one.
+const ANALYZE_AGENT_TIMEOUT_SECS: u64 = 1860;
+
+/// Analyze a panel backup (cPanel/Plesk/HestiaCP).
+///
+/// **Accepted, not performed.** Walking a cPanel archive is minutes of work for
+/// any real account, and every gateway between the browser and this handler
+/// gives up long before that: Cloudflare at 100s, the nginx `setup.sh` writes at
+/// `proxy_read_timeout 300s`, and this panel's own `TimeoutLayer` at 300s — all
+/// of them shorter than the agent call below. Running the analysis inline
+/// therefore *guaranteed* a 524/504 for precisely the archives the wizard exists
+/// to import (#91), and raising any one of those numbers would only move the
+/// size at which it breaks.
+///
+/// So the row is inserted `analyzing`, the agent call moves to a spawned task,
+/// and this returns `202` immediately. The verdict lands in the row — `analyzed`
+/// with an inventory, or `failed` carrying the agent's real message — which is
+/// what `GET /api/migration/{id}` serves. That row is the durable part: it
+/// outlives the request, the tab, and a reload. It does not outlive the process,
+/// which is what `finalize_analyzing_on_startup` below exists to close out.
 pub async fn analyze(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
@@ -125,55 +152,145 @@ pub async fn analyze(
     .await
     .map_err(|e| internal_error("analyze", e))?;
 
-    // Call agent to analyze the backup (long timeout for large archives)
     let agent_body = serde_json::json!({
         "path": path,
         "source": source,
     });
 
-    let inventory = match agent
-        .post_long("/migration/analyze", Some(agent_body), 600)
-        .await
-    {
-        Ok(result) => result,
-        Err(e) => {
-            // Mark migration as failed
-            let _ = sqlx::query(
-                "UPDATE migrations SET status = 'failed', result = $1, updated_at = NOW() WHERE id = $2",
+    let db = state.db.clone();
+    let migration_id = migration.id;
+    let user_id = claims.sub;
+    let email = claims.email.clone();
+    let path_owned = path.to_string();
+    let source_owned = source.to_string();
+
+    tokio::spawn(async move {
+        match agent
+            .post_long(
+                "/migration/analyze",
+                Some(agent_body),
+                ANALYZE_AGENT_TIMEOUT_SECS,
             )
-            .bind(serde_json::json!({ "error": e.to_string() }))
-            .bind(migration.id)
-            .execute(&state.db)
-            .await;
-            return Err(agent_error("Backup analysis", e));
+            .await
+        {
+            Ok(inventory) => {
+                if let Err(e) = sqlx::query(
+                    "UPDATE migrations SET status = 'analyzed', inventory = $1, updated_at = NOW() \
+                     WHERE id = $2",
+                )
+                .bind(&inventory)
+                .bind(migration_id)
+                .execute(&db)
+                .await
+                {
+                    // The work is done and the panel cannot say so. Leaving the
+                    // row 'analyzing' would poll forever, so record the failure
+                    // that the operator can actually act on.
+                    tracing::error!("Migration {migration_id}: inventory write failed: {e}");
+                    let _ = sqlx::query(
+                        "UPDATE migrations SET status = 'failed', result = $1, updated_at = NOW() \
+                         WHERE id = $2",
+                    )
+                    .bind(serde_json::json!({
+                        "error": format!("Analysis finished but its result could not be saved: {e}")
+                    }))
+                    .bind(migration_id)
+                    .execute(&db)
+                    .await;
+                    return;
+                }
+
+                tracing::info!(
+                    "Migration analyzed: {} (source: {})",
+                    path_owned,
+                    source_owned
+                );
+                activity::log_activity(
+                    &db,
+                    user_id,
+                    &email,
+                    "migration.analyze",
+                    Some("migration"),
+                    Some(&path_owned),
+                    Some(&source_owned),
+                    None,
+                )
+                .await;
+            }
+            Err(e) => {
+                // There is no HTTP response left to shape this into, so the
+                // agent's own sentence goes into the row verbatim and the poller
+                // reads it out of `result.error`. This is now the ONLY place the
+                // reason for a failed analysis is ever recorded — #90 was that
+                // reason being replaced by a generic one on the way out.
+                tracing::error!("Migration {migration_id}: analysis failed: {e}");
+                let _ = sqlx::query(
+                    "UPDATE migrations SET status = 'failed', result = $1, updated_at = NOW() \
+                     WHERE id = $2",
+                )
+                .bind(serde_json::json!({ "error": e.to_string() }))
+                .bind(migration_id)
+                .execute(&db)
+                .await;
+            }
         }
-    };
+    });
 
-    // Store inventory and update status
-    let updated: Migration = sqlx::query_as(
-        "UPDATE migrations SET status = 'analyzed', inventory = $1, updated_at = NOW() \
-         WHERE id = $2 RETURNING *",
-    )
-    .bind(&inventory)
-    .bind(migration.id)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|e| internal_error("analyze", e))?;
+    Ok((StatusCode::ACCEPTED, Json(migration)))
+}
 
-    tracing::info!("Migration analyzed: {} (source: {})", path, source);
-    activity::log_activity(
-        &state.db,
-        claims.sub,
-        &claims.email,
-        "migration.analyze",
-        Some("migration"),
-        Some(path),
-        Some(source),
-        None,
-    )
-    .await;
+/// Close out analyses that were in flight when the process died.
+///
+/// The analysis runs in a `tokio::spawn`, so a restart takes it with no chance
+/// to write its own verdict — and an `analyzing` row with nothing left to
+/// finish it is a spinner the operator can never clear. Same shape, and the same
+/// remedy, as `panel_update::finalize_pending_on_startup`: on boot, nothing is
+/// running, so every row still claiming to be is stale by definition.
+///
+/// `importing` rows are swept too, for the same reason and by the same argument
+/// — that path has always spawned, so it has always had this hole.
+pub async fn finalize_analyzing_on_startup(pool: &sqlx::PgPool) {
+    // Two statuses, two different truths, so two sentences. Analysis only reads
+    // the archive, so an interrupted one leaves nothing behind and starting again
+    // is the whole remedy. An import MUTATES as it goes — it writes nginx vhosts,
+    // `sites` rows and database containers one selection at a time — so an
+    // interrupted one has done part of the work, and telling the operator to run
+    // it again would be telling them to re-import over what already landed.
+    // Saying "nothing was left half-done" over that row would be false.
+    let sweeps: [(&str, &str); 2] = [
+        (
+            "analyzing",
+            "The panel restarted while this archive was being analysed. Nothing was \
+             changed on the server — analysis only reads — so run it again.",
+        ),
+        (
+            "importing",
+            "The panel restarted part-way through this import. Whatever had already \
+             been imported is still there; the rest was not. Check Sites and Databases \
+             for what landed before importing the remainder.",
+        ),
+    ];
 
-    Ok((StatusCode::CREATED, Json(updated)))
+    for (status, message) in sweeps {
+        let result = sqlx::query(
+            "UPDATE migrations SET status = 'failed', \
+             result = COALESCE(result, '{}'::jsonb) || $1::jsonb, updated_at = NOW() \
+             WHERE status = $2",
+        )
+        .bind(serde_json::json!({ "error": message }))
+        .bind(status)
+        .execute(pool)
+        .await;
+
+        match result {
+            Ok(r) if r.rows_affected() > 0 => tracing::warn!(
+                "Closed out {} migration(s) left '{status}' by a previous process",
+                r.rows_affected()
+            ),
+            Ok(_) => {}
+            Err(e) => tracing::warn!("finalize_analyzing_on_startup: '{status}' sweep failed: {e}"),
+        }
+    }
 }
 
 // ──────────────────────────────────────────────────────────────

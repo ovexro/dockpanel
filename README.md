@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>The most feature-packed free server panel ever built.</strong><br>
-  Self-hosted. Docker-native. Written in Rust. Panel services run on <strong>~49MB of RAM</strong>. 811 HTTP routes. 153 app templates. 585 regression assertions. ~45MB binaries. Zero subscriptions.
+  Self-hosted. Docker-native. Written in Rust. Panel services run on <strong>~49MB of RAM</strong>. 811 HTTP routes. 153 app templates. 642 regression assertions. ~45MB binaries. Zero subscriptions.
 </p>
 
 <p align="center">
@@ -173,7 +173,7 @@ found, including what is still broken.
 ## Features
 
 ### Hosting
-- **Sites** — Static, PHP (8.1-8.4), Node.js, Python, reverse proxy. Automatic Nginx config, SSL, PHP-FPM pools.
+- **Sites** — Static, PHP (8.1–8.5), Node.js, Python, reverse proxy. Automatic Nginx config, SSL, PHP-FPM pools.
 - **Databases** — MySQL/PostgreSQL in Docker. Built-in SQL browser, visual schema browser, point-in-time recovery (WAL/binlog). Auto-cleanup on site delete.
 - **Docker Apps** — 153 templates across 14 categories (AI, CMS, Database, Media, Monitoring, and more). Compose stacks. Resource limits. GPU passthrough.
 - **Git Deploy** — Push-to-deploy. Atomic zero-downtime deploys (Capistrano-style). Nixpacks (30+ languages). Preview environments.

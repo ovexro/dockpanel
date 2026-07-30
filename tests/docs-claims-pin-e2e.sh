@@ -146,13 +146,29 @@ else
   # it drifted: it read "Seven suites, 195 assertions" over an eight-row table
   # summing to 228 — two published numbers, both wrong, in front of a table that
   # was right. A number nothing derives is a number that rots.
-  prose=$(grep -oE '[A-Za-z]+ suites, \*\*[0-9]+ assertions\*\*' "$TESTING" | head -1)
+  # The word class must admit a hyphen: every count from twenty-one on is
+  # hyphenated, and `[A-Za-z]+` silently captured only the tail — "Twenty-two"
+  # was read as "two". Found the moment the word check above started running
+  # again, which is what an arm that cannot fail costs you.
+  prose=$(grep -oE '[A-Za-z-]+ suites, \*\*[0-9]+ assertions\*\*' "$TESTING" | head -1)
   if [ -z "$prose" ]; then
     bad "no 'N suites, M assertions' summary found above the table — if it was removed, drop this check deliberately"
   else
     p_assert=$(printf '%s' "$prose" | grep -oE '[0-9]+')
     p_suites=$(printf '%s' "$prose" | sed -E 's/ suites.*//')
-    words="one two three four five six seven eight nine ten eleven twelve"
+    # This list stopped at "twelve" while the table grew to twenty rows, so
+    # `want_word` came back empty, the guard below was skipped, and the arm fell
+    # straight to its ok branch: the suite-count WORD had been unverified since
+    # the thirteenth suite landed, sitting in the suite looking like coverage
+    # while only the assertion half still checked anything. Extended well past
+    # the current count — and if it is ever exhausted again the arm now says so
+    # instead of quietly agreeing.
+    words="one two three four five six seven eight nine ten eleven twelve
+           thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty
+           twenty-one twenty-two twenty-three twenty-four twenty-five twenty-six
+           twenty-seven twenty-eight twenty-nine thirty thirty-one thirty-two
+           thirty-three thirty-four thirty-five thirty-six thirty-seven
+           thirty-eight thirty-nine forty"
     n=0; want_word=""
     for w in $words; do n=$((n+1)); [ "$n" -eq "$rows" ] && want_word="$w"; done
     if [ "$p_assert" != "$sum" ]; then
@@ -160,7 +176,13 @@ else
     else
       ok "the summary's assertion total ($p_assert) matches the table it introduces"
     fi
-    if [ -n "$want_word" ] && [ "$(printf '%s' "$p_suites" | tr 'A-Z' 'a-z')" != "$want_word" ]; then
+    # One arm, one verdict. Reporting the exhausted list as a `bad` and then
+    # falling through to the `else` below emitted a red AND an unearned green for
+    # the same claim — which is how the count would go on being published while
+    # the summary line said it was checked.
+    if [ -z "$want_word" ]; then
+      bad "$rows suites is past the end of this check's word list — extend it rather than lose the arm"
+    elif [ "$(printf '%s' "$p_suites" | tr 'A-Z' 'a-z')" != "$want_word" ]; then
       bad "docs/testing.md's summary says '$p_suites suites'; the table has $rows rows ($want_word)"
     else
       ok "the summary's suite count matches the $rows rows in the table"

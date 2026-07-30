@@ -167,11 +167,53 @@ async fn install_version_rpm(
     let _ = safe_command("systemctl").args(["enable", &unit]).output().await;
     let _ = safe_command("systemctl").args(["restart", &unit]).output().await;
 
-    Ok(Json(InstallResponse {
-        success: true,
-        message: format!("PHP {version} installed and started"),
+    Ok(Json(settle(version, "was installed").await))
+}
+
+/// Enable and start this version's FPM unit, under whichever name the family uses.
+async fn start_fpm(version: &str) {
+    let unit = crate::services::pkg::service_name(&format!("php{version}-fpm")).await;
+    let _ = safe_command("systemctl")
+        .args(["enable", "--now", &unit])
+        .output()
+        .await;
+}
+
+/// Report on what an install actually achieved, judged by the thing that matters.
+///
+/// Every caller of this route wants a PHP site to work afterwards, and the only
+/// fact that decides that is whether the FPM socket exists — packages installed
+/// and units enabled are means, not the end. So the verdict waits briefly for
+/// the socket and then says what it found. The window is short because
+/// `systemctl enable --now` has already returned by this point; it covers FPM
+/// finishing its own startup, not the install.
+///
+/// Answering `success: false` here is deliberate even though the packages may be
+/// perfectly installed: a caller that is told "installed" and then cannot create
+/// a PHP site has been told the wrong thing, and that exact sequence is what
+/// this route was reported for.
+async fn settle(version: &str, what_happened: &str) -> InstallResponse {
+    for _ in 0..25 {
+        if socket_exists(version).await {
+            return InstallResponse {
+                success: true,
+                message: format!("PHP {version} {what_happened} and PHP-FPM is running"),
+                version: version.to_string(),
+            };
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+
+    let unit = crate::services::pkg::service_name(&format!("php{version}-fpm")).await;
+    InstallResponse {
+        success: false,
+        message: format!(
+            "PHP {version} {what_happened}, but PHP-FPM did not open its socket, so PHP sites \
+             on this version will not work yet. Check `systemctl status {unit}` and \
+             `journalctl -u {unit}` on the server."
+        ),
         version: version.to_string(),
-    }))
+    }
 }
 
 /// POST /php/install — Install a PHP version with common extensions.
@@ -191,13 +233,18 @@ async fn install_version(
         ));
     }
 
-    // Check if already installed
+    // Already installed — but that is not the question anyone is asking.
+    //
+    // `is_installed` reads the PACKAGE database, while everything downstream of
+    // an install cares about the SOCKET: `nginx.rs` refuses to write a PHP vhost
+    // when `/run/php/php{v}-fpm.sock` is missing, and that guard is what sends
+    // people here in the first place. A box whose php8.3-fpm unit is installed
+    // and stopped satisfied this branch, so the install reported success and the
+    // very next action — the switch that prompted it — failed again with the
+    // same message. Start the unit and let the socket answer.
     if is_installed(version).await {
-        return Ok(Json(InstallResponse {
-            success: true,
-            message: format!("PHP {version} is already installed"),
-            version: version.to_string(),
-        }));
+        start_fpm(version).await;
+        return Ok(Json(settle(version, "was already installed").await));
     }
 
     // The RHEL family selects a PHP version by enabling a module stream, not by
@@ -395,18 +442,13 @@ async fn install_version(
     }
 
     // Enable and start FPM service
-    let _ = safe_command("systemctl")
-        .args(["enable", "--now", &format!("php{version}-fpm")])
-        .output()
-        .await;
+    start_fpm(version).await;
 
     tracing::info!("PHP {version} installed and started");
 
-    Ok(Json(InstallResponse {
-        success: true,
-        message: format!("PHP {version} installed with FPM and all available extensions"),
-        version: version.to_string(),
-    }))
+    Ok(Json(
+        settle(version, "was installed with FPM and all available extensions").await,
+    ))
 }
 
 // ──────────────────────────────────────────────────────────────

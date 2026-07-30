@@ -4,6 +4,91 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.49.0] - 2026-07-30
+
+Two long jobs that the panel had been holding an HTTP request open across, and a
+capability that was complete except for the one link that made it reachable.
+
+### Fixed
+
+- **Analysing a cPanel backup no longer times out (#91).** The analysis ran
+  inline in the request. Walking a real cPanel account is minutes of work, and
+  every gateway in front of the panel gives up sooner: Cloudflare at 100s, the
+  nginx the installer writes at 300s, and the panel's own request ceiling at
+  300s — while the agent call was budgeted 600s. So the connection was torn down
+  for exactly the archives the wizard exists to import, and the reporter's
+  `Request failed (524)` was this repository's own fallback message rendering a
+  Cloudflare error page that carried no JSON to read. The work always carried on
+  afterwards; nothing was able to come back and say so.
+
+  `POST /api/migration/analyze` now returns **202** immediately and the verdict
+  lands in the migration row — `analyzed` with an inventory, or `failed` carrying
+  the agent's own sentence. The wizard polls it, shows elapsed time, and picks a
+  running analysis back up after a reload, so closing the tab no longer loses
+  sight of a job that is still going. Raising a timeout was available and would
+  only have moved the archive size at which this breaks.
+
+- **Unpacking an archive is bounded on the side doing the unpacking.** Neither
+  side of the socket had a limit on `tar`, so a damaged member or a stalled disk
+  could only end by a gateway hanging up on the browser. The agent now owns a
+  30-minute ceiling on extraction, kills a timed-out `tar` rather than merely
+  stopping waiting for it, removes the scratch directory, and names the archive
+  and the budget in the error. The panel's budget sits deliberately above the
+  agent's, so the sentence the operator reads is the one written by the side that
+  knows what happened.
+
+- **A restart no longer leaves a migration spinning forever.** Analysis and
+  import both run in a spawned task, which a restart takes with no chance to
+  write a verdict — leaving a row claiming to be in progress and a UI that could
+  never clear it. On boot nothing is running, so anything still claiming to be is
+  closed out and says why.
+
+- **The PHP version picker can install a PHP version.** Reported by surprises29,
+  who expected switching version to offer the install. The version-specific
+  installer has existed end to end since v2.8 — the agent route, deb.sury.org for
+  Debian, `ppa:ondrej/php` for Ubuntu, module streams for the RHEL family, and a
+  backend proxy — and **nothing in the browser had ever called it.** Both pickers
+  offered five versions with no idea which of them the server had, and choosing
+  one it did not have failed the switch, or the whole site creation, at the agent.
+
+  Both now read the live list, label what is missing, and offer to install it,
+  with the install's log streamed as it runs. The switch is held back until the
+  version actually works rather than being fired and refused.
+
+- **The advice that refusal used to give was a dead end.** It sent people to
+  Settings → Services, which has one PHP tile with no version on it, reports
+  installed if *any* version is, and therefore shows a box that already has 8.4
+  an "Uninstall" button and no install button at all — over a route that takes no
+  version and installs whatever the distro offers. It now names the control that
+  can do the job.
+
+- **Installing a service is no longer capped at 60 seconds.** `install_service_with_log`
+  used the untimed agent client over an operation the agent budgets 300s for,
+  plus repo configuration outside that clock. Nothing was cancelled by it: the
+  install finished while the panel wrote *"agent request timed out after 60s"*
+  into the log the operator was watching. This affected **every** service install,
+  not just PHP — the s289 defect again, at a different call site.
+
+- **An install that leaves PHP unusable is no longer reported as success.** The
+  already-installed branch answered from the package database, while the guard
+  that sends people there tests the **socket**. A box whose `php8.3-fpm` was
+  installed and stopped was told "already installed" and then failed the very
+  next action with the same message. All three install paths now start the unit
+  and judge the outcome on whether the socket appears.
+
+- **A test arm that had stopped being able to fail.** `docs-claims` verifies that
+  the testing page's summary sentence matches the table under it. Its list of
+  English number words stopped at "twelve" while the table grew past twenty, so
+  the suite-count half silently skipped its own check and agreed with whatever
+  was written. Restored — and it immediately caught that the same check could not
+  read a hyphenated number either, having been reading "Twenty-two" as "two".
+
+### Added
+
+- Two regression pins, 57 assertions, both watched failing against the pre-fix
+  tree: `migration-analyze-async-pin-e2e.sh` (28) and
+  `php-install-from-picker-pin-e2e.sh` (29).
+
 ## [2.48.6] - 2026-07-30
 
 A backup that the panel calls off-site is now actually off-site. v2.48.5 fixed the

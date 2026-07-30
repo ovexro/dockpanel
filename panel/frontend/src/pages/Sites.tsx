@@ -6,6 +6,8 @@ import { statusColors, runtimeLabels } from "../constants";
 import ProvisionLog from "../components/ProvisionLog";
 import { PrereqCallout, useDnsPrereq } from "../components/Prerequisite";
 import { FieldHelp, InfoTip } from "../components/FieldHelp";
+import PhpVersionPicker from "../components/PhpVersionPicker";
+import { useAuth } from "../context/AuthContext";
 
 interface Site {
   id: string;
@@ -19,6 +21,7 @@ interface Site {
 }
 
 export default function Sites() {
+  const { user } = useAuth();
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -299,24 +302,29 @@ export default function Sites() {
             </div>
           )}
 
-          {runtime === "php" && !cms && (
+          {/* Shown for a CMS too. `handleCreate` sends `php_version` for every
+              CMS install — a one-click WordPress is a PHP site — so gating this
+              on `!cms` left the most common route to a PHP site submitting the
+              form's untouched default with nothing on screen to say which
+              versions the server has. That is the same failure the picker exists
+              to prevent, on the path most people take. */}
+          {(runtime === "php" || cms) && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label htmlFor="site-php-version" className="block text-sm font-medium text-dark-100 mb-1">PHP Version</label>
-                <select
+                {/* The agent refuses to write a PHP vhost when the version's FPM
+                    socket is missing, so an uninstalled version failed the whole
+                    site creation with a message pointing somewhere that could not
+                    fix it. The picker now says which versions this server has and
+                    offers to install one that it does not. */}
+                <PhpVersionPicker
                   id="site-php-version"
                   value={phpVersion}
-                  onChange={(e) => setPhpVersion(e.target.value)}
-                  className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm bg-dark-800"
-                >
-                  <option value="8.5">PHP 8.5</option>
-                  <option value="8.4">PHP 8.4</option>
-                  <option value="8.3">PHP 8.3</option>
-                  <option value="8.2">PHP 8.2</option>
-                  <option value="8.1">PHP 8.1</option>
-                </select>
+                  onChange={(v) => setPhpVersion(v)}
+                  canInstall={user?.role === "admin"}
+                />
               </div>
-              <div>
+              <div className={cms ? "hidden" : undefined}>
                 <label htmlFor="site-php-preset" className="block text-sm font-medium text-dark-100 mb-1">Framework</label>
                 <select
                   id="site-php-preset"

@@ -307,9 +307,19 @@ pub async fn cmd_apply(token: &str, file: &str, dry_run: bool, email: Option<&st
                 print!("  Installing PHP {version}... ");
                 let body = json!({ "version": version });
                 match client::agent_post("/php/install", &body, token).await {
-                    Ok(_) => {
+                    // A 200 stopped meaning success when the agent began judging
+                    // an install by whether PHP-FPM opened its socket: "installed
+                    // but the service never came up" is an honest 200 carrying
+                    // `success: false`. Counting it as applied would print a
+                    // green tick over a PHP that cannot serve a site.
+                    Ok(r) if r["success"].as_bool() != Some(false) => {
                         println!("\x1b[32m✓\x1b[0m");
                         applied += 1;
+                    }
+                    Ok(r) => {
+                        let msg = r["message"].as_str().unwrap_or("install did not complete");
+                        println!("\x1b[31m✗\x1b[0m ({msg})");
+                        errors += 1;
                     }
                     Err(e) => {
                         println!("\x1b[31m✗\x1b[0m ({e})");

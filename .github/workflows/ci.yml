@@ -332,3 +332,37 @@ jobs:
       # is this feature's recurring failure, so these are checks now.
       - name: A backup the panel calls off-site must actually be off-site
         run: bash tests/backup-lands-pin-e2e.sh
+
+  migration-analyze-async:
+    name: Migration Analysis Is Accepted, Not Performed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pure source analysis. Analysing a cPanel archive ran inline in the HTTP
+      # request while every gateway in front of the panel gives up sooner than
+      # the work takes — Cloudflare at 100s, the installed nginx at 300s, the
+      # panel's own TimeoutLayer at 300s — so issue #91 was structural: the
+      # request could only ever be torn down for the archives the wizard exists
+      # to import, and the analysis then finished with nothing able to report it.
+      # This holds the four halves of the fix together: accept and spawn, let the
+      # agent own its own ceiling, keep the verdict in a row that outlives the
+      # request, and read it back from the browser.
+      - name: A job longer than the gateway must not be held open by it
+        run: bash tests/migration-analyze-async-pin-e2e.sh
+
+  php-install-from-picker:
+    name: The PHP Version Picker Can Install A Version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pure source analysis. The version-specific PHP installer has existed end
+      # to end since v2.8 — agent route, third-party repos, RHEL module streams,
+      # backend proxy — and nothing in the browser had ever called it, so both
+      # pickers offered five versions with no idea which existed and sent anyone
+      # who picked wrong to a Settings tile that cannot install a version. Same
+      # family as the backup finding: a capability that is complete except for
+      # the one link that makes it reachable.
+      - name: A control that knows a version is missing must be able to install it
+        run: bash tests/php-install-from-picker-pin-e2e.sh

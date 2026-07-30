@@ -1299,6 +1299,17 @@ pub async fn get_one(
     Ok(Json(site))
 }
 
+/// PHP versions this panel will accept from a client.
+///
+/// One list for both handlers below, where there were two identical literals.
+/// It is still a second copy of the agent's own `ALLOWED_VERSIONS`, and
+/// deliberately so — this side has to reject a bad version before it spawns
+/// anything, and cannot ask an agent that may be a release behind. The
+/// frontend no longer carries a third and fourth copy: both pickers read the
+/// live list from `GET /api/php/versions`, which is the agent's answer for the
+/// server the site actually runs on.
+const PHP_VERSIONS: &[&str] = &["8.1", "8.2", "8.3", "8.4", "8.5"];
+
 /// PUT /api/sites/{id}/php — Switch PHP version for a site.
 #[derive(serde::Deserialize)]
 pub struct SwitchPhpRequest {
@@ -1314,10 +1325,10 @@ pub async fn switch_php(
 ) -> Result<Json<Site>, ApiError> {
     let version = body.version.trim();
 
-    if !["8.1", "8.2", "8.3", "8.4", "8.5"].contains(&version) {
+    if !PHP_VERSIONS.contains(&version) {
         return Err(err(
             StatusCode::BAD_REQUEST,
-            "Invalid PHP version. Allowed: 8.1, 8.2, 8.3, 8.4, 8.5",
+            &format!("Invalid PHP version. Allowed: {}", PHP_VERSIONS.join(", ")),
         ));
     }
 
@@ -1383,53 +1394,87 @@ pub async fn php_versions(
     Ok(Json(result))
 }
 
-/// POST /api/php/install — Install a PHP version (proxy to agent, admin only).
+/// POST /api/php/install — Install a PHP version (admin only).
+///
+/// Accepted, not performed: returns `202 { install_id }` and streams the outcome
+/// over the same `/api/services/install/{id}/log` SSE the Services page already
+/// uses. Installing a PHP version can mean adding deb.sury.org or a module
+/// stream and then unpacking fifteen packages, which is minutes — comfortably
+/// past the panel's own 300s `TimeoutLayer`, never mind Cloudflare — so holding
+/// the request open could only ever produce a timeout for the installs that
+/// needed the most time.
 #[derive(serde::Deserialize)]
 pub struct InstallPhpRequest {
     pub version: String,
 }
 
 pub async fn php_install(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<InstallPhpRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     if claims.role != "admin" {
         return Err(err(StatusCode::FORBIDDEN, "Admin only"));
     }
 
-    let result = agent
-        .post(
-            "/php/install",
-            Some(serde_json::json!({ "version": body.version })),
-        )
-        .await
-        .map_err(|e| agent_error("PHP install", e))?;
+    // Reject here as well as on the agent. The agent is the authority, but this
+    // side spawns and answers 202 before it has heard from anything, so an
+    // unchecked version would be reported as "started" and only contradicted
+    // later, inside a log the caller has to go and read.
+    if !PHP_VERSIONS.contains(&body.version.as_str()) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            &format!("Invalid PHP version. Allowed: {}", PHP_VERSIONS.join(", ")),
+        ));
+    }
 
-    Ok(Json(result))
+    crate::routes::system::install_service_with_log(
+        &state,
+        agent,
+        claims.sub,
+        &claims.email,
+        &format!("PHP {}", body.version),
+        "/php/install",
+        Some(serde_json::json!({ "version": body.version })),
+    )
+    .await
 }
 
 /// POST /api/php/uninstall — Uninstall a specific PHP version (admin only).
+///
+/// Accepted and logged, like the install: same 202 + `install_id`, same SSE.
 pub async fn php_uninstall(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<InstallPhpRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     if claims.role != "admin" {
         return Err(err(StatusCode::FORBIDDEN, "Admin only"));
     }
 
-    let result = agent
-        .post(
-            "/php/uninstall",
-            Some(serde_json::json!({ "version": body.version })),
-        )
-        .await
-        .map_err(|e| agent_error("PHP uninstall", e))?;
+    if !PHP_VERSIONS.contains(&body.version.as_str()) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            &format!("Invalid PHP version. Allowed: {}", PHP_VERSIONS.join(", ")),
+        ));
+    }
 
-    Ok(Json(result))
+    // Same inversion the install had, in the other direction: the agent budgets
+    // 300s for the purge and its `apt-get autoremove` afterwards, and this side
+    // was giving it 60. The purge is not cancelled by that — only the account of
+    // it is, which is worse for a destructive operation than for an additive one.
+    crate::routes::system::install_service_with_log(
+        &state,
+        agent,
+        claims.sub,
+        &claims.email,
+        &format!("PHP {} (uninstall)", body.version),
+        "/php/uninstall",
+        Some(serde_json::json!({ "version": body.version })),
+    )
+    .await
 }
 
 /// PUT /api/sites/{id}/limits — Update per-site resource limits.

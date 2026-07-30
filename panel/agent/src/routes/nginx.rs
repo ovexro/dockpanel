@@ -145,13 +145,21 @@ async fn put_site(
                     .strip_prefix("/run/php/php")
                     .and_then(|s| s.strip_suffix("-fpm.sock"))
                     .unwrap_or("unknown");
+                // Where this used to send people was a dead end. Settings →
+                // Services has one PHP tile with no version on it, and it
+                // reports installed if ANY version is — so on a box with 8.4
+                // the operator was told to go and install 8.3 on a screen
+                // showing "Installed / Uninstall" and no install button at all.
+                // The PHP Version control is the one place that can do this,
+                // and since v2.49.0 it offers the install itself.
                 return Err((
                     StatusCode::BAD_REQUEST,
                     Json(NginxResponse {
                         success: false,
                         message: format!(
-                            "PHP {version} is not installed or PHP-FPM is not running. \
-                             Install it from Settings > Services before creating a PHP site."
+                            "PHP {version} is not installed, or its PHP-FPM service is not \
+                             running. Install it from the PHP Version control on the site — \
+                             it offers any version this server does not have yet."
                         ),
                     }),
                 ));
