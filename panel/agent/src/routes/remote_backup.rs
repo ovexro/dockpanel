@@ -124,7 +124,11 @@ async fn test_destination(
             let secret_key = body.destination.secret_key.as_deref()
                 .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Missing secret_key"))?;
 
-            remote_backup::test_s3(bucket, region, endpoint, access_key, secret_key)
+            // Same defaults the upload handler applies, so the test probes the
+            // location the backups will actually go to rather than the bucket root.
+            let prefix = body.destination.path_prefix.as_deref().unwrap_or("");
+
+            remote_backup::test_s3(bucket, region, endpoint, access_key, secret_key, prefix)
                 .await
                 .map_err(|e| err(StatusCode::BAD_GATEWAY, &e))?;
 
@@ -136,11 +140,13 @@ async fn test_destination(
             let port = body.destination.port.unwrap_or(22);
             let username = body.destination.username.as_deref()
                 .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Missing username"))?;
+            let remote_path = body.destination.remote_path.as_deref().unwrap_or("/backups");
 
             remote_backup::test_sftp(
                 host, port, username,
                 body.destination.password.as_deref(),
                 body.destination.key_path.as_deref(),
+                remote_path,
             )
             .await
             .map_err(|e| err(StatusCode::BAD_GATEWAY, &e))?;

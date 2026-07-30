@@ -133,7 +133,16 @@ async fn upload_to_destination(
     let mut last_err = String::new();
 
     for (attempt, delay) in delays.iter().enumerate() {
-        match agent.post("/backups/upload", Some(body.clone())).await {
+        // See the sibling call in `backup_scheduler`: plain `post` caps the call at
+        // 60s while the agent budgets 600s for the same upload, so a slow-but-fine
+        // transfer was reported as a failure three times over — and here that also
+        // trips `destination_down`, which skips off-siting for every remaining site,
+        // database and volume in the run and raises an incident saying the backups
+        // "exist only on this server" about backups that had just been uploaded.
+        match agent
+            .post_long("/backups/upload", Some(body.clone()), 660)
+            .await
+        {
             Ok(_) => return true,
             Err(e) => {
                 last_err = e.to_string();

@@ -542,14 +542,34 @@ install_dependencies() {
         fi
     fi
 
-    local BASE_PKGS="curl, openssl, ca-certificates"
+    # openssh-client is the SFTP backup destination's runtime: the agent shells out
+    # to scp/ssh for every SFTP upload. Present by default on the images we test, but
+    # a dependency that happens to be satisfied is still an undeclared dependency.
+    local BASE_PKGS="curl, openssl, ca-certificates, openssh-client"
     if [ "$PKG_MGR" = "apt" ]; then
         # gnupg + lsb-release only exist/matter on Debian-based
         run "Installing base packages (${BASE_PKGS}, gnupg, lsb-release)" \
-            pkg_install curl openssl ca-certificates gnupg lsb-release
+            pkg_install curl openssl ca-certificates openssh-client gnupg lsb-release
     else
+        # RHEL-family names the ssh client package openssh-clients (plural).
         run "Installing base packages (${BASE_PKGS})" \
-            pkg_install curl openssl ca-certificates
+            pkg_install curl openssl ca-certificates openssh-clients
+    fi
+
+    # sshpass — required for PASSWORD-authenticated SFTP backup destinations, which
+    # is the mode the panel's destination form offers first. Nothing installed it, so
+    # on a fresh box every such destination failed at Test Connection with an opaque
+    # 502 ("No such file or directory (os error 2)"); s288 measured SFTP as working
+    # only because the test rig had apt-installed sshpass itself (s289).
+    #
+    # Best-effort ON PURPOSE, and not in BASE_PKGS: on RHEL-family sshpass comes from
+    # EPEL, whose enablement above is itself `|| true`, and this script runs under
+    # `set -e`. Making it mandatory would turn "no EPEL" into a failed install for
+    # everyone — trading a backup-destination bug for a total install failure. When
+    # it is missing the agent now says so by name, and key auth is unaffected.
+    if ! run "Installing sshpass (password-authenticated SFTP backups)" pkg_install sshpass; then
+        warn "sshpass could not be installed — SFTP backup destinations that authenticate"
+        warn "by PASSWORD will not work. Install it manually, or use an SSH key instead."
     fi
 
     # Build tools required for Rust compilation (cmake for aws-lc-sys, gcc for ring)

@@ -315,3 +315,20 @@ jobs:
       # the write paths from the source instead of restating them.
       - name: A path the agent writes must be a path the sandbox allows
         run: bash tests/agent-sandbox-paths-pin-e2e.sh
+
+  backup-lands:
+    name: Backups Actually Land
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pure source analysis. s288 fixed the backup credential path and proved
+      # Test Connection; s289 drove a backup all the way to the destination and
+      # found six defects underneath, four of which make the panel state
+      # something FALSE about data protection — a redirect reported as a
+      # completed upload, a scheduled off-site copy filed as local-only, a 60s
+      # panel cap over a 600s agent operation, and a Test that passes because it
+      # exercises less than an upload needs. A green check over a broken thing
+      # is this feature's recurring failure, so these are checks now.
+      - name: A backup the panel calls off-site must actually be off-site
+        run: bash tests/backup-lands-pin-e2e.sh

@@ -4,9 +4,69 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [2.48.6] - 2026-07-30
+
+A backup that the panel calls off-site is now actually off-site. v2.48.5 fixed the
+backup credential path and proved **Test Connection**; it never watched a backup
+**arrive**. Driving one to the destination found six defects underneath, and four
+of them make the panel state something false about data protection.
 
 ### Fixed
+
+- **A redirect is no longer reported as a completed upload.** The S3 uploader
+  passed `curl --fail`, which fails on 4xx/5xx and says nothing about **3xx** —
+  and without `-L`, curl does not follow a redirect: it transfers nothing and
+  **exits 0**. A bucket addressed in the wrong region, or an `http://` endpoint
+  the provider redirects to `https://`, therefore produced a successful upload
+  with no object written, the agent answering `{"success":true}` and the panel
+  lighting the **remote** badge. Measured against a redirecting endpoint: a full
+  policy run reported *"1 successes, 0 failures, 0 not uploaded off-site"* while
+  the bucket stayed empty. Success is now an explicit 2xx. Following the redirect
+  is deliberately **not** the fix — an AWS SigV4 signature is bound to the host
+  and path it was signed for, and curl downgrades `PUT` to `GET` on 301/302. The
+  same latent bug was in `test_s3`, `list_s3` and `delete_s3`; all four now share
+  one runner rather than four copies of the flags.
+
+- **A scheduled backup records where its bytes went.** `backup_scheduler`
+  computed its upload result into a discarded `_`-prefixed binding and inserted
+  five columns, omitting `uploaded` and `destination_id` — the two columns the
+  migration had added for precisely this. Every per-site scheduled backup that
+  *did* go off-site was filed as local-only, so the **remote** badge could never
+  appear for the path most people configure, and nothing recorded which
+  destination held the copy. Measured: the SFTP archive sitting at the
+  destination while its row read `uploaded=f, destination_id=NULL`.
+
+- **An upload slower than a minute is no longer treated as a failure.** The panel
+  capped every agent call at 60s while the agent budgets 600s for this exact
+  upload. An off-site copy that took longer — a 12MB archive on a slow uplink was
+  enough to measure — had the panel give up while `curl`/`scp` kept running, so
+  the bytes landed and the panel then re-sent the whole file twice more, recorded
+  it local-only, tripped the destination breaker so every remaining site,
+  database and volume in that run skipped off-siting too, and raised an incident
+  saying the backups *"exist only on this server"*. Both upload call sites now
+  use `post_long` with a budget that outlasts the agent's, so the agent's own
+  error surfaces instead of a bare timeout.
+
+- **`sshpass` is installed.** It is the only path a password-authenticated SFTP
+  destination can take, and password is the mode the destination form offers
+  first — but nothing installed it, so on every fresh install those destinations
+  failed at Test Connection with an opaque `502`. v2.48.5 measured SFTP as
+  working only because the test rig had installed `sshpass` itself. The installer
+  now installs it (best-effort: it comes from EPEL on RHEL-family, and making it
+  mandatory would turn a missing repository into a failed install), `openssh-client`
+  is declared rather than assumed, and when it is genuinely absent the agent now
+  names the binary and the remedy instead of reporting `os error 2`.
+
+- **Test Connection exercises what an upload needs.** The S3 test issued `HEAD`
+  on the bucket **root** while an upload `PUT`s into the **prefix** — a different
+  permission at a different path, so read-only keys and prefix-scoped keys both
+  reported green. It now writes a probe object where the backups will go and
+  removes it. The SFTP test connected and ran `exit`, never touching
+  `remote_path`; and nothing ever created that directory, which `scp` will not do
+  — so a destination whose path did not already exist passed Test and failed
+  every upload with *"No such file or directory"*. The default is `/backups`,
+  which exists on almost no server. The upload now creates the directory, and the
+  test creates and probes it.
 
 - **One `known_hosts`, not two.** v2.48.5 pointed the backup uploader's ssh at
   `/var/lib/dockpanel/known_hosts`, when `deploy.rs` had already established
@@ -14,6 +74,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   with a docstring saying so. Two trust stores means a host pinned by a git
   deploy is an unknown host to a backup upload. Aligned to the existing path.
   (Both are writable under the unit; this is consistency, not a failure.)
+
+### Changed
+
+- **The ssh options for backup uploads are built in one place.** `upload_sftp` and
+  `test_sftp` each built the list by hand under a comment promising they were
+  "kept in step deliberately". They were not — `ConnectTimeout` was set on the
+  test and missing from the upload — and a test that connects differently from
+  the upload is a test of nothing. One builder now serves both.
+
+### Added
+
+- **CI check: `backup-lands`.** A source pin over all six defects above, watched
+  failing against the pre-fix tree (29 of 31 arms) before being trusted.
 
 
 ## [2.48.5] - 2026-07-30

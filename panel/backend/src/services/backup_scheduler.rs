@@ -13,7 +13,9 @@ struct ScheduleRow {
     domain: String,
     schedule: String,
     retention_count: i32,
-    #[allow(dead_code)]
+    /// Recorded on the `backups` row when the upload succeeds. It carried an
+    /// `#[allow(dead_code)]` for as long as this path selected it and never used
+    /// it — the annotation is what kept the compiler from pointing at the gap.
     dest_id: Option<Uuid>,
     dest_dtype: Option<String>,
     dest_config: Option<serde_json::Value>,
@@ -241,7 +243,7 @@ async fn run_scheduled_backup(
     let filepath = format!("/var/backups/dockpanel/{}/{}", row.domain, filename);
 
     // 2. Upload to remote destination (if configured)
-    let _uploaded_remote = if let (Some(dest_dtype), Some(dest_config)) =
+    let uploaded_remote = if let (Some(dest_dtype), Some(dest_config)) =
         (&row.dest_dtype, &row.dest_config)
     {
         let dest = crate::routes::backup_destinations::agent_destination_payload(
@@ -260,7 +262,18 @@ async fn run_scheduled_backup(
         let mut uploaded = false;
 
         for (attempt, delay) in delays.iter().enumerate() {
-            match agent.post("/backups/upload", Some(upload_body.clone())).await {
+            // `post_long`, not `post`: `post` caps every agent call at 60s, while the
+            // agent budgets 600s for this exact upload (services/remote_backup.rs).
+            // An off-site copy that takes longer than a minute — a ~12MB archive on a
+            // slow uplink was enough to measure it — therefore had the panel give up
+            // while curl/scp kept running and the bytes DID land. The panel then
+            // retried the whole file twice more, recorded the backup as local-only,
+            // and alerted that it had failed. 660s so the AGENT's own timeout always
+            // fires first and the operator gets its real error, not "timed out".
+            match agent
+                .post_long("/backups/upload", Some(upload_body.clone()), 660)
+                .await
+            {
                 Ok(_) => {
                     uploaded = true;
                     break;
@@ -308,15 +321,28 @@ async fn run_scheduled_backup(
 
     // 3. Record in DB only after successful creation and upload (if configured).
     // This ensures the DB only contains backups that are fully complete.
+    //
+    // `uploaded` and `destination_id` are bound here because migration
+    // 20260726000000 added them to `backups` for precisely this, and this path did
+    // not write them: it computed the upload result into a discarded `_`-prefixed
+    // binding and inserted five columns. So a per-site schedule with a destination
+    // attached shipped the archive off-site and then filed it as local-only — the
+    // "remote" badge in All Backups could never light for a scheduled backup, and
+    // nothing recorded where the bytes went. Measured on a live box (s289): the
+    // SFTP copy was sitting at the destination while its row read
+    // uploaded=f, destination_id=NULL. The sibling policy path had been wired to
+    // these columns from the start, which is what made the gap invisible.
     let _ = sqlx::query(
-        "INSERT INTO backups (site_id, filename, size_bytes, databases_included, databases_expected) \
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO backups (site_id, filename, size_bytes, databases_included, databases_expected, uploaded, destination_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(row.site_id)
     .bind(filename)
     .bind(size_bytes)
     .bind(db_included)
     .bind(db_expected)
+    .bind(uploaded_remote)
+    .bind(if uploaded_remote { row.dest_id } else { None })
     .execute(db)
     .await;
 
