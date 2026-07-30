@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **One `known_hosts`, not two.** v2.48.5 pointed the backup uploader's ssh at
+  `/var/lib/dockpanel/known_hosts`, when `deploy.rs` had already established
+  `/etc/dockpanel/known_hosts` for git deploys, for exactly the same reason and
+  with a docstring saying so. Two trust stores means a host pinned by a git
+  deploy is an unknown host to a backup upload. Aligned to the existing path.
+  (Both are writable under the unit; this is consistency, not a failure.)
+
+
 ## [2.48.5] - 2026-07-30
 
 SFTP backup destinations have never worked. Both reasons were found by standing

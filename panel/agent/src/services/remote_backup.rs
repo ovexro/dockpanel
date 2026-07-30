@@ -135,11 +135,14 @@ pub async fn upload_sftp(
         // SFTP destination therefore failed before it opened a connection, with
         // "Could not create directory '/root/.ssh' (Read-only file system)" — so
         // SFTP destinations could never be tested and never uploaded to (s288).
-        // /var/lib/dockpanel is in the unit's ReadWritePaths. Redirecting the file
-        // keeps first-use pinning intact; using /dev/null or StrictHostKeyChecking=no
-        // would have "fixed" it by discarding host verification entirely.
+        // /etc/dockpanel is in the unit's ReadWritePaths, and is where `deploy.rs`
+        // already points git's ssh for exactly this reason — one trust store, so a
+        // host pinned by a git deploy is the same host to a backup upload. Redirecting
+        // the file keeps first-use pinning intact; /dev/null or
+        // StrictHostKeyChecking=no would have "fixed" it by discarding host
+        // verification entirely.
         "-o".into(),
-        "UserKnownHostsFile=/var/lib/dockpanel/known_hosts".into(),
+        "UserKnownHostsFile=/etc/dockpanel/known_hosts".into(),
         "-P".into(),
         port.to_string(),
     ];
@@ -269,7 +272,7 @@ pub async fn test_sftp(
         "-o".into(),
         "StrictHostKeyChecking=accept-new".into(),
         "-o".into(),
-        "UserKnownHostsFile=/var/lib/dockpanel/known_hosts".into(),
+        "UserKnownHostsFile=/etc/dockpanel/known_hosts".into(),
         "-o".into(),
         "ConnectTimeout=10".into(),
         "-p".into(),
