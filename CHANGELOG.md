@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.48.5] - 2026-07-30
+
+SFTP backup destinations have never worked. Both reasons were found by standing
+one up and pressing Test — neither is visible in the code that implements SFTP.
+
+### Fixed
+
+- **An SFTP destination can be reached at all.** `ssh` was invoked with
+  `StrictHostKeyChecking=accept-new`, which means "trust on first use, then pin"
+  — and pinning is a **write**, to `~/.ssh/known_hosts`. The agent runs with
+  `ProtectHome=yes` and `ProtectSystem=strict`, so that path does not exist and
+  cannot be created:
+
+  ```
+  Could not create directory '/root/.ssh' (Read-only file system)
+  ```
+
+  Every SFTP destination failed there, before it opened a connection — so none
+  could be tested and none could be uploaded to. `known_hosts` now lives at
+  `/var/lib/dockpanel/known_hosts`, which the unit already allows. First-use
+  pinning is kept; `StrictHostKeyChecking=no` would have "fixed" this by throwing
+  away host verification.
+
+- **Password authentication works.** The same commands also passed
+  `BatchMode=yes`, which disables password and keyboard-interactive
+  authentication outright. `sshpass` was therefore supplying a password that
+  `ssh` had already refused to offer, and the server answered
+  `Permission denied (publickey,password)`. Two settings that are each correct
+  alone and cancel each other out. `BatchMode` is now sent only when
+  authenticating by key, where it belongs — password auth stays non-interactive
+  because sshpass supplies it over a pty and `ConnectTimeout` bounds the attempt.
+
+  Measured both ways against a live endpoint: with the flag, denied; without it,
+  connected.
+
+
 ## [2.48.4] - 2026-07-30
 
 Two defects that only became visible once something finally exercised the code:

@@ -128,11 +128,39 @@ pub async fn upload_sftp(
     let mut cmd_args: Vec<String> = vec![
         "-o".into(),
         "StrictHostKeyChecking=accept-new".into(),
+        // known_hosts must live somewhere the agent can WRITE. `accept-new` means
+        // "trust on first use, then pin", and pinning is a write — ssh's default
+        // target is ~/.ssh/known_hosts, which under this unit's ProtectHome=yes
+        // and ProtectSystem=strict does not exist and cannot be created. Every
+        // SFTP destination therefore failed before it opened a connection, with
+        // "Could not create directory '/root/.ssh' (Read-only file system)" — so
+        // SFTP destinations could never be tested and never uploaded to (s288).
+        // /var/lib/dockpanel is in the unit's ReadWritePaths. Redirecting the file
+        // keeps first-use pinning intact; using /dev/null or StrictHostKeyChecking=no
+        // would have "fixed" it by discarding host verification entirely.
         "-o".into(),
-        "BatchMode=yes".into(),
+        "UserKnownHostsFile=/var/lib/dockpanel/known_hosts".into(),
         "-P".into(),
         port.to_string(),
     ];
+
+    // BatchMode=yes ONLY when authenticating by key.
+    //
+    // It means "never prompt", which is right for a key and fatal for a password:
+    // it disables password and keyboard-interactive authentication outright, so
+    // sshpass has nothing left to answer and the server reports
+    // "Permission denied (publickey,password)". The two settings each look correct
+    // on their own and cancel each other out, so a password-authenticated SFTP
+    // destination could never connect — measured s288, with and without the flag
+    // against the same live endpoint.
+    //
+    // Password auth is still non-interactive: sshpass supplies it over a pty, and
+    // ConnectTimeout bounds the attempt, so dropping BatchMode cannot leave the
+    // agent waiting on a prompt.
+    if key_path.is_some() || password.is_none() {
+        cmd_args.push("-o".into());
+        cmd_args.push("BatchMode=yes".into());
+    }
 
     if let Some(key) = key_path {
         cmd_args.push("-i".into());
@@ -232,18 +260,35 @@ pub async fn test_sftp(
     password: Option<&str>,
     key_path: Option<&str>,
 ) -> Result<(), String> {
+    // Same two constraints as `upload_sftp` above, for the same reasons: the
+    // known_hosts file must be writable under this unit's sandbox, and BatchMode
+    // must NOT be set when authenticating by password or it disables the very
+    // method sshpass supplies. Kept in step with that function deliberately — a
+    // test that connects differently from the upload is a test of nothing.
     let mut cmd_args: Vec<String> = vec![
         "-o".into(),
         "StrictHostKeyChecking=accept-new".into(),
         "-o".into(),
-        "BatchMode=yes".into(),
+        "UserKnownHostsFile=/var/lib/dockpanel/known_hosts".into(),
         "-o".into(),
         "ConnectTimeout=10".into(),
         "-p".into(),
         port.to_string(),
-        format!("{username}@{host}"),
-        "exit".into(),
     ];
+    if key_path.is_some() || password.is_none() {
+        cmd_args.push("-o".into());
+        cmd_args.push("BatchMode=yes".into());
+    }
+    // Appended here rather than spliced in at a fixed index further down. The
+    // previous code did `insert(6, "-i")`, which silently depends on how many
+    // options happen to precede it — and this function's option list is now
+    // conditional, so that offset is no longer a constant.
+    if let Some(key) = key_path {
+        cmd_args.push("-i".into());
+        cmd_args.push(key.into());
+    }
+    cmd_args.push(format!("{username}@{host}"));
+    cmd_args.push("exit".into());
 
     let (program, final_args, sshpass_env) = if let Some(pw) = password {
         if key_path.is_some() {
@@ -254,10 +299,7 @@ pub async fn test_sftp(
             ("sshpass".to_string(), args, Some(pw.to_string()))
         }
     } else {
-        if let Some(key) = key_path {
-            cmd_args.insert(6, "-i".into());
-            cmd_args.insert(7, key.into());
-        }
+        // `-i` is already in cmd_args (appended above with the other options).
         ("ssh".to_string(), cmd_args, None)
     };
 
