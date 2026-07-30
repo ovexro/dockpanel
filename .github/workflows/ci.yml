@@ -269,3 +269,17 @@ jobs:
       # that guard being wrong is it never having been executed.
       - name: A rollback cannot undo itself, and a failed update reports
         run: bash tests/update-rollback-pin-e2e.sh
+
+  agent-error-contract:
+    name: Agent Error Propagation Contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pure source analysis — no box, no build. Guards the boundary where an
+      # agent's deliberate 4xx ("Path must be within /var/backups/ or /tmp/")
+      # used to become a generic 502 that the frontend then rendered as "Agent
+      # offline". Three separate reporters filed three separate bugs against
+      # that one sentence (#90, #91, #92), so the contract is worth a job.
+      - name: An agent that answers is not an agent that is offline
+        run: bash tests/agent-error-propagation-pin-e2e.sh

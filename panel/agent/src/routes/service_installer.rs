@@ -1238,14 +1238,61 @@ SecStatusEngine Off
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Write modsec config: {e}")))?;
 
     // 5. Write unicode mapping (required by ModSecurity)
-    if !std::path::Path::new("/etc/modsecurity/unicode.mapping").exists() {
-        // Try to copy from default location or create minimal one
-        let _ = std::fs::copy(
-            "/usr/share/modsecurity-crs/unicode.mapping",
-            "/etc/modsecurity/unicode.mapping",
-        );
-        if !std::path::Path::new("/etc/modsecurity/unicode.mapping").exists() {
-            std::fs::write("/etc/modsecurity/unicode.mapping", "").ok();
+    //
+    // `modsecurity.conf` above declares `SecUnicodeMapFile unicode.mapping
+    // 20127`, and ModSecurity refuses to load a mapping file it cannot parse —
+    // so an ABSENT or EMPTY file here does not fail the install, it fails
+    // `nginx -t` later, the first time a site actually turns the WAF on. That
+    // is what issue #92 hit on Debian 13, where `libmodsecurity3t64` ships no
+    // `unicode.mapping` anywhere on the filesystem (verified: `find / -name
+    // unicode.mapping` on a clean debian:13 after installing the package
+    // returns nothing) and the old code's copy source
+    // `/usr/share/modsecurity-crs/unicode.mapping` therefore never existed —
+    // leaving the `write("")` fallback to create a zero-byte file that is
+    // guaranteed to break the very nginx config this installer is for.
+    //
+    // The file rides the BINARY instead of depending on distro packaging, the
+    // same delivery discipline as the agent's own systemd unit. Vendored from
+    // upstream ModSecurity at `panel/agent/assets/unicode.mapping`.
+    const UNICODE_MAPPING: &str = include_str!("../../assets/unicode.mapping");
+    const MAPPING_PATH: &str = "/etc/modsecurity/unicode.mapping";
+
+    // A system copy is preferred when the distro does ship one, but only if it
+    // is real: an empty or truncated file is worse than no file, because it
+    // looks installed.
+    let usable_system_copy = std::fs::metadata(MAPPING_PATH)
+        .map(|m| m.len() > 1024)
+        .unwrap_or(false);
+
+    if !usable_system_copy {
+        let from_distro = ["/usr/share/modsecurity/unicode.mapping",
+                           "/usr/share/modsecurity-crs/unicode.mapping",
+                           "/etc/nginx/modsecurity/unicode.mapping"]
+            .iter()
+            .find(|p| std::fs::metadata(p).map(|m| m.len() > 1024).unwrap_or(false))
+            .and_then(|p| std::fs::read_to_string(p).ok());
+
+        let contents = from_distro.as_deref().unwrap_or(UNICODE_MAPPING);
+        std::fs::write(MAPPING_PATH, contents).map_err(|e| {
+            err(StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Write unicode.mapping: {e}"))
+        })?;
+    }
+
+    // Assert the thing the later nginx reload depends on, rather than assuming
+    // the write did what it said (#45: an installer that discards its results
+    // hides every other bug in itself).
+    match std::fs::read_to_string(MAPPING_PATH) {
+        Ok(c) if c.contains("20127") => {}
+        Ok(_) => {
+            return Err(err(StatusCode::INTERNAL_SERVER_ERROR,
+                "unicode.mapping is present but does not define code page 20127, \
+                 which modsecurity.conf requires — the WAF would fail nginx -t \
+                 the first time a site enabled it"));
+        }
+        Err(e) => {
+            return Err(err(StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("unicode.mapping unreadable after install: {e}")));
         }
     }
 

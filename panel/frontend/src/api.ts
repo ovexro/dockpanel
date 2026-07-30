@@ -51,8 +51,12 @@ async function request<T = unknown>(
 
   if (!res.ok) {
     let message = (data as { error?: string }).error || `Request failed (${res.status})`;
-    // Translate common backend errors into user-friendly messages
-    if (res.status === 502 || message.includes("agent connection failed")) {
+    // Only the backend can tell "the agent never answered" apart from "the
+    // agent answered and something failed inside it" — both arrive as 502.
+    // Keying this off the bare status is what reported a working agent as
+    // offline whenever it refused a request (issues #90, #91, #92), and did
+    // the same for a Stripe or Cloudflare failure that never involved it.
+    if ((data as { code?: string }).code === "agent_unreachable") {
       message = "Agent offline — the DockPanel agent is not responding.";
     }
     throw new ApiError(res.status, message);

@@ -6,6 +6,61 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.48.2] - 2026-07-30
+
+Three people reported three different bugs this week. All three had been told
+"Agent offline — the DockPanel agent is not responding" by a panel whose agent
+was answering perfectly clearly.
+
+### Fixed
+
+- **An agent that refuses a request is no longer reported as an agent that is
+  down** (#90, #91, #92). `agent_error()` accepted `impl Display`, so
+  `AgentError::Status(code, body)` — carrying the agent's real status and its
+  real sentence — was formatted into a string and collapsed into one generic
+  `502` at 244 call sites. The frontend then rewrote *any* 502 into the
+  "agent offline" message. So `Path must be within /var/backups/ or /tmp/`,
+  `WAF not installed. Install it from the Services page first.` and a complete
+  `nginx -t` diagnostic all reached their operators as the same dead end.
+
+  A 4xx from the agent now keeps its status and its message. Only a transport
+  failure or an open circuit breaker — the cases where nothing answered — carry
+  the `agent_unreachable` marker the UI keys off. Agent 5xx still returns a
+  generic message with an incident id, so internals are not leaked.
+
+- **Stripe and Cloudflare failures no longer blame the agent.** 27 call sites in
+  `billing.rs` and `dns.rs` routed third-party HTTP errors through the agent
+  path; `billing.rs` makes no agent call at all. They now report which upstream
+  actually failed. Enforced by the type system rather than by review:
+  `agent_error` takes `AgentError`, which a `reqwest::Error` is not.
+
+- **The WAF install no longer leaves nginx unable to start** (#92). The
+  installer copied `unicode.mapping` from `/usr/share/modsecurity-crs/`, and
+  when that was absent wrote a **zero-byte file** — which ModSecurity cannot
+  parse. Debian 13's `libmodsecurity3t64` ships no `unicode.mapping` anywhere,
+  so every Debian 13 install took the empty-file path, reported success, and
+  failed `nginx -t` the first time a site actually enabled the WAF. The mapping
+  now rides the binary (`include_str!`), and the installer verifies the file it
+  just wrote defines the code page `modsecurity.conf` names.
+
+- **The Migration form stops suggesting a path the agent rejects** (#90). The
+  Backup File Path placeholder read `/home/user/backup-…` while the agent only
+  accepts `/var/backups/` or `/tmp/`. The field now shows an accepted location
+  and states the constraint.
+
+### Known issues
+
+- **#91 (Migration `524`) is only half addressed here.** The misleading message
+  is fixed, but the underlying cause — backup analysis runs inline in the
+  request and can outlive the gateway timeout on a large archive — needs the
+  async 202-and-poll treatment used by the restore and update paths. Tracked on
+  the issue.
+
+### Added
+
+- `tests/agent-error-propagation-pin-e2e.sh` (21 assertions, CI job
+  `agent-error-contract`), proven to fail 20 of 21 against the pre-fix tree.
+
 ## [2.48.1] - 2026-07-29
 
 A clean 16-package upgrade reported itself as failed, because the update killed

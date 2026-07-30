@@ -7,7 +7,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
-use crate::error::{internal_error, err, agent_error, require_admin, ApiError};
+use crate::error::{ApiError, agent_error, err, internal_error, require_admin, upstream_error};
 use crate::services::activity;
 use crate::AppState;
 
@@ -298,12 +298,12 @@ pub async fn create_zone(
                 .headers(headers)
                 .send()
                 .await
-                .map_err(|e| agent_error("Cloudflare API", e))?;
+                .map_err(|e| upstream_error("Cloudflare API", e))?;
 
             let cf_resp: serde_json::Value = resp
                 .json()
                 .await
-                .map_err(|e| agent_error("Cloudflare response", e))?;
+                .map_err(|e| upstream_error("Cloudflare response", e))?;
 
             if !cf_resp.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
                 let errors = cf_resp.get("errors").cloned().unwrap_or_default();
@@ -370,7 +370,7 @@ pub async fn create_zone(
                 .json(&pdns_body)
                 .send()
                 .await
-                .map_err(|e| agent_error("PowerDNS API", e))?;
+                .map_err(|e| upstream_error("PowerDNS API", e))?;
 
             let status = resp.status();
             if !status.is_success() {
@@ -436,7 +436,7 @@ pub async fn delete_zone(
             .headers(headers)
             .send()
             .await
-            .map_err(|e| agent_error("PowerDNS delete zone", e))?;
+            .map_err(|e| upstream_error("PowerDNS delete zone", e))?;
         let st = resp.status();
         // 2xx = deleted; 404 = already absent — both are acceptable end states.
         if !st.is_success() && st.as_u16() != 404 {
@@ -479,12 +479,12 @@ pub async fn list_records(
                 .headers(headers)
                 .send()
                 .await
-                .map_err(|e| agent_error("Cloudflare API", e))?;
+                .map_err(|e| upstream_error("Cloudflare API", e))?;
 
             let cf_resp: serde_json::Value = resp
                 .json()
                 .await
-                .map_err(|e| agent_error("Cloudflare response", e))?;
+                .map_err(|e| upstream_error("Cloudflare response", e))?;
 
             if !cf_resp.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
                 return Err(err(StatusCode::BAD_GATEWAY, "Failed to fetch DNS records from Cloudflare"));
@@ -507,7 +507,7 @@ pub async fn list_records(
                 .headers(headers)
                 .send()
                 .await
-                .map_err(|e| agent_error("PowerDNS API", e))?;
+                .map_err(|e| upstream_error("PowerDNS API", e))?;
 
             if !resp.status().is_success() {
                 let body = resp.text().await.unwrap_or_default();
@@ -518,7 +518,7 @@ pub async fn list_records(
             let pdns_resp: serde_json::Value = resp
                 .json()
                 .await
-                .map_err(|e| agent_error("PowerDNS response", e))?;
+                .map_err(|e| upstream_error("PowerDNS response", e))?;
 
             let rrsets = pdns_resp.get("rrsets").and_then(|v| v.as_array()).cloned().unwrap_or_default();
             let records = pdns_flatten_records(&rrsets);
@@ -573,12 +573,12 @@ pub async fn create_record(
                 .json(&cf_body)
                 .send()
                 .await
-                .map_err(|e| agent_error("Cloudflare API", e))?;
+                .map_err(|e| upstream_error("Cloudflare API", e))?;
 
             let cf_resp: serde_json::Value = resp
                 .json()
                 .await
-                .map_err(|e| agent_error("Cloudflare response", e))?;
+                .map_err(|e| upstream_error("Cloudflare response", e))?;
 
             if !cf_resp.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
                 let errors = cf_resp.get("errors").cloned().unwrap_or_default();
@@ -622,7 +622,7 @@ pub async fn create_record(
                 .headers(headers.clone())
                 .send()
                 .await
-                .map_err(|e| agent_error("PowerDNS API", e))?;
+                .map_err(|e| upstream_error("PowerDNS API", e))?;
 
             let mut existing_records: Vec<serde_json::Value> = Vec::new();
             if get_resp.status().is_success() {
@@ -663,7 +663,7 @@ pub async fn create_record(
                 .json(&patch_body)
                 .send()
                 .await
-                .map_err(|e| agent_error("PowerDNS API", e))?;
+                .map_err(|e| upstream_error("PowerDNS API", e))?;
 
             if !resp.status().is_success() {
                 let body_text = resp.text().await.unwrap_or_default();
@@ -730,12 +730,12 @@ pub async fn update_record(
                 .json(&cf_body)
                 .send()
                 .await
-                .map_err(|e| agent_error("Cloudflare API", e))?;
+                .map_err(|e| upstream_error("Cloudflare API", e))?;
 
             let cf_resp: serde_json::Value = resp
                 .json()
                 .await
-                .map_err(|e| agent_error("Cloudflare response", e))?;
+                .map_err(|e| upstream_error("Cloudflare response", e))?;
 
             if !cf_resp.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
                 let errors = cf_resp.get("errors").cloned().unwrap_or_default();
@@ -781,7 +781,7 @@ pub async fn update_record(
                 .headers(headers.clone())
                 .send()
                 .await
-                .map_err(|e| agent_error("PowerDNS API", e))?;
+                .map_err(|e| upstream_error("PowerDNS API", e))?;
 
             let zone_data: serde_json::Value = get_resp.json().await.unwrap_or_default();
             let rrsets = zone_data.get("rrsets").and_then(|v| v.as_array()).cloned().unwrap_or_default();
@@ -885,7 +885,7 @@ pub async fn update_record(
                 .json(&serde_json::json!({ "rrsets": patch_rrsets }))
                 .send()
                 .await
-                .map_err(|e| agent_error("PowerDNS API", e))?;
+                .map_err(|e| upstream_error("PowerDNS API", e))?;
 
             if !resp.status().is_success() {
                 let body_text = resp.text().await.unwrap_or_default();
@@ -936,12 +936,12 @@ pub async fn delete_record(
                 .headers(headers)
                 .send()
                 .await
-                .map_err(|e| agent_error("Cloudflare API", e))?;
+                .map_err(|e| upstream_error("Cloudflare API", e))?;
 
             let cf_resp: serde_json::Value = resp
                 .json()
                 .await
-                .map_err(|e| agent_error("Cloudflare response", e))?;
+                .map_err(|e| upstream_error("Cloudflare response", e))?;
 
             if !cf_resp.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
                 let errors = cf_resp.get("errors").cloned().unwrap_or_default();
@@ -968,7 +968,7 @@ pub async fn delete_record(
                 .headers(headers.clone())
                 .send()
                 .await
-                .map_err(|e| agent_error("PowerDNS API", e))?;
+                .map_err(|e| upstream_error("PowerDNS API", e))?;
 
             let zone_data: serde_json::Value = get_resp.json().await.unwrap_or_default();
             let rrsets = zone_data.get("rrsets").and_then(|v| v.as_array()).cloned().unwrap_or_default();
@@ -1009,7 +1009,7 @@ pub async fn delete_record(
                 .json(&serde_json::json!({ "rrsets": [patch_rrset] }))
                 .send()
                 .await
-                .map_err(|e| agent_error("PowerDNS API", e))?;
+                .map_err(|e| upstream_error("PowerDNS API", e))?;
 
             if !resp.status().is_success() {
                 let body_text = resp.text().await.unwrap_or_default();

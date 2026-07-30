@@ -8,7 +8,7 @@ use axum::{
 use subtle::ConstantTimeEq;
 
 use crate::auth::AuthUser;
-use crate::error::{internal_error, err, agent_error, ApiError};
+use crate::error::{ApiError, err, internal_error, upstream_error};
 use crate::AppState;
 
 /// Plan definitions: name, price_id (set via Stripe dashboard), server_limit.
@@ -91,10 +91,10 @@ pub async fn create_checkout(
             .form(&[("email", &user.1), ("metadata[user_id]", &claims.sub.to_string())])
             .send()
             .await
-            .map_err(|e| agent_error("Stripe request", e))?;
+            .map_err(|e| upstream_error("Stripe request", e))?;
 
         let body: serde_json::Value = resp.json().await
-            .map_err(|e| agent_error("Stripe response parse", e))?;
+            .map_err(|e| upstream_error("Stripe response parse", e))?;
 
         let cid = body["id"].as_str()
             .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "Stripe: missing customer id"))?
@@ -144,13 +144,13 @@ pub async fn create_checkout(
         ])
         .send()
         .await
-        .map_err(|e| agent_error("Stripe request", e))?;
+        .map_err(|e| upstream_error("Stripe request", e))?;
 
     let session: serde_json::Value = resp.json().await
-        .map_err(|e| agent_error("Stripe response parse", e))?;
+        .map_err(|e| upstream_error("Stripe response parse", e))?;
 
     if let Some(err_msg) = session.get("error") {
-        return Err(agent_error("Stripe checkout", err_msg));
+        return Err(upstream_error("Stripe checkout", err_msg));
     }
 
     let url = session["url"].as_str()
@@ -190,10 +190,10 @@ pub async fn customer_portal(
         ])
         .send()
         .await
-        .map_err(|e| agent_error("Stripe request", e))?;
+        .map_err(|e| upstream_error("Stripe request", e))?;
 
     let session: serde_json::Value = resp.json().await
-        .map_err(|e| agent_error("Stripe response parse", e))?;
+        .map_err(|e| upstream_error("Stripe response parse", e))?;
 
     let url = session["url"].as_str()
         .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "Stripe: missing portal URL"))?;

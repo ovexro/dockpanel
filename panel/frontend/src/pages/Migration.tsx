@@ -204,10 +204,13 @@ export default function Migration() {
             <input
               value={backupPath}
               onChange={(e) => setBackupPath(e.target.value)}
-              placeholder="/home/user/backup-1.2.2026_12-00-00_username.tar.gz"
+              placeholder="/var/backups/backup-1.2.2026_12-00-00_username.tar.gz"
               className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-dark-50 text-sm focus:border-rust-500 focus:outline-none font-mono"
             />
-            <p className="text-xs text-dark-400 mt-1">Upload the backup to your server via SFTP first, then enter the full path here.</p>
+            <p className="text-xs text-dark-400 mt-1">
+              Upload the backup to your server via SFTP first, then enter the full path here.
+              It must be under <code className="text-dark-200">/var/backups/</code> or <code className="text-dark-200">/tmp/</code>.
+            </p>
           </div>
 
           <button
