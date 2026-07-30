@@ -6,6 +6,77 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.48.3] - 2026-07-30
+
+Two reports, one shape: a feature whose halves were both present and were not
+connected to each other. Neither was a missing capability — in both cases the
+work had been done and something in between dropped it on the floor without
+saying so.
+
+### Fixed
+
+- **Git Deploy now passes the UI's environment variables to the container**
+  (#94). The panel sent them under the key `env_vars`; the agent's handler
+  declared that field as `env` with `#[serde(default)]`. serde discarded the key
+  it did not recognise and defaulted the one it did to an empty map, so the
+  container started with no environment and every layer reported success. Only
+  `docker inspect` disagreed.
+
+  This was never specific to the Dockerfile build method. It affected Nixpacks
+  too, and redeploys, and rollbacks, and PR previews — all five call sites.
+  Nixpacks merely *looked* correct because the build endpoint receives the
+  variables separately and bakes them into the image. Docker Apps was unaffected
+  because its two sides happen to agree on `env`.
+
+  The agent now accepts either spelling, so a panel and an agent on different
+  versions still understand each other. All five bodies are built by one
+  function whose parameters are not optional.
+
+- **A crashed Git Deploy container no longer rolls back unconfigured and
+  unbounded.** The auto-rollback path built its own request from four fields and
+  had lost three: it sent no environment under either spelling, and no
+  `memory_mb` or `cpu_percent`. A container that crashed and rolled back came
+  back with no environment *and no resource limits* — on the one path nobody
+  watches, because it runs unattended after a failure.
+
+- **Backup destinations can be added from the panel again** (#93). The S3/SFTP
+  form — create, list, test, delete — was written in Settings, then switched off
+  in place behind `{false && (…)}` by the commit that moved the Destinations tab
+  to Backup Manager. That move brought across the list and the Test button and
+  left create, update and delete with no caller anywhere in the panel. The empty
+  state went on telling operators to "add one via Settings", which was by then
+  the one screen the control had been taken from; the guidance layer told them to
+  add a destination and linked to a tab that had no way to.
+
+  Backup Manager → Destinations now creates, edits, tests and deletes, and the
+  page honours `?tab=` so the links the panel already emitted land where they
+  say. Secret fields come back masked and stay stored unless retyped.
+
+- **Scheduled backups can actually authenticate to their destination.** Three
+  places hand a destination to the agent and only one of them decrypted first.
+  Test Connection used the decrypting path; the per-site scheduler and the policy
+  executor both cloned the stored row and posted the **ciphertext** as the S3
+  secret key or the SFTP password. A destination therefore verified green and
+  then failed every real upload. All three now share one helper.
+
+- **A destination can be attached to a per-site backup schedule.** The check
+  inner-joined `servers` on `backup_destinations.server_id` — a nullable column
+  that `create` never populates, so it is NULL on every destination the panel has
+  ever made. An inner join on an always-NULL column matches nothing, so the
+  endpoint answered `403 Destination not found or not owned by you` for every
+  destination that existed. Unscoped destinations are now accepted; ones pinned
+  to a server still have to belong to the caller.
+
+### Known issues
+
+- PR preview containers still run without the parent app's memory and CPU limits.
+  That predates this release and is left unchanged deliberately rather than
+  altered as a side effect of the rollback fix.
+- Nixpacks still passes environment variables to `nixpacks build --env`, so
+  secrets land in image layers and are visible to `docker history`. Runtime
+  injection now works, which makes the build-time copy redundant; removing it is
+  a separate change.
+
 ## [2.48.2] - 2026-07-30
 
 Three people reported three different bugs this week. All three had been told

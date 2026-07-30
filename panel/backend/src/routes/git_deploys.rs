@@ -140,6 +140,98 @@ pub struct GitPreview {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// Everything `POST /git/deploy` carries. Named as one struct so that adding a
+/// field to the agent's `DeployRequest` forces every caller here to say what it
+/// passes for it, rather than silently passing nothing.
+pub(crate) struct DeployBody<'a> {
+    pub name: &'a str,
+    pub image_tag: &'a str,
+    pub container_port: i32,
+    pub host_port: i32,
+    pub env_vars: &'a serde_json::Value,
+    pub domain: Option<&'a str>,
+    pub memory_mb: Option<i32>,
+    pub cpu_percent: Option<i32>,
+    pub ssl_email: Option<&'a str>,
+}
+
+/// Build the body for the agent's `POST /git/deploy`.
+///
+/// This exists because five call sites used to assemble the same object by hand
+/// and drifted apart in two directions at once (GH #94):
+///
+///   * Four of them sent the environment under the key `env_vars`, after the
+///     column it is loaded from. The agent's handler declares that field as `env`
+///     with `#[serde(default)]`, so the unrecognised key was dropped and the
+///     recognised one defaulted to empty. Every git deploy — Dockerfile AND
+///     Nixpacks, first deploy and redeploy — started its container with no
+///     environment, and no layer reported a problem: the panel logged a success
+///     and the agent logged a deploy. Only `docker inspect` disagreed. Nixpacks
+///     appeared to work because `/git/nixpacks-build` receives the variables
+///     separately and bakes them into the image, which is also why a Nixpacks
+///     app's secrets end up in its image layers.
+///   * The auto-rollback path had lost three fields rather than mis-spelling one:
+///     it sent no environment under either key, and no `memory_mb`/`cpu_percent`,
+///     so a container that crashed and rolled back came back up stripped of its
+///     configuration AND of its resource limits.
+///
+/// The key sent is `env`, the one the agent has always read. Sending the corrected
+/// spelling instead would have fixed nothing until every agent in the fleet was
+/// updated too, and agents update on their own schedule. Exactly one of the two
+/// keys is sent: serde treats a field plus its alias as a duplicate field and
+/// rejects the whole request.
+/// Coerce the `env_vars` JSONB into the object of strings the agent deserializes.
+///
+/// The agent reads this field as `HashMap<String, String>`. `env_vars` is an
+/// unconstrained JSONB column, and while `CreateRequest`/`UpdateRequest` both type
+/// it as a string map, nothing stops a row written by hand — or by a future
+/// writer, or a restored dump — from holding a number or a bool. Passing the raw
+/// value through would make one such row fail the WHOLE deploy at the agent's
+/// deserializer, which trades a bug that lost the environment for a bug that
+/// refuses to deploy. Scalars are stringified, everything else is dropped.
+fn env_object(env_vars: &serde_json::Value) -> serde_json::Value {
+    let Some(obj) = env_vars.as_object() else {
+        return serde_json::json!({});
+    };
+    let coerced: serde_json::Map<String, serde_json::Value> = obj
+        .iter()
+        .filter_map(|(k, v)| {
+            let s = match v {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                // null / array / object have no sane env representation.
+                _ => return None,
+            };
+            Some((k.clone(), serde_json::Value::String(s)))
+        })
+        .collect();
+    serde_json::Value::Object(coerced)
+}
+
+pub(crate) fn build_deploy_body(b: DeployBody<'_>) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "name": b.name,
+        "image_tag": b.image_tag,
+        "container_port": b.container_port,
+        "host_port": b.host_port,
+        "env": env_object(b.env_vars),
+    });
+    if let Some(d) = b.domain {
+        body["domain"] = serde_json::json!(d);
+    }
+    if let Some(mem) = b.memory_mb {
+        body["memory_mb"] = serde_json::json!(mem);
+    }
+    if let Some(cpu) = b.cpu_percent {
+        body["cpu_percent"] = serde_json::json!(cpu);
+    }
+    if let Some(email) = b.ssl_email {
+        body["ssl_email"] = serde_json::json!(email);
+    }
+    body
+}
+
 #[derive(serde::Serialize, sqlx::FromRow)]
 pub struct GitDeployHistory {
     pub id: Uuid,
@@ -843,22 +935,17 @@ pub async fn rollback(
         // Skip clone+build — go straight to deploy with the historical image
         emit("deploy", "Rolling back container", "in_progress", None);
 
-        let mut deploy_body = serde_json::json!({
-            "name": config.name,
-            "image_tag": rollback_image,
-            "container_port": config.container_port,
-            "host_port": config.host_port,
-            "env_vars": config.env_vars,
+        let deploy_body = build_deploy_body(DeployBody {
+            name: &config.name,
+            image_tag: &rollback_image,
+            container_port: config.container_port,
+            host_port: config.host_port,
+            env_vars: &config.env_vars,
+            domain: config.domain.as_deref(),
+            memory_mb: config.memory_mb,
+            cpu_percent: config.cpu_percent,
+            ssl_email: config.ssl_email.as_deref(),
         });
-        if let Some(ref domain) = config.domain {
-            deploy_body["domain"] = serde_json::json!(domain);
-        }
-        if let Some(mem) = config.memory_mb {
-            deploy_body["memory_mb"] = serde_json::json!(mem);
-        }
-        if let Some(cpu) = config.cpu_percent {
-            deploy_body["cpu_percent"] = serde_json::json!(cpu);
-        }
 
         match agent.post_long("/git/deploy", Some(deploy_body), 120).await {
             Ok(result) => {
@@ -1584,25 +1671,17 @@ fn spawn_deploy_task(
         // Step 3: Deploy
         emit("deploy", "Deploying container", "in_progress", None);
 
-        let mut deploy_body = serde_json::json!({
-            "name": config.name,
-            "image_tag": image_tag,
-            "container_port": config.container_port,
-            "host_port": config.host_port,
-            "env_vars": config.env_vars,
+        let deploy_body = build_deploy_body(DeployBody {
+            name: &config.name,
+            image_tag: &image_tag,
+            container_port: config.container_port,
+            host_port: config.host_port,
+            env_vars: &config.env_vars,
+            domain: config.domain.as_deref(),
+            memory_mb: config.memory_mb,
+            cpu_percent: config.cpu_percent,
+            ssl_email: config.ssl_email.as_deref(),
         });
-        if let Some(ref domain) = config.domain {
-            deploy_body["domain"] = serde_json::json!(domain);
-        }
-        if let Some(mem) = config.memory_mb {
-            deploy_body["memory_mb"] = serde_json::json!(mem);
-        }
-        if let Some(cpu) = config.cpu_percent {
-            deploy_body["cpu_percent"] = serde_json::json!(cpu);
-        }
-        if let Some(ref ssl_email) = config.ssl_email {
-            deploy_body["ssl_email"] = serde_json::json!(ssl_email);
-        }
 
         match agent.post_long("/git/deploy", Some(deploy_body), 120).await {
             Ok(result) => {
@@ -1760,6 +1839,16 @@ fn spawn_deploy_task(
                     let monitor_config_port = config.container_port;
                     let monitor_config_host_port = config.host_port;
                     let monitor_config_domain = config.domain.clone();
+                    // Captured so the rollback below can redeploy the app as it was
+                    // configured. Without these it rebuilt the container from the
+                    // four fields above alone, which meant a crash-triggered
+                    // rollback silently dropped the environment and the memory/CPU
+                    // limits — the container came back both unconfigured and
+                    // unbounded, on the one path nobody is watching (GH #94).
+                    let monitor_config_env = config.env_vars.clone();
+                    let monitor_config_memory = config.memory_mb;
+                    let monitor_config_cpu = config.cpu_percent;
+                    let monitor_config_ssl_email = config.ssl_email.clone();
 
                     tokio::spawn(async move {
                         // Check container health every 15s for 2 minutes
@@ -1790,15 +1879,17 @@ fn spawn_deploy_task(
                                         tracing::warn!("Auto-rollback: rolling back {monitor_name} to {prev_image}");
 
                                         // Deploy the previous image
-                                        let mut rollback_body = serde_json::json!({
-                                            "name": monitor_config_name,
-                                            "image_tag": prev_image,
-                                            "container_port": monitor_config_port,
-                                            "host_port": monitor_config_host_port,
+                                        let rollback_body = build_deploy_body(DeployBody {
+                                            name: &monitor_config_name,
+                                            image_tag: &prev_image,
+                                            container_port: monitor_config_port,
+                                            host_port: monitor_config_host_port,
+                                            env_vars: &monitor_config_env,
+                                            domain: monitor_config_domain.as_deref(),
+                                            memory_mb: monitor_config_memory,
+                                            cpu_percent: monitor_config_cpu,
+                                            ssl_email: monitor_config_ssl_email.as_deref(),
                                         });
-                                        if let Some(ref domain) = monitor_config_domain {
-                                            rollback_body["domain"] = serde_json::json!(domain);
-                                        }
 
                                         if monitor_agent.post_long("/git/deploy", Some(rollback_body), 120).await.is_ok() {
                                             // Record rollback in history
@@ -2223,15 +2314,17 @@ pub async fn trigger_deploy_task(
     };
 
     // Deploy
-    let mut deploy_body = serde_json::json!({
-        "name": config.name, "image_tag": image_tag,
-        "container_port": config.container_port, "host_port": config.host_port,
-        "env_vars": config.env_vars,
+    let deploy_body = build_deploy_body(DeployBody {
+        name: &config.name,
+        image_tag: &image_tag,
+        container_port: config.container_port,
+        host_port: config.host_port,
+        env_vars: &config.env_vars,
+        domain: config.domain.as_deref(),
+        memory_mb: config.memory_mb,
+        cpu_percent: config.cpu_percent,
+        ssl_email: config.ssl_email.as_deref(),
     });
-    if let Some(ref domain) = config.domain { deploy_body["domain"] = serde_json::json!(domain); }
-    if let Some(ref ssl) = config.ssl_email { deploy_body["ssl_email"] = serde_json::json!(ssl); }
-    if let Some(mem) = config.memory_mb { deploy_body["memory_mb"] = serde_json::json!(mem); }
-    if let Some(cpu) = config.cpu_percent { deploy_body["cpu_percent"] = serde_json::json!(cpu); }
 
     match agent.post_long("/git/deploy", Some(deploy_body), 120).await {
         Ok(result) => {
@@ -2432,21 +2525,22 @@ async fn handle_preview_deploy(state: &AppState, agent: &AgentHandle, config: &G
             }
         };
 
-        // Deploy
-        let mut deploy_body = serde_json::json!({
-            "name": format!("{name}-pr-{branch_slug}"),
-            "image_tag": image_tag,
-            "container_port": container_port,
-            "host_port": port,
-            "env_vars": env_vars,
+        // Deploy. memory_mb/cpu_percent are deliberately not inherited from the
+        // parent app: preview containers have always run unbounded, and quietly
+        // starting to cap them would be a behaviour change this fix did not set out
+        // to make. Recorded rather than silently kept — see the s288 ledger.
+        let deploy_body = build_deploy_body(DeployBody {
+            name: &format!("{name}-pr-{branch_slug}"),
+            image_tag: &image_tag,
+            container_port,
+            host_port: port,
+            env_vars: &env_vars,
+            domain: preview_domain.as_deref(),
+            memory_mb: None,
+            cpu_percent: None,
+            // Pass SSL email so preview environments get HTTPS
+            ssl_email: ssl_email.as_deref(),
         });
-        if let Some(ref pd) = preview_domain {
-            deploy_body["domain"] = serde_json::json!(pd);
-        }
-        // Pass SSL email so preview environments get HTTPS
-        if let Some(ref ssl_email) = ssl_email {
-            deploy_body["ssl_email"] = serde_json::json!(ssl_email);
-        }
 
         match agent.post_long("/git/deploy", Some(deploy_body), 120).await {
             Ok(result) => {
@@ -2744,7 +2838,77 @@ pub async fn reject_deploy(
 
 #[cfg(test)]
 mod tests {
-    use super::{strip_container_prefix, is_valid_cron};
+    use super::{build_deploy_body, env_object, strip_container_prefix, is_valid_cron, DeployBody};
+
+    fn body_with(env: serde_json::Value) -> serde_json::Value {
+        build_deploy_body(DeployBody {
+            name: "app",
+            image_tag: "dockpanel-git-app:abc",
+            container_port: 3000,
+            host_port: 30001,
+            env_vars: &env,
+            domain: None,
+            memory_mb: None,
+            cpu_percent: None,
+            ssl_email: None,
+        })
+    }
+
+    #[test]
+    fn deploy_body_sends_the_key_the_agent_reads() {
+        // GH #94: the panel spelled this "env_vars" and the agent's DeployRequest
+        // declares "env" with serde(default), so the environment was dropped and
+        // the deploy still reported success.
+        let body = body_with(serde_json::json!({ "APP_KEY": "secret" }));
+        assert_eq!(body["env"]["APP_KEY"], "secret");
+        // Sending both spellings is worse than sending the wrong one: serde treats
+        // a field plus its alias as a duplicate field and rejects the request.
+        assert!(body.get("env_vars").is_none(), "must not also send the alias");
+    }
+
+    #[test]
+    fn optional_fields_are_omitted_not_nulled() {
+        let body = body_with(serde_json::json!({}));
+        for k in ["domain", "memory_mb", "cpu_percent", "ssl_email"] {
+            assert!(body.get(k).is_none(), "{k} should be absent, not null");
+        }
+    }
+
+    #[test]
+    fn env_scalars_are_stringified_rather_than_failing_the_deploy() {
+        // env_vars is an unconstrained JSONB column. The agent reads it as
+        // HashMap<String, String>, so one numeric value in one row would other-
+        // wise reject the WHOLE deploy — trading a bug that lost the environment
+        // for a bug that refuses to deploy at all.
+        let env = env_object(&serde_json::json!({
+            "PORT": 8080,
+            "DEBUG": true,
+            "NAME": "app",
+        }));
+        assert_eq!(env["PORT"], "8080");
+        assert_eq!(env["DEBUG"], "true");
+        assert_eq!(env["NAME"], "app");
+    }
+
+    #[test]
+    fn env_values_with_no_env_representation_are_dropped() {
+        let env = env_object(&serde_json::json!({
+            "GOOD": "keep",
+            "NULLED": serde_json::Value::Null,
+            "NESTED": { "a": 1 },
+            "LIST": [1, 2],
+        }));
+        assert_eq!(env["GOOD"], "keep");
+        for k in ["NULLED", "NESTED", "LIST"] {
+            assert!(env.get(k).is_none(), "{k} should be dropped");
+        }
+    }
+
+    #[test]
+    fn a_non_object_env_column_yields_an_empty_map() {
+        assert_eq!(env_object(&serde_json::Value::Null), serde_json::json!({}));
+        assert_eq!(env_object(&serde_json::json!("oops")), serde_json::json!({}));
+    }
 
     #[test]
     fn strip_prefix_from_stored_preview_name() {

@@ -283,3 +283,20 @@ jobs:
       # that one sentence (#90, #91, #92), so the contract is worth a job.
       - name: An agent that answers is not an agent that is offline
         run: bash tests/agent-error-propagation-pin-e2e.sh
+
+  backup-dest-git-env:
+    name: Destination + Deploy Env Contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pure source analysis — no box, no build. Two contracts across the same
+      # seam: what the panel sends the agent, and whether a screen exists for
+      # what the API accepts. #94 was a JSON key the two sides spelled
+      # differently, made silent by serde(default). #93 was a form switched off
+      # in place, leaving three endpoints with no caller and an empty state
+      # pointing at the screen the control had just been taken from — plus two
+      # upload paths posting the stored ciphertext as the credential while Test
+      # Connection decrypted and reported success.
+      - name: Both halves of a feature must be connected to each other
+        run: bash tests/backup-destinations-git-env-pin-e2e.sh

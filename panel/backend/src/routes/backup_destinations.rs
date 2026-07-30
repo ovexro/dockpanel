@@ -233,11 +233,28 @@ pub async fn test_connection(
 /// Build the agent destination config from a DB record.
 /// Decrypts sensitive fields before sending to the agent.
 pub fn build_agent_destination(dest: &BackupDestination) -> serde_json::Value {
-    let mut d = decrypt_config_secrets(&dest.config);
+    agent_destination_payload(&dest.dtype, &dest.config)
+}
+
+/// The `destination` object the agent's `/backups/*` handlers expect: the stored
+/// config with its secrets decrypted and `type` folded in.
+///
+/// Everything that hands a destination to the agent must come through here.
+/// Three places built this object and only one of them — `test_connection` —
+/// decrypted first. The other two, the per-site scheduler and the policy
+/// executor, cloned the row's `config` straight out of the database and posted
+/// the CIPHERTEXT as the S3 secret key or the SFTP password. The failure is
+/// shaped to survive review: Test Connection uses the decrypting path and
+/// reports success, so a destination verifies green and then every actual upload
+/// authenticates with an encrypted blob. Taking `dtype` and `config` rather than
+/// a `BackupDestination` is deliberate — both callers hold the two columns from a
+/// joined query and would otherwise have kept hand-rolling this.
+pub fn agent_destination_payload(dtype: &str, config: &serde_json::Value) -> serde_json::Value {
+    let mut d = decrypt_config_secrets(config);
     if let Some(obj) = d.as_object_mut() {
-        obj.insert("type".to_string(), serde_json::json!(&dest.dtype));
+        obj.insert("type".to_string(), serde_json::json!(dtype));
     } else {
-        d = serde_json::json!({ "type": &dest.dtype });
+        d = serde_json::json!({ "type": dtype });
     }
     d
 }

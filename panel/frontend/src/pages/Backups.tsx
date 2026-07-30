@@ -316,7 +316,12 @@ export default function Backups() {
                     ))}
                   </select>
                   {destinations.length === 0 && (
-                    <p className="text-xs text-warn-500 mt-1">Add a destination in Settings first</p>
+                    <p className="text-xs text-warn-500 mt-1">
+                      No destinations yet —{" "}
+                      <Link to="/backup-orchestrator?tab=destinations" className="underline hover:text-warn-400">
+                        add one in Backup Manager
+                      </Link>
+                    </p>
                   )}
                 </div>
               </div>

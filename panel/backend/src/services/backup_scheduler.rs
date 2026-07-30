@@ -244,10 +244,10 @@ async fn run_scheduled_backup(
     let _uploaded_remote = if let (Some(dest_dtype), Some(dest_config)) =
         (&row.dest_dtype, &row.dest_config)
     {
-        let mut dest = dest_config.clone();
-        if let Some(obj) = dest.as_object_mut() {
-            obj.insert("type".to_string(), serde_json::json!(dest_dtype));
-        }
+        let dest = crate::routes::backup_destinations::agent_destination_payload(
+            dest_dtype,
+            dest_config,
+        );
 
         let upload_body = serde_json::json!({
             "filepath": filepath,

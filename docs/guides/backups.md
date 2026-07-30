@@ -95,7 +95,7 @@ Scheduled backups run in the background. The backup scheduler checks for pending
 
 Store backups off-server for disaster recovery. DockPanel supports any S3-compatible storage (AWS S3, Backblaze B2, MinIO, Wasabi, DigitalOcean Spaces, etc.).
 
-1. Go to **Backup Manager** > **Destinations** (also reachable from **Settings**)
+1. Go to **Backup Manager** > **Destinations**
 2. Click **Add Destination**
 3. Enter:
    - **Name**: A label (e.g., `backblaze-b2`)
@@ -105,8 +105,14 @@ Store backups off-server for disaster recovery. DockPanel supports any S3-compat
    - **Access Key**: Your access key ID
    - **Secret Key**: Your secret access key
    - **Region**: `us-west-001` (varies by provider)
-4. Click **Test Connection** to verify access
-5. Click **Save**
+4. Click **Create Destination**. Credentials are encrypted before they are stored.
+5. Click **Test** on the saved destination to verify access — nothing is checked at
+   save time, and the test runs against the stored credentials.
+
+Use **Edit** to change a destination later. Secret fields come back masked as
+`********`; leave them as they are to keep the stored credential, or type a new
+value to rotate it. The transport (S3 or SFTP) cannot be changed on an existing
+destination — delete it and add a new one instead.
 
 Once a destination is configured, edit your backup schedule and select it as the remote destination. Backups will be uploaded after creation.
 

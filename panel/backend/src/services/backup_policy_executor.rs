@@ -56,10 +56,14 @@ pub fn derive_backup_encryption_key(jwt_secret: &str) -> String {
 /// off-site destination and been shown no indication it was ignored. A backup
 /// that only exists on the disk it is insuring is not a backup.
 ///
-/// The sibling path — `backup_scheduler`, which runs per-site schedules — has
-/// uploaded correctly all along. This brings the policy path to the same
-/// behaviour, including its retry ladder and its refusal to record a backup whose
-/// upload failed.
+/// The sibling path — `backup_scheduler`, which runs per-site schedules — was
+/// described here as having "uploaded correctly all along". That was wrong, and
+/// wrong in a way this comment helped preserve: it had the same missing decrypt
+/// this path did, so both were posting ciphertext as the credential while Test
+/// Connection went on reporting success. Both now go through
+/// `agent_destination_payload`. What remains true is the rest — this path shares
+/// the scheduler's retry ladder and its refusal to record a backup whose upload
+/// failed.
 struct ResolvedDestination {
     id: Uuid,
     /// The destination config with `type` folded in, exactly as the agent's
@@ -79,7 +83,7 @@ async fn resolve_destination(db: &PgPool, policy: &PolicyRow) -> Option<Resolved
     // Distinguish "deleted" from "we couldn't ask". Both end in local-only
     // backups, but they are different faults and collapsing them would send an
     // operator hunting for a destination that is still perfectly there.
-    let (dtype, mut config) = match row {
+    let (dtype, config) = match row {
         Ok(Some(r)) => r,
         Ok(None) => {
             tracing::error!(
@@ -97,11 +101,10 @@ async fn resolve_destination(db: &PgPool, policy: &PolicyRow) -> Option<Resolved
         }
     };
 
-    if let Some(obj) = config.as_object_mut() {
-        obj.insert("type".to_string(), serde_json::json!(dtype));
-    }
-
-    Some(ResolvedDestination { id, payload: config })
+    Some(ResolvedDestination {
+        id,
+        payload: crate::routes::backup_destinations::agent_destination_payload(&dtype, &config),
+    })
 }
 
 /// Push one finished backup file off the box.

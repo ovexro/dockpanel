@@ -1,5 +1,5 @@
 import { useAuth } from "../context/AuthContext";
-import { Navigate } from "react-router-dom";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { api } from "../api";
 import { formatSize, formatDate, timeAgo } from "../utils/format";
@@ -115,7 +115,35 @@ interface Destination {
   id: string;
   name: string;
   dtype: string;
+  // Secret-bearing fields (secret_key, password) arrive masked as "********".
+  // Sending them back unchanged is how an edit keeps the stored credential: the
+  // API merges a masked value with the one already encrypted at rest.
+  config: Record<string, string | number | undefined>;
 }
+
+// One editable destination. Both transports are held in the same object so that
+// switching Type in the form does not discard what was typed under the other.
+interface DestForm {
+  name: string;
+  dtype: string;
+  bucket: string;
+  region: string;
+  endpoint: string;
+  access_key: string;
+  secret_key: string;
+  path_prefix: string;
+  host: string;
+  port: string;
+  username: string;
+  password: string;
+  remote_path: string;
+}
+
+const EMPTY_DEST_FORM: DestForm = {
+  name: "", dtype: "s3",
+  bucket: "", region: "us-east-1", endpoint: "", access_key: "", secret_key: "", path_prefix: "backups",
+  host: "", port: "22", username: "", password: "", remote_path: "/backups",
+};
 
 interface ServerRow {
   id: string;
@@ -166,13 +194,33 @@ interface Database {
 
 type Tab = "overview" | "all" | "policies" | "databases" | "volumes" | "verifications" | "drills" | "destinations";
 
+const TAB_KEYS: Tab[] = [
+  "overview", "all", "policies", "databases", "volumes", "verifications", "drills", "destinations",
+];
+
+// Which tab `?tab=` asks for, or Overview. Deep-linkable because other pages send
+// operators here to add a destination, and a link that lands on the wrong tab is
+// how GH #93 started: text that named a place the reader then had to hunt for.
+function tabFromSearch(search: string): Tab {
+  const requested = new URLSearchParams(search).get("tab");
+  return TAB_KEYS.find(k => k === requested) ?? "overview";
+}
+
 const ALL_PAGE_SIZE = 50;
 const DRILLS_PAGE_SIZE = 50;
 
 export default function BackupOrchestrator() {
   const { user } = useAuth();
   if (!user || user.role !== "admin") return <Navigate to="/" replace />;
-  const [tab, setTab] = useState<Tab>("overview");
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [tab, setTabState] = useState<Tab>(() => tabFromSearch(location.search));
+  // Keep `?tab=` in step with the tab bar so the address is shareable and Back
+  // steps between tabs instead of leaving the page.
+  const setTab = (next: Tab) => {
+    setTabState(next);
+    navigate(next === "overview" ? "/backup-orchestrator" : `/backup-orchestrator?tab=${next}`, { replace: true });
+  };
   const [health, setHealth] = useState<BackupHealth | null>(null);
   const [policies, setPolicies] = useState<BackupPolicy[]>([]);
   const [dbBackups, setDbBackups] = useState<DatabaseBackup[]>([]);
@@ -192,6 +240,12 @@ export default function BackupOrchestrator() {
   const [unifiedLoading, setUnifiedLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState({ text: "", type: "" });
+  const [showDestForm, setShowDestForm] = useState(false);
+  const [editingDestId, setEditingDestId] = useState<string | null>(null);
+  const [destForm, setDestForm] = useState<DestForm>(EMPTY_DEST_FORM);
+  const [savingDest, setSavingDest] = useState(false);
+  const [testingDestId, setTestingDestId] = useState<string | null>(null);
+  const [pendingDeleteDestId, setPendingDeleteDestId] = useState<string | null>(null);
   const [showPolicyForm, setShowPolicyForm] = useState(false);
   const [policyForm, setPolicyForm] = useState({
     name: "", schedule: "0 2 * * *", backup_sites: true, backup_databases: true,
@@ -295,6 +349,116 @@ export default function BackupOrchestrator() {
       setMessage({ text: "Policy deleted", type: "success" });
     } catch (e) {
       setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
+    }
+  };
+
+  const openNewDest = () => {
+    setEditingDestId(null);
+    setDestForm(EMPTY_DEST_FORM);
+    setShowDestForm(true);
+  };
+
+  const openEditDest = (d: Destination) => {
+    const c = d.config ?? {};
+    const str = (k: string, fallback = "") => (c[k] === undefined || c[k] === null ? fallback : String(c[k]));
+    setEditingDestId(d.id);
+    setDestForm({
+      ...EMPTY_DEST_FORM,
+      name: d.name,
+      dtype: d.dtype,
+      bucket: str("bucket"),
+      region: str("region", "us-east-1"),
+      endpoint: str("endpoint"),
+      access_key: str("access_key"),
+      // Left masked on purpose. Cleared and retyped to rotate; sent back as
+      // "********" to keep the credential already stored.
+      secret_key: str("secret_key"),
+      path_prefix: str("path_prefix", "backups"),
+      host: str("host"),
+      port: str("port", "22"),
+      username: str("username"),
+      password: str("password"),
+      remote_path: str("remote_path", "/backups"),
+    });
+    setShowDestForm(true);
+  };
+
+  const saveDest = async () => {
+    if (!destForm.name.trim()) {
+      setMessage({ text: "Name is required", type: "error" });
+      return;
+    }
+    const port = parseInt(destForm.port, 10);
+    if (destForm.dtype === "sftp" && (!Number.isFinite(port) || port < 1 || port > 65535)) {
+      setMessage({ text: "Port must be between 1 and 65535", type: "error" });
+      return;
+    }
+    setSavingDest(true);
+    try {
+      const config = destForm.dtype === "s3"
+        ? {
+            bucket: destForm.bucket.trim(),
+            region: destForm.region.trim(),
+            endpoint: destForm.endpoint.trim(),
+            access_key: destForm.access_key.trim(),
+            secret_key: destForm.secret_key,
+            path_prefix: destForm.path_prefix.trim(),
+          }
+        : {
+            host: destForm.host.trim(),
+            port,
+            username: destForm.username.trim(),
+            password: destForm.password,
+            remote_path: destForm.remote_path.trim(),
+          };
+      if (editingDestId) {
+        // dtype is immutable: the stored config is shaped by it, and the API's
+        // update takes name + config only.
+        await api.put(`/backup-destinations/${editingDestId}`, { name: destForm.name.trim(), config });
+        setMessage({ text: `Destination "${destForm.name.trim()}" updated`, type: "success" });
+      } else {
+        await api.post("/backup-destinations", { name: destForm.name.trim(), dtype: destForm.dtype, config });
+        setMessage({ text: `Destination "${destForm.name.trim()}" created`, type: "success" });
+      }
+      setShowDestForm(false);
+      setEditingDestId(null);
+      setDestForm(EMPTY_DEST_FORM);
+      setDestinations(await api.get<Destination[]>("/backup-destinations"));
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : "Failed to save destination", type: "error" });
+    } finally {
+      setSavingDest(false);
+    }
+  };
+
+  const testDest = async (d: Destination) => {
+    setTestingDestId(d.id);
+    setMessage({ text: "", type: "" });
+    try {
+      await api.post(`/backup-destinations/${d.id}/test`);
+      setMessage({ text: `Connection to "${d.name}" succeeded`, type: "success" });
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : "Connection failed", type: "error" });
+    } finally {
+      setTestingDestId(null);
+    }
+  };
+
+  const deleteDest = async (d: Destination) => {
+    setPendingDeleteDestId(null);
+    try {
+      // The API answers with a warning when schedules referenced it — those rows
+      // are not deleted, their destination is nulled, so they silently become
+      // local-only. Surfacing that is the whole point of showing it.
+      const res = await api.delete<{ ok: boolean; warning?: string }>(`/backup-destinations/${d.id}`);
+      setDestinations(destinations.filter(x => x.id !== d.id));
+      setMessage({
+        text: res?.warning ? `Destination "${d.name}" deleted — ${res.warning}` : `Destination "${d.name}" deleted`,
+        type: res?.warning ? "error" : "success",
+      });
+      if (res?.warning) loadAll();
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : "Failed to delete destination", type: "error" });
     }
   };
 
@@ -425,34 +589,23 @@ export default function BackupOrchestrator() {
         />
       )}
       {tab === "destinations" && (
-        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
-          <div className="px-5 py-3 border-b border-dark-600">
-            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Backup Destinations</h3>
-            <p className="text-xs text-dark-200 mt-0.5">S3, SFTP, and other remote storage for backups</p>
-          </div>
-          <div className="p-5">
-            {destinations.length === 0 ? (
-              <p className="text-sm text-dark-300 text-center py-4">No backup destinations configured. Add one via Settings &rarr; or the API.</p>
-            ) : (
-              <div className="space-y-3">
-                {destinations.map(d => (
-                  <div key={d.id} className="flex items-center justify-between p-3 bg-dark-700 rounded-lg">
-                    <div>
-                      <span className="text-sm font-medium text-dark-50">{d.name}</span>
-                      <span className="ml-2 px-2 py-0.5 text-[10px] font-mono uppercase bg-dark-600 text-dark-300 rounded">{d.dtype}</span>
-                    </div>
-                    <button onClick={async () => {
-                      try {
-                        await api.post(`/backup-destinations/${d.id}/test`);
-                        setMessage({ text: `Connection to "${d.name}" successful`, type: "success" });
-                      } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Connection failed", type: "error" }); }
-                    }} className="px-3 py-1 text-xs font-mono bg-dark-600 hover:bg-dark-500 text-dark-200 rounded">Test</button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
+        <DestinationsTab
+          destinations={destinations}
+          showForm={showDestForm}
+          editingId={editingDestId}
+          form={destForm}
+          setForm={setDestForm}
+          saving={savingDest}
+          testingId={testingDestId}
+          pendingDeleteId={pendingDeleteDestId}
+          setPendingDeleteId={setPendingDeleteDestId}
+          onNew={openNewDest}
+          onEdit={openEditDest}
+          onCancel={() => { setShowDestForm(false); setEditingDestId(null); }}
+          onSave={saveDest}
+          onTest={testDest}
+          onDelete={deleteDest}
+        />
       )}
     </div>
   );
@@ -838,6 +991,194 @@ function AllBackupsTab({
               className="px-3 py-1 bg-dark-700 hover:bg-dark-600 disabled:opacity-40 disabled:cursor-not-allowed text-dark-100 rounded"
             >Next</button>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Destinations Tab ──────────────────────────────────────────────────────
+//
+// This is where a destination is created, edited and deleted. It reads as new
+// UI and is not: the form below was written in March, in Settings, and was
+// switched off by the commit that moved this tab here (fd44a31) — which brought
+// across the list and the Test button and left the three mutating endpoints with
+// no caller in the panel at all. What the empty state then told operators to do,
+// "add one via Settings", was the one place the control had just been taken from
+// (GH #93). The docs have described the button below since that same commit.
+
+const DEST_INPUT =
+  "w-full px-3 py-2 bg-dark-900 border border-dark-500 rounded-lg text-sm font-mono text-dark-50 focus:ring-2 focus:ring-accent-500 outline-none";
+const DEST_LABEL = "block text-xs font-medium text-dark-100 mb-1 font-mono";
+
+function DestField({
+  label, value, onChange, placeholder, type = "text", hint,
+}: {
+  label: string; value: string; onChange: (v: string) => void;
+  placeholder?: string; type?: string; hint?: string;
+}) {
+  return (
+    <div>
+      <label className={DEST_LABEL}>{label}</label>
+      <input type={type} value={value} placeholder={placeholder}
+        onChange={e => onChange(e.target.value)} className={DEST_INPUT} />
+      {hint && <p className="text-[10px] text-dark-300 mt-1 font-mono">{hint}</p>}
+    </div>
+  );
+}
+
+function DestinationsTab({
+  destinations, showForm, editingId, form, setForm, saving, testingId,
+  pendingDeleteId, setPendingDeleteId, onNew, onEdit, onCancel, onSave, onTest, onDelete,
+}: {
+  destinations: Destination[];
+  showForm: boolean;
+  editingId: string | null;
+  form: DestForm;
+  setForm: (v: DestForm) => void;
+  saving: boolean;
+  testingId: string | null;
+  pendingDeleteId: string | null;
+  setPendingDeleteId: (v: string | null) => void;
+  onNew: () => void;
+  onEdit: (d: Destination) => void;
+  onCancel: () => void;
+  onSave: () => void;
+  onTest: (d: Destination) => void;
+  onDelete: (d: Destination) => void;
+}) {
+  const set = (patch: Partial<DestForm>) => setForm({ ...form, ...patch });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <button onClick={showForm ? onCancel : onNew}
+          className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium font-mono hover:bg-rust-600 transition-colors">
+          {showForm ? "Cancel" : "Add Destination"}
+        </button>
+      </div>
+
+      {showForm && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 p-5 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <DestField label="Name" value={form.name} onChange={v => set({ name: v })} placeholder="Offsite S3" />
+            <div>
+              <label className={DEST_LABEL}>Type</label>
+              <select value={form.dtype} onChange={e => set({ dtype: e.target.value })}
+                disabled={editingId !== null} className={`${DEST_INPUT} disabled:opacity-50`}>
+                <option value="s3">S3 / R2 / MinIO</option>
+                <option value="sftp">SFTP</option>
+              </select>
+              {editingId !== null && (
+                <p className="text-[10px] text-dark-300 mt-1 font-mono">
+                  Type cannot change — delete and re-add to switch transport
+                </p>
+              )}
+            </div>
+          </div>
+
+          {form.dtype === "s3" ? (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <DestField label="Bucket" value={form.bucket} onChange={v => set({ bucket: v })} placeholder="my-backups" />
+                <DestField label="Region" value={form.region} onChange={v => set({ region: v })} placeholder="us-east-1" />
+              </div>
+              <DestField label="Endpoint URL" value={form.endpoint} onChange={v => set({ endpoint: v })}
+                placeholder="https://s3.amazonaws.com"
+                hint="Cloudflare R2: https://ACCOUNT_ID.r2.cloudflarestorage.com · MinIO: your own host" />
+              <div className="grid grid-cols-2 gap-3">
+                <DestField label="Access Key" value={form.access_key} onChange={v => set({ access_key: v })} />
+                <DestField label="Secret Key" type="password" value={form.secret_key}
+                  onChange={v => set({ secret_key: v })}
+                  hint={editingId ? "Leave as ******** to keep the stored key" : undefined} />
+              </div>
+              <DestField label="Path Prefix" value={form.path_prefix} onChange={v => set({ path_prefix: v })} placeholder="backups" />
+            </>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <DestField label="Host" value={form.host} onChange={v => set({ host: v })} placeholder="backup.example.com" />
+                <DestField label="Port" value={form.port} onChange={v => set({ port: v })} placeholder="22" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <DestField label="Username" value={form.username} onChange={v => set({ username: v })} />
+                <DestField label="Password" type="password" value={form.password}
+                  onChange={v => set({ password: v })}
+                  hint={editingId ? "Leave as ******** to keep the stored password" : undefined} />
+              </div>
+              <DestField label="Remote Path" value={form.remote_path} onChange={v => set({ remote_path: v })} placeholder="/backups" />
+            </>
+          )}
+
+          <div className="flex justify-end gap-2 pt-1">
+            <button onClick={onCancel}
+              className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium font-mono hover:bg-dark-600">
+              Cancel
+            </button>
+            <button onClick={onSave} disabled={saving}
+              className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium font-mono hover:bg-rust-600 disabled:opacity-50">
+              {saving ? "Saving..." : editingId ? "Save Changes" : "Create Destination"}
+            </button>
+          </div>
+          <p className="text-[10px] text-dark-300 font-mono">
+            Credentials are encrypted before they are stored. Use Test after saving — nothing is
+            verified at save time.
+          </p>
+        </div>
+      )}
+
+      {destinations.length === 0 && !showForm ? (
+        <div className="p-12 text-center">
+          <p className="text-dark-200 text-sm font-mono">No backup destinations configured</p>
+          <p className="text-dark-300 text-xs mt-1 font-mono">
+            Backups without a destination stay on this server, and are lost with it. Add S3-compatible
+            storage or an SFTP server, then select it on a policy.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {destinations.map(d => (
+            <div key={d.id} className="flex items-center justify-between p-3 bg-dark-800 rounded-lg border border-dark-500">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-dark-50 truncate">{d.name}</span>
+                  <span className="px-2 py-0.5 text-[10px] font-mono uppercase bg-dark-600 text-dark-300 rounded">{d.dtype}</span>
+                </div>
+                <p className="text-xs text-dark-300 font-mono truncate mt-0.5">
+                  {d.dtype === "s3"
+                    ? `${d.config?.bucket ?? "(no bucket)"}${d.config?.endpoint ? ` @ ${d.config.endpoint}` : ""}`
+                    : `${d.config?.username ? `${d.config.username}@` : ""}${d.config?.host ?? "(no host)"}:${d.config?.port ?? 22}${d.config?.remote_path ?? ""}`}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button onClick={() => onTest(d)} disabled={testingId === d.id}
+                  className="px-3 py-1 text-xs font-mono bg-accent-500/10 text-accent-400 rounded hover:bg-accent-500/20 disabled:opacity-50">
+                  {testingId === d.id ? "Testing..." : "Test"}
+                </button>
+                <button onClick={() => onEdit(d)}
+                  className="px-3 py-1 text-xs font-mono bg-dark-600 hover:bg-dark-500 text-dark-200 rounded">
+                  Edit
+                </button>
+                {pendingDeleteId === d.id ? (
+                  <>
+                    <button onClick={() => onDelete(d)}
+                      className="px-3 py-1 text-xs font-mono bg-danger-500/20 text-danger-400 border border-danger-500/40 rounded hover:bg-danger-500/30">
+                      Confirm
+                    </button>
+                    <button onClick={() => setPendingDeleteId(null)}
+                      className="px-3 py-1 text-xs font-mono bg-dark-700 hover:bg-dark-600 text-dark-200 rounded">
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button onClick={() => setPendingDeleteId(d.id)}
+                    className="px-3 py-1 text-xs font-mono bg-danger-500/10 text-danger-400 rounded hover:bg-danger-500/20">
+                    Delete
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>

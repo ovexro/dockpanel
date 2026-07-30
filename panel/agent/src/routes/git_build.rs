@@ -114,7 +114,19 @@ struct DeployRequest {
     image_tag: String,
     container_port: u16,
     host_port: u16,
-    #[serde(default)]
+    /// The container's runtime environment.
+    ///
+    /// Accepts both spellings deliberately. This endpoint has always read `env`
+    /// (matching `/apps/deploy`), while every caller in the panel spelled it
+    /// `env_vars` after the column it is loaded from — and `serde(default)` turned
+    /// that mismatch into an empty map rather than an error, so git deploys came up
+    /// with no environment at all and nothing anywhere said so (GH #94). The panel
+    /// now sends `env`; the alias keeps a not-yet-updated panel working, since
+    /// agents and panels are installed separately and update on their own schedule.
+    ///
+    /// Callers must send ONE of the two keys, never both: serde rejects a payload
+    /// carrying a field and its alias as a duplicate field.
+    #[serde(default, alias = "env_vars")]
     env: HashMap<String, String>,
     domain: Option<String>,
     memory_mb: Option<u64>,
@@ -549,8 +561,14 @@ async fn nixpacks_build_handler(
     if build_context.contains("..") || build_context.starts_with('/') {
         return Err((StatusCode::BAD_REQUEST, "Invalid build_context path".into()));
     }
-    let env_vars: std::collections::HashMap<String, String> = body["env_vars"]
-        .as_object()
+    // Both spellings, for the same reason `/git/deploy` accepts both: this endpoint
+    // reads `env_vars` and its sibling reads `env`, and that disagreement is what
+    // GH #94 was. Neither endpoint should care which one a given panel sends.
+    let env_vars: std::collections::HashMap<String, String> = body
+        .get("env_vars")
+        .filter(|v| !v.is_null())
+        .or_else(|| body.get("env"))
+        .and_then(|v| v.as_object())
         .map(|m| m.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect())
         .unwrap_or_default();
 

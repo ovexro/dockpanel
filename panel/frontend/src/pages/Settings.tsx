@@ -13,14 +13,6 @@ interface HealthStatus {
   agentOk: boolean;  // computed
 }
 
-interface BackupDestination {
-  id: string;
-  name: string;
-  dtype: string;
-  config: Record<string, string>;
-  created_at: string;
-}
-
 interface Passkey {
   id: string;
   name: string;
@@ -179,24 +171,6 @@ export default function Settings() {
   const [showHeader, setShowHeader] = useState(() => localStorage.getItem("dp-show-header") === "true");
   const [flatNav, setFlatNav] = useState(() => localStorage.getItem("dp-flat-nav") === "true");
 
-  // Backup destinations
-  const [destinations, setDestinations] = useState<BackupDestination[]>([]);
-  const [showDestForm, setShowDestForm] = useState(false);
-  const [destName, setDestName] = useState("");
-  const [destType, setDestType] = useState("s3");
-  const [destBucket, setDestBucket] = useState("");
-  const [destRegion, setDestRegion] = useState("us-east-1");
-  const [destEndpoint, setDestEndpoint] = useState("https://s3.amazonaws.com");
-  const [destAccessKey, setDestAccessKey] = useState("");
-  const [destSecretKey, setDestSecretKey] = useState("");
-  const [destPathPrefix, setDestPathPrefix] = useState("backups");
-  const [destSftpHost, setDestSftpHost] = useState("");
-  const [destSftpPort, setDestSftpPort] = useState("22");
-  const [destSftpUser, setDestSftpUser] = useState("");
-  const [destSftpPass, setDestSftpPass] = useState("");
-  const [destSftpPath, setDestSftpPath] = useState("/backups");
-  const [savingDest, setSavingDest] = useState(false);
-  const [testingDest, setTestingDest] = useState<string | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<{ type: string; label: string; data?: Record<string, unknown> } | null>(null);
 
   // OAuth sign-in providers. The keys behind these were writable through the
@@ -276,15 +250,6 @@ export default function Settings() {
     }
   };
 
-  const loadDestinations = async () => {
-    try {
-      const data = await api.get<BackupDestination[]>("/backup-destinations");
-      setDestinations(data);
-    } catch {
-      setMessage({ text: "Failed to load backup destinations", type: "error" });
-    }
-  };
-
   const executeConfirm = async () => {
     if (!pendingConfirm) return;
     const { type, data } = pendingConfirm;
@@ -304,13 +269,6 @@ export default function Settings() {
           await api.post("/settings/import", data.config);
           setMessage({ text: "Config imported", type: "success" });
           window.location.reload();
-          break;
-        }
-        case "delete_destination": {
-          if (!data) break;
-          await api.delete(`/backup-destinations/${data.id}`);
-          loadDestinations();
-          setMessage({ text: "Destination removed", type: "success" });
           break;
         }
         case "revoke_sessions": {
@@ -371,7 +329,6 @@ export default function Settings() {
   useEffect(() => {
     loadSettings();
     loadHealth();
-    loadDestinations();
     load2faStatus();
     loadPasskeys();
     loadNotifyChannels();
@@ -543,9 +500,9 @@ export default function Settings() {
       {/* Inline confirmation bar */}
       {pendingConfirm && (
         <div className={`mb-4 px-4 py-3 rounded-lg border flex items-center justify-between ${
-          ["revoke_sessions", "revoke_key", "delete_destination"].includes(pendingConfirm.type) ? "border-danger-500/30 bg-danger-500/5" : "border-warn-500/30 bg-warn-500/5"
+          ["revoke_sessions", "revoke_key"].includes(pendingConfirm.type) ? "border-danger-500/30 bg-danger-500/5" : "border-warn-500/30 bg-warn-500/5"
         }`}>
-          <span className={`text-xs font-mono ${["revoke_sessions", "revoke_key", "delete_destination"].includes(pendingConfirm.type) ? "text-danger-400" : "text-warn-400"}`}>
+          <span className={`text-xs font-mono ${["revoke_sessions", "revoke_key"].includes(pendingConfirm.type) ? "text-danger-400" : "text-warn-400"}`}>
             {pendingConfirm.label}
           </span>
           <div className="flex items-center gap-2 shrink-0 ml-4">
@@ -1301,182 +1258,6 @@ export default function Settings() {
                 {saving === "smtp" ? "Saving..." : "Save"}
               </button>
             </div>
-          </div>
-        </div>
-
-        )}
-
-        {/* Backup Destinations — moved to Backup Manager page */}
-        {false && (
-        <div className="hidden">
-          <div>
-            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Backup Destinations</h3>
-            {showDestForm ? (
-              <button
-                onClick={() => setShowDestForm(false)}
-                className="px-3 py-1 text-dark-300 border border-dark-600 rounded-md text-xs font-medium hover:text-dark-100 hover:border-dark-400"
-              >
-                Cancel
-              </button>
-            ) : (
-              <button
-                onClick={() => setShowDestForm(true)}
-                className="px-3 py-1 bg-rust-500 text-white rounded-md text-xs font-medium hover:bg-rust-600"
-              >
-                Add Destination
-              </button>
-            )}
-          </div>
-          <div className="p-5">
-            {showDestForm && (
-              <div className="mb-4 p-4 bg-dark-900 rounded-lg space-y-3">
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-dark-100 mb-1">Name</label>
-                    <input type="text" value={destName} onChange={(e) => setDestName(e.target.value)} placeholder="My S3 Backup" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-dark-100 mb-1">Type</label>
-                    <select value={destType} onChange={(e) => setDestType(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm bg-dark-800 focus:ring-2 focus:ring-accent-500 outline-none">
-                      <option value="s3">S3 / R2 / MinIO</option>
-                      <option value="sftp">SFTP</option>
-                    </select>
-                  </div>
-                </div>
-                {destType === "s3" ? (
-                  <>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs font-medium text-dark-100 mb-1">Bucket</label>
-                        <input type="text" value={destBucket} onChange={(e) => setDestBucket(e.target.value)} placeholder="my-backups" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-dark-100 mb-1">Region</label>
-                        <input type="text" value={destRegion} onChange={(e) => setDestRegion(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-dark-100 mb-1">Endpoint URL</label>
-                      <input type="text" value={destEndpoint} onChange={(e) => setDestEndpoint(e.target.value)} placeholder="https://s3.amazonaws.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none font-mono" />
-                      <p className="text-xs text-dark-300 mt-1">For R2: https://ACCOUNT_ID.r2.cloudflarestorage.com</p>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs font-medium text-dark-100 mb-1">Access Key</label>
-                        <input type="text" value={destAccessKey} onChange={(e) => setDestAccessKey(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-dark-100 mb-1">Secret Key</label>
-                        <input type="password" value={destSecretKey} onChange={(e) => setDestSecretKey(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-dark-100 mb-1">Path Prefix</label>
-                      <input type="text" value={destPathPrefix} onChange={(e) => setDestPathPrefix(e.target.value)} placeholder="backups" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs font-medium text-dark-100 mb-1">Host</label>
-                        <input type="text" value={destSftpHost} onChange={(e) => setDestSftpHost(e.target.value)} placeholder="backup.example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none font-mono" />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-dark-100 mb-1">Port</label>
-                        <input type="text" value={destSftpPort} onChange={(e) => setDestSftpPort(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none font-mono" />
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs font-medium text-dark-100 mb-1">Username</label>
-                        <input type="text" value={destSftpUser} onChange={(e) => setDestSftpUser(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-dark-100 mb-1">Password</label>
-                        <input type="password" value={destSftpPass} onChange={(e) => setDestSftpPass(e.target.value)} className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none" />
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-dark-100 mb-1">Remote Path</label>
-                      <input type="text" value={destSftpPath} onChange={(e) => setDestSftpPath(e.target.value)} placeholder="/backups" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none font-mono" />
-                    </div>
-                  </>
-                )}
-                <div className="flex justify-end">
-                  <button
-                    disabled={savingDest}
-                    onClick={async () => {
-                      setSavingDest(true);
-                      setMessage({ text: "", type: "" });
-                      try {
-                        const config = destType === "s3"
-                          ? { bucket: destBucket, region: destRegion, endpoint: destEndpoint, access_key: destAccessKey, secret_key: destSecretKey, path_prefix: destPathPrefix }
-                          : { host: destSftpHost, port: parseInt(destSftpPort), username: destSftpUser, password: destSftpPass, remote_path: destSftpPath };
-                        await api.post("/backup-destinations", { name: destName, dtype: destType, config });
-                        setShowDestForm(false);
-                        setDestName(""); setDestBucket(""); setDestAccessKey(""); setDestSecretKey("");
-                        setDestSftpHost(""); setDestSftpUser(""); setDestSftpPass("");
-                        loadDestinations();
-                        setMessage({ text: "Destination created", type: "success" });
-                      } catch (e) {
-                        setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
-                      } finally {
-                        setSavingDest(false);
-                      }
-                    }}
-                    className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
-                  >
-                    {savingDest ? "Saving..." : "Save Destination"}
-                  </button>
-                </div>
-              </div>
-            )}
-            {destinations.length === 0 && !showDestForm ? (
-              <p className="text-sm text-dark-300 text-center py-4">No backup destinations configured</p>
-            ) : (
-              <div className="space-y-2">
-                {destinations.map((d) => (
-                  <div key={d.id} className="flex items-center justify-between p-3 bg-dark-900 rounded-lg">
-                    <div>
-                      <p className="text-sm font-medium text-dark-50">{d.name}</p>
-                      <p className="text-xs text-dark-200 font-mono">
-                        {d.dtype === "s3" ? `S3: ${d.config.bucket || ""}` : `SFTP: ${d.config.host || ""}`}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={async () => {
-                          setTestingDest(d.id);
-                          try {
-                            await api.post(`/backup-destinations/${d.id}/test`);
-                            setMessage({ text: `${d.name}: Connection successful`, type: "success" });
-                          } catch (e) {
-                            setMessage({ text: e instanceof Error ? e.message : "Test failed", type: "error" });
-                          } finally {
-                            setTestingDest(null);
-                          }
-                        }}
-                        disabled={testingDest === d.id}
-                        className="px-2 py-1 bg-accent-500/10 text-accent-400 rounded text-xs font-medium hover:bg-accent-500/20 disabled:opacity-50"
-                      >
-                        {testingDest === d.id ? "Testing..." : "Test"}
-                      </button>
-                      <button
-                        onClick={() => setPendingConfirm({
-                          type: "delete_destination",
-                          label: `Delete "${d.name}"?`,
-                          data: { id: d.id }
-                        })}
-                        className="px-2 py-1 bg-danger-500/10 text-danger-400 rounded text-xs font-medium hover:bg-danger-500/20"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
         </div>
 

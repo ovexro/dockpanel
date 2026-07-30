@@ -80,9 +80,25 @@ pub async fn set_schedule(
         return Err(err(StatusCode::BAD_REQUEST, "Schedule must have 5 fields (minute hour day month weekday)"));
     }
 
-    // Verify destination exists and belongs to the user's server
+    // Verify the destination exists and is one this user may send backups to.
+    //
+    // The inner JOIN this replaces could never match. `backup_destinations.server_id`
+    // is nullable by design — the migration that added it calls destinations
+    // "shared" — and `create` inserts only (name, dtype, config), so the column is
+    // NULL on every destination the panel has ever made. An inner join on a column
+    // that is always NULL selects nothing, so this check answered 403 "Destination
+    // not found or not owned by you" for every destination that existed, and the
+    // per-site schedule form's Destination dropdown could not be used at all.
+    //
+    // A NULL server_id means unscoped: any user may target it. That is the model
+    // destinations already have — they are created and deleted through admin-only
+    // routes, so the operator choosing them is the same person who owns the bucket,
+    // and a site owner can upload to it but never read it. A destination that IS
+    // pinned to a server still has to belong to this user.
     let dest_check: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT bd.id FROM backup_destinations bd JOIN servers s ON bd.server_id = s.id WHERE bd.id = $1 AND s.user_id = $2",
+        "SELECT bd.id FROM backup_destinations bd \
+         LEFT JOIN servers s ON bd.server_id = s.id \
+         WHERE bd.id = $1 AND (bd.server_id IS NULL OR s.user_id = $2)",
     )
     .bind(&body.destination_id)
     .bind(claims.sub)
