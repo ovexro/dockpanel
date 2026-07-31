@@ -268,7 +268,14 @@ SMOKE=.github/workflows/smoke-test.yml
 # lists, and reading that as a support claim would put a distro under the pin
 # that nobody promised. The marketing strip (`Ubuntu · Debian · CentOS · Rocky ·
 # Amazon Linux`) has no promise-word at all, which is why the count arm exists.
-DISTRO_RE='Ubuntu|Debian|CentOS|Rocky|Alma[Ll]inux|Fedora|Amazon Linux'
+# `Arch` is here despite nothing claiming it yet, and that is the point: the gate
+# is NAME-KEYED, so a family it cannot spell is a family it cannot police. Issue
+# #88 asks for an Arch installer; without this line, adding "Arch Linux" to the
+# README would pass CI green with no smoke image behind it — the exact
+# advertised-on-the-strength-of-nothing failure this pin exists to prevent. The
+# gate only fired in the other direction, when the matrix gained an image
+# `family_of` could not classify. Verified by simulation before adding it.
+DISTRO_RE='Ubuntu|Debian|CentOS|Rocky|Alma[Ll]inux|Fedora|Amazon Linux|Arch'
 PROMISE_RE='[Ss]upports?|[Rr]uns on|\*\*OS\*\*|Requirements'
 
 # Normalise a distro name to a family slug, from either side of the comparison.
@@ -281,6 +288,7 @@ family_of() {
     alma*)                echo alma ;;
     fedora*)              echo fedora ;;
     amazon*|amzn*)        echo amazon ;;
+    arch*|manjaro*)       echo arch ;;
     *)                    echo UNKNOWN ;;
   esac
 }
