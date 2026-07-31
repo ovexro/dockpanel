@@ -12,7 +12,7 @@ use super::{is_valid_container_id, is_valid_domain, is_valid_name, AppState};
 use crate::routes::nginx::SiteConfig;
 use crate::services::compose;
 use crate::services::docker_apps;
-use crate::services::{nginx, ssl, traefik};
+use crate::services::{nginx, ownership, ssl, traefik};
 
 #[derive(Deserialize)]
 struct DeployRequest {
@@ -862,9 +862,12 @@ async fn remove(
     }
     ensure_managed(&container_id).await?;
 
-    // Extract app metadata before removing the container
-    let domain = docker_apps::get_app_domain(&container_id).await;
-    let app_name = docker_apps::get_app_name(&container_id).await;
+    // Everything the cleanup below needs to PROVE it owns what it deletes, read
+    // while the container still exists. The domain and name labels alone are not
+    // proof: they say what this app was called, not that the vhost, the cert
+    // directory or the data tree of that name are still its own.
+    let identity = docker_apps::removal_identity(&container_id).await;
+    let domain = identity.domain.clone();
 
     docker_apps::remove_app(&container_id)
         .await
@@ -877,54 +880,103 @@ async fn remove(
 
     let mut response = serde_json::json!({ "success": true });
 
-    // Clean up proxy config (nginx + Traefik) + SSL certs if domain was set
+    // Clean up proxy config (nginx + Traefik) + SSL certs if domain was set.
+    //
+    // Every delete here is now conditional on the resource saying it belongs to
+    // this app. Before, all of them fired on the label alone — so removing an
+    // app whose domain a site had since taken over destroyed the SITE's vhost,
+    // certificates and logs, and nothing said so.
     if let Some(ref domain) = domain {
         response["domain_removed"] = serde_json::json!(domain);
 
-        // Remove Traefik dynamic route config (if it exists)
+        // Remove Traefik dynamic route config (if it exists). The legacy-name
+        // leg inside checks ownership itself.
         traefik::remove_route_config(domain);
 
-        // Remove nginx config
+        // Remove nginx config — only if it is still fronting THIS container.
+        // The vhost is rendered from the same template a site's is, so the only
+        // thing in it identifying the app is the `proxy_pass` to the port the
+        // container published.
         let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+        let mut removed_vhost = false;
         if std::path::Path::new(&config_path).exists() {
-            std::fs::remove_file(&config_path).ok();
-            if let Err(e) = nginx::reload().await {
-                tracing::warn!("Auto-proxy cleanup: nginx reload failed after removing config for {domain}: {e}");
+            if ownership::app_vhost(&config_path, identity.host_port).may_delete() {
+                std::fs::remove_file(&config_path).ok();
+                removed_vhost = true;
+                if let Err(e) = nginx::reload().await {
+                    tracing::warn!("Auto-proxy cleanup: nginx reload failed after removing config for {domain}: {e}");
+                }
+                tracing::info!("Auto-proxy cleanup: removed nginx config for {domain}");
+            } else {
+                tracing::warn!(
+                    "Auto-proxy cleanup: LEAVING {config_path} in place — it does not \
+                     proxy to this container's port. Another site or app now serves \
+                     {domain}; removing this app must not take it down."
+                );
+                response["proxy_warning"] = serde_json::json!(format!(
+                    "The nginx configuration for {domain} is serving something else and was left in place."
+                ));
             }
-            tracing::info!("Auto-proxy cleanup: removed nginx config for {domain}");
         }
 
-        // Remove SSL certificates (panel-provisioned)
+        // Remove SSL certificates (panel-provisioned). A DNS-01 wildcard is
+        // provisioned once under the zone apex and SHARED by every site in the
+        // zone, so this directory is not necessarily this app's to delete.
         let ssl_dir = format!("/etc/dockpanel/ssl/{domain}");
         if std::path::Path::new(&ssl_dir).exists() {
-            std::fs::remove_dir_all(&ssl_dir).ok();
-            tracing::info!("SSL cleanup: removed certs for {domain}");
+            if ownership::cert_dir_in_use_elsewhere(domain) {
+                tracing::warn!(
+                    "SSL cleanup: LEAVING {ssl_dir} in place — another vhost still \
+                     points at it. Deleting it would break that site at the next \
+                     nginx reload."
+                );
+            } else {
+                std::fs::remove_dir_all(&ssl_dir).ok();
+                tracing::info!("SSL cleanup: removed certs for {domain}");
+            }
         }
 
-        // Remove SSL certificates (certbot/Let's Encrypt)
-        let le_live = format!("/etc/letsencrypt/live/{domain}");
-        let le_archive = format!("/etc/letsencrypt/archive/{domain}");
-        let le_renewal = format!("/etc/letsencrypt/renewal/{domain}.conf");
-        if std::path::Path::new(&le_live).exists() {
-            std::fs::remove_dir_all(&le_live).ok();
-            std::fs::remove_dir_all(&le_archive).ok();
-            std::fs::remove_file(&le_renewal).ok();
-            tracing::info!("SSL cleanup: removed Let's Encrypt certs for {domain}");
-        }
+        // Let's Encrypt is NOT the panel's namespace and this code never had any
+        // business in it. Neither tree issues through certbot — provisioning is
+        // instant_acme into /etc/dockpanel/ssl above — so every lineage this
+        // could reach was created by the operator, out of band. Deleting
+        // live/ + archive/ + renewal/ destroyed the certificate, its whole
+        // history, and the automation that would have renewed it, for a
+        // certificate the panel did not issue and does not read. On a box whose
+        // mail stack is configured by the panel that includes the lineage
+        // Postfix and Dovecot are pointed at (`routes/mail.rs`
+        // `panel_tls_paths`), whose documented fallback is the distro snakeoil.
+        // There is no marker distinguishing a panel-era lineage from an
+        // operator's, so there is no safe narrowing — the delete is gone.
 
-        // Remove nginx logs
-        let access_log = format!("/var/log/nginx/{domain}.access.log");
-        let error_log = format!("/var/log/nginx/{domain}.error.log");
-        std::fs::remove_file(&access_log).ok();
-        std::fs::remove_file(&error_log).ok();
+        // Remove nginx logs — only ours to remove if the vhost was ours. When
+        // another site now serves this domain, these are that site's logs.
+        if removed_vhost {
+            let access_log = format!("/var/log/nginx/{domain}.access.log");
+            let error_log = format!("/var/log/nginx/{domain}.error.log");
+            std::fs::remove_file(&access_log).ok();
+            std::fs::remove_file(&error_log).ok();
+        }
     }
 
-    // Clean up persistent volume data
-    if let Some(ref name) = app_name {
-        let volume_dir = format!("/var/lib/dockpanel/apps/{name}");
+    // Clean up persistent volume data — only when this container actually
+    // bind-mounts out of that directory. The name label is not proof: a compose
+    // service carries a caller-supplied `container_name` in the same label while
+    // its own data lives under /var/lib/dockpanel/compose, so removing it used
+    // to delete the identically-named template app's entire data tree.
+    if let Some(ref name) = identity.name {
+        let volume_dir = format!("{}/{}", docker_apps::APP_DATA_DIR, name);
         if std::path::Path::new(&volume_dir).exists() {
-            std::fs::remove_dir_all(&volume_dir).ok();
-            tracing::info!("Volume cleanup: removed {volume_dir}");
+            if identity.owns_app_dir {
+                std::fs::remove_dir_all(&volume_dir).ok();
+                tracing::info!("Volume cleanup: removed {volume_dir}");
+            } else {
+                tracing::warn!(
+                    "Volume cleanup: LEAVING {volume_dir} in place — this container \
+                     had no bind mount under it, so the directory belongs to a \
+                     different app."
+                );
+            }
         }
     }
 

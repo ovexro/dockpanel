@@ -8,6 +8,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio_stream::StreamExt;
 
+/// Where a template app's persistent volumes are bind-mounted from.
+///
+/// Named once because three places have to agree: the deploy that creates the
+/// directory, the prefix check that keeps a volume from escaping it, and the
+/// removal that decides whether this container is entitled to delete it.
+pub const APP_DATA_DIR: &str = "/var/lib/dockpanel/apps";
+
 // ── Container auto-update detection ────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -2470,14 +2477,14 @@ pub async fn deploy_app(
     // Volume binds — create dirs and canonicalize to prevent symlink TOCTOU
     let mut binds: Vec<String> = Vec::new();
     for vol in template.volumes {
-        let host_dir = format!("/var/lib/dockpanel/apps/{name}{vol}");
+        let host_dir = format!("{APP_DATA_DIR}/{name}{vol}");
         // Create directory before canonicalize (it must exist)
         std::fs::create_dir_all(&host_dir).ok();
         // Canonicalize to resolve any symlinks, then verify it's still under the allowed prefix
         let resolved = std::fs::canonicalize(&host_dir)
             .map_err(|e| format!("Volume path {host_dir} inaccessible: {e}"))?;
         let resolved_str = resolved.to_string_lossy();
-        if !resolved_str.starts_with("/var/lib/dockpanel/apps/") {
+        if !resolved_str.starts_with(&format!("{APP_DATA_DIR}/")) {
             return Err(format!("Volume path {host_dir} escapes allowed prefix after canonicalization"));
         }
         binds.push(format!("{resolved_str}:{vol}"));
@@ -3396,6 +3403,66 @@ pub async fn get_app_name(container_id: &str) -> Option<String> {
     let docker = Docker::connect_with_local_defaults().ok()?;
     let info = docker.inspect_container(container_id, None).await.ok()?;
     info.config?.labels?.get("dockpanel.app.name").cloned()
+}
+
+/// What a removal needs to know about a container *before* it is removed, so
+/// the cleanup that follows can prove it owns each thing it deletes.
+///
+/// Read in one inspect because after `remove_app` there is nothing left to ask.
+/// Every field is optional and a missing one means "cannot prove it" — the
+/// callers treat that as a refusal, per [`crate::services::ownership`].
+#[derive(Debug, Default, Clone)]
+pub struct RemovalIdentity {
+    /// `dockpanel.app.domain` — the vhost, cert dir and logs are named after it.
+    pub domain: Option<String>,
+    /// `dockpanel.app.name` — `/var/lib/dockpanel/apps/{name}` is named after it.
+    pub name: Option<String>,
+    /// The published host port. The app's vhost `proxy_pass`es to it, and it is
+    /// the only thing in that file identifying which container it fronts.
+    pub host_port: Option<u16>,
+    /// Whether this container actually bind-mounts out of
+    /// `/var/lib/dockpanel/apps/{name}`.
+    ///
+    /// A template deploy does; a compose service does not — its binds are
+    /// confined to `/var/lib/dockpanel/compose/`, so an identically-named
+    /// compose service was deleting a template app's data directory while
+    /// owning nothing under it.
+    pub owns_app_dir: bool,
+}
+
+/// Gather [`RemovalIdentity`] for `container_id`. Never fails: an unreachable
+/// Docker yields all-none, which refuses every subsequent delete.
+pub async fn removal_identity(container_id: &str) -> RemovalIdentity {
+    let mut id = RemovalIdentity::default();
+    let Ok(docker) = Docker::connect_with_local_defaults() else {
+        return id;
+    };
+    let Ok(info) = docker.inspect_container(container_id, None).await else {
+        return id;
+    };
+
+    if let Some(labels) = info.config.as_ref().and_then(|c| c.labels.as_ref()) {
+        id.domain = labels.get("dockpanel.app.domain").cloned();
+        id.name = labels.get("dockpanel.app.name").cloned();
+    }
+
+    if let Some(host_config) = info.host_config.as_ref() {
+        id.host_port = extract_host_port(host_config);
+
+        // Ownership of the data directory is decided by the container's own
+        // mounts, not by its name label. `{prefix}` rather than `{prefix}/` so a
+        // bind of the directory itself counts, and the trailing boundary is
+        // checked explicitly so `/apps/data` cannot answer for `/apps/database`.
+        if let (Some(name), Some(binds)) = (id.name.as_deref(), host_config.binds.as_ref()) {
+            let prefix = format!("{APP_DATA_DIR}/{name}");
+            id.owns_app_dir = binds.iter().any(|b| {
+                let source = b.split(':').next().unwrap_or_default();
+                source == prefix || source.starts_with(&format!("{prefix}/"))
+            });
+        }
+    }
+
+    id
 }
 
 /// True iff the container's labels mark it dockpanel-managed (`dockpanel.managed=true`).

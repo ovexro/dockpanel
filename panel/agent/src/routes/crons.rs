@@ -23,6 +23,18 @@ pub struct CronRequest {
     pub command: String,
     pub schedule: String,
     pub label: Option<String>,
+    /// Whether this cron should be in the crontab.
+    ///
+    /// The panel now sends every cron of the site being synced, enabled or not,
+    /// because the payload has to be the authoritative statement of *which lines
+    /// this sync owns* — see [`sync_crons`]. Defaults to `true` so a panel older
+    /// than this field still schedules what it sends.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Serialize)]
@@ -42,16 +54,41 @@ pub fn router() -> Router<AppState> {
         .route("/crons/remove/{id}", delete(remove_cron))
 }
 
-/// POST /crons/sync — Write all enabled crons to the system crontab.
+/// POST /crons/sync — Write this site's crons to the system crontab.
 /// Receives a list of crons and writes them atomically.
+///
+/// **This sync owns only the lines it was sent.** It used to strip every line
+/// carrying `# dockpanel:` — the marker is panel-wide, not per-site — and then
+/// re-add only the one site the panel was syncing. So any tenant adding, editing
+/// or deleting a single cron on their OWN site silently removed every OTHER
+/// site's jobs from the crontab, box-wide. Nothing errored and nothing was
+/// visible: the `crons` rows are untouched, so the panel kept listing those jobs
+/// as enabled while they never ran again. On a box with several WordPress sites
+/// the collateral is automatic, since each install seeds a WP-Cron row.
+///
+/// The payload is now the authoritative set for one site, which is why it
+/// carries disabled crons too: a line is removed because its id was sent and is
+/// disabled, never because some other site happened to be synced.
 async fn sync_crons(
     AxumJson(crons): AxumJson<Vec<CronRequest>>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
-    // Read existing crontab, preserve non-dockpanel entries
-    let existing = read_crontab().await;
+    // Read the existing crontab. A read that FAILED must not be mistaken for an
+    // empty crontab — that is how a transient `crontab -l` timeout used to
+    // replace root's entire crontab, operator entries included, with one site's
+    // jobs.
+    let existing = read_crontab()
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+
+    // Keep every line except the ones this payload is authoritative for.
+    let owned: std::collections::HashSet<&str> =
+        crons.iter().map(|c| c.id.as_str()).collect();
     let mut lines: Vec<String> = existing
         .lines()
-        .filter(|line| !line.contains(CRONTAB_MARKER))
+        .filter(|line| match marker_id(line) {
+            Some(id) => !owned.contains(id),
+            None => true,
+        })
         .map(|s| s.to_string())
         .collect();
 
@@ -73,7 +110,13 @@ async fn sync_crons(
     // strong — the command still never reaches the crontab — while costing one
     // row instead of the feature.
     let mut skipped: Vec<String> = Vec::new();
+    let mut disabled = 0usize;
     for cron in &crons {
+        if !cron.enabled {
+            // Its line was already dropped above; not scheduling it is the point.
+            disabled += 1;
+            continue;
+        }
         let reject = if !is_valid_schedule(&cron.schedule) {
             Some(format!("invalid schedule {:?}", cron.schedule))
         } else if cron.command.is_empty() {
@@ -104,7 +147,7 @@ async fn sync_crons(
     write_crontab(&lines.join("\n")).await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
 
-    let synced = crons.len() - skipped.len();
+    let synced = crons.len() - skipped.len() - disabled;
     if skipped.is_empty() {
         tracing::info!("Synced {synced} cron jobs to system crontab");
     } else {
@@ -166,7 +209,12 @@ async fn run_cron(
 
 /// GET /crons/list — Read dockpanel crons from system crontab.
 async fn list_crons() -> Result<Json<Vec<serde_json::Value>>, ApiErr> {
-    let crontab = read_crontab().await;
+    // Read-only: a failed read destroys nothing here, so it degrades to an empty
+    // listing rather than a 500. The panel's own `crons` rows are the record.
+    let crontab = read_crontab().await.unwrap_or_else(|e| {
+        tracing::warn!("Could not read the crontab to list crons: {e}");
+        String::new()
+    });
     let crons: Vec<serde_json::Value> = crontab
         .lines()
         .filter(|line| line.contains(CRONTAB_MARKER))
@@ -197,11 +245,12 @@ async fn list_crons() -> Result<Json<Vec<serde_json::Value>>, ApiErr> {
 async fn remove_cron(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
-    let existing = read_crontab().await;
-    let marker = format!("{}{}", CRONTAB_MARKER, id);
+    let existing = read_crontab()
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
     let lines: Vec<&str> = existing
         .lines()
-        .filter(|line| !line.contains(&marker))
+        .filter(|line| marker_id(line) != Some(id.as_str()))
         .collect();
 
     write_crontab(&lines.join("\n")).await
@@ -210,8 +259,27 @@ async fn remove_cron(
     Ok(Json(serde_json::json!({ "removed": id })))
 }
 
+/// The dockpanel cron id a crontab line carries, if any.
+///
+/// The marker is written as `# dockpanel:{id} {label}`, so the id is the token
+/// immediately after the marker. Parsed rather than substring-matched so that a
+/// line belonging to one cron cannot be attributed to another whose id merely
+/// extends it.
+fn marker_id(line: &str) -> Option<&str> {
+    let rest = line.split(CRONTAB_MARKER).nth(1)?;
+    let id = rest.split_whitespace().next()?;
+    (!id.is_empty()).then_some(id)
+}
+
 /// Read the current root crontab.
-async fn read_crontab() -> String {
+///
+/// `Ok("")` means root genuinely has no crontab. Anything that merely *looks*
+/// like an empty crontab — a timeout, a spawn failure, a non-zero exit that is
+/// not the "no crontab for ..." message — is an `Err`, because every caller
+/// feeds this straight back into `write_crontab` as the complete new content.
+/// Collapsing the two used to mean a slow `crontab -l` destroyed every operator
+/// and system entry on the box.
+async fn read_crontab() -> Result<String, String> {
     let output = tokio::time::timeout(
         Duration::from_secs(15),
         safe_command("crontab")
@@ -221,8 +289,22 @@ async fn read_crontab() -> String {
     .await;
 
     match output {
-        Ok(Ok(o)) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
-        _ => String::new(), // No crontab, timeout, or error
+        Ok(Ok(o)) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).to_string()),
+        Ok(Ok(o)) => {
+            let stderr = String::from_utf8_lossy(&o.stderr).to_lowercase();
+            if stderr.contains("no crontab for") {
+                Ok(String::new())
+            } else {
+                Err(format!(
+                    "Refusing to rewrite the crontab: `crontab -l` exited {} ({}). \
+                     Treating that as an empty crontab would delete every existing entry.",
+                    o.status.code().unwrap_or(-1),
+                    stderr.trim()
+                ))
+            }
+        }
+        Ok(Err(e)) => Err(format!("Refusing to rewrite the crontab: `crontab -l` failed to run: {e}")),
+        Err(_) => Err("Refusing to rewrite the crontab: `crontab -l` timed out after 15s".to_string()),
     }
 }
 
@@ -269,4 +351,51 @@ fn is_valid_schedule(schedule: &str) -> bool {
     parts.iter().all(|part| {
         part.chars().all(|c| c.is_ascii_digit() || c == '*' || c == '/' || c == '-' || c == ',')
     })
+}
+
+#[cfg(test)]
+mod sync_scope_tests {
+    use super::marker_id;
+
+    #[test]
+    fn the_id_is_the_token_after_the_marker() {
+        assert_eq!(
+            marker_id("*/5 * * * * /bin/true # dockpanel:abc-123 My label"),
+            Some("abc-123")
+        );
+        assert_eq!(marker_id("*/5 * * * * /bin/true # dockpanel:abc-123"), Some("abc-123"));
+        assert_eq!(marker_id("0 3 * * * /usr/bin/certbot renew"), None);
+        assert_eq!(marker_id("# a plain operator comment"), None);
+    }
+
+    /// The wipe this replaced: every dockpanel line on the box was stripped and
+    /// only the synced site's re-added. A line whose id was NOT sent must
+    /// survive, whoever owns it.
+    #[test]
+    fn a_line_this_sync_does_not_own_is_kept() {
+        let crontab = "\
+*/15 * * * * php wp-cron.php # dockpanel:site-a-cron WordPress Cron
+0 2 * * * /usr/local/bin/backup # dockpanel:site-b-cron Nightly backup
+0 4 * * * /usr/bin/certbot renew";
+        let owned: std::collections::HashSet<&str> = ["site-a-cron"].into_iter().collect();
+        let kept: Vec<&str> = crontab
+            .lines()
+            .filter(|l| match marker_id(l) {
+                Some(id) => !owned.contains(id),
+                None => true,
+            })
+            .collect();
+        assert_eq!(kept.len(), 2, "kept: {kept:?}");
+        assert!(kept.iter().any(|l| l.contains("site-b-cron")), "another site's cron was removed");
+        assert!(kept.iter().any(|l| l.contains("certbot")), "an operator line was removed");
+    }
+
+    /// An id that is a PREFIX of another must not carry it off — the same
+    /// unanchored-match class as the WordPress auto-update marker.
+    #[test]
+    fn a_prefix_id_does_not_match_a_longer_one() {
+        let line = "*/5 * * * * /bin/true # dockpanel:abc-1234 label";
+        assert_ne!(marker_id(line), Some("abc-123"));
+        assert_eq!(marker_id(line), Some("abc-1234"));
+    }
 }

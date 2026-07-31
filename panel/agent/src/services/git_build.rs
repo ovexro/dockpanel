@@ -453,13 +453,26 @@ pub async fn cleanup_container(name: &str) -> Result<(), String> {
 
     let container_name = format!("dockpanel-git-{name}");
 
-    // Inspect to find domain label before removing
-    let domain = if let Ok(info) = docker.inspect_container(&container_name, None).await {
-        info.config
-            .and_then(|c| c.labels)
-            .and_then(|l| l.get("dockpanel.app.domain").cloned())
-    } else {
-        None
+    // Inspect to find the domain label AND the published port before removing.
+    //
+    // The port is what proves the vhost below is still this container's. The
+    // label alone is not proof: a preview holding `feature.example.com` is
+    // invisible to `domain_claim::find_occupant` (it queries sites, git_deploys
+    // and the agent's /apps, and a preview container is in none of them), so a
+    // real site can be created on that exact domain and pass every check — and
+    // then this cleanup, running unattended on TTL expiry, deletes the site's
+    // vhost and certificates five minutes later.
+    let (domain, host_port) = match docker.inspect_container(&container_name, None).await {
+        Ok(info) => (
+            info.config
+                .as_ref()
+                .and_then(|c| c.labels.as_ref())
+                .and_then(|l| l.get("dockpanel.app.domain").cloned()),
+            info.host_config
+                .as_ref()
+                .and_then(crate::services::docker_apps::extract_host_port),
+        ),
+        Err(_) => (None, None),
     };
 
     // Stop container
@@ -483,29 +496,44 @@ pub async fn cleanup_container(name: &str) -> Result<(), String> {
 
     tracing::info!("Removed git container: {container_name}");
 
-    // Remove nginx config
+    // Remove nginx config — only while it is still fronting THIS container.
     if let Some(ref d) = domain {
         let config_path = format!("/etc/nginx/sites-enabled/{d}.conf");
         if std::path::Path::new(&config_path).exists() {
-            std::fs::remove_file(&config_path).ok();
-            tracing::info!("Removed nginx config: {config_path}");
+            if crate::services::ownership::app_vhost(&config_path, host_port).may_delete() {
+                std::fs::remove_file(&config_path).ok();
+                tracing::info!("Removed nginx config: {config_path}");
 
-            // Reload nginx after removing config
-            match crate::services::nginx::test_config().await {
-                Ok(output) if output.success => {
-                    crate::services::nginx::reload().await.ok();
+                // Reload nginx after removing config
+                match crate::services::nginx::test_config().await {
+                    Ok(output) if output.success => {
+                        crate::services::nginx::reload().await.ok();
+                    }
+                    _ => {
+                        tracing::warn!("Nginx test failed after removing config for {d}");
+                    }
                 }
-                _ => {
-                    tracing::warn!("Nginx test failed after removing config for {d}");
-                }
+            } else {
+                tracing::warn!(
+                    "Leaving {config_path} in place: it does not proxy to this \
+                     container's port, so {d} is now served by something else. \
+                     This cleanup runs unattended — taking that down would be \
+                     an outage nobody was present for."
+                );
             }
         }
 
-        // Remove SSL certificates
+        // Remove SSL certificates — not if a wildcard shared across the zone.
         let ssl_dir = format!("/etc/dockpanel/ssl/{d}");
         if std::path::Path::new(&ssl_dir).exists() {
-            std::fs::remove_dir_all(&ssl_dir).ok();
-            tracing::info!("Removed SSL certs: {ssl_dir}");
+            if crate::services::ownership::cert_dir_in_use_elsewhere(d) {
+                tracing::warn!(
+                    "Leaving {ssl_dir} in place: another vhost still points at it."
+                );
+            } else {
+                std::fs::remove_dir_all(&ssl_dir).ok();
+                tracing::info!("Removed SSL certs: {ssl_dir}");
+            }
         }
     }
 

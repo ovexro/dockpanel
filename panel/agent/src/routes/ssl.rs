@@ -1,4 +1,3 @@
-use crate::safe_cmd::safe_command;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -408,25 +407,47 @@ async fn revoke(
 
     tracing::info!("Deleting SSL certificate for {domain}");
 
+    // A DNS-01 wildcard is provisioned once under the zone apex and every site
+    // in the zone points its `ssl_certificate` at that one directory, so this
+    // path is not necessarily this domain's alone to delete.
     let ssl_dir = format!("/etc/dockpanel/ssl/{domain}");
     if std::path::Path::new(&ssl_dir).exists() {
-        tokio::fs::remove_dir_all(&ssl_dir).await.map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": format!("Failed to remove cert dir: {e}") })),
-            )
-        })?;
+        if crate::services::ownership::cert_dir_in_use_elsewhere(&domain) {
+            tracing::warn!(
+                "Leaving {ssl_dir} in place — another vhost still points at it \
+                 (a shared wildcard). Removing it would make `nginx -t` fail for \
+                 that site and leave nginx down at the next restart."
+            );
+        } else {
+            tokio::fs::remove_dir_all(&ssl_dir).await.map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("Failed to remove cert dir: {e}") })),
+                )
+            })?;
+        }
     }
 
-    // Best-effort certbot cleanup for legacy certs migrated from v2.7.x.
-    // Failure here is fine — the filesystem cleanup already succeeded.
-    let _ = tokio::time::timeout(
-        Duration::from_secs(30),
-        safe_command("certbot")
-            .args(["delete", "--cert-name", &domain, "--non-interactive"])
-            .output(),
-    )
-    .await;
+    // What used to be here: `certbot delete --cert-name {domain}
+    // --non-interactive`, described as "best-effort cleanup for legacy certs
+    // migrated from v2.7.x".
+    //
+    // Neither tree issues through certbot at HEAD — provisioning is instant_acme
+    // into /etc/dockpanel/ssl, above — so on any install newer than v2.7.x every
+    // lineage this could name was created by the OPERATOR, out of band, and
+    // nothing distinguished the two cases. A certbot lineage also carries all
+    // its SANs, so deleting the one named `example.com` took `www.` and `mail.`
+    // with it, plus the renewal config that would have brought it back. The
+    // panel does not read these certificates and cannot re-issue them; the only
+    // correct action is to say so and leave them alone.
+    let renewal_conf = format!("/etc/letsencrypt/renewal/{domain}.conf");
+    if std::path::Path::new(&renewal_conf).exists() {
+        tracing::warn!(
+            "A certbot lineage named {domain} exists at {renewal_conf} and was NOT \
+             touched — the panel did not issue it. Remove it with `certbot delete \
+             --cert-name {domain}` if it really is stale."
+        );
+    }
 
     tracing::info!("SSL certificate deleted for {domain}");
     Ok(Json(serde_json::json!({ "ok": true, "domain": domain })))

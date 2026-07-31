@@ -340,8 +340,22 @@ async fn put_site(
                  bantime = 3600\n"
             );
 
+            // `jail_name` collapses '.' to '-', which is not injective over the
+            // domains `is_valid_domain` accepts, so `a.b.com` and `a-b.com` share
+            // one jail file. Writing it unconditionally repointed the existing
+            // jail's `logpath` at the other tenant's access log — leaving the
+            // first site unprotected while its jail appeared to still exist.
             let jail_path = format!("/etc/fail2ban/jail.d/{jail_name}.conf");
-            if let Ok(()) = std::fs::write(&jail_path, &jail_config) {
+            let jail_is_someone_elses = std::path::Path::new(&jail_path).exists()
+                && services::ownership::fail2ban_jail(&jail_path, &domain)
+                    == services::ownership::Owner::Theirs;
+            if jail_is_someone_elses {
+                tracing::warn!(
+                    "Not writing {jail_path} for {domain}: it already watches another \
+                     domain's access log. Jail names collapse '.' to '-', so these two \
+                     domains share one jail file and only the first keeps protection."
+                );
+            } else if let Ok(()) = std::fs::write(&jail_path, &jail_config) {
                 // Reload fail2ban (best-effort)
                 let _ = safe_command_sync("systemctl")
                     .args(["reload", "fail2ban"])
@@ -445,10 +459,20 @@ async fn delete_site(
         tracing::info!("Removed FastCGI cache: {cache_dir}");
     }
 
-    // SSL certificates
+    // SSL certificates. A DNS-01 wildcard is provisioned ONCE under the zone
+    // apex and every site in the zone points `ssl_certificate` at that one
+    // directory, so deleting the apex site used to take the certificate out from
+    // under its siblings. That does not fail now — nginx is already serving from
+    // memory — it fails at the next `nginx -t` anyone triggers, and leaves nginx
+    // down box-wide at the next full restart.
     let ssl_dir = format!("/etc/dockpanel/ssl/{domain}");
     if std::path::Path::new(&ssl_dir).exists() {
-        if let Err(e) = std::fs::remove_dir_all(&ssl_dir) {
+        if services::ownership::cert_dir_in_use_elsewhere(&domain) {
+            tracing::warn!(
+                "Leaving {ssl_dir} in place: another vhost still points at it \
+                 (a wildcard shared across the zone)."
+            );
+        } else if let Err(e) = std::fs::remove_dir_all(&ssl_dir) {
             tracing::warn!("Failed to remove SSL certs for {domain}: {e}");
         } else {
             tracing::info!("Removed SSL certs: {ssl_dir}");
@@ -491,15 +515,25 @@ async fn delete_site(
         tracing::info!("Removed WordPress auto-update cron for {domain}");
     }
 
-    // Fail2Ban jail
+    // Fail2Ban jail — same non-injective name as the create side above, so the
+    // file at this path may be another domain's brute-force protection. The
+    // jail's own `logpath` says which log it watches.
     let jail_name = format!("nginx-{}", domain.replace('.', "-"));
     let jail_path = format!("/etc/fail2ban/jail.d/{jail_name}.conf");
     if std::path::Path::new(&jail_path).exists() {
-        let _ = std::fs::remove_file(&jail_path);
-        let _ = safe_command_sync("systemctl")
-            .args(["reload", "fail2ban"])
-            .output();
-        tracing::info!("Removed Fail2Ban jail for {domain}");
+        if services::ownership::fail2ban_jail(&jail_path, &domain).may_delete() {
+            let _ = std::fs::remove_file(&jail_path);
+            let _ = safe_command_sync("systemctl")
+                .args(["reload", "fail2ban"])
+                .output();
+            tracing::info!("Removed Fail2Ban jail for {domain}");
+        } else {
+            tracing::warn!(
+                "Leaving {jail_path} in place: it does not watch {domain}'s access \
+                 log. Jail names collapse '.' to '-', so this file protects a \
+                 different domain."
+            );
+        }
     }
 
     Ok(Json(NginxResponse {
@@ -626,8 +660,25 @@ async fn rename_site(
     let config_content = std::fs::read_to_string(&old_conf).unwrap_or_default();
     let new_content = config_content.replace(&old_domain, new_domain);
 
-    // 3. Write new nginx config
+    // 3. Write new nginx config.
+    //
+    // Snapshot the destination first. This is the writer the v2.52.0
+    // `restore_or_remove` retrofit missed, and it replaces a path that
+    // `domain_claim` cannot vouch for: the claim guard clears a name against
+    // `sites`, `git_deploys` and Docker-app labels, and never looks at the
+    // filesystem — so a vhost the OPERATOR wrote by hand (`webmail.example.com`,
+    // a legacy config predating the panel) is claimable, and was silently
+    // overwritten here and then bare-deleted on rollback. The tenant's own
+    // config came back; the operator's never existed anywhere else.
     let new_conf = format!("/etc/nginx/sites-enabled/{new_domain}.conf");
+    let displaced = std::fs::read_to_string(&new_conf).ok();
+    if let Some(ref bytes) = displaced {
+        tracing::warn!(
+            "Renaming {old_domain} onto {new_domain} is replacing an existing vhost \
+             at {new_conf} ({} bytes) that no site, git deploy or Docker app claims.",
+            bytes.len()
+        );
+    }
     if let Err(e) = std::fs::write(&new_conf, &new_content) {
         // Rollback directory rename
         if std::path::Path::new(&new_dir).exists() {
@@ -720,20 +771,25 @@ async fn rename_site(
             }))
         }
         Ok(output) => {
-            // Rollback: restore old config
+            // Rollback: restore old config, and put back whatever we displaced
+            // at the destination rather than deleting it.
             std::fs::write(&old_conf, &config_content).ok();
-            std::fs::remove_file(&new_conf).ok();
+            let restored = services::nginx::restore_or_remove(&new_conf, displaced.as_deref());
             if std::path::Path::new(&new_dir).exists() {
                 std::fs::rename(&new_dir, &old_dir).ok();
             }
             Err((StatusCode::BAD_REQUEST, Json(NginxResponse {
                 success: false,
-                message: format!("Nginx config test failed after rename: {}", output.stderr),
+                message: format!(
+                    "Nginx config test failed after rename: {}{}",
+                    output.stderr,
+                    services::nginx::restore_note(restored)
+                ),
             })))
         }
         Err(e) => {
             std::fs::write(&old_conf, &config_content).ok();
-            std::fs::remove_file(&new_conf).ok();
+            services::nginx::restore_or_remove(&new_conf, displaced.as_deref());
             if std::path::Path::new(&new_dir).exists() {
                 std::fs::rename(&new_dir, &old_dir).ok();
             }

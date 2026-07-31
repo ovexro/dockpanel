@@ -466,3 +466,38 @@ jobs:
       # queries, which is how create and update came to disagree.
       - name: Every path claims through one guard, and no write destroys what it replaced
         run: bash tests/domain-claim-pin-e2e.sh
+
+  ownership-delete:
+    name: A Delete Proves It Owns What It Deletes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pure source analysis. v2.52.0 pinned "may this domain be CLAIMED?".
+      # This pins the question after it: "is the thing I am about to DESTROY
+      # actually mine?" Nothing owned that question, so every removal named its
+      # target by a key it had never checked, and the key lied two ways.
+      #
+      # IT NAMED AN IDENTITY NOBODY RE-VERIFIED. Removing a Docker app deleted
+      # the vhost, cert directory, logs and data tree of whatever its
+      # `dockpanel.app.domain` label said — by then possibly a site's. The git
+      # preview sweep did the same from an unattended 5-minute loop.
+      #
+      # IT WAS NOT INJECTIVE. `domain.replace('.', "-")` maps a.b.com and
+      # a-b.com onto one name, and `-` is legal in a domain label, so one
+      # tenant's site deletion removed another's systemd unit and Fail2Ban jail.
+      # v2.52.0 fixed exactly this for Traefik and then re-introduced it in the
+      # legacy-name CLEANUP, where it fires on a FRESH install and never expires.
+      #
+      # §B is the arm that matters: a destructive path that does not ask fails
+      # here. §C is an ABSENCE section, so §0 measures the comment stripper and
+      # C0 asserts the file list is non-empty before the absence arms are
+      # allowed to mean anything — an absence arm on an empty subject set is
+      # green and worthless.
+      #
+      # ATTACKED: 24 deliberate evasions against the fixed tree, of which SEVEN
+      # beat the first draft — including both classes that beat the s294 pin (a
+      # guard called and its result discarded, and a delete reached through a
+      # renamed variable). Every arm they beat is now keyed on the property.
+      - name: Every destructive path proves ownership, and markers are anchored
+        run: bash tests/ownership-delete-pin-e2e.sh

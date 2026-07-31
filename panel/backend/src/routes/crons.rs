@@ -61,10 +61,18 @@ async fn get_site_domain(state: &AppState, site_id: Uuid, user_id: Uuid) -> Resu
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))
 }
 
-/// Sync all enabled crons for a site to the agent's system crontab.
+/// Sync this site's crons to the agent's system crontab.
+///
+/// Sends EVERY cron of the site, disabled ones included, because the agent uses
+/// the payload to decide which crontab lines this sync owns. Sending only the
+/// enabled ones made the request indistinguishable from "this site has no
+/// disabled crons", and the agent compensated by stripping every `# dockpanel:`
+/// line on the box — every other site's jobs with them. The `enabled` flag now
+/// carries that information explicitly, so the agent can remove exactly this
+/// site's disabled lines and touch nothing else.
 async fn sync_crons_to_agent(state: &AppState, agent: &AgentHandle, site_id: Uuid) -> Result<(), ApiError> {
     let crons: Vec<Cron> = sqlx::query_as(
-        "SELECT * FROM crons WHERE site_id = $1 AND enabled = true",
+        "SELECT * FROM crons WHERE site_id = $1",
     )
     .bind(site_id)
     .fetch_all(&state.db)
@@ -79,6 +87,7 @@ async fn sync_crons_to_agent(state: &AppState, agent: &AgentHandle, site_id: Uui
                 "command": c.command,
                 "schedule": c.schedule,
                 "label": c.label,
+                "enabled": c.enabled,
             })
         })
         .collect();

@@ -4,6 +4,134 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.53.0] - 2026-07-31
+
+v2.52.0 answered *may this domain be claimed?* This answers the question after
+it: **is the thing I am about to destroy actually mine?**
+
+Nothing owned that question, so every removal in the panel named its target by a
+key it had never checked — and the key lied in two different ways.
+
+### Fixed — removing a Docker app could destroy a site's configuration and certificates
+
+An app's domain lives in the `dockpanel.app.domain` container label. Removing the
+app deleted, on the strength of that label alone: the nginx vhost, the
+certificate directory, both access logs, the Traefik route, and the data tree
+named by its `dockpanel.app.name` label. None of it checked that the app still
+owned any of those things.
+
+On a box installed before v2.52.0 nothing stopped a site from claiming a domain
+an app already held, so by removal time those files routinely belonged to the
+site. Every one of these deletes now reads the resource and confirms it names
+this container: the vhost must `proxy_pass` to the port the container published,
+and the data directory must be one the container actually bind-mounts. What
+cannot be proved is left in place and logged, loudly — a stale file is an untidy
+box, a deleted one is an outage nobody can attribute.
+
+The same shape, in `services/git_build.rs`, is fired **unattended** by the
+preview sweep every five minutes. It is guarded now too.
+
+### Fixed — the panel deleted Let's Encrypt certificates it never issued
+
+Two paths removed `/etc/letsencrypt/live`, `/etc/letsencrypt/archive` and the
+`renewal/*.conf` that regenerates them: Docker-app removal, by direct `rm`, and
+SSL revoke, via `certbot delete --cert-name`.
+
+**Neither tree issues through certbot.** Certificates the panel provisions go to
+`/etc/dockpanel/ssl` through its own ACME client, so every lineage those deletes
+could reach had been created by the operator, out of band — and a certbot lineage
+carries all its SANs, so deleting the one named `example.com` took `www.` and
+`mail.` with it, along with the automation that would have renewed them. On a box
+whose mail stack the panel configured, that includes the lineage Postfix and
+Dovecot are pointed at, whose documented fallback is the distro's self-signed
+snakeoil.
+
+Nothing distinguished a panel-era lineage from an operator's, so there is no safe
+narrowing. Both deletes are gone. Revoke now reports that a lineage of that name
+exists and leaves it alone.
+
+### Fixed — one tenant could destroy another tenant's systemd unit, jail and crons
+
+Three separate keys were not keys at all:
+
+- **Systemd units and Fail2Ban jails.** `domain.replace('.', "-")` maps
+  `a.b.com` and `a-b.com` onto one name, and `-` is legal inside a domain label,
+  so both are separately claimable and both resolve to
+  `dockpanel-app-a-b-com`. Deleting one site stopped, disabled and unlinked the
+  other's app unit, and removed its jail; creating one silently overwrote the
+  other's unit with the wrong `WorkingDirectory`, latent until the next reboot.
+  Both now read the file — a unit records the docroot it runs, a jail records the
+  log it watches — and refuse when it names someone else.
+- **Cron sync.** The `# dockpanel:` marker is panel-wide, but the payload was one
+  site's rows. So any tenant touching a single cron on their own site stripped
+  **every other site's jobs** from the crontab, box-wide and silently: the `crons`
+  rows are untouched, so the panel kept listing them as enabled while they never
+  ran again. The payload now carries the site's full cron set, and the sync
+  removes only the lines whose ids it was sent.
+- **The WordPress auto-update marker** was matched as an unanchored substring, so
+  toggling auto-update on `example.com` — or simply deleting that site — stripped
+  `example.community`'s line and silently ended its core, plugin and theme
+  security updates.
+
+### Fixed — a Traefik route removal deleted a different, live domain's route
+
+v2.52.0 made the route filename injective by escaping `-` before mapping `.` to
+`-`, then kept deleting the pre-fix name as upgrade cleanup, under a comment
+reading *"Only safe because the legacy name is what THIS domain would have been
+written as."*
+
+That premise is true and insufficient: the legacy name is also what **another
+domain is written as today**. `route_key` doubles a literal `-`, so for a domain
+containing none it agrees with the old mangle — the legacy name of `a-b.com` is
+exactly the current file of `a.b.com`. Removing the first app took the second
+one's route down, on a **fresh install with no legacy files at all**, and the
+window never closed. The cleanup now reads the file's own `Host()` rule first.
+
+### Fixed — deleting one site could take the whole box's nginx down at the next restart
+
+A DNS-01 wildcard is provisioned once under the zone apex and every site in the
+zone points `ssl_certificate` at that one directory. Deleting any one of them
+removed it. Nothing failed at the time, because nginx was already serving from
+memory — it failed at the next `nginx -t` anyone triggered, and left nginx down
+for **every** site on the box at the next full restart. Four paths shared the
+defect; each now checks whether another vhost still references the directory.
+
+### Fixed — site deletion and rename touched other accounts' status-page components
+
+`DELETE FROM status_page_components WHERE name = $1` had no `user_id`, and the
+rename path had the same gap on an `UPDATE`. The owning module's own delete keys
+on both the id and the account; these two had dropped the tenant filter, so they
+reached across accounts and took the monitor links with them by cascade.
+
+### Fixed — a rename overwrote an operator's vhost and deleted it on rollback
+
+`rename_site` is the replacing writer the v2.52.0 `restore_or_remove` retrofit
+missed. It wrote the destination config with no snapshot and, when the
+whole-server `nginx -t` failed, bare-deleted it — and the destination is a path
+`domain_claim` cannot vouch for, because that guard clears a name against
+`sites`, `git_deploys` and Docker-app labels and never looks at the filesystem.
+A vhost the operator wrote by hand was therefore claimable, silently replaced,
+and then destroyed with nothing to restore from.
+
+### Fixed — a slow `crontab -l` replaced root's entire crontab
+
+`read_crontab` collapsed a timeout, a spawn failure and a genuine "no crontab"
+into the same empty string, which the caller then wrote back as the complete new
+crontab. A single slow read destroyed every operator and system entry on the box.
+An empty crontab is now returned for exactly one reason.
+
+### Added
+
+- `services::ownership` — the one place the question is answered, with a
+  three-state result. `Unknown` (unreadable, or carrying no marker) does **not**
+  permit a delete; the asymmetry is the design.
+- `tests/ownership-delete-pin-e2e.sh` — 36 assertions, 27 of them red against
+  v2.52.0. §0 measures the comment stripper against its own subjects and C0
+  asserts the file list is non-empty, because both of this suite's absence
+  sections are green and worthless on an empty subject. Attacked with 24
+  evasions; seven beat the first draft, including both classes that beat the
+  s294 pin.
+
 ## [2.52.0] - 2026-07-31
 
 One question nothing owned — *may this domain be claimed?* — and one nobody

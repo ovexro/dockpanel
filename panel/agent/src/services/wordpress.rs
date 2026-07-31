@@ -369,10 +369,28 @@ pub async fn promote_site_url_to_https(domain: &str) -> CanonicalUrlOutcome {
     }
 }
 
+/// The comment a site's auto-update cron line ends with.
+///
+/// Compared with [`line_marked_for`], never with `contains`. The marker embeds a
+/// domain and sits at the end of the line, so an unanchored test let one site
+/// answer for another whose domain merely EXTENDS it: `# wp-auto-update-example.com`
+/// is a substring of `# wp-auto-update-example.community`. Toggling auto-update
+/// on `example.com`, or simply deleting that site, therefore stripped
+/// `example.community`'s line — silently ending core, plugin and theme security
+/// updates for a site the actor did not own, with nothing logged against it.
+fn auto_update_marker(domain: &str) -> String {
+    format!("# wp-auto-update-{domain}")
+}
+
+/// Whether `line` is the auto-update cron line carrying exactly `marker`.
+fn line_marked_for(line: &str, marker: &str) -> bool {
+    line.trim_end().ends_with(marker)
+}
+
 /// Set or remove auto-update cron.
 pub async fn set_auto_update(domain: &str, enabled: bool) -> Result<(), String> {
     let path = site_path(domain)?;
-    let marker = format!("# wp-auto-update-{domain}");
+    let marker = auto_update_marker(domain);
     let cron_line = format!(
         "0 3 * * * {WP_CLI} core update --skip-plugins --skip-themes --allow-root --path={path} > /dev/null 2>&1 && \
          {WP_CLI} plugin update --all --skip-plugins --skip-themes --allow-root --path={path} > /dev/null 2>&1 && \
@@ -390,10 +408,10 @@ pub async fn set_auto_update(domain: &str, enabled: bool) -> Result<(), String> 
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
 
-    // Remove existing auto-update line for this domain
+    // Remove existing auto-update line for this domain — and ONLY this domain.
     let filtered: Vec<&str> = current
         .lines()
-        .filter(|l| !l.contains(&marker))
+        .filter(|l| !line_marked_for(l, &marker))
         .collect();
 
     let mut new_crontab = filtered.join("\n");
@@ -438,12 +456,21 @@ pub async fn set_auto_update(domain: &str, enabled: bool) -> Result<(), String> 
 }
 
 /// Check if auto-update cron is enabled for a domain.
+///
+/// Line-anchored for the same reason the removal is: the unanchored form
+/// reported `example.com` as enabled off `example.community`'s line, and
+/// `delete_site` used that answer to decide whether to run the strip — so the
+/// mis-read and the destructive act were the same bug twice.
 pub fn is_auto_update_enabled(domain: &str) -> bool {
-    let marker = format!("wp-auto-update-{domain}");
+    let marker = auto_update_marker(domain);
     safe_command_sync("crontab")
         .args(["-l", "-u", "root"])
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains(&marker))
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .any(|l| line_marked_for(l, &marker))
+        })
         .unwrap_or(false)
 }
 
@@ -622,7 +649,7 @@ pub async fn update_with_rollback(domain: &str) -> Result<serde_json::Value, Str
 
 #[cfg(test)]
 mod canonical_url_tests {
-    use super::https_promotion_target;
+    use super::{auto_update_marker, https_promotion_target, line_marked_for};
 
     #[test]
     fn promotes_this_vhost_own_plain_http_url() {
@@ -674,5 +701,32 @@ mod canonical_url_tests {
             https_promotion_target("http://example.com.attacker.net", "example.com"),
             None
         );
+    }
+
+    /// The prefix-collision that let one site strip another's security updates.
+    /// `example.com` and `example.community` are separately registerable, and
+    /// the marker sits at the END of the cron line, so the old `contains` test
+    /// matched the longer domain's line from the shorter domain's marker.
+    #[test]
+    fn a_prefix_domain_cannot_match_a_longer_domains_cron_line() {
+        let victim = format!(
+            "0 3 * * * wp core update --path=/var/www/example.community/public {}",
+            auto_update_marker("example.community")
+        );
+        assert!(line_marked_for(&victim, &auto_update_marker("example.community")));
+        assert!(!line_marked_for(&victim, &auto_update_marker("example.com")));
+        // The other direction is safe too: a longer marker cannot match a
+        // shorter domain's line.
+        let short = format!(
+            "0 3 * * * wp core update --path=/var/www/a.co/public {}",
+            auto_update_marker("a.co")
+        );
+        assert!(!line_marked_for(&short, &auto_update_marker("a.com")));
+    }
+
+    #[test]
+    fn trailing_whitespace_does_not_hide_the_marker() {
+        let line = format!("0 3 * * * wp core update {}   ", auto_update_marker("a.com"));
+        assert!(line_marked_for(&line, &auto_update_marker("a.com")));
     }
 }

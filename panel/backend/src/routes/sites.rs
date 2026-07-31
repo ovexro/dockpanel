@@ -1636,9 +1636,17 @@ pub async fn remove(
         .await
         .ok();
 
-    // Clean up status page components matching this domain
-    sqlx::query("DELETE FROM status_page_components WHERE name = $1")
+    // Clean up status page components matching this domain.
+    //
+    // Scoped to the owner. `status_page_components.name` is free text with no
+    // unique constraint, and the owning module's own delete keys on
+    // `id = $1 AND user_id = $2` (incidents.rs) — this statement had dropped
+    // both, so deleting a site removed every OTHER account's component that
+    // happened to carry the same name, taking its monitor links with it through
+    // the ON DELETE CASCADE and logging nothing against the actor.
+    sqlx::query("DELETE FROM status_page_components WHERE name = $1 AND user_id = $2")
         .bind(&site.domain)
+        .bind(claims.sub)
         .execute(&state.db)
         .await
         .ok();
@@ -2590,10 +2598,13 @@ pub async fn rename_domain(
     .await
     .ok();
 
-    // Update status page components
-    sqlx::query("UPDATE status_page_components SET name = $1 WHERE name = $2")
+    // Update status page components — the mutating twin of the unscoped delete
+    // in `remove`, and the same fix: without `user_id` a rename renamed every
+    // other account's component that shared the old domain string.
+    sqlx::query("UPDATE status_page_components SET name = $1 WHERE name = $2 AND user_id = $3")
         .bind(&new_domain)
         .bind(&old_domain)
+        .bind(claims.sub)
         .execute(&state.db)
         .await
         .ok();

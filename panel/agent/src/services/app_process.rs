@@ -114,6 +114,24 @@ WantedBy=multi-user.target
     );
 
     let unit_path = format!("/etc/systemd/system/{svc}.service");
+
+    // The mirror of the delete-side collision: because `service_name` collapses
+    // '.' to '-', writing this unit for `a-b.com` would silently replace the one
+    // running `a.b.com` — pointing its ExecStart and WorkingDirectory at another
+    // tenant's docroot. Latent rather than immediate (`enable --now` does not
+    // restart an already-active unit), which is worse: it surfaces at the next
+    // reboot, running the wrong process for the victim's vhost.
+    if std::path::Path::new(&unit_path).exists()
+        && crate::services::ownership::systemd_unit(&unit_path, domain)
+            == crate::services::ownership::Owner::Theirs
+    {
+        return Err(format!(
+            "The systemd unit name for {domain} is already taken by another domain \
+             ({unit_path}). Unit names collapse '.' to '-', so these two domains \
+             share one name; rename one of them."
+        ));
+    }
+
     std::fs::write(&unit_path, &unit)
         .map_err(|e| format!("Failed to write service unit: {e}"))?;
 
@@ -147,6 +165,23 @@ pub fn remove_app_service(domain: &str) -> Result<(), String> {
 
     if !std::path::Path::new(&unit_path).exists() {
         return Ok(()); // No service to remove
+    }
+
+    // `service_name` maps `.` to `-`, and `-` is legal inside a domain label, so
+    // it is NOT injective: `a.b.com` and `a-b.com` are separately claimable
+    // domains that both land on `dockpanel-app-a-b-com`. Deleting a site used to
+    // stop, disable and unlink the unit at that name whoever wrote it, and no
+    // ordinary panel action re-sends `app_command`, so the victim's site stayed
+    // down until it was deleted and recreated.
+    //
+    // Renaming the unit would strand every unit already on disk. The unit itself
+    // records who it runs, so ask it.
+    if !crate::services::ownership::systemd_unit(&unit_path, domain).may_delete() {
+        tracing::warn!(
+            "Leaving {unit_path} in place: it does not run {domain}. The unit name \
+             collapses '.' to '-', so this file belongs to a different domain."
+        );
+        return Ok(());
     }
 
     // Stop and disable

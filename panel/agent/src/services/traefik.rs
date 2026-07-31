@@ -286,12 +286,28 @@ pub fn remove_route_config(domain: &str) {
     }
     // Boxes that ran an older agent have a file under the ambiguous name. Remove
     // it too, or a Traefik install that predates this fix keeps routing a domain
-    // whose app is gone. Only safe because the legacy name is what THIS domain
-    // would have been written as.
+    // whose app is gone.
+    //
+    // v2.52.0 said this was "only safe because the legacy name is what THIS
+    // domain would have been written as". True, and not sufficient: that name is
+    // also what ANOTHER domain is written as *today*. `route_key` doubles a
+    // literal `-`, so for any domain containing none it agrees with the legacy
+    // mangle — `legacy(a-b.com)` is `a-b-com.yml`, which is `route_key(a.b.com)`,
+    // the live file of a different app. That fires on a fresh install with no
+    // legacy files at all, and never expires. So ask the file who it routes.
     let legacy = legacy_route_config_path(domain);
     if legacy != path && std::path::Path::new(&legacy).exists() {
-        let _ = std::fs::remove_file(&legacy);
-        tracing::info!("Traefik route config removed (legacy name): {domain}");
+        match crate::services::ownership::traefik_route(&legacy, domain) {
+            o if o.may_delete() => {
+                let _ = std::fs::remove_file(&legacy);
+                tracing::info!("Traefik route config removed (legacy name): {domain}");
+            }
+            _ => tracing::warn!(
+                "Leaving {legacy} in place: it does not route {domain}. Under the \
+                 pre-v2.52.0 naming that file is also the current name of another \
+                 domain's route, and removing it would take that domain down."
+            ),
+        }
     }
 }
 
@@ -359,6 +375,29 @@ mod route_key_tests {
     #[test]
     fn the_key_is_stable_for_one_domain() {
         assert_eq!(route_key("app.example.com"), route_key("app.example.com"));
+    }
+
+    /// Why `remove_route_config` may not delete the legacy name on filename
+    /// alone: the legacy name of a hyphen-bearing domain IS the current name of
+    /// a different, live dot-domain. Making the writer injective did not make
+    /// the legacy *cleanup* safe, and this arm is here so a future simplifier
+    /// cannot delete the ownership check as redundant.
+    #[test]
+    fn the_legacy_name_of_one_domain_is_the_live_name_of_another() {
+        use super::{legacy_route_config_path, route_config_path};
+        for (dot, hyphen) in [
+            ("a.b.com", "a-b.com"),
+            ("my.app.example.com", "my-app.example.com"),
+            ("web.1.site.io", "web-1.site.io"),
+        ] {
+            assert_eq!(
+                legacy_route_config_path(hyphen),
+                route_config_path(dot),
+                "removing {hyphen} would delete the live route file of {dot}"
+            );
+            // And it is not merely its own file under another name.
+            assert_ne!(legacy_route_config_path(hyphen), route_config_path(hyphen));
+        }
     }
 }
 
