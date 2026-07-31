@@ -126,6 +126,28 @@ if [ -n "$POLICY_ID" ]; then
     else
         fail "Update policy — name not updated"
     fi
+
+    # The PUT above is deliberately PARTIAL: it names only `name` and
+    # `retention_count`. Until v2.50.0 the handler assigned server_id and
+    # destination_id unconditionally, so this very request silently NULLed both
+    # every time it ran — and this test asserted nothing about them, so it drove
+    # the defect for months without noticing. `schedule` stands in for the whole
+    # untouched set: it was created as "0 3 * * *" and no request has changed it.
+    KEPT_SCHEDULE=$(echo "$UPDATE_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('schedule',''))" 2>/dev/null)
+    if [ "$KEPT_SCHEDULE" = "0 3 * * *" ]; then
+        ok "Partial update preserves fields it does not mention"
+    else
+        fail "Partial update reset an unmentioned field (schedule='$KEPT_SCHEDULE', expected '0 3 * * *')"
+    fi
+
+    # And the value it DID send must have been applied, or "preserves" would be
+    # satisfied by a handler that ignores the body entirely.
+    NEW_RETENTION=$(echo "$UPDATE_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('retention_count',''))" 2>/dev/null)
+    if [ "$NEW_RETENTION" = "10" ]; then
+        ok "Partial update applies the fields it does mention"
+    else
+        fail "Partial update did not apply retention_count (got '$NEW_RETENTION', expected 10)"
+    fi
 fi
 
 # Delete policy
