@@ -19,6 +19,7 @@ use crate::error::{internal_error, err, agent_error, paginate, ApiError};
 use crate::models::Site;
 use crate::routes::is_valid_domain;
 use crate::routes::reseller_dashboard::check_reseller_quota;
+use crate::services::domain_claim;
 
 /// Effective per-user site-creation ceiling per hour, shared by `create` and
 /// `clone` so the two cannot drift apart. `security_site_rate_limit` holds the
@@ -252,15 +253,18 @@ pub async fn create(
         }
     }
 
-    // Validate domain format
-    if !is_valid_domain(&body.domain) {
-        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
-    }
-
-    // Block reserved panel domains (shared guard — see clone/rename/add_alias).
-    if crate::routes::is_reserved_domain_for(&body.domain, &headers) {
-        return Err(err(StatusCode::FORBIDDEN, "This domain is reserved and cannot be used"));
-    }
+    // Format, reserved and every ownership check, in one call — see
+    // services::domain_claim. `body.domain` is not used past this point; the
+    // normalised form is what gets stored and sent to the agent.
+    let domain = domain_claim::ensure_claimable(
+        &state.db,
+        &agent,
+        server_id,
+        &body.domain,
+        &headers,
+        domain_claim::Holder::New,
+    )
+    .await?;
 
     let runtime = body.runtime.as_deref().unwrap_or("static");
     if !["static", "php", "proxy", "node", "python"].contains(&runtime) {
@@ -355,31 +359,8 @@ pub async fn create(
         }
     }
 
-    // Check domain uniqueness
-    let existing: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM sites WHERE domain = $1")
-            .bind(&body.domain)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| internal_error("create sites", e))?;
-
-    if existing.is_some() {
-        return Err(err(StatusCode::CONFLICT, "Domain already exists"));
-    }
-
-    // Cross-table domain uniqueness: check git_deploys
-    let git_conflict: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM git_deploys WHERE domain = $1 AND server_id = $2"
-    )
-    .bind(&body.domain)
-    .bind(server_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| internal_error("create sites", e))?;
-
-    if git_conflict.is_some() {
-        return Err(err(StatusCode::CONFLICT, "Domain already in use by a git deployment"));
-    }
+    // Domain uniqueness — sites, git deploys AND Docker apps — was checked by
+    // `domain_claim::ensure_claimable` above, before any of this work started.
 
     // Check reseller quota before creating site
     check_reseller_quota(&state.db, claims.sub, "sites").await?;
@@ -426,7 +407,7 @@ pub async fn create(
     )
     .bind(claims.sub)
     .bind(server_id)
-    .bind(&body.domain)
+    .bind(&domain)
     .bind(runtime)
     .bind(effective_proxy_port)
     .bind(&body.php_version)
@@ -1990,14 +1971,14 @@ pub async fn add_alias(
     // live domain as an alias and hijack its traffic / intercept its ACME
     // HTTP-01 challenge. Reject reserved domains and any domain already served
     // by a site or git deployment on this server.
-    ensure_domain_available(&state, &body.alias, server_id, &headers).await?;
+    let alias = ensure_domain_available(&state, &agent, &body.alias, server_id, &headers).await?;
 
     let result = agent
         .post(
             "/nginx/aliases/add",
             Some(serde_json::json!({
                 "domain": domain,
-                "alias": body.alias,
+                "alias": alias,
             })),
         )
         .await
@@ -2292,7 +2273,7 @@ pub async fn clone_site(
                 &format!("Site creation rate limit: max {max_sites} sites per hour")));
         }
     }
-    ensure_domain_available(&state, target_domain, server_id, &headers).await?;
+    let target_domain = &ensure_domain_available(&state, &agent, target_domain, server_id, &headers).await?;
     // Atomically reserve the reseller site-quota slot AFTER the (fallible) domain checks
     // so a rejected clone cannot leak a quota slot; this mirrors create(), where the
     // reserve is the last pre-check before the mutation. Release it if the INSERT fails;
@@ -2551,49 +2532,28 @@ pub async fn rename_domain(
     .map_err(|e| internal_error("rename domain", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
-    let new_domain = body.get("new_domain")
+    let requested = body.get("new_domain")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .trim()
         .to_string();
 
-    if !is_valid_domain(&new_domain) {
-        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
-    }
-
-    // Same reserved-domain block create() enforces — otherwise a tenant could
-    // rename a site they own onto a panel control-plane domain (dockpanel.dev /
-    // docs.dockpanel.dev) and shadow the panel's own vhost for phishing.
-    if crate::routes::is_reserved_domain_for(&new_domain, &headers) {
-        return Err(err(StatusCode::FORBIDDEN, "This domain is reserved and cannot be used"));
-    }
-
-    if new_domain == site.domain {
-        return Err(err(StatusCode::BAD_REQUEST, "New domain is the same as current domain"));
-    }
-
-    // Check uniqueness
-    let existing: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM sites WHERE domain = $1")
-            .bind(&new_domain)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| internal_error("rename domain", e))?;
-
-    if existing.is_some() {
-        return Err(err(StatusCode::CONFLICT, "Domain already exists"));
-    }
-
-    let git_conflict: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM git_deploys WHERE domain = $1"
+    // Format, reserved, and every owner — including Docker apps, whose domain the
+    // panel could not see before and which the agent's 8-step rename below would
+    // have walked straight over (it checks that the SOURCE vhost exists and never
+    // that the DESTINATION is free).
+    let new_domain = domain_claim::ensure_claimable(
+        &state.db,
+        &agent,
+        _server_id,
+        &requested,
+        &headers,
+        domain_claim::Holder::Site(id),
     )
-    .bind(&new_domain)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| internal_error("rename domain", e))?;
+    .await?;
 
-    if git_conflict.is_some() {
-        return Err(err(StatusCode::CONFLICT, "Domain already in use by a git deployment"));
+    if new_domain == domain_claim::normalise(&site.domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "New domain is the same as current domain"));
     }
 
     // Call agent to rename nginx config, site dir, logs
@@ -3127,38 +3087,29 @@ fn is_safe_proxy_port(port: i32) -> bool {
     (1024..=65535).contains(&port) && !RESERVED.contains(&port)
 }
 
-/// Shared new-domain guard: rejects reserved control-plane domains and any
-/// domain already claimed by a site or a git deployment on this server. Used by
-/// clone_site and add_alias so the guard set create() enforces cannot drift.
+/// Shared new-domain guard for clone_site and add_alias.
+///
+/// This used to hold the checks itself, with a comment saying it existed "so the
+/// guard set create() enforces cannot drift" — while `create()` did not call it
+/// and six other domain-introducing paths did not exist as far as it knew. The
+/// checks now live in [`crate::services::domain_claim`], which every path calls,
+/// and this is the thin adapter for the two callers that pass a `&AppState`.
 async fn ensure_domain_available(
     state: &AppState,
+    agent: &crate::services::agent::AgentHandle,
     domain: &str,
     server_id: Uuid,
     headers: &HeaderMap,
-) -> Result<(), ApiError> {
-    if crate::routes::is_reserved_domain_for(domain, headers) {
-        return Err(err(StatusCode::FORBIDDEN, "This domain is reserved and cannot be used"));
-    }
-    let existing: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM sites WHERE domain = $1")
-        .bind(domain)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| internal_error("domain availability", e))?;
-    if existing.is_some() {
-        return Err(err(StatusCode::CONFLICT, "Domain already in use"));
-    }
-    let git_conflict: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM git_deploys WHERE domain = $1 AND server_id = $2",
+) -> Result<String, ApiError> {
+    domain_claim::ensure_claimable(
+        &state.db,
+        agent,
+        server_id,
+        domain,
+        headers,
+        domain_claim::Holder::New,
     )
-    .bind(domain)
-    .bind(server_id)
-    .fetch_optional(&state.db)
     .await
-    .map_err(|e| internal_error("domain availability", e))?;
-    if git_conflict.is_some() {
-        return Err(err(StatusCode::CONFLICT, "Domain already in use by a git deployment"));
-    }
-    Ok(())
 }
 
 /// Build the full nginx agent body from a Site model. Shared by all config-rebuild paths.

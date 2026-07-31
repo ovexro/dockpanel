@@ -13,10 +13,11 @@ use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
 use crate::error::{internal_error, err, agent_error, require_admin, ApiError};
-use crate::routes::{is_valid_name, is_valid_domain, is_reserved_domain};
+use crate::routes::{is_valid_name, is_reserved_domain};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
 use crate::services::agent::AgentHandle;
+use crate::services::domain_claim;
 use crate::services::notifications;
 use crate::AppState;
 
@@ -319,7 +320,8 @@ pub async fn list(
 pub async fn create(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(server_id, _agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
+    headers: axum::http::HeaderMap,
     Json(body): Json<CreateRequest>,
 ) -> Result<(StatusCode, Json<GitDeploy>), ApiError> {
     require_admin(&claims.role)?;
@@ -399,47 +401,24 @@ pub async fn create(
         }
     }
 
-    // Cross-table domain uniqueness: check sites table
-    if let Some(ref domain) = body.domain {
-        if !domain.is_empty() {
-            // Parity with the Sites surface (s241 #69): the domain reaches the
-            // root agent's nginx path write + unescaped `server_name`. Reject
-            // malformed values (path traversal / directive break-out) and
-            // reserved control-plane zones before it is stored.
-            if !is_valid_domain(domain) {
-                return Err(err(StatusCode::BAD_REQUEST, "Invalid domain"));
-            }
-            if is_reserved_domain(domain) {
-                return Err(err(StatusCode::BAD_REQUEST, "Domain is reserved"));
-            }
-
-            let site_conflict: Option<(Uuid,)> = sqlx::query_as(
-                "SELECT id FROM sites WHERE domain = $1 AND server_id = $2"
+    // Format, reserved and every owner — see services::domain_claim. The two
+    // conflict queries that used to be inlined here are the ones `update` never
+    // grew, which is how a git deploy could be RENAMED onto an occupied domain
+    // that it could not have been CREATED on.
+    let domain = match body.domain.as_deref().filter(|d| !d.is_empty()) {
+        Some(d) => Some(
+            domain_claim::ensure_claimable(
+                &state.db,
+                &agent,
+                server_id,
+                d,
+                &headers,
+                domain_claim::Holder::New,
             )
-            .bind(domain)
-            .bind(server_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| internal_error("create git_deploys", e))?;
-
-            if site_conflict.is_some() {
-                return Err(err(StatusCode::CONFLICT, "Domain already in use by a site"));
-            }
-
-            let git_conflict: Option<(Uuid,)> = sqlx::query_as(
-                "SELECT id FROM git_deploys WHERE domain = $1 AND server_id = $2"
-            )
-            .bind(domain)
-            .bind(server_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| internal_error("create git_deploys", e))?;
-
-            if git_conflict.is_some() {
-                return Err(err(StatusCode::CONFLICT, "Domain already in use by another git deployment"));
-            }
-        }
-    }
+            .await?,
+        ),
+        None => body.domain.clone(),
+    };
 
     let deploy: GitDeploy = sqlx::query_as(
         "INSERT INTO git_deploys (user_id, server_id, name, repo_url, branch, dockerfile, container_port, host_port, domain, env_vars, auto_deploy, webhook_secret, memory_mb, cpu_percent, ssl_email, pre_build_cmd, post_deploy_cmd, build_args, build_context, github_token, deploy_cron, deploy_protected, preview_ttl_hours) \
@@ -454,7 +433,7 @@ pub async fn create(
     .bind(dockerfile)
     .bind(container_port)
     .bind(host_port)
-    .bind(&body.domain)
+    .bind(&domain)
     .bind(&env_vars)
     .bind(auto_deploy)
     .bind(&webhook_secret)
@@ -528,6 +507,7 @@ pub async fn update(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<UpdateRequest>,
 ) -> Result<Json<GitDeploy>, ApiError> {
     require_admin(&claims.role)?;
@@ -536,8 +516,13 @@ pub async fn update(
     // that actually CHANGE (grandfather rows that predate these guards — e.g. a
     // deploy already on a reserved zone, or a stored 6-field cron — so an
     // unrelated field edit that re-sends the unchanged value isn't rejected).
-    let existing: Option<(Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT domain, deploy_cron FROM git_deploys WHERE id = $1 AND user_id = $2",
+    //
+    // `server_id` is fetched too: the conflict check is per-server and this
+    // handler has no ServerScope. Reading it from the ROW rather than from the
+    // caller's X-Server-Id header means the guard consults the server the deploy
+    // actually lives on, which is the one whose nginx it will overwrite.
+    let existing: Option<(Option<String>, Option<String>, Uuid)> = sqlx::query_as(
+        "SELECT domain, deploy_cron, server_id FROM git_deploys WHERE id = $1 AND user_id = $2",
     )
     .bind(id)
     .bind(claims.sub)
@@ -545,23 +530,37 @@ pub async fn update(
     .await
     .map_err(|e| internal_error("update git_deploys", e))?;
 
-    let (cur_domain, cur_cron) = match existing {
+    let (cur_domain, cur_cron, server_id) = match existing {
         Some(row) => row,
         None => return Err(err(StatusCode::NOT_FOUND, "Git deploy not found")),
     };
 
-    // Validate domain ONLY when it changes (parity with create / Sites s241 #69) —
-    // it reaches the root agent's nginx path write + unescaped `server_name`.
-    if let Some(ref domain) = body.domain {
-        if !domain.is_empty() && Some(domain) != cur_domain.as_ref() {
-            if !is_valid_domain(domain) {
-                return Err(err(StatusCode::BAD_REQUEST, "Invalid domain"));
-            }
-            if is_reserved_domain(domain) {
-                return Err(err(StatusCode::BAD_REQUEST, "Domain is reserved"));
-            }
+    // Validate domain ONLY when it changes. This used to run `is_valid_domain` +
+    // `is_reserved_domain` and stop there, under a comment claiming parity with
+    // `create` — but create ALSO ran two conflict queries, so a domain that could
+    // not be created could still be renamed onto. The next deploy then rendered a
+    // proxy vhost over the file the victim owned.
+    let domain = match body.domain.as_deref() {
+        Some(d) if !d.is_empty() && Some(d) != cur_domain.as_deref() => {
+            let agent = state
+                .agents
+                .for_server(server_id)
+                .await
+                .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
+            Some(
+                domain_claim::ensure_claimable(
+                    &state.db,
+                    &agent,
+                    server_id,
+                    d,
+                    &headers,
+                    domain_claim::Holder::GitDeploy(id),
+                )
+                .await?,
+            )
         }
-    }
+        other => other.map(|d| d.to_string()),
+    };
 
     // Validate deploy_cron format ONLY when it changes
     if let Some(ref cron) = body.deploy_cron {
@@ -615,7 +614,7 @@ pub async fn update(
     .bind(body.branch.as_deref())
     .bind(body.dockerfile.as_deref())
     .bind(body.container_port)
-    .bind(body.domain.as_deref())
+    .bind(domain.as_deref())
     .bind(env_vars)
     .bind(body.auto_deploy)
     .bind(body.memory_mb)
@@ -2474,7 +2473,42 @@ async fn handle_preview_deploy(state: &AppState, agent: &AgentHandle, config: &G
     };
 
     let container_name = format!("dockpanel-git-{}-pr-{}", config.name, branch_slug);
-    let preview_domain = config.domain.as_ref().map(|d| format!("{branch_slug}.{d}"));
+
+    // The preview domain's leftmost label comes from a PUSHED BRANCH NAME, and
+    // `POST /api/webhooks/git/{id}/{secret}` has no auth extractor — so a repo
+    // collaborator with no panel account chooses it. A branch called `www`, `mail`
+    // or `api` used to synthesise `www.example.com` and hand it straight to the
+    // agent, which replaced whatever vhost was already there.
+    //
+    // A collision here is almost always accidental, so the preview still deploys —
+    // it just does not get a vhost. Losing a preview URL is a far smaller thing
+    // than repointing a production site at a branch build. Note `is_reserved_domain`
+    // and not `is_reserved_domain_for`: the Host header on this request is chosen
+    // by whoever calls the webhook, so it must not be trusted to define what is
+    // reserved.
+    let mut preview_domain = config.domain.as_ref().map(|d| format!("{branch_slug}.{d}"));
+    if let Some(ref candidate) = preview_domain {
+        let taken = if is_reserved_domain(candidate) {
+            Some(crate::services::domain_claim::Occupant::Site)
+        } else {
+            crate::services::domain_claim::find_occupant(
+                &state.db,
+                agent,
+                config.server_id,
+                candidate,
+                crate::services::domain_claim::Holder::GitDeploy(config.id),
+            )
+            .await
+            .unwrap_or(None)
+        };
+        if taken.is_some() {
+            tracing::warn!(
+                "Preview for branch '{branch}' would have claimed {candidate}, which is \
+                 already served on this server — deploying the preview without a domain"
+            );
+            preview_domain = None;
+        }
+    }
 
     // Upsert preview record
     if let Err(e) = sqlx::query(

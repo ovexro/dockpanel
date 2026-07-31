@@ -49,9 +49,26 @@ for f in "$APPS_UI" "$APPS_BE" "$APPS_SVC" "$NGINX_SVC" "$NGINX_ROUTE" "$TRAEFIK
   [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
 done
 
-# Block comments first: stripping line comments first would let a `//` holding a
-# `/*` eat the rest of the file.
-code() { perl -0777 -pe 's{/\*.*?\*/}{}gs; s{^\s*//.*$}{}gm' "$1"; }
+# Comments out, CODE INTACT.
+#
+# The obvious `s{/\*.*?\*/}{}gs` is wrong and shipped in four suites before this
+# one: `/*` occurs INSIDE string literals (a Dockerfile's
+# `COPY --from=builder /app/target/release/*`, a glob, a regex), so it opened a
+# "block comment" that ran to the next `*/` and deleted real code —
+# git_build.rs 1214 -> 729 lines, agent/routes/nginx.rs 2263 -> 2145. A
+# truncated subject makes an ABSENCE arm pass on code that was merely deleted by
+# the stripper, which is the worst way for a pin to be wrong.
+#
+# So a block comment is only recognised where one is actually written: opening at
+# the start of a line, closing at the end of one. A `/*` in the middle of a line
+# is data.
+code() {
+  perl -0777 -pe '
+    s{\{/\*.*?\*/\}}{}gs;
+    s{^[ \t]*/\*.*?\*/[ \t]*$}{}gms;
+    s{^\s*//.*$}{}gm;
+  ' "$1"
+}
 
 # An arm whose subject could not be extracted must SKIP, not print a confident
 # green next to a red about the same subject (lesson #122b).

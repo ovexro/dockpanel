@@ -219,7 +219,7 @@ pub async fn status(docker: &Docker) -> TraefikStatus {
 /// Write a Traefik dynamic route config file for an app.
 /// Traefik auto-reloads file configs via the file provider (--providers.file.watch=true).
 pub fn write_route_config(domain: &str, backend_port: u16, ssl: bool) -> Result<(), String> {
-    let safe = domain.replace('.', "-").replace(':', "-");
+    let safe = route_key(domain);
     let dir = format!("{TRAEFIK_CONFIG_DIR}/dynamic");
     std::fs::create_dir_all(&dir).ok();
 
@@ -284,6 +284,40 @@ pub fn remove_route_config(domain: &str) {
         let _ = std::fs::remove_file(&path);
         tracing::info!("Traefik route config removed: {domain}");
     }
+    // Boxes that ran an older agent have a file under the ambiguous name. Remove
+    // it too, or a Traefik install that predates this fix keeps routing a domain
+    // whose app is gone. Only safe because the legacy name is what THIS domain
+    // would have been written as.
+    let legacy = legacy_route_config_path(domain);
+    if legacy != path && std::path::Path::new(&legacy).exists() {
+        let _ = std::fs::remove_file(&legacy);
+        tracing::info!("Traefik route config removed (legacy name): {domain}");
+    }
+}
+
+/// Traefik router name / config filename for `domain`.
+///
+/// Mangling `.` to `-` alone is NOT injective over the domains `is_valid_domain`
+/// accepts, because `-` is legal inside a label: `a.b.com` and `a-b.com` both
+/// became `a-b-com`, so they shared one route file and one router name. The
+/// second app deployed silently truncated the first one's route, removing either
+/// deleted the other's, and `route_is_tls` answered for whichever won — feeding
+/// `nginx::domain_is_https` and therefore the link the panel prints.
+///
+/// Escaping first makes it injective: a literal `-` doubles, so a single `-` can
+/// only have come from a `.`.
+fn route_key(domain: &str) -> String {
+    let mut out = String::with_capacity(domain.len() + 4);
+    for c in domain.chars() {
+        match c {
+            '-' => out.push_str("--"),
+            '_' => out.push_str("__"),
+            '.' => out.push('-'),
+            ':' => out.push('_'),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Path of the dynamic route config `write_route_config` writes for `domain`.
@@ -291,8 +325,41 @@ pub fn remove_route_config(domain: &str) {
 /// Factored out so the readers below and the writer above cannot disagree about
 /// where the file lives — the same name-mangling has to be applied to find it.
 fn route_config_path(domain: &str) -> String {
+    format!("{TRAEFIK_CONFIG_DIR}/dynamic/{}.yml", route_key(domain))
+}
+
+/// The pre-fix, ambiguous path. Read only by `remove_route_config`, to clean up
+/// files written by an agent older than this change.
+fn legacy_route_config_path(domain: &str) -> String {
     let safe = domain.replace('.', "-").replace(':', "-");
     format!("{TRAEFIK_CONFIG_DIR}/dynamic/{safe}.yml")
+}
+
+#[cfg(test)]
+mod route_key_tests {
+    use super::route_key;
+
+    #[test]
+    fn distinct_domains_get_distinct_keys() {
+        // The exact collision this replaced: both used to be "a-b-com".
+        assert_ne!(route_key("a.b.com"), route_key("a-b.com"));
+        assert_ne!(route_key("x-y.z.com"), route_key("x.y.z.com"));
+        assert_ne!(route_key("a--b.com"), route_key("a-b-com"));
+    }
+
+    #[test]
+    fn keys_contain_no_path_or_yaml_separators() {
+        for d in ["a.b.com", "a-b.com", "hy-phen.example.co.uk"] {
+            let k = route_key(d);
+            assert!(!k.contains('.'), "{k} still has a dot");
+            assert!(!k.contains('/'), "{k} has a path separator");
+        }
+    }
+
+    #[test]
+    fn the_key_is_stable_for_one_domain() {
+        assert_eq!(route_key("app.example.com"), route_key("app.example.com"));
+    }
 }
 
 /// Whether the Traefik route for `domain` terminates TLS.

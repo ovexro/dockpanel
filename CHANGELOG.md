@@ -4,6 +4,88 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.52.0] - 2026-07-31
+
+One question nothing owned — *may this domain be claimed?* — and one nobody
+asked — *what was here before I wrote?*
+
+### Fixed — a site update could delete that site's nginx configuration
+
+This is the one to upgrade for, and it has nothing to do with domains.
+
+When the agent wrote a vhost it replaced the file at
+`/etc/nginx/sites-enabled/{domain}.conf` and then ran `nginx -t`. If the test
+failed it **deleted** the file — under a comment reading *"Invalid config —
+remove it and restore"*. No backup was ever taken, so there was nothing to
+restore from, and a second, undocumented delete did the same when `nginx -t`
+merely timed out.
+
+`nginx -t` validates the **whole server**. An unrelated broken vhost anywhere on
+the box fails it. So an ordinary self-service change on a healthy site — switching
+PHP version, toggling the WAF, editing security headers — could remove that
+site's configuration file, as could the auto-healer and the security scanner
+with nobody touching anything. Nginx is not reloaded on that path, so the box
+kept serving from memory and the loss only surfaced at the next reload.
+
+All three writers now snapshot the existing configuration first and put it back
+on failure, deleting only a file they themselves created. The error now says so.
+
+### Fixed — one guard decides whether a domain may be claimed
+
+Eleven paths could cause a vhost to be written and each carried its own subset
+of the checks. `sites.rs` had a shared helper whose comment said it existed
+*"so the guard set create() enforces cannot drift"* — and two of the eleven
+called it.
+
+- **Docker apps were invisible to every guard.** An app's domain lives only in
+  the `dockpanel.app.domain` container label, never in the database, so no SQL
+  check could see it. Creating or renaming a site onto a domain an app owned
+  passed every check and then replaced the app's vhost. The panel now asks the
+  agent, which has been returning that domain all along.
+- **`POST /api/apps/deploy` checked nothing at all** — not the reserved
+  control-plane domain, not sites, not git deploys. It could be pointed at a
+  live site's domain, or at the panel's own hostname. The check now runs before
+  the DNS record is created, not after.
+- **Renaming a git deploy** skipped both conflict queries that creating one
+  performs, so a domain that could not be created could still be renamed onto.
+- **Staging environments** — the only tenant-reachable path here — consulted the
+  sites table alone, and accepted any domain, not just a subdomain of the parent.
+- **Preview deployments** built `{branch}.{domain}` from a pushed branch name and
+  claimed it unchecked. A branch called `www` took `www.example.com`. Previews
+  now deploy without a vhost rather than over someone else's.
+- **The migration wizard** imported client-supplied domains with no format or
+  reserved-domain check at all.
+- **`EXAMPLE.com` walked past `example.com`.** Domain comparison was
+  case-sensitive while the reserved-domain check was not. Domains are now
+  normalised at the point of claim.
+
+### Fixed — two Traefik route files could collide
+
+The route filename and router name mapped `.` to `-`, which is not reversible:
+`a.b.com` and `a-b.com` both became `a-b-com`. The second app deployed silently
+truncated the first one's route, removing either deleted the other's, and the
+TLS state reported for one was the other's. Route files written by an older
+agent are cleaned up on removal.
+
+### Added
+
+- **Domain Watchdog** as a multi-container stack package (Docker Apps → Compose →
+  Packages) — RDAP domain monitoring, four services (#50).
+
+### Testing
+
+- New `domain-claim-pin-e2e.sh`, 44 assertions, 29 of them red against v2.51.0.
+  Sixteen deliberate evasions were then run against the fixed tree; two beat the
+  first draft — a delete reached through a renamed variable, and a guard whose
+  result was computed and discarded — and both arms were re-keyed on the
+  property rather than the spelling.
+- **A comment stripper shared by five pin suites was deleting code.** `/*` inside
+  a string literal (a Dockerfile's `COPY … /app/target/release/*`) opened a block
+  comment that ran to the next `*/`: `git_build.rs` lost 485 of 1214 lines and
+  `agent/routes/nginx.rs` 118 of 2263. A truncated subject makes an
+  absence-checking assertion pass on code the stripper merely removed. Fixed in
+  all five; every suite re-verified green.
+
 ## [2.51.0] - 2026-07-31
 
 Two ends of the panel disagreeing about something each of them already knew.

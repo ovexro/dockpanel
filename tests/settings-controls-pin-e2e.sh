@@ -105,7 +105,7 @@ KNOBS_N=$(printf '%s\n' "$KNOBS" | grep -c . || true)
 FE_SRC=$(mktemp)
 trap 'rm -f "$FE_SRC"' EXIT
 find "$FE" -name '*.tsx' -exec cat {} + \
-  | perl -0777 -pe 's{/\*.*?\*/}{}gs' \
+  | perl -0777 -pe 's{\{/\*.*?\*/\}}{}gs; s{^[ \t]*/\*.*?\*/[ \t]*$}{}gms' \
   | grep -vE '^\s*//' > "$FE_SRC"
 
 # Keys constructed at the call site rather than spelled out, e.g.

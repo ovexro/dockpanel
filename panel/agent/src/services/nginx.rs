@@ -53,6 +53,52 @@ pub fn domain_is_https(domain: &str) -> bool {
     })
 }
 
+/// Undo a vhost write: put `previous` back if there was one, otherwise remove the
+/// file we just created. Returns whether a previous config was restored.
+///
+/// Every writer that replaces `/etc/nginx/sites-enabled/{domain}.conf` and then
+/// validates must funnel its failure path through here. A bare `remove_file` is
+/// only correct when the writer knows the path held nothing beforehand — and none
+/// of the three writers knew that. `nginx -t` is a whole-server check, so an
+/// unrelated broken vhost anywhere on the box fails it, and the site being edited
+/// paid for it with its own configuration file.
+pub fn restore_or_remove(config_path: &str, previous: Option<&str>) -> bool {
+    match previous {
+        Some(prev) => {
+            // Restore through the same tmp+rename dance the write used, so a crash
+            // mid-restore cannot leave a truncated vhost behind.
+            let tmp_path = format!("{config_path}.restore");
+            let ok = std::fs::write(&tmp_path, prev)
+                .and_then(|_| std::fs::rename(&tmp_path, config_path))
+                .is_ok();
+            if !ok {
+                std::fs::remove_file(&tmp_path).ok();
+                tracing::error!(
+                    "Failed to restore the previous nginx config at {config_path} \
+                     ({} bytes) — this domain may now have no vhost",
+                    prev.len()
+                );
+            }
+            ok
+        }
+        None => {
+            std::fs::remove_file(config_path).ok();
+            false
+        }
+    }
+}
+
+/// Sentence appended to an error so the operator learns whether the previous
+/// configuration survived. Saying nothing is what let the old behaviour stay
+/// invisible for as long as it did.
+pub fn restore_note(restored: bool) -> &'static str {
+    if restored {
+        " (the previous configuration for this domain was restored)"
+    } else {
+        ""
+    }
+}
+
 /// Detect the server's primary (non-loopback, non-docker) interface IP for nginx listen directives.
 /// Returns empty string if detection fails (templates fall back to wildcard listen).
 fn detect_bind_ip() -> String {

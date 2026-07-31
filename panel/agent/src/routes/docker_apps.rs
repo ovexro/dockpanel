@@ -148,6 +148,10 @@ async fn deploy(
             match nginx::render_site_config(&state.templates, domain, &site_config) {
                 Ok(rendered) => {
                     let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+                    // Snapshot first: this path may already belong to a site or a
+                    // git deploy, and `nginx -t` below is a whole-server check that
+                    // an unrelated broken vhost is enough to fail.
+                    let previous = std::fs::read_to_string(&config_path).ok();
                     let tmp_path = format!("{config_path}.tmp");
                     let write_result = std::fs::write(&tmp_path, &rendered)
                         .and_then(|_| std::fs::rename(&tmp_path, &config_path));
@@ -167,14 +171,21 @@ async fn deploy(
                                 tracing::info!("Auto-proxy: {domain} → 127.0.0.1:{}", body.port);
                             }
                             Ok(output) => {
-                                std::fs::remove_file(&config_path).ok();
+                                let restored = nginx::restore_or_remove(&config_path, previous.as_deref());
                                 tracing::warn!("Auto-proxy: nginx config test failed for {domain}: {}", output.stderr);
-                                response["proxy_warning"] = serde_json::json!(format!("Nginx config test failed: {}", output.stderr));
+                                response["proxy_warning"] = serde_json::json!(format!(
+                                    "Nginx config test failed: {}{}",
+                                    output.stderr,
+                                    nginx::restore_note(restored)
+                                ));
                             }
                             Err(e) => {
-                                std::fs::remove_file(&config_path).ok();
+                                let restored = nginx::restore_or_remove(&config_path, previous.as_deref());
                                 tracing::warn!("Auto-proxy: nginx test error for {domain}: {e}");
-                                response["proxy_warning"] = serde_json::json!(format!("Nginx test error: {e}"));
+                                response["proxy_warning"] = serde_json::json!(format!(
+                                    "Nginx test error: {e}{}",
+                                    nginx::restore_note(restored)
+                                ));
                             }
                         }
                     }

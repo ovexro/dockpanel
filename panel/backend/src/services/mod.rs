@@ -9,6 +9,7 @@ pub mod backup_scheduler;
 pub mod backup_verifier;
 pub mod chain_report;
 pub mod deploy_scheduler;
+pub mod domain_claim;
 pub mod drift;
 pub mod drill_scheduler;
 pub mod email;

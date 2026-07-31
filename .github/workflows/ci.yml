@@ -437,3 +437,32 @@ jobs:
       # extractor (a fixed -A window is satisfied by the NEXT function).
       - name: The scheme is derived, and the importer writes where nginx looks
         run: bash tests/scheme-and-import-pin-e2e.sh
+
+  domain-claim:
+    name: One Door Owns A Domain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pure source analysis. Two questions nothing owned.
+      #
+      # "MAY THIS DOMAIN BE CLAIMED?" — eleven paths could cause a vhost to be
+      # written and each carried its own subset of the guards. sites.rs even had
+      # a shared helper whose comment said it existed "so the guard set create()
+      # enforces cannot drift"; two of the eleven called it. docker_apps::deploy
+      # checked nothing at all, git_deploys::update dropped both conflict queries
+      # its own create runs, staging::create — the tenant-reachable one —
+      # consulted only the sites table, and a Docker app's domain lives solely in
+      # a container label, so no SQL guard could see it in the first place.
+      #
+      # "WHAT WAS HERE BEFORE I WROTE?" — three writers replaced
+      # /etc/nginx/sites-enabled/{domain}.conf and, when the WHOLE-SERVER
+      # `nginx -t` failed, deleted it, under a comment promising a restore. An
+      # unrelated broken vhost anywhere on the box was enough, so an ordinary
+      # settings toggle could remove a healthy site's configuration.
+      #
+      # §B is the arm that matters: a new domain-introducing surface that does
+      # not call the shared guard fails here. §B2 forbids private conflict
+      # queries, which is how create and update came to disagree.
+      - name: Every path claims through one guard, and no write destroys what it replaced
+        run: bash tests/domain-claim-pin-e2e.sh

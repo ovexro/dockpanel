@@ -8,7 +8,6 @@ use uuid::Uuid;
 use crate::auth::{AuthUser, ServerScope};
 use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::models::Site;
-use crate::routes::is_valid_domain;
 use crate::services::activity;
 use crate::AppState;
 
@@ -41,6 +40,7 @@ pub async fn create(
     AuthUser(claims): AuthUser,
     ServerScope(server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<CreateStagingRequest>,
 ) -> Result<(StatusCode, Json<Site>), ApiError> {
     let parent = get_site(&state, id, claims.sub).await?;
@@ -70,27 +70,25 @@ pub async fn create(
         ));
     }
 
-    // Determine staging domain
-    let staging_domain = match body.domain {
-        Some(ref d) if !d.is_empty() => {
-            if !is_valid_domain(d) {
-                return Err(err(StatusCode::BAD_REQUEST, "Invalid staging domain format"));
-            }
-            d.clone()
-        }
+    // Determine staging domain. `body.domain` is arbitrary — it is NOT required to
+    // be a subdomain of the parent — so this is a full domain claim by an ordinary
+    // tenant, and it must pass the same guard as every other one. Until now it
+    // consulted the `sites` table alone: no reserved-domain block (so a tenant who
+    // owned one site could claim the panel's own hostname), no git deploys, and no
+    // Docker apps.
+    let requested = match body.domain {
+        Some(ref d) if !d.is_empty() => d.clone(),
         _ => format!("staging.{}", parent.domain),
     };
-
-    // Check domain uniqueness
-    let dup: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM sites WHERE domain = $1")
-        .bind(&staging_domain)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| internal_error("create staging", e))?;
-
-    if dup.is_some() {
-        return Err(err(StatusCode::CONFLICT, "Staging domain already in use"));
-    }
+    let staging_domain = crate::services::domain_claim::ensure_claimable(
+        &state.db,
+        &agent,
+        server_id,
+        &requested,
+        &headers,
+        crate::services::domain_claim::Holder::New,
+    )
+    .await?;
 
     // Insert staging site
     let staging: Site = sqlx::query_as(

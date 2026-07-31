@@ -814,6 +814,10 @@ async fn setup_nginx_proxy(
         .map_err(|e| format!("Failed to render nginx config: {e}"))?;
 
     let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+    // Snapshot first — a preview deploy synthesises `{branch}.{domain}` from a
+    // pushed branch name, so this path can already belong to somebody else, and
+    // `nginx -t` is a whole-server check an unrelated broken vhost can fail.
+    let previous = std::fs::read_to_string(&config_path).ok();
     let tmp_path = format!("{config_path}.tmp");
 
     std::fs::write(&tmp_path, &rendered)
@@ -830,9 +834,11 @@ async fn setup_nginx_proxy(
             tracing::info!("Nginx proxy configured for {domain} -> port {host_port}");
         }
         _ => {
-            std::fs::remove_file(&config_path).ok();
+            let restored =
+                crate::services::nginx::restore_or_remove(&config_path, previous.as_deref());
             return Err(format!(
-                "Nginx config test failed for {domain}, config removed"
+                "Nginx config test failed for {domain}{}",
+                crate::services::nginx::restore_note(restored)
             ));
         }
     }

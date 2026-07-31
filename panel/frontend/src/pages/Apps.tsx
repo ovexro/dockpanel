@@ -1125,6 +1125,60 @@ volumes:
   nextcloud_data:
   nc_mariadb:`,
     },
+    {
+      id: "domain-watchdog",
+      name: "Domain Watchdog",
+      description: "Monitor domain names over RDAP, track their history, and catch them when they expire (GitHub #50)",
+      services: 4,
+      yaml: `services:
+  domainwatchdog:
+    image: maelgangloff/domain-watchdog:latest
+    ports: ["8085:80"]
+    environment:
+      APP_ENV: prod
+      SERVER_NAME: ":80"
+      DATABASE_URL: postgresql://app:dw_password@database:5432/app?serverVersion=16&charset=utf8
+      MESSENGER_ASYNC_TRANSPORT_DSN: redis://valkey:6379/messages
+      MESSENGER_RDAP_LOW_TRANSPORT_DSN: redis://valkey:6379/messages-rdap-low
+      MESSENGER_RDAP_HIGH_TRANSPORT_DSN: redis://valkey:6379/messages-rdap-high
+      LOCK_DSN: redis://valkey:6379
+      HTTP_SECURE_COOKIE: "false"
+    depends_on: [database, valkey]
+    volumes: [dw_caddy_data:/data, dw_caddy_config:/config]
+    labels:
+      dockpanel.managed: "true"
+  php-worker:
+    image: maelgangloff/domain-watchdog:latest
+    command: php /app/bin/console messenger:consume --all --time-limit=3600
+    environment:
+      APP_ENV: prod
+      DATABASE_URL: postgresql://app:dw_password@database:5432/app?serverVersion=16&charset=utf8
+      MESSENGER_ASYNC_TRANSPORT_DSN: redis://valkey:6379/messages
+      MESSENGER_RDAP_LOW_TRANSPORT_DSN: redis://valkey:6379/messages-rdap-low
+      MESSENGER_RDAP_HIGH_TRANSPORT_DSN: redis://valkey:6379/messages-rdap-high
+      LOCK_DSN: redis://valkey:6379
+      MESSENGER_CONSUMER_NAME: worker
+    depends_on: [database, valkey]
+    labels:
+      dockpanel.managed: "true"
+  database:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: dw_password
+    volumes: [dw_pgdata:/var/lib/postgresql/data]
+    labels:
+      dockpanel.managed: "true"
+  valkey:
+    image: valkey/valkey:8-alpine
+    labels:
+      dockpanel.managed: "true"
+volumes:
+  dw_caddy_data:
+  dw_caddy_config:
+  dw_pgdata:`,
+    },
   ];
 
   // Filter apps by tag (Feature #7)
@@ -2643,7 +2697,8 @@ volumes:
                           .replace(/wp_password/g, randPw())
                           .replace(/root_password/g, randPw())
                           .replace(/ghost_password/g, randPw())
-                          .replace(/nc_password/g, randPw());
+                          .replace(/nc_password/g, randPw())
+                          .replace(/dw_password/g, randPw());
                         setComposeYaml(yaml); setComposeView('compose'); setComposeParsed(null);
                       }}
                     >

@@ -62,6 +62,7 @@ pub async fn deploy(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(_server_id, agent): ServerScope,
+    headers: axum::http::HeaderMap,
     Json(body): Json<DeployRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     require_admin(&claims.role)?;
@@ -210,7 +211,29 @@ pub async fn deploy(
     let app_name = body.name.clone();
     let template = body.template_id.clone();
 
-    let deploy_domain = body.domain.clone().filter(|d| !d.is_empty());
+    // Until now this line WAS the whole of the domain handling: filtered for
+    // emptiness and put on the wire. No format check (the agent had one), no
+    // reserved-domain block (the agent has never had one), and no conflict query
+    // against `sites` or `git_deploys` — data the panel holds in its own database
+    // and simply never consulted. So an app could be deployed onto a live site's
+    // domain and the agent would replace that site's vhost, and onto the panel's
+    // own hostname. The check must happen HERE and not later: the spawned task
+    // below creates a DNS A record before the agent is ever called, so a domain
+    // rejected downstream still leaves a live record behind.
+    let deploy_domain = match body.domain.clone().filter(|d| !d.is_empty()) {
+        Some(d) => Some(
+            crate::services::domain_claim::ensure_claimable(
+                &state.db,
+                &agent,
+                _server_id,
+                &d,
+                &headers,
+                crate::services::domain_claim::Holder::New,
+            )
+            .await?,
+        ),
+        None => None,
+    };
     // Requesting a certificate is the right default — most people pointing a
     // domain at this box want one, which is why an omitted address falls back to
     // the operator's. But it has to be declinable: behind an upstream TLS

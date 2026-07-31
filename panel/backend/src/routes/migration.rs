@@ -348,6 +348,7 @@ pub async fn import(
     AuthUser(claims): AuthUser,
     ServerScope(server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<ImportRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     require_admin(&claims.role)?;
@@ -423,6 +424,12 @@ pub async fn import(
     let email = claims.email.clone();
     let agent_migration_id = agent_migration_id.clone();
     let migration_source = migration.source.clone();
+    // The imported domains are client-supplied (`ImportSiteItem.domain`) and are
+    // never reconciled against what the analyse step actually found, so they get
+    // the same guard as any other claim. Carried into the task because
+    // `is_reserved_domain_for` reads the Host header — BASE_URL is empty on a
+    // routine install, which is the whole reason that variant exists.
+    let claim_headers = headers.clone();
 
     tokio::spawn(async move {
         let mut results = serde_json::json!({
@@ -450,29 +457,45 @@ pub async fn import(
                 None,
             );
 
-            // Check if domain already exists
-            let existing: Option<(Uuid,)> =
-                sqlx::query_as("SELECT id FROM sites WHERE domain = $1")
-                    .bind(domain)
-                    .fetch_optional(&db)
-                    .await
-                    .unwrap_or(None);
+            // Is this domain claimable? Same guard as every other path — which
+            // here also supplies the format and reserved-domain checks the import
+            // never had, and extends "already exists" past the `sites` table to
+            // git deploys and Docker apps. Note the ORDER below: the vhost is
+            // written before the row is inserted, so a domain that slips past
+            // this is already on disk by the time the INSERT could reject it.
+            let claimed = crate::services::domain_claim::ensure_claimable(
+                &db,
+                &agent,
+                server_id,
+                domain,
+                &claim_headers,
+                crate::services::domain_claim::Holder::New,
+            )
+            .await;
 
-            if existing.is_some() {
-                emit_step(
-                    &logs,
-                    id,
-                    &step_key,
-                    &format!("Site {domain}"),
-                    "done",
-                    Some("Skipped (domain already exists)".into()),
-                );
-                if let Some(arr) = results["sites_skipped"].as_array_mut() {
-                    arr.push(serde_json::json!(domain));
+            let domain = &match claimed {
+                Ok(d) => d,
+                Err((_, reason)) => {
+                    let detail = reason
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("domain not available")
+                        .to_string();
+                    emit_step(
+                        &logs,
+                        id,
+                        &step_key,
+                        &format!("Site {domain}"),
+                        "done",
+                        Some(format!("Skipped ({detail})")),
+                    );
+                    if let Some(arr) = results["sites_skipped"].as_array_mut() {
+                        arr.push(serde_json::json!(domain));
+                    }
+                    completed += 1;
+                    continue;
                 }
-                completed += 1;
-                continue;
-            }
+            };
 
             // 1. Create nginx site via agent
             let runtime = &site_item.runtime;

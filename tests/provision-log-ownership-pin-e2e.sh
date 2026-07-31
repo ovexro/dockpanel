@@ -96,7 +96,18 @@ done
 # pinned strings left only inside `/* … */` kept both §6 arms green. Block
 # comments are the idiomatic way to disable a multi-line Rust call and a normal
 # TSX comment form, so they are stripped too.
-strip() { perl -0777 -pe 's{/\*.*?\*/}{}gs; s{//[^\n]*}{}g' "$1"; }
+# A `/*` inside a string literal (a Dockerfile glob, a regex) is DATA, not a
+# comment opener — the naive form deleted 485 lines of git_build.rs and 118 of
+# agent/routes/nginx.rs, and a truncated subject makes an ABSENCE arm pass on
+# code the stripper merely removed. Likewise `//` only opens a comment at the
+# start of a line: stripping it anywhere ate the `//` of every `https://` URL.
+strip() {
+  perl -0777 -pe '
+    s{\{/\*.*?\*/\}}{}gs;
+    s{^[ \t]*/\*.*?\*/[ \t]*$}{}gms;
+    s{^\s*//.*$}{}gm;
+  ' "$1"
+}
 
 # Every route file, comments stripped. ALL of them — the previous version read 8
 # of 63, so five plausible future homes for a provisioning stream (stacks.rs,

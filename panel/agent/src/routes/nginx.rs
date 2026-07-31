@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{is_valid_domain, AppState};
 use crate::services;
+use crate::services::nginx::{restore_note, restore_or_remove};
 use crate::services::ssl;
 
 #[derive(Deserialize)]
@@ -257,8 +258,18 @@ async fn put_site(
         }
     };
 
-    // Write config file atomically (write to .tmp, then rename)
+    // Write config file atomically (write to .tmp, then rename).
+    //
+    // `rename` REPLACES whatever is already at this path, and `nginx -t` below is
+    // a whole-server check — an unrelated broken vhost anywhere on the box fails
+    // it. So the error paths must be able to put back exactly what was here: for
+    // four years they deleted instead, under a comment promising a restore, which
+    // meant an ordinary settings toggle (PHP version, WAF, headers) on a healthy
+    // site could remove that site's config while some *other* vhost was broken.
+    // Nothing reloads nginx on that path, so the box kept serving from memory and
+    // the loss only surfaced at the next reload.
     let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+    let previous = std::fs::read_to_string(&config_path).ok();
     let tmp_path = format!("{config_path}.tmp");
     let write_result = std::fs::write(&tmp_path, &rendered)
         .and_then(|_| std::fs::rename(&tmp_path, &config_path));
@@ -344,23 +355,30 @@ async fn put_site(
             }))
         }
         Ok(output) => {
-            // Invalid config — remove it and restore
-            std::fs::remove_file(&config_path).ok();
+            // Invalid config — put back exactly what was here before.
+            let restored = restore_or_remove(&config_path, previous.as_deref());
             Err((
                 StatusCode::BAD_REQUEST,
                 Json(NginxResponse {
                     success: false,
-                    message: format!("Nginx config test failed: {}", output.stderr),
+                    message: format!(
+                        "Nginx config test failed: {}{}",
+                        output.stderr,
+                        restore_note(restored)
+                    ),
                 }),
             ))
         }
         Err(e) => {
-            std::fs::remove_file(&config_path).ok();
+            // `nginx -t` did not answer (timeout, missing binary). The rendered
+            // config is unproven, so it does not stay — but neither does the
+            // previous owner's config get destroyed by our inability to test.
+            let restored = restore_or_remove(&config_path, previous.as_deref());
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(NginxResponse {
                     success: false,
-                    message: format!("Failed to test config: {e}"),
+                    message: format!("Failed to test config: {e}{}", restore_note(restored)),
                 }),
             ))
         }
