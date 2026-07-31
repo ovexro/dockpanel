@@ -9,6 +9,50 @@ pub struct CmdOutput {
     pub stderr: String,
 }
 
+/// The directory nginx will actually serve for a site, given its runtime.
+///
+/// This is not the site directory. Every template renders
+/// `root {{ root }}/{{ domain }}/public` for the static and PHP runtimes, and
+/// only the runtimes that proxy to a process are served from the site directory
+/// itself. It lives here because two callers need the same answer and used to
+/// disagree: `put_site` created the `public` subdirectory, while the migration
+/// importer copied the imported site's files one level above it and then
+/// deleted `public` on its way past — so every import produced a vhost whose
+/// document root did not exist.
+pub fn document_root_for(site_dir: &str, runtime: &str) -> String {
+    match runtime {
+        "proxy" | "node" | "python" => site_dir.to_string(),
+        _ => format!("{site_dir}/public"),
+    }
+}
+
+/// Whether this box actually serves `domain` over HTTPS.
+///
+/// The panel used to assume it always did, and printed `https://` links and
+/// monitor URLs on that assumption. That is wrong in two ordinary situations:
+/// an operator terminating TLS at an external reverse proxy, whose origin
+/// serves plain HTTP (issue #96), and any app or site whose certificate step
+/// was skipped — including one where the deploy said so on screen.
+///
+/// The answer is not a guess. The agent wrote the vhost, and its own template
+/// emits a `listen …443 ssl` line only when a certificate is in place, so the
+/// file on disk is the record of what is being served. Traefik keeps the same
+/// record in its dynamic route config, and is asked first because when it is
+/// the proxy for a domain there is no nginx vhost to read.
+pub fn domain_is_https(domain: &str) -> bool {
+    if let Some(tls) = crate::services::traefik::route_is_tls(domain) {
+        return tls;
+    }
+    let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+    let Ok(config) = std::fs::read_to_string(&config_path) else {
+        return false;
+    };
+    config.lines().any(|line| {
+        let line = line.trim();
+        line.starts_with("listen ") && line.contains("443") && line.contains("ssl")
+    })
+}
+
 /// Detect the server's primary (non-loopback, non-docker) interface IP for nginx listen directives.
 /// Returns empty string if detection fails (templates fall back to wildcard listen).
 fn detect_bind_ip() -> String {

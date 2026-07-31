@@ -164,6 +164,22 @@ pub async fn analyze(backup_path: &str, source: &str) -> Result<MigrationInvento
 }
 
 /// Find the actual root of the extracted backup (skip single top-level dir)
+/// Express `path` relative to `root`, for the paths that travel to the importer.
+///
+/// Everything in a `MigrationInventory` is joined onto the archive root on the
+/// import side, and `import_site_files` rejects any source that starts with `/`,
+/// so an absolute path here is not merely untidy — it cannot be imported at all.
+/// Returns `None` when `path` is not inside `root`, which the caller should
+/// report rather than pass on.
+fn relative_to(path: &Path, root: &Path) -> Option<String> {
+    let rel = path.strip_prefix(root).ok()?;
+    let rel = rel.to_string_lossy().to_string();
+    if rel.is_empty() {
+        return None;
+    }
+    Some(rel)
+}
+
 async fn find_backup_root(extract_dir: &str) -> String {
     let entries: Vec<_> = std::fs::read_dir(extract_dir)
         .ok()
@@ -312,9 +328,18 @@ async fn parse_plesk(id: &str, root: &str) -> Result<MigrationInventory, String>
                 let doc_root = if httpdocs.exists() { httpdocs } else { entry.path() };
                 let (size, count) = dir_stats(&doc_root).await;
                 let runtime = detect_runtime(&doc_root);
+                // Relative to the archive root, like the cPanel parser. Emitting
+                // the absolute path put this straight into `import_site_files`'
+                // own traversal guard, which rejects anything starting with `/`
+                // — so every Plesk site failed at import with "Invalid source
+                // directory path".
+                let Some(rel_doc_root) = relative_to(&doc_root, root) else {
+                    warnings.push(format!("Skipped {domain}: document root is outside the archive"));
+                    continue;
+                };
                 sites.push(MigrationSite {
                     domain,
-                    doc_root: doc_root.to_string_lossy().to_string(),
+                    doc_root: rel_doc_root,
                     size_bytes: size,
                     runtime,
                     file_count: count,
@@ -331,7 +356,10 @@ async fn parse_plesk(id: &str, root: &str) -> Result<MigrationInventory, String>
             if name.ends_with(".sql") || name.ends_with(".sql.gz") {
                 let db_name = name.trim_end_matches(".gz").trim_end_matches(".sql").to_string();
                 let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                databases.push(MigrationDatabase { name: db_name, file: name, size_bytes: size, engine: "mysql".to_string() });
+                // Carry the directory. `import_database` joins this onto the
+                // archive root, so a bare filename resolved one level too high
+                // and every Plesk database failed with "SQL file not found".
+                databases.push(MigrationDatabase { name: db_name, file: format!("databases/{name}"), size_bytes: size, engine: "mysql".to_string() });
             }
         }
     }
@@ -360,7 +388,12 @@ async fn parse_hestiacp(id: &str, root: &str) -> Result<MigrationInventory, Stri
                 let doc_root = if public.exists() { public } else { entry.path() };
                 let (size, count) = dir_stats(&doc_root).await;
                 let runtime = detect_runtime(&doc_root);
-                sites.push(MigrationSite { domain, doc_root: doc_root.to_string_lossy().to_string(), size_bytes: size, runtime, file_count: count });
+                // Relative to the archive root — see the note in `parse_plesk`.
+                let Some(rel_doc_root) = relative_to(&doc_root, root) else {
+                    warnings.push(format!("Skipped {domain}: document root is outside the archive"));
+                    continue;
+                };
+                sites.push(MigrationSite { domain, doc_root: rel_doc_root, size_bytes: size, runtime, file_count: count });
             }
         }
     }
@@ -373,7 +406,8 @@ async fn parse_hestiacp(id: &str, root: &str) -> Result<MigrationInventory, Stri
             if name.ends_with(".sql") || name.ends_with(".sql.gz") {
                 let db_name = name.trim_end_matches(".gz").trim_end_matches(".sql").to_string();
                 let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                databases.push(MigrationDatabase { name: db_name, file: name, size_bytes: size, engine: "mysql".to_string() });
+                // Carry the directory — see the note in `parse_plesk`.
+                databases.push(MigrationDatabase { name: db_name, file: format!("db/{name}"), size_bytes: size, engine: "mysql".to_string() });
             }
         }
     }
@@ -449,7 +483,12 @@ async fn dir_stats(dir: &Path) -> (u64, u64) {
 }
 
 /// Import site files from extracted backup to /var/www/{domain}/
-pub async fn import_site_files(migration_id: &str, domain: &str, source_dir: &str) -> Result<String, String> {
+pub async fn import_site_files(
+    migration_id: &str,
+    domain: &str,
+    source_dir: &str,
+    runtime: &str,
+) -> Result<String, String> {
     // Validate migration_id format
     if !is_valid_migration_id(migration_id) {
         return Err("Invalid migration ID format".into());
@@ -465,9 +504,21 @@ pub async fn import_site_files(migration_id: &str, domain: &str, source_dir: &st
         return Err("Invalid domain name".into());
     }
 
-    let extract_root = format!("{MIGRATION_DIR}-{migration_id}");
+    // Resolve the archive root exactly the way `analyze` did.
+    //
+    // The parsers emit their paths relative to `find_backup_root`, which steps
+    // into the single top-level directory a control-panel archive normally
+    // nests everything under. This side used to rebuild the base as the
+    // extraction directory alone, so the two halves disagreed by exactly that
+    // one component and every nested archive — which is the shape a cPanel full
+    // backup and a `cpmove` archive both have — failed with "Source directory
+    // not found". Calling the same function is what keeps them from drifting
+    // again.
+    let extract_root = find_backup_root(&format!("{MIGRATION_DIR}-{migration_id}")).await;
     let source = format!("{extract_root}/{source_dir}");
-    let dest = format!("/var/www/{domain}");
+    // Write where nginx will actually look, which for a static or PHP site is
+    // the `public` subdirectory, not the site directory.
+    let dest = crate::services::nginx::document_root_for(&format!("/var/www/{domain}"), runtime);
 
     // Ensure source exists
     if !Path::new(&source).exists() {
@@ -525,7 +576,8 @@ pub async fn import_database(migration_id: &str, sql_file: &str, container_name:
         return Err("Invalid SQL file path".into());
     }
 
-    let extract_root = format!("{MIGRATION_DIR}-{migration_id}");
+    // Same archive-root resolution as `import_site_files` — see the note there.
+    let extract_root = find_backup_root(&format!("{MIGRATION_DIR}-{migration_id}")).await;
     let sql_path = format!("{extract_root}/{sql_file}");
 
     if !Path::new(&sql_path).exists() {

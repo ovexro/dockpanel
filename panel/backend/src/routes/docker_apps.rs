@@ -27,6 +27,14 @@ pub struct DeployRequest {
     pub env: Option<HashMap<String, String>>,
     pub domain: Option<String>,
     pub ssl_email: Option<String>,
+    /// Set when TLS is terminated by a proxy in front of this server, so the
+    /// panel must not attempt Let's Encrypt for the domain. Without it there is
+    /// no way to decline: leaving `ssl_email` empty does not decline, because
+    /// the handler substitutes the operator's account address. Defaults to
+    /// false, so an existing caller that omits it keeps requesting a
+    /// certificate exactly as before.
+    #[serde(default)]
+    pub external_tls: bool,
     pub memory_mb: Option<u64>,
     pub cpu_percent: Option<u64>,
     #[serde(default)]
@@ -203,7 +211,16 @@ pub async fn deploy(
     let template = body.template_id.clone();
 
     let deploy_domain = body.domain.clone().filter(|d| !d.is_empty());
-    let deploy_ssl_email = body.ssl_email.clone().or_else(|| Some(claims.email.clone()));
+    // Requesting a certificate is the right default — most people pointing a
+    // domain at this box want one, which is why an omitted address falls back to
+    // the operator's. But it has to be declinable: behind an upstream TLS
+    // terminator this server never holds :80/:443, so every deploy spent an
+    // ACME attempt that could not succeed.
+    let deploy_ssl_email = if body.external_tls {
+        None
+    } else {
+        body.ssl_email.clone().or_else(|| Some(claims.email.clone()))
+    };
     let deploy_memory = body.memory_mb;
     let deploy_cpu = body.cpu_percent;
 
@@ -420,7 +437,17 @@ pub async fn deploy(
 
                 // GAP 12: Auto-create monitor for Docker app with domain
                 if let Some(ref domain) = deploy_domain {
-                    let url = format!("https://{domain}");
+                    // Monitor the scheme this deploy actually produced. The agent
+                    // reports `ssl` only when it provisioned a certificate — the
+                    // same value the "SSL certificate" step above was emitted
+                    // from — so a deploy that just told the operator SSL was
+                    // skipped no longer gets a monitor that can only ever fail.
+                    let scheme = if result.get("ssl").and_then(|v| v.as_bool()).unwrap_or(false) {
+                        "https"
+                    } else {
+                        "http"
+                    };
+                    let url = format!("{scheme}://{domain}");
                     let _ = sqlx::query(
                         "INSERT INTO monitors (user_id, url, name, check_interval, status, enabled, monitor_type) \
                          VALUES ($1, $2, $3, 60, 'pending', TRUE, 'http') ON CONFLICT DO NOTHING"

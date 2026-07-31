@@ -279,10 +279,29 @@ pub fn write_route_config(domain: &str, backend_port: u16, ssl: bool) -> Result<
 
 /// Remove a Traefik dynamic route config file for an app.
 pub fn remove_route_config(domain: &str) {
-    let safe = domain.replace('.', "-").replace(':', "-");
-    let path = format!("{TRAEFIK_CONFIG_DIR}/dynamic/{safe}.yml");
+    let path = route_config_path(domain);
     if std::path::Path::new(&path).exists() {
         let _ = std::fs::remove_file(&path);
         tracing::info!("Traefik route config removed: {domain}");
     }
+}
+
+/// Path of the dynamic route config `write_route_config` writes for `domain`.
+///
+/// Factored out so the readers below and the writer above cannot disagree about
+/// where the file lives — the same name-mangling has to be applied to find it.
+fn route_config_path(domain: &str) -> String {
+    let safe = domain.replace('.', "-").replace(':', "-");
+    format!("{TRAEFIK_CONFIG_DIR}/dynamic/{safe}.yml")
+}
+
+/// Whether the Traefik route for `domain` terminates TLS.
+///
+/// `write_route_config` emits the `tls:` block only in its `ssl` arm, so the
+/// file itself is the record of what this box actually serves. Returns `None`
+/// when Traefik is not the proxy for this domain, so the caller can go on to
+/// ask nginx rather than reading "no file" as "no TLS".
+pub fn route_is_tls(domain: &str) -> Option<bool> {
+    let config = std::fs::read_to_string(route_config_path(domain)).ok()?;
+    Some(config.contains("tls:"))
 }

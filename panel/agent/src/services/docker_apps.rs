@@ -289,6 +289,11 @@ pub struct DeployedApp {
     pub status: String,
     pub port: Option<u16>,
     pub domain: Option<String>,
+    /// Whether this box serves `domain` over HTTPS. Carried so the panel can
+    /// link to the scheme that actually answers instead of assuming `https`
+    /// (issue #96 — an operator terminating TLS upstream serves plain HTTP).
+    /// Always false when there is no domain.
+    pub ssl: bool,
     pub health: Option<String>,
     pub image: Option<String>,
     pub volumes: Vec<String>,
@@ -2711,6 +2716,11 @@ pub async fn list_deployed_apps() -> Result<Vec<DeployedApp>, String> {
             let stack_id = labels.get("dockpanel.stack_id").cloned();
             let user_id = labels.get("dockpanel.user.id").cloned();
 
+            let ssl = domain
+                .as_deref()
+                .map(crate::services::nginx::domain_is_https)
+                .unwrap_or(false);
+
             Some(DeployedApp {
                 container_id: id.clone(),
                 name,
@@ -2718,6 +2728,7 @@ pub async fn list_deployed_apps() -> Result<Vec<DeployedApp>, String> {
                 status,
                 port,
                 domain,
+                ssl,
                 health,
                 image,
                 volumes,

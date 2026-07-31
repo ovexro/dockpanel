@@ -4,6 +4,72 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.51.0] - 2026-07-31
+
+Two ends of the panel disagreeing about something each of them already knew.
+Both were found while working through GitHub issues that had gone unanswered,
+and both turned out to be wider than the reports that led to them.
+
+### Fixed — the scheme is derived, never assumed (#96)
+
+DockPanel printed and fetched `https://<your domain>` in five places while the
+answer was in scope. For anyone terminating TLS at a proxy in front of the
+server — where the origin only ever serves plain HTTP — every one of them was
+wrong.
+
+- **The Docker Apps link** now follows the scheme the server actually serves.
+  The agent reports it per app, read from the vhost it wrote itself, or from the
+  Traefik route config when Traefik is the proxy.
+- **The uptime monitor created for a new app** was pointed at `https://`
+  unconditionally — including on a deploy that had just reported *"SSL
+  certificate — Skipped"* on screen a moment earlier. It now follows what the
+  deploy reported, so a deploy without a certificate no longer creates a monitor
+  that can only ever fail.
+- **The post-deploy health check for a git deploy** assumed https, under a
+  comment saying git deploys "typically" have SSL. On a deploy without a
+  certificate it connected to a port serving no TLS and reported a perfectly good
+  deploy as unreachable. The GitHub commit-status link had the same assumption
+  and now shares one resolver with the health check.
+- **Renaming a site's domain** rewrote its monitor's URL to `https://`. A rename
+  should change the domain; it now leaves the scheme alone, which also stops it
+  overwriting a URL the operator had set by hand on the Monitors screen.
+
+Added: **"TLS is terminated by an upstream proxy"** on the app deploy form. The
+SSL email field was labelled optional but was not — leaving it blank substituted
+your account address and requested a certificate anyway, so an operator behind an
+external terminator had no way to decline and spent a doomed ACME attempt on
+every deploy. The default is unchanged: leave the box unticked and you still get
+a certificate.
+
+### Fixed — the Migration Wizard imported into a directory nothing serves (#51)
+
+Found while answering a three-month-old request for more source panels. The
+wizard advertises cPanel, Plesk and HestiaCP, and on a realistic archive none of
+the three could complete an import:
+
+- **Every imported site landed one level above its own document root.** The
+  vhost the wizard creates serves `/var/www/<domain>/public`; the importer copied
+  the site's files to `/var/www/<domain>` and its `rsync --delete` then removed
+  the `public` directory that had just been created. The result was a site the
+  panel reported as imported, serving a document root that did not exist. Both
+  halves now ask one function where a site lives.
+- **Nested archives could not be found at all.** The analyser steps into the
+  single top-level directory that a cPanel full backup and a `cpmove` archive
+  both nest everything under; the importer rebuilt the path without that step, so
+  it looked one directory too high and failed with "Source directory not found".
+  Both sides now resolve the archive root through the same function.
+- **Plesk and HestiaCP emitted absolute paths**, which the importer's own
+  path-traversal guard rejected — so every site from those two failed on
+  "Invalid source directory path" — **and bare database filenames** without their
+  directory, which resolved one level too high and failed on "SQL file not
+  found".
+
+### Added
+
+- `tests/scheme-and-import-pin-e2e.sh` — 35 assertions, 32 of which fail against
+  the previous release. Fourteen deliberate evasions were then written against
+  the fixed tree; five walked through the first draft and each one is now closed.
+
 ## [2.50.0] - 2026-07-31
 
 Eleven backup defects were recorded as findings at v2.48.6 and left unbuilt.

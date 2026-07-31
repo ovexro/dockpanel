@@ -1381,9 +1381,12 @@ fn spawn_deploy_task(
             if !gh_token.is_empty() {
                 let token = gh_token.clone();
                 let repo = config.repo_url.clone();
-                let domain = config.domain.clone();
+                let target = config
+                    .domain
+                    .as_deref()
+                    .map(|d| deploy_url(d, config.ssl_email.as_deref()));
                 tokio::spawn(async move {
-                    set_github_status(&token, &repo, "HEAD", "pending", domain.as_deref()).await;
+                    set_github_status(&token, &repo, "HEAD", "pending", target).await;
                 });
             }
         }
@@ -1781,9 +1784,12 @@ fn spawn_deploy_task(
                         let token = gh_token.clone();
                         let repo_url = config.repo_url.clone();
                         let sha = commit_hash.clone();
-                        let domain = config.domain.clone();
+                        let target = config
+                            .domain
+                            .as_deref()
+                            .map(|d| deploy_url(d, config.ssl_email.as_deref()));
                         tokio::spawn(async move {
-                            set_github_status(&token, &repo_url, &sha, "success", domain.as_deref()).await;
+                            set_github_status(&token, &repo_url, &sha, "success", target).await;
                         });
                     }
                 }
@@ -1791,7 +1797,7 @@ fn spawn_deploy_task(
                 // Post-deploy health check: verify site is responding
                 if let Some(ref domain) = config.domain {
                     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                    let check_url = format!("https://{}", domain); // Git deploys with domain typically have SSL
+                    let check_url = deploy_url(domain, config.ssl_email.as_deref());
                     if let Ok(client) = reqwest::Client::builder()
                         .danger_accept_invalid_certs(true)
                         .timeout(std::time::Duration::from_secs(10))
@@ -1989,9 +1995,12 @@ fn spawn_deploy_task(
                         let token = gh_token.clone();
                         let repo_url = config.repo_url.clone();
                         let sha = commit_hash.clone();
-                        let domain = config.domain.clone();
+                        let target = config
+                            .domain
+                            .as_deref()
+                            .map(|d| deploy_url(d, config.ssl_email.as_deref()));
                         tokio::spawn(async move {
-                            set_github_status(&token, &repo_url, &sha, "failure", domain.as_deref()).await;
+                            set_github_status(&token, &repo_url, &sha, "failure", target).await;
                         });
                     }
                 }
@@ -2036,14 +2045,32 @@ fn mask_github_token(deploy: &mut GitDeploy) {
     }
 }
 
+/// The URL a git deploy's domain is actually reachable on.
+///
+/// A deploy only gets a certificate when an SSL email is configured — that is
+/// the same condition `deploy_body` uses to ask the agent for one — so it is
+/// also the condition that decides the scheme. This used to be assumed to be
+/// https everywhere, under a comment reading "Git deploys with domain typically
+/// have SSL"; on a deploy without one, the post-deploy health check then
+/// connected to a port serving no TLS and reported a perfectly good deploy as
+/// unreachable.
+fn deploy_url(domain: &str, ssl_email: Option<&str>) -> String {
+    let scheme = if ssl_email.is_some() { "https" } else { "http" };
+    format!("{scheme}://{domain}")
+}
+
 /// Set GitHub commit status via the GitHub API.
-async fn set_github_status(token: &str, repo_url: &str, sha: &str, state: &str, domain: Option<&str>) {
+///
+/// Takes the finished URL rather than a domain, so every caller is forced
+/// through `deploy_url` and none can reintroduce a hardcoded scheme in the link
+/// third parties see on the commit.
+async fn set_github_status(token: &str, repo_url: &str, sha: &str, state: &str, target_url: Option<String>) {
     let (owner, repo) = match parse_github_repo(repo_url) {
         Some(r) => r,
         None => return, // Not a GitHub URL
     };
 
-    let target_url = domain.map(|d| format!("https://{d}")).unwrap_or_default();
+    let target_url = target_url.unwrap_or_default();
     let description = match state {
         "success" => "Deployed successfully via DockPanel",
         "failure" => "Deploy failed",
@@ -2152,7 +2179,8 @@ pub async fn trigger_deploy_task(
     // GitHub pending status
     if let Some(ref gh_token) = config.github_token {
         if !gh_token.is_empty() {
-            set_github_status(gh_token, &config.repo_url, "HEAD", "pending", config.domain.as_deref()).await;
+            set_github_status(gh_token, &config.repo_url, "HEAD", "pending",
+                config.domain.as_deref().map(|d| deploy_url(d, config.ssl_email.as_deref()))).await;
         }
     }
 
@@ -2300,7 +2328,8 @@ pub async fn trigger_deploy_task(
                 }
                 if let Some(ref gh_token) = config.github_token {
                     if !gh_token.is_empty() && commit_hash != "unknown" {
-                        set_github_status(gh_token, &config.repo_url, &commit_hash, "failure", config.domain.as_deref()).await;
+                        set_github_status(gh_token, &config.repo_url, &commit_hash, "failure",
+                            config.domain.as_deref().map(|d| deploy_url(d, config.ssl_email.as_deref()))).await;
                     }
                 }
                 return;
@@ -2350,7 +2379,8 @@ pub async fn trigger_deploy_task(
             // GitHub status
             if let Some(ref gh_token) = config.github_token {
                 if !gh_token.is_empty() && commit_hash != "unknown" {
-                    set_github_status(gh_token, &config.repo_url, &commit_hash, "success", config.domain.as_deref()).await;
+                    set_github_status(gh_token, &config.repo_url, &commit_hash, "success",
+                            config.domain.as_deref().map(|d| deploy_url(d, config.ssl_email.as_deref()))).await;
                 }
             }
 
@@ -2367,7 +2397,7 @@ pub async fn trigger_deploy_task(
             // Post-deploy health check: verify site is responding
             if let Some(ref domain) = config.domain {
                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                let check_url = format!("https://{}", domain);
+                let check_url = deploy_url(domain, config.ssl_email.as_deref());
                 if let Ok(client) = reqwest::Client::builder()
                     .danger_accept_invalid_certs(true)
                     .timeout(std::time::Duration::from_secs(10))
@@ -2406,7 +2436,8 @@ pub async fn trigger_deploy_task(
 
             if let Some(ref gh_token) = config.github_token {
                 if !gh_token.is_empty() && commit_hash != "unknown" {
-                    set_github_status(gh_token, &config.repo_url, &commit_hash, "failure", config.domain.as_deref()).await;
+                    set_github_status(gh_token, &config.repo_url, &commit_hash, "failure",
+                            config.domain.as_deref().map(|d| deploy_url(d, config.ssl_email.as_deref()))).await;
                 }
             }
 

@@ -56,8 +56,13 @@ async fn import_site(
     let migration_id = body["migration_id"].as_str().ok_or((StatusCode::BAD_REQUEST, "migration_id required".into()))?;
     let domain = body["domain"].as_str().ok_or((StatusCode::BAD_REQUEST, "domain required".into()))?;
     let source_dir = body["source_dir"].as_str().ok_or((StatusCode::BAD_REQUEST, "source_dir required".into()))?;
+    // Decides whether the files belong in the site directory or in its `public`
+    // subdirectory. Defaults to the same arm `put_site` takes for anything it
+    // does not recognise, so an older panel that does not send the key lands
+    // the files where a static or PHP vhost looks for them.
+    let runtime = body["runtime"].as_str().unwrap_or("php");
 
-    match migration::import_site_files(migration_id, domain, source_dir).await {
+    match migration::import_site_files(migration_id, domain, source_dir, runtime).await {
         Ok(msg) => Ok(Json(serde_json::json!({ "ok": true, "message": msg }))),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
     }

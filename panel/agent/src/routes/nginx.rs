@@ -288,10 +288,8 @@ async fn put_site(
 
     let default_root = format!("/var/www/{domain}");
     let doc_root = config.root.as_deref().unwrap_or(&default_root);
-    let actual_root = match config.runtime.as_str() {
-        "proxy" | "node" | "python" => doc_root.to_string(),
-        _ => format!("{doc_root}/public"),
-    };
+    let actual_root =
+        crate::services::nginx::document_root_for(doc_root, &config.runtime);
     if let Err(e) = std::fs::create_dir_all(&actual_root) {
         tracing::warn!("Failed to create document root {actual_root}: {e}");
     } else {

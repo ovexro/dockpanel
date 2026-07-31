@@ -519,6 +519,9 @@ pub async fn import(
                 "migration_id": agent_migration_id,
                 "domain": domain,
                 "source_dir": site_item.doc_root,
+                // Same runtime the vhost was just created with, so the files
+                // land in the directory that vhost serves.
+                "runtime": runtime,
             });
 
             if let Err(e) = agent

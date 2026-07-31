@@ -2611,15 +2611,24 @@ pub async fn rename_domain(
         .await
         .map_err(|e| internal_error("rename domain", e))?;
 
-    // Update monitors linked to this site
-    let new_url = format!("https://{new_domain}");
-    sqlx::query("UPDATE monitors SET name = $1, url = $2 WHERE site_id = $3")
-        .bind(&new_domain)
-        .bind(&new_url)
-        .bind(id)
-        .execute(&state.db)
-        .await
-        .ok();
+    // Update monitors linked to this site.
+    //
+    // Keep whatever scheme the monitor already had. This used to rebuild the URL
+    // as `https://{new_domain}` unconditionally, which is not a rename — it also
+    // switched the monitor onto a scheme nobody asked it to check. That is wrong
+    // for a site with no certificate, and it is not recoverable from
+    // `sites.ssl_enabled` either, because a monitor's URL is editable by hand
+    // from the Monitors screen. A domain rename should change the domain.
+    sqlx::query(
+        "UPDATE monitors SET name = $1, \
+         url = CASE WHEN url LIKE 'http://%' THEN 'http://' || $1 ELSE 'https://' || $1 END \
+         WHERE site_id = $2",
+    )
+    .bind(&new_domain)
+    .bind(id)
+    .execute(&state.db)
+    .await
+    .ok();
 
     // Update status page components
     sqlx::query("UPDATE status_page_components SET name = $1 WHERE name = $2")

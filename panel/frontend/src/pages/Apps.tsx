@@ -46,6 +46,10 @@ interface DeployedApp {
   status: string;
   port: number | null;
   domain: string | null;
+  // Whether the server actually serves this domain over HTTPS. Optional so an
+  // older agent, which does not send it, degrades to a plain-HTTP link rather
+  // than to the https:// assumption this field exists to remove.
+  ssl?: boolean;
   health: string | null;
   image: string | null;
   volumes: string[];
@@ -322,6 +326,7 @@ export default function Apps() {
   const [envValues, setEnvValues] = useState<Record<string, string>>({});
   const [appDomain, setAppDomain] = useState("");
   const [sslEmail, setSslEmail] = useState("");
+  const [externalTls, setExternalTls] = useState(false);
   const [memoryMb, setMemoryMb] = useState("");
   const [cpuPercent, setCpuPercent] = useState("");
   const [gpuEnabled, setGpuEnabled] = useState(false);
@@ -596,7 +601,8 @@ export default function Apps() {
         port: appPort,
         env: envValues,
         ...(appDomain ? { domain: appDomain } : {}),
-        ...(appDomain && sslEmail ? { ssl_email: sslEmail } : {}),
+        ...(appDomain && sslEmail && !externalTls ? { ssl_email: sslEmail } : {}),
+        ...(appDomain && externalTls ? { external_tls: true } : {}),
         ...(memoryMb ? { memory_mb: parseInt(memoryMb) } : {}),
         ...(cpuPercent ? { cpu_percent: parseInt(cpuPercent) } : {}),
         ...(gpuEnabled ? { gpu_enabled: true } : {}),
@@ -1440,7 +1446,7 @@ volumes:
                     <td className="px-5 py-4 text-sm text-dark-200 hidden sm:table-cell">{app.template}</td>
                     <td className="px-5 py-4 text-sm hidden md:table-cell">
                       {app.domain ? (
-                        <a href={`https://${app.domain}`} target="_blank" rel="noopener noreferrer" className="text-rust-400 hover:underline font-mono">{app.domain}</a>
+                        <a href={`${app.ssl ? "https" : "http"}://${app.domain}`} target="_blank" rel="noopener noreferrer" className="text-rust-400 hover:underline font-mono">{app.domain}</a>
                       ) : (
                         <span className="text-dark-300">{"\u2014"}</span>
                       )}
@@ -1927,16 +1933,30 @@ volumes:
 
               {appDomain && (
                 <div>
-                  <label className="block text-sm font-medium text-dark-100 mb-1">
-                    SSL Email <span className="text-dark-300 font-normal">(optional — Let's Encrypt)</span>
+                  <label className="flex items-center gap-2 text-sm font-medium text-dark-100">
+                    <input type="checkbox" checked={externalTls} onChange={e => setExternalTls(e.target.checked)} className="rounded border-dark-500" />
+                    TLS is terminated by an upstream proxy
                   </label>
-                  <input
-                    type="email"
-                    value={sslEmail}
-                    onChange={(e) => setSslEmail(e.target.value)}
-                    placeholder="you@example.com"
-                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
-                  />
+                  <p className="mt-1 text-xs text-dark-300">
+                    {externalTls
+                      ? "No certificate will be requested, and this app will be served and linked over plain HTTP."
+                      : "Leave unticked to get a Let's Encrypt certificate. Tick it if something in front of this server already handles HTTPS — this server never sees ports 80 and 443, so the certificate request cannot succeed."}
+                  </p>
+                  {!externalTls && (
+                    <div className="mt-3">
+                      <label className="block text-sm font-medium text-dark-100 mb-1">
+                        SSL Email <span className="text-dark-300 font-normal">(optional — Let's Encrypt)</span>
+                      </label>
+                      <input
+                        type="email"
+                        value={sslEmail}
+                        onChange={(e) => setSslEmail(e.target.value)}
+                        placeholder="you@example.com"
+                        className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
+                      />
+                      <p className="mt-1 text-xs text-dark-300">Leave blank to use your account email.</p>
+                    </div>
+                  )}
                 </div>
               )}
 
