@@ -443,12 +443,16 @@ pub async fn create(
         }
     })?;
 
-    // Create provisioning log channel
-    let (broadcast_tx, _) = broadcast::channel::<ProvisionStep>(64);
-    {
-        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        logs.insert(site.id, (Vec::new(), broadcast_tx, Instant::now()));
-    }
+    // Create provisioning log channel. This is the entry that carries the
+    // generated CMS admin password on its "credentials" step, so the owner
+    // recorded here is what keeps it from any other account.
+    crate::helpers::register_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        site.id,
+        claims.sub,
+        64,
+    );
     let logs = state.provision_logs.clone();
     let site_id = site.id;
 
@@ -1241,16 +1245,16 @@ pub async fn provision_log(
         return Err(err(StatusCode::NOT_FOUND, "Site not found"));
     }
 
-    // Get broadcast receiver + snapshot of existing steps
-    let (snapshot, rx) = {
-        let logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        match logs.get(&id) {
-            Some((history, tx, _)) => (history.clone(), Some(tx.subscribe())),
-            None => (Vec::new(), None),
-        }
-    };
-
-    let rx = rx.ok_or_else(|| err(StatusCode::NOT_FOUND, "No active provisioning for this site"))?;
+    // The `sites` row check above is kept as well as the per-key owner check
+    // below: this is the one stream that deliberately carries a credential, and
+    // it is worth two independent reasons to refuse rather than one.
+    let (snapshot, rx) = crate::helpers::open_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        id,
+        claims.sub,
+        "No active provisioning for this site",
+    )?;
 
     // First yield snapshot events, then stream live updates
     let snapshot_stream = futures::stream::iter(

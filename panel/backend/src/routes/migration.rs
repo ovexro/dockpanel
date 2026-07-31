@@ -394,13 +394,6 @@ pub async fn import(
     .await
     .map_err(|e| internal_error("import", e))?;
 
-    // Create broadcast channel for SSE progress
-    let (tx, _) = broadcast::channel::<ProvisionStep>(64);
-    {
-        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        logs.insert(id, (Vec::new(), tx, Instant::now()));
-    }
-
     // Extract the agent-side migration_id from the inventory (needed for agent import calls)
     let agent_migration_id = migration
         .inventory
@@ -409,6 +402,18 @@ pub async fn import(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "Migration inventory missing agent ID"))?;
+
+    // Registered only once nothing above can still bail. Creating the log first
+    // meant this `?` returned a 500 while leaving a log and an owner behind for
+    // the whole TTL — and `progress` would then answer 200 on a stream nothing
+    // would ever emit to, so the page sat on "Provisioning…" until the sweep.
+    crate::helpers::register_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        id,
+        claims.sub,
+        64,
+    );
 
     // Clone everything needed for the spawned task
     let logs = state.provision_logs.clone();
@@ -761,16 +766,15 @@ pub async fn progress(
         return Err(err(StatusCode::NOT_FOUND, "Migration not found"));
     }
 
-    // Get broadcast receiver + snapshot of existing steps
-    let (snapshot, rx) = {
-        let logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        match logs.get(&id) {
-            Some((history, tx, _)) => (history.clone(), Some(tx.subscribe())),
-            None => (Vec::new(), None),
-        }
-    };
-
-    let rx = rx.ok_or_else(|| err(StatusCode::NOT_FOUND, "No active import for this migration"))?;
+    // As in sites::provision_log, the row check above is kept alongside the
+    // per-key owner check.
+    let (snapshot, rx) = crate::helpers::open_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        id,
+        claims.sub,
+        "No active import for this migration",
+    )?;
 
     // First yield snapshot events, then stream live updates
     let snapshot_stream = futures::stream::iter(snapshot.into_iter().map(|step| {
@@ -844,7 +848,7 @@ pub async fn remove(
         .map_err(|e| internal_error("remove migration", e))?;
 
     // Remove any lingering provision log channel
-    state.provision_logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+    crate::helpers::forget_provision_log(&state.provision_logs, &state.deploy_owners, id);
 
     tracing::info!("Migration deleted: {id}");
     activity::log_activity(

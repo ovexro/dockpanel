@@ -563,3 +563,259 @@ mod panel_ip_allowlist_tests {
         }
     }
 }
+
+// ── Provisioning-log access control ─────────────────────────────────────
+//
+// `provision_logs` is one process-wide map shared by nine unrelated features:
+// service installs, mail installs, system updates, site provisioning, backups
+// and restores, migration imports, container deploys, git deploys and rollbacks.
+// It is a single flat keyspace — nothing namespaces a site id apart from a
+// deploy id — so any endpoint that looks a caller-supplied uuid up in it can
+// reach every other feature's stream unless it proves ownership itself.
+//
+// Five endpoints did that five different ways, and the two weakest were open:
+// the service-install stream looked the id up with no ownership test at all,
+// and the git-deploy stream consulted the owner table but *fell through* when
+// the id was absent — which was the common case, because only three of the
+// sixteen sites that created a log ever recorded an owner for it. Together
+// those two meant any signed-in account could read any other tenant's site
+// provisioning stream, and that stream deliberately carries a generated CMS
+// admin password in cleartext for the couple of minutes the install takes
+// (`routes::sites`, the "credentials" step). The comment there justified
+// emitting it on the grounds that the stream was owner-scoped. That was true
+// of the endpoint its author was looking at and false of the siblings.
+//
+// So ownership stops being each caller's responsibility. A log cannot be
+// created without an owner, and cannot be read except by that owner.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+/// The shared provisioning-log map: id -> (history, live channel, created-at).
+pub type ProvisionLogs = Arc<
+    Mutex<
+        HashMap<
+            uuid::Uuid,
+            (
+                Vec<crate::routes::sites::ProvisionStep>,
+                tokio::sync::broadcast::Sender<crate::routes::sites::ProvisionStep>,
+                Instant,
+            ),
+        >,
+    >,
+>;
+
+/// Owner table for the map above: id -> the user whose log it is.
+pub type ProvisionOwners = Arc<Mutex<HashMap<uuid::Uuid, uuid::Uuid>>>;
+
+/// Create a provisioning log and record who owns it.
+///
+/// Deliberately returns nothing. Every feature emits by locking the map and
+/// taking `get_mut(&id)`, which is what lets the terminal `remove` actually
+/// close the stream: the map holds the last sender, so dropping the entry ends
+/// every receiver. Handing a `Sender` clone back would let a caller outlive the
+/// entry and hold the channel open, and the SSE stream would hang instead of
+/// finishing.
+///
+/// Both maps are taken under one lock scope, logs first. The cleanup task in
+/// `main` drops owner rows whose log has been evicted (`owners.retain(|id, _|
+/// map.contains_key(id))`) and takes the same two locks in the same order, so
+/// it can neither interleave with a registration and strand a live log without
+/// an owner — which the reader below would then refuse to serve to the very
+/// user watching it — nor deadlock against one.
+///
+/// `capacity` is the broadcast channel depth; callers that emit fine-grained
+/// output (apt line-by-line) need far more than callers that emit a dozen steps.
+pub fn register_provision_log(
+    logs: &ProvisionLogs,
+    owners: &ProvisionOwners,
+    id: uuid::Uuid,
+    owner: uuid::Uuid,
+    capacity: usize,
+) {
+    let (tx, _) = tokio::sync::broadcast::channel(capacity);
+    let mut logs = logs.lock().unwrap_or_else(|e| e.into_inner());
+    let mut owners = owners.lock().unwrap_or_else(|e| e.into_inner());
+    logs.insert(id, (Vec::new(), tx, Instant::now()));
+    owners.insert(id, owner);
+}
+
+/// Drop a provisioning log and its owner together.
+///
+/// For the callers that discard a log outright rather than letting their
+/// terminal step retire it — deleting the migration a log belongs to, say.
+/// Removing only the log would leave the owner row behind until the next sweep.
+pub fn forget_provision_log(logs: &ProvisionLogs, owners: &ProvisionOwners, id: uuid::Uuid) {
+    let mut logs = logs.lock().unwrap_or_else(|e| e.into_inner());
+    let mut owners = owners.lock().unwrap_or_else(|e| e.into_inner());
+    logs.remove(&id);
+    owners.remove(&id);
+}
+
+/// Resolve a provisioning log for a caller, or refuse.
+///
+/// Returns the history so far plus a receiver for everything still to come.
+///
+/// An id with no owner recorded is refused. That is the whole point: a future
+/// feature that adds a log without going through `register_provision_log` gets
+/// a stream nobody can read, which is a bug its author will notice on the first
+/// run — the previous arrangement gave them a stream *everybody* could read,
+/// which nobody would notice at all.
+///
+/// "Not yours" and "no such log" deliberately return the same 404. Separating
+/// them would turn the endpoint into an oracle for which uuids are live jobs.
+pub fn open_provision_log(
+    logs: &ProvisionLogs,
+    owners: &ProvisionOwners,
+    id: uuid::Uuid,
+    caller: uuid::Uuid,
+    missing: &str,
+) -> Result<
+    (
+        Vec<crate::routes::sites::ProvisionStep>,
+        tokio::sync::broadcast::Receiver<crate::routes::sites::ProvisionStep>,
+    ),
+    crate::error::ApiError,
+> {
+    let logs = logs.lock().unwrap_or_else(|e| e.into_inner());
+    let owners = owners.lock().unwrap_or_else(|e| e.into_inner());
+
+    let owned = owners.get(&id).copied() == Some(caller);
+    match logs.get(&id) {
+        Some((history, tx, _)) if owned => Ok((history.clone(), tx.subscribe())),
+        _ => Err(crate::error::err(
+            axum::http::StatusCode::NOT_FOUND,
+            missing,
+        )),
+    }
+}
+
+#[cfg(test)]
+mod provision_log_tests {
+    use super::*;
+
+    fn maps() -> (ProvisionLogs, ProvisionOwners) {
+        (
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(HashMap::new())),
+        )
+    }
+
+    #[test]
+    fn owner_can_read_its_own_log() {
+        let (logs, owners) = maps();
+        let id = uuid::Uuid::new_v4();
+        let owner = uuid::Uuid::new_v4();
+        register_provision_log(&logs, &owners, id, owner, 8);
+        assert!(open_provision_log(&logs, &owners, id, owner, "gone").is_ok());
+    }
+
+    #[test]
+    fn a_stranger_cannot_read_someone_elses_log() {
+        let (logs, owners) = maps();
+        let id = uuid::Uuid::new_v4();
+        let owner = uuid::Uuid::new_v4();
+        register_provision_log(&logs, &owners, id, owner, 8);
+        let stranger = uuid::Uuid::new_v4();
+        assert!(open_provision_log(&logs, &owners, id, stranger, "gone").is_err());
+    }
+
+    // The regression this module exists for: a log present in the map with no
+    // owner recorded beside it. The old git-deploy stream fell through such a
+    // gap to the log itself; thirteen of the sixteen creation sites left one.
+    #[test]
+    fn an_ownerless_log_is_refused_not_served() {
+        let (logs, owners) = maps();
+        let id = uuid::Uuid::new_v4();
+        let (tx, _) = tokio::sync::broadcast::channel(8);
+        logs.lock()
+            .unwrap()
+            .insert(id, (Vec::new(), tx, Instant::now()));
+
+        assert!(
+            open_provision_log(&logs, &owners, id, uuid::Uuid::new_v4(), "gone").is_err(),
+            "a log with no recorded owner must not be readable"
+        );
+    }
+
+    #[test]
+    fn registration_records_the_owner() {
+        let (logs, owners) = maps();
+        let id = uuid::Uuid::new_v4();
+        let owner = uuid::Uuid::new_v4();
+        register_provision_log(&logs, &owners, id, owner, 8);
+        assert_eq!(owners.lock().unwrap().get(&id).copied(), Some(owner));
+        assert!(logs.lock().unwrap().contains_key(&id));
+    }
+
+    // Absent and forbidden must be indistinguishable, or the endpoint tells a
+    // stranger which uuids are live jobs.
+    #[test]
+    fn missing_and_forbidden_are_indistinguishable() {
+        let (logs, owners) = maps();
+        let live = uuid::Uuid::new_v4();
+        register_provision_log(&logs, &owners, live, uuid::Uuid::new_v4(), 8);
+
+        let stranger = uuid::Uuid::new_v4();
+        let forbidden = open_provision_log(&logs, &owners, live, stranger, "gone").unwrap_err();
+        let absent =
+            open_provision_log(&logs, &owners, uuid::Uuid::new_v4(), stranger, "gone").unwrap_err();
+
+        // Status *and* body — a differing sentence is as good an oracle as a
+        // differing code.
+        assert_eq!(forbidden.0, absent.0);
+        assert_eq!(*forbidden.1, *absent.1);
+    }
+
+    // Emitting the way every feature actually emits — lock the map, `get_mut`,
+    // push and send — must reach a reader that has already attached. This is
+    // the real path; a test against a sender handed back by `register` would
+    // pin a contract no caller uses.
+    #[test]
+    fn a_step_emitted_through_the_map_reaches_an_attached_reader() {
+        let (logs, owners) = maps();
+        let id = uuid::Uuid::new_v4();
+        let owner = uuid::Uuid::new_v4();
+        register_provision_log(&logs, &owners, id, owner, 8);
+
+        let (_history, mut rx) = open_provision_log(&logs, &owners, id, owner, "gone").unwrap();
+
+        {
+            let mut map = logs.lock().unwrap();
+            let (history, tx, _) = map.get_mut(&id).unwrap();
+            let ev = crate::routes::sites::ProvisionStep {
+                step: "s".into(),
+                label: "l".into(),
+                status: "done".into(),
+                message: None,
+            };
+            history.push(ev.clone());
+            tx.send(ev).unwrap();
+        }
+
+        assert_eq!(rx.try_recv().unwrap().step, "s");
+    }
+
+    // Removing the entry must end the stream. That is what the terminal
+    // `remove` in every feature relies on, and it only holds while the map owns
+    // the last sender.
+    #[test]
+    fn removing_the_entry_closes_the_reader() {
+        let (logs, owners) = maps();
+        let id = uuid::Uuid::new_v4();
+        let owner = uuid::Uuid::new_v4();
+        register_provision_log(&logs, &owners, id, owner, 8);
+
+        let (_history, mut rx) = open_provision_log(&logs, &owners, id, owner, "gone").unwrap();
+        logs.lock().unwrap().remove(&id);
+
+        assert!(
+            matches!(
+                rx.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed)
+            ),
+            "dropping the map entry must close the receiver, or the SSE stream hangs"
+        );
+    }
+}

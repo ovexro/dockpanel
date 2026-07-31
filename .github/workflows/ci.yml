@@ -366,3 +366,24 @@ jobs:
       # the one link that makes it reachable.
       - name: A control that knows a version is missing must be able to install it
         run: bash tests/php-install-from-picker-pin-e2e.sh
+
+  provision-log-ownership:
+    name: A Provisioning Log Belongs To Somebody
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pure source analysis. `provision_logs` is one flat keyspace shared by
+      # nine features, so an endpoint that looks a caller-supplied uuid up in it
+      # reaches every other feature's stream unless it proves ownership itself.
+      # Five endpoints did that five different ways: the service-install stream
+      # discarded its claims and checked nothing, and the git-deploy stream fell
+      # through whenever the id had no owner recorded — which was 13 of the 16
+      # creation sites, so any signed-in account could read another tenant's site
+      # provisioning log, and that stream deliberately carries the generated CMS
+      # admin password in cleartext. Ownership now lives on the KEY, and this
+      # holds the shape that makes that true: one way in, one way out, no reader
+      # exempting admins, and a UI that no longer draws a refused stream as a
+      # completed one.
+      - name: Nobody reaches the shared log map without proving whose log it is
+        run: bash tests/provision-log-ownership-pin-e2e.sh

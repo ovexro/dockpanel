@@ -504,14 +504,28 @@ async fn main() {
             // unpacks fifteen packages. An hour costs a few hundred bytes per
             // finished job and covers all of them; the terminal-step removals in
             // each feature are what actually reclaim the common case.
-            if let Ok(mut map) = provision.lock() {
-                let before = map.len();
+            //
+            // The owner prune below runs on every tick, not only on ticks where
+            // this TTL evicted something. Each feature removes its own log 30-60s
+            // after its job ends, so the one-hour sweep usually finds nothing to
+            // drop — which, while the prune was conditional on it, meant the owner
+            // map was almost never pruned and grew for the life of the process.
+            // That was survivable when three call sites registered an owner. Every
+            // provisioning log has one now, so it is not.
+            //
+            // Lock order is logs then owners, matching `register_provision_log`
+            // and `open_provision_log`, so a registration cannot interleave and
+            // leave a live log whose owner has just been swept out from under it.
+            // Poison-tolerant, like every other accessor of these two maps. An
+            // `if let Ok(...)` here would make a single panic under either lock
+            // permanently disable the only pruner they have — writers would keep
+            // inserting through `into_inner()` while nothing ever removed, which
+            // is the unbounded growth this block exists to prevent.
+            {
+                let mut map = provision.lock().unwrap_or_else(|e| e.into_inner());
                 map.retain(|_, (_, _, created)| now.duration_since(*created) < Duration::from_secs(3600));
-                if map.len() < before {
-                    if let Ok(mut owners) = deploy_owners.lock() {
-                        owners.retain(|id, _| map.contains_key(id));
-                    }
-                }
+                let mut owners = deploy_owners.lock().unwrap_or_else(|e| e.into_inner());
+                owners.retain(|id, _| map.contains_key(id));
             }
             // Clean expired OAuth CSRF states (older than 10 minutes)
             if let Ok(mut map) = oauth.lock() {

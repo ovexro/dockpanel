@@ -4,7 +4,6 @@ use axum::{
     Json,
 };
 use std::time::{Duration, Instant};
-use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
@@ -204,11 +203,13 @@ pub async fn trigger(
 
     let deploy_id = Uuid::new_v4();
 
-    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
-    {
-        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        logs.insert(deploy_id, (Vec::new(), tx, Instant::now()));
-    }
+    crate::helpers::register_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        deploy_id,
+        claims.sub,
+        32,
+    );
 
     let logs = state.provision_logs.clone();
     let db = state.db.clone();

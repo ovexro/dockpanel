@@ -3,8 +3,6 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use std::time::Instant;
-use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::auth::{AdminUser, ServerScope};
@@ -109,11 +107,13 @@ pub async fn mail_install(
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let install_id = Uuid::new_v4();
 
-    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
-    {
-        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        logs.insert(install_id, (Vec::new(), tx, Instant::now()));
-    }
+    crate::helpers::register_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        install_id,
+        claims.sub,
+        32,
+    );
 
     let logs = state.provision_logs.clone();
     let db = state.db.clone();
@@ -170,11 +170,13 @@ pub async fn mail_uninstall(
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let install_id = Uuid::new_v4();
 
-    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
-    {
-        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        logs.insert(install_id, (Vec::new(), tx, Instant::now()));
-    }
+    crate::helpers::register_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        install_id,
+        claims.sub,
+        32,
+    );
 
     let logs = state.provision_logs.clone();
     let db = state.db.clone();

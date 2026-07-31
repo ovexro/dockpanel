@@ -3,8 +3,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use std::time::{Duration, Instant};
-use tokio::sync::broadcast;
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
@@ -139,11 +138,13 @@ pub async fn create(
 
     let backup_id = Uuid::new_v4();
 
-    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
-    {
-        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        logs.insert(backup_id, (Vec::new(), tx, Instant::now()));
-    }
+    crate::helpers::register_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        backup_id,
+        claims.sub,
+        32,
+    );
 
     let site_dbs = site_databases(&state, id).await;
     let db_expected = site_dbs.expected() as i32;
@@ -322,11 +323,13 @@ pub async fn restore(
 
     let restore_id = Uuid::new_v4();
 
-    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
-    {
-        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        logs.insert(restore_id, (Vec::new(), tx, Instant::now()));
-    }
+    crate::helpers::register_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        restore_id,
+        claims.sub,
+        32,
+    );
 
     let site_dbs = site_databases(&state, id).await;
     let site_has_dbs = site_dbs.expected() > 0;

@@ -4,6 +4,76 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.49.1] - 2026-07-31
+
+A security fix. One in-memory map held the progress logs of nine unrelated
+features under a single flat set of ids, and the endpoints that read it did not
+agree on who was allowed to.
+
+### Security
+
+- **A provisioning log could be read by accounts it did not belong to.**
+  `state.provision_logs` is one process-wide map keyed by bare uuids — a site id,
+  a backup id, a deploy id and a migration id all live in it together with
+  nothing to tell them apart. Five endpoints served from it and each decided
+  authorization differently. Two of them got it wrong:
+
+  `GET /api/services/install/{id}/log` took the admin extractor, **discarded the
+  claims**, and looked the id up with no ownership test at all. Despite its path
+  it is the panel's general progress stream — the UI points backup, restore,
+  site-deploy, mail-install and system-update ids at it — so it could not
+  authorize by feature, and authorized by nothing.
+
+  `GET /api/git-deploys/deploy/{id}/log` consulted the owner table but **fell
+  through when the id was absent from it**, on the stated grounds that the
+  not-found below would catch it. It would not: absent-from-owners and
+  absent-from-logs are different questions. Only 3 of 16 places that created a
+  log ever recorded an owner, so absent was the ordinary case — and this route
+  requires only a signed-in session, any role.
+
+  That matters because one of those streams carries a credential on purpose. A
+  one-click WordPress install emits the generated admin password in cleartext on
+  its `credentials` step, so the operator who did not choose one still gets it.
+  The comment justifying that pointed at the owner check on the *sites*
+  endpoint — true there, and not true of the siblings reading the same map.
+
+  Measured on a throwaway server running 2.49.0: the site's owner, an unrelated
+  tenant with the ordinary `user` role, and a second admin all attached to one
+  site's provisioning stream and received **the same 1458 bytes, containing the
+  same cleartext WordPress admin password**.
+
+  Ownership now travels with the key rather than with the endpoint. A log cannot
+  be created without recording who it belongs to, and there is one read path,
+  which refuses any id whose owner is not recorded — so a future feature that
+  forgets gets a stream nobody can read, instead of one everybody can. "Not
+  yours" and "no such log" answer identically, so the endpoint cannot be used to
+  discover which ids are live jobs. The two readers that exempted the admin role
+  no longer do: `/api/sites` is scoped per user, so holding that role was never a
+  licence to read another tenant's log.
+
+  **If you run more than one account on a panel, update.** No configuration
+  change is needed. Reading a log still requires a valid session; there is no
+  unauthenticated exposure.
+
+### Fixed
+
+- **Owners of backups and site deploys can read their own progress logs again.**
+  The same endpoint required the admin role while the routes that *start* those
+  jobs only require ownership, so an ordinary user could launch a backup and then
+  be refused the log of the job they had just started. Checking the key's owner
+  is both narrower than the old role check and correct for this case.
+
+- **A progress stream that ended without reporting anything is no longer drawn as
+  success.** The log component treated any stream that closed before its first
+  step as a completed one — a green tick over an empty list. It now says the
+  stream ended without reporting, and distinguishes that from a finished job.
+
+- **The owner table is pruned on every sweep.** Pruning had been conditional on
+  the hourly expiry having evicted something, but each feature retires its own
+  log within 30-60 seconds, so that sweep usually finds nothing and the prune
+  rarely ran. Survivable while three call sites recorded an owner; not now that
+  every one does.
+
 ## [2.49.0] - 2026-07-30
 
 Two long jobs that the panel had been holding an HTTP request open across, and a

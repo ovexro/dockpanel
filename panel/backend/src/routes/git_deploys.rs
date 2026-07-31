@@ -8,7 +8,6 @@ use futures::stream::StreamExt;
 use sha2::{Sha256, Digest};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
-use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
@@ -753,16 +752,13 @@ pub async fn deploy(
 
     let deploy_id = Uuid::new_v4();
 
-    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
-    {
-        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        logs.insert(deploy_id, (Vec::new(), tx, Instant::now()));
-    }
-    // Record deploy ownership for SSE log access control
-    {
-        let mut owners = state.deploy_owners.lock().unwrap_or_else(|e| e.into_inner());
-        owners.insert(deploy_id, claims.sub);
-    }
+    crate::helpers::register_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        deploy_id,
+        claims.sub,
+        32,
+    );
 
     spawn_deploy_task(
         state,
@@ -786,26 +782,19 @@ pub async fn deploy_log(
     AuthUser(claims): AuthUser,
     Path(deploy_id): Path<Uuid>,
 ) -> Result<Sse<impl futures::Stream<Item = Result<Event, axum::BoxError>>>, ApiError> {
-    // Verify the caller owns this deploy (or is admin)
-    {
-        let owners = state.deploy_owners.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(&owner_id) = owners.get(&deploy_id) {
-            if claims.sub != owner_id && claims.role != "admin" {
-                return Err(err(StatusCode::FORBIDDEN, "Access denied"));
-            }
-        }
-        // If not in owners map, fall through — the NOT_FOUND below handles missing deploys
-    }
-
-    let (snapshot, rx) = {
-        let logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        match logs.get(&deploy_id) {
-            Some((history, tx, _)) => (history.clone(), Some(tx.subscribe())),
-            None => (Vec::new(), None),
-        }
-    };
-
-    let rx = rx.ok_or_else(|| err(StatusCode::NOT_FOUND, "No active deploy"))?;
+    // This check used to skip itself when the id was absent from the owner map,
+    // on the stated grounds that the lookup below would 404 anyway. It would
+    // not: absent from *owners* and absent from *logs* are different questions,
+    // and most writers never registered an owner — so the fall-through streamed
+    // rollback, webhook, backup, migration and site provisioning logs to any
+    // signed-in account. Absence is now a refusal, not a pass.
+    let (snapshot, rx) = crate::helpers::open_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        deploy_id,
+        claims.sub,
+        "No active deploy",
+    )?;
 
     let snapshot_stream = futures::stream::iter(
         snapshot.into_iter().map(|step| {
@@ -903,11 +892,13 @@ pub async fn rollback(
 
     let deploy_id = Uuid::new_v4();
 
-    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
-    {
-        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        logs.insert(deploy_id, (Vec::new(), tx, Instant::now()));
-    }
+    crate::helpers::register_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        deploy_id,
+        claims.sub,
+        32,
+    );
 
     let logs = state.provision_logs.clone();
     let db = state.db.clone();
@@ -1313,11 +1304,15 @@ pub async fn webhook(
 
     let deploy_id = Uuid::new_v4();
 
-    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
-    {
-        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        logs.insert(deploy_id, (Vec::new(), tx, Instant::now()));
-    }
+    // No claims here — a webhook deploy has no signed-in actor. The log belongs
+    // to whoever owns the git deploy it was fired against.
+    crate::helpers::register_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        deploy_id,
+        config.user_id,
+        32,
+    );
 
     // Get user email for activity log
     let user_email: Option<(String,)> = match sqlx::query_as(
@@ -2779,11 +2774,19 @@ pub async fn approve_deploy(
     }
 
     let new_deploy_id = Uuid::new_v4();
-    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
-    {
-        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        logs.insert(new_deploy_id, (Vec::new(), tx, Instant::now()));
-    }
+    // The approver, not the requester — and deliberately so. `new_deploy_id`
+    // is returned in this response and stored nowhere else, so the approver is
+    // the only party that ever learns it; the requester got a bare
+    // "pending_approval" with no id and has nothing to open a stream with.
+    // Recording the requester as owner would name someone who cannot ask and
+    // refuse the only one who can, leaving the log readable by nobody.
+    crate::helpers::register_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        new_deploy_id,
+        claims.sub,
+        32,
+    );
 
     spawn_deploy_task(
         state,

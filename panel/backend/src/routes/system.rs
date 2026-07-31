@@ -5,13 +5,12 @@ use axum::{
     Json,
 };
 use futures::stream::StreamExt;
-use std::time::{Duration, Instant};
-use tokio::sync::broadcast;
+use std::time::Duration;
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
-use crate::auth::{AdminUser, ServerScope};
-use crate::error::{err, agent_error, ApiError};
+use crate::auth::{AdminUser, AuthUser, ServerScope};
+use crate::error::{agent_error, ApiError};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
 use crate::services::agent::AgentHandle;
@@ -172,11 +171,14 @@ pub async fn updates_apply(
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let install_id = uuid::Uuid::new_v4();
 
-    let (tx, _) = tokio::sync::broadcast::channel::<ProvisionStep>(256);
-    {
-        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        logs.insert(install_id, (Vec::new(), tx, Instant::now()));
-    }
+    // 256: this one forwards apt output line by line, not a dozen coarse steps.
+    crate::helpers::register_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        install_id,
+        claims.sub,
+        256,
+    );
 
     let logs = state.provision_logs.clone();
     let db = state.db.clone();
@@ -350,11 +352,15 @@ pub(crate) async fn install_service_with_log(
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let install_id = Uuid::new_v4();
 
-    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
-    {
-        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        logs.insert(install_id, (Vec::new(), tx, Instant::now()));
-    }
+    // One line here covers every service install and uninstall route plus both
+    // PHP routes — they all funnel through this helper.
+    crate::helpers::register_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        install_id,
+        claims_sub,
+        32,
+    );
 
     let logs = state.provision_logs.clone();
     let db = state.db.clone();
@@ -469,20 +475,33 @@ pub async fn install_ufw(
 }
 
 /// GET /api/services/install/{install_id}/log — SSE stream of install progress.
+///
+/// Despite the path, this is the panel's general provisioning stream: the UI
+/// points backup ids, restore ids, site-deploy ids, mail-install ids and
+/// system-update ids at it as well as service installs. So it cannot authorize
+/// by feature — and it used to authorize by nothing at all. It took `AdminUser`,
+/// discarded the claims, and looked the id up bare, which handed any key any
+/// feature had put in the shared map to any admin: including another tenant's
+/// site provisioning log, and the cleartext CMS admin password on it.
+///
+/// `AuthUser` in place of `AdminUser` is not a relaxation. Ownership is now
+/// checked per key, which is strictly narrower than "anyone with the admin
+/// role". It also repairs the opposite half of the same mistake: backups and
+/// site deploys are owner-authorized routes open to any user, so a non-admin
+/// who started one could never read back the log of the job they had just
+/// launched — the stream 403'd the one person entitled to it.
 pub async fn install_log(
     State(state): State<AppState>,
-    AdminUser(_claims): AdminUser,
+    AuthUser(claims): AuthUser,
     Path(install_id): Path<Uuid>,
 ) -> Result<Sse<impl futures::Stream<Item = Result<Event, axum::BoxError>>>, ApiError> {
-    let (snapshot, rx) = {
-        let logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        match logs.get(&install_id) {
-            Some((history, tx, _)) => (history.clone(), Some(tx.subscribe())),
-            None => (Vec::new(), None),
-        }
-    };
-
-    let rx = rx.ok_or_else(|| err(StatusCode::NOT_FOUND, "No active install"))?;
+    let (snapshot, rx) = crate::helpers::open_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        install_id,
+        claims.sub,
+        "No active install",
+    )?;
 
     let snapshot_stream = futures::stream::iter(
         snapshot.into_iter().map(|step| {
@@ -607,11 +626,13 @@ pub async fn install_powerdns(
         .map(|b| serde_json::json!({ "backend": b }));
     let install_id = Uuid::new_v4();
 
-    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
-    {
-        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        logs.insert(install_id, (Vec::new(), tx, Instant::now()));
-    }
+    crate::helpers::register_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        install_id,
+        claims.sub,
+        32,
+    );
 
     let logs = state.provision_logs.clone();
     let db = state.db.clone();

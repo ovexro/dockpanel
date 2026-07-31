@@ -6,8 +6,7 @@ use axum::{
 };
 use futures::stream::StreamExt;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
-use tokio::sync::broadcast;
+use std::time::Duration;
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
@@ -185,16 +184,15 @@ pub async fn deploy(
     let deploy_id = Uuid::new_v4();
 
     // Create provisioning channel (reuse the same provision_logs map from AppState)
-    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
-    {
-        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        logs.insert(deploy_id, (Vec::new(), tx, Instant::now()));
-    }
-    // Track deploy ownership for SSE log access control
-    {
-        let mut owners = state.deploy_owners.lock().unwrap_or_else(|e| e.into_inner());
-        owners.insert(deploy_id, claims.sub);
-    }
+    // and record ownership for SSE log access control. These were two separate
+    // lock scopes, which left the key momentarily present with no owner.
+    crate::helpers::register_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        deploy_id,
+        claims.sub,
+        32,
+    );
 
     let logs = state.provision_logs.clone();
     let agent = agent.clone();
@@ -651,23 +649,17 @@ pub async fn deploy_log(
     AuthUser(claims): AuthUser,
     Path(deploy_id): Path<Uuid>,
 ) -> Result<Sse<impl futures::Stream<Item = Result<Event, axum::BoxError>>>, ApiError> {
-    // Verify the requesting user owns this deploy (or is admin)
-    if claims.role != "admin" {
-        let owners = state.deploy_owners.lock().unwrap_or_else(|e| e.into_inner());
-        if owners.get(&deploy_id) != Some(&claims.sub) {
-            return Err(err(StatusCode::FORBIDDEN, "Not your deploy"));
-        }
-    }
-
-    let (snapshot, rx) = {
-        let logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        match logs.get(&deploy_id) {
-            Some((history, tx, _)) => (history.clone(), Some(tx.subscribe())),
-            None => (Vec::new(), None),
-        }
-    };
-
-    let rx = rx.ok_or_else(|| err(StatusCode::NOT_FOUND, "No active deploy"))?;
+    // The admin exemption is gone. This map is one keyspace shared with site
+    // provisioning, whose stream carries a generated CMS password, and `/api/sites`
+    // is user_id-scoped — so "has the admin role" was never a licence to read
+    // another tenant's log through here.
+    let (snapshot, rx) = crate::helpers::open_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        deploy_id,
+        claims.sub,
+        "No active deploy",
+    )?;
 
     let snapshot_stream = futures::stream::iter(
         snapshot.into_iter().map(|step| {
@@ -806,15 +798,13 @@ pub async fn update_app(
 
     let deploy_id = Uuid::new_v4();
 
-    let (tx, _) = broadcast::channel::<ProvisionStep>(32);
-    {
-        let mut logs = state.provision_logs.lock().unwrap_or_else(|e| e.into_inner());
-        logs.insert(deploy_id, (Vec::new(), tx, Instant::now()));
-    }
-    {
-        let mut owners = state.deploy_owners.lock().unwrap_or_else(|e| e.into_inner());
-        owners.insert(deploy_id, claims.sub);
-    }
+    crate::helpers::register_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        deploy_id,
+        claims.sub,
+        32,
+    );
 
     let logs = state.provision_logs.clone();
     let agent = agent.clone();
