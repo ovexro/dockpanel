@@ -9,7 +9,7 @@ Unlike per-site backups (see [Backups](backups.md)), the Backup Orchestrator wor
 - **Database backups**: Any PostgreSQL, MySQL/MariaDB, or MongoDB container
 - **Volume backups**: Any Docker named volume
 - **Policies**: Automated schedules with retention rules
-- **Encryption**: Optional AES-256 encryption at rest
+- **Encryption**: Optional AES-256 encryption at rest, for **database dumps only**
 - **Verification**: Automated restore tests to confirm backup integrity
 - **Destinations**: Push backups to S3, SFTP, Backblaze B2, or Google Cloud Storage
 
@@ -33,7 +33,7 @@ For more control, create a custom policy.
    - **Schedule**: Cron expression (default: `0 2 * * *` = daily at 2 AM)
    - **Destination**: Optional remote destination
    - **Retention**: Backups to keep, 1-365 (default: 7)
-   - **Encrypt**: Enable AES-256 encryption
+   - **Encrypt DB dumps**: Enable AES-256 encryption for this policy's database dumps. Site and volume archives are always written and uploaded unencrypted
    - **Verify after backup**: Run automated verification after each backup
 4. Click **Save**
 
@@ -151,7 +151,16 @@ A policy with no destination writes its archives to this server's own disk and n
 
 ## Encryption
 
-When encryption is enabled:
+> **Encryption covers database dumps, and only those.** The agent has no
+> encryption path for a site or volume archive, so ticking **Encrypt DB dumps**
+> on a policy that also backs up sites or volumes leaves those archives in
+> cleartext both on disk and at the destination. A site archive is the whole
+> webroot — configuration files, and any database credentials in them — and
+> since v2.34.0 it also carries a dump of every database attached to that site.
+> So an encrypted policy covering sites ships an encrypted copy of that data and
+> an unencrypted copy of the same data to the same destination.
+
+When encryption is enabled, for the database dumps it covers:
 
 - **Algorithm**: AES-256-GCM
 - **Key management**: Keys are stored encrypted in the panel database

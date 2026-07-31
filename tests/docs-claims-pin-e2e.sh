@@ -141,6 +141,25 @@ else
     ok "assertion table parsed: $rows suites checked against live output"
   fi
 
+  # Every check above walks the rows the PAGE lists, so a suite that exists on
+  # disk and is simply absent from the table is invisible to all of them — the
+  # page can be internally consistent and still undercount the tree. That is not
+  # hypothetical: s288 shipped two new suites, neither was added here, and the
+  # published total was wrong until s289 caught it from the other direction.
+  # Count the tree and compare.
+  # This suite is the one deliberate exclusion: it re-runs the others, so a row
+  # for itself would recurse. Named explicitly rather than absorbed into a fudge
+  # factor, so a SECOND unpublished suite still fails.
+  on_disk=$(find tests -maxdepth 1 -name '*-pin-e2e.sh' ! -name 'docs-claims-pin-e2e.sh' | wc -l)
+  if [ "$on_disk" -eq "$rows" ]; then
+    ok "every pin suite on disk has a row in the table ($on_disk)"
+  else
+    missing=$(comm -23 \
+      <(find tests -maxdepth 1 -name '*-pin-e2e.sh' ! -name 'docs-claims-pin-e2e.sh' -printf '%f\n' | sort) \
+      <(grep -oE '^\| *`[a-z0-9-]+\.sh`' "$TESTING" | tr -d '|` ' | sort) | tr '\n' ' ')
+    bad "$on_disk pin suites on disk but $rows rows in docs/testing.md — unpublished: ${missing:-?}"
+  fi
+
   # The sentence introducing the table publishes its own totals ("Ten suites,
   # 260 assertions"). Every row was verified above and that sentence was not, so
   # it drifted: it read "Seven suites, 195 assertions" over an eight-row table

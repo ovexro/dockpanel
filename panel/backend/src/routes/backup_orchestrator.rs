@@ -54,6 +54,44 @@ pub struct CreatePolicyRequest {
     pub drill_schedule: Option<String>,
 }
 
+/// Distinguish "the caller omitted this field" from "the caller sent null".
+///
+/// `destination_id` needs both: omitting it must preserve the attached
+/// destination, while sending `null` is how the operator detaches one and goes
+/// back to local-only. With a plain `Option` the two are the same value, which
+/// is why a partial PUT used to silently NULL the very destination the
+/// preflight warning asks the operator to attach.
+fn de_double_option<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    serde::Deserialize::deserialize(d).map(Some)
+}
+
+/// Body of PUT /policies/{id}. Separate from [`CreatePolicyRequest`] because on
+/// create an absent field means "use the default", while on update it means
+/// "leave it as it is" — the same `None` standing for two different intentions
+/// is what made this endpoint destructive.
+#[derive(serde::Deserialize)]
+pub struct UpdatePolicyRequest {
+    pub name: String,
+    #[serde(default, deserialize_with = "de_double_option")]
+    pub server_id: Option<Option<Uuid>>,
+    pub backup_sites: Option<bool>,
+    pub backup_databases: Option<bool>,
+    pub backup_volumes: Option<bool>,
+    pub schedule: Option<String>,
+    #[serde(default, deserialize_with = "de_double_option")]
+    pub destination_id: Option<Option<Uuid>>,
+    pub retention_count: Option<i32>,
+    pub encrypt: Option<bool>,
+    pub verify_after_backup: Option<bool>,
+    pub enabled: Option<bool>,
+    pub drill_enabled: Option<bool>,
+    pub drill_schedule: Option<String>,
+}
+
 /// Reject obviously-invalid cron strings before they hit the DB. The
 /// scheduler's parser is 5-field whitespace-separated; same shape as the
 /// existing backup_policy_executor.
@@ -193,6 +231,11 @@ pub struct BackupHealth {
     pub verify_lag_p50_hours: Option<f64>,
     pub verify_lag_p95_hours: Option<f64>,
     pub per_server_sla: Vec<ServerSla>,
+    /// The SLA figures above could not be computed. Zeroes then mean "not
+    /// measured", NOT "nothing to measure" — the two render identically
+    /// otherwise, and for six releases the card showed its empty state on every
+    /// install because a query referenced a column that does not exist.
+    pub sla_unavailable: bool,
     // Drill counts (Phase 4 W1.2): end-to-end restore probes in last 30d.
     pub drills_passed_30d: i64,
     pub drills_failed_30d: i64,
@@ -202,8 +245,10 @@ pub struct BackupHealth {
 pub struct StaleBackup {
     pub resource_type: String,
     pub resource_name: String,
-    pub last_backup: chrono::DateTime<chrono::Utc>,
-    pub days_since: i64,
+    /// None = this resource has never been backed up. That is the worst case the
+    /// list reports, so it must be representable rather than a decode failure.
+    pub last_backup: Option<chrono::DateTime<chrono::Utc>>,
+    pub days_since: Option<i64>,
 }
 
 #[derive(serde::Serialize)]
@@ -389,22 +434,33 @@ pub async fn health(
         .fetch_one(db).await.map_err(|e| internal_error("health", e))?;
 
     // Find stale sites (no backup in > 7 days)
-    let stale_sites: Vec<(String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+    //
+    // `last_backup` is Option because the HAVING clause deliberately admits sites
+    // that have NEVER been backed up — those are the ones that matter most — and
+    // a LEFT JOIN miss makes MAX() NULL. Decoding that into a bare DateTime made
+    // `fetch_all` fail on the FIRST row (NULLS FIRST sorts them to the front),
+    // and `unwrap_or_default` then blanked the entire warning, including the
+    // genuinely-stale sites that decoded fine.
+    let stale_sites: Vec<(String, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
         "SELECT s.domain, MAX(b.created_at) as last_backup \
          FROM sites s LEFT JOIN backups b ON b.site_id = s.id \
          GROUP BY s.id, s.domain \
          HAVING MAX(b.created_at) IS NULL OR MAX(b.created_at) < NOW() - INTERVAL '7 days' \
          ORDER BY MAX(b.created_at) NULLS FIRST LIMIT 10"
-    ).fetch_all(db).await.unwrap_or_default();
+    ).fetch_all(db).await
+    .map_err(|e| { tracing::error!("backup health: stale-site query failed: {e}"); e })
+    .unwrap_or_default();
 
     let now = chrono::Utc::now();
     let stale_backups: Vec<StaleBackup> = stale_sites.into_iter().map(|(domain, last)| {
-        let days = (now - last).num_days();
         StaleBackup {
             resource_type: "site".into(),
             resource_name: domain,
+            // None = never backed up at all. `days_since` is left null rather
+            // than faked from epoch so the UI can say so instead of printing an
+            // arithmetic artefact like "20789 days".
+            days_since: last.map(|l| (now - l).num_days()),
             last_backup: last,
-            days_since: days,
         }
     }).collect();
 
@@ -412,9 +468,15 @@ pub async fn health(
     // "Of the last N backups across all kinds, how many are verified?"
     // Latest verification per (kind, backup_id) wins (re-verifications supersede).
     const SLA_WINDOW: i64 = 30;
+    // `backups` has NO server_id column — a site reaches its server through
+    // `sites`, exactly as the unified list query above does. Selecting it
+    // directly made this statement fail at PLAN time, on every request, on every
+    // install, from the day the card shipped.
+    let mut sla_unavailable = false;
     let (sla_verified, sla_failed, sla_pending): (i64, i64, i64) = sqlx::query_as(
         "WITH all_backups AS ( \
-            SELECT id, created_at, server_id, 'site'::text AS kind FROM backups \
+            SELECT b.id, b.created_at, s.server_id, 'site'::text AS kind \
+              FROM backups b JOIN sites s ON s.id = b.site_id \
             UNION ALL \
             SELECT id, created_at, server_id, 'database'::text FROM database_backups \
             UNION ALL \
@@ -436,7 +498,11 @@ pub async fn health(
     )
     .bind(SLA_WINDOW)
     .fetch_one(db).await
-    .unwrap_or((0, 0, 0));
+    .unwrap_or_else(|e| {
+        tracing::error!("backup health: SLA window query failed: {e}");
+        sla_unavailable = true;
+        (0, 0, 0)
+    });
 
     // Verify lag percentiles: hours between backup creation and verification completion,
     // for backups created in the last 30 days that have a passed verification.
@@ -488,7 +554,8 @@ pub async fn health(
     // server happened to back up most recently.
     let per_server_rows: Vec<(Option<Uuid>, String, i64, i64, Option<f64>)> = sqlx::query_as(
         "WITH all_backups AS ( \
-            SELECT id, created_at, server_id, 'site'::text AS kind FROM backups \
+            SELECT b.id, b.created_at, s.server_id, 'site'::text AS kind \
+              FROM backups b JOIN sites s ON s.id = b.site_id \
             UNION ALL \
             SELECT id, created_at, server_id, 'database'::text FROM database_backups \
             UNION ALL \
@@ -521,6 +588,11 @@ pub async fn health(
          LIMIT 20"
     )
     .fetch_all(db).await
+    .map_err(|e| {
+        tracing::error!("backup health: per-server SLA query failed: {e}");
+        sla_unavailable = true;
+        e
+    })
     .unwrap_or_default();
 
     let per_server_sla: Vec<ServerSla> = per_server_rows.into_iter()
@@ -560,6 +632,7 @@ pub async fn health(
         verify_lag_p50_hours: lag_p50,
         verify_lag_p95_hours: lag_p95,
         per_server_sla,
+        sla_unavailable,
         drills_passed_30d,
         drills_failed_30d,
     }))
@@ -647,22 +720,29 @@ pub async fn update_policy(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
-    Json(req): Json<CreatePolicyRequest>,
+    Json(req): Json<UpdatePolicyRequest>,
 ) -> Result<Json<BackupPolicy>, ApiError> {
     require_admin(&claims.role)?;
-    // Verify ownership
-    let existing: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM backup_policies WHERE id = $1 AND user_id = $2"
+    // Verify ownership, and read the three columns the UPDATE assigns
+    // unconditionally so an omitted field can keep its current value instead of
+    // being reset.
+    let existing: Option<(Uuid, Option<Uuid>, Option<Uuid>, i32)> = sqlx::query_as(
+        "SELECT id, server_id, destination_id, retention_count FROM backup_policies WHERE id = $1 AND user_id = $2"
     )
     .bind(id).bind(claims.sub)
     .fetch_optional(&state.db).await
     .map_err(|e| internal_error("update policy", e))?;
 
-    if existing.is_none() {
+    let Some((_, cur_server_id, cur_destination_id, cur_retention)) = existing else {
         return Err(err(StatusCode::NOT_FOUND, "Policy not found"));
-    }
+    };
 
-    let retention = req.retention_count.unwrap_or(7).max(1).min(365);
+    // Omitted -> keep. Explicit null -> clear. A value -> set.
+    let server_id = req.server_id.unwrap_or(cur_server_id);
+    let destination_id = req.destination_id.unwrap_or(cur_destination_id);
+    // `unwrap_or(7)` here meant an edit that did not mention retention silently
+    // reset it to seven — the same reset-on-omission class as the two above.
+    let retention = req.retention_count.unwrap_or(cur_retention).max(1).min(365);
 
     if let Some(s) = &req.schedule {
         if !s.is_empty() && !is_valid_cron_5(s) {
@@ -695,12 +775,12 @@ pub async fn update_policy(
     )
     .bind(id)
     .bind(&req.name)
-    .bind(req.server_id)
+    .bind(server_id)
     .bind(req.backup_sites)
     .bind(req.backup_databases)
     .bind(req.backup_volumes)
     .bind(req.schedule.as_deref().unwrap_or(""))
-    .bind(req.destination_id)
+    .bind(destination_id)
     .bind(retention)
     .bind(req.encrypt)
     .bind(req.verify_after_backup)

@@ -49,15 +49,7 @@ pub async fn list(
     let masked: Vec<BackupDestination> = dests
         .into_iter()
         .map(|mut d| {
-            if let Some(obj) = d.config.as_object_mut() {
-                for key in ["secret_key", "password"] {
-                    if let Some(v) = obj.get(key) {
-                        if v.as_str().map(|s| !s.is_empty()).unwrap_or(false) {
-                            obj.insert(key.to_string(), serde_json::json!("********"));
-                        }
-                    }
-                }
-            }
+            mask_config_secrets(&mut d);
             d
         })
         .collect();
@@ -80,10 +72,12 @@ pub async fn create(
         return Err(err(StatusCode::BAD_REQUEST, "Name is required"));
     }
 
+    reject_empty_secrets(&body.config)?;
+
     // Encrypt sensitive fields in config before storing
     let encrypted_config = encrypt_config_secrets(&body.config, &state.config.jwt_secret)?;
 
-    let dest: BackupDestination = sqlx::query_as(
+    let mut dest: BackupDestination = sqlx::query_as(
         "INSERT INTO backup_destinations (name, dtype, config) VALUES ($1, $2, $3) RETURNING *",
     )
     .bind(body.name.trim())
@@ -94,6 +88,7 @@ pub async fn create(
     .map_err(|e| internal_error("create backup_destinations", e))?;
 
     tracing::info!("Backup destination created: {} ({})", dest.name, dest.dtype);
+    mask_config_secrets(&mut dest);
     Ok((StatusCode::CREATED, Json(dest)))
 }
 
@@ -121,6 +116,11 @@ pub async fn update(
     let encrypted_config = match body.config {
         None => None,
         Some(ref incoming) => {
+            // An empty secret is refused rather than stored. It is neither the
+            // mask nor a value `encrypt_config_secrets` touches, so it used to
+            // sail through and overwrite a working credential with nothing.
+            reject_empty_secrets(incoming)?;
+
             // Whatever arrived as plaintext gets encrypted exactly once. Masked
             // fields are left as the sentinel by design.
             let mut cfg = encrypt_config_secrets(incoming, &state.config.jwt_secret)?;
@@ -129,28 +129,35 @@ pub async fn update(
                 .as_object()
                 .map(|o| {
                     o.iter()
-                        .filter(|(_, v)| v.as_str() == Some("********"))
+                        .filter(|(_, v)| v.as_str() == Some(MASK))
                         .map(|(k, _)| k.clone())
                         .collect()
                 })
                 .unwrap_or_default();
 
-            if !still_masked.is_empty() {
-                let existing: Option<(serde_json::Value,)> =
-                    sqlx::query_as("SELECT config FROM backup_destinations WHERE id = $1")
-                        .bind(id)
-                        .fetch_optional(&state.db)
-                        .await
-                        .map_err(|e| internal_error("update backup_destinations", e))?;
-                if let Some((existing_cfg,)) = existing {
+            // This UPDATE REPLACES the whole config column, and the form sends a
+            // fixed key set per transport — so any stored key the form does not
+            // know about was silently erased by an unrelated edit. `key_path` is
+            // the live case: the agent supports it, the panel form has no field
+            // for it, and renaming an SFTP destination dropped it.
+            let existing: Option<(serde_json::Value,)> =
+                sqlx::query_as("SELECT config FROM backup_destinations WHERE id = $1")
+                    .bind(id)
+                    .fetch_optional(&state.db)
+                    .await
+                    .map_err(|e| internal_error("update backup_destinations", e))?;
+
+            if let Some((existing_cfg,)) = existing {
+                if !still_masked.is_empty() {
                     carry_masked_secrets(&mut cfg, &existing_cfg, &still_masked);
                 }
+                carry_unmentioned_keys(&mut cfg, &existing_cfg);
             }
             Some(cfg)
         }
     };
 
-    let dest: BackupDestination = sqlx::query_as(
+    let mut dest: BackupDestination = sqlx::query_as(
         "UPDATE backup_destinations SET \
          name = COALESCE($1, name), \
          config = COALESCE($2, config), \
@@ -165,6 +172,7 @@ pub async fn update(
     .map_err(|e| internal_error("update backup_destinations", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Destination not found"))?;
 
+    mask_config_secrets(&mut dest);
     Ok(Json(dest))
 }
 
@@ -291,8 +299,70 @@ fn carry_masked_secrets(
     }
 }
 
+/// Carry across any stored key the incoming config does not mention.
+///
+/// The PUT replaces the entire JSONB column, but the edit form only ever sends
+/// the fixed key set for the selected transport. Anything else a destination had
+/// — `key_path` being the real one — vanished on the first unrelated edit. Keys
+/// the caller DID send win, including one sent as JSON null, so this preserves
+/// without preventing a deliberate change.
+fn carry_unmentioned_keys(cfg: &mut serde_json::Value, existing: &serde_json::Value) {
+    let (Some(obj), Some(stored)) = (cfg.as_object_mut(), existing.as_object()) else {
+        return;
+    };
+    for (k, v) in stored {
+        if !obj.contains_key(k) {
+            obj.insert(k.clone(), v.clone());
+        }
+    }
+}
+
 /// Sensitive keys within the backup destination config JSON.
 const CONFIG_SENSITIVE_KEYS: &[&str] = &["secret_key", "password"];
+
+/// The sentinel the list endpoint substitutes for a stored secret, and the only
+/// value that means "keep what is already there".
+const MASK: &str = "********";
+
+/// Replace every stored secret in a row with the mask, in place.
+///
+/// `list` masks; `create` and `update` returned the row straight from
+/// `RETURNING *`, so a PUT that merely renamed a destination echoed the stored
+/// credential back over the wire — ciphertext on a modern row, and the REAL
+/// secret on any row created before credential encryption landed, since nothing
+/// backfills that column. An admin who never knew the credential could read it
+/// out of the response to a rename.
+fn mask_config_secrets(dest: &mut BackupDestination) {
+    let Some(obj) = dest.config.as_object_mut() else { return };
+    for key in CONFIG_SENSITIVE_KEYS {
+        if let Some(v) = obj.get(*key) {
+            if v.as_str().map(|s| !s.is_empty()).unwrap_or(false) {
+                obj.insert((*key).to_string(), serde_json::json!(MASK));
+            }
+        }
+    }
+}
+
+/// Reject an empty string submitted for a secret.
+///
+/// `encrypt_config_secrets` deliberately skips `""`, and `""` is not the mask,
+/// so `carry_masked_secrets` never sees it either — an empty secret therefore
+/// travelled all the way into the config column and REPLACED a working
+/// credential with nothing. There is no destination for which an empty secret is
+/// valid, so the honest answer is to refuse rather than to guess whether the
+/// operator meant "clear it" or "leave it alone".
+fn reject_empty_secrets(config: &serde_json::Value) -> Result<(), ApiError> {
+    let Some(obj) = config.as_object() else { return Ok(()) };
+    for key in CONFIG_SENSITIVE_KEYS {
+        if obj.get(*key).and_then(|v| v.as_str()) == Some("") {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                &format!("{key} cannot be empty — leave the field masked to keep the stored value, or type a new one"),
+            ));
+        }
+    }
+    Ok(())
+}
 
 /// Encrypt sensitive fields within a backup destination config JSON.
 fn encrypt_config_secrets(config: &serde_json::Value, jwt_secret: &str) -> Result<serde_json::Value, ApiError> {
@@ -402,5 +472,53 @@ mod tests {
         let payload = agent_destination_payload("sftp", &serde_json::json!({ "host": "h" }));
         assert_eq!(payload["type"], "sftp");
         assert_eq!(payload["host"], "h");
+    }
+
+    #[test]
+    fn an_empty_secret_is_refused_not_stored() {
+        // The destructive path: encrypt_config_secrets skips "", and "" is not the
+        // mask, so nothing carried the stored value across and the UPDATE wrote the
+        // empty string over a working credential.
+        assert!(reject_empty_secrets(&serde_json::json!({ "secret_key": "" })).is_err());
+        assert!(reject_empty_secrets(&serde_json::json!({ "password": "" })).is_err());
+        // A real value and the mask are both legitimate.
+        assert!(reject_empty_secrets(&serde_json::json!({ "secret_key": "AKIAsecret" })).is_ok());
+        assert!(reject_empty_secrets(&serde_json::json!({ "secret_key": MASK })).is_ok());
+        // A destination with no secret at all (SFTP by key) is not an error.
+        assert!(reject_empty_secrets(&serde_json::json!({ "host": "h" })).is_ok());
+    }
+
+    #[test]
+    fn a_stored_key_the_form_does_not_send_survives_an_edit() {
+        // The form sends a fixed key set per transport; the UPDATE replaces the
+        // whole column. key_path is agent-supported with no panel field, so an
+        // unrelated rename used to erase it.
+        let mut cfg = serde_json::json!({ "host": "h2", "username": "u" });
+        let stored = serde_json::json!({ "host": "h1", "username": "u", "key_path": "/root/.ssh/id_ed25519" });
+        carry_unmentioned_keys(&mut cfg, &stored);
+        assert_eq!(cfg["key_path"], "/root/.ssh/id_ed25519");
+        // What the caller DID send still wins.
+        assert_eq!(cfg["host"], "h2");
+    }
+
+    #[test]
+    fn create_and_update_do_not_echo_the_stored_secret() {
+        // list() masked; create/update returned RETURNING * verbatim, so a rename
+        // handed back the stored credential — plaintext on any row predating
+        // credential encryption, since nothing backfills that column.
+        let mut dest = BackupDestination {
+            id: Uuid::nil(),
+            name: "d".into(),
+            dtype: "s3".into(),
+            config: serde_json::json!({ "bucket": "b", "secret_key": "PLAINTEXT-LEGACY", "password": "" }),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        mask_config_secrets(&mut dest);
+        assert_eq!(dest.config["secret_key"], MASK);
+        assert_eq!(dest.config["bucket"], "b");
+        // An empty stored value is left alone — masking it would claim a
+        // credential exists where none does.
+        assert_eq!(dest.config["password"], "");
     }
 }

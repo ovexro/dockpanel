@@ -70,11 +70,15 @@ pub fn check_backup_destination(facts: &PolicyDestinationFacts) -> PrereqResult 
 
         // Chose one, it's gone. Materially worse than never having chosen: the
         // operator believes this is handled.
+        // The fix is on the POLICY, so the link goes where the policy is edited.
+        // It used to point at the destinations tab, which lists destinations and
+        // cannot attach one — and until this release no screen could, so the
+        // advice named an action the product did not offer.
         (Some(_), false) => BACKUPS_DEST_CHECK
             .result(&BACKUPS_DEST_DELETED, &[("policy", name)])
             .with_remediation(Remediation::Link {
-                label: "Backup destinations".to_string(),
-                href: "/backup-orchestrator?tab=destinations".to_string(),
+                label: "Edit the policy".to_string(),
+                href: "/backup-orchestrator?tab=policies".to_string(),
             }),
 
         // Never chose one. The advice differs by whether there is anything to
@@ -92,13 +96,18 @@ pub fn check_backup_destination(facts: &PolicyDestinationFacts) -> PrereqResult 
                 BACKUPS_DEST_CHECK.result(&BACKUPS_DEST_LOCAL_NO_OPTIONS, &[("policy", name)])
             };
 
-            rendered.with_remediation(Remediation::Link {
-                label: if has_options {
-                    "Choose a destination".to_string()
-                } else {
-                    "Add a destination".to_string()
-                },
-                href: "/backup-orchestrator?tab=destinations".to_string(),
+            // Two different actions, so two different destinations: attaching one
+            // you already have happens on the policy, creating one does not.
+            rendered.with_remediation(if has_options {
+                Remediation::Link {
+                    label: "Choose a destination".to_string(),
+                    href: "/backup-orchestrator?tab=policies".to_string(),
+                }
+            } else {
+                Remediation::Link {
+                    label: "Add a destination".to_string(),
+                    href: "/backup-orchestrator?tab=destinations".to_string(),
+                }
             })
         }
     }

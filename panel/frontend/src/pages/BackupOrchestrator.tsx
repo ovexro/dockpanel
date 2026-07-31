@@ -26,7 +26,9 @@ interface BackupHealth {
   verifications_passed: number;
   verifications_failed: number;
   oldest_unverified_days: number | null;
-  stale_backups: { resource_type: string; resource_name: string; last_backup: string; days_since: number }[];
+  // last_backup/days_since are null when the resource has never been backed up —
+  // the worst case this list reports, and the one it used to be unable to encode.
+  stale_backups: { resource_type: string; resource_name: string; last_backup: string | null; days_since: number | null }[];
   sla_window: number;
   sla_verified: number;
   sla_failed: number;
@@ -34,6 +36,9 @@ interface BackupHealth {
   verify_lag_p50_hours: number | null;
   verify_lag_p95_hours: number | null;
   per_server_sla: ServerSla[];
+  // True when the SLA figures could not be computed at all. Distinguishes
+  // "nothing to measure" from "not measured" — they used to render identically.
+  sla_unavailable: boolean;
   drills_passed_30d: number;
   drills_failed_30d: number;
 }
@@ -182,9 +187,20 @@ interface PolicyForm {
   retention_count: number;
   encrypt: boolean;
   verify_after_backup: boolean;
+  // Only editable on an existing policy — a new one is always created enabled.
+  // Nothing could flip it before, though the table has always rendered the word
+  // "Paused" for the state that produced it.
+  enabled: boolean;
   drill_enabled: boolean;
   drill_schedule: string;
 }
+
+const EMPTY_POLICY_FORM: PolicyForm = {
+  name: "", schedule: "0 2 * * *", backup_sites: true, backup_databases: true,
+  backup_volumes: false, destination_id: "", retention_count: 7,
+  encrypt: false, verify_after_backup: false, enabled: true,
+  drill_enabled: false, drill_schedule: "0 4 * * 0",
+};
 
 interface Database {
   id: string;
@@ -247,12 +263,10 @@ export default function BackupOrchestrator() {
   const [testingDestId, setTestingDestId] = useState<string | null>(null);
   const [pendingDeleteDestId, setPendingDeleteDestId] = useState<string | null>(null);
   const [showPolicyForm, setShowPolicyForm] = useState(false);
-  const [policyForm, setPolicyForm] = useState({
-    name: "", schedule: "0 2 * * *", backup_sites: true, backup_databases: true,
-    backup_volumes: false, destination_id: "", retention_count: 7,
-    encrypt: false, verify_after_backup: false,
-    drill_enabled: false, drill_schedule: "0 4 * * 0",
-  });
+  const [policyForm, setPolicyForm] = useState<PolicyForm>(EMPTY_POLICY_FORM);
+  // Non-null while an existing policy is loaded into the form for editing.
+  const [editingPolicyId, setEditingPolicyId] = useState<string | null>(null);
+  const [protectAllBusy, setProtectAllBusy] = useState(false);
 
   useEffect(() => { loadAll(); }, []);
 
@@ -328,17 +342,70 @@ export default function BackupOrchestrator() {
     }
   };
 
-  const createPolicy = async () => {
+  // Create OR save, depending on whether a policy is loaded into the form. The
+  // PUT endpoint existed and was correct from the start; nothing in the browser
+  // had ever called it, so schedule, scope, retention, destination, encryption,
+  // verification and enabled were all create-once — while the preflight warning
+  // told the operator to "edit the policy and pick a destination".
+  //
+  // Every field is sent on save, not a partial body: `destination_id: null` is
+  // how the operator detaches a destination and returns to local-only.
+  const savePolicy = async () => {
     try {
-      await api.post("/backup-orchestrator/policies", {
-        ...policyForm,
-        destination_id: policyForm.destination_id || null,
-      });
-      setMessage({ text: "Policy created", type: "success" });
+      const body = { ...policyForm, destination_id: policyForm.destination_id || null };
+      if (editingPolicyId) {
+        await api.put(`/backup-orchestrator/policies/${editingPolicyId}`, body);
+        setMessage({ text: `Policy "${policyForm.name}" saved`, type: "success" });
+      } else {
+        await api.post("/backup-orchestrator/policies", body);
+        setMessage({ text: "Policy created", type: "success" });
+      }
+      setEditingPolicyId(null);
+      setPolicyForm(EMPTY_POLICY_FORM);
       setShowPolicyForm(false);
       loadAll();
     } catch (e) {
       setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
+    }
+  };
+
+  const openEditPolicy = (p: BackupPolicy) => {
+    setEditingPolicyId(p.id);
+    setShowPolicyForm(false);
+    setPolicyForm({
+      name: p.name,
+      schedule: p.schedule,
+      backup_sites: p.backup_sites,
+      backup_databases: p.backup_databases,
+      backup_volumes: p.backup_volumes,
+      destination_id: p.destination_id ?? "",
+      retention_count: p.retention_count,
+      encrypt: p.encrypt,
+      verify_after_backup: p.verify_after_backup,
+      enabled: p.enabled,
+      drill_enabled: p.drill_enabled,
+      drill_schedule: p.drill_schedule || "0 4 * * 0",
+    });
+  };
+
+  const cancelEditPolicy = () => {
+    setEditingPolicyId(null);
+    setPolicyForm(EMPTY_POLICY_FORM);
+    setShowPolicyForm(false);
+  };
+
+  const protectAll = async () => {
+    setProtectAllBusy(true);
+    try {
+      await api.post("/backup-orchestrator/policies/protect-all");
+      setMessage({ text: "Protect Everything policy created — nightly at 2 AM, keeping 7", type: "success" });
+      loadAll();
+    } catch (e) {
+      // The handler answers 409 when the preset already exists; its message
+      // names the policy, which is more useful than a generic failure.
+      setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
+    } finally {
+      setProtectAllBusy(false);
     }
   };
 
@@ -569,7 +636,9 @@ export default function BackupOrchestrator() {
           policies={policies} destinations={destinations}
           showForm={showPolicyForm} setShowForm={setShowPolicyForm}
           form={policyForm} setForm={setPolicyForm}
-          onCreate={createPolicy} onDelete={deletePolicy}
+          onCreate={savePolicy} onDelete={deletePolicy}
+          editingId={editingPolicyId} onEdit={openEditPolicy} onCancelEdit={cancelEditPolicy}
+          onProtectAll={protectAll} protectAllBusy={protectAllBusy}
         />
       )}
       {tab === "databases" && (
@@ -652,7 +721,9 @@ function OverviewTab({ health }: { health: BackupHealth }) {
                   <span className="text-sm text-dark-50 font-mono">{s.resource_name}</span>
                   <span className="text-xs text-dark-300 ml-2">({s.resource_type})</span>
                 </div>
-                <span className="text-xs text-warn-400 font-mono">{s.days_since}d since last backup</span>
+                <span className="text-xs text-warn-400 font-mono">
+                  {s.days_since === null ? "never backed up" : `${s.days_since}d since last backup`}
+                </span>
               </div>
             ))}
           </div>
@@ -690,7 +761,14 @@ function SlaCard({ health }: { health: BackupHealth }) {
         <span className="text-[10px] text-dark-300 font-mono">last {health.sla_window} backups</span>
       </div>
 
-      {total === 0 ? (
+      {health.sla_unavailable ? (
+        <div className="px-5 py-8 text-center">
+          <p className="text-sm text-warn-400 font-mono">Restore confidence could not be measured</p>
+          <p className="text-xs text-dark-300 font-mono mt-1">
+            The verification query failed — see the dockpanel-api service log. This is not a report that your backups are unverified.
+          </p>
+        </div>
+      ) : total === 0 ? (
         <div className="px-5 py-8 text-center">
           <p className="text-sm text-dark-200 font-mono">No recent backups to verify yet</p>
           <p className="text-xs text-dark-300 font-mono mt-1">Run a backup or enable verify-after-backup on a policy</p>
@@ -1188,25 +1266,43 @@ function DestinationsTab({
 // ── Policies Tab ──────────────────────────────────────────────────────────
 
 function PoliciesTab({
-  policies, destinations, showForm, setShowForm, form, setForm, onCreate, onDelete
+  policies, destinations, showForm, setShowForm, form, setForm, onCreate, onDelete,
+  editingId, onEdit, onCancelEdit, onProtectAll, protectAllBusy
 }: {
   policies: BackupPolicy[]; destinations: Destination[];
   showForm: boolean; setShowForm: (v: boolean) => void;
   form: PolicyForm;
   setForm: (v: PolicyForm) => void;
   onCreate: () => void; onDelete: (id: string) => void;
+  editingId: string | null;
+  onEdit: (p: BackupPolicy) => void;
+  onCancelEdit: () => void;
+  onProtectAll: () => void;
+  protectAllBusy: boolean;
 }) {
+  const editing = editingId !== null;
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <button onClick={() => setShowForm(!showForm)}
+      <div className="flex justify-end gap-2">
+        {/* The guide's Quick Start and the preflight remediation have both told
+            operators to click this since the preset shipped; the handler was
+            complete and no button ever called it. */}
+        <button onClick={onProtectAll} disabled={protectAllBusy}
+          title="Create the one-click preset: sites, databases and volumes, nightly at 2 AM, keep 7, auto-verify"
+          className="px-4 py-2 bg-dark-700 text-dark-50 border border-dark-500 rounded-lg text-sm font-medium font-mono hover:bg-dark-600 transition-colors disabled:opacity-50">
+          {protectAllBusy ? "Working…" : "Protect Everything"}
+        </button>
+        <button onClick={() => (editing ? onCancelEdit() : setShowForm(!showForm))}
           className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium font-mono hover:bg-rust-600 transition-colors">
-          {showForm ? "Cancel" : "Create Policy"}
+          {showForm || editing ? "Cancel" : "Create Policy"}
         </button>
       </div>
 
-      {showForm && (
+      {(showForm || editing) && (
         <div className="bg-dark-800 rounded-lg border border-dark-500 p-5 space-y-3">
+          {editing && (
+            <p className="text-xs text-accent-400 font-mono">Editing "{form.name}"</p>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-dark-100 mb-1 font-mono">Name</label>
@@ -1252,8 +1348,12 @@ function PoliciesTab({
             <label className="flex items-center gap-2 text-dark-100">
               <input type="checkbox" checked={form.backup_volumes} onChange={e => setForm({ ...form, backup_volumes: e.target.checked })} /> Volumes
             </label>
-            <label className="flex items-center gap-2 text-dark-100">
-              <input type="checkbox" checked={form.encrypt} onChange={e => setForm({ ...form, encrypt: e.target.checked })} /> Encrypt
+            {/* Scoped deliberately. The derived key reaches the database dump
+                and nothing else: the agent has no encryption path for site or
+                volume archives at all, so an unqualified "Encrypt" promised
+                something the product cannot do. */}
+            <label className="flex items-center gap-2 text-dark-100" title="Applies to database dumps only. Site and volume archives are stored and uploaded unencrypted.">
+              <input type="checkbox" checked={form.encrypt} onChange={e => setForm({ ...form, encrypt: e.target.checked })} /> Encrypt DB dumps
             </label>
             <label className="flex items-center gap-2 text-dark-100">
               <input type="checkbox" checked={form.verify_after_backup} onChange={e => setForm({ ...form, verify_after_backup: e.target.checked })} /> Auto-verify
@@ -1278,9 +1378,32 @@ function PoliciesTab({
               End-to-end restore probe of latest db + volume backup. Site backups not yet covered.
             </span>
           </div>
+          {form.encrypt && (form.backup_sites || form.backup_volumes) && (
+            <p className="text-[11px] text-warn-400 font-mono">
+              Encryption covers database dumps only. This policy also backs up{" "}
+              {[form.backup_sites && "sites", form.backup_volumes && "volumes"].filter(Boolean).join(" and ")}
+              , and those archives are written and uploaded unencrypted — a site archive contains its webroot,
+              including configuration files and any database credentials in them.
+            </p>
+          )}
+          {form.destination_id !== "" && destinations.find(d => d.id === form.destination_id)?.dtype === "sftp" && (
+            <p className="text-[11px] text-warn-400 font-mono">
+              Retention is enforced on this server only. The agent cannot prune an SFTP destination, so remote copies accumulate there until you remove them.
+            </p>
+          )}
+          {editing && (
+            <div className="flex items-center gap-2 text-sm font-mono pt-2 border-t border-dark-600">
+              <label className="flex items-center gap-2 text-dark-100">
+                <input type="checkbox" checked={form.enabled} onChange={e => setForm({ ...form, enabled: e.target.checked })} /> Enabled
+              </label>
+              <span className="text-[10px] text-dark-300">Unticking pauses the policy without deleting it or its history.</span>
+            </div>
+          )}
           <div className="flex justify-end">
             <button onClick={onCreate}
-              className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium font-mono hover:bg-rust-600">Create</button>
+              className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium font-mono hover:bg-rust-600">
+              {editing ? "Save Changes" : "Create"}
+            </button>
           </div>
         </div>
       )}
@@ -1332,10 +1455,16 @@ function PoliciesTab({
                     )}
                   </td>
                   <td className="px-5 py-4">
-                    <button onClick={() => onDelete(p.id)}
-                      className="px-3 py-1 bg-danger-500/10 text-danger-400 rounded-md text-xs font-medium font-mono hover:bg-danger-500/20 transition-colors">
-                      Delete
-                    </button>
+                    <div className="flex gap-2">
+                      <button onClick={() => onEdit(p)}
+                        className="px-3 py-1 bg-dark-700 text-dark-50 rounded-md text-xs font-medium font-mono hover:bg-dark-600 transition-colors">
+                        Edit
+                      </button>
+                      <button onClick={() => onDelete(p.id)}
+                        className="px-3 py-1 bg-danger-500/10 text-danger-400 rounded-md text-xs font-medium font-mono hover:bg-danger-500/20 transition-colors">
+                        Delete
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

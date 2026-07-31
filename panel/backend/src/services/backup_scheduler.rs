@@ -306,13 +306,34 @@ async fn run_scheduled_backup(
             return Err(format!("Upload failed after 3 attempts: {last_err}"));
         }
 
-        // Prune old remote backups
+        // Prune old remote backups.
+        //
+        // The agent answers 200 with an explanatory `message` when it cannot
+        // prune — SFTP has no supported prune path, so it returns pruned:0 and
+        // says so. Discarding the body meant the schedule kept rendering its
+        // retention count as an enforced setting while remote copies accumulated
+        // forever, and the only trace was a warn in a journal that gets vacuumed.
         let prune_body = serde_json::json!({
             "destination": dest,
             "domain": row.domain,
             "retention": row.retention_count,
         });
-        let _ = agent.post("/backups/prune", Some(prune_body)).await;
+        match agent.post("/backups/prune", Some(prune_body)).await {
+            Ok(resp) => {
+                if let Some(msg) = resp.get("message").and_then(|v| v.as_str()) {
+                    crate::services::system_log::log_event(
+                        db,
+                        "warn",
+                        "backup_scheduler",
+                        &format!("Remote retention was not enforced for {}", row.domain),
+                        Some(msg),
+                    ).await;
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Remote prune failed for {}: {e}", row.domain);
+            }
+        }
 
         true
     } else {
@@ -332,7 +353,13 @@ async fn run_scheduled_backup(
     // SFTP copy was sitting at the destination while its row read
     // uploaded=f, destination_id=NULL. The sibling policy path had been wired to
     // these columns from the start, which is what made the gap invisible.
-    let _ = sqlx::query(
+    //
+    // The Result is checked because this row IS the backup as far as the product
+    // is concerned — every list and restore path reads it. Returning Err here
+    // routes into `tick`'s existing failure arm, which writes last_status='failed'
+    // plus a system_log entry and a critical backup_failure alert; discarding it
+    // left the schedule reading 'success' over an archive with no row.
+    if let Err(e) = sqlx::query(
         "INSERT INTO backups (site_id, filename, size_bytes, databases_included, databases_expected, uploaded, destination_id) \
          VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
@@ -344,7 +371,9 @@ async fn run_scheduled_backup(
     .bind(uploaded_remote)
     .bind(if uploaded_remote { row.dest_id } else { None })
     .execute(db)
-    .await;
+    .await {
+        return Err(format!("Backup created but could not be recorded: {e}"));
+    }
 
     tracing::info!("Scheduled backup complete for {}", row.domain);
     Ok(())

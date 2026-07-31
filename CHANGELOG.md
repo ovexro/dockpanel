@@ -4,6 +4,84 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.50.0] - 2026-07-31
+
+Eleven backup defects were recorded as findings at v2.48.6 and left unbuilt.
+All eleven were re-verified against this tree before any work started; none had
+aged out. Nine are fixed here. The theme is that the backup subsystem was
+telling the truth about almost everything except whether it had worked.
+
+### Fixed
+
+- **The Restore Confidence card had been dead on every install since it
+  shipped.** Two of its queries selected `server_id` from `backups`, a column
+  that table has never had, so both failed at plan time on every request and
+  their errors were discarded. The card showed "No recent backups to verify yet"
+  forever, and took the verify-lag percentiles, the oldest-unverified age, the
+  drill strip and the per-server breakdown down with it. Site backups now reach
+  their server through `sites`, as the neighbouring list query always did.
+- **A measurement that fails is no longer reported as a measurement of zero.**
+  The health response carries `sla_unavailable`, and the card says the figure
+  could not be computed instead of rendering its empty state.
+- **The stale-backup warning went blank exactly when it mattered.** Its query
+  deliberately selects sites that have never been backed up, then decoded the
+  resulting NULL into a non-nullable timestamp — and since those rows sort
+  first, the failure took the whole list, including sites that were genuinely
+  overdue. Never-backed-up is now a state the list can express and render.
+- **A backup the panel could not record was still counted as a success.** Five
+  writers discarded the result of their `INSERT`. A backup destination deleted
+  while a policy was running made every later insert a foreign-key violation,
+  and the run still reported green over archives that exist on disk and in no
+  list or restore path. All five now report the failure; on the manual path the
+  live log says so instead of ticking "Backup created".
+- **Clearing a destination's secret field destroyed the stored credential.** An
+  empty string was neither encrypted nor recognised as the "keep what is
+  stored" sentinel, so it replaced a working key with nothing. Empty secrets are
+  refused. Separately, an edit no longer drops stored settings the form does not
+  send, such as an SFTP key path.
+- **Creating or updating a destination echoed its stored secret back.** Both
+  handlers returned the row unmasked while the list endpoint masked it — and on
+  panels that predate credential encryption the stored value is the real secret,
+  so renaming a destination handed it to whoever was watching the response.
+- **Policies could be created and deleted but never edited.** Schedule, scope,
+  retention, destination, encryption, verification and enabled were all
+  create-once, while the panel's own preflight advice said to edit the policy
+  and pick a destination. There is now an Edit control, and the endpoint behind
+  it no longer resets `server_id`, `destination_id` or `retention_count` when a
+  request omits them.
+- **"Protect Everything" now exists.** The preset the Quick Start guide and the
+  preflight remediation both tell you to click was fully implemented and had no
+  button.
+- **Retention that cannot be enforced is reported.** The agent answers that it
+  cannot prune an SFTP destination; both callers discarded that answer, so
+  remote copies accumulated while the panel displayed the retention count as
+  settled. It now reaches the system log, once per run, and the policy form says
+  so at configuration time.
+
+### Changed
+
+- **The policy "Encrypt" option is now "Encrypt DB dumps", because that is what
+  it does.** The agent has no encryption path for site or volume archives, so a
+  ticked box left them in cleartext on disk and at the destination — and since
+  v2.34.0 a site archive also contains a dump of every database attached to that
+  site, so an encrypted policy shipped an encrypted copy of that data and an
+  unencrypted copy of the same data to the same place. The label, the guide and
+  the policy form now say what is covered; encrypting those archives for real
+  needs agent-side work on the create, restore, list and prune legs.
+- Restic incremental backup is marked API-only in the README. It is implemented
+  end to end and has no panel UI.
+
+### Added
+
+- `backup-truth-pin-e2e.sh` (35 assertions, CI job `backup-truth`). Its arms are
+  keyed on the capability a regression must use rather than on today's spelling;
+  34 of 35 fail against the previous tree, and seven deliberate evasions were
+  run against it, the last of which found a real gap in the suite itself.
+- `docs-claims` now compares the pin suites on disk against the rows published
+  in `docs/testing.md`. Every earlier check walked only the rows the page lists,
+  so a suite that was never added there was invisible to all of them. The new
+  arm immediately found `tier2-pin-e2e.sh`, unpublished since it landed.
+
 ## [2.49.1] - 2026-07-31
 
 A security fix. One in-memory map held the progress logs of nine unrelated

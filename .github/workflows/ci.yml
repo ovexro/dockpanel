@@ -387,3 +387,25 @@ jobs:
       # completed one.
       - name: Nobody reaches the shared log map without proving whose log it is
         run: bash tests/provision-log-ownership-pin-e2e.sh
+
+  backup-truth:
+    name: A Backup Says What Actually Happened
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pure source analysis. The backup subsystem reported confidently on work
+      # it had not done: two SLA queries read a column `backups` has never had,
+      # so the Restore Confidence card was dead on every install and said so as
+      # an empty state; five INSERT sites discarded their result, so an archive
+      # the panel could not record still counted as a success; a destination's
+      # stored secret was destroyed by clearing its field and echoed back by
+      # renaming the row; and the Encrypt option covered database dumps only
+      # while a site archive — which carries a dump of that site's databases —
+      # went to the same destination in cleartext. The arms below are keyed on
+      # the capability a regression must use, not on the spelling this tree
+      # happens to have: you cannot read a site's server without naming `sites`,
+      # you cannot use a response you have not destructured, and you cannot
+      # return a row without passing it through the masker.
+      - name: A backup reports what happened to it, not what was attempted
+        run: bash tests/backup-truth-pin-e2e.sh

@@ -206,7 +206,7 @@ pub async fn create(
                     }
                 };
 
-                let _ = sqlx::query(
+                let recorded = sqlx::query(
                     "INSERT INTO backups (site_id, filename, size_bytes, sha256_hash, previous_hash, chain_valid, databases_included, databases_expected) \
                      VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7)",
                 )
@@ -219,6 +219,21 @@ pub async fn create(
                 .bind(db_expected)
                 .execute(&db)
                 .await;
+
+                // An archive with no row is unreachable through the product: the
+                // list and both restore paths look it up by row. Reporting the
+                // step green over that failure is the one thing this live log
+                // must not do.
+                //
+                // Deliberately NOT an early return — the tail of this task removes
+                // the log from the shared map, and returning here would leak both
+                // it and its owner row until the hourly prune.
+                if let Err(e) = recorded {
+                    tracing::error!("Backup created for site {id} but could not be recorded: {e}");
+                    emit("backup", "Backup created but could not be recorded", "error",
+                        Some("The archive exists on the server but is not listed in the panel, so it cannot be restored from here.".to_string()));
+                    emit("complete", "Backup not recorded", "error", Some(filename.clone()));
+                } else {
 
                 emit("backup", "Creating backup", "done", None);
 
@@ -259,6 +274,8 @@ pub async fn create(
                     "databases_included": included.len(),
                     "databases_expected": db_expected,
                 }));
+
+                } // end: the row was recorded
             }
             Err(e) => {
                 emit("backup", "Creating backup", "error", Some(format!("{e}")));

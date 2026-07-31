@@ -274,6 +274,9 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow, jw
     // the next scheduled run try again from scratch.
     let mut destination_down = false;
 
+    // Remote retention is reported once per run, not once per resource.
+    let mut remote_prune_warned = false;
+
     // Get encryption key if encrypt is enabled. Use the shared derivation (single source of
     // truth) keyed on the jwt_secret passed into the executor — which equals the
     // state.config.jwt_secret the restore path uses — NOT a separate std::env read that could
@@ -283,6 +286,20 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow, jw
     } else {
         None
     };
+
+    // The key reaches the database dump and nothing else — the agent has no
+    // encryption path for a site or volume archive, so there is nowhere to send
+    // it. Say so per run rather than letting the flag imply cover it does not
+    // give: a site archive is the whole webroot, and since v2.34.0 it also
+    // carries a dump of every database attached to that site, which means an
+    // encrypted policy ships an encrypted copy of that data and an unencrypted
+    // one to the same destination.
+    if policy.encrypt && (policy.backup_sites || policy.backup_volumes) {
+        tracing::warn!(
+            "Policy '{}': encryption applies to database dumps only — this policy's site/volume archives are stored and uploaded unencrypted",
+            policy.name
+        );
+    }
 
     // Backup sites
     if policy.backup_sites {
@@ -318,11 +335,36 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow, jw
                         if uploaded {
                             // Enforce remote retention too, or the destination grows
                             // without bound. Same call the scheduler makes.
-                            let _ = agent.post("/backups/prune", Some(serde_json::json!({
+                            //
+                            // The agent returns 200 with a `message` when it cannot
+                            // prune (SFTP has no supported path), so a discarded body
+                            // left the policy showing an enforced retention count over
+                            // a destination that never deletes anything. Reported once
+                            // per run — a forty-site policy should not write forty
+                            // identical rows.
+                            match agent.post("/backups/prune", Some(serde_json::json!({
                                 "destination": dest.payload,
                                 "domain": domain,
                                 "retention": policy.retention_count,
-                            }))).await;
+                            }))).await {
+                                Ok(resp) => {
+                                    if let Some(msg) = resp.get("message").and_then(|v| v.as_str()) {
+                                        if !remote_prune_warned {
+                                            remote_prune_warned = true;
+                                            crate::services::system_log::log_event(
+                                                db,
+                                                "warn",
+                                                "backup_policy_executor",
+                                                &format!("Policy '{}': remote retention was not enforced", policy.name),
+                                                Some(msg),
+                                            ).await;
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Policy '{}': remote prune failed for {domain}: {e}", policy.name);
+                                }
+                            }
                         } else {
                             upload_failures += 1;
                             destination_down = true;
@@ -332,7 +374,14 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow, jw
                         upload_failures += 1;
                     }
 
-                    let _ = sqlx::query(
+                    // A backup the panel cannot record is a backup the operator
+                    // cannot find or restore: every list and restore path keys off
+                    // this row. Discarding the Result reported the run green over
+                    // an archive that exists on disk and nowhere in the product.
+                    // The realistic trigger is not "the database is down" — it is
+                    // deleting a backup destination mid-run, which makes every
+                    // remaining insert in that run a foreign-key violation.
+                    match sqlx::query(
                         "INSERT INTO backups (site_id, filename, size_bytes, destination_id, uploaded, databases_included, databases_expected) \
                          VALUES ($1, $2, $3, $4, $5, $6, $7)"
                     )
@@ -340,9 +389,13 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow, jw
                     .bind(destination.as_ref().map(|d| d.id)).bind(uploaded)
                     .bind(resp.get("databases_included").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0) as i32)
                     .bind(db_expected)
-                    .execute(db).await;
-
-                    successes += 1;
+                    .execute(db).await {
+                        Ok(_) => successes += 1,
+                        Err(e) => {
+                            tracing::error!("Policy '{}': site backup for {domain} was created but could not be recorded: {e}", policy.name);
+                            failures += 1;
+                        }
+                    }
                 }
                 Err(e) => {
                     tracing::error!("Policy '{}': site backup failed for {domain} (after retry): {e}", policy.name);
@@ -404,7 +457,7 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow, jw
                         upload_failures += 1;
                     }
 
-                    let _ = sqlx::query(
+                    match sqlx::query(
                         "INSERT INTO database_backups (database_id, server_id, filename, size_bytes, db_type, db_name, encrypted, policy_id, destination_id, uploaded, sha256_hash, previous_hash, chain_valid) \
                          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, TRUE)"
                     )
@@ -413,9 +466,13 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow, jw
                     .bind(destination.as_ref().map(|d| d.id)).bind(uploaded)
                     .bind(if sha256_hash.is_empty() { None } else { Some(&sha256_hash) })
                     .bind(previous_hash.as_deref())
-                    .execute(db).await;
-
-                    successes += 1;
+                    .execute(db).await {
+                        Ok(_) => successes += 1,
+                        Err(e) => {
+                            tracing::error!("Policy '{}': DB backup for {db_name} was created but could not be recorded: {e}", policy.name);
+                            failures += 1;
+                        }
+                    }
                 }
                 Err(e) => {
                     tracing::error!("Policy '{}': DB backup failed for {db_name} (after retry): {e}", policy.name);
@@ -494,7 +551,7 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow, jw
                                                 upload_failures += 1;
                                             }
 
-                                            let _ = sqlx::query(
+                                            match sqlx::query(
                                                 "INSERT INTO volume_backups (container_id, container_name, server_id, volume_name, filename, size_bytes, policy_id, destination_id, uploaded, sha256_hash, previous_hash, chain_valid) \
                                                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, TRUE)"
                                             )
@@ -503,9 +560,13 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow, jw
                                             .bind(destination.as_ref().map(|d| d.id)).bind(uploaded)
                                             .bind(if sha256_hash.is_empty() { None } else { Some(&sha256_hash) })
                                             .bind(previous_hash.as_deref())
-                                            .execute(db).await;
-
-                                            successes += 1;
+                                            .execute(db).await {
+                                                Ok(_) => successes += 1,
+                                                Err(e) => {
+                                                    tracing::error!("Policy '{}': volume backup for {container_name}/{vol_name} was created but could not be recorded: {e}", policy.name);
+                                                    failures += 1;
+                                                }
+                                            }
                                         }
                                         Err(e) => {
                                             tracing::error!("Policy '{}': volume backup failed for {container_name}/{vol_name} (after retry): {e}", policy.name);

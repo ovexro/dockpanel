@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>The most feature-packed free server panel ever built.</strong><br>
-  Self-hosted. Docker-native. Written in Rust. Panel services run on <strong>~49MB of RAM</strong>. 811 HTTP routes. 153 app templates. 683 regression assertions. ~45MB binaries. Zero subscriptions.
+  Self-hosted. Docker-native. Written in Rust. Panel services run on <strong>~49MB of RAM</strong>. 811 HTTP routes. 153 app templates. 732 regression assertions. ~45MB binaries. Zero subscriptions.
 </p>
 
 <p align="center">
@@ -129,7 +129,7 @@ found, including what is still broken.
 </details>
 
 <details>
-<summary><strong>Backups</strong> — Scheduled backups, S3/SFTP destinations, Restic incremental, one-click restore</summary>
+<summary><strong>Backups</strong> — Scheduled backups, S3/SFTP destinations, Restic incremental (API only), one-click restore</summary>
 
 ![Backups](.github/screenshots/dp-backups.png)
 </details>
@@ -179,7 +179,7 @@ found, including what is still broken.
 - **Git Deploy** — Push-to-deploy. Atomic zero-downtime deploys (Capistrano-style). Nixpacks (30+ languages). Preview environments.
 - **WordPress Toolkit** — Multi-site dashboard, vulnerability scanning, security hardening, bulk updates.
 - **CMS Install** — WordPress, Laravel, Drupal, Joomla, Symfony, CodeIgniter — one click.
-- **Backups** — Scheduled, S3/SFTP remote destinations, one-click restore. Restic incremental (encrypted, deduplicated).
+- **Backups** — Scheduled, S3/SFTP remote destinations, one-click restore. Restic incremental (encrypted, deduplicated) — API only, no panel UI yet.
 - **Backup Orchestrator** — DB/volume backups, AES-256 encryption, restore verification, cross-resource policies, S3/SFTP/B2/GCS destinations, health dashboard.
 - **CDN** — BunnyCDN and Cloudflare CDN management. Cache purge, bandwidth stats, pull zone discovery.
 - **Image Optimization** — Server-side WebP/AVIF conversion per site.
