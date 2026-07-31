@@ -409,3 +409,31 @@ jobs:
       # return a row without passing it through the masker.
       - name: A backup reports what happened to it, not what was attempted
         run: bash tests/backup-truth-pin-e2e.sh
+
+  scheme-and-import:
+    name: The Panel Serves What It Says It Serves
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pure source analysis. Two families of the same mistake: two ends of the
+      # panel disagreeing about something each of them already knew.
+      #
+      # The SCHEME — five places printed or fetched `https://<a user's domain>`
+      # while a certificate on disk, an ssl_email on the row, or an `ssl` flag in
+      # the very response being read said otherwise; and the "optional" SSL email
+      # was not optional, so an operator terminating TLS upstream could not
+      # decline a certificate request that could never succeed.
+      #
+      # The PATHS — the migration importer wrote a site's files one level above
+      # the directory its own vhost serves and then deleted that directory on the
+      # way past, and resolved the archive root differently from the analyser
+      # that produced the paths it was joining.
+      #
+      # The arms are keyed on the capability a regression must use and were then
+      # ATTACKED: fourteen deliberate evasions against the fixed tree, of which
+      # five beat the first draft. Hence the liveness checks (dead code and
+      # discarded results satisfy a presence grep) and the real function-body
+      # extractor (a fixed -A window is satisfied by the NEXT function).
+      - name: The scheme is derived, and the importer writes where nginx looks
+        run: bash tests/scheme-and-import-pin-e2e.sh
