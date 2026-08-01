@@ -877,28 +877,75 @@ pub async fn apply_fix(fix_id: &str) -> Result<String, String> {
                 Ok(format!("Tmp cleanup completed with warnings: {}", stderr.chars().take(200).collect::<String>()))
             }
         }
-        // GAP 35: Docker system prune (unused images, volumes, build cache)
-        "docker-prune" => {
-            let output = tokio::time::timeout(
+        // Reclaim only what DockPanel does NOT manage.
+        //
+        // This replaces `docker system prune -af --volumes`, which removed every
+        // stopped container, every image not held by a RUNNING container, and
+        // every unattached volume. Three things made that catastrophic rather
+        // than merely aggressive:
+        //   * a container the panel had put to SLEEP is a stopped container, so
+        //     the panel deleted the app it intended to wake — and `wake` only
+        //     issues `docker start` on an id that no longer exists;
+        //   * removing that container detached its volumes, which the same
+        //     command then reclaimed, so the tenant's data went with it;
+        //   * a locally built image (git deploys, and every rollback target) has
+        //     no registry to be pulled back from.
+        // `dockpanel.managed=true` is the label the panel puts on everything it
+        // creates, and is the same evidence `services::ownership` uses elsewhere.
+        // `docker-prune` is the OLD id and is deliberately routed here, so an
+        // older panel pointed at a newer agent cannot get the destructive
+        // behaviour back by name.
+        "docker-reclaim" | "docker-prune" => {
+            if action == "docker-prune" {
+                tracing::warn!(
+                    "docker-prune is deprecated and now performs a SCOPED reclaim; \
+                     the caller is an older panel. Upgrade the panel to use docker-reclaim."
+                );
+            }
+            let mut freed: Vec<String> = Vec::new();
+
+            // Dangling images only: never `-a`, so an image backing a stopped
+            // (slept, or merely crashed) container is untouched.
+            if let Ok(out) = tokio::time::timeout(
                 std::time::Duration::from_secs(60),
                 safe_command("docker")
-                    .args(["system", "prune", "-af", "--volumes"])
+                    .args(["image", "prune", "-f", "--filter", "label!=dockpanel.managed=true"])
                     .output(),
-            )
-            .await
-            .map_err(|_| "Docker prune timed out".to_string())?
-            .map_err(|e| format!("Failed to run docker prune: {e}"))?;
-
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if output.status.success() {
-                let reclaimed = stdout.lines()
-                    .find(|l| l.contains("reclaimed"))
-                    .unwrap_or("Docker prune completed");
-                Ok(reclaimed.to_string())
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                Err(format!("Docker prune failed: {}", stderr.chars().take(200).collect::<String>()))
+            ).await.map_err(|_| "Docker image prune timed out".to_string())? {
+                if out.status.success() {
+                    if let Some(l) = String::from_utf8_lossy(&out.stdout).lines()
+                        .find(|l| l.contains("reclaimed")) { freed.push(l.to_string()); }
+                }
             }
+
+            // Build cache is never a live resource — safe to reclaim in full.
+            if let Ok(out) = tokio::time::timeout(
+                std::time::Duration::from_secs(60),
+                safe_command("docker").args(["builder", "prune", "-f"]).output(),
+            ).await.map_err(|_| "Docker builder prune timed out".to_string())? {
+                if out.status.success() {
+                    if let Some(l) = String::from_utf8_lossy(&out.stdout).lines()
+                        .find(|l| l.contains("reclaimed")) { freed.push(format!("build cache: {l}")); }
+                }
+            }
+
+            // Networks the panel did not create and nothing is attached to.
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                safe_command("docker")
+                    .args(["network", "prune", "-f", "--filter", "label!=dockpanel.managed=true"])
+                    .output(),
+            ).await;
+
+            // NOTE: volumes are deliberately NOT reclaimed. An unattached volume
+            // is indistinguishable from a volume whose container is stopped, and
+            // the panel stops containers on purpose. Volume reclamation belongs
+            // to an explicit, itemised operator action, not to a disk alert.
+            Ok(if freed.is_empty() {
+                "Reclaimed unmanaged Docker resources (nothing to free)".into()
+            } else {
+                format!("Reclaimed unmanaged Docker resources — {}", freed.join("; "))
+            })
         }
         "clean-cache" => {
             // Clear nginx fastcgi/proxy cache for a specific domain or all

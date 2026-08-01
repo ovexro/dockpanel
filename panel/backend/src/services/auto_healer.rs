@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::services::activity;
-use crate::services::agent::AgentClient;
+use crate::services::agent::{AgentClient, AgentRegistry};
 use crate::services::notifications;
 
 /// Cumulative count of auto-healer SSL renewal attempts that succeeded.
@@ -19,7 +19,12 @@ pub static SSL_RENEWALS_FAILURE: AtomicU64 = AtomicU64::new(0);
 
 /// Background task: auto-heals common issues when detected.
 /// Runs every 120 seconds (offset from alert engine to spread load).
-pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
+pub async fn run(
+    pool: PgPool,
+    agent: AgentClient,
+    agents: AgentRegistry,
+    mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+) {
     tracing::info!("Auto-healer started");
 
     // Initial delay (90s offset from alert engine's 30s, respects shutdown)
@@ -54,7 +59,7 @@ pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync:
         // Only run auto-healing if enabled globally
         if is_enabled(&pool).await {
             auto_restart_services(&pool, &agent).await;
-            auto_clean_disk(&pool, &agent).await;
+            auto_clean_disk(&pool, &agents).await;
             auto_renew_ssl(&pool, &agent).await;
             auto_sleep_idle_containers(&pool, &agent).await;
         }
@@ -417,91 +422,177 @@ async fn auto_restart_services(pool: &PgPool, agent: &AgentClient) {
     }
 }
 
-/// Auto-clean logs when disk usage > 90%.
-async fn auto_clean_disk(pool: &PgPool, agent: &AgentClient) {
-    // Check if disk alert is firing
-    let firing: Option<(String,)> = sqlx::query_as(
-        "SELECT current_state FROM alert_state \
-         WHERE alert_type = 'disk' AND current_state = 'firing' LIMIT 1",
+/// Free disk space on servers whose disk alert is firing — on THOSE servers.
+///
+/// This used to read one firing `disk` row with no `server_id` predicate and send
+/// the fixes to the local agent. `alert_state` is keyed per server
+/// (`idx_alert_state_server` on `(server_id, alert_type, state_key)`), so in a
+/// fleet ANY member crossing its threshold made the panel host clean and prune
+/// ITSELF, forever, while the full machine was never touched. Proven on a
+/// two-box fleet: member at 93%, panel host at 18%, and the panel host lost a
+/// tenant's container and image.
+///
+/// Three properties this now holds:
+/// * **Each firing server is healed on its own agent**, resolved through
+///   `AgentRegistry::for_server` — the same primitive every HTTP route already
+///   uses via `ServerScope`.
+/// * **The cooldown is real.** It used to count `activity_logs` rows written with
+///   `Uuid::nil()`, which violates `fk_activity_logs_user`, so the insert always
+///   failed, the count was always 0, and the "hourly" escalation was armed on
+///   every 120s tick. The record is now written against the server's owner, so it
+///   both gates the next run and gives the operator the audit trail that
+///   destruction of this size owes them.
+/// * **Recovery goes through the alert engine's own path.** A raw UPDATE to `ok`
+///   consumed the firing->ok transition without ever calling `resolve_alert`, so
+///   the `alerts` row stayed `firing` for ever — and retention only purges
+///   `status = 'resolved'`, making those rows unpurgeable.
+async fn auto_clean_disk(pool: &PgPool, agents: &AgentRegistry) {
+    let firing: Vec<(uuid::Uuid, uuid::Uuid, String)> = sqlx::query_as(
+        "SELECT a.server_id, s.user_id, s.name \
+         FROM alert_state a JOIN servers s ON s.id = a.server_id \
+         WHERE a.alert_type = 'disk' AND a.current_state = 'firing' \
+           AND a.server_id IS NOT NULL",
     )
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await
-    .ok()
-    .flatten();
+    .unwrap_or_default();
 
-    if firing.is_none() {
-        return;
-    }
+    for (server_id, user_id, server_name) in firing {
+        // Cooldown is per server: a fleet where one box is chronically full must
+        // not suppress healing on another that has just filled up.
+        let recent: Option<(i64,)> = sqlx::query_as(
+            "SELECT COUNT(*) FROM activity_logs \
+             WHERE action = 'auto_heal.clean_logs' AND target_name = $1 \
+             AND created_at > NOW() - INTERVAL '1 hour'",
+        )
+        .bind(server_id.to_string())
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
 
-    // Check if we already cleaned recently
-    let recent: Option<(i64,)> = sqlx::query_as(
-        "SELECT COUNT(*) FROM activity_logs \
-         WHERE action = 'auto_heal.clean_logs' \
-         AND created_at > NOW() - INTERVAL '1 hour'",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
+        if recent.map(|r| r.0).unwrap_or(0) > 0 {
+            continue;
+        }
 
-    if recent.map(|r| r.0).unwrap_or(0) > 0 {
-        return;
-    }
+        let agent = match agents.for_server(server_id).await {
+            Ok(a) => a,
+            Err(e) => {
+                // Refuse rather than fall back to the local agent. Falling back is
+                // precisely the defect: it destroys a healthy host to "fix" one we
+                // cannot reach.
+                tracing::warn!(
+                    "Auto-heal: disk alert firing on {server_name} ({server_id}) but its \
+                     agent is unreachable ({e}) — NOT cleaning. Refusing to act on a \
+                     different host."
+                );
+                continue;
+            }
+        };
 
-    tracing::info!("Auto-heal: cleaning logs to free disk space");
+        tracing::info!("Auto-heal: cleaning logs on {server_name} to free disk space");
+        let success = agent
+            .post(
+                "/diagnostics/fix",
+                Some(serde_json::json!({ "fix_id": "clean-logs:all" })),
+            )
+            .await
+            .is_ok();
 
-    let result = agent
-        .post(
-            "/diagnostics/fix",
-            Some(serde_json::json!({ "fix_id": "clean-logs:all" })),
+        // Written against the server's OWNER, not the nil uuid — this row is both
+        // the cooldown gate and the operator's only record that this ran.
+        activity::log_activity(
+            pool,
+            user_id,
+            "auto-healer",
+            "auto_heal.clean_logs",
+            Some("server"),
+            Some(&server_id.to_string()),
+            Some(&format!("server={server_name} success={success}")),
+            None,
         )
         .await;
 
-    let success = result.is_ok();
-    let system_id = uuid::Uuid::nil();
-    activity::log_activity(
-        pool,
-        system_id,
-        "auto-healer",
-        "auto_heal.clean_logs",
-        Some("system"),
-        Some("logs"),
-        Some(&format!("success={success}")),
-        None,
-    )
-    .await;
+        if !success {
+            continue;
+        }
 
-    // GAP 35: Also clean /tmp and prune Docker when disk is critical
-    if success {
-        tracing::info!("Auto-heal: cleaning /tmp files older than 7 days");
-        let _ = agent.post(
-            "/diagnostics/fix",
-            Some(serde_json::json!({ "fix_id": "clean-tmp:all" })),
-        ).await;
+        tracing::info!("Auto-heal: cleaning /tmp files older than 7 days on {server_name}");
+        let _ = agent
+            .post(
+                "/diagnostics/fix",
+                Some(serde_json::json!({ "fix_id": "clean-tmp:all" })),
+            )
+            .await;
 
-        tracing::info!("Auto-heal: running Docker system prune");
-        let _ = agent.post(
-            "/diagnostics/fix",
-            Some(serde_json::json!({ "fix_id": "docker-prune:all" })),
-        ).await;
-    }
+        // The reclaim is opt-in and scoped; see `docker-reclaim` in the agent's
+        // diagnostics. It never removes anything DockPanel manages, and never
+        // anything a tenant is only sleeping.
+        if reclaim_enabled(pool).await {
+            tracing::info!("Auto-heal: reclaiming unmanaged Docker resources on {server_name}");
+            let _ = agent
+                .post(
+                    "/diagnostics/fix",
+                    Some(serde_json::json!({ "fix_id": "docker-reclaim:all" })),
+                )
+                .await;
+        }
 
-    // If cleanup succeeded, reset the disk alert_state so the alert engine doesn't
-    // re-fire immediately (let it re-evaluate on the next cycle with fresh metrics)
-    if success {
+        // Hand recovery back to the alert engine, scoped to THIS server, so the
+        // `alerts` row is resolved and the operator is told it recovered.
         let _ = sqlx::query(
             "UPDATE alert_state SET current_state = 'ok', consecutive_count = 0, \
              fired_at = NULL, last_notified_at = NULL \
-             WHERE alert_type = 'disk' AND current_state = 'firing'",
+             WHERE server_id = $1 AND alert_type = 'disk' AND current_state = 'firing'",
         )
+        .bind(server_id)
         .execute(pool)
         .await;
 
-        tracing::info!("Auto-heal: disk cleanup succeeded, disk alert state reset");
+        notifications::resolve_alert(
+            pool,
+            user_id,
+            Some(server_id),
+            None,
+            "disk",
+            &format!("DISK recovered on {server_name}"),
+            &format!("Automatic disk cleanup freed space on server {server_name}"),
+        )
+        .await;
 
-        // Panel notification
-        notifications::notify_panel(pool, None, "Disk cleanup completed", "Automatic disk cleanup was performed to free space (logs + /tmp + Docker prune)", "info", "auto_heal", None).await;
+        tracing::info!("Auto-heal: disk cleanup succeeded on {server_name}, alert resolved");
+
+        notifications::notify_panel(
+            pool,
+            None,
+            "Disk cleanup completed",
+            &format!(
+                "Automatic disk cleanup ran on {server_name} (logs + /tmp{})",
+                if reclaim_enabled(pool).await { " + unmanaged Docker resources" } else { "" }
+            ),
+            "info",
+            "auto_heal",
+            None,
+        )
+        .await;
     }
+}
+
+/// Whether the operator has opted into reclaiming unused Docker resources during
+/// a disk heal. Defaults to **false**: the previous behaviour ran
+/// `docker system prune -af --volumes` — every stopped container, every image not
+/// held by a running one, every unused volume — on a consent screen that said
+/// "cleans logs".
+async fn reclaim_enabled(pool: &PgPool) -> bool {
+    sqlx::query_scalar::<_, String>(
+        "SELECT value FROM settings WHERE key = 'auto_heal_docker_reclaim'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .map(|v| v == "true")
+    .unwrap_or(false)
 }
 
 /// Auto-renew SSL certs using ACME Renewal Information (RFC 9773) when
@@ -935,6 +1026,68 @@ async fn send_weekly_digest(pool: &PgPool) {
     }
 }
 
+/// Retire one policy-created backup: remove the archive, then the row that names it.
+///
+/// The row is the ONLY record of where the archive lives, so it is deleted last and
+/// only when the archive is genuinely gone. Two cases keep it:
+///
+/// * **The backup belongs to another server.** `std::fs` reaches this host and no
+///   other, so unlinking here would leave a remote archive alive with nothing
+///   pointing at it. Retention for remote backups needs the owning server's agent
+///   (`AgentRegistry::for_server`); until the sweep is threaded through it, refuse
+///   loudly rather than silently destroy the record.
+/// * **The unlink failed for a reason other than "already gone".** A read-only
+///   mount or a permission problem is exactly when the operator most needs the row
+///   to still say what is on disk.
+///
+/// Returns true when the backup was actually retired.
+async fn prune_policy_backup(
+    pool: &PgPool,
+    table: &str,
+    id: uuid::Uuid,
+    filepath: &str,
+    row_server: Option<uuid::Uuid>,
+    local_server: Option<uuid::Uuid>,
+) -> bool {
+    if let (Some(row_s), Some(local_s)) = (row_server, local_server) {
+        if row_s != local_s {
+            tracing::warn!(
+                "Retention: {table} {id} belongs to server {row_s}, not this host — \
+                 keeping the row. A local unlink cannot reach it, and deleting the row \
+                 would orphan the archive with no record of where it is."
+            );
+            return false;
+        }
+    }
+
+    match std::fs::remove_file(filepath) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Already gone — the row is the only thing left to clean up.
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Retention: could not remove {filepath} ({e}) — keeping the {table} row \
+                 so the archive stays accounted for."
+            );
+            return false;
+        }
+    }
+
+    // `table` is a compile-time literal from this module, never user input.
+    let deleted = sqlx::query(&format!("DELETE FROM {table} WHERE id = $1"))
+        .bind(id)
+        .execute(pool)
+        .await;
+    match deleted {
+        Ok(_) => true,
+        Err(e) => {
+            tracing::warn!("Retention: removed {filepath} but could not delete {table} {id}: {e}");
+            false
+        }
+    }
+}
+
 /// Periodic data retention cleanup: removes old records to keep the database lean.
 async fn run_retention_cleanup(pool: &PgPool) {
     tracing::info!("Running data retention cleanup...");
@@ -1126,37 +1279,58 @@ async fn run_retention_cleanup(pool: &PgPool) {
         "SELECT id, retention_count FROM backup_policies WHERE retention_count > 0"
     ).fetch_all(pool).await.unwrap_or_default();
 
+    // The local server's id. A retention sweep unlinks a path on THIS filesystem,
+    // so it may only act on rows whose backup was written here — see
+    // `prune_policy_backup` for what happens to the rest.
+    let local_server_id: Option<uuid::Uuid> =
+        sqlx::query_scalar("SELECT id FROM servers WHERE is_local = TRUE LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+
     for (policy_id, retention_count) in &policies {
-        // Prune excess database backups for this policy
-        let excess_db: Vec<(uuid::Uuid, String)> = sqlx::query_as(
-            "SELECT id, filename FROM database_backups WHERE policy_id = $1 \
-             ORDER BY created_at DESC OFFSET $2"
+        // Retention is per DATABASE, not per policy. `OFFSET n` over a policy's
+        // whole history kept n backups in TOTAL across every database the policy
+        // covers, so a policy protecting five databases kept five backups and
+        // four of those databases ended up with none.
+        let excess_db: Vec<(uuid::Uuid, String, String, Option<uuid::Uuid>)> = sqlx::query_as(
+            "SELECT id, filename, db_name, server_id FROM ( \
+                 SELECT id, filename, db_name, server_id, \
+                        ROW_NUMBER() OVER (PARTITION BY database_id ORDER BY created_at DESC) AS rn \
+                 FROM database_backups WHERE policy_id = $1 \
+             ) ranked WHERE rn > $2"
         )
         .bind(policy_id).bind(*retention_count)
         .fetch_all(pool).await.unwrap_or_default();
 
-        for (id, filename) in &excess_db {
-            let filepath = format!("/var/backups/dockpanel/databases/{filename}");
-            let _ = std::fs::remove_file(&filepath);
-            let _ = sqlx::query("DELETE FROM database_backups WHERE id = $1")
-                .bind(id).execute(pool).await;
-            total_pruned += 1;
+        for (id, filename, db_name, server_id) in &excess_db {
+            // `database_backup::backup_dir` nests per database. The old path
+            // omitted `{db_name}`, so the unlink could never match a real file
+            // while the DELETE below ran anyway — every dump was orphaned on
+            // disk and its only record destroyed.
+            let filepath = format!("/var/backups/dockpanel/databases/{db_name}/{filename}");
+            if prune_policy_backup(pool, "database_backups", *id, &filepath, *server_id, local_server_id).await {
+                total_pruned += 1;
+            }
         }
 
-        // Prune excess volume backups for this policy
-        let excess_vol: Vec<(uuid::Uuid, String)> = sqlx::query_as(
-            "SELECT id, filename FROM volume_backups WHERE policy_id = $1 \
-             ORDER BY created_at DESC OFFSET $2"
+        // Same shape for volumes: per container+volume, and nested per container.
+        let excess_vol: Vec<(uuid::Uuid, String, String, Option<uuid::Uuid>)> = sqlx::query_as(
+            "SELECT id, filename, container_name, server_id FROM ( \
+                 SELECT id, filename, container_name, server_id, \
+                        ROW_NUMBER() OVER (PARTITION BY container_id, volume_name ORDER BY created_at DESC) AS rn \
+                 FROM volume_backups WHERE policy_id = $1 \
+             ) ranked WHERE rn > $2"
         )
         .bind(policy_id).bind(*retention_count)
         .fetch_all(pool).await.unwrap_or_default();
 
-        for (id, filename) in &excess_vol {
-            let filepath = format!("/var/backups/dockpanel/volumes/{filename}");
-            let _ = std::fs::remove_file(&filepath);
-            let _ = sqlx::query("DELETE FROM volume_backups WHERE id = $1")
-                .bind(id).execute(pool).await;
-            total_pruned += 1;
+        for (id, filename, container_name, server_id) in &excess_vol {
+            let filepath = format!("/var/backups/dockpanel/volumes/{container_name}/{filename}");
+            if prune_policy_backup(pool, "volume_backups", *id, &filepath, *server_id, local_server_id).await {
+                total_pruned += 1;
+            }
         }
     }
     if total_pruned > 0 {

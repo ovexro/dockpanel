@@ -549,6 +549,49 @@ jobs:
       - name: A container proves it is the one the caller asked for
         run: bash tests/container-identity-pin-e2e.sh
 
+  unattended-host-scope:
+    name: An Unattended Service Must Name The Host It Acts On
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pure source analysis. DockPanel's multi-server migration reached every
+      # HTTP route and NOT ONE background service: all twelve were spawned with
+      # `AppState.agent` (the doc-commented "Legacy single-agent accessor")
+      # while `AppState.agents` — the registry that "dispatches to local or
+      # remote agents by server_id" — went unused outside the request path.
+      #
+      # For the disk healer that is destruction rather than routing.
+      # `auto_clean_disk` read ONE firing `disk` row with no `server_id`
+      # predicate and sent the fixes to the local agent, so in a fleet ANY
+      # member crossing its threshold made the panel host clean and prune
+      # ITSELF while the full machine was never touched. Driven on a two-box
+      # fleet against released v2.55.0: member at 93%, panel host at 18% with
+      # its own disk never measured, and forty seconds after auto-healing was
+      # switched on the panel host lost a tenant's container and its image — an
+      # app the panel had itself put to sleep — while reporting "disk cleanup
+      # succeeded".
+      #
+      # Three compounding defects are pinned alongside it. The hourly cooldown
+      # counted `activity_logs` rows written with `Uuid::nil()`, which violates
+      # `fk_activity_logs_user`, so every insert failed, the count was always 0
+      # and the prune ran every 120 SECONDS — measured at 19:16:13, 19:18:13,
+      # 19:20:13, 19:22:13. The recovery UPDATE skipped `resolve_alert`, so the
+      # `alerts` row stayed firing for ever and retention, which purges only
+      # `status='resolved'`, could never reach it. And policy retention unlinked
+      # a path the writer never creates, discarded the ENOENT, and deleted the
+      # row regardless.
+      #
+      # 26 arms, 20 red against v2.55.0. Two arms survived that run legitimately
+      # (the harness self-check, and the arm asserting a log write is attempted
+      # — its sibling is what catches the nil uuid). Running it red also exposed
+      # TWO FALSE GREENS in this suite's own §C: absence arms over a subject
+      # that does not exist in v2.55.0 are vacuously true, so they now SKIP when
+      # the reclaim arm cannot be extracted (#143's shape, found only by running
+      # the suite against the previous tag).
+      - name: An unattended service names the host it acts on
+        run: bash tests/unattended-host-scope-pin-e2e.sh
+
   compose-stack:
     name: A Stack Is A Network, A Namespace, And An Honest Status
     runs-on: ubuntu-latest

@@ -127,6 +127,7 @@ export default function Settings() {
 
   // Auto-healing
   const [autoHealEnabled, setAutoHealEnabled] = useState(false);
+  const [autoHealReclaim, setAutoHealReclaim] = useState(false);
   const [reverseProxy, setReverseProxy] = useState("nginx");
   const [traefikInstalling, setTraefikInstalling] = useState(false);
   const [showTraefikEmail, setShowTraefikEmail] = useState(false);
@@ -214,6 +215,7 @@ export default function Settings() {
       setSmtpFromName(data.smtp_from_name || "");
       setSmtpEncryption(data.smtp_encryption || "starttls");
       setAutoHealEnabled(data.auto_heal_enabled === "true");
+      setAutoHealReclaim(data.auto_heal_docker_reclaim === "true");
       setReverseProxy(data.reverse_proxy || "nginx");
       setPdnsApiUrl(data.pdns_api_url || "");
       setPdnsApiKey(data.pdns_api_key || "");
@@ -558,7 +560,7 @@ export default function Settings() {
               <div>
                 <p className="text-sm text-dark-100">Enable auto-healing</p>
                 <p className="text-xs text-dark-300 mt-0.5">
-                  Auto-restarts crashed services, cleans logs when disk is full, renews expiring SSL certs
+                  Auto-restarts crashed services, frees disk space on the server whose disk alert is firing, renews expiring SSL certs
                 </p>
               </div>
               <button
@@ -581,12 +583,44 @@ export default function Settings() {
               </button>
             </div>
             {autoHealEnabled && (
-              <div className="text-xs text-dark-300 space-y-1 pl-4 border-l-2 border-dark-600">
-                <p>Crashed services are restarted (max once per 10 minutes)</p>
-                <p>Logs are cleaned when disk exceeds 90% (max once per hour)</p>
-                <p>SSL certs are renewed on the CA's ACME Renewal Information (ARI) schedule, or a profile-aware fallback (2d for shortlived, 15d for tlsserver, 30d for classic). Max once per 6 hours per domain.</p>
-                <p>All actions are logged in the Audit Log page</p>
-              </div>
+              <>
+                <div className="text-xs text-dark-300 space-y-1 pl-4 border-l-2 border-dark-600">
+                  <p>Crashed services are restarted (max once per 10 minutes)</p>
+                  <p>Oversized logs and <span className="font-mono">/tmp</span> files older than 7 days are cleaned when a server crosses its disk threshold (default 85%) — on that server, at most once per hour</p>
+                  <p>SSL certs are renewed on the CA's ACME Renewal Information (ARI) schedule, or a profile-aware fallback (2d for shortlived, 15d for tlsserver, 30d for classic). Max once per 6 hours per domain.</p>
+                  <p>All actions are logged in the Audit Log page</p>
+                </div>
+
+                {/* Docker reclamation is a SEPARATE consent. Until v2.56.0 this ran as
+                    part of "cleans logs" and was `docker system prune -af --volumes`. */}
+                <div className="flex items-center justify-between pt-2">
+                  <div className="pr-4">
+                    <p className="text-sm text-dark-100">Also reclaim unused Docker resources</p>
+                    <p className="text-xs text-dark-300 mt-0.5">
+                      When a disk alert triggers cleanup, additionally remove <span className="font-medium">dangling images, build cache and unattached networks that DockPanel does not manage</span>.
+                      Containers, volumes and images belonging to your apps are never touched — including apps that are only sleeping.
+                    </p>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      const newVal = !autoHealReclaim;
+                      try {
+                        await api.put("/settings", { auto_heal_docker_reclaim: newVal ? "true" : "false" });
+                        setAutoHealReclaim(newVal);
+                        setMessage({ text: `Docker reclamation ${newVal ? "enabled" : "disabled"}`, type: "success" });
+                      } catch (e) {
+                        setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
+                      }
+                    }}
+                    role="switch"
+                    aria-checked={autoHealReclaim}
+                    aria-label="Reclaim unused Docker resources during disk cleanup"
+                    className={`relative shrink-0 inline-flex h-6 w-11 items-center rounded-full transition-colors ${autoHealReclaim ? "bg-rust-500" : "bg-dark-600"}`}
+                  >
+                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${autoHealReclaim ? "translate-x-6" : "translate-x-1"}`} />
+                  </button>
+                </div>
+              </>
             )}
           </div>
         </div>

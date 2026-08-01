@@ -401,8 +401,11 @@ async fn main() {
     let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
     spawn_supervised("alert_engine", &shutdown_tx, move |rx| services::alert_engine::run(s_db.clone(), s_agent.clone(), rx));
 
-    let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
-    spawn_supervised("auto_healer", &shutdown_tx, move |rx| services::auto_healer::run(s_db.clone(), s_agent.clone(), rx));
+    // The healer gets the REGISTRY as well as the legacy local client: its disk
+    // heal acts on whichever server's alert is firing, which is not necessarily
+    // this one. See `auto_clean_disk`.
+    let (s_db, s_agent, s_agents) = (state.db.clone(), state.agent.clone(), state.agents.clone());
+    spawn_supervised("auto_healer", &shutdown_tx, move |rx| services::auto_healer::run(s_db.clone(), s_agent.clone(), s_agents.clone(), rx));
 
     let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
     spawn_supervised("metrics_collector", &shutdown_tx, move |rx| services::metrics_collector::run(s_db.clone(), s_agent.clone(), rx));

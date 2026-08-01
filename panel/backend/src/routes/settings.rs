@@ -37,7 +37,7 @@ pub const ALLOWED_KEYS: &[&str] = &[
     "stripe_price_starter", "stripe_price_pro", "stripe_price_agency",
     "agent_auto_update_enabled",
     "pdns_api_url", "pdns_api_key",
-    "auto_heal_enabled", "status_page_enabled", "enforce_2fa",
+    "auto_heal_enabled", "auto_heal_docker_reclaim", "status_page_enabled", "enforce_2fa",
     "logo_url", "accent_color",
     "oauth_google_client_id", "oauth_google_client_secret",
     "oauth_github_client_id", "oauth_github_client_secret",

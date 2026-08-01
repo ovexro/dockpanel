@@ -4,6 +4,92 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.56.0] - 2026-08-01
+
+**An unattended service must name the host it acts on.**
+
+DockPanel's multi-server migration reached every HTTP route and **not one
+background service**. `AppState` has carried both handles for releases —
+`agents: AgentRegistry` ("dispatches to local or remote agents by server_id")
+and `agent: AgentClient` ("Legacy single-agent accessor") — and all twelve
+background services were spawned with the legacy one. Each of them queries rows
+across the whole fleet and then acts on whichever machine the panel happens to
+run on.
+
+For the disk healer that is not a routing bug, it is destruction. `auto_clean_disk`
+read one firing `disk` row with no `server_id` predicate, then sent the fixes to
+the local agent. `alert_state` is keyed per server, so **any** member crossing its
+threshold made the panel host clean and prune **itself**, while the machine that
+was actually full was never touched.
+
+Driven on a two-box fleet, on the released v2.55.0: the member was filled to 93%,
+the panel host sat at 18% with its own `disk_usage_pct` never even measured, and
+forty seconds after auto-healing was switched on the panel host lost a tenant's
+container and its image — an app the panel itself had put to sleep. The panel
+reported *"Auto-heal: disk cleanup succeeded, disk alert state reset."*
+
+Three further defects, each of which made it worse:
+
+- **The hourly cooldown could never engage.** It counts `activity_logs` rows for
+  `auto_heal.clean_logs`, and those inserts were written with `Uuid::nil()`,
+  which violates `fk_activity_logs_user`. Every insert failed, the count was
+  always zero, and `docker system prune -af --volumes` ran on the same healthy
+  host **every 120 seconds** — measured at 19:16:13, 19:18:13, 19:20:13,
+  19:22:13. The operator also had no audit record of any of it.
+- **The recovery transition was consumed, not completed.** A raw `UPDATE` to
+  `'ok'` skipped `notifications::resolve_alert`, so the `alerts` row stayed
+  `firing` for ever; the alert engine, seeing state already `'ok'`, never took
+  its recovery branch again. Retention only purges `status = 'resolved'`, so
+  those rows were also unpurgeable.
+- **The prune was indiscriminate.** `docker system prune -af --volumes` removes
+  every stopped container — and a sleeping app *is* a stopped container — then
+  `-a` takes every image no longer held by a running one, including locally built
+  images with no registry to restore them from. `wake` only issues `docker start`
+  on an id that no longer exists.
+
+  Precisely, because the blast radius is often overstated: on Docker 23.0+
+  `--volumes` reclaims **anonymous** volumes only, and template apps keep their
+  data in host bind mounts, so an app's *data* usually survives. What is
+  destroyed is the container, its image, and any anonymous volume the image
+  declared — which for a tenant database container is where the data lives. On
+  the live fleet the panel host went from 2 containers and 2 images to 1 and 1
+  while the volume count was unchanged, which is exactly this shape.
+
+### Fixed
+
+- **The disk heal resolves the agent for the server whose alert is firing**, via
+  `AgentRegistry::for_server` — the primitive every HTTP route already uses. When
+  that agent is unreachable it **refuses and says so**, rather than falling back
+  to the local host, which was the whole defect.
+- **The cooldown is real and per-server**, its activity row written against the
+  server's owner. It gates the next run and gives the operator the audit trail a
+  destructive action owes them.
+- **Recovery goes through `resolve_alert`, scoped to that server**, so the
+  `alerts` row resolves, the operator is told the server recovered, and retention
+  can reach the row.
+- **`docker system prune -af --volumes` is gone.** A new `docker-reclaim` frees
+  dangling images, build cache and unattached networks that DockPanel does not
+  manage. **Volumes are deliberately never reclaimed** — an unattached volume is
+  indistinguishable from one whose container the panel stopped on purpose. The
+  old `docker-prune` id now routes to the scoped reclaim, so an older panel
+  pointed at a newer agent cannot get the destructive behaviour back by name.
+- **Reclamation is opt-in and separately consented** (`auto_heal_docker_reclaim`,
+  default off), with its own control in Settings. The Auto-Healing panel's text
+  was wrong on every count: it named 90% where the default is 85, said "cleans
+  logs" where the code also pruned Docker host-wide, and promised "All actions
+  are logged in the Audit Log" — the log write that always failed.
+- **Backup retention no longer destroys the only record of an archive it did not
+  delete.** The policy sweep unlinked `/var/backups/dockpanel/databases/{filename}`
+  while the writer creates `.../databases/{db_name}/{filename}` (and the same for
+  volumes, per container) — a path that can never exist, whose `ENOENT` was
+  discarded, with the row deleted regardless. Every database and volume dump was
+  orphaned on disk with nothing left pointing at it. The path now matches the
+  writer, the row survives a failed unlink, and a backup belonging to another
+  server is refused rather than silently forgotten.
+- **Policy retention is per resource.** `OFFSET n` over a policy's whole history
+  kept `n` backups in total across every database it covered, so a policy
+  protecting five databases kept five backups and four databases kept none.
+
 ## [2.55.0] - 2026-08-01
 
 **A container name is not a key anybody owns.**
