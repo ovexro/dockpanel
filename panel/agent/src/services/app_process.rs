@@ -13,6 +13,36 @@ fn service_name(domain: &str) -> String {
     format!("{SERVICE_PREFIX}{}", domain.replace('.', "-"))
 }
 
+/// The unit name to act on for `domain` — but only when the unit on disk says
+/// it is the one running `domain`.
+///
+/// `service_name` collapses `.` to `-`, and `-` is legal inside a domain label,
+/// so `a.b.com` and `a-b.com` are separately claimable domains that land on the
+/// same unit. v2.53.0 guarded the create and remove paths with exactly this
+/// question and left the *lifecycle* callers behind: disabling a site, enabling
+/// it, or saving its `.env` each ran `systemctl stop`/`restart` on the collided
+/// name. Stopping a neighbour's app is not as loud as deleting its unit file,
+/// but it is the same outage, reachable by any tenant on their own site.
+///
+/// `None` when there is nothing to act on OR when the unit belongs to someone
+/// else — the caller does nothing either way, which is why one return value
+/// serves both.
+pub fn owned_service_name(domain: &str) -> Option<String> {
+    let svc = service_name(domain);
+    let unit_path = format!("/etc/systemd/system/{svc}.service");
+    if !std::path::Path::new(&unit_path).exists() {
+        return None;
+    }
+    if !crate::services::ownership::systemd_unit(&unit_path, domain).may_delete() {
+        tracing::warn!(
+            "Not touching {svc}: {unit_path} does not run {domain}. The unit name collapses \
+             '.' to '-', so this unit belongs to a different domain."
+        );
+        return None;
+    }
+    Some(svc)
+}
+
 /// Create and start a systemd service for an app.
 pub fn create_app_service(
     domain: &str,

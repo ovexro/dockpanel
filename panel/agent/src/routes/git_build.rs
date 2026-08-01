@@ -9,7 +9,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 use super::AppState;
-use crate::services::{deploy, git_build};
+use crate::services::{deploy, git_build, ownership};
 
 type ApiErr = (StatusCode, Json<serde_json::Value>);
 
@@ -80,12 +80,30 @@ fn is_valid_image_tag(tag: &str) -> bool {
     tag.starts_with("dockpanel-git-") && !tag.contains('/')
 }
 
+/// Every git endpoint addresses one of two disjoint name spaces, and the caller
+/// says which.
+///
+/// A preview used to be addressed by the bare string `{config}-pr-{branch}`,
+/// which is a name a *deployment* can legally have — so a pushed branch could
+/// name a stranger's production container, checkout directory and image
+/// repository. `GitScope::scoped` puts previews behind a `.`, which
+/// `is_valid_name` rejects, so the two spaces can no longer intersect.
+///
+/// Absent or unrecognised means `deploy`: a panel older than this agent keeps
+/// working exactly as before, and only the panel that knows about previews can
+/// ask for one.
+fn scope_of(raw: &str) -> ownership::GitScope {
+    ownership::GitScope::from_wire(raw)
+}
+
 #[derive(Deserialize)]
 struct CloneRequest {
     name: String,
     repo_url: String,
     branch: String,
     key_path: Option<String>,
+    #[serde(default)]
+    scope: String,
 }
 
 #[derive(Deserialize)]
@@ -98,6 +116,8 @@ struct BuildRequest {
     build_args: HashMap<String, String>,
     #[serde(default = "default_context")]
     build_context: String,
+    #[serde(default)]
+    scope: String,
 }
 
 fn default_dockerfile() -> String {
@@ -132,6 +152,8 @@ struct DeployRequest {
     memory_mb: Option<u64>,
     cpu_percent: Option<u64>,
     ssl_email: Option<String>,
+    #[serde(default)]
+    scope: String,
 }
 
 #[derive(Deserialize)]
@@ -142,6 +164,20 @@ struct KeygenRequest {
 #[derive(Deserialize)]
 struct CleanupRequest {
     name: String,
+    #[serde(default)]
+    scope: String,
+    /// What the PANEL believes this deployment's vhost and published port are.
+    ///
+    /// The agent reads both off the container, which answers nothing once the
+    /// container is already gone — and that is the common case for a preview
+    /// swept after a crash. The vhost and its certificate then survived with no
+    /// record anywhere naming them. These are a fallback, not an override: the
+    /// port still has to match what the vhost proxies to before anything is
+    /// deleted.
+    #[serde(default)]
+    domain: Option<String>,
+    #[serde(default)]
+    host_port: Option<u16>,
 }
 
 #[derive(Deserialize)]
@@ -149,6 +185,8 @@ struct PruneRequest {
     name: String,
     #[serde(default = "default_keep")]
     keep: usize,
+    #[serde(default)]
+    scope: String,
 }
 
 fn default_keep() -> usize {
@@ -172,10 +210,12 @@ async fn clone(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid branch name"));
     }
 
-    tracing::info!("Git clone: {} from {} ({})", body.name, body.repo_url, body.branch);
+    let name = scope_of(&body.scope).scoped(&body.name);
+
+    tracing::info!("Git clone: {} from {} ({})", name, body.repo_url, body.branch);
 
     let result = git_build::clone_or_pull(
-        &body.name,
+        &name,
         &body.repo_url,
         &body.branch,
         body.key_path.as_deref(),
@@ -203,10 +243,12 @@ async fn build(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid build_context path"));
     }
 
-    tracing::info!("Git build: {} (commit: {})", body.name, body.commit_hash);
+    let name = scope_of(&body.scope).scoped(&body.name);
+
+    tracing::info!("Git build: {} (commit: {})", name, body.commit_hash);
 
     let result = git_build::build_image(
-        &body.name,
+        &name,
         &body.dockerfile,
         &body.commit_hash,
         &body.build_args,
@@ -249,13 +291,17 @@ async fn deploy_container(
         }
     }
 
+    let scope = scope_of(&body.scope);
+    let name = scope.scoped(&body.name);
+
     tracing::info!(
         "Git deploy: {} (image: {}, port: {}→{})",
-        body.name, body.image_tag, body.host_port, body.container_port
+        name, body.image_tag, body.host_port, body.container_port
     );
 
     let result = git_build::deploy_or_update(
-        &body.name,
+        &name,
+        scope,
         &body.image_tag,
         body.container_port,
         body.host_port,
@@ -272,6 +318,12 @@ async fn deploy_container(
     Ok(Json(serde_json::json!({
         "container_id": result.container_id,
         "blue_green": result.blue_green,
+        // What was ACTUALLY created, so the caller records a name rather than
+        // predicting one. An agent and a panel are installed separately and
+        // update on their own schedule, and a panel newer than its agent would
+        // otherwise store the scoped name for a container the agent had created
+        // under the old one — a row pointing at nothing.
+        "container_name": format!("dockpanel-git-{name}"),
     })))
 }
 
@@ -300,8 +352,21 @@ async fn cleanup(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid name"));
     }
 
-    git_build::cleanup_container(&body.name)
-        .await
+    if let Some(ref d) = body.domain {
+        if !d.is_empty() && !is_safe_nginx_domain(d) {
+            return Err(err(StatusCode::BAD_REQUEST, "Invalid domain"));
+        }
+    }
+
+    let scope = scope_of(&body.scope);
+
+    git_build::cleanup_container(
+        &scope.scoped(&body.name),
+        scope,
+        body.domain.as_deref(),
+        body.host_port,
+    )
+    .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
 
     Ok(Json(serde_json::json!({ "success": true })))
@@ -315,7 +380,7 @@ async fn prune(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid name"));
     }
 
-    let pruned = git_build::prune_images(&body.name, body.keep)
+    let pruned = git_build::prune_images(&scope_of(&body.scope).scoped(&body.name), body.keep)
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
 
@@ -325,12 +390,14 @@ async fn prune(
 #[derive(Deserialize)]
 struct LifecycleRequest {
     name: String,
+    #[serde(default)]
+    scope: String,
 }
 
 /// POST /git/stop
 async fn stop_container(Json(body): Json<LifecycleRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
     if !super::is_valid_name(&body.name) { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
-    let container_name = format!("dockpanel-git-{}", body.name);
+    let container_name = format!("dockpanel-git-{}", scope_of(&body.scope).scoped(&body.name));
     let docker = bollard::Docker::connect_with_local_defaults()
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
     tokio::time::timeout(
@@ -345,7 +412,7 @@ async fn stop_container(Json(body): Json<LifecycleRequest>) -> Result<Json<serde
 /// POST /git/start
 async fn start_container(Json(body): Json<LifecycleRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
     if !super::is_valid_name(&body.name) { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
-    let container_name = format!("dockpanel-git-{}", body.name);
+    let container_name = format!("dockpanel-git-{}", scope_of(&body.scope).scoped(&body.name));
     let docker = bollard::Docker::connect_with_local_defaults()
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
     tokio::time::timeout(
@@ -360,7 +427,7 @@ async fn start_container(Json(body): Json<LifecycleRequest>) -> Result<Json<serd
 /// POST /git/restart
 async fn restart_container(Json(body): Json<LifecycleRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
     if !super::is_valid_name(&body.name) { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
-    let container_name = format!("dockpanel-git-{}", body.name);
+    let container_name = format!("dockpanel-git-{}", scope_of(&body.scope).scoped(&body.name));
     let docker = bollard::Docker::connect_with_local_defaults()
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
     tokio::time::timeout(
@@ -377,13 +444,15 @@ struct LogsRequest {
     name: String,
     #[serde(default = "default_log_lines")]
     lines: usize,
+    #[serde(default)]
+    scope: String,
 }
 fn default_log_lines() -> usize { 200 }
 
 /// POST /git/logs
 async fn container_logs(Json(body): Json<LogsRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
     if !super::is_valid_name(&body.name) { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
-    let container_name = format!("dockpanel-git-{}", body.name);
+    let container_name = format!("dockpanel-git-{}", scope_of(&body.scope).scoped(&body.name));
     let docker = bollard::Docker::connect_with_local_defaults()
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
 
@@ -403,6 +472,8 @@ async fn container_logs(Json(body): Json<LogsRequest>) -> Result<Json<serde_json
 struct HookRequest {
     name: String,
     command: String,
+    #[serde(default)]
+    scope: String,
 }
 
 /// POST /git/hook — Run a command inside a git-deployed container (docker exec).
@@ -415,7 +486,7 @@ async fn run_hook(Json(body): Json<HookRequest>) -> Result<Json<serde_json::Valu
         return Err(err(StatusCode::BAD_REQUEST, "Command contains disallowed characters or patterns"));
     }
 
-    let container_name = format!("dockpanel-git-{}", body.name);
+    let container_name = format!("dockpanel-git-{}", scope_of(&body.scope).scoped(&body.name));
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(300),

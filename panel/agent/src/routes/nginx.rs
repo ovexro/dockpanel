@@ -617,6 +617,21 @@ async fn get_site(
 }
 
 /// POST /nginx/sites/{domain}/rename — Rename a site's domain.
+/// Copy the files directly inside `src` into `dst`, creating `dst`.
+///
+/// Shallow on purpose: a certificate directory is a flat set of PEMs, and a
+/// recursive copy here would be reach this function does not need.
+fn copy_dir_shallow(src: &str, dst: &str) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            std::fs::copy(entry.path(), std::path::Path::new(dst).join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}
+
 async fn rename_site(
     Path(old_domain): Path<String>,
     Json(body): Json<serde_json::Value>,
@@ -692,11 +707,36 @@ async fn rename_site(
     // 4. Remove old config
     std::fs::remove_file(&old_conf).ok();
 
-    // 5. Rename SSL certificates directory
+    // 5. Rename SSL certificates directory.
+    //
+    // A DNS-01 wildcard is issued once under the zone apex and every site in the
+    // zone points its `ssl_certificate` at that one directory. MOVING it because
+    // one of those sites was renamed leaves all the others pointing at a path
+    // that no longer exists — which does not fail now, because nginx is already
+    // serving from memory, but fails the next `nginx -t` anybody triggers and
+    // leaves nginx down at the next restart, for every site on the box. v2.53.0
+    // guarded the delete paths against exactly this and did not reach the rename.
+    //
+    // When it is shared we copy instead of moving: the renamed site's vhost was
+    // rewritten to the new path two steps ago, so leaving the directory alone
+    // would take the whole server's config invalid — the same outage from the
+    // other side. A copy is a duplicate that renewal will not refresh, and that
+    // is worth saying out loud rather than discovering at expiry.
     let old_ssl = format!("/etc/dockpanel/ssl/{old_domain}");
     let new_ssl = format!("/etc/dockpanel/ssl/{new_domain}");
     if std::path::Path::new(&old_ssl).exists() {
-        std::fs::rename(&old_ssl, &new_ssl).ok();
+        if services::ownership::cert_dir_in_use_elsewhere(&old_domain) {
+            tracing::warn!(
+                "{old_ssl} is referenced by another vhost — copying it to {new_ssl} instead of \
+                 moving it, so the sites still pointing at it keep working. The copy is a \
+                 snapshot: reissue a certificate for {new_domain} before the original expires."
+            );
+            if let Err(e) = copy_dir_shallow(&old_ssl, &new_ssl) {
+                tracing::warn!("Could not copy {old_ssl} to {new_ssl}: {e}");
+            }
+        } else {
+            std::fs::rename(&old_ssl, &new_ssl).ok();
+        }
     }
 
     // 6. Rename log files
@@ -723,12 +763,29 @@ async fn rename_site(
         }
     }
 
-    // 8. Rename Fail2Ban jail
+    // 8. Rename Fail2Ban jail.
+    //
+    // `nginx-{domain with '.' → '-'}` is the non-injective key v2.53.0 fixed on
+    // the create and remove paths by reading each jail's own `logpath`. The
+    // rename path was missed, and it does both halves of the damage at once:
+    // it DELETES the file at the old name (which may be `a.b.com`'s jail while
+    // the caller is renaming `a-b.com`) and WRITES the destination (which may be
+    // a third domain's). Both are answered the same way — open the file and ask.
     let old_jail = format!("nginx-{}", old_domain.replace('.', "-"));
     let new_jail = format!("nginx-{}", new_domain.replace('.', "-"));
     let old_jail_path = format!("/etc/fail2ban/jail.d/{old_jail}.conf");
     let new_jail_path = format!("/etc/fail2ban/jail.d/{new_jail}.conf");
-    if std::path::Path::new(&old_jail_path).exists() {
+    let jail_is_ours =
+        services::ownership::fail2ban_jail(&old_jail_path, &old_domain).may_delete();
+    let destination_is_free = !std::path::Path::new(&new_jail_path).exists()
+        || services::ownership::fail2ban_jail(&new_jail_path, new_domain).may_delete();
+    if std::path::Path::new(&old_jail_path).exists() && !(jail_is_ours && destination_is_free) {
+        tracing::warn!(
+            "Not migrating {old_jail_path}: ours={jail_is_ours}, destination_free=\
+             {destination_is_free}. The jail name collapses '.' to '-', so one of these files \
+             protects a different domain."
+        );
+    } else if std::path::Path::new(&old_jail_path).exists() {
         if let Ok(jail_content) = std::fs::read_to_string(&old_jail_path) {
             let updated = jail_content
                 .replace(&old_jail, &new_jail)
@@ -1635,9 +1692,11 @@ async fn set_env(Path(domain): Path<String>, Json(body): Json<serde_json::Value>
     // Fix ownership
     let _ = safe_command("chown").args(["www-data:www-data", &env_path]).output().await;
 
-    // Restart the app service if it's a Node/Python site
-    let service_name = format!("dockpanel-app-{}", domain.replace('.', "-"));
-    let _ = safe_command("systemctl").args(["restart", &service_name]).output().await;
+    // Restart the app service if it's a Node/Python site — if the unit at that
+    // name is in fact this site's. The name is not injective.
+    if let Some(svc) = services::app_process::owned_service_name(&domain) {
+        let _ = safe_command("systemctl").args(["restart", &svc]).output().await;
+    }
 
     tracing::info!("Environment variables updated for {domain}");
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -1679,9 +1738,10 @@ async fn disable_site(Path(domain): Path<String>) -> Result<Json<serde_json::Val
     std::fs::write(&conf_path, &disabled_conf)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Write disabled config: {e}")))?;
 
-    // Stop app process if it exists (node/python)
-    let service_name = format!("dockpanel-app-{}", domain.replace('.', "-"));
-    let _ = safe_command("systemctl").args(["stop", &service_name]).output().await;
+    // Stop app process if it exists (node/python) — and is this site's.
+    if let Some(svc) = services::app_process::owned_service_name(&domain) {
+        let _ = safe_command("systemctl").args(["stop", &svc]).output().await;
+    }
 
     // Reload nginx
     services::nginx::reload().await
@@ -1708,9 +1768,10 @@ async fn enable_site(Path(domain): Path<String>) -> Result<Json<serde_json::Valu
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Restore config: {e}")))?;
     std::fs::remove_file(&backup_path).ok();
 
-    // Restart app process if it exists (node/python)
-    let service_name = format!("dockpanel-app-{}", domain.replace('.', "-"));
-    let _ = safe_command("systemctl").args(["restart", &service_name]).output().await;
+    // Restart app process if it exists (node/python) — and is this site's.
+    if let Some(svc) = services::app_process::owned_service_name(&domain) {
+        let _ = safe_command("systemctl").args(["restart", &svc]).output().await;
+    }
 
     // Reload nginx
     services::nginx::reload().await

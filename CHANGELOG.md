@@ -4,6 +4,81 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.55.0] - 2026-08-01
+
+**A container name is not a key anybody owns.**
+
+`dockpanel-git-{X}` is the container of a git deployment called `X`. It was also
+the container of a *preview* of config `C` on branch `B` whenever
+`{C}-pr-{slug(B)}` spelled `X` — and `X` is a name the panel will happily
+create, because `is_valid_name` accepts hyphens. The agent resolved that name
+with `list_containers` and acted on whatever answered.
+
+What it did with it was blue-green: it read the domain off the container it had
+just found, swapped **that** domain's vhost to the pushed build, force-removed
+the container behind it, and reported a successful zero-downtime deploy. The
+ownership guard added in v2.53.0 authorised the vhost write, correctly — the
+victim's container really was the one behind the victim's vhost. The branch half
+of the colliding name is chosen by whoever can push to the repo, and
+`POST /api/webhooks/git/{id}/{secret}` has no auth extractor, so no panel
+account was needed to fire it. The same shared name also meant one checkout
+directory, one image repository (so one deploy's `prune` evicted the other's
+rollback history) and one unattended TTL sweep.
+
+`services::ownership` had five primitives and every one of them read a file.
+The largest thing the agent destroys had none.
+
+### Fixed
+
+- **Previews have their own name space.** A preview is scoped `pr.`, and `.` is a
+  character `is_valid_name` rejects, so no deployment can be named into it. The
+  scope travels on the wire and is applied to the container name, the image
+  repository and the on-disk checkout alike.
+- **`services::ownership` gained a container primitive.** Every git container
+  records which space it was created in; a deploy that finds a container
+  belonging to something else now refuses and changes nothing. The
+  compatibility path that reaches the old shared space requires the caller's own
+  recorded port to match the container's — every container predating this
+  release is unlabelled, including the victim's, so an absent label is not
+  evidence of anything there.
+- **The blue-green stand-in no longer occupies a real name.** `{name}-blue` is a
+  name `is_valid_name` accepts, so updating the app `api` force-removed the
+  running container of the app `api-blue`. The separator is now `.`, and the
+  leftover-clearing step refuses anything not managed by DockPanel. Both twins.
+- **A blue-green swap frees the promoted name before it destroys anything, and
+  reports when it cannot.** The commit phase removed the old container and
+  renamed the new one with both results discarded — so a failed removal made the
+  rename impossible, and the function returned success over a host whose nginx
+  pointed at a container the *next* deploy would clear away as a leftover.
+- **Editing or adding a git deploy's domain writes its vhost.** `setup_nginx_proxy`
+  had one call site, in the first-deploy branch, so a domain change moved the
+  label and nothing else — the new hostname never got a server block, on that
+  deploy or any later one.
+- **A masked environment value sent back is treated as unchanged.** The env
+  editor is seeded from the masked read and posts every field back, and the
+  container is the only place a Docker app's environment is stored — so saving
+  any change wrote the literal mask over every secret and then removed the
+  container holding the originals. The mask predicate also matched by unanchored
+  substring, so `KEYCLOAK_ADMIN`, `NEXTAUTH_URL` and `AUTHENTIK_POSTGRESQL__HOST`
+  were masked and destroyed alongside real secrets; the catalogue's own
+  `secret: false` now exempts them.
+- **The v2.53.0 ownership guard reaches the paths it missed.** Renaming a site
+  moved a shared wildcard certificate directory out from under every sibling
+  vhost, and migrated a Fail2Ban jail at the non-injective `nginx-{domain}` name
+  without proving either end. Disabling, enabling or saving the `.env` of a site
+  ran `systemctl stop`/`restart` on a unit name that collapses `.` to `-`, so a
+  tenant could stop a neighbour's app process.
+- **The unattended preview sweep keeps the only record of what it could not
+  remove**, honours `preview_ttl_hours = 0` in both of its queries rather than
+  one, and carries the row's own domain and port so a crashed preview's vhost
+  and certificate are still released. Deleting a git deployment now tears down
+  its previews before the foreign-key cascade forgets they exist.
+
+### Added
+
+- `tests/container-identity-pin-e2e.sh` — 38 assertions, 37 of them red against
+  v2.54.0.
+
 ## [2.54.0] - 2026-08-01
 
 **A stack is a network, a namespace, and an honest status.**

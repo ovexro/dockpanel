@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use tera::Tera;
 use crate::safe_cmd::safe_command;
+use crate::services::ownership;
 
 const GIT_BASE_DIR: &str = "/var/lib/dockpanel/git";
 
@@ -235,8 +236,13 @@ pub async fn build_image(
 /// - New container: create + start. If domain is provided, set up nginx reverse proxy.
 /// - Existing container with domain + nginx config: blue-green zero-downtime update.
 /// - Existing container without domain: stop old, remove, create new, start.
+///
+/// `name` arrives already scoped by [`ownership::GitScope::scoped`]; `scope`
+/// comes with it because the name alone cannot say whether the container found
+/// under it is this deployment's.
 pub async fn deploy_or_update(
     name: &str,
+    scope: ownership::GitScope,
     image_tag: &str,
     container_port: u16,
     host_port: u16,
@@ -258,11 +264,18 @@ pub async fn deploy_or_update(
         .map(|(k, v)| format!("{k}={v}"))
         .collect();
 
-    // Build labels
+    // Build labels. `dockpanel.git.kind` is what a later run reads back to tell
+    // a deployment's container from a preview's — the two used to be
+    // indistinguishable, and a container is the one thing here with no file to
+    // open and ask.
     let mut labels = HashMap::from([
         ("dockpanel.managed".to_string(), "true".to_string()),
         ("dockpanel.type".to_string(), "git".to_string()),
         ("dockpanel.git.name".to_string(), name.to_string()),
+        (
+            ownership::GIT_KIND_LABEL.to_string(),
+            scope.label().to_string(),
+        ),
     ]);
     if let Some(d) = domain {
         labels.insert("dockpanel.app.domain".to_string(), d.to_string());
@@ -305,12 +318,44 @@ pub async fn deploy_or_update(
     }
 
     // Check if container already exists
-    let existing = find_container(&docker, &container_name).await;
+    let existing = find_container(&docker, &container_name, scope).await;
+
+    // A container holding this name is not necessarily this deployment's. If it
+    // says it belongs to something else, stop here — every branch below either
+    // force-removes it or repoints ITS domain at our build, and both are
+    // irreversible. Refusing costs a failed deploy the operator can read.
+    if let Some(ref found) = existing {
+        if !found.owner.may_delete() {
+            return Err(format!(
+                "Refusing to deploy: the container {container_name} already exists and does not \
+                 belong to this {} (it reports {:?}). Nothing was changed. Rename this deployment \
+                 or remove the existing container first.",
+                match scope {
+                    ownership::GitScope::Preview | ownership::GitScope::PreviewLegacy => "preview",
+                    ownership::GitScope::Deploy => "deployment",
+                },
+                found.owner
+            ));
+        }
+    }
 
     match existing {
-        Some((container_id, existing_domain, existing_port)) => {
+        Some(Found { id: container_id, domain: existing_domain, host_port: existing_port, .. }) => {
+            // Does the request still name the domain the running container was
+            // built for? If not, blue-green is the wrong tool: it swaps the
+            // vhost of the domain read off the OLD container, and there is
+            // exactly one call site for `setup_nginx_proxy` — the fresh-deploy
+            // arm below — so the domain the operator just asked for would never
+            // get a server block at all, on this deploy or any later one.
+            let domain_unchanged = match (domain, existing_domain.as_deref()) {
+                (Some(requested), Some(current)) => requested == current,
+                (None, _) => true, // the request says nothing; keep what is there
+                (Some(_), None) => false, // a domain is being added
+            };
+
             // Container exists — check if blue-green is possible
-            let has_nginx = existing_domain.is_some()
+            let has_nginx = domain_unchanged
+                && existing_domain.is_some()
                 && existing_port.is_some()
                 && std::path::Path::new(&format!(
                     "/etc/nginx/sites-enabled/{}.conf",
@@ -341,8 +386,11 @@ pub async fn deploy_or_update(
                 .await;
             }
 
-            // No domain/nginx — stop + remove + recreate
-            tracing::info!("Replacing git container {container_name} (no domain, stop/start)");
+            // No usable vhost to swap — stop + remove + recreate on the port the
+            // panel allocated.
+            tracing::info!(
+                "Replacing git container {container_name} (stop/start; domain_unchanged={domain_unchanged})"
+            );
 
             docker
                 .stop_container(&container_id, Some(StopContainerOptions { t: 10 }))
@@ -370,6 +418,25 @@ pub async fn deploy_or_update(
                 host_config,
             )
             .await?;
+
+            // The requested domain gets its server block here too, not only on a
+            // first deploy. Adding or changing a git app's domain used to write
+            // the new value into the container's label and stop — the panel
+            // reported success and the hostname served nothing, permanently,
+            // because every later deploy took this same branch.
+            //
+            // The PREVIOUS domain's vhost is deliberately left alone: it may
+            // have been re-claimed by a site since, and tearing down a config
+            // this deploy cannot prove it still owns is the mistake
+            // `services::ownership` exists to prevent. It is stale, not
+            // dangerous, and `unexpose`-on-rename is the separate piece of work
+            // tracked for the domain-rename feature.
+            if let Some(d) = domain {
+                let config_path = format!("/etc/nginx/sites-enabled/{d}.conf");
+                if !domain_unchanged || !std::path::Path::new(&config_path).exists() {
+                    setup_nginx_proxy(templates, d, host_port).await?;
+                }
+            }
 
             Ok(GitDeployResult {
                 container_id: result,
@@ -447,7 +514,18 @@ pub async fn deploy_or_update(
 }
 
 /// Stop and remove a git-deployed container, plus its nginx config, SSL certs, and volume dir.
-pub async fn cleanup_container(name: &str) -> Result<(), String> {
+///
+/// `scope` decides both which name space is addressed and what counts as proof
+/// the container is the caller's. The path that matters is
+/// [`ownership::GitScope::PreviewLegacy`]: it reaches into the OLD shared space
+/// to clear a preview created before the two were separated, and the container
+/// sitting there may be a production deployment that merely shares the name.
+pub async fn cleanup_container(
+    name: &str,
+    scope: ownership::GitScope,
+    known_domain: Option<&str>,
+    known_port: Option<u16>,
+) -> Result<(), String> {
     let docker =
         Docker::connect_with_local_defaults().map_err(|e| format!("Docker connect failed: {e}"))?;
 
@@ -463,16 +541,50 @@ pub async fn cleanup_container(name: &str) -> Result<(), String> {
     // then this cleanup, running unattended on TTL expiry, deletes the site's
     // vhost and certificates five minutes later.
     let (domain, host_port) = match docker.inspect_container(&container_name, None).await {
-        Ok(info) => (
-            info.config
+        Ok(info) => {
+            // Who does it say it is? A TTL sweep runs with nobody watching, and
+            // the legacy preview space is shared with real deployments — so
+            // there the caller's own recorded port has to agree as well.
+            let live_port = info
+                .host_config
                 .as_ref()
-                .and_then(|c| c.labels.as_ref())
-                .and_then(|l| l.get("dockpanel.app.domain").cloned()),
-            info.host_config
-                .as_ref()
-                .and_then(crate::services::docker_apps::extract_host_port),
+                .and_then(crate::services::docker_apps::extract_host_port);
+            let owner = ownership::git_container(
+                info.config.as_ref().and_then(|c| c.labels.as_ref()),
+                scope,
+                known_port,
+                live_port,
+            );
+            if !owner.may_delete() {
+                tracing::warn!(
+                    "Refusing to clean up {container_name}: it reports {owner:?} for this \
+                     {scope:?} request. Leaving the container, its vhost, its certificates and \
+                     its checkout in place — a stale preview is untidy, and removing a running \
+                     deployment is an outage nobody was present for."
+                );
+                return Ok(());
+            }
+            (
+                info.config
+                    .as_ref()
+                    .and_then(|c| c.labels.as_ref())
+                    .and_then(|l| l.get("dockpanel.app.domain").cloned()),
+                info.host_config
+                    .as_ref()
+                    .and_then(crate::services::docker_apps::extract_host_port),
+            )
+        }
+        // The container is already gone. That used to end the vhost and
+        // certificate cleanup here — `domain` was `None`, and everything below
+        // hangs off `if let Some(d)` — so the crashed preview's server block and
+        // its certificate outlived every record that named them. The caller
+        // knows both from its own row; the port still has to match the vhost
+        // before anything is removed, so this widens what can be tidied, not
+        // what can be destroyed.
+        Err(_) => (
+            known_domain.map(str::to_string),
+            known_port,
         ),
-        Err(_) => (None, None),
     };
 
     // Stop container
@@ -706,11 +818,26 @@ pub fn auto_generate_dockerfile(name: &str, dockerfile_path: &str, build_context
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Find an existing container by name. Returns (id, domain label, host port).
+/// What `find_container` found: its id, the domain it claims, its published
+/// port, and — the field that was missing — who it says it belongs to.
+struct Found {
+    id: String,
+    domain: Option<String>,
+    host_port: Option<u16>,
+    owner: crate::services::ownership::Owner,
+}
+
+/// Find an existing container by name.
+///
+/// A name is not a proof of ownership, which is why the `owner` field exists:
+/// `list_containers` will happily hand back whatever holds the string, and until
+/// v2.55.0 the callers acted on it. See the container section of
+/// [`crate::services::ownership`] for what that cost.
 async fn find_container(
     docker: &Docker,
     container_name: &str,
-) -> Option<(String, Option<String>, Option<u16>)> {
+    scope: ownership::GitScope,
+) -> Option<Found> {
     let mut filters = HashMap::new();
     filters.insert("name", vec![container_name]);
 
@@ -746,7 +873,48 @@ async fn find_container(
         })
         .map(|p| p as u16);
 
-    Some((id, domain, host_port))
+    // A deploy is judged by its label alone: its name is unique per server and
+    // nothing else writes into that space any more. The port arguments exist
+    // for the legacy-preview space, which `deploy_or_update` never addresses —
+    // nothing may CREATE there.
+    let owner = ownership::git_container(container.labels.as_ref(), scope, None, host_port);
+
+    Some(Found { id, domain, host_port, owner })
+}
+
+/// Clear the leftover of an interrupted swap, if what is standing there is ours
+/// to clear. Returns `Err` when it is not, so the caller aborts rather than
+/// building on top of a stranger's container.
+///
+/// "Does a container with this name exist" was never the right question:
+/// `{name}-blue` was a name a real deployment could hold.
+async fn clear_blue_leftover(docker: &Docker, blue_name: &str) -> Result<(), String> {
+    let Ok(info) = docker.inspect_container(blue_name, None).await else {
+        return Ok(()); // nothing there
+    };
+    let owner = ownership::blue_leftover(info.config.as_ref().and_then(|c| c.labels.as_ref()));
+    if !owner.may_delete() {
+        return Err(format!(
+            "A container named {blue_name} exists and is not managed by DockPanel ({owner:?}); \
+             refusing to force-remove it to make room for a blue-green swap"
+        ));
+    }
+    docker
+        .stop_container(blue_name, Some(StopContainerOptions { t: 5 }))
+        .await
+        .ok();
+    docker
+        .remove_container(
+            blue_name,
+            Some(RemoveContainerOptions {
+                force: true,
+                v: false,
+                ..Default::default()
+            }),
+        )
+        .await
+        .ok();
+    Ok(())
 }
 
 /// Create and start a container. Returns the container ID.
@@ -877,7 +1045,7 @@ async fn setup_nginx_proxy(
 /// Blue-green zero-downtime update for a git container behind nginx.
 ///
 /// 1. Find a free temp port
-/// 2. Create new container `{name}-blue` with temp port
+/// 2. Create the stand-in container (see `ownership::blue_name`) on a temp port
 /// 3. Health check the new container
 /// 4. Swap nginx proxy_pass to temp port
 /// 5. Test + reload nginx
@@ -901,26 +1069,10 @@ async fn blue_green_update(
         "Blue-green update for {container_name}: old_port={old_port}, temp_port={temp_port}"
     );
 
-    let blue_name = format!("{container_name}-blue");
+    let blue_name = ownership::blue_name(container_name);
 
-    // Clean up stale blue container from a failed previous attempt
-    if docker.inspect_container(&blue_name, None).await.is_ok() {
-        docker
-            .stop_container(&blue_name, Some(StopContainerOptions { t: 5 }))
-            .await
-            .ok();
-        docker
-            .remove_container(
-                &blue_name,
-                Some(RemoveContainerOptions {
-                    force: true,
-                    v: false,
-                    ..Default::default()
-                }),
-            )
-            .await
-            .ok();
-    }
+    // Clean up the leftover of a failed previous attempt — if it is ours.
+    clear_blue_leftover(docker, &blue_name).await?;
 
     // Build port bindings for the temp port
     let container_port_key = format!("{container_port}/tcp");
@@ -1019,14 +1171,72 @@ async fn blue_green_update(
         }
     }
 
-    // Traffic is now flowing to the new container. Stop and remove old container.
+    // Traffic is now flowing to the new container. Promote it.
+    //
+    // ORDER MATTERS, and the old order was destroy-then-rename with both
+    // results discarded by `.ok()`. When the removal failed the rename could not
+    // possibly succeed — the name was still taken — and the function returned
+    // `Ok` over a half-swapped host: the old container alive under the real
+    // name, the new one alive as the stand-in, and nginx pointing at the stand-
+    // in. The next deploy then resolved the OLD container, cleared the
+    // "leftover" nginx was actually serving, and aborted on the port guard. A
+    // reported-successful deploy that arms the next one to take the site down.
+    //
+    // So: free the name first, by a rename that destroys nothing and can be
+    // undone. Only once the promotion is real does anything get removed.
+    let retired_name = format!("{container_name}.retired");
+    if let Err(e) = docker
+        .rename_container(
+            old_container_id,
+            RenameContainerOptions { name: retired_name.clone() },
+        )
+        .await
+    {
+        // Nothing has been destroyed. Put traffic back on the old container and
+        // fail honestly.
+        crate::services::docker_apps::swap_nginx_proxy_port(domain, temp_port, old_port).ok();
+        crate::services::nginx::reload().await.ok();
+        cleanup_blue(docker, &new_container.id).await;
+        return Err(format!(
+            "Could not free the container name for promotion: {e}. Rolled back — the previous \
+             container is still serving {domain}."
+        ));
+    }
+
+    if let Err(e) = docker
+        .rename_container(
+            &new_container.id,
+            RenameContainerOptions { name: container_name.to_string() },
+        )
+        .await
+    {
+        // The name is free and the old container is untouched and still running.
+        docker
+            .rename_container(
+                old_container_id,
+                RenameContainerOptions { name: container_name.to_string() },
+            )
+            .await
+            .ok();
+        crate::services::docker_apps::swap_nginx_proxy_port(domain, temp_port, old_port).ok();
+        crate::services::nginx::reload().await.ok();
+        cleanup_blue(docker, &new_container.id).await;
+        return Err(format!(
+            "Could not promote the new container: {e}. Rolled back — the previous container is \
+             still serving {domain}."
+        ));
+    }
+
+    // Promotion is committed. Removing the retired container is housekeeping: a
+    // failure here leaks a stopped container under a name nothing can be created
+    // as, which is why it is safe to only log it.
     docker
-        .stop_container(old_container_id, Some(StopContainerOptions { t: 10 }))
+        .stop_container(&retired_name, Some(StopContainerOptions { t: 10 }))
         .await
         .ok();
-    docker
+    if let Err(e) = docker
         .remove_container(
-            old_container_id,
+            &retired_name,
             Some(RemoveContainerOptions {
                 force: true,
                 v: false,
@@ -1034,18 +1244,12 @@ async fn blue_green_update(
             }),
         )
         .await
-        .ok();
-
-    // Rename blue container to the original name
-    docker
-        .rename_container(
-            &new_container.id,
-            RenameContainerOptions {
-                name: container_name.to_string(),
-            },
-        )
-        .await
-        .ok();
+    {
+        tracing::warn!(
+            "Blue-green for {container_name} promoted cleanly but {retired_name} could not be \
+             removed: {e}. It is stopped and holds no port; remove it by hand."
+        );
+    }
 
     tracing::info!(
         "Git app updated (blue-green, zero-downtime): {container_name}, port {old_port} -> {temp_port}"

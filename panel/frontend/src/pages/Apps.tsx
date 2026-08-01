@@ -7,6 +7,12 @@ import { PrereqList, usePrereqs } from "../components/Prerequisite";
 import { FieldHelp } from "../components/FieldHelp";
 import { timeAgo } from "../utils/format";
 
+/// What the agent substitutes for an environment value it will not show. The
+/// edit dialog is seeded from that response, so this is what an untouched
+/// sensitive field posts back — the agent reads it as "unchanged" and keeps the
+/// stored value.
+const ENV_MASK = "********";
+
 interface EnvVar {
   name: string;
   label: string;
@@ -2361,6 +2367,11 @@ volumes:
             {envEditing && (
               <div className="mb-3 px-3 py-2 bg-warn-500/10 border border-warn-500/20 rounded-lg">
                 <p className="text-xs text-warn-400">Container will be recreated with the new environment variables. This causes brief downtime.</p>
+                {envVars.some(ev => ev.value === ENV_MASK) && (
+                  <p className="text-xs text-warn-400/80 mt-1">
+                    Values shown as <span className="font-mono">{ENV_MASK}</span> are hidden, not empty. Leave one as it is to keep the stored value; type over it to replace it.
+                  </p>
+                )}
               </div>
             )}
             {envLoading ? (

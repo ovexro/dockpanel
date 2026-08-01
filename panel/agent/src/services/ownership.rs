@@ -34,6 +34,29 @@
 //! config behind is an untidy box; deleting a live one is an outage nobody can
 //! attribute. The asymmetry is the whole point, so every caller logs the refusal
 //! loudly enough that the leftover is findable.
+//!
+//! # Containers
+//!
+//! Everything above reads a file. That left the largest resource the agent
+//! destroys — a running container — with no primitive at all, and the same two
+//! ways for a key to lie apply to it word for word.
+//!
+//! A git deploy named `X` is the container `dockpanel-git-X`. A *preview* of
+//! config `C` on branch `B` was the container `dockpanel-git-{C}-pr-{slug(B)}`,
+//! which is the same string a deploy named `{C}-pr-{slug(B)}` produces — and
+//! `is_valid_name` permits that name. The branch half is chosen by whoever can
+//! push to `C`'s repo, and the webhook that acts on it has no auth extractor.
+//! `find_container` matched on the name alone, so a pushed branch could adopt a
+//! stranger's production container, blue-green it out of existence and repoint
+//! **that stranger's own domain** at the pushed build. The ownership guard
+//! shipped in v2.53.0 authorised the vhost write, correctly: the victim's
+//! container really was the one behind the victim's vhost.
+//!
+//! So the two spaces are now disjoint (a preview is scoped `pr.`, and `.` is a
+//! character [`crate::routes::is_valid_name`] rejects, so no deploy can spell
+//! one), and [`git_container`] is the read-side proof: a container states what
+//! it is in the labels the agent wrote when it created it. Same remedy as
+//! above — do not trust the name, open the thing and ask.
 
 /// Who a resource on disk says it belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +75,139 @@ impl Owner {
     /// The only question a caller should ask. `Unknown` is not a maybe.
     pub fn may_delete(self) -> bool {
         matches!(self, Owner::Ours)
+    }
+}
+
+/// The label key a git container carries to say which of the two disjoint name
+/// spaces it was created in.
+pub const GIT_KIND_LABEL: &str = "dockpanel.git.kind";
+
+/// The suffix a blue-green swap parks its stand-in container under.
+///
+/// It was `-blue`, which is not a space anybody owns: `is_valid_name` accepts
+/// `api-blue`, so `dockpanel-app-api-blue` is *simultaneously* the stand-in for
+/// the app `api` and the production container of the app `api-blue` — and the
+/// leftover-cleanup that runs before every swap force-removed whatever it
+/// found there. The separator is now `.`, which `is_valid_name` rejects, so no
+/// deployment can be standing in this space to begin with.
+pub const BLUE_SUFFIX: &str = ".blue";
+
+/// Compose the blue-green stand-in name for `container_name`.
+pub fn blue_name(container_name: &str) -> String {
+    format!("{container_name}{BLUE_SUFFIX}")
+}
+
+/// Which name space a git request addresses.
+///
+/// The variants are not interchangeable spellings of one thing: they select the
+/// container name, the image repository, the on-disk checkout directory *and*
+/// the ownership rule, and those four must never disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitScope {
+    /// A configured deployment — a row in `git_deploys`, whose `name` is unique
+    /// per server.
+    Deploy,
+    /// A branch preview. Scoped `pr.` so it cannot spell a deploy's name.
+    Preview,
+    /// A preview created before the scopes were separated, addressed by its old
+    /// unscoped name. Cleanup only — nothing may ever *create* in this space.
+    PreviewLegacy,
+}
+
+impl GitScope {
+    /// Parse the wire value. Unknown values are [`GitScope::Deploy`] so that a
+    /// panel older than this agent keeps working unchanged.
+    pub fn from_wire(s: &str) -> Self {
+        match s {
+            "preview" => GitScope::Preview,
+            "preview_legacy" => GitScope::PreviewLegacy,
+            _ => GitScope::Deploy,
+        }
+    }
+
+    /// The [`GIT_KIND_LABEL`] value written on containers created in this space.
+    pub fn label(self) -> &'static str {
+        match self {
+            GitScope::Deploy => "deploy",
+            GitScope::Preview | GitScope::PreviewLegacy => "preview",
+        }
+    }
+
+    /// Turn the panel's `name` into the name this space actually uses.
+    ///
+    /// `.` is deliberate: [`crate::routes::is_valid_name`] rejects it, so no
+    /// deploy name can ever produce a string in the preview space. A prefix made
+    /// of characters a deploy name *can* contain would only move the collision.
+    pub fn scoped(self, name: &str) -> String {
+        match self {
+            GitScope::Deploy | GitScope::PreviewLegacy => name.to_string(),
+            GitScope::Preview => format!("pr.{name}"),
+        }
+    }
+}
+
+/// Is the container carrying `labels` the one a request in `scope` may act on?
+///
+/// `expected_port` is what the CALLER's own record says this thing publishes,
+/// and `actual_port` is what the container publishes. Docker will not let two
+/// containers bind one host port, so when the labels cannot answer, the port
+/// can — the same argument [`app_vhost`] already makes for a vhost.
+///
+/// Containers created before the scopes were separated carry no
+/// [`GIT_KIND_LABEL`] at all, and the answer to that has to differ by space,
+/// because the three spaces have entirely different legacy populations:
+///
+/// * [`GitScope::Deploy`] — an unlabelled container at `dockpanel-git-{name}`
+///   is this deployment's own, created by an older agent: deploy names are
+///   unique per server, and the one thing that could previously stand there
+///   under someone else's ownership — a preview — no longer writes into this
+///   space at all. Refusing would break the update path of every app on every
+///   existing install. `Ours`, and the next deploy relabels it.
+/// * [`GitScope::Preview`] — nothing legacy can be here; the space did not
+///   exist. An unlabelled container at `dockpanel-git-pr.{name}` was not put
+///   there by this agent. `Unknown`, which may not delete.
+/// * [`GitScope::PreviewLegacy`] — the old SHARED space, reached only to clean
+///   up, and the one place where "unlabelled" is genuinely ambiguous: an old
+///   preview and a deployment that merely shares its name look identical.
+///   Answering `Ours` here would have preserved, inside the fix, the exact
+///   unattended cross-owner delete the fix exists to close — every container
+///   predating this build is unlabelled, including the victim's. So the port
+///   must agree, and if the caller does not know it, or it does not match, the
+///   answer is `Unknown` and the stale preview is left standing.
+pub fn git_container(
+    labels: Option<&std::collections::HashMap<String, String>>,
+    scope: GitScope,
+    expected_port: Option<u16>,
+    actual_port: Option<u16>,
+) -> Owner {
+    let kind = labels.and_then(|l| l.get(GIT_KIND_LABEL)).map(String::as_str);
+    match (scope, kind) {
+        (_, Some(k)) if k == scope.label() => Owner::Ours,
+        (_, Some(_)) => Owner::Theirs,
+        (GitScope::Deploy, None) => Owner::Ours,
+        (GitScope::Preview, None) => Owner::Unknown,
+        (GitScope::PreviewLegacy, None) => match (expected_port, actual_port) {
+            (Some(a), Some(b)) if a == b => Owner::Ours,
+            _ => Owner::Unknown,
+        },
+    }
+}
+
+/// May the container found at a [`blue_name`] be force-removed as the leftover
+/// of an interrupted swap?
+///
+/// The load-bearing half of that question is answered by [`BLUE_SUFFIX`]: no
+/// panel resource can be named into that space, so nothing legitimate is
+/// standing there. This is the second half — Docker itself will accept a `.` in
+/// a name typed by hand, and an operator's own container is not ours to
+/// destroy. `Unknown` for anything that does not say it is managed.
+pub fn blue_leftover(labels: Option<&std::collections::HashMap<String, String>>) -> Owner {
+    match labels
+        .and_then(|l| l.get("dockpanel.managed"))
+        .map(String::as_str)
+    {
+        Some("true") => Owner::Ours,
+        _ => Owner::Unknown,
     }
 }
 
@@ -273,5 +429,129 @@ mod tests {
     fn a_file_with_no_marker_at_all_is_theirs_not_ours() {
         let (_d, p) = tmpfile("[Unit]\nDescription=Something an operator wrote\n");
         assert_eq!(systemd_unit(&p, "a.com"), Owner::Theirs);
+    }
+
+    fn labelled(pairs: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn the_preview_scope_cannot_spell_any_legal_deploy_name() {
+        // The whole separation rests on this: `is_valid_name` rejects `.`, so a
+        // deploy can never be asked for under a name the preview space uses.
+        let scoped = GitScope::Preview.scoped("myapp-pr-feature-x");
+        assert!(scoped.contains('.'));
+        assert!(!crate::routes::is_valid_name(&scoped));
+        // And the collision that motivated this: a deploy literally named
+        // `{config}-pr-{branch}` no longer shares a string with that preview.
+        assert_ne!(scoped, GitScope::Deploy.scoped("myapp-pr-feature-x"));
+    }
+
+    #[test]
+    fn a_preview_may_not_adopt_a_container_that_says_it_is_a_deploy() {
+        let deploy = labelled(&[(GIT_KIND_LABEL, "deploy")]);
+        assert_eq!(
+            git_container(Some(&deploy), GitScope::Preview, None, None),
+            Owner::Theirs
+        );
+        // …and the legacy cleanup path refuses it by the same label even when
+        // the caller's port happens to agree, which is the only thing standing
+        // between an expiring preview and a production container sharing its
+        // old name.
+        assert_eq!(
+            git_container(Some(&deploy), GitScope::PreviewLegacy, Some(8001), Some(8001)),
+            Owner::Theirs
+        );
+    }
+
+    #[test]
+    fn an_unlabelled_container_is_read_differently_in_each_space() {
+        // Deploy: an older agent's container. Refusing it would break every
+        // existing install's update path.
+        assert_eq!(git_container(None, GitScope::Deploy, None, None), Owner::Ours);
+        // Preview: the space is new, so nothing legitimate is unlabelled here.
+        assert_eq!(git_container(None, GitScope::Preview, None, None), Owner::Unknown);
+        assert!(!git_container(None, GitScope::Preview, None, None).may_delete());
+    }
+
+    #[test]
+    fn the_legacy_space_needs_the_port_because_every_old_container_is_unlabelled() {
+        // THE TRAP THIS TEST EXISTS FOR: the compatibility path is reached with
+        // a name that a production deployment can legally hold, and on an
+        // install upgrading to this build EVERY container is unlabelled —
+        // including the victim's. Answering `Ours` on the label alone would
+        // have carried the original unattended delete straight through the fix.
+        assert_eq!(
+            git_container(None, GitScope::PreviewLegacy, None, None),
+            Owner::Unknown
+        );
+        assert!(!git_container(None, GitScope::PreviewLegacy, None, None).may_delete());
+        // A caller that cannot read the container's port decides nothing.
+        assert_eq!(
+            git_container(None, GitScope::PreviewLegacy, Some(8001), None),
+            Owner::Unknown
+        );
+        // A port that disagrees is positive evidence of the wrong container.
+        assert_eq!(
+            git_container(None, GitScope::PreviewLegacy, Some(8001), Some(7003)),
+            Owner::Unknown
+        );
+        // Agreement is the proof: Docker will not bind one host port twice.
+        assert_eq!(
+            git_container(None, GitScope::PreviewLegacy, Some(8001), Some(8001)),
+            Owner::Ours
+        );
+    }
+
+    #[test]
+    fn each_space_accepts_its_own_label() {
+        let d = labelled(&[(GIT_KIND_LABEL, "deploy")]);
+        let p = labelled(&[(GIT_KIND_LABEL, "preview")]);
+        assert_eq!(git_container(Some(&d), GitScope::Deploy, None, None), Owner::Ours);
+        assert_eq!(git_container(Some(&p), GitScope::Preview, None, None), Owner::Ours);
+        assert_eq!(git_container(Some(&p), GitScope::Deploy, None, None), Owner::Theirs);
+        // A labelled preview in the legacy space is unambiguous without a port.
+        assert_eq!(
+            git_container(Some(&p), GitScope::PreviewLegacy, None, None),
+            Owner::Ours
+        );
+    }
+
+    #[test]
+    fn the_blue_stand_in_space_cannot_hold_a_real_deployment() {
+        // The defect: `is_valid_name` accepts `api-blue`, so the app whose
+        // container is `dockpanel-app-api-blue` WAS the stand-in name for the
+        // app `api`, and was force-removed every time `api` was updated.
+        assert_eq!(blue_name("dockpanel-app-api"), "dockpanel-app-api.blue");
+        assert_ne!(blue_name("dockpanel-app-api"), "dockpanel-app-api-blue");
+        // Nothing the panel will name can land in that space.
+        assert!(!crate::routes::is_valid_name("api.blue"));
+        assert!(crate::routes::is_valid_name("api-blue"));
+    }
+
+    #[test]
+    fn an_operators_own_container_is_not_ours_to_force_remove() {
+        // Docker accepts a hand-typed `.` even though the panel does not.
+        assert_eq!(blue_leftover(None), Owner::Unknown);
+        assert!(!blue_leftover(None).may_delete());
+        let handmade = labelled(&[("com.example.stack", "mine")]);
+        assert!(!blue_leftover(Some(&handmade)).may_delete());
+        let ours = labelled(&[("dockpanel.managed", "true")]);
+        assert!(blue_leftover(Some(&ours)).may_delete());
+    }
+
+    #[test]
+    fn an_older_panel_that_sends_no_scope_still_means_deploy() {
+        assert_eq!(GitScope::from_wire("deploy"), GitScope::Deploy);
+        assert_eq!(GitScope::from_wire(""), GitScope::Deploy);
+        assert_eq!(GitScope::from_wire("nonsense"), GitScope::Deploy);
+        assert_eq!(GitScope::from_wire("preview"), GitScope::Preview);
+        assert_eq!(GitScope::from_wire("preview_legacy"), GitScope::PreviewLegacy);
+        // The legacy space addresses the OLD name, not the scoped one — that is
+        // the entire reason it exists.
+        assert_eq!(GitScope::PreviewLegacy.scoped("a-pr-b"), "a-pr-b");
     }
 }

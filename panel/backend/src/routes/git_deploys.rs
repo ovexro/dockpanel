@@ -34,6 +34,58 @@ pub(crate) fn strip_container_prefix(stored: &str) -> &str {
     stored.strip_prefix("dockpanel-git-").unwrap_or(stored)
 }
 
+/// The container-name prefix a preview is created under from v2.55.0 on.
+///
+/// `.` is the whole point: `is_valid_name` rejects it, so no *deployment* can be
+/// named into this space. Before the split, a preview of config `C` on branch
+/// `B` was `dockpanel-git-{C}-pr-{slug(B)}` — which is exactly the container of
+/// a deployment named `{C}-pr-{slug(B)}`, a name the panel will happily create.
+pub(crate) const PREVIEW_SCOPE_PREFIX: &str = "pr.";
+
+/// Turn a stored `git_previews.container_name` into the `(name, scope)` pair the
+/// agent needs to address it.
+///
+/// Rows written before the split carry the old unscoped name and must be torn
+/// down in the old space — hence `preview_legacy`, which addresses that name but
+/// refuses any container whose labels say it is a deployment. Recomputing the
+/// name from `{config}-pr-{slug(branch)}` instead would be a second answer to a
+/// question the row already answers, and would drift the day `dns_label` does.
+pub(crate) fn preview_cleanup_target(stored: &str) -> (String, &'static str) {
+    let bare = strip_container_prefix(stored);
+    match bare.strip_prefix(PREVIEW_SCOPE_PREFIX) {
+        Some(name) => (name.to_string(), "preview"),
+        None => (bare.to_string(), "preview_legacy"),
+    }
+}
+
+/// The one body every preview teardown sends to `POST /git/cleanup`.
+///
+/// There are five call sites — the TTL sweep, the stuck sweep, the manual
+/// delete, the unauthenticated branch-delete webhook, and the parent
+/// deployment's own removal — and they had drifted into three different
+/// spellings, one of which double-prefixed the name into a no-op. `domain` and
+/// `host_port` come from the row because the agent reads them off the container,
+/// which is exactly what is missing when a crashed preview is being swept.
+pub(crate) fn preview_cleanup_body(
+    container_name: &str,
+    domain: Option<&str>,
+    host_port: Option<i32>,
+) -> serde_json::Value {
+    let (name, scope) = preview_cleanup_target(container_name);
+    let mut body = serde_json::json!({ "name": name, "scope": scope });
+    if let Some(d) = domain {
+        if !d.is_empty() {
+            body["domain"] = serde_json::json!(d);
+        }
+    }
+    if let Some(p) = host_port {
+        if (0..=u16::MAX as i32).contains(&p) {
+            body["host_port"] = serde_json::json!(p);
+        }
+    }
+    body
+}
+
 /// Convert an arbitrary branch name into a DNS-label-safe slug for the preview
 /// subdomain / container name: lowercase, every run of chars outside `[a-z0-9]`
 /// collapses to a single '-', with leading/trailing '-' trimmed. Keeps the
@@ -153,6 +205,10 @@ pub(crate) struct DeployBody<'a> {
     pub memory_mb: Option<i32>,
     pub cpu_percent: Option<i32>,
     pub ssl_email: Option<&'a str>,
+    /// Which of the agent's two name spaces this deploy addresses — `"deploy"`
+    /// or `"preview"`. Not defaulted on purpose: an omitted scope is precisely
+    /// how a preview came to be able to name a deployment's container.
+    pub scope: &'a str,
 }
 
 /// Build the body for the agent's `POST /git/deploy`.
@@ -216,6 +272,7 @@ pub(crate) fn build_deploy_body(b: DeployBody<'_>) -> serde_json::Value {
         "container_port": b.container_port,
         "host_port": b.host_port,
         "env": env_object(b.env_vars),
+        "scope": b.scope,
     });
     if let Some(d) = b.domain {
         body["domain"] = serde_json::json!(d);
@@ -657,9 +714,39 @@ pub async fn remove(
 
     let (name, _domain) = deploy.ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
 
+    // Every preview of this deployment is a container, a bound port, a vhost and
+    // a checkout of its own, and the `git_previews` rows are about to be removed
+    // by the FK cascade below — after which nothing on the box knows they exist.
+    // Tear them down while the records that name them are still there.
+    let previews: Vec<(String, Option<String>, i32)> = sqlx::query_as(
+        "SELECT container_name, domain, host_port FROM git_previews WHERE git_deploy_id = $1",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    for (container_name, domain, host_port) in &previews {
+        agent
+            .post(
+                "/git/cleanup",
+                Some(preview_cleanup_body(container_name, domain.as_deref(), Some(*host_port))),
+            )
+            .await
+            .ok();
+    }
+    if !previews.is_empty() {
+        tracing::info!(
+            "Removed {} preview container(s) alongside git deploy {name}",
+            previews.len()
+        );
+    }
+
     // Tell agent to stop and remove container + cleanup
     agent
-        .post("/git/cleanup", Some(serde_json::json!({ "name": name })))
+        .post(
+            "/git/cleanup",
+            Some(serde_json::json!({ "name": name, "scope": "deploy" })),
+        )
         .await
         .ok();
 
@@ -935,6 +1022,7 @@ pub async fn rollback(
             memory_mb: config.memory_mb,
             cpu_percent: config.cpu_percent,
             ssl_email: config.ssl_email.as_deref(),
+            scope: "deploy",
         });
 
         match agent.post_long("/git/deploy", Some(deploy_body), 120).await {
@@ -1259,8 +1347,8 @@ pub async fn webhook(
 
     if is_branch_delete {
         // Clean up preview for this deleted branch
-        let deleted = match sqlx::query_as::<_, (uuid::Uuid, String)>(
-            "SELECT id, container_name FROM git_previews WHERE git_deploy_id = $1 AND branch = $2"
+        let deleted = match sqlx::query_as::<_, (uuid::Uuid, String, Option<String>, i32)>(
+            "SELECT id, container_name, domain, host_port FROM git_previews WHERE git_deploy_id = $1 AND branch = $2"
         )
         .bind(config.id)
         .bind(&push_branch)
@@ -1271,8 +1359,17 @@ pub async fn webhook(
             Err(e) => { tracing::warn!("Failed to query git preview for cleanup: {e}"); None }
         };
 
-        if let Some((preview_id, container_name)) = deleted {
-            let _ = agent.post("/git/cleanup", Some(serde_json::json!({ "name": strip_container_prefix(&container_name) }))).await;
+        if let Some((preview_id, container_name, domain, host_port)) = deleted {
+            // Reached with NO authentication — the webhook route has no auth
+            // extractor, and a `deleted: true` payload names the branch. Which
+            // makes it the sharpest of the four preview-teardown call sites, and
+            // the one that most needs to address the preview's own space.
+            let _ = agent
+                .post(
+                    "/git/cleanup",
+                    Some(preview_cleanup_body(&container_name, domain.as_deref(), Some(host_port))),
+                )
+                .await;
             let _ = sqlx::query("DELETE FROM git_previews WHERE id = $1").bind(preview_id).execute(&state.db).await;
             tracing::info!("Cleaned up preview for deleted branch: {push_branch}");
         }
@@ -1678,6 +1775,7 @@ fn spawn_deploy_task(
             memory_mb: config.memory_mb,
             cpu_percent: config.cpu_percent,
             ssl_email: config.ssl_email.as_deref(),
+            scope: "deploy",
         });
 
         match agent.post_long("/git/deploy", Some(deploy_body), 120).await {
@@ -1889,6 +1987,7 @@ fn spawn_deploy_task(
                                             memory_mb: monitor_config_memory,
                                             cpu_percent: monitor_config_cpu,
                                             ssl_email: monitor_config_ssl_email.as_deref(),
+                                            scope: "deploy",
                                         });
 
                                         if monitor_agent.post_long("/git/deploy", Some(rollback_body), 120).await.is_ok() {
@@ -2347,6 +2446,7 @@ pub async fn trigger_deploy_task(
         memory_mb: config.memory_mb,
         cpu_percent: config.cpu_percent,
         ssl_email: config.ssl_email.as_deref(),
+        scope: "deploy",
     });
 
     match agent.post_long("/git/deploy", Some(deploy_body), 120).await {
@@ -2472,7 +2572,48 @@ async fn handle_preview_deploy(state: &AppState, agent: &AgentHandle, config: &G
         None => { tracing::warn!("No preview ports available"); return; }
     };
 
-    let container_name = format!("dockpanel-git-{}-pr-{}", config.name, branch_slug);
+    // The preview's own name space. Before v2.55.0 this was
+    // `dockpanel-git-{config}-pr-{slug}` — the container name of a DEPLOYMENT
+    // called `{config}-pr-{slug}`, which any admin can create and which the
+    // agent resolved by name alone. Both halves of that string are reachable by
+    // whoever can push to the repo (the webhook has no auth extractor), so a
+    // push could blue-green a stranger's production container out of existence
+    // and repoint that stranger's domain at the pushed branch.
+    let preview_name = format!("{}-pr-{}", config.name, branch_slug);
+    let container_name = format!("dockpanel-git-{PREVIEW_SCOPE_PREFIX}{preview_name}");
+
+    // A row written before the split names its container in the OLD shared
+    // space. The upsert below overwrites that name, so unless it is torn down
+    // first the container, its port, its vhost and its checkout are orphaned
+    // with nothing left in the database pointing at them.
+    let previous: Option<(String, Option<String>, i32)> = sqlx::query_as(
+        "SELECT container_name, domain, host_port FROM git_previews \
+         WHERE git_deploy_id = $1 AND branch = $2",
+    )
+    .bind(config.id)
+    .bind(branch)
+    .fetch_optional(&state.db)
+    .await
+    .unwrap_or(None);
+    if let Some((prev_name, prev_domain, prev_port)) = previous {
+        if prev_name != container_name {
+            tracing::info!(
+                "Preview {prev_name} predates the preview name space; tearing it down before \
+                 deploying {container_name}"
+            );
+            agent
+                .post(
+                    "/git/cleanup",
+                    Some(preview_cleanup_body(
+                        &prev_name,
+                        prev_domain.as_deref(),
+                        Some(prev_port),
+                    )),
+                )
+                .await
+                .ok();
+        }
+    }
 
     // The preview domain's leftmost label comes from a PUSHED BRANCH NAME, and
     // `POST /api/webhooks/git/{id}/{secret}` has no auth extractor — so a repo
@@ -2545,6 +2686,7 @@ async fn handle_preview_deploy(state: &AppState, agent: &AgentHandle, config: &G
             "name": format!("{name}-pr-{branch_slug}"),
             "repo_url": repo_url,
             "branch": branch,
+            "scope": "preview",
         });
         if let Some(ref kp) = key_path {
             clone_body["key_path"] = serde_json::json!(kp);
@@ -2572,6 +2714,7 @@ async fn handle_preview_deploy(state: &AppState, agent: &AgentHandle, config: &G
             "commit_hash": commit_hash,
             "build_args": build_args,
             "build_context": build_context,
+            "scope": "preview",
         })), 660).await {
             Ok(r) => r.get("image_tag").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
             Err(e) => {
@@ -2600,13 +2743,25 @@ async fn handle_preview_deploy(state: &AppState, agent: &AgentHandle, config: &G
             cpu_percent: None,
             // Pass SSL email so preview environments get HTTPS
             ssl_email: ssl_email.as_deref(),
+            scope: "preview",
         });
 
         match agent.post_long("/git/deploy", Some(deploy_body), 120).await {
             Ok(result) => {
                 let cid = result.get("container_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                if let Err(db_err) = sqlx::query("UPDATE git_previews SET status = 'running', container_id = $1, commit_hash = $2 WHERE git_deploy_id = $3 AND branch = $4")
-                    .bind(&cid).bind(&commit_hash).bind(deploy_id).bind(&branch).execute(&db).await
+                // Record the name the AGENT says it created, not the one this
+                // panel predicted. An agent older than this panel ignores the
+                // scope it was sent and creates the unscoped name; storing the
+                // prediction would leave the row pointing at nothing, and every
+                // later teardown addressing a container that does not exist.
+                let created = result
+                    .get("container_name")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("dockpanel-git-{name}-pr-{branch_slug}"));
+                if let Err(db_err) = sqlx::query("UPDATE git_previews SET status = 'running', container_id = $1, commit_hash = $2, container_name = $3 WHERE git_deploy_id = $4 AND branch = $5")
+                    .bind(&cid).bind(&commit_hash).bind(&created).bind(deploy_id).bind(&branch).execute(&db).await
                 {
                     tracing::warn!("Failed to update git preview status: {db_err}");
                 }
@@ -2652,9 +2807,20 @@ pub async fn delete_preview(
         .map_err(|e| internal_error("delete preview", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Preview not found"))?;
 
-    // Clean up container — strip the "dockpanel-git-" prefix since the agent re-adds it
-    let cleanup_name = strip_container_prefix(&preview.container_name);
-    agent.post("/git/cleanup", Some(serde_json::json!({ "name": cleanup_name }))).await.ok();
+    // Clean up container — the stored name carries both the `dockpanel-git-`
+    // prefix the agent re-adds and, for rows written from v2.55.0 on, the
+    // preview scope. `preview_cleanup_target` resolves both.
+    agent
+        .post(
+            "/git/cleanup",
+            Some(preview_cleanup_body(
+                &preview.container_name,
+                preview.domain.as_deref(),
+                Some(preview.host_port),
+            )),
+        )
+        .await
+        .ok();
 
     if let Err(e) = sqlx::query("DELETE FROM git_previews WHERE id = $1").bind(preview_id).execute(&state.db).await {
         tracing::warn!("Failed to delete git preview record: {e}");
@@ -2906,7 +3072,39 @@ pub async fn reject_deploy(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_deploy_body, env_object, strip_container_prefix, is_valid_cron, DeployBody};
+    use super::{
+        build_deploy_body, env_object, is_valid_cron, preview_cleanup_target,
+        strip_container_prefix, DeployBody,
+    };
+
+    #[test]
+    fn a_preview_is_torn_down_in_the_space_it_was_created_in() {
+        // Written from v2.55.0 on: scoped, so the agent addresses the preview's
+        // own space and refuses anything labelled as a deployment.
+        assert_eq!(
+            preview_cleanup_target("dockpanel-git-pr.myapp-pr-feature-x"),
+            ("myapp-pr-feature-x".to_string(), "preview")
+        );
+        // Written before it: the old shared space. Addressed by the old name —
+        // recomputing it would be a second answer to a question the row already
+        // holds — but with the ownership rule that refuses a labelled deploy.
+        assert_eq!(
+            preview_cleanup_target("dockpanel-git-myapp-pr-feature-x"),
+            ("myapp-pr-feature-x".to_string(), "preview_legacy")
+        );
+    }
+
+    #[test]
+    fn the_two_stored_shapes_are_never_the_same_string() {
+        // The collision this replaced: the legacy preview of config `myapp` on
+        // branch `feature-x` WAS the container of a deployment named
+        // `myapp-pr-feature-x`, which `is_valid_name` accepts.
+        let legacy = "dockpanel-git-myapp-pr-feature-x";
+        let scoped = format!("dockpanel-git-{}myapp-pr-feature-x", super::PREVIEW_SCOPE_PREFIX);
+        assert_ne!(legacy, scoped);
+        assert!(!crate::routes::is_valid_name(strip_container_prefix(&scoped)));
+        assert!(crate::routes::is_valid_name(strip_container_prefix(legacy)));
+    }
 
     fn body_with(env: serde_json::Value) -> serde_json::Value {
         build_deploy_body(DeployBody {
@@ -2919,6 +3117,7 @@ mod tests {
             memory_mb: None,
             cpu_percent: None,
             ssl_email: None,
+            scope: "deploy",
         })
     }
 

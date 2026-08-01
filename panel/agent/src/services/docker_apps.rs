@@ -2399,6 +2399,83 @@ fn to_app_template(def: &AppTemplateDef) -> AppTemplate {
 }
 
 /// Return all available app templates.
+/// What `GET /apps/{id}/env` substitutes for a value it will not show.
+///
+/// Exported because [`update_env`] has to recognise it coming back: the edit
+/// dialog is seeded from the masked read, so the mask is what a caller sends
+/// for every field they did not touch.
+pub const ENV_MASK: &str = "********";
+
+/// Env var names the shipped catalogue itself declares are NOT secret.
+///
+/// The mask is chosen by substring — `KEY`, `AUTH`, `TOKEN`, `SECRET`,
+/// `PASSWORD` anywhere in the name — which is right for an unknown key and
+/// wrong for several we ship ourselves: `KEYCLOAK_ADMIN` is a username,
+/// `NEXTAUTH_URL` is a URL, `AUTHENTIK_POSTGRESQL__HOST` is a hostname. All
+/// three contain a pattern; none is a secret; all three were shown as
+/// `********`, which is unreadable and — before the sentinel in [`update_env`]
+/// — unrecoverable once saved.
+///
+/// A name is allowlisted only if EVERY template that declares it says
+/// `secret: false`, so a name reused as a secret elsewhere keeps its mask, and
+/// a name the catalogue has never heard of falls through to the substring test.
+/// The list can therefore only ever un-mask something we ourselves defined.
+/// Merge the caller's environment over the container's own, treating
+/// [`ENV_MASK`] as "leave this one alone".
+///
+/// `GET /apps/{id}/env` substitutes the mask for anything sensitive, the edit
+/// dialog is seeded from exactly that response and sends every field back, and
+/// **this container is the only place the real value is stored** — no table
+/// holds a Docker app's environment. Without this, saving the dialog wrote the
+/// literal `********` over every masked variable and then removed the container
+/// that held the original, which for Vaultwarden's `ADMIN_TOKEN` and
+/// code-server's `PASSWORD` is an auth downgrade to a published literal, and for
+/// Meilisearch a container that refuses to start after the original is gone.
+///
+/// Returns the new `KEY=value` list and the names carried over, so the caller
+/// can say what it did rather than doing it silently.
+pub(crate) fn merge_env_preserving_masked(
+    new_env: &HashMap<String, String>,
+    container_env: &[String],
+) -> (Vec<String>, Vec<String>) {
+    let existing: HashMap<&str, &str> = container_env
+        .iter()
+        .filter_map(|kv| kv.split_once('='))
+        .collect();
+
+    let mut kept = Vec::new();
+    let env_list = new_env
+        .iter()
+        .map(|(k, v)| {
+            if v == ENV_MASK {
+                if let Some(real) = existing.get(k.as_str()) {
+                    kept.push(k.clone());
+                    return format!("{k}={real}");
+                }
+            }
+            format!("{k}={v}")
+        })
+        .collect();
+
+    kept.sort();
+    (env_list, kept)
+}
+
+pub fn catalogue_non_secret_env(name: &str) -> bool {
+    let mut seen = false;
+    for t in TEMPLATES {
+        for v in t.env_vars {
+            if v.name == name {
+                if v.secret {
+                    return false;
+                }
+                seen = true;
+            }
+        }
+    }
+    seen
+}
+
 pub fn list_templates() -> Vec<AppTemplate> {
     TEMPLATES.iter().map(to_app_template).collect()
 }
@@ -2925,11 +3002,23 @@ async fn blue_green_update(
         }
     }
 
-    // Create new container with a temp name
-    let new_name = format!("{name}-blue");
+    // Create new container with a temp name. The separator is `.` and not `-`
+    // because `is_valid_name` rejects `.`: an app may legally be called
+    // `api-blue`, and `dockpanel-app-api-blue` was therefore both its production
+    // container AND the stand-in name for the app `api`.
+    let new_name = crate::services::ownership::blue_name(name);
 
-    // Clean up stale blue container from a failed previous attempt
-    if docker.inspect_container(&new_name, None).await.is_ok() {
+    // Clean up the leftover of a failed previous attempt — if it is ours.
+    if let Ok(info) = docker.inspect_container(&new_name, None).await {
+        let owner = crate::services::ownership::blue_leftover(
+            info.config.as_ref().and_then(|c| c.labels.as_ref()),
+        );
+        if !owner.may_delete() {
+            return Err(format!(
+                "A container named {new_name} exists and is not managed by DockPanel \
+                 ({owner:?}); refusing to force-remove it to make room for a blue-green swap"
+            ));
+        }
         docker
             .stop_container(&new_name, Some(StopContainerOptions { t: 5 }))
             .await
@@ -3515,8 +3604,16 @@ pub async fn update_env(
         .trim_start_matches('/')
         .to_string();
 
-    // Build new env list
-    let env_list: Vec<String> = new_env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    // Build new env list, carrying over anything the caller sent back masked.
+    let (env_list, kept) = merge_env_preserving_masked(&new_env, config.env.as_deref().unwrap_or(&[]));
+
+    if !kept.is_empty() {
+        tracing::info!(
+            "update_env for {container_id}: {} masked value(s) carried over unchanged ({})",
+            kept.len(),
+            kept.join(", ")
+        );
+    }
 
     // Stop and remove old container
     docker
@@ -3621,5 +3718,79 @@ mod tests {
 
         assert!(!is_managed_labels(Some(&HashMap::new())));
         assert!(!is_managed_labels(None));
+    }
+
+    fn env(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_masked_value_sent_back_leaves_the_real_one_alone() {
+        // Exactly what the edit dialog posts after the user changes one field:
+        // it was seeded from the MASKED read, so every untouched secret comes
+        // back as the mask.
+        let container = vec![
+            "ADMIN_TOKEN=hunter2-the-real-one".to_string(),
+            "PUID=1000".to_string(),
+        ];
+        let posted = env(&[("ADMIN_TOKEN", ENV_MASK), ("PUID", "1001")]);
+
+        let (list, kept) = merge_env_preserving_masked(&posted, &container);
+
+        assert!(
+            list.contains(&"ADMIN_TOKEN=hunter2-the-real-one".to_string()),
+            "the real value must survive; got {list:?}"
+        );
+        assert!(!list.iter().any(|kv| kv.contains(ENV_MASK)));
+        assert!(list.contains(&"PUID=1001".to_string()), "edits still apply");
+        assert_eq!(kept, vec!["ADMIN_TOKEN".to_string()]);
+    }
+
+    #[test]
+    fn a_value_that_merely_looks_like_the_mask_is_not_resurrected() {
+        // A NEW variable whose value the operator really did type as eight
+        // asterisks has nothing to fall back to, and must be stored verbatim
+        // rather than silently dropped.
+        let (list, kept) = merge_env_preserving_masked(&env(&[("NEW", ENV_MASK)]), &[]);
+        assert_eq!(list, vec![format!("NEW={ENV_MASK}")]);
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn a_container_env_entry_with_no_equals_does_not_derail_the_merge() {
+        let container = vec!["MALFORMED".to_string(), "A=1".to_string()];
+        let (list, _) = merge_env_preserving_masked(&env(&[("A", ENV_MASK)]), &container);
+        assert_eq!(list, vec!["A=1".to_string()]);
+    }
+
+    #[test]
+    fn the_catalogue_exempts_its_own_non_secrets_and_never_its_secrets() {
+        // All four contain a SENSITIVE_PATTERN substring; none is a secret.
+        for name in [
+            "KEYCLOAK_ADMIN",
+            "NEXTAUTH_URL",
+            "AUTHENTIK_POSTGRESQL__HOST",
+            "AUTHENTIK_REDIS__HOST",
+        ] {
+            assert!(
+                catalogue_non_secret_env(name),
+                "{name} is declared secret:false in the catalogue and must not be masked"
+            );
+        }
+        // The real secrets sitting right beside them stay masked.
+        for name in [
+            "KEYCLOAK_ADMIN_PASSWORD",
+            "NEXTAUTH_SECRET",
+            "AUTHENTIK_SECRET_KEY",
+            "AUTHENTIK_POSTGRESQL__PASSWORD",
+        ] {
+            assert!(!catalogue_non_secret_env(name), "{name} must stay masked");
+        }
+        // A name the catalogue has never heard of falls through to the
+        // substring test rather than being exempted.
+        assert!(!catalogue_non_secret_env("SOME_VENDOR_API_KEY"));
     }
 }

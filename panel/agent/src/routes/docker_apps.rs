@@ -542,7 +542,14 @@ async fn get_env(
             )
         })?;
 
-    // Sensitive env var name patterns — mask values containing these substrings
+    // Sensitive env var name patterns — mask values containing these substrings.
+    //
+    // Substring and not a whole token, deliberately: an unknown key is safer
+    // over-masked than under-masked, and `APIKEY` has no separator to anchor on.
+    // The cost of that choice is paid by `catalogue_non_secret_env`, which
+    // exempts the names our OWN templates declare non-secret — otherwise
+    // `KEYCLOAK_ADMIN`, `NEXTAUTH_URL` and `AUTHENTIK_POSTGRESQL__HOST` all read
+    // as `********`.
     const SENSITIVE_PATTERNS: &[&str] = &[
         "PASSWORD", "SECRET", "KEY", "TOKEN", "CREDENTIAL", "AUTH",
     ];
@@ -551,11 +558,10 @@ async fn get_env(
         .into_iter()
         .map(|(k, v)| {
             let upper = k.to_uppercase();
-            let is_sensitive = SENSITIVE_PATTERNS
-                .iter()
-                .any(|pat| upper.contains(pat));
+            let is_sensitive = SENSITIVE_PATTERNS.iter().any(|pat| upper.contains(pat))
+                && !docker_apps::catalogue_non_secret_env(&k);
             let masked_value = if is_sensitive {
-                "********".to_string()
+                docker_apps::ENV_MASK.to_string()
             } else {
                 v
             };
