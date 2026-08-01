@@ -502,6 +502,53 @@ jobs:
       - name: Every destructive path proves ownership, and markers are anchored
         run: bash tests/ownership-delete-pin-e2e.sh
 
+  container-identity:
+    name: A Container Name Is Not A Key Anybody Owns
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pure source analysis. `dockpanel-git-{X}` was the container of a git
+      # deployment called X AND of a preview of config C on branch B whenever
+      # `{C}-pr-{slug(B)}` spelled X — a name `is_valid_name` accepts and an
+      # admin creates by ordinary means. `find_container` filtered
+      # `list_containers` by name, returned the first exact match, and that was
+      # the whole of the check.
+      #
+      # What the agent then did with it was blue-green: read the domain off the
+      # container it had just FOUND, swap that domain's vhost to the pushed
+      # build, force-remove the container behind it, report a successful
+      # zero-downtime deploy. The v2.53.0 ownership guard authorised the vhost
+      # write, correctly — the victim's container really was the one behind the
+      # victim's vhost. `services::ownership` had five primitives and every one
+      # of them read a file; the largest thing the agent destroys had none.
+      #
+      # §A is the arm that matters and the one most likely to rot silently: the
+      # separation rests on the preview scope using a character the NAME
+      # VALIDATOR rejects, so A2 reads the marker out of the source and checks
+      # it against both trees' validators rather than hardcoding either.
+      #
+      # §B5 pins the trap inside the fix. The compatibility path reaches the old
+      # shared space, where every container predating this release is
+      # unlabelled — INCLUDING THE VICTIM'S — so answering "mine" on the absence
+      # of a label would have carried the original unattended delete straight
+      # through the remedy. It demands the caller's own recorded port instead.
+      #
+      # §C1 is a property arm, not an absence arm: moving the stand-in suffix
+      # into the shared helper would satisfy an absence arm over the two twins
+      # while changing nothing.
+      #
+      # ATTACKED: 18 deliberate evasions against the fixed tree, all caught,
+      # THREE of which beat the first draft — the stand-in suffix moved into the
+      # helper (the check moving with the code), one of two promotion renames
+      # made best-effort while the arm required only one, and `scope: ""`, field
+      # present but EMPTY, for the third release running. Two further arms
+      # passed on v2.54.0's own defect until the suite was run against the tag:
+      # both described the function rather than the promotion. A null mutation
+      # is included as a control.
+      - name: A container proves it is the one the caller asked for
+        run: bash tests/container-identity-pin-e2e.sh
+
   compose-stack:
     name: A Stack Is A Network, A Namespace, And An Honest Status
     runs-on: ubuntu-latest
