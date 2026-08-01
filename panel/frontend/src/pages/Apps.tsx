@@ -60,6 +60,8 @@ interface StackInfo {
   id: string;
   name: string;
   service_count: number;
+  domain: string | null;
+  ssl_email: string | null;
   running: number;
   total: number;
   status: string;
@@ -69,16 +71,33 @@ interface StackInfo {
 }
 
 interface ComposeService {
+  /// The compose service key — what sibling services resolve on the stack network.
+  key: string;
+  /// The Docker container name, scoped by stack.
   name: string;
   image: string;
   ports: { host: number; container: number; protocol: string }[];
   environment: Record<string, string>;
   volumes: string[];
   restart: string;
+  command: string[] | null;
+  depends_on: string[];
 }
 
 interface ComposeDeployResult {
   services: { name: string; container_id: string; status: string; error: string | null }[];
+  network?: string;
+  proxy?: boolean | string;
+  proxy_warning?: string;
+  ssl?: boolean;
+  ssl_warning?: string;
+}
+
+interface ComposeValidation {
+  valid: boolean;
+  errors: { service?: string; message: string }[];
+  warnings: { service?: string; message: string }[];
+  info: { service?: string; message: string }[];
 }
 
 interface ScanVuln {
@@ -435,6 +454,9 @@ export default function Apps() {
   const [composeDeploying, setComposeDeploying] = useState(false);
   const [composeError, setComposeError] = useState("");
   const [composeName, setComposeName] = useState("");
+  const [composeDomain, setComposeDomain] = useState("");
+  const [composeSslEmail, setComposeSslEmail] = useState("");
+  const [composeChecks, setComposeChecks] = useState<ComposeValidation | null>(null);
 
   // Image management state (Feature #6)
   const [showImages, setShowImages] = useState(false);
@@ -889,9 +911,18 @@ export default function Apps() {
     if (!composeYaml.trim()) return;
     setComposeError("");
     setComposeParsed(null);
+    setComposeChecks(null);
     try {
       const services = await api.post<ComposeService[]>("/apps/compose/parse", { yaml: composeYaml });
       setComposeParsed(services);
+      // The panel has had a compose validator since v2.15 and no screen ever
+      // called it — including the arm that says "no restart policy", which is
+      // exactly what turned one failed boot into a permanently dead service.
+      try {
+        setComposeChecks(await api.post<ComposeValidation>("/apps/compose/validate", { yaml: composeYaml }));
+      } catch {
+        // Advisory only — never block a preview on it.
+      }
     } catch (e) {
       setComposeError(e instanceof Error ? e.message : "Failed to parse YAML");
     }
@@ -906,20 +937,36 @@ export default function Apps() {
       const result = await api.post<{ id: string; deploy_result: ComposeDeployResult }>("/stacks", {
         name: stackName,
         yaml: composeYaml,
+        domain: composeDomain.trim() || null,
+        ssl_email: composeSslEmail.trim() || null,
       });
       const failed = result.deploy_result.services.filter(s => s.status === "failed");
+      // Refresh either way. A partial failure leaves real containers running
+      // behind this dialog, and the list underneath used to stay stale until a
+      // full page reload — so a second Deploy click made a second stack.
+      loadApps();
       if (failed.length > 0) {
-        setComposeError(`${failed.length} service(s) failed: ${failed.map(s => `${s.name}: ${s.error}`).join(", ")}`);
+        setComposeError(
+          `${failed.length} of ${result.deploy_result.services.length} service(s) failed:\n` +
+            failed.map(s => `• ${s.name}: ${s.error}`).join("\n")
+        );
       } else {
         setShowCompose(false);
         setComposeYaml("");
         setComposeParsed(null);
+        setComposeChecks(null);
         setComposeName("");
+        setComposeDomain("");
+        setComposeSslEmail("");
+        const proxyNote = result.deploy_result.proxy_warning
+          ? ` — but the domain could not be set up: ${result.deploy_result.proxy_warning}`
+          : result.deploy_result.ssl_warning
+            ? ` — served over HTTP for now: ${result.deploy_result.ssl_warning}`
+            : "";
         setMessage({
-          text: `Stack "${stackName}" deployed with ${result.deploy_result.services.length} service(s)`,
-          type: "success",
+          text: `Stack "${stackName}" deployed with ${result.deploy_result.services.length} service(s)${proxyNote}`,
+          type: proxyNote ? "error" : "success",
         });
-        loadApps();
       }
     } catch (e) {
       setComposeError(e instanceof Error ? e.message : "Deploy failed");
@@ -1030,6 +1077,7 @@ export default function Apps() {
       yaml: `services:
   wordpress:
     image: wordpress:latest
+    restart: unless-stopped
     ports: ["8080:80"]
     environment:
       WORDPRESS_DB_HOST: db
@@ -1037,22 +1085,15 @@ export default function Apps() {
       WORDPRESS_DB_PASSWORD: wp_password
       WORDPRESS_DB_NAME: wordpress
     depends_on: [db]
-    labels:
-      dockpanel.managed: "true"
-      dockpanel.app.template: wordpress-package
-      dockpanel.app.name: wordpress
   db:
     image: mysql:8
+    restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: root_password
       MYSQL_DATABASE: wordpress
       MYSQL_USER: wordpress
       MYSQL_PASSWORD: wp_password
     volumes: [mysql_data:/var/lib/mysql]
-    labels:
-      dockpanel.managed: "true"
-      dockpanel.app.template: wordpress-package
-      dockpanel.app.name: wordpress-db
 volumes:
   mysql_data:`,
     },
@@ -1064,6 +1105,7 @@ volumes:
       yaml: `services:
   ghost:
     image: ghost:latest
+    restart: unless-stopped
     ports: ["2368:2368"]
     environment:
       database__client: mysql
@@ -1073,18 +1115,15 @@ volumes:
       database__connection__database: ghost
       url: http://localhost:2368
     depends_on: [db]
-    labels:
-      dockpanel.managed: "true"
   db:
     image: mysql:8
+    restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: root_password
       MYSQL_DATABASE: ghost
       MYSQL_USER: ghost
       MYSQL_PASSWORD: ghost_password
     volumes: [ghost_mysql:/var/lib/mysql]
-    labels:
-      dockpanel.managed: "true"
 volumes:
   ghost_mysql:`,
     },
@@ -1096,6 +1135,7 @@ volumes:
       yaml: `services:
   nextcloud:
     image: nextcloud:latest
+    restart: unless-stopped
     ports: ["8081:80"]
     environment:
       MYSQL_HOST: db
@@ -1105,22 +1145,18 @@ volumes:
       REDIS_HOST: redis
     depends_on: [db, redis]
     volumes: [nextcloud_data:/var/www/html]
-    labels:
-      dockpanel.managed: "true"
   db:
     image: mariadb:11
+    restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: root_password
       MYSQL_DATABASE: nextcloud
       MYSQL_USER: nextcloud
       MYSQL_PASSWORD: nc_password
     volumes: [nc_mariadb:/var/lib/mysql]
-    labels:
-      dockpanel.managed: "true"
   redis:
     image: redis:7-alpine
-    labels:
-      dockpanel.managed: "true"
+    restart: unless-stopped
 volumes:
   nextcloud_data:
   nc_mariadb:`,
@@ -1130,12 +1166,17 @@ volumes:
       name: "Domain Watchdog",
       description: "Monitor domain names over RDAP, track their history, and catch them when they expire (GitHub #50)",
       services: 4,
-      yaml: `services:
+      yaml: `# HTTP_SECURE_COOKIE is "false" so the first login works over plain HTTP.
+# Once this is behind a domain with SSL, set it to "true" — the session cookie
+# is a 7-day JWT and without it the cookie is sent unprotected.
+services:
   domainwatchdog:
     image: maelgangloff/domain-watchdog:latest
+    restart: unless-stopped
     ports: ["8085:80"]
     environment:
       APP_ENV: prod
+      APP_SECRET: dw_app_secret
       SERVER_NAME: ":80"
       DATABASE_URL: postgresql://app:dw_password@database:5432/app?serverVersion=16&charset=utf8
       MESSENGER_ASYNC_TRANSPORT_DSN: redis://valkey:6379/messages
@@ -1145,13 +1186,13 @@ volumes:
       HTTP_SECURE_COOKIE: "false"
     depends_on: [database, valkey]
     volumes: [dw_caddy_data:/data, dw_caddy_config:/config]
-    labels:
-      dockpanel.managed: "true"
   php-worker:
     image: maelgangloff/domain-watchdog:latest
+    restart: always
     command: php /app/bin/console messenger:consume --all --time-limit=3600
     environment:
       APP_ENV: prod
+      APP_SECRET: dw_app_secret
       DATABASE_URL: postgresql://app:dw_password@database:5432/app?serverVersion=16&charset=utf8
       MESSENGER_ASYNC_TRANSPORT_DSN: redis://valkey:6379/messages
       MESSENGER_RDAP_LOW_TRANSPORT_DSN: redis://valkey:6379/messages-rdap-low
@@ -1159,21 +1200,17 @@ volumes:
       LOCK_DSN: redis://valkey:6379
       MESSENGER_CONSUMER_NAME: worker
     depends_on: [database, valkey]
-    labels:
-      dockpanel.managed: "true"
   database:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: app
       POSTGRES_USER: app
       POSTGRES_PASSWORD: dw_password
     volumes: [dw_pgdata:/var/lib/postgresql/data]
-    labels:
-      dockpanel.managed: "true"
   valkey:
     image: valkey/valkey:8-alpine
-    labels:
-      dockpanel.managed: "true"
+    restart: unless-stopped
 volumes:
   dw_caddy_data:
   dw_caddy_config:
@@ -1312,6 +1349,17 @@ volumes:
                        stack.status === "partial" ? `${stack.running}/${stack.total} running` :
                        "removed"}
                     </span>
+                    {stack.domain && (
+                      <a
+                        href={`${stack.ssl_email ? "https" : "http"}://${stack.domain}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-xs font-mono text-accent-400 hover:text-accent-300"
+                      >
+                        {stack.domain}
+                      </a>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     {stack.status !== "running" && stack.total > 0 && (
@@ -1382,6 +1430,7 @@ volumes:
                           <th className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest pb-2 hidden sm:table-cell">Image</th>
                           <th className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest pb-2 w-20">Port</th>
                           <th className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest pb-2 w-24">Status</th>
+                          <th className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest pb-2 w-20 text-right">Logs</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-dark-700">
@@ -1394,6 +1443,18 @@ volumes:
                               <span className={`text-xs font-medium ${svc.status === "running" ? "text-rust-400" : "text-dark-400"}`}>
                                 {svc.status}
                               </span>
+                            </td>
+                            {/* A stack service had no Logs button anywhere, so a
+                                crashed one could not be diagnosed from the panel
+                                at all \u2014 which is why bug reports about stacks
+                                arrive with no detail in them. */}
+                            <td className="py-1.5 text-right">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleLogs(svc.container_id); }}
+                                className="px-2 py-0.5 text-xs text-dark-200 hover:text-dark-50 border border-dark-600 rounded"
+                              >
+                                Logs
+                              </button>
                             </td>
                           </tr>
                         ))}
@@ -2691,15 +2752,27 @@ volumes:
                       key={pkg.id}
                       className="bg-dark-900 rounded-lg border border-dark-500 p-4 hover:border-dark-400 cursor-pointer transition-colors"
                       onClick={() => {
-                        // Replace placeholder passwords with random ones for security
-                        const randPw = () => crypto.randomUUID().replace(/-/g, '').slice(0, 20);
+                        // Replace placeholder passwords with random ones for security.
+                        // `getRandomValues`, not `randomUUID`: the latter is
+                        // secure-context-only, and the installer's cert-failed
+                        // branch leaves the operator on plain http:// — where
+                        // this onClick would throw and the card would silently
+                        // do nothing. Same reasoning as the generator above.
+                        const randPw = () => {
+                          const bytes = new Uint8Array(10);
+                          crypto.getRandomValues(bytes);
+                          return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+                        };
                         const yaml = pkg.yaml
                           .replace(/wp_password/g, randPw())
                           .replace(/root_password/g, randPw())
                           .replace(/ghost_password/g, randPw())
                           .replace(/nc_password/g, randPw())
-                          .replace(/dw_password/g, randPw());
-                        setComposeYaml(yaml); setComposeView('compose'); setComposeParsed(null);
+                          .replace(/dw_password/g, randPw())
+                          // Upstream bakes a published APP_SECRET into the image;
+                          // without this every install signs with the same one.
+                          .replace(/dw_app_secret/g, randPw() + randPw());
+                        setComposeYaml(yaml); setComposeView('compose'); setComposeParsed(null); setComposeChecks(null);
                       }}
                     >
                       <h4 className="text-sm font-medium text-dark-50">{pkg.name}</h4>
@@ -2736,6 +2809,38 @@ volumes:
               <p className="text-xs text-dark-300 mt-1">Name for this stack (used for grouping services)</p>
             </div>
 
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label htmlFor="compose-domain" className="block text-sm font-medium text-dark-100 mb-1">Domain <span className="text-dark-400 font-normal">(optional)</span></label>
+                <input
+                  id="compose-domain"
+                  type="text"
+                  value={composeDomain}
+                  onChange={(e) => setComposeDomain(e.target.value)}
+                  placeholder="watchdog.example.com"
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
+                />
+                <p className="text-xs text-dark-300 mt-1">
+                  Serves the stack's first published port. Without one it is reachable only on 127.0.0.1 from the server itself.
+                </p>
+              </div>
+              <div>
+                <label htmlFor="compose-ssl-email" className="block text-sm font-medium text-dark-100 mb-1">SSL Email <span className="text-dark-400 font-normal">(optional)</span></label>
+                <input
+                  id="compose-ssl-email"
+                  type="email"
+                  value={composeSslEmail}
+                  onChange={(e) => setComposeSslEmail(e.target.value)}
+                  placeholder="admin@example.com"
+                  disabled={!composeDomain.trim()}
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 focus:border-accent-500 disabled:opacity-50"
+                />
+                <p className="text-xs text-dark-300 mt-1">
+                  Requests a Let's Encrypt certificate. Leave blank to serve plain HTTP.
+                </p>
+              </div>
+            </div>
+
             <div className="mb-4">
               <label htmlFor="compose-yaml" className="block text-sm font-medium text-dark-100 mb-1">docker-compose.yml</label>
               <textarea
@@ -2770,22 +2875,42 @@ volumes:
             {/* Parsed services preview */}
             {composeParsed && (
               <>
+                {composeChecks && (composeChecks.warnings.length > 0 || composeChecks.info.length > 0) && (
+                  <div className="mb-4 rounded-lg border border-dark-500 bg-dark-900 p-3 space-y-1">
+                    {composeChecks.warnings.map((w, i) => (
+                      <p key={`w${i}`} className="text-xs text-warn-500">
+                        {w.service ? <span className="font-mono">{w.service}: </span> : null}{w.message}
+                      </p>
+                    ))}
+                    {composeChecks.info.map((n, i) => (
+                      <p key={`i${i}`} className="text-xs text-dark-300">
+                        {n.service ? <span className="font-mono">{n.service}: </span> : null}{n.message}
+                      </p>
+                    ))}
+                  </div>
+                )}
                 <div className="mb-4">
                   <h4 className="text-sm font-medium text-dark-50 mb-2">
                     {composeParsed.length} service{composeParsed.length !== 1 ? "s" : ""} found:
                   </h4>
+                  <p className="text-xs text-dark-300 mb-2">
+                    Services reach each other by their compose name on a private network for this stack.
+                  </p>
                   <div className="space-y-2">
                     {composeParsed.map((svc) => (
                       <div key={svc.name} className="bg-dark-900 rounded-lg p-3 border border-dark-500">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
-                            <span className="text-sm font-semibold text-dark-50">{svc.name}</span>
+                            <span className="text-sm font-semibold text-dark-50">{svc.key}</span>
                             <span className="text-xs text-dark-300 font-mono">{svc.image}</span>
                           </div>
                           {svc.restart !== "no" && (
                             <span className="text-[10px] text-dark-300">restart: {svc.restart}</span>
                           )}
                         </div>
+                        {svc.depends_on.length > 0 && (
+                          <p className="mt-1 text-[10px] text-dark-400">starts after {svc.depends_on.join(", ")}</p>
+                        )}
                         {svc.ports.length > 0 && (
                           <div className="mt-1.5 flex gap-2 flex-wrap">
                             {svc.ports.map((p, i) => (

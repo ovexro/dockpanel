@@ -101,184 +101,286 @@ async fn deploy(
 
     // Auto reverse proxy: Traefik (file-based dynamic config) or nginx
     if let Some(ref domain) = body.domain {
-        if body.use_traefik {
-            // --- Traefik mode: write a dynamic route config file ---
-            let ssl = body.ssl_email.is_some();
-            match traefik::write_route_config(domain, body.port, ssl) {
-                Ok(()) => {
-                    response["domain"] = serde_json::json!(domain);
-                    response["proxy"] = serde_json::json!("traefik");
-                    if ssl {
-                        response["ssl"] = serde_json::json!(true);
-                    }
-                    tracing::info!("Auto-proxy (Traefik): {domain} → 127.0.0.1:{} (ssl={ssl})", body.port);
-                }
-                Err(e) => {
-                    tracing::warn!("Auto-proxy (Traefik): failed to write route config for {domain}: {e}");
-                    response["proxy_warning"] = serde_json::json!(format!("Traefik config failed: {e}"));
-                }
-            }
-        } else {
-            // --- nginx mode: create nginx config pointing to the app's port ---
-            let site_config = SiteConfig {
-                runtime: "proxy".to_string(),
-                root: None,
-                proxy_port: Some(body.port),
-                php_socket: None,
-                ssl: None,
-                ssl_cert: None,
-                ssl_key: None,
-                rate_limit: None,
-                max_upload_mb: None,
-                php_memory_mb: None,
-                php_max_workers: None,
-                custom_nginx: None,
-                php_preset: None,
-                app_command: None,
-                fastcgi_cache: None,
-                redis_cache: None,
-                redis_db: None,
-                waf_enabled: None,
-                waf_mode: None,
+        expose_domain(
+            &state.templates,
+            domain,
+            body.port,
+            body.ssl_email.as_deref(),
+            body.use_traefik,
+            &mut response,
+        )
+        .await;
+    }
+
+    Ok(Json(response))
+}
+
+/// A reverse-proxy vhost pointing at a local port. Built in one place because
+/// the same shape is needed to render the plain-HTTP config and again to
+/// re-render it with SSL, and two literals drift.
+fn proxy_site_config(port: u16) -> SiteConfig {
+    SiteConfig {
+        runtime: "proxy".to_string(),
+        root: None,
+        proxy_port: Some(port),
+        php_socket: None,
+        ssl: None,
+        ssl_cert: None,
+        ssl_key: None,
+        rate_limit: None,
+        max_upload_mb: None,
+        php_memory_mb: None,
+        php_max_workers: None,
+        custom_nginx: None,
+        php_preset: None,
+        app_command: None,
+        fastcgi_cache: None,
+        redis_cache: None,
+        redis_db: None,
+        waf_enabled: None,
+        waf_mode: None,
         csp_policy: None,
         permissions_policy: None,
         bot_protection: None,
-            };
+    }
+}
 
-            match nginx::render_site_config(&state.templates, domain, &site_config) {
-                Ok(rendered) => {
-                    let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
-                    // Snapshot first: this path may already belong to a site or a
-                    // git deploy, and `nginx -t` below is a whole-server check that
-                    // an unrelated broken vhost is enough to fail.
-                    let previous = std::fs::read_to_string(&config_path).ok();
-                    let tmp_path = format!("{config_path}.tmp");
-                    let write_result = std::fs::write(&tmp_path, &rendered)
-                        .and_then(|_| std::fs::rename(&tmp_path, &config_path));
-                    if let Err(e) = write_result {
-                        // Clean up tmp file on failure
-                        std::fs::remove_file(&tmp_path).ok();
-                        tracing::warn!("Auto-proxy: failed to write nginx config for {domain}: {e}");
-                        response["proxy_warning"] = serde_json::json!(format!("Failed to write nginx config: {e}"));
-                    } else {
-                        match nginx::test_config().await {
-                            Ok(output) if output.success => {
-                                if let Err(e) = nginx::reload().await {
-                                    tracing::warn!("Auto-proxy: nginx reload failed after deploy for {domain}: {e}");
-                                }
-                                response["domain"] = serde_json::json!(domain);
-                                response["proxy"] = serde_json::json!(true);
-                                tracing::info!("Auto-proxy: {domain} → 127.0.0.1:{}", body.port);
-                            }
-                            Ok(output) => {
-                                let restored = nginx::restore_or_remove(&config_path, previous.as_deref());
-                                tracing::warn!("Auto-proxy: nginx config test failed for {domain}: {}", output.stderr);
-                                response["proxy_warning"] = serde_json::json!(format!(
-                                    "Nginx config test failed: {}{}",
-                                    output.stderr,
-                                    nginx::restore_note(restored)
-                                ));
-                            }
-                            Err(e) => {
-                                let restored = nginx::restore_or_remove(&config_path, previous.as_deref());
-                                tracing::warn!("Auto-proxy: nginx test error for {domain}: {e}");
-                                response["proxy_warning"] = serde_json::json!(format!(
-                                    "Nginx test error: {e}{}",
-                                    nginx::restore_note(restored)
-                                ));
-                            }
-                        }
-                    }
+/// Put a domain in front of a local port: write the vhost, then provision a
+/// certificate if an ACME address was given.
+///
+/// Extracted from `deploy` so compose stacks reach the same code rather than a
+/// second copy of it. Until v2.54.0 a stack had no route to any of this — the
+/// compose deploy request carried no domain field at all, so a stack could only
+/// ever be reached on `127.0.0.1:{port}` and "SSL doesn't work" was the
+/// accurate report of a feature that did not exist.
+///
+/// Failures are reported into `response` as warnings rather than returned: the
+/// container is already up, and losing the whole deploy over a certificate that
+/// can be retried from the panel would be the worse trade.
+async fn expose_domain(
+    templates: &tera::Tera,
+    domain: &str,
+    port: u16,
+    ssl_email: Option<&str>,
+    use_traefik: bool,
+    response: &mut serde_json::Value,
+) {
+    if use_traefik {
+        // --- Traefik mode: write a dynamic route config file ---
+        let ssl = ssl_email.is_some();
+        match traefik::write_route_config(domain, port, ssl) {
+            Ok(()) => {
+                response["domain"] = serde_json::json!(domain);
+                response["proxy"] = serde_json::json!("traefik");
+                if ssl {
+                    response["ssl"] = serde_json::json!(true);
                 }
-                Err(e) => {
-                    tracing::warn!("Auto-proxy: failed to render config for {domain}: {e}");
-                    response["proxy_warning"] = serde_json::json!(format!("Failed to render nginx config: {e}"));
-                }
+                tracing::info!("Auto-proxy (Traefik): {domain} → 127.0.0.1:{port} (ssl={ssl})");
             }
+            Err(e) => {
+                tracing::warn!("Auto-proxy (Traefik): failed to write route config for {domain}: {e}");
+                response["proxy_warning"] = serde_json::json!(format!("Traefik config failed: {e}"));
+            }
+        }
+        return;
+    }
 
-            // SSL provisioning (only if proxy was set up successfully, nginx mode only)
-            if response.get("proxy").is_some() {
-                if let Some(ref email) = body.ssl_email {
-                    // Wait for DNS propagation before attempting SSL (up to 30 seconds)
-                    for i in 0..6u32 {
-                        if i > 0 {
-                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    // --- nginx mode: create nginx config pointing to the app's port ---
+    let site_config = proxy_site_config(port);
+
+    match nginx::render_site_config(templates, domain, &site_config) {
+        Ok(rendered) => {
+            let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+            // Snapshot first: this path may already belong to a site or a
+            // git deploy, and `nginx -t` below is a whole-server check that
+            // an unrelated broken vhost is enough to fail.
+            let previous = std::fs::read_to_string(&config_path).ok();
+            let tmp_path = format!("{config_path}.tmp");
+            let write_result = std::fs::write(&tmp_path, &rendered)
+                .and_then(|_| std::fs::rename(&tmp_path, &config_path));
+            if let Err(e) = write_result {
+                // Clean up tmp file on failure
+                std::fs::remove_file(&tmp_path).ok();
+                tracing::warn!("Auto-proxy: failed to write nginx config for {domain}: {e}");
+                response["proxy_warning"] =
+                    serde_json::json!(format!("Failed to write nginx config: {e}"));
+            } else {
+                match nginx::test_config().await {
+                    Ok(output) if output.success => {
+                        if let Err(e) = nginx::reload().await {
+                            tracing::warn!("Auto-proxy: nginx reload failed after deploy for {domain}: {e}");
                         }
-                        match tokio::net::lookup_host(format!("{}:80", domain)).await {
-                            Ok(_) => {
-                                tracing::info!("DNS resolved for {domain} (attempt {}/6)", i + 1);
-                                break;
-                            }
-                            Err(_) if i < 5 => {
-                                tracing::info!("Waiting for DNS propagation for {}... ({}/6)", domain, i + 1);
-                                continue;
-                            }
-                            Err(e) => {
-                                tracing::warn!("DNS not propagated for {}: {} — trying SSL anyway", domain, e);
-                                break;
-                            }
-                        }
+                        response["domain"] = serde_json::json!(domain);
+                        response["proxy"] = serde_json::json!(true);
+                        tracing::info!("Auto-proxy: {domain} → 127.0.0.1:{port}");
                     }
-
-                    match ssl::load_or_create_account(email).await {
-                        Ok(account) => {
-                            match ssl::provision_cert(&account, domain, None).await {
-                                Ok(_cert_info) => {
-                                    let ssl_site_config = SiteConfig {
-                                        runtime: "proxy".to_string(),
-                                        root: None,
-                                        proxy_port: Some(body.port),
-                                        php_socket: None,
-                                        ssl: None,
-                                        ssl_cert: None,
-                                        ssl_key: None,
-                                        rate_limit: None,
-                                        max_upload_mb: None,
-                                        php_memory_mb: None,
-                                        php_max_workers: None,
-                                        custom_nginx: None,
-                                        php_preset: None,
-                                        app_command: None,
-                                        fastcgi_cache: None,
-                redis_cache: None,
-                redis_db: None,
-                waf_enabled: None,
-                waf_mode: None,
-        csp_policy: None,
-        permissions_policy: None,
-        bot_protection: None,
-                                    };
-                                    match ssl::enable_ssl_for_site(&state.templates, domain, &ssl_site_config).await {
-                                        Ok(_) => {
-                                            response["ssl"] = serde_json::json!(true);
-                                            tracing::info!("Auto-SSL: certificate provisioned for {domain}");
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!("Auto-SSL: enable_ssl_for_site failed for {domain}: {e}");
-                                            response["ssl_warning"] = serde_json::json!(format!("SSL enable failed: {e} — retry from panel"));
-                                            response["ssl_pending"] = serde_json::json!(true);
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::warn!("Auto-SSL: cert provisioning failed for {domain}: {e}");
-                                    response["ssl_warning"] = serde_json::json!(format!("SSL provisioning failed: {e} — retry from panel"));
-                                    response["ssl_pending"] = serde_json::json!(true);
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!("Auto-SSL: ACME account failed: {e}");
-                            response["ssl_warning"] = serde_json::json!(format!("ACME account failed: {e} — retry from panel"));
-                            response["ssl_pending"] = serde_json::json!(true);
-                        }
+                    Ok(output) => {
+                        let restored = nginx::restore_or_remove(&config_path, previous.as_deref());
+                        tracing::warn!("Auto-proxy: nginx config test failed for {domain}: {}", output.stderr);
+                        response["proxy_warning"] = serde_json::json!(format!(
+                            "Nginx config test failed: {}{}",
+                            output.stderr,
+                            nginx::restore_note(restored)
+                        ));
+                    }
+                    Err(e) => {
+                        let restored = nginx::restore_or_remove(&config_path, previous.as_deref());
+                        tracing::warn!("Auto-proxy: nginx test error for {domain}: {e}");
+                        response["proxy_warning"] = serde_json::json!(format!(
+                            "Nginx test error: {e}{}",
+                            nginx::restore_note(restored)
+                        ));
                     }
                 }
             }
         }
+        Err(e) => {
+            tracing::warn!("Auto-proxy: failed to render config for {domain}: {e}");
+            response["proxy_warning"] =
+                serde_json::json!(format!("Failed to render nginx config: {e}"));
+        }
     }
 
-    Ok(Json(response))
+    // SSL provisioning (only if proxy was set up successfully, nginx mode only)
+    if response.get("proxy").is_none() {
+        return;
+    }
+    let email = match ssl_email {
+        Some(e) => e,
+        None => return,
+    };
+
+    // Wait for DNS propagation before attempting SSL (up to 30 seconds)
+    for i in 0..6u32 {
+        if i > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+        match tokio::net::lookup_host(format!("{}:80", domain)).await {
+            Ok(_) => {
+                tracing::info!("DNS resolved for {domain} (attempt {}/6)", i + 1);
+                break;
+            }
+            Err(_) if i < 5 => {
+                tracing::info!("Waiting for DNS propagation for {}... ({}/6)", domain, i + 1);
+                continue;
+            }
+            Err(e) => {
+                tracing::warn!("DNS not propagated for {}: {} — trying SSL anyway", domain, e);
+                break;
+            }
+        }
+    }
+
+    match ssl::load_or_create_account(email).await {
+        Ok(account) => match ssl::provision_cert(&account, domain, None).await {
+            Ok(_cert_info) => {
+                match ssl::enable_ssl_for_site(templates, domain, &site_config).await {
+                    Ok(_) => {
+                        response["ssl"] = serde_json::json!(true);
+                        tracing::info!("Auto-SSL: certificate provisioned for {domain}");
+                    }
+                    Err(e) => {
+                        tracing::warn!("Auto-SSL: enable_ssl_for_site failed for {domain}: {e}");
+                        response["ssl_warning"] =
+                            serde_json::json!(format!("SSL enable failed: {e} — retry from panel"));
+                        response["ssl_pending"] = serde_json::json!(true);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Auto-SSL: cert provisioning failed for {domain}: {e}");
+                response["ssl_warning"] =
+                    serde_json::json!(format!("SSL provisioning failed: {e} — retry from panel"));
+                response["ssl_pending"] = serde_json::json!(true);
+            }
+        },
+        Err(e) => {
+            tracing::warn!("Auto-SSL: ACME account failed: {e}");
+            response["ssl_warning"] =
+                serde_json::json!(format!("ACME account failed: {e} — retry from panel"));
+            response["ssl_pending"] = serde_json::json!(true);
+        }
+    }
+}
+
+/// Take a domain back down: remove the vhost, the certificates and the logs —
+/// but only the ones that can still be proved to belong to the caller.
+///
+/// Every delete here is conditional on the resource saying so. Before v2.53.0
+/// they all fired on a label alone, so removing an app whose domain a site had
+/// since taken over destroyed the SITE's vhost, certificates and logs. Shared
+/// with the Compose-stack teardown so a stack cannot grow a second, unguarded
+/// copy of the same deletes.
+async fn unexpose_domain(domain: &str, host_port: Option<u16>, response: &mut serde_json::Value) {
+
+    // Remove Traefik dynamic route config (if it exists). The legacy-name
+    // leg inside checks ownership itself.
+    traefik::remove_route_config(domain);
+
+    // Remove nginx config — only if it is still fronting THIS container.
+    // The vhost is rendered from the same template a site's is, so the only
+    // thing in it identifying the app is the `proxy_pass` to the port the
+    // container published.
+    let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+    let mut removed_vhost = false;
+    if std::path::Path::new(&config_path).exists() {
+        if ownership::app_vhost(&config_path, host_port).may_delete() {
+            std::fs::remove_file(&config_path).ok();
+            removed_vhost = true;
+            if let Err(e) = nginx::reload().await {
+                tracing::warn!("Auto-proxy cleanup: nginx reload failed after removing config for {domain}: {e}");
+            }
+            tracing::info!("Auto-proxy cleanup: removed nginx config for {domain}");
+        } else {
+            tracing::warn!(
+                "Auto-proxy cleanup: LEAVING {config_path} in place — it does not \
+                 proxy to this container's port. Another site or app now serves \
+                 {domain}; removing this app must not take it down."
+            );
+            response["proxy_warning"] = serde_json::json!(format!(
+                "The nginx configuration for {domain} is serving something else and was left in place."
+            ));
+        }
+    }
+
+    // Remove SSL certificates (panel-provisioned). A DNS-01 wildcard is
+    // provisioned once under the zone apex and SHARED by every site in the
+    // zone, so this directory is not necessarily this app's to delete.
+    let ssl_dir = format!("/etc/dockpanel/ssl/{domain}");
+    if std::path::Path::new(&ssl_dir).exists() {
+        if ownership::cert_dir_in_use_elsewhere(domain) {
+            tracing::warn!(
+                "SSL cleanup: LEAVING {ssl_dir} in place — another vhost still \
+                 points at it. Deleting it would break that site at the next \
+                 nginx reload."
+            );
+        } else {
+            std::fs::remove_dir_all(&ssl_dir).ok();
+            tracing::info!("SSL cleanup: removed certs for {domain}");
+        }
+    }
+
+    // Let's Encrypt is NOT the panel's namespace and this code never had any
+    // business in it. Neither tree issues through certbot — provisioning is
+    // instant_acme into /etc/dockpanel/ssl above — so every lineage this
+    // could reach was created by the operator, out of band. Deleting
+    // live/ + archive/ + renewal/ destroyed the certificate, its whole
+    // history, and the automation that would have renewed it, for a
+    // certificate the panel did not issue and does not read. On a box whose
+    // mail stack is configured by the panel that includes the lineage
+    // Postfix and Dovecot are pointed at (`routes/mail.rs`
+    // `panel_tls_paths`), whose documented fallback is the distro snakeoil.
+    // There is no marker distinguishing a panel-era lineage from an
+    // operator's, so there is no safe narrowing — the delete is gone.
+
+    // Remove nginx logs — only ours to remove if the vhost was ours. When
+    // another site now serves this domain, these are that site's logs.
+    if removed_vhost {
+        let access_log = format!("/var/log/nginx/{domain}.access.log");
+        let error_log = format!("/var/log/nginx/{domain}.error.log");
+        std::fs::remove_file(&access_log).ok();
+        std::fs::remove_file(&error_log).ok();
+    }
 }
 
 /// GET /apps — List all deployed apps.
@@ -888,75 +990,7 @@ async fn remove(
     // certificates and logs, and nothing said so.
     if let Some(ref domain) = domain {
         response["domain_removed"] = serde_json::json!(domain);
-
-        // Remove Traefik dynamic route config (if it exists). The legacy-name
-        // leg inside checks ownership itself.
-        traefik::remove_route_config(domain);
-
-        // Remove nginx config — only if it is still fronting THIS container.
-        // The vhost is rendered from the same template a site's is, so the only
-        // thing in it identifying the app is the `proxy_pass` to the port the
-        // container published.
-        let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
-        let mut removed_vhost = false;
-        if std::path::Path::new(&config_path).exists() {
-            if ownership::app_vhost(&config_path, identity.host_port).may_delete() {
-                std::fs::remove_file(&config_path).ok();
-                removed_vhost = true;
-                if let Err(e) = nginx::reload().await {
-                    tracing::warn!("Auto-proxy cleanup: nginx reload failed after removing config for {domain}: {e}");
-                }
-                tracing::info!("Auto-proxy cleanup: removed nginx config for {domain}");
-            } else {
-                tracing::warn!(
-                    "Auto-proxy cleanup: LEAVING {config_path} in place — it does not \
-                     proxy to this container's port. Another site or app now serves \
-                     {domain}; removing this app must not take it down."
-                );
-                response["proxy_warning"] = serde_json::json!(format!(
-                    "The nginx configuration for {domain} is serving something else and was left in place."
-                ));
-            }
-        }
-
-        // Remove SSL certificates (panel-provisioned). A DNS-01 wildcard is
-        // provisioned once under the zone apex and SHARED by every site in the
-        // zone, so this directory is not necessarily this app's to delete.
-        let ssl_dir = format!("/etc/dockpanel/ssl/{domain}");
-        if std::path::Path::new(&ssl_dir).exists() {
-            if ownership::cert_dir_in_use_elsewhere(domain) {
-                tracing::warn!(
-                    "SSL cleanup: LEAVING {ssl_dir} in place — another vhost still \
-                     points at it. Deleting it would break that site at the next \
-                     nginx reload."
-                );
-            } else {
-                std::fs::remove_dir_all(&ssl_dir).ok();
-                tracing::info!("SSL cleanup: removed certs for {domain}");
-            }
-        }
-
-        // Let's Encrypt is NOT the panel's namespace and this code never had any
-        // business in it. Neither tree issues through certbot — provisioning is
-        // instant_acme into /etc/dockpanel/ssl above — so every lineage this
-        // could reach was created by the operator, out of band. Deleting
-        // live/ + archive/ + renewal/ destroyed the certificate, its whole
-        // history, and the automation that would have renewed it, for a
-        // certificate the panel did not issue and does not read. On a box whose
-        // mail stack is configured by the panel that includes the lineage
-        // Postfix and Dovecot are pointed at (`routes/mail.rs`
-        // `panel_tls_paths`), whose documented fallback is the distro snakeoil.
-        // There is no marker distinguishing a panel-era lineage from an
-        // operator's, so there is no safe narrowing — the delete is gone.
-
-        // Remove nginx logs — only ours to remove if the vhost was ours. When
-        // another site now serves this domain, these are that site's logs.
-        if removed_vhost {
-            let access_log = format!("/var/log/nginx/{domain}.access.log");
-            let error_log = format!("/var/log/nginx/{domain}.error.log");
-            std::fs::remove_file(&access_log).ok();
-            std::fs::remove_file(&error_log).ok();
-        }
+        unexpose_domain(domain, identity.host_port, &mut response).await;
     }
 
     // Clean up persistent volume data — only when this container actually
@@ -987,13 +1021,20 @@ async fn remove(
 struct ComposeParseRequest {
     yaml: String,
     stack_id: Option<String>,
+    /// Optional domain to put in front of the stack (deploy only).
+    domain: Option<String>,
+    /// Email for Let's Encrypt SSL (requires domain).
+    ssl_email: Option<String>,
+    /// Host port the domain proxies to. Defaults to the first published port
+    /// in the stack, which is the right answer for every package we ship.
+    expose_port: Option<u16>,
 }
 
 /// POST /apps/compose/parse — Parse docker-compose.yml and return services preview.
 async fn compose_parse(
     Json(body): Json<ComposeParseRequest>,
 ) -> Result<Json<Vec<compose::ComposeService>>, (StatusCode, Json<serde_json::Value>)> {
-    let services = compose::parse_compose(&body.yaml).map_err(|e| {
+    let services = compose::parse_compose(&body.yaml, body.stack_id.as_deref()).map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": e })),
@@ -1012,7 +1053,7 @@ async fn compose_validate(
     let mut info: Vec<serde_json::Value> = Vec::new();
 
     // Try to parse
-    match compose::parse_compose(&body.yaml) {
+    match compose::parse_compose(&body.yaml, body.stack_id.as_deref()) {
         Ok(services) => {
             info.push(serde_json::json!({
                 "message": format!("{} service(s) found", services.len()),
@@ -1022,7 +1063,7 @@ async fn compose_validate(
                 // Check for latest tag
                 if svc.image.ends_with(":latest") || !svc.image.contains(':') {
                     warnings.push(serde_json::json!({
-                        "service": svc.name,
+                        "service": svc.key,
                         "message": "Using ':latest' tag — pin to a specific version for reproducible deploys",
                     }));
                 }
@@ -1031,7 +1072,7 @@ async fn compose_validate(
                 for port in &svc.ports {
                     if port.host < 1024 && port.host != 80 && port.host != 443 {
                         warnings.push(serde_json::json!({
-                            "service": svc.name,
+                            "service": svc.key,
                             "message": format!("Privileged port {} — consider using a higher port", port.host),
                         }));
                     }
@@ -1041,7 +1082,7 @@ async fn compose_validate(
                 let db_images = ["postgres", "mysql", "mariadb", "mongo", "redis"];
                 if db_images.iter().any(|db| svc.image.contains(db)) && svc.volumes.is_empty() {
                     warnings.push(serde_json::json!({
-                        "service": svc.name,
+                        "service": svc.key,
                         "message": "Database service without volumes — data will be lost on container restart",
                     }));
                 }
@@ -1049,7 +1090,7 @@ async fn compose_validate(
                 // Check for missing restart policy
                 if svc.restart.is_empty() || svc.restart == "no" {
                     info.push(serde_json::json!({
-                        "service": svc.name,
+                        "service": svc.key,
                         "message": "No restart policy — container won't auto-restart. Consider 'unless-stopped'",
                     }));
                 }
@@ -1057,7 +1098,7 @@ async fn compose_validate(
                 // Check for missing health check env vars
                 if svc.environment.is_empty() && db_images.iter().any(|db| svc.image.contains(db)) {
                     warnings.push(serde_json::json!({
-                        "service": svc.name,
+                        "service": svc.key,
                         "message": "Database without environment variables — password/root may use defaults",
                     }));
                 }
@@ -1085,25 +1126,87 @@ async fn compose_validate(
     }))
 }
 
-/// POST /apps/compose/deploy — Deploy services from parsed compose file.
+/// POST /apps/compose/deploy — Deploy services from parsed compose file,
+/// optionally behind a domain with a certificate.
 async fn compose_deploy(
+    State(state): State<AppState>,
     Json(body): Json<ComposeParseRequest>,
-) -> Result<Json<compose::ComposeDeployResult>, (StatusCode, Json<serde_json::Value>)> {
-    let services = compose::parse_compose(&body.yaml).map_err(|e| {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let services = compose::parse_compose(&body.yaml, body.stack_id.as_deref()).map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": e })),
         )
     })?;
 
+    if let Some(ref domain) = body.domain {
+        if !is_valid_domain(domain) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Invalid domain format" })),
+            ));
+        }
+    }
+
+    // Resolve which published port the domain should point at before deploying,
+    // so a stack that publishes nothing is refused up front rather than after
+    // its containers are running.
+    let expose_port = match body.domain.as_ref() {
+        None => None,
+        Some(_) => {
+            let port = body
+                .expose_port
+                .or_else(|| services.iter().find_map(|s| s.ports.first().map(|p| p.host)));
+            match port {
+                Some(p) => Some(p),
+                None => {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": "This stack publishes no host port, so there is nothing for the domain to point at. \
+                                      Add a 'ports:' entry to the service you want reachable."
+                        })),
+                    ))
+                }
+            }
+        }
+    };
+
     let result = compose::deploy_compose(&services, body.stack_id.as_deref()).await;
-    Ok(Json(result))
+    let mut response = serde_json::to_value(&result).unwrap_or_else(|_| serde_json::json!({}));
+
+    // Only front a stack that actually came up. Writing a vhost to a dead
+    // upstream would hand the operator a 502 and a certificate for it.
+    if let (Some(domain), Some(port)) = (body.domain.as_ref(), expose_port) {
+        let running = result.services.iter().any(|s| s.status == "running");
+        if running {
+            expose_domain(
+                &state.templates,
+                domain,
+                port,
+                body.ssl_email.as_deref(),
+                false,
+                &mut response,
+            )
+            .await;
+        } else {
+            response["proxy_warning"] = serde_json::json!(
+                "No service in the stack stayed running, so no vhost was written. \
+                 Fix the stack and re-apply the domain."
+            );
+        }
+    }
+
+    Ok(Json(response))
 }
 
 #[derive(Deserialize)]
 struct StackActionRequest {
     stack_id: String,
     action: String,
+    /// The domain this stack was exposed on, so `remove` can take the vhost and
+    /// certificates down with it. Absent for a stack that was never exposed.
+    domain: Option<String>,
 }
 
 /// POST /apps/stack/action — Perform a lifecycle action on all containers in a stack.
@@ -1137,6 +1240,10 @@ async fn stack_action(
         ));
     }
 
+    // Read the published port while the containers still exist — it is what
+    // proves the vhost is this stack's before anything deletes it.
+    let stack_port = stack_containers.iter().find_map(|a| a.port);
+
     let mut results = Vec::new();
     for app in &stack_containers {
         let cid = &app.container_id;
@@ -1158,11 +1265,30 @@ async fn stack_action(
         }));
     }
 
-    Ok(Json(serde_json::json!({
+    let mut response = serde_json::json!({
         "stack_id": body.stack_id,
         "action": body.action,
         "results": results,
-    })))
+    });
+
+    if body.action == "remove" {
+        // The stack's own bridge outlives its last container, so tear it down
+        // with them. `remove_stack_network` refuses anything it cannot prove
+        // is ours.
+        compose::remove_stack_network(Some(&body.stack_id)).await;
+
+        // And the vhost, certificates and logs — through the same guarded
+        // teardown an app removal uses, so a stack cannot delete a domain that
+        // has since been taken over by a site.
+        if let Some(ref domain) = body.domain {
+            if is_valid_domain(domain) {
+                response["domain_removed"] = serde_json::json!(domain);
+                unexpose_domain(domain, stack_port, &mut response).await;
+            }
+        }
+    }
+
+    Ok(Json(response))
 }
 
 /// GET /apps/images — List Docker images.

@@ -445,6 +445,47 @@ else
     STACK_ID=""
 fi
 
+# A TWO-SERVICE stack, because a one-service stack cannot fail the way every
+# real one did (GitHub #50). Until v2.54.0 compose services were created with no
+# user-defined network, so a sibling's name never resolved and every
+# multi-service package the panel ships died on boot — while the deploy reported
+# every service "running" on the strength of create+start returning Ok. A single
+# nginx that talks to nothing exercises neither half.
+PAIR_YAML='services:\n  client:\n    image: alpine:3\n    command: sleep 300\n    depends_on: [store]\n  store:\n    image: redis:7-alpine'
+PAIR_RESP=$(api_post "/stacks" "{\"name\":\"e2e-pair\",\"yaml\":\"$PAIR_YAML\"}")
+PAIR_ID=$(echo "$PAIR_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+if [ -n "$PAIR_ID" ]; then
+    ok "Two-service stack created (ID: ${PAIR_ID:0:8}...)"
+
+    # The deploy must report what is true, not what was attempted.
+    PAIR_RUNNING=$(echo "$PAIR_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('running',0))" 2>/dev/null || echo "0")
+    if [ "$PAIR_RUNNING" -eq 2 ]; then
+        ok "Both services reported running"
+    else
+        fail "Stack reported $PAIR_RUNNING/2 running: $(echo "$PAIR_RESP" | head -c 400)"
+    fi
+
+    # THE ASSERTION THAT WOULD HAVE CAUGHT #50: one service resolving the other
+    # by its compose service key. Run inside the container, so it tests Docker's
+    # embedded DNS on the stack's own network rather than the host resolver.
+    sleep 4
+    CLIENT_CID=$(docker ps -aq --filter "label=dockpanel.stack_id=$PAIR_ID" \
+                              --filter "label=dockpanel.compose.service=client" | head -1)
+    if [ -n "$CLIENT_CID" ]; then
+        if docker exec "$CLIENT_CID" getent hosts store >/dev/null 2>&1; then
+            ok "A service resolves its sibling by compose service key"
+        else
+            fail "'store' does not resolve from 'client' — services are not on a shared network"
+        fi
+    else
+        fail "Could not find the client container for stack ${PAIR_ID:0:8}"
+    fi
+
+    api_delete "/stacks/$PAIR_ID" >/dev/null 2>&1 || true
+else
+    fail "Two-service stack creation failed: $(echo "$PAIR_RESP" | head -c 300)"
+fi
+
 # ═══════════════════════════════════════════════════════════════════════
 section "9. MULTI-SERVER (LOCAL ONLY)"
 # ═══════════════════════════════════════════════════════════════════════

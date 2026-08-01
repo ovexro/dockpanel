@@ -34,6 +34,16 @@ interface DiskIoResponse {
   write_bytes_sec: number;
 }
 
+interface UpdateInfo {
+  /// Derived by the backend, not a presence check: the stored version outlives
+  /// the release it names on any panel upgraded from the shell, so only this
+  /// flag may gate the banner.
+  update_available: boolean;
+  update_available_version?: string;
+  update_release_url?: string;
+  current_version?: string;
+}
+
 function useCountUp(target: number, duration = 800): number {
   const [value, setValue] = useState(0);
   const prev = useRef(0);
@@ -261,7 +271,7 @@ export default function Dashboard() {
   const [bmLabel, setBmLabel] = useState("");
   const [bmUrl, setBmUrl] = useState("");
   // Update notification
-  const [updateInfo, setUpdateInfo] = useState<{ update_available: boolean; update_available_version?: string; update_release_url?: string; current_version?: string } | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
 
   const isVisible = (widget: string) => widgetConfig[widget] !== false; // default visible
   const toggleWidget = (widget: string) => {
@@ -358,11 +368,25 @@ export default function Dashboard() {
         setMailQueue(count);
       })
       .catch(() => {});
-    // Update check
-    api
-      .get<{ update_available: boolean; update_available_version?: string; update_release_url?: string; current_version?: string }>("/telemetry/update-status")
-      .then(setUpdateInfo)
-      .catch(() => {});
+  }, []);
+
+  // Update check. Refetched every time the tab regains focus, because the row
+  // behind this banner is cleared server-side — on the first boot after an
+  // upgrade, and on every poll that finds nothing newer. Without a refetch a
+  // dashboard left open kept advertising an update that no longer existed until
+  // someone reloaded the page. Focus rather than an interval: a dashboard
+  // nobody is looking at costs nothing, and the banner is only wrong to a
+  // person who is looking at it.
+  useEffect(() => {
+    const loadUpdateInfo = () => {
+      api
+        .get<UpdateInfo>("/telemetry/update-status")
+        .then(setUpdateInfo)
+        .catch(() => {});
+    };
+    loadUpdateInfo();
+    window.addEventListener("focus", loadUpdateInfo);
+    return () => window.removeEventListener("focus", loadUpdateInfo);
   }, []);
 
   // Fetch real-time system endpoints (only needed when WS is disconnected)

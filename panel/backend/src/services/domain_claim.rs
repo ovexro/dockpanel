@@ -51,6 +51,10 @@ pub enum Holder {
     Site(Uuid),
     /// The `git_deploys` row with this id may hold it.
     GitDeploy(Uuid),
+    /// The `docker_stacks` row with this id may hold it. Unlike a Docker app, a
+    /// stack *can* re-claim its own domain: `update` redeploys in place under
+    /// the same id, so without this a stack could not be edited twice.
+    Stack(Uuid),
 }
 
 /// What already holds a domain. Carried so the error can name it — "in use" with
@@ -60,6 +64,7 @@ pub enum Occupant {
     Site,
     GitDeploy,
     DockerApp,
+    Stack,
 }
 
 impl Occupant {
@@ -71,6 +76,10 @@ impl Occupant {
                 "Domain already in use by a Docker app on this server. Rename or \
                  remove the app first — deploying over it would replace its nginx \
                  configuration."
+            }
+            Occupant::Stack => {
+                "Domain already in use by a Compose stack on this server. Change \
+                 that stack's domain or remove it first."
             }
         }
     }
@@ -168,6 +177,25 @@ pub async fn find_occupant(
     .map_err(|e| internal_error("domain availability", e))?;
     if git.is_some() {
         return Ok(Some(Occupant::GitDeploy));
+    }
+
+    // Compose stacks became domain holders in v2.54.0. A path that writes a
+    // vhost but is invisible to this function is how a domain ends up with two
+    // owners, so the leg lands with the feature rather than after it.
+    let exclude_stack = match holder {
+        Holder::Stack(id) => Some(id),
+        _ => None,
+    };
+    let stack: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM docker_stacks WHERE lower(domain) = $1 AND ($2::uuid IS NULL OR id <> $2)",
+    )
+    .bind(&domain)
+    .bind(exclude_stack)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| internal_error("domain availability", e))?;
+    if stack.is_some() {
+        return Ok(Some(Occupant::Stack));
     }
 
     // The leg that could not exist before: Docker apps are not rows. The agent

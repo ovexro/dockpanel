@@ -85,14 +85,44 @@ pub struct ApplyResponse {
     pub state: panel_update::UpdateState,
 }
 
+/// Why an apply target is refused, or `None` when it is a genuine upgrade.
+///
+/// Split out of the handler so the rules are unit-testable without a database.
+/// The direction rule is the one the comment above [`apply_update`] always
+/// claimed and never enforced: matching the advertised row is not enough,
+/// because the row can name a release OLDER than the running panel — the
+/// operator upgraded by hand and the advertisement had not been reconciled yet.
+/// `update.sh` installs whatever tag it is handed, in either direction, so
+/// applying such a row silently regressed the panel by several releases.
+fn reject_apply_target(target_clean: &str, advertised: &str, current: &str) -> Option<String> {
+    if advertised.is_empty() {
+        return Some(
+            "no update is currently available — run /api/update/manual-check first".to_string(),
+        );
+    }
+    if advertised.trim_start_matches('v') != target_clean {
+        return Some(
+            "target_version does not match the advertised update — refresh and retry".to_string(),
+        );
+    }
+    if !telemetry_collector::is_newer_release(target_clean, current) {
+        return Some(format!(
+            "refusing to apply v{target_clean}: this panel already runs v{current}, and this \
+             endpoint only moves forward. To go back to an earlier release, restore a snapshot \
+             via /api/update/rollback."
+        ));
+    }
+    None
+}
+
 pub async fn apply_update(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
     Json(body): Json<ApplyInput>,
 ) -> Result<(StatusCode, Json<ApplyResponse>), ApiError> {
-    // Operator can only apply versions the poller has surfaced. Prevents
-    // arbitrary tag jumps + downgrades through this surface (downgrade =
-    // rollback to a snapshot, separate route).
+    // Operator can only apply versions the poller has surfaced, and only ones
+    // ahead of what is installed. Prevents arbitrary tag jumps + downgrades
+    // through this surface (downgrade = rollback to a snapshot, separate route).
     let advertised: Option<(String,)> = sqlx::query_as(
         "SELECT value FROM settings WHERE key = 'update_available_version'",
     )
@@ -101,17 +131,12 @@ pub async fn apply_update(
     .map_err(|e| internal_error("apply update", e))?;
     let advertised_version = advertised.map(|r| r.0).unwrap_or_default();
     let target_clean = body.target_version.trim_start_matches('v');
-    if advertised_version.is_empty() {
-        return Err(err(
-            StatusCode::BAD_REQUEST,
-            "no update is currently available — run /api/update/manual-check first",
-        ));
-    }
-    if advertised_version.trim_start_matches('v') != target_clean {
-        return Err(err(
-            StatusCode::BAD_REQUEST,
-            "target_version does not match the advertised update — refresh and retry",
-        ));
+    if let Some(reason) = reject_apply_target(
+        target_clean,
+        &advertised_version,
+        env!("CARGO_PKG_VERSION"),
+    ) {
+        return Err(err(StatusCode::BAD_REQUEST, &reason));
     }
 
     let new_state = panel_update::start_panel_update(
@@ -164,9 +189,16 @@ pub async fn manual_check(
     .fetch_optional(&state.db)
     .await
     .map_err(|e| internal_error("manual check", e))?;
+    // The poll above clears a row it has overtaken, but it also returns early
+    // when GitHub is unreachable — and then the untouched row would come back
+    // as this check's own finding, telling the operator who doubted the banner
+    // that a live check had just confirmed it.
+    let available_version = advertised
+        .map(|r| r.0)
+        .filter(|v| telemetry_collector::is_newer_release(v, env!("CARGO_PKG_VERSION")));
     Ok(Json(ManualCheckResponse {
         checked_at: chrono::Utc::now().to_rfc3339(),
-        available_version: advertised.map(|r| r.0),
+        available_version,
     }))
 }
 
@@ -440,6 +472,31 @@ mod tests {
             serde_json::from_str(r#"{"target_version":"v2.10.0"}"#).unwrap();
         assert!(body.halt_on_failure);
         assert!(!body.include_panel);
+    }
+
+    #[test]
+    fn apply_refuses_a_target_no_newer_than_the_running_panel() {
+        // #98's state: the panel runs 2.52.0, the settings row still advertises
+        // 2.49.0, and the UI offers a button to apply it. Matching the row was
+        // the only guard, so the apply went through and reinstalled a panel
+        // three releases behind.
+        let reason = reject_apply_target("2.49.0", "2.49.0", "2.52.0")
+            .expect("a lower target must be refused");
+        assert!(reason.contains("2.49.0") && reason.contains("2.52.0"));
+        assert!(reason.contains("rollback"), "refusal must name the way back");
+
+        // Reinstalling the running version is not an update either.
+        assert!(reject_apply_target("2.52.0", "2.52.0", "2.52.0").is_some());
+        // ...nor is an rc of the release already installed.
+        assert!(reject_apply_target("2.52.0-rc.1", "2.52.0-rc.1", "2.52.0").is_some());
+    }
+
+    #[test]
+    fn apply_accepts_the_advertised_upgrade_and_nothing_else() {
+        assert!(reject_apply_target("2.53.0", "2.53.0", "2.52.0").is_none());
+        // Unadvertised tag jump, advertised-but-different tag, no advertisement.
+        assert!(reject_apply_target("2.99.0", "2.53.0", "2.52.0").is_some());
+        assert!(reject_apply_target("2.53.0", "", "2.52.0").is_some());
     }
 
     #[test]

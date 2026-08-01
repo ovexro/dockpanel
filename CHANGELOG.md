@@ -4,6 +4,118 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.54.0] - 2026-08-01
+
+**A stack is a network, a namespace, and an honest status.**
+
+DockPanel's Compose support does not run `docker compose` — it creates each
+service directly through the Docker API, which is what lets the panel apply its
+own sandboxing to a pasted compose file. What that hand-rolled path has to
+reproduce deliberately is everything `docker compose` would have done for free,
+and until now it reproduced almost none of it.
+
+Services were created with **no user-defined network**. Every one landed on
+Docker's default bridge, where container-name DNS does not exist — so
+`postgresql://app:pw@database:5432` could not resolve, and **every multi-service
+package the panel ships died on boot**: Domain Watchdog, WordPress, Ghost and
+Nextcloud alike. The failure looked like a broken image rather than a broken
+deployer, because the deploy reported every service `running` on the strength of
+`create` and `start` returning `Ok`, and because our only end-to-end test for
+stacks deployed a single nginx and asserted that a UUID came back. A one-service
+stack cannot fail this way.
+
+Reported by @insxa on #50 — the same thread the Domain Watchdog package was
+shipped for in v2.52.0 — as "always crashing apps, ssl doesnt work properly".
+Both halves were accurate, and neither was about his box.
+
+### Fixed — Compose stacks (#50)
+
+- **A stack gets its own bridge network**, and every service is attached to it
+  under its compose service key as an alias — the name its siblings were
+  actually configured with. A `container_name` chosen by the compose author
+  becomes an additional alias rather than the host-level Docker name.
+- **Names are scoped per stack.** Container names, the network and named volumes
+  all carry the stack's scope, so the `db` service of two packages can coexist;
+  before, WordPress, Ghost and Nextcloud all wanted `dockpanel-compose-db` and
+  the second package to be deployed failed on a name conflict. An existing
+  volume is reused rather than renamed, so an upgrade never orphans data.
+- **`command:`, `depends_on:`, `labels:` and long-form `ports:` are no longer
+  discarded.** None of the four was declared on the parser's service struct, so
+  serde dropped them silently — which turned Domain Watchdog's
+  `messenger:consume` worker into a second copy of its web server, and made
+  `docker compose config` output deploy with no published port at all. Author
+  labels now reach Docker; `dockpanel.*` keys stay the panel's.
+- **Services deploy in dependency order**, and over a deterministic iteration
+  order — a `HashMap` had been randomising it per process.
+- **A service is reported running because it is.** The deploy waits for the
+  container to still be up and returns its log tail when it is not, and the
+  panel refuses to save a stack where nothing came up.
+
+### Added — a stack can be given a domain and a certificate (#50)
+
+There was no vhost, domain or certificate path for a stack anywhere in the tree:
+the deploy request carried no domain field and the stack table had no column for
+one, so a deployed stack was reachable only on `127.0.0.1:{port}` from the
+server itself. Stacks now take an optional **Domain** and **SSL Email**, served
+through the same nginx and ACME path Docker apps use.
+
+The domain is claimed through `services::domain_claim`, and a stack is now
+visible to that check as a holder — a path that writes a vhost while being
+invisible to the claim system is how one domain ends up with two owners. Removal
+takes the vhost and certificates down through the v2.53.0 ownership guard, so a
+stack cannot delete a domain a site has since taken over.
+
+### Fixed — the dashboard advertised an update that was not one (#98)
+
+Reported by @brunoDruon: after `update.sh` the banner still read *"DockPanel
+v2.49.0 is available (current: v2.52.0)"*. Two independent defects, and the
+second one fires on **every install**:
+
+- The render decision was not a version test of any kind. `update_available` was
+  set because the stored string was non-empty, next to the current version it
+  never compared against.
+- Nothing cleared the stored value unless GitHub's latest was byte-equal to the
+  running version. `update.sh` never touches the settings table and the first
+  poll after a restart is six hours out — so **every operator who upgraded saw
+  the version they had just installed advertised back at them for six hours.**
+
+The comparison is now one shared semver answer used by the poller, the boot
+reconcile, both API surfaces and the apply guard; the stored advertisement is
+reconciled against the running binary at startup, off the network; and applying
+a target no newer than the installed version is refused, pointing at
+`/api/update/rollback` instead. The old comparator dropped a non-numeric segment
+and shifted the rest, so `2.53.0-rc.1` outranked its own GA.
+
+### Fixed — other
+
+- **A failed stack edit no longer replaces the only copy of its YAML.**
+  `docker_stacks` has no history table, and the write landed after the redeploy
+  and unconditionally — while the agent reports per-service failure inside a
+  200. The previous definition is now held until the new one is known to run,
+  and redeployed when it is not.
+- **Stopped containers are listed on the Logs page.** `docker ps` without `-a`
+  excluded exactly the containers anybody opens that page for, and stack
+  services had no Logs control at all — which is why bug reports about stacks
+  arrive with no detail in them.
+- **`POST /api/stacks` runs the container-escape validator.** It guarded the
+  agent endpoint the UI does not post to.
+- **The package cards work on a plain-HTTP panel.** They minted passwords with
+  `crypto.randomUUID`, which is secure-context-only, so on the installer's
+  cert-failed branch the card silently did nothing.
+- **Domain Watchdog ships its own `APP_SECRET`.** Upstream bakes a published one
+  into the image, so every install signed with the same value.
+
+### Testing
+
+- New `tests/compose-stack-pin-e2e.sh` — 43 arms, 42 red against v2.53.0.
+  Attacked with 17 evasions, of which three beat the first draft: an alias field
+  present but empty, a `confirm_running` whose result was discarded, and an arm
+  that matched a label name inside the log line narrating the check rather than
+  the check itself.
+- `tests/deep-e2e.sh` deploys a **two-service** stack and asserts one service
+  resolves the other by compose service key.
+- 8 new Rust unit tests over the update comparison, 12 over compose parsing.
+
 ## [2.53.0] - 2026-07-31
 
 v2.52.0 answered *may this domain be claimed?* This answers the question after

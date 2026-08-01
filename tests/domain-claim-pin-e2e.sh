@@ -304,13 +304,29 @@ fi
 
 # All three writers: snapshot before, restore after. Named per writer so a
 # regression says WHICH one lost it.
+# $2 is a |-separated list of the function the write may live in. The vhost
+# write moved out of `deploy` and into the shared `expose_domain` at v2.54.0 so
+# the Compose-stack path could not grow a second, unguarded copy of it; the arm
+# follows the write rather than the name it used to sit under. The FIRST
+# non-empty body wins, and an empty result across all of them still reds.
 check_writer() {
-  local file="$1" fn="$2" label="$3"
-  local S B
+  local file="$1" fns="$2" label="$3"
+  local S B fn
   S=$(subj "$file") || { bad "$label: subject unreadable"; return; }
-  B=$(fnbody "$S" "$fn")
+  B=""
+  for fn in ${fns//|/ }; do
+    B=$(fnbody "$S" "$fn")
+    [ -n "$B" ] && break
+  done
   if [ -z "$B" ]; then
-    bad "$label: could not extract fn $fn — the arm is not measuring anything"
+    bad "$label: could not extract any of [$fns] — the arm is not measuring anything"
+    return
+  fi
+  # A body with no vhost write in it is not the writer, and every arm below
+  # would pass on it vacuously — the third one especially, since a body with no
+  # deletes has no stray deletes.
+  if ! derives "$B" 'fs::write\(&tmp_path|fs::write\(&config_path'; then
+    bad "$label: the extracted body writes no vhost — the arm is pointed at the wrong function"
     return
   fi
   if derives "$B" 'read_to_string\(&config_path\)'; then
@@ -338,7 +354,19 @@ check_writer() {
 }
 
 check_writer "$NGINX_ROUTE" put_site   "put_site"
-check_writer "$APPS_ROUTE"  deploy     "the Docker-app auto-proxy write"
+check_writer "$APPS_ROUTE"  "expose_domain|deploy" "the Docker-app auto-proxy write"
+
+# ...and the extraction must stay reachable. A shared writer nothing calls is a
+# refactor that quietly deleted a feature.
+ARD=$(subj "$APPS_ROUTE") || ARD=""
+if [ -n "$ARD" ]; then
+  DEP=$(fnbody "$ARD" "deploy")
+  if derives "$DEP" 'expose_domain' || derives "$DEP" 'fs::write\(&tmp_path'; then
+    ok "the app deploy still reaches the vhost writer"
+  else
+    bad "the app deploy no longer writes a vhost at all"
+  fi
+fi
 
 # git_build's writer returns a String error rather than an HTTP response, so it
 # is checked by name rather than through check_writer.

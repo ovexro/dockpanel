@@ -8,6 +8,7 @@
 //! 5. Checks GitHub Releases for DockPanel updates
 
 use crate::services::agent::AgentClient;
+use crate::services::panel_update::semver_key;
 use sqlx::PgPool;
 use std::time::Duration;
 
@@ -50,6 +51,13 @@ pub async fn run(
     agent: AgentClient,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
 ) {
+    // Before anything sleeps: `update.sh` upgrades the binaries but never
+    // touches the settings table, so on the first boot after an upgrade the
+    // stored advertisement still names the version now running — and the first
+    // poll is UPDATE_CHECK_INTERVAL away. Reconcile it against the compiled-in
+    // version now, off the network.
+    reconcile_stored_update(&pool).await;
+
     // Stagger start to avoid thundering herd with other background services
     tokio::time::sleep(Duration::from_secs(120)).await;
 
@@ -155,11 +163,6 @@ async fn collect_agent_health(pool: &PgPool, agent: &AgentClient) {
 /// Public wrapper for routes to trigger manual send.
 pub async fn send_pending_events_public(pool: &PgPool, endpoint: &str) {
     send_pending_events(pool, endpoint).await;
-}
-
-/// Public wrapper for routes to trigger manual update check.
-pub async fn check_for_updates_public(pool: &PgPool) {
-    check_for_updates(pool).await;
 }
 
 /// Send unsent telemetry events to the remote endpoint.
@@ -324,8 +327,9 @@ async fn read_update_channel(pool: &PgPool) -> String {
 ///                   builds when CI starts tagging `prerelease: true`)
 ///   - `hold`      → skip the poll entirely (operator pinned)
 ///
-/// The manual-check route bypasses the `hold` skip by calling
-/// [`check_for_updates_manual`] instead.
+/// Both "Check Now" routes bypass the `hold` skip by calling
+/// [`check_for_updates_manual`] instead — `hold` pins automatic polling, not
+/// an operator who has just asked to look.
 async fn check_for_updates(pool: &PgPool) {
     let channel = read_update_channel(pool).await;
     if channel == "hold" {
@@ -411,35 +415,15 @@ async fn check_for_updates_inner(pool: &PgPool, channel: &str) {
     let latest_version = tag.trim_start_matches('v');
     let current_version = env!("CARGO_PKG_VERSION");
 
-    if latest_version.is_empty() || latest_version == current_version {
-        // No update or same version — clear any stale update info
-        let _ = sqlx::query(
-            "DELETE FROM settings WHERE key IN ('update_available_version', 'update_release_notes', 'update_release_url', 'update_checked_at')",
-        )
-        .execute(pool)
-        .await;
-        // Still record the check timestamp so the UI can show "checked Xs ago"
-        let _ = sqlx::query(
-            "INSERT INTO settings (key, value) VALUES ('update_checked_at', $1) \
-             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-        )
-        .bind(chrono::Utc::now().to_rfc3339())
-        .execute(pool)
-        .await;
-        return;
-    }
-
-    // Simple semver comparison (works for X.Y.Z format)
-    let is_newer = compare_versions(latest_version, current_version);
-    if !is_newer {
-        // Also record the check timestamp so the UI updates even on no-op polls
-        let _ = sqlx::query(
-            "INSERT INTO settings (key, value) VALUES ('update_checked_at', $1) \
-             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-        )
-        .bind(chrono::Utc::now().to_rfc3339())
-        .execute(pool)
-        .await;
+    // One decision covers every not-newer shape: an empty tag, a release
+    // older than what is installed (the operator upgraded past it by hand), the
+    // release already running, and anything unparseable. All of them CLEAR the
+    // advertisement. Until v2.53.0 only byte-equality cleared it, so a stored
+    // row that was merely older survived every poll for as long as it existed
+    // and the panel kept offering an update to a version behind itself (#98).
+    if advertisement_is_stale(latest_version, current_version) {
+        clear_update_advertisement(pool).await;
+        record_update_check_time(pool).await;
         return;
     }
 
@@ -474,7 +458,53 @@ async fn check_for_updates_inner(pool: &PgPool, channel: &str) {
         .await;
     }
 
-    // Store check timestamp
+    record_update_check_time(pool).await;
+
+    tracing::info!(
+        "DockPanel update available ({channel} channel): v{current_version} -> v{latest_version}"
+    );
+}
+
+/// Drop an advertisement the running binary has already caught up with.
+///
+/// Runs once at service start. `update.sh` replaces the binaries but never
+/// writes to the settings table, and no migration touches these keys, so a
+/// panel that has just been upgraded boots with the row still advertising the
+/// version it is now running. Nothing else would clear it before the first
+/// poll, which is [`UPDATE_CHECK_INTERVAL`] plus the start stagger away — so
+/// every operator saw "vX is available (current: vX)" for six hours after
+/// every upgrade.
+///
+/// A DB read and possibly a delete; no GitHub request, so it costs the API
+/// nothing and works on a box with no outbound network.
+async fn reconcile_stored_update(pool: &PgPool) {
+    let advertised = get_setting(pool, "update_available_version").await;
+    if advertised.is_empty() {
+        return;
+    }
+    let current_version = env!("CARGO_PKG_VERSION");
+    if !advertisement_is_stale(&advertised, current_version) {
+        return;
+    }
+    tracing::info!(
+        "Clearing stale update advertisement v{advertised} — this panel runs v{current_version}"
+    );
+    clear_update_advertisement(pool).await;
+}
+
+/// Delete the three keys that make the UI offer an update. `update_checked_at`
+/// deliberately survives: the check still happened, and the UI shows when.
+async fn clear_update_advertisement(pool: &PgPool) {
+    let _ = sqlx::query(
+        "DELETE FROM settings WHERE key IN ('update_available_version', 'update_release_notes', 'update_release_url')",
+    )
+    .execute(pool)
+    .await;
+}
+
+/// Record the check timestamp so the UI can show "checked Xs ago" — on polls
+/// that found nothing just as much as on polls that found a release.
+async fn record_update_check_time(pool: &PgPool) {
     let _ = sqlx::query(
         "INSERT INTO settings (key, value) VALUES ('update_checked_at', $1) \
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
@@ -482,32 +512,48 @@ async fn check_for_updates_inner(pool: &PgPool, channel: &str) {
     .bind(chrono::Utc::now().to_rfc3339())
     .execute(pool)
     .await;
-
-    tracing::info!(
-        "DockPanel update available ({channel} channel): v{current_version} -> v{latest_version}"
-    );
 }
 
-/// Compare two semver version strings. Returns true if `a` is newer than `b`.
-fn compare_versions(a: &str, b: &str) -> bool {
-    let parse = |v: &str| -> Vec<u32> {
-        v.split('.')
-            .filter_map(|p| p.parse::<u32>().ok())
-            .collect()
-    };
-    let va = parse(a);
-    let vb = parse(b);
-    for i in 0..3 {
-        let pa = va.get(i).copied().unwrap_or(0);
-        let pb = vb.get(i).copied().unwrap_or(0);
-        if pa > pb {
-            return true;
-        }
-        if pa < pb {
-            return false;
-        }
+/// True when a stored `update_available_version` must be deleted rather than
+/// left standing — i.e. whenever it is not strictly newer than what is running.
+fn advertisement_is_stale(stored: &str, current: &str) -> bool {
+    !is_newer_release(stored, current)
+}
+
+/// True when `latest` is a strictly newer release than `current`.
+///
+/// The single version comparison behind the poller, the start-up reconcile,
+/// the read-side `update_available` flags and the apply guard — one rule, so
+/// the four surfaces cannot disagree about whether an update exists.
+pub fn is_newer_release(latest: &str, current: &str) -> bool {
+    if latest.trim().is_empty() {
+        return false;
     }
-    false
+    release_key(latest) > release_key(current)
+}
+
+/// Ordering key for a release tag, layered on [`semver_key`] so the update
+/// surfaces and the fleet queue parse `X.Y.Z` the same way — including the
+/// junk tolerance that keeps a non-numeric segment from shifting the rest of
+/// the version left (`2.52.0-rc.1` is 2.52.0, never 2.52.1).
+///
+/// `semver_key` drops the `-rc.N` suffix on purpose: the fleet queue wants an
+/// rc to sort with its GA release. The update path needs the other half of the
+/// SemVer rule — `2.53.0-rc.1` precedes `2.53.0`, and an operator on the
+/// `candidate` channel must still be offered rc.2 over rc.1 — so the suffix
+/// comes back as a second component. GA (no suffix) outranks every prerelease;
+/// `rc.N` orders by N; any other suffix ranks below rc.1 rather than being
+/// silently promoted to GA.
+fn release_key(v: &str) -> ((u8, u64, u64, u64), u64) {
+    let v = v.trim();
+    let prerelease = match v.split_once('-') {
+        Some((_, suffix)) => suffix
+            .strip_prefix("rc.")
+            .and_then(|n| n.parse::<u64>().ok())
+            .unwrap_or(0),
+        None => u64::MAX,
+    };
+    (semver_key(Some(v)), prerelease)
 }
 
 /// Clean up events older than retention period.
@@ -554,4 +600,82 @@ async fn get_setting(pool: &PgPool, key: &str) -> String {
         .ok()
         .flatten()
         .unwrap_or_default()
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The decision is tested, not the SQL around it: #98 was a wrong verdict,
+    // not a failed write. `advertisement_is_stale` is exactly what both the
+    // poller and the start-up reconcile branch on.
+
+    #[test]
+    fn a_release_older_than_this_panel_clears_the_advertisement() {
+        // #98 verbatim: the panel is on 2.52.0, the settings row still says
+        // 2.49.0. The byte-equality gate this replaced answered "not stale"
+        // and left the row — and the banner — standing.
+        assert!(advertisement_is_stale("2.49.0", "2.52.0"));
+        assert!(!is_newer_release("2.49.0", "2.52.0"));
+    }
+
+    #[test]
+    fn the_running_release_clears_the_advertisement() {
+        // The case that fires after EVERY successful upgrade: update.sh swaps
+        // the binaries and leaves the row naming the version now installed.
+        assert!(advertisement_is_stale("2.53.0", "2.53.0"));
+        assert!(!is_newer_release("2.53.0", "2.53.0"));
+    }
+
+    #[test]
+    fn an_unparseable_or_empty_tag_clears_the_advertisement() {
+        assert!(advertisement_is_stale("", "2.53.0"));
+        assert!(advertisement_is_stale("garbage", "2.53.0"));
+        assert!(advertisement_is_stale("v", "2.53.0"));
+    }
+
+    #[test]
+    fn a_genuinely_newer_release_is_stored() {
+        assert!(is_newer_release("2.54.0", "2.53.0"));
+        assert!(is_newer_release("v2.54.0", "2.53.0"));
+        assert!(is_newer_release("2.53.1", "2.53.0"));
+        assert!(is_newer_release("3.0.0", "2.53.0"));
+        assert!(is_newer_release("2.100.0", "2.53.0"), "2.100 > 2.53 numerically, not lexicographically");
+        assert!(!advertisement_is_stale("2.54.0", "2.53.0"));
+    }
+
+    #[test]
+    fn a_release_candidate_orders_below_its_own_ga_release() {
+        // The parser this replaced dropped the non-numeric segment and shifted
+        // the rest left, reading "2.53.0-rc.1" as 2.53.1 — a phantom upgrade
+        // offered to every panel already running the GA release.
+        assert!(!is_newer_release("2.53.0-rc.1", "2.53.0"));
+        assert!(advertisement_is_stale("2.53.0-rc.1", "2.53.0"));
+        assert!(is_newer_release("2.53.0", "2.53.0-rc.1"));
+        // ...and an rc still supersedes an earlier rc, which is the whole
+        // point of the `candidate` channel.
+        assert!(is_newer_release("2.53.0-rc.2", "2.53.0-rc.1"));
+        assert!(!is_newer_release("2.53.0-rc.1", "2.53.0-rc.2"));
+        // A suffix that is not `rc.N` ranks below rc.1, never above GA.
+        assert!(!is_newer_release("2.53.0-beta", "2.53.0"));
+    }
+
+    #[test]
+    fn the_reconcile_and_the_poller_agree_on_every_shape() {
+        // Both call the same predicate; pin that they cannot drift.
+        for (stored, current) in [
+            ("2.49.0", "2.52.0"),
+            ("2.53.0", "2.53.0"),
+            ("2.54.0", "2.53.0"),
+            ("2.53.0-rc.1", "2.53.0"),
+            ("junk", "2.53.0"),
+        ] {
+            assert_eq!(
+                advertisement_is_stale(stored, current),
+                !is_newer_release(stored, current),
+            );
+        }
+    }
 }

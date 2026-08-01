@@ -231,10 +231,24 @@ AR=$(subj "$APPS_ROUTE") || AR=""
 # treats an empty window as a failure, so the arm reds rather than greening on a
 # body it never read (lesson #131).
 RA=$(fnbody "$AR" "remove")
+# The guarded teardown moved out of `remove` and into the shared
+# `unexpose_domain` at v2.54.0, so the Compose-stack teardown reaches the same
+# guard instead of copying it. Follow the deletes; the arm below is unchanged.
+# A SEPARATE window: the later arms in this section measure `remove`'s own
+# body (the data-tree cleanup lives there still), so this must not overwrite it.
+RA_VHOST="$RA"
+if [ -n "$AR" ] && ! grep -qE 'ownership::app_vhost' <<< "$RA"; then
+  RA_HELPER=$(fnbody "$AR" "unexpose_domain")
+  # Only accept the helper if `remove` actually reaches it — otherwise the
+  # teardown has simply been deleted and the arm must red.
+  if grep -qE 'unexpose_domain' <<< "$RA" && [ -n "$RA_HELPER" ]; then
+    RA_VHOST="$RA_HELPER"
+  fi
+fi
 # The guard's ANSWER must reach the branch. Calling it and dropping the result
 # on the floor is one of the two evasions that beat the s294 pin, so the arm is
 # keyed on the call sitting inside the condition, not on the call existing.
-if derives "$RA" 'if +[^;]*ownership::app_vhost[^;]*may_delete'; then
+if derives "$RA_VHOST" 'if +[^;]*ownership::app_vhost[^;]*may_delete'; then
   ok "B2 app removal proves the vhost is still fronting THIS container"
 else
   bad "B2 app removal deletes the vhost without the guard's answer reaching the branch"

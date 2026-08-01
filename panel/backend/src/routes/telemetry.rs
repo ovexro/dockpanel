@@ -190,15 +190,29 @@ pub async fn get_config(
             .await
             .map_err(|e| internal_error("get telemetry config", e))?;
 
+    let current_version = env!("CARGO_PKG_VERSION");
+
     let mut config = serde_json::Map::new();
+    let mut update_available = false;
     for (key, value) in rows {
+        if key == "update_available_version" {
+            update_available = crate::services::telemetry_collector::is_newer_release(&value, current_version);
+        }
         config.insert(key, serde_json::Value::String(value));
     }
 
     // Add current version
     config.insert(
         "current_version".to_string(),
-        serde_json::Value::String(env!("CARGO_PKG_VERSION").to_string()),
+        serde_json::Value::String(current_version.to_string()),
+    );
+    // Derived here so no client has to compare versions of its own — and so
+    // that a stored row which is not newer than this binary stops rendering a
+    // banner. The raw value stays in the payload: the row is what was last
+    // seen on GitHub, `update_available` is what it means for this panel.
+    config.insert(
+        "update_available".to_string(),
+        serde_json::Value::Bool(update_available),
     );
 
     Ok(Json(serde_json::Value::Object(config)))
@@ -501,16 +515,23 @@ pub async fn update_status(
             .await
             .map_err(|e| internal_error("get update status", e))?;
 
+    let current_version = env!("CARGO_PKG_VERSION");
+
     let mut result = serde_json::Map::new();
     result.insert(
         "current_version".to_string(),
-        serde_json::Value::String(env!("CARGO_PKG_VERSION").to_string()),
+        serde_json::Value::String(current_version.to_string()),
     );
 
+    // Belt to the collector's braces. The presence of a row proved only that a
+    // check once found something; it is an update only while it names a release
+    // newer than the binary answering this request. Deliberately does NOT
+    // delete the row — a GET must not mutate. Clearing is the collector's job,
+    // at start-up and on every poll.
     let mut has_update = false;
     for (key, value) in rows {
-        if key == "update_available_version" && !value.is_empty() {
-            has_update = true;
+        if key == "update_available_version" {
+            has_update = crate::services::telemetry_collector::is_newer_release(&value, current_version);
         }
         result.insert(key, serde_json::Value::String(value));
     }
@@ -523,18 +544,37 @@ pub async fn update_status(
 }
 
 /// POST /api/telemetry/check-updates — Force an update check now (admin only).
+///
+/// Runs the poll inline and reports what it found. It used to spawn the check
+/// and answer "Update check started" before it had started anything — which
+/// under `update_channel = hold` was answering success for a poll that returned
+/// immediately without contacting GitHub. Clicking a button labelled "Check
+/// Now" is an explicit operator request, and `hold` suppresses *automatic*
+/// polling only, so this takes the same bypass the `/api/update/manual-check`
+/// button has always taken. Bounded by the collector's own 15s HTTP timeout.
 pub async fn check_updates(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let pool = state.db.clone();
-    tokio::spawn(async move {
-        crate::services::telemetry_collector::check_for_updates_public(&pool).await;
+    crate::services::telemetry_collector::check_for_updates_manual(&state.db).await;
+
+    let available: Option<(String,)> =
+        sqlx::query_as("SELECT value FROM settings WHERE key = 'update_available_version'")
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| internal_error("check updates", e))?;
+    let available = available.map(|r| r.0).filter(|v| {
+        crate::services::telemetry_collector::is_newer_release(v, env!("CARGO_PKG_VERSION"))
     });
 
     tracing::info!(user = %claims.email, "Manual update check triggered");
 
-    Ok(Json(
-        serde_json::json!({ "success": true, "message": "Update check started" }),
-    ))
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": match &available {
+            Some(v) => format!("Update available: v{v}"),
+            None => "No update available — you are on the latest version.".to_string(),
+        },
+        "available_version": available,
+    })))
 }

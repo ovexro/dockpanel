@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     Json,
 };
 use uuid::Uuid;
@@ -9,7 +9,11 @@ use crate::auth::{AuthUser, Claims, ServerScope};
 use crate::error::{internal_error, err, agent_error, require_admin, ApiError};
 use crate::services::activity;
 use crate::services::agent::AgentHandle;
+use crate::services::domain_claim::{self, Holder};
 use crate::AppState;
+
+const STACK_SELECT: &str = "SELECT id, user_id, name, yaml, service_count, domain, ssl_email, \
+                            created_at, updated_at FROM docker_stacks";
 
 #[derive(serde::Serialize, sqlx::FromRow)]
 pub struct Stack {
@@ -18,6 +22,9 @@ pub struct Stack {
     pub name: String,
     pub yaml: String,
     pub service_count: i32,
+    /// Domain this stack is served on, if the operator gave it one.
+    pub domain: Option<String>,
+    pub ssl_email: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -26,11 +33,62 @@ pub struct Stack {
 pub struct CreateStackRequest {
     pub name: String,
     pub yaml: String,
+    /// Optional domain to front the stack with.
+    pub domain: Option<String>,
+    /// ACME address. A domain with no address gets a vhost but no certificate.
+    pub ssl_email: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
 pub struct UpdateStackRequest {
     pub yaml: String,
+    pub domain: Option<String>,
+    pub ssl_email: Option<String>,
+}
+
+/// Did anything in the stack actually come up?
+///
+/// The agent reports per-service outcomes inside a 200 — `deploy_compose`
+/// returns a result, never an `Err` — so a caller that only checks the HTTP
+/// status believes a stack deployed when none of it did.
+fn deployed_service_states(deploy_result: &serde_json::Value) -> (usize, usize, Vec<String>) {
+    let services = deploy_result
+        .get("services")
+        .and_then(|s| s.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let total = services.len();
+    let running = services
+        .iter()
+        .filter(|s| s.get("status").and_then(|v| v.as_str()) == Some("running"))
+        .count();
+    let errors = services
+        .iter()
+        .filter_map(|s| {
+            let name = s.get("name").and_then(|v| v.as_str()).unwrap_or("service");
+            s.get("error")
+                .and_then(|v| v.as_str())
+                .map(|e| format!("{name}: {e}"))
+        })
+        .collect();
+    (running, total, errors)
+}
+
+/// Normalise + claim a stack's domain, or clear it.
+async fn claim_stack_domain(
+    state: &AppState,
+    agent: &AgentHandle,
+    server_id: Uuid,
+    headers: &HeaderMap,
+    domain: Option<&str>,
+    holder: Holder,
+) -> Result<Option<String>, ApiError> {
+    let Some(raw) = domain.map(str::trim).filter(|d| !d.is_empty()) else {
+        return Ok(None);
+    };
+    let claimed =
+        domain_claim::ensure_claimable(&state.db, agent, server_id, raw, headers, holder).await?;
+    Ok(Some(claimed))
 }
 
 /// GET /api/stacks — List all stacks for the current user.
@@ -41,10 +99,9 @@ pub async fn list(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
 
-    let stacks: Vec<Stack> = sqlx::query_as(
-        "SELECT id, user_id, name, yaml, service_count, created_at, updated_at \
-         FROM docker_stacks WHERE user_id = $1 AND server_id = $2 ORDER BY created_at DESC",
-    )
+    let stacks: Vec<Stack> = sqlx::query_as(&format!(
+        "{STACK_SELECT} WHERE user_id = $1 AND server_id = $2 ORDER BY created_at DESC"
+    ))
     .bind(claims.sub)
     .bind(server_id)
     .fetch_all(&state.db)
@@ -79,6 +136,8 @@ pub async fn list(
                 "id": stack.id,
                 "name": stack.name,
                 "service_count": stack.service_count,
+                "domain": stack.domain,
+                "ssl_email": stack.ssl_email,
                 "running": running,
                 "total": total,
                 "status": if total == 0 { "removed" } else if running == total { "running" } else if running == 0 { "stopped" } else { "partial" },
@@ -101,10 +160,7 @@ pub async fn get_one(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
 
-    let stack: Stack = sqlx::query_as(
-        "SELECT id, user_id, name, yaml, service_count, created_at, updated_at \
-         FROM docker_stacks WHERE id = $1 AND user_id = $2",
-    )
+    let stack: Stack = sqlx::query_as(&format!("{STACK_SELECT} WHERE id = $1 AND user_id = $2"))
     .bind(id)
     .bind(claims.sub)
     .fetch_optional(&state.db)
@@ -137,6 +193,8 @@ pub async fn get_one(
         "name": stack.name,
         "yaml": stack.yaml,
         "service_count": stack.service_count,
+        "domain": stack.domain,
+        "ssl_email": stack.ssl_email,
         "running": running,
         "total": services.len(),
         "services": services,
@@ -150,6 +208,7 @@ pub async fn create(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(server_id, agent): ServerScope,
+    headers: HeaderMap,
     Json(body): Json<CreateStackRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     require_admin(&claims.role)?;
@@ -160,6 +219,23 @@ pub async fn create(
     if body.yaml.len() > 65536 {
         return Err(err(StatusCode::BAD_REQUEST, "YAML too large (max 64KB)"));
     }
+
+    // The container-escape validator guarded `POST /api/apps/compose/deploy` and
+    // nothing else, so the endpoint the UI actually posts to skipped it. The
+    // agent re-rejects each of these itself, which is why it was never
+    // exploitable — but a defence that only one of two doors performs is one
+    // refactor away from being no defence.
+    super::validate_compose_yaml(&body.yaml).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+
+    let domain = claim_stack_domain(
+        &state,
+        &agent,
+        server_id,
+        &headers,
+        body.domain.as_deref(),
+        Holder::New,
+    )
+    .await?;
 
     // Parse to get service count
     let parsed = agent
@@ -177,15 +253,17 @@ pub async fn create(
 
     // Create DB record first to get the stack ID
     let stack: Stack = sqlx::query_as(
-        "INSERT INTO docker_stacks (user_id, server_id, name, yaml, service_count) \
-         VALUES ($1, $2, $3, $4, $5) \
-         RETURNING id, user_id, name, yaml, service_count, created_at, updated_at",
+        "INSERT INTO docker_stacks (user_id, server_id, name, yaml, service_count, domain, ssl_email) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7) \
+         RETURNING id, user_id, name, yaml, service_count, domain, ssl_email, created_at, updated_at",
     )
     .bind(claims.sub)
     .bind(server_id)
     .bind(&body.name)
     .bind(&body.yaml)
     .bind(service_count)
+    .bind(&domain)
+    .bind(&body.ssl_email)
     .fetch_one(&state.db)
     .await
     .map_err(|e| internal_error("create stacks", e))?;
@@ -197,6 +275,8 @@ pub async fn create(
             Some(serde_json::json!({
                 "yaml": body.yaml,
                 "stack_id": stack.id.to_string(),
+                "domain": domain,
+                "ssl_email": body.ssl_email,
             })),
         )
         .await
@@ -212,6 +292,24 @@ pub async fn create(
             });
             agent_error("Stack deploy", e)
         })?;
+
+    // A stack where nothing came up is not a stack. Leaving the row behind gave
+    // the operator a Compose Stacks entry with no containers and a second one
+    // on every retry, and the domain claim would have outlived the deploy.
+    let (running, total, errors) = deployed_service_states(&deploy_result);
+    if total > 0 && running == 0 {
+        let _ = sqlx::query("DELETE FROM docker_stacks WHERE id = $1")
+            .bind(stack.id)
+            .execute(&state.db)
+            .await;
+        return Err(err(
+            StatusCode::BAD_GATEWAY,
+            &format!(
+                "No service in the stack stayed running, so it was not saved. {}",
+                errors.join(" | ")
+            ),
+        ));
+    }
 
     activity::log_activity(
         &state.db,
@@ -231,6 +329,9 @@ pub async fn create(
             "id": stack.id,
             "name": stack.name,
             "service_count": service_count,
+            "domain": domain,
+            "running": running,
+            "total": total,
             "deploy_result": deploy_result,
         })),
     ))
@@ -275,23 +376,26 @@ pub async fn remove(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
 
-    let stack: Option<(Uuid, String)> =
-        sqlx::query_as("SELECT id, name FROM docker_stacks WHERE id = $1 AND user_id = $2")
-            .bind(id)
-            .bind(claims.sub)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| internal_error("remove stacks", e))?;
+    let stack: Option<(Uuid, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, name, domain FROM docker_stacks WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("remove stacks", e))?;
 
-    let (_, name) = stack.ok_or_else(|| err(StatusCode::NOT_FOUND, "Stack not found"))?;
+    let (_, name, domain) = stack.ok_or_else(|| err(StatusCode::NOT_FOUND, "Stack not found"))?;
 
-    // Remove all containers
+    // Remove all containers, and the vhost/certs the stack was fronted by. The
+    // agent proves ownership of each before deleting it.
     let result = agent
         .post(
             "/apps/stack/action",
             Some(serde_json::json!({
                 "stack_id": id.to_string(),
                 "action": "remove",
+                "domain": domain,
             })),
         )
         .await;
@@ -323,11 +427,20 @@ pub async fn remove(
 }
 
 /// PUT /api/stacks/{id} — Update stack by removing old containers and redeploying.
+///
+/// The stored YAML is the only copy of a stack's definition — there is no
+/// history table for `docker_stacks` the way there is for git deploys and
+/// secrets. It used to be overwritten *after* the redeploy and unconditionally,
+/// and since the agent reports per-service failure inside a 200, a redeploy
+/// where every service failed still replaced the last-known-good file with the
+/// YAML that had just failed. The old definition is now held until the new one
+/// is known to run, and restored when it does not.
 pub async fn update(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
+    headers: HeaderMap,
     Json(body): Json<UpdateStackRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -335,19 +448,32 @@ pub async fn update(
     if body.yaml.len() > 65536 {
         return Err(err(StatusCode::BAD_REQUEST, "YAML too large (max 64KB)"));
     }
+    super::validate_compose_yaml(&body.yaml).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
 
-    // Verify ownership
-    let exists: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM docker_stacks WHERE id = $1 AND user_id = $2")
-            .bind(id)
-            .bind(claims.sub)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| internal_error("update stacks", e))?;
+    // Keep what we are about to replace.
+    let previous: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT yaml, domain, ssl_email FROM docker_stacks WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("update stacks", e))?;
 
-    if exists.is_none() {
-        return Err(err(StatusCode::NOT_FOUND, "Stack not found"));
-    }
+    let (previous_yaml, previous_domain, previous_ssl_email) =
+        previous.ok_or_else(|| err(StatusCode::NOT_FOUND, "Stack not found"))?;
+
+    // `Holder::Stack(id)` so a stack keeps its own domain across an edit;
+    // anything else already holding it is still a conflict.
+    let domain = claim_stack_domain(
+        &state,
+        &agent,
+        server_id,
+        &headers,
+        body.domain.as_deref(),
+        Holder::Stack(id),
+    )
+    .await?;
 
     // Parse new YAML
     let parsed = agent
@@ -360,13 +486,17 @@ pub async fn update(
 
     let service_count = parsed.as_array().map(|a| a.len() as i32).unwrap_or(0);
 
-    // Remove old containers
+    // Remove old containers. The vhost only comes down when the domain is
+    // actually changing — tearing it down on every edit would drop the site for
+    // as long as the redeploy takes.
+    let vacating = previous_domain.as_deref().filter(|d| Some(*d) != domain.as_deref());
     let _ = agent
         .post(
             "/apps/stack/action",
             Some(serde_json::json!({
                 "stack_id": id.to_string(),
                 "action": "remove",
+                "domain": vacating,
             })),
         )
         .await;
@@ -378,17 +508,42 @@ pub async fn update(
             Some(serde_json::json!({
                 "yaml": body.yaml,
                 "stack_id": id.to_string(),
+                "domain": domain,
+                "ssl_email": body.ssl_email,
             })),
         )
-        .await
-        .map_err(|e| agent_error("Stack redeploy", e))?;
+        .await;
 
-    // Update DB record
+    let deploy_result = match deploy_result {
+        Ok(r) => r,
+        Err(e) => {
+            restore_previous(&agent, id, &previous_yaml, previous_domain.as_deref(), previous_ssl_email.as_deref()).await;
+            return Err(agent_error("Stack redeploy (previous definition restored)", e));
+        }
+    };
+
+    let (running, total, errors) = deployed_service_states(&deploy_result);
+    if total > 0 && running == 0 {
+        restore_previous(&agent, id, &previous_yaml, previous_domain.as_deref(), previous_ssl_email.as_deref()).await;
+        return Err(err(
+            StatusCode::BAD_GATEWAY,
+            &format!(
+                "No service in the new definition stayed running — the previous stack was \
+                 redeployed and the saved YAML is unchanged. {}",
+                errors.join(" | ")
+            ),
+        ));
+    }
+
+    // Only now is the new definition the one worth keeping.
     sqlx::query(
-        "UPDATE docker_stacks SET yaml = $1, service_count = $2, updated_at = NOW() WHERE id = $3",
+        "UPDATE docker_stacks SET yaml = $1, service_count = $2, domain = $3, ssl_email = $4, \
+         updated_at = NOW() WHERE id = $5",
     )
     .bind(&body.yaml)
     .bind(service_count)
+    .bind(&domain)
+    .bind(&body.ssl_email)
     .bind(id)
     .execute(&state.db)
     .await
@@ -397,8 +552,48 @@ pub async fn update(
     Ok(Json(serde_json::json!({
         "ok": true,
         "service_count": service_count,
+        "domain": domain,
+        "running": running,
+        "total": total,
         "deploy_result": deploy_result,
     })))
+}
+
+/// Put the stack back the way it was after a failed edit.
+///
+/// Best effort — if this also fails the operator still has the stored YAML,
+/// which is the whole point of not having overwritten it yet.
+async fn restore_previous(
+    agent: &AgentHandle,
+    id: Uuid,
+    yaml: &str,
+    domain: Option<&str>,
+    ssl_email: Option<&str>,
+) {
+    let _ = agent
+        .post(
+            "/apps/stack/action",
+            Some(serde_json::json!({ "stack_id": id.to_string(), "action": "remove" })),
+        )
+        .await;
+    match agent
+        .post(
+            "/apps/compose/deploy",
+            Some(serde_json::json!({
+                "yaml": yaml,
+                "stack_id": id.to_string(),
+                "domain": domain,
+                "ssl_email": ssl_email,
+            })),
+        )
+        .await
+    {
+        Ok(_) => tracing::info!("Stack {id}: restored the previous definition after a failed update"),
+        Err(e) => tracing::error!(
+            "Stack {id}: the update failed AND the previous definition could not be \
+             redeployed ({e}). The saved YAML is still the previous one."
+        ),
+    }
 }
 
 /// Internal helper for start/stop/restart stack actions.

@@ -25,6 +25,11 @@ interface TelemetryConfig {
   telemetry_endpoint?: string;
   telemetry_installation_id?: string;
   current_version?: string;
+  /// Derived server-side: true only while `update_available_version` names a
+  /// release strictly newer than `current_version`. The raw key survives a
+  /// panel that has overtaken it (an operator who upgraded from the shell, a
+  /// poll that has not run yet), so its presence alone never means "update".
+  update_available?: boolean;
   update_available_version?: string;
   update_release_notes?: string;
   update_release_url?: string;
@@ -447,7 +452,7 @@ export default function Telemetry() {
 
   // Phase 4 W4: apply update through the panel itself.
   const applyUpdate = async () => {
-    if (!config.update_available_version) return;
+    if (!config.update_available || !config.update_available_version) return;
     setApplyConfirm(false);
     setApplying(true);
     setShowApplyProgress(true);
@@ -626,12 +631,17 @@ export default function Telemetry() {
     }
   };
 
+  // Same endpoint as before, but it now runs the poll inline and answers with
+  // what it found, so the flash reports the check instead of announcing one.
+  // Reloads the config afterwards rather than guessing at a 5s delay.
   const checkUpdates = async () => {
     setChecking(true);
     try {
-      await api.post("/telemetry/check-updates");
-      flash("Update check started", "success");
-      setTimeout(loadConfig, 5000);
+      const resp = await api.post<{ message: string; available_version: string | null }>(
+        "/telemetry/check-updates"
+      );
+      flash(resp.message, "success");
+      await Promise.all([loadConfig(), loadUpdateState()]);
     } catch (e: unknown) {
       flash(e instanceof Error ? e.message : "Failed to check", "error");
     } finally {
@@ -648,6 +658,11 @@ export default function Telemetry() {
   }
 
   const totalPages = Math.ceil(total / limit);
+
+  // Every "is there an update" question on this page answers from the backend's
+  // derived flag, never from the mere presence of the stored version — that row
+  // outlives the release it names on any panel upgraded from the shell (#98).
+  const updateAvailable = Boolean(config.update_available && config.update_available_version);
 
   // The two update-path verdicts, newest first. Built here rather than inline so
   // the Updates tab can order them against each other; each is still rendered
@@ -744,7 +759,7 @@ export default function Telemetry() {
       )}
 
       {/* Update banner */}
-      {config.update_available_version && (
+      {updateAvailable && (
         <div className="mb-4 px-4 py-3 rounded-lg border border-rust-500/30 bg-rust-500/10 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <svg className="w-5 h-5 text-rust-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
@@ -952,8 +967,8 @@ export default function Telemetry() {
               </div>
               <div>
                 <div className="text-xs text-dark-400 mb-1">Latest Available</div>
-                <div className={`text-sm font-mono ${config.update_available_version ? "text-rust-400" : "text-emerald-400"}`}>
-                  {config.update_available_version ? `v${config.update_available_version}` : "Up to date"}
+                <div className={`text-sm font-mono ${updateAvailable ? "text-rust-400" : "text-emerald-400"}`}>
+                  {updateAvailable ? `v${config.update_available_version}` : "Up to date"}
                 </div>
               </div>
               <div>
@@ -965,7 +980,7 @@ export default function Telemetry() {
             </div>
           </div>
 
-          {config.update_available_version && config.update_release_notes && (
+          {updateAvailable && config.update_release_notes && (
             <div className="bg-dark-800 border border-dark-600 rounded-lg p-4">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-medium text-dark-100">
@@ -1055,7 +1070,7 @@ export default function Telemetry() {
             </div>
           </div>
 
-          {config.update_available_version && (
+          {updateAvailable && (
             <div className="bg-dark-800 border border-dark-600 rounded-lg p-4">
               <h3 className="text-sm font-medium text-dark-100 mb-3">Apply Update</h3>
               <div className="bg-dark-900 rounded-lg p-3 border border-dark-700 mb-3">

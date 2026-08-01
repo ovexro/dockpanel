@@ -501,3 +501,44 @@ jobs:
       # renamed variable). Every arm they beat is now keyed on the property.
       - name: Every destructive path proves ownership, and markers are anchored
         run: bash tests/ownership-delete-pin-e2e.sh
+
+  compose-stack:
+    name: A Stack Is A Network, A Namespace, And An Honest Status
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pure source analysis. GitHub #50: a reporter took the Compose stack
+      # package shipped for him in v2.52.0 and got "always crashing apps, ssl
+      # doesnt work properly". He was right on both halves, and the cause was
+      # not his box.
+      #
+      # DockPanel's Compose support does not run `docker compose` — it creates
+      # each service through the Docker API so the panel's own sandboxing
+      # applies. That means every convenience compose gives for free has to be
+      # reproduced deliberately, and almost none of it was. Services were
+      # created with NO user-defined network, so container-name DNS did not
+      # exist and `postgresql://app:pw@database:5432` could not resolve. Every
+      # multi-service package the panel ships — Domain Watchdog, WordPress,
+      # Ghost, Nextcloud — died on boot for the same reason.
+      #
+      # It looked healthy because `deploy_service` reported "running" on the
+      # strength of `create` + `start` returning Ok, and because the one e2e
+      # test for stacks deployed a single nginx and asserted that a UUID came
+      # back. A one-service stack cannot fail this way; deep-e2e.sh now deploys
+      # two and asserts one resolves the other.
+      #
+      # §A is the arm that matters: reintroduce the missing network or the
+      # missing alias and it fails. §F pins an ORDER, not a pair of statements —
+      # the stack YAML has no history table, and the write used to land before
+      # anything knew whether the new definition ran.
+      #
+      # ATTACKED: 17 deliberate evasions against the fixed tree, of which THREE
+      # beat the first draft — an alias field present but EMPTY, a
+      # `confirm_running` whose result was discarded (the class that beat the
+      # s294 pin), and a teardown arm that matched `dockpanel.managed` inside
+      # the log line NARRATING the check rather than the check itself. Every arm
+      # they beat is now keyed on the property. A null mutation is included as a
+      # control: a harness that cannot report a green is not reporting.
+      - name: Stacks share a network, scope their names, and report real status
+        run: bash tests/compose-stack-pin-e2e.sh

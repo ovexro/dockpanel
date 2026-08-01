@@ -377,12 +377,18 @@ async fn log_stats(
 }
 
 /// GET /logs/docker — List Docker containers with dockpanel.managed label.
+///
+/// `-a` is load-bearing, not tidiness: without it this listed only *running*
+/// containers, so the crashed ones — the only containers anybody opens this
+/// page for — were exactly the ones missing from the picker. Docker keeps the
+/// logs of an exited container until it is removed.
 async fn docker_containers() -> Json<serde_json::Value> {
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(30),
         safe_command("docker")
             .args([
                 "ps",
+                "-a",
                 "--filter",
                 "label=dockpanel.managed=true",
                 "--format",
