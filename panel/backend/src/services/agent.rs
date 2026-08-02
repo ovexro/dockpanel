@@ -1177,6 +1177,46 @@ impl AgentRegistry {
         .unwrap_or_default();
         rows
     }
+
+    /// Every online server, resolved to its owner, its name and its own agent.
+    ///
+    /// This is the subject list for a background service whose subject is a
+    /// MACHINE rather than a row — a scanner, or a health check that asks a host
+    /// what it is running. A service driven by a table gets its host from the
+    /// row and should use `for_server` directly instead.
+    ///
+    /// **A server whose agent will not resolve is SKIPPED, never substituted.**
+    /// The registry also offers an `Option`-taking convenience resolver that
+    /// answers a missing id with the local agent; reaching for it here is how a
+    /// member's readings end up stamped with a member's id and taken from the
+    /// panel, which is the whole class of defect this returns a fleet to avoid.
+    pub async fn online_fleet(&self) -> Vec<FleetMember> {
+        let rows: Vec<(Uuid, Uuid, String)> = sqlx::query_as(
+            "SELECT id, user_id, name FROM servers WHERE status = 'online' \
+             ORDER BY is_local DESC",
+        )
+        .fetch_all(&self.db)
+        .await
+        .unwrap_or_default();
+
+        let mut fleet = Vec::with_capacity(rows.len());
+        for (id, user_id, name) in rows {
+            match self.for_server(id).await {
+                Ok(agent) => fleet.push(FleetMember { id, user_id, name, agent }),
+                Err(e) => tracing::debug!("Fleet iteration: skipping {name} ({id}) — no agent: {e}"),
+            }
+        }
+        fleet
+    }
+}
+
+/// One online server, together with the identity every row written about it
+/// must carry and the agent that can actually answer for it.
+pub struct FleetMember {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub name: String,
+    pub agent: AgentHandle,
 }
 
 /// Ensure the local server row exists in the DB. Returns the local server UUID.

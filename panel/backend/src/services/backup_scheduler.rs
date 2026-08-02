@@ -3,7 +3,7 @@ use chrono::Timelike;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::services::agent::AgentClient;
+use crate::services::agent::AgentRegistry;
 
 /// Row from the scheduler query (join of schedules + destinations + sites).
 #[derive(sqlx::FromRow)]
@@ -13,6 +13,10 @@ struct ScheduleRow {
     domain: String,
     schedule: String,
     retention_count: i32,
+    /// The host that actually holds this site's files. NOT NULL, and stable — a
+    /// site never moves between servers, so it is safe to resolve the agent from
+    /// it rather than storing a copy on `backups`.
+    server_id: Uuid,
     /// Recorded on the `backups` row when the upload succeeds. It carried an
     /// `#[allow(dead_code)]` for as long as this path selected it and never used
     /// it — the annotation is what kept the compiler from pointing at the gap.
@@ -22,7 +26,14 @@ struct ScheduleRow {
 }
 
 /// Run the backup scheduler loop — checks every 60 seconds for due schedules.
-pub async fn run(db: PgPool, agent: AgentClient, jwt_secret: String, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
+///
+/// The schedule query is fleet-wide, so this takes the REGISTRY: a site is backed up
+/// on the server that holds its files. Backing a member's site up against the panel's
+/// own `/var/www` either fails every night for ever (the agent refuses a webroot it
+/// does not have) or — where the same domain legally exists on both hosts, which
+/// `idx_sites_domain_server` permits — silently archives the wrong machine's files
+/// and prunes the member's real off-site copies out of retention.
+pub async fn run(db: PgPool, agents: AgentRegistry, jwt_secret: String, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
     tracing::info!("Backup scheduler started");
 
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -30,7 +41,7 @@ pub async fn run(db: PgPool, agent: AgentClient, jwt_secret: String, mut shutdow
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                if let Err(e) = tick(&db, &agent, &jwt_secret).await {
+                if let Err(e) = tick(&db, &agents, &jwt_secret).await {
                     tracing::error!("Backup scheduler error: {e}");
                 }
             }
@@ -42,13 +53,14 @@ pub async fn run(db: PgPool, agent: AgentClient, jwt_secret: String, mut shutdow
     }
 }
 
-async fn tick(db: &PgPool, agent: &AgentClient, jwt_secret: &str) -> Result<(), String> {
+async fn tick(db: &PgPool, agents: &AgentRegistry, jwt_secret: &str) -> Result<(), String> {
     let now = chrono::Utc::now();
 
     // Fetch all enabled schedules with their destination and site info
     let rows: Vec<ScheduleRow> = sqlx::query_as(
         "SELECT \
          bs.id as schedule_id, bs.site_id, s.domain, bs.schedule, bs.retention_count, \
+         s.server_id, \
          bd.id as dest_id, bd.dtype as dest_dtype, bd.config as dest_config \
          FROM backup_schedules bs \
          JOIN sites s ON s.id = bs.site_id \
@@ -73,7 +85,7 @@ async fn tick(db: &PgPool, agent: &AgentClient, jwt_secret: &str) -> Result<(), 
         }
 
         tracing::info!("Running scheduled backup for {}", row.domain);
-        let result = run_scheduled_backup(db, agent, jwt_secret, row).await;
+        let result = run_scheduled_backup(db, agents, jwt_secret, row).await;
 
         let status = if result.is_ok() { "success" } else { "failed" };
         if let Err(ref e) = result {
@@ -137,10 +149,23 @@ async fn get_last_run(db: &PgPool, schedule_id: Uuid) -> Option<chrono::DateTime
 
 async fn run_scheduled_backup(
     db: &PgPool,
-    agent: &AgentClient,
+    agents: &AgentRegistry,
     jwt_secret: &str,
     row: &ScheduleRow,
 ) -> Result<(), String> {
+    // Resolve the site's OWN server before anything else. Returning Err here routes
+    // into tick()'s existing failure arm, which marks the schedule failed, writes a
+    // system_log entry and fires a critical alert — the "refuse out loud" contract,
+    // reusing the plumbing that is already there. Never fall back to the local agent:
+    // the disk pre-flight, the archive, the upload and the prune below would all then
+    // act on a host that does not hold this site.
+    let agent = agents.for_server(row.server_id).await.map_err(|e| {
+        format!(
+            "server {} is unreachable ({e}) — refusing to back up {} on a different host",
+            row.server_id, row.domain
+        )
+    })?;
+
     // 0. Pre-flight: check disk space via agent before creating backup
     if let Ok(sys_info) = agent.get("/system/info").await {
         let disk_pct = sys_info

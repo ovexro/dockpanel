@@ -2,11 +2,11 @@ use sqlx::PgPool;
 use std::time::Duration;
 use uuid::Uuid;
 
-use crate::services::agent::AgentClient;
+use crate::services::agent::{AgentRegistry, FleetMember};
 use crate::services::notifications;
 
 /// Background task: checks all alert conditions every 60 seconds.
-pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
+pub async fn run(pool: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
     tracing::info!("Alert engine started");
 
     // Initial delay (respects shutdown)
@@ -26,18 +26,31 @@ pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync:
                 tick_count += 1;
 
                 check_resource_thresholds(&pool).await;
-                check_gpu_thresholds(&pool, &agent).await;
                 check_server_offline(&pool).await;
                 check_ssl_expiry(&pool).await;
 
-                // Service health every 2 minutes (every other tick)
-                if tick_count % 2 == 0 {
-                    check_service_health(&pool, &agent).await;
-                }
+                // The agent-driven checks run once PER ONLINE SERVER. Until
+                // v2.58.0 all three asked the panel's own agent and labelled the
+                // labelled the answers with the OLDEST `servers` row, selected
+                // by ascending creation date and commented "the local server",
+                // which it is only on an
+                // install that never added one. On a fleet that is the panel's
+                // GPUs, the panel's services and the panel's containers filed
+                // under whichever server was registered first.
+                let fleet = agents.online_fleet().await;
 
-                // GAP 8: Docker container health every 2 minutes (offset from service health)
-                if tick_count % 2 == 1 {
-                    check_container_health(&pool, &agent).await;
+                for member in &fleet {
+                    check_gpu_thresholds(&pool, member).await;
+
+                    // Service health every 2 minutes (every other tick)
+                    if tick_count % 2 == 0 {
+                        check_service_health(&pool, member).await;
+                    }
+
+                    // GAP 8: Docker container health every 2 minutes (offset from service health)
+                    if tick_count % 2 == 1 {
+                        check_container_health(&pool, member).await;
+                    }
                 }
 
                 // GAP 9: Escalate unacknowledged firing alerts older than 15 minutes
@@ -649,8 +662,8 @@ async fn clear_trend_alert(
 
 // ─── GPU Thresholds ─────────────────────────────────────────────────────
 
-async fn check_gpu_thresholds(pool: &PgPool, agent: &AgentClient) {
-    let gpu_info = match agent.get("/apps/gpu-info").await {
+async fn check_gpu_thresholds(pool: &PgPool, member: &FleetMember) {
+    let gpu_info = match member.agent.get("/apps/gpu-info").await {
         Ok(v) => v,
         Err(_) => return,
     };
@@ -663,19 +676,7 @@ async fn check_gpu_thresholds(pool: &PgPool, agent: &AgentClient) {
         _ => return,
     };
 
-    // Get the local server
-    let server: Option<(Uuid, Uuid, String)> = sqlx::query_as(
-        "SELECT id, user_id, name FROM servers ORDER BY created_at ASC LIMIT 1",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-
-    let (server_id, user_id, server_name) = match server {
-        Some(s) => s,
-        None => return,
-    };
+    let (server_id, user_id, server_name) = (member.id, member.user_id, member.name.clone());
 
     let (gpu_util_thresh, gpu_util_dur, gpu_temp_thresh, gpu_vram_thresh, cooldown) =
         notifications::get_gpu_thresholds(pool, user_id, Some(server_id)).await;
@@ -1159,8 +1160,8 @@ async fn fire_ssl_alert(
 
 // ─── Service Health ─────────────────────────────────────────────────────
 
-async fn check_service_health(pool: &PgPool, agent: &AgentClient) {
-    let services: Vec<serde_json::Value> = match agent.get("/services/health").await {
+async fn check_service_health(pool: &PgPool, member: &FleetMember) {
+    let services: Vec<serde_json::Value> = match member.agent.get("/services/health").await {
         Ok(val) => {
             if let Some(arr) = val.as_array() {
                 arr.clone()
@@ -1174,19 +1175,7 @@ async fn check_service_health(pool: &PgPool, agent: &AgentClient) {
         }
     };
 
-    // Get the local server — find the server with NULL team_id or the first one
-    let server: Option<(Uuid, Uuid, String)> = sqlx::query_as(
-        "SELECT id, user_id, name FROM servers ORDER BY created_at ASC LIMIT 1",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-
-    let (server_id, user_id, server_name) = match server {
-        Some(s) => s,
-        None => return,
-    };
+    let (server_id, user_id, server_name) = (member.id, member.user_id, member.name.clone());
 
     for svc in &services {
         let name = svc["name"].as_str().unwrap_or("");
@@ -1295,8 +1284,8 @@ async fn check_service_health(pool: &PgPool, agent: &AgentClient) {
 
 // ─── GAP 8: Docker Container Health ──────────────────────────────────────
 
-async fn check_container_health(pool: &PgPool, agent: &AgentClient) {
-    let containers: Vec<serde_json::Value> = match agent.get("/apps").await {
+async fn check_container_health(pool: &PgPool, member: &FleetMember) {
+    let containers: Vec<serde_json::Value> = match member.agent.get("/apps").await {
         Ok(val) => {
             if let Some(arr) = val.as_array() {
                 arr.clone()
@@ -1310,19 +1299,16 @@ async fn check_container_health(pool: &PgPool, agent: &AgentClient) {
         }
     };
 
-    // Get the local server for alert association
-    let server: Option<(Uuid, Uuid, String)> = sqlx::query_as(
-        "SELECT id, user_id, name FROM servers ORDER BY created_at ASC LIMIT 1",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
+    let (server_id, user_id) = (member.id, member.user_id);
 
-    let (server_id, user_id, _server_name) = match server {
-        Some(s) => s,
-        None => return,
-    };
+    // Every container this host still reports, whatever its state. Reaching
+    // this line means the agent answered with a well-formed array, so a name
+    // absent from it is genuinely absent from the host — see the sweep at the
+    // end of this function.
+    let observed: std::collections::HashSet<&str> = containers
+        .iter()
+        .filter_map(|c| c.get("name").and_then(|v| v.as_str()))
+        .collect();
 
     for c in &containers {
         let name = c.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
@@ -1485,6 +1471,65 @@ async fn check_container_health(pool: &PgPool, agent: &AgentClient) {
                 }
             }
         }
+    }
+
+    // A REMOVED container never appears in `/apps` again, so neither the fire
+    // branches nor the recovered branch above can ever run for it and its row
+    // stays `firing` for ever. Not theoretical: this panel carried a
+    // `container_down` row for a container deleted on 2026-03-23, still
+    // `firing` four months later, with ZERO matching `alerts` rows ever
+    // written — because the fire branches skip a key that already reads
+    // `firing`, that one row had silently suppressed every future alert for
+    // that container name. Retention cannot clear it either; both purges only
+    // delete `status = 'resolved'`.
+    //
+    // Threading this check makes the sweep both possible and necessary: the
+    // subject is now "the containers THIS member reports", so absence from that
+    // list is a fact about one host rather than about the whole fleet.
+    let stale: Vec<(String, String)> = sqlx::query_as(
+        "SELECT alert_type, state_key FROM alert_state \
+         WHERE server_id = $1 AND current_state = 'firing' \
+           AND alert_type IN ('container_down', 'container_unhealthy', 'container_crashloop')",
+    )
+    .bind(server_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    for (alert_type, state_key) in &stale {
+        if observed.contains(state_key.as_str()) {
+            continue;
+        }
+
+        let _ = sqlx::query(
+            "UPDATE alert_state SET current_state = 'ok', fired_at = NULL, last_notified_at = NULL \
+             WHERE server_id = $1 AND alert_type = $2 AND state_key = $3",
+        )
+        .bind(server_id)
+        .bind(alert_type)
+        .bind(state_key)
+        .execute(pool)
+        .await;
+
+        notifications::resolve_alert(
+            pool,
+            user_id,
+            Some(server_id),
+            None,
+            alert_type,
+            &format!("Container '{}' is no longer present", state_key),
+            &format!(
+                "Docker container '{}' is no longer reported by {}. Its alert state has been \
+                 cleared so a container of that name can raise an alert again.",
+                state_key, member.name
+            ),
+        )
+        .await;
+
+        tracing::info!(
+            "Alert engine: cleared stale {alert_type} state for absent container {state_key} on {}",
+            member.name
+        );
     }
 }
 

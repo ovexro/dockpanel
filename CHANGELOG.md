@@ -4,6 +4,102 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.58.0] - 2026-08-02
+
+**A scan belongs to the machine that was scanned.**
+
+The multi-server migration is finished. v2.56.0 threaded one background service,
+v2.57.0 threaded eleven more plus two webhook routes, and this release closes the
+last three — the two scanners and the alert engine — together with the healer
+path that only worked because two bugs cancelled.
+
+### The unit was not uniform
+
+`security_scanner` and `image_scanner` take a **machine** as their subject, not a
+row: they ask an agent what it found, so there was no per-row `server_id` to
+thread and they needed an iterate-the-fleet loop instead. Both primitives that
+required already existed with zero callers — `online_server_ids`, doc-commented
+"for background services that need to iterate", and an `Option`-taking resolver
+that silently answers a missing id with the local agent and is now documented as
+the trap it is. `AgentRegistry::online_fleet` is the one primitive both scanners,
+the alert engine and the healer now share, so the skip-don't-substitute rule
+cannot drift between call sites.
+
+### Fixed — fleet correctness
+
+- **Members were never security-scanned at all.** Not mislabelled: never looked
+  at. The weekly scan asked the panel's own agent and filed the result under no
+  server, and the cadence gate was fleet-wide, so the first host scanned
+  satisfied it for every other host. The gate is now per server and only a
+  **completed** scan satisfies it — it counted rows of any status, so one failed
+  scan bought a whole week of no security scanning.
+- **File-integrity monitoring detected the FIRST change to a watched file and was
+  deaf to every change after it.** The upsert's `ON CONFLICT (server_id, file_path)`
+  named a column the INSERT never supplied, and a NULL never conflict-matches, so
+  `DO UPDATE` had never once executed: every scan appended a new baseline and the
+  comparison read the oldest row. Measured on a live panel: 126 rows for 7 watched
+  paths — 18 duplicates each, one per weekly scan since March. The watched set
+  includes `/etc/shadow`, `/etc/sudoers` and `/etc/ssh/sshd_config`.
+- **Image scan results and SBOMs collided across hosts.** `image_scan_findings`
+  had no server column and `image_sbom` was keyed on the bare image string, so
+  two machines running the same image overwrote each other. The deploy gate read
+  the same bare key, so a clean scan on one host could wave a vulnerable image
+  onto another; the 30-row history trim evicted a quiet host's only result; and
+  the sweeper's freshness check let one host's scan suppress every other host's
+  rescan indefinitely.
+- **Auto-restart would have restarted the wrong host's services.** `alert_engine`
+  labelled every agent-driven reading with the oldest `servers` row while
+  `auto_healer::auto_restart_services` read `alert_state` with no server predicate
+  and posted to the local agent. The two cancelled, so the restart landed
+  correctly by accident; writing correct server ids ends the accident. Both are
+  fixed in this release — separately, either one is a regression.
+- **Auto-restart of exited containers had never run once.** It read `state` and
+  `id` from the agent's `/apps` payload, which carries `status` and
+  `container_id`. A missing JSON field reads as an empty string, so both the
+  state test and the emptiness guard failed silently and permanently.
+- **The service-restart cooldown had never engaged.** It counted `activity_logs`
+  rows written with the nil uuid, which violates the user foreign key, so the
+  insert always failed and the count was always 0 — neither the 10-minute gap nor
+  the give-up-after-3 rule ever applied, and a crash-looping service was restarted
+  every 120 seconds for ever with no audit trail. The record is now written
+  against the server's owner and stamped with `server_id`, which also stops two
+  hosts running a service of the same name from sharing one budget.
+- **A four-month-old alert tombstone suppressed an entire alert type.** A removed
+  container never reappears in `/apps`, so neither the fire branch nor the
+  recovered branch could ever run for it and its row stayed `firing` for ever —
+  silently suppressing every future `container_down` alert for that name, with
+  retention unable to help because both purges only delete resolved rows. The
+  container health check now clears state for containers the host no longer
+  reports.
+- **The compliance report paired one server's scan with another's live data.** It
+  scoped the agent it queried and then took whichever scan finished most recently.
+- Security scan history, posture and detail views are server-scoped; a clean scan
+  on one machine no longer resolves another machine's security alerts.
+
+### Added
+
+- `activity_logs.server_id` is written for the first time. The column, its index
+  and its foreign key have existed since the multi-server migration with no
+  writer and no reader; an unattended action that acts on one machine and records
+  a row indistinguishable from the same action on another is not an audit trail.
+- 31 new regression-pin arms (§G of the unattended-host-scope suite), covering
+  the s300 backup family — which shipped with none — as well as this release.
+  30 of the 31 were watched **red** against v2.57.0 before landing.
+
+### Migrations
+
+Two, both deduplicating before backfilling because the order matters: collapsing
+18 duplicate baselines onto each of 7 keys before the backfill would violate
+`UNIQUE(server_id, file_path)` and abort. `server_id` is then `NOT NULL` on
+`security_scans`, `file_integrity_baselines` and `image_scan_findings`, so an
+insert that forgets to bind the host fails loudly instead of silently recreating
+the inert-upsert defect. `image_sbom`'s primary key becomes `(server_id, image)`.
+
+⚠ **`routes/sboms.rs` had to change in the same commit as that key.** An
+`ON CONFLICT` arbiter naming no unique index does not degrade — Postgres raises
+`42P10` at execution time — so the migration alone would have turned every SBOM
+generation into a 500.
+
 ## [2.57.0] - 2026-08-02
 
 **A schedule belongs to the machine that owns it.**

@@ -61,7 +61,7 @@ pub async fn list_templates(
 pub async fn deploy(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     headers: axum::http::HeaderMap,
     Json(body): Json<DeployRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
@@ -184,8 +184,10 @@ pub async fn deploy(
         }
     }
 
-    // Image scan deploy gate (no-op unless admin opted in via Settings)
-    crate::routes::image_scans::preflight_gate(&state.db, &agent, &body.template_id).await?;
+    // Image scan deploy gate (no-op unless admin opted in via Settings).
+    // Scoped to the server being deployed TO — the scan that decides has to be
+    // a scan of the machine that will run the image.
+    crate::routes::image_scans::preflight_gate(&state.db, server_id, &agent, &body.template_id).await?;
 
     // Pass user_id to agent for labeling
     let user_id_for_agent = claims.sub.to_string();
@@ -225,7 +227,7 @@ pub async fn deploy(
             crate::services::domain_claim::ensure_claimable(
                 &state.db,
                 &agent,
-                _server_id,
+                server_id,
                 &d,
                 &headers,
                 crate::services::domain_claim::Holder::New,

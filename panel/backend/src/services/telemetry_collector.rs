@@ -1,13 +1,13 @@
 //! Telemetry collector background service.
 //!
-//! Responsibilities:
-//! 1. Periodically collects system diagnostics from the agent
+//! Responsibilities (all scoped to THIS host — see `run`):
+//! 1. Periodically collects system diagnostics from the PANEL HOST's own agent
 //! 2. Stores error/warning events in the telemetry_events table
 //! 3. Sends unsent events to the configured remote endpoint (opt-in)
 //! 4. Cleans up old events based on retention settings
 //! 5. Checks GitHub Releases for DockPanel updates
 
-use crate::services::agent::AgentClient;
+use crate::services::agent::{AgentClient, AgentRegistry};
 use crate::services::panel_update::semver_key;
 use sqlx::PgPool;
 use std::time::Duration;
@@ -46,9 +46,16 @@ pub async fn record_event(
 }
 
 /// Main telemetry loop — runs as a supervised background service.
+/// This service is LOCAL BY INTENT, and takes the registry to say so out loud.
+///
+/// It diagnoses the panel host itself — its own agent's `/health` and `/diagnostics`,
+/// and the version of the binary executing this code. None of that is a fleet
+/// question, so it calls `agents.local()` rather than resolving a server. Taking a
+/// bare `AgentClient` made "local" indistinguishable from "nobody threaded this yet",
+/// which is the only reason it stayed on the fleet-blind list for two sessions.
 pub async fn run(
     pool: PgPool,
-    agent: AgentClient,
+    agents: AgentRegistry,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
 ) {
     // Before anything sleeps: `update.sh` upgrades the binaries but never
@@ -69,7 +76,7 @@ pub async fn run(
     loop {
         tokio::select! {
             _ = check_interval.tick() => {
-                collect_and_process(&pool, &agent).await;
+                collect_and_process(&pool, agents.local()).await;
             }
             _ = update_interval.tick() => {
                 check_for_updates(&pool).await;

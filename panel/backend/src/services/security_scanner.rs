@@ -1,11 +1,17 @@
 use sqlx::PgPool;
 use std::time::Duration;
 
-use crate::services::agent::AgentClient;
+use crate::services::agent::{AgentRegistry, FleetMember};
 use crate::services::notifications;
 
-/// Background task: runs weekly security scans automatically.
-pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
+/// Background task: runs weekly security scans automatically, on every server.
+///
+/// This scanner's subject is a MACHINE, not a row — it asks an agent what it
+/// found — so there was no per-row `server_id` to thread and it needs the
+/// fleet loop instead. Until v2.58.0 it asked the panel's own agent once a week
+/// and recorded the answer with a NULL host, so a fleet's members were never
+/// scanned at all: not mislabelled, simply never looked at.
+pub async fn run(pool: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
     tracing::info!("Security scanner background task started (weekly)");
 
     // Initial delay: 5 minutes after startup (respects shutdown)
@@ -18,20 +24,30 @@ pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync:
     }
 
     loop {
-        // Check if a scan was done in the last 7 days
-        let recent: Option<(i64,)> = sqlx::query_as(
-            "SELECT COUNT(*) FROM security_scans \
-             WHERE server_id IS NULL AND created_at > NOW() - INTERVAL '7 days'",
-        )
-        .fetch_optional(&pool)
-        .await
-        .unwrap_or(None);
+        for member in agents.online_fleet().await {
+            // Is THIS server due? The cadence gate used to be fleet-wide, which
+            // on a fleet meant the first host to be scanned satisfied it for
+            // every other host — one machine scanned weekly and the rest never.
+            //
+            // It also counted rows of ANY status, so a single failed or
+            // interrupted scan bought a whole week of no security scanning at
+            // all. Only a COMPLETED scan proves the machine was looked at.
+            let recent: Option<(i64,)> = sqlx::query_as(
+                "SELECT COUNT(*) FROM security_scans \
+                 WHERE server_id = $1 AND status = 'completed' \
+                   AND created_at > NOW() - INTERVAL '7 days'",
+            )
+            .bind(member.id)
+            .fetch_optional(&pool)
+            .await
+            .unwrap_or(None);
 
-        let needs_scan = recent.map(|(c,)| c == 0).unwrap_or(true);
+            let needs_scan = recent.map(|(c,)| c == 0).unwrap_or(true);
 
-        if needs_scan {
-            tracing::info!("Running scheduled weekly security scan");
-            run_scan(&pool, &agent).await;
+            if needs_scan {
+                tracing::info!("Running scheduled weekly security scan on {}", member.name);
+                run_scan(&pool, &member).await;
+            }
         }
 
         // Check every 6 hours if a weekly scan is due (respects shutdown)
@@ -45,11 +61,14 @@ pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync:
     }
 }
 
-async fn run_scan(pool: &PgPool, agent: &AgentClient) {
-    // Create scan record
+async fn run_scan(pool: &PgPool, member: &FleetMember) {
+    let agent = &member.agent;
+
+    // Create scan record, naming the host it is a scan OF.
     let scan_id: uuid::Uuid = match sqlx::query_scalar(
-        "INSERT INTO security_scans (scan_type, status) VALUES ('full', 'running') RETURNING id",
+        "INSERT INTO security_scans (server_id, scan_type, status) VALUES ($1, 'full', 'running') RETURNING id",
     )
+    .bind(member.id)
     .fetch_one(pool)
     .await
     {
@@ -121,10 +140,14 @@ async fn run_scan(pool: &PgPool, agent: &AgentClient) {
             let hash = h["hash"].as_str().unwrap_or("");
             let size = h["size"].as_i64().unwrap_or(0);
 
+            // One row per (server, path) now that the upsert below actually
+            // upserts, so this is a keyed lookup rather than "whichever of the
+            // eighteen duplicates the heap returned first".
             let existing: Option<(String,)> = sqlx::query_as(
                 "SELECT sha256_hash FROM file_integrity_baselines \
-                 WHERE server_id IS NULL AND file_path = $1",
+                 WHERE server_id = $1 AND file_path = $2",
             )
+            .bind(member.id)
             .bind(path)
             .fetch_optional(pool)
             .await
@@ -146,11 +169,16 @@ async fn run_scan(pool: &PgPool, agent: &AgentClient) {
                 }
             }
 
+            // Binding the host is what ARMS this upsert. The arbiter named a
+            // column the INSERT never supplied, and a NULL never conflict-matches,
+            // so DO UPDATE had never executed and the baseline never advanced
+            // past the first scan.
             let _ = sqlx::query(
-                "INSERT INTO file_integrity_baselines (file_path, sha256_hash, file_size) \
-                 VALUES ($1, $2, $3) \
-                 ON CONFLICT (server_id, file_path) DO UPDATE SET sha256_hash = $2, file_size = $3, updated_at = NOW()",
+                "INSERT INTO file_integrity_baselines (server_id, file_path, sha256_hash, file_size) \
+                 VALUES ($1, $2, $3, $4) \
+                 ON CONFLICT (server_id, file_path) DO UPDATE SET sha256_hash = $3, file_size = $4, updated_at = NOW()",
             )
+            .bind(member.id)
             .bind(path)
             .bind(hash)
             .bind(size)
@@ -192,19 +220,31 @@ async fn run_scan(pool: &PgPool, agent: &AgentClient) {
     // Auto-resolve prior firing security alerts so the new scan's result is
     // the single source of truth — avoids the "every 2–5 min escalation on
     // three stale alerts" pileup the user saw on 2026-04-15.
+    // Scoped to the scanned host: a clean scan on one machine must not silently
+    // close another machine's outstanding security alerts.
     let _ = sqlx::query(
         "UPDATE alerts SET status = 'resolved', resolved_at = NOW() \
-         WHERE alert_type = 'security' AND status IN ('firing', 'acknowledged')",
+         WHERE alert_type = 'security' AND server_id = $1 AND status IN ('firing', 'acknowledged')",
     )
+    .bind(member.id)
     .execute(pool)
     .await;
 
     // Send alerts if critical or warning findings
     if critical > 0 || warning > 0 {
-        send_scan_alerts(pool, critical, warning, total).await;
+        send_scan_alerts(pool, member, critical, warning, total).await;
     } else {
         // Clean scan — notify panel
-        notifications::notify_panel(pool, None, "Security scan: all clear", "No vulnerabilities or issues detected", "info", "security", Some("/security")).await;
+        notifications::notify_panel(
+            pool,
+            None,
+            "Security scan: all clear",
+            &format!("No vulnerabilities or issues detected on {}", member.name),
+            "info",
+            "security",
+            Some("/security"),
+        )
+        .await;
     }
 }
 
@@ -241,7 +281,7 @@ async fn ssl_renewal_alert(
 /// Never auto-fixes malware, open ports, or config changes that could break things.
 async fn auto_fix_safe_findings(
     pool: &PgPool,
-    agent: &AgentClient,
+    agent: &crate::services::agent::AgentHandle,
     findings: &[serde_json::Value],
 ) {
     for f in findings {
@@ -394,7 +434,7 @@ async fn auto_fix_safe_findings(
     }
 }
 
-async fn send_scan_alerts(pool: &PgPool, critical: i32, warning: i32, total: i32) {
+async fn send_scan_alerts(pool: &PgPool, member: &FleetMember, critical: i32, warning: i32, total: i32) {
     // Get admin users to create alerts for
     let admins: Vec<(uuid::Uuid, String)> =
         sqlx::query_as("SELECT id, email FROM users WHERE role = 'admin'")
@@ -404,21 +444,23 @@ async fn send_scan_alerts(pool: &PgPool, critical: i32, warning: i32, total: i32
 
     let severity = if critical > 0 { "critical" } else { "warning" };
     let title = format!(
-        "Security scan: {} critical, {} warning findings",
-        critical, warning
+        "Security scan on {}: {} critical, {} warning findings",
+        member.name, critical, warning
     );
     let message = format!(
-        "A scheduled security scan completed with {} total findings ({} critical, {} warning). \
+        "A scheduled security scan of {} completed with {} total findings ({} critical, {} warning). \
          Review the scan results in the Security section.",
-        total, critical, warning
+        member.name, total, critical, warning
     );
 
-    // Create an alert for each admin user via the alerts system
+    // Create an alert for each admin user via the alerts system, naming the
+    // scanned server — without it the operator gets identical alerts from every
+    // machine in the fleet and no way to tell which one is on fire.
     for (user_id, _email) in &admins {
         notifications::fire_alert(
             pool,
             *user_id,
-            None,
+            Some(member.id),
             None,
             "security",
             severity,

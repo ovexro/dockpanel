@@ -95,6 +95,24 @@ subj() { local t; t=$(code "$1"); [ -n "$t" ] || return 1; printf '%s' "$t"; }
 has()   { grep -qE -- "$2" <<< "$1"; }
 count() { grep -cE -- "$2" <<< "$1" || true; }
 
+# `has` is LINE-oriented, but Rust signatures and multi-line SQL string literals
+# wrap. An arm keyed on a construct that spans lines matches nothing — and it
+# fails in whichever direction the arm is written, so a PRESENCE arm goes red on
+# correct code (noisy, survivable) while an ABSENCE arm goes GREEN on the defect
+# (silent, not survivable). Caught at s301: three §G arms measured nothing and
+# only the red told me. Flatten a WINDOW, never a whole subject — flattening the
+# subject is window bleed by construction (p31).
+flat() { tr '\n' ' ' <<< "$1" | tr -s ' '; }
+
+# The flattened signature of one function: enough lines to cover a wrapped
+# parameter list, anchored on the paren so `fn run` cannot latch onto `fn run_scan`.
+sig() { flat "$(grep -A 8 -E "fn $2\(" <<< "$1" || true)"; }
+
+# Every statement matching a pattern, each flattened onto its own line, so a
+# line-oriented `has`/`count` can measure multi-line SQL without bleeding across
+# statements. `--` separates grep's windows; it becomes the line break.
+stmt() { grep -A "${3:-3}" -E -- "$2" <<< "$1" | tr '\n' ' ' | sed 's/ -- /\n/g' | tr -s ' '; }
+
 # Extract one function body by brace balance. A fixed `-A n` window is NOT a
 # function (lesson: p31) — a regression that moves a line past the window makes
 # the arm silently measure nothing.
@@ -111,7 +129,7 @@ fnbody() {
 }
 
 echo
-echo "unattended-host-scope-pin-e2e — s298 / v2.56.0"
+echo "unattended-host-scope-pin-e2e — s298 / v2.56.0 · §F s299 · §G s300+s301"
 echo "=============================================="
 echo
 echo "§0 harness self-check"
@@ -531,6 +549,379 @@ if [ -n "$MET_S" ]; then
   fi
 else
   skip "F13 — metrics_collector.rs not extractable"
+fi
+
+
+echo
+echo "§G the last background services name their host (s300 backups + s301 scanners)"
+
+# s300 threaded the backup family and landed with NO arms at all; s301 finished
+# the scanners. Both are pinned here, because the two halves share one hazard:
+# a fix that POPULATES a column is the first thing that ever runs the mechanisms
+# written against it, and those mechanisms have never been exercised.
+BS=panel/backend/src/services/backup_scheduler.rs
+BPE=panel/backend/src/services/backup_policy_executor.rs
+BV=panel/backend/src/services/backup_verifier.rs
+DS=panel/backend/src/services/drill_scheduler.rs
+TC=panel/backend/src/services/telemetry_collector.rs
+BO=panel/backend/src/routes/backup_orchestrator.rs
+SS=panel/backend/src/services/security_scanner.rs
+SSR=panel/backend/src/routes/security_scans.rs
+IS=panel/backend/src/services/image_scanner.rs
+ISR=panel/backend/src/routes/image_scans.rs
+SB=panel/backend/src/routes/sboms.rs
+AE=panel/backend/src/services/alert_engine.rs
+
+for f in "$BS" "$BPE" "$BV" "$DS" "$TC" "$BO" "$SS" "$SSR" "$IS" "$ISR" "$SB" "$AE"; do
+  [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
+done
+
+BS_S=$(subj "$BS" || true);   BPE_S=$(subj "$BPE" || true); BV_S=$(subj "$BV" || true)
+DS_S=$(subj "$DS" || true);   TC_S=$(subj "$TC" || true);   BO_S=$(subj "$BO" || true)
+SS_S=$(subj "$SS" || true);   SSR_S=$(subj "$SSR" || true); IS_S=$(subj "$IS" || true)
+ISR_S=$(subj "$ISR" || true); SB_S=$(subj "$SB" || true);   AE_S=$(subj "$AE" || true)
+
+# ── the backup family (s300) ───────────────────────────────────────────────
+if [ -n "$BS_S" ]; then
+  if has "$(sig "$BS_S" run)" "AgentRegistry" && has "$BS_S" "for_server\("; then
+    ok "G1 backup_scheduler resolves each site's own server"
+  else
+    bad "G1 backup_scheduler still backs up every site through one agent"
+  fi
+else
+  skip "G1 — backup_scheduler.rs not extractable"
+fi
+
+if [ -n "$BPE_S" ]; then
+  if has "$BPE_S" "for_server\(" && has "$(sig "$BPE_S" run)" "AgentRegistry"; then
+    ok "G2 backup_policy_executor resolves the host per row"
+  else
+    bad "G2 backup_policy_executor still writes every policy backup to the panel"
+  fi
+else
+  skip "G2 — backup_policy_executor.rs not extractable"
+fi
+
+if [ -n "$BV_S" ]; then
+  if has "$BV_S" "for_server\(" && has "$(sig "$BV_S" run)" "AgentRegistry"; then
+    ok "G3 backup_verifier reads each archive on the host that wrote it"
+  else
+    bad "G3 backup_verifier still verifies every archive on the panel"
+  fi
+else
+  skip "G3 — backup_verifier.rs not extractable"
+fi
+
+# G4 — the #164 arm for the backup half. Populating drill_scheduler's server_id
+# ARMS a per-server concurrency guard that has never once engaged, and the db
+# drill INSERTs a 'running' row immediately before the volume drill counts them.
+# Without an age bound one stranded row disables DR for that machine for ever.
+if [ -n "$DS_S" ]; then
+  GUARD=$(fnbody "$DS_S" "has_running_drill_for_server")
+  if [ -z "$GUARD" ]; then
+    skip "G4 — has_running_drill_for_server not extractable"
+  elif has "$GUARD" "INTERVAL|started_at"; then
+    ok "G4 the drill concurrency guard is age-bounded, so one stranded drill cannot disable DR for ever"
+  else
+    bad "G4 the drill guard has no age bound — arming it makes a crashed drill permanent"
+  fi
+else
+  skip "G4 — drill_scheduler.rs not extractable"
+fi
+
+# G5 — telemetry_collector is local BY INTENT. The arm requires that intent to be
+# STATED (it takes the registry and asks it for the local agent), not merely to
+# coincide with a legacy handle nobody revisited.
+if [ -n "$TC_S" ]; then
+  if has "$(sig "$TC_S" run)" "AgentRegistry" && has "$TC_S" "\.local\(\)"; then
+    ok "G5 telemetry_collector states local-by-intent through the registry"
+  else
+    bad "G5 telemetry_collector's locality is an accident of the legacy handle again"
+  fi
+else
+  skip "G5 — telemetry_collector.rs not extractable"
+fi
+
+# G6 — the laundering shape (s299's metrics_collector defect, verbatim): resolve
+# the real server, discard it, then stamp the row from an arbitrary online row.
+if [ -n "$BO_S" ]; then
+  if has "$BO_S" "FROM servers WHERE status = 'online' LIMIT 1"; then
+    bad "G6 backup_orchestrator still stamps server_id from an arbitrary online server"
+  else
+    ok "G6 the arbitrary-online-server stamp is gone from backup_orchestrator"
+  fi
+else
+  skip "G6 — backup_orchestrator.rs not extractable"
+fi
+
+# ── the scanners (s301) ────────────────────────────────────────────────────
+# G7/G8 — both scanners take a MACHINE as their subject, so the arm requires the
+# fleet LOOP, not merely a registry in the signature.
+if [ -n "$SS_S" ]; then
+  if has "$(sig "$SS_S" run)" "AgentRegistry" && has "$SS_S" "online_fleet\(\)"; then
+    ok "G7 security_scanner sweeps the fleet instead of the panel alone"
+  else
+    bad "G7 security_scanner still scans only the panel host — members are never scanned at all"
+  fi
+else
+  skip "G7 — security_scanner.rs not extractable"
+fi
+
+if [ -n "$IS_S" ]; then
+  if has "$(sig "$IS_S" run)" "AgentRegistry" && has "$IS_S" "online_fleet\(\)"; then
+    ok "G8 image_scanner sweeps the fleet instead of the panel alone"
+  else
+    bad "G8 image_scanner still sweeps only the panel's images"
+  fi
+else
+  skip "G8 — image_scanner.rs not extractable"
+fi
+
+if [ -n "$MAIN_S" ]; then
+  for pair in "security_scanner:G9" "image_scanner:G10" "alert_engine:G11"; do
+    svc=${pair%%:*}; id=${pair##*:}
+    if has "$MAIN_S" "${svc}::run\(s_db\.clone\(\), s_agents"; then
+      ok "$id main.rs spawns $svc with the REGISTRY"
+    else
+      bad "$id $svc is still spawned with the legacy single-agent handle — the fix exists but is never wired"
+    fi
+  done
+else
+  skip "G9/G10/G11 — main.rs not extractable"
+fi
+
+# G12 — THE arming arm. The upsert's arbiter named a column the INSERT never
+# supplied, and a NULL never conflict-matches, so DO UPDATE had never executed:
+# the file-integrity alarm saw the FIRST change to a watched file and was deaf
+# to every change after it. Key on the INSERT's column list, since the ON
+# CONFLICT clause was already correct and is not what was broken.
+for pair in "SS_S:G12a:security_scanner" "SSR_S:G12b:the manual trigger route"; do
+  var=${pair%%:*}; rest=${pair#*:}; id=${rest%%:*}; who=${rest##*:}
+  src=${!var}
+  if [ -z "$src" ]; then skip "$id — subject not extractable"; continue; fi
+  INS=$(stmt "$src" 'INSERT INTO file_integrity_baselines' 2)
+  if [ -z "$INS" ]; then
+    skip "$id — baseline INSERT not found in $who"
+  elif has "$INS" 'file_integrity_baselines \(server_id, file_path'; then
+    ok "$id the baseline upsert in $who supplies server_id, so ON CONFLICT can match"
+  else
+    bad "$id the baseline upsert in $who still omits server_id — DO UPDATE can never fire"
+  fi
+done
+
+# G13 — the comparison read. `server_id IS NULL` was not a filter but the absence
+# of one; once the column is real it matches nothing and the alarm goes SILENT.
+# Both halves of the change have to move together or the mechanism flips from
+# always-false-positive to always-quiet.
+for pair in "SS_S:G13a:security_scanner" "SSR_S:G13b:the manual trigger route"; do
+  var=${pair%%:*}; rest=${pair#*:}; id=${rest%%:*}; who=${rest##*:}
+  src=${!var}
+  if [ -z "$src" ]; then skip "$id — subject not extractable"; continue; fi
+  if has "$(stmt "$src" 'FROM file_integrity_baselines' 2)" 'server_id IS NULL'; then
+    bad "$id the baseline comparison in $who still reads the NULL bucket — it will match nothing"
+  else
+    ok "$id the baseline comparison in $who is keyed by server"
+  fi
+done
+
+# G14 — the cadence gate. Fleet-wide, the first host scanned satisfied it for
+# every other host; counting rows of ANY status meant one failed scan bought a
+# whole week of no security scanning.
+if [ -n "$SS_S" ]; then
+  GATE=$(stmt "$SS_S" 'SELECT COUNT\(\*\) FROM security_scans')
+  if [ -z "$GATE" ]; then
+    skip "G14 — cadence gate not extractable"
+  elif has "$GATE" 'server_id = \$1' && has "$GATE" "status = 'completed'"; then
+    ok "G14 the weekly gate is per server and only a COMPLETED scan satisfies it"
+  else
+    bad "G14 the weekly cadence gate is still fleet-wide or still counts failed scans"
+  fi
+else
+  skip "G14 — security_scanner.rs not extractable"
+fi
+
+# G15 — the scan record itself. This route resolved the correct agent and threw
+# the id away: the s299 laundering shape, in an HTTP handler.
+if [ -n "$SSR_S" ]; then
+  if has "$(stmt "$SSR_S" 'INSERT INTO security_scans' 1)" 'security_scans \(server_id, scan_type'; then
+    ok "G15 the manual scan route records the host it scanned"
+  else
+    bad "G15 the manual scan route still files every member's scan under no server"
+  fi
+else
+  skip "G15 — security_scans.rs not extractable"
+fi
+
+# G16 — the readers. If these keep reading the NULL bucket while the writers
+# start binding, the Security page empties out and the posture card disappears.
+if [ -n "$SSR_S" ]; then
+  NULLREADS=$(count "$(stmt "$SSR_S" 'FROM security_scans' 2)" 'server_id IS NULL')
+  if [ "$NULLREADS" -eq 0 ]; then
+    ok "G16 no security_scans reader is still pinned to the NULL bucket"
+  else
+    bad "G16 $NULLREADS security_scans reader(s) still filter server_id IS NULL — the scan history will read empty"
+  fi
+else
+  skip "G16 — security_scans.rs not extractable"
+fi
+
+# G17 — the image write + its retention. An unscoped 30-row trim makes a busy
+# host evict a quiet host's ONLY row, so a scanned server's badge goes blank.
+if [ -n "$ISR_S" ]; then
+  if has "$(stmt "$ISR_S" 'INSERT INTO image_scan_findings')" '\(server_id, image, scanner'; then
+    ok "G17a image scan results record the host that produced them"
+  else
+    bad "G17a image scan results are still stored keyed on the bare image"
+  fi
+  TRIM=$(stmt "$ISR_S" 'DELETE FROM image_scan_findings' 2)
+  if [ -z "$TRIM" ]; then
+    skip "G17b — history trim not extractable"
+  elif has "$TRIM" 'server_id = \$1'; then
+    ok "G17b the 30-row history trim is per (server, image)"
+  else
+    bad "G17b the history trim is still per image — one host evicts another's only result"
+  fi
+else
+  skip "G17 — image_scans.rs not extractable"
+fi
+
+# G18 — the deploy gate. The scan that decides has to be a scan of the machine
+# that will run the image; reading by image alone let a clean scan on one host
+# wave a vulnerable image onto another.
+if [ -n "$ISR_S" ]; then
+  GATE=$(fnbody "$ISR_S" "preflight_gate")
+  if [ -z "$GATE" ]; then
+    skip "G18 — preflight_gate not extractable"
+  elif has "$GATE" 'server_id: uuid::Uuid' && has "$GATE" 'server_id = \$1'; then
+    ok "G18 the deploy gate reads a scan of the deploy TARGET"
+  else
+    bad "G18 the deploy gate still reads whichever host scanned that image last"
+  fi
+else
+  skip "G18 — image_scans.rs not extractable"
+fi
+
+# G19 — the badge feed. This was the one handler in its module with no scope at
+# all, and the client keys its response by image, so a fleet-wide DISTINCT ON
+# collapsed every host's result into one with no duplicate and no error.
+if [ -n "$ISR_S" ]; then
+  LR=$(fnbody "$ISR_S" "list_recent")
+  if [ -z "$LR" ]; then
+    skip "G19 — list_recent not extractable"
+  elif has "$LR" "ServerScope" && has "$LR" 'server_id = \$1'; then
+    ok "G19 the Apps badge feed is server-scoped"
+  else
+    bad "G19 list_recent is still fleet-wide — badges collapse across hosts, last writer wins"
+  fi
+else
+  skip "G19 — image_scans.rs not extractable"
+fi
+
+# G20 — THE 42P10 ARM, and the reason this migration and this writer are one
+# change. An ON CONFLICT arbiter that matches no unique index does not degrade:
+# Postgres raises 42P10 at EXECUTION time, so a composite key shipped without
+# this edit turns every SBOM generation into a 500. Verified by running the old
+# statement against the migrated schema.
+if [ -n "$SB_S" ]; then
+  UP=$(stmt "$SB_S" 'INSERT INTO image_sbom' 4)
+  if [ -z "$UP" ]; then
+    skip "G20 — SBOM upsert not extractable"
+  elif has "$UP" 'ON CONFLICT \(server_id, image\)'; then
+    ok "G20 the SBOM upsert's arbiter names the composite key the table actually has"
+  else
+    bad "G20 the SBOM upsert names an arbiter with no matching unique index — every generate 500s (42P10)"
+  fi
+else
+  skip "G20 — sboms.rs not extractable"
+fi
+
+# G21 — alert_engine's three AGENT-driven checks. Its DB-driven checks were
+# already per-server; only the ones that ask a machine what it has were blind.
+if [ -n "$AE_S" ]; then
+  OLDEST=$(count "$AE_S" 'FROM servers ORDER BY created_at ASC LIMIT 1')
+  if [ "$OLDEST" -eq 0 ]; then
+    ok "G21 the oldest-row 'local server' derivation is gone from alert_engine"
+  else
+    bad "G21 alert_engine still derives 'the local server' by row age in $OLDEST place(s)"
+  fi
+  if has "$AE_S" "online_fleet\(\)" && has "$AE_S" "check_container_health\(&pool, member\)"; then
+    ok "G22 alert_engine runs its agent-driven checks once per online server"
+  else
+    bad "G22 alert_engine still asks the panel's agent and labels the answer with another server"
+  fi
+else
+  skip "G21/G22 — alert_engine.rs not extractable"
+fi
+
+# G23 — the corollary arm (#164): two bugs that cancel are two bugs. alert_engine
+# mislabelled the row and the healer ignored the label, so the restart landed on
+# the right host BY ACCIDENT. Correct ids end the accident, which is why this
+# must be true in the same commit as G22 and not one release later.
+if [ -n "$AH_S" ]; then
+  RESTART=$(fnbody "$AH_S" "auto_restart_services")
+  if [ -z "$RESTART" ]; then
+    skip "G23 — auto_restart_services not extractable"
+  else
+    if has "$RESTART" "for_server\(" && has "$(sig "$AH_S" auto_restart_services)" "AgentRegistry"; then
+      ok "G23 auto_restart_services restarts a service on the host it died on"
+    else
+      bad "G23 auto_restart_services still posts every restart to the local agent"
+    fi
+    UNSCOPED=$(count "$RESTART" "alert_type = 'service_down'")
+    SCOPED=$(count "$RESTART" 'server_id = \$1')
+    if [ "$UNSCOPED" -gt 0 ] && [ "$SCOPED" -ge 3 ]; then
+      ok "G24 its alert_state reads and writes are scoped to the server ($SCOPED predicates)"
+    else
+      bad "G24 alert_state statements in auto_restart_services are still fleet-wide (scoped=$SCOPED)"
+    fi
+    if has "$RESTART" 'target_name = \$1 AND server_id = \$2'; then
+      ok "G25 the restart cooldown counts attempts on THIS server"
+    else
+      bad "G25 the cooldown is still keyed on the bare service name — two hosts share one budget"
+    fi
+    if has "$RESTART" "log_activity_on_server\(" && ! has "$RESTART" "Uuid::nil\(\)"; then
+      ok "G26 the heal is recorded against the server's owner, so the cooldown row can exist at all"
+    else
+      bad "G26 the heal record still uses the nil uuid — it violates the user FK, so the cooldown stays dead"
+    fi
+    # G27 — the field names. A missing JSON field reads as an empty string, so
+    # asking for the wrong one fails silently and for ever. The agent's payload
+    # carries `status` and `container_id`; the alert engine reads the correct
+    # name for the same payload 900 lines away in the same subsystem.
+    APPS=$(grep -A 4 -E 'get\("/apps"\)' <<< "$RESTART" || true)
+    if has "$RESTART" 'get\("container_id"\)' && ! has "$RESTART" 'c\.get\("state"\)'; then
+      ok "G27 the container leg reads the field names the agent actually sends"
+    else
+      bad "G27 the container leg still reads fields the /apps payload has never had — it can never fire"
+    fi
+  fi
+else
+  skip "G23–G27 — auto_healer.rs not extractable"
+fi
+
+# G28 — the NEGATIVE arm, and the reason it runs over STRIPPED source. The
+# registry offers an Option-taking resolver that answers a missing id with the
+# LOCAL agent, silently; no background service may use it. Two subjects carry
+# comments that spell the name precisely to say they are NOT using it, so an arm
+# over raw source would fire on the prose narrating the decision — the #149 trap,
+# and the reason `subj` is used here rather than the file.
+BG_FILES=$(find panel/backend/src/services -name '*.rs' -type f 2>/dev/null | sort)
+BG_COUNT=$(grep -c '\.rs$' <<< "$BG_FILES" || true)
+if [ "${BG_COUNT:-0}" -lt 10 ]; then
+  bad "G28 only $BG_COUNT service files enumerated — the absence arm below cannot mean anything"
+else
+  OFFENDERS=0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ "$f" = "panel/backend/src/services/agent.rs" ] && continue
+    if grep -qE -- '\.for_server_or_local\(' <<< "$(code "$f")"; then
+      bad "G28 $f calls the resolver that silently substitutes the local agent"
+      OFFENDERS=$((OFFENDERS+1))
+    fi
+  done <<< "$BG_FILES"
+  if [ "$OFFENDERS" -eq 0 ]; then
+    ok "G28 no background service resolves its agent through the silently-local convenience path ($BG_COUNT files)"
+  fi
 fi
 
 echo

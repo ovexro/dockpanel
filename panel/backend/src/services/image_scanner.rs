@@ -9,14 +9,21 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use crate::routes::image_scans;
-use crate::services::agent::AgentClient;
+use crate::services::agent::{AgentRegistry, FleetMember};
 
 const CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60); // 30 minutes
 const STARTUP_DELAY: Duration = Duration::from_secs(10 * 60);  // 10 minutes
 
+/// Sweep every online server's images, not just the panel's.
+///
+/// Like the security scanner this asks a MACHINE what it is running, so there
+/// is no row whose `server_id` could be threaded — it needs the fleet loop. It
+/// hard-coded the local handle, so a member's containers were never swept
+/// and its images never scanned, while the Apps page badged them with whatever
+/// the panel happened to have found for an image of the same name.
 pub async fn run(
     pool: PgPool,
-    agent: AgentClient,
+    agents: AgentRegistry,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
 ) {
     tracing::info!("Image scanner background task started");
@@ -29,11 +36,11 @@ pub async fn run(
         }
     }
 
-    let agent_handle = crate::services::agent::AgentHandle::Local(agent);
-
     loop {
-        if let Err(e) = sweep_once(&pool, &agent_handle).await {
-            tracing::warn!("Image scanner sweep failed: {e}");
+        for member in agents.online_fleet().await {
+            if let Err(e) = sweep_once(&pool, &member).await {
+                tracing::warn!("Image scanner sweep failed on {}: {e}", member.name);
+            }
         }
 
         tokio::select! {
@@ -46,10 +53,8 @@ pub async fn run(
     }
 }
 
-async fn sweep_once(
-    pool: &PgPool,
-    agent: &crate::services::agent::AgentHandle,
-) -> Result<(), String> {
+async fn sweep_once(pool: &PgPool, member: &FleetMember) -> Result<(), String> {
+    let agent = &member.agent;
     let (enabled, _on_deploy, _gate, interval_hours) = image_scans::read_settings(pool)
         .await
         .map_err(|e| format!("read settings: {e}"))?;
@@ -83,11 +88,15 @@ async fn sweep_once(
     let interval_secs = (interval_hours.max(1) as i64) * 3600;
 
     for image in images {
-        // Skip if a fresh enough scan exists.
+        // Skip if a fresh enough scan exists FOR THIS SERVER. Unscoped, one
+        // host's fresh scan of `postgres:16` suppressed the rescan on every
+        // other host running it — indefinitely, since the suppressor keeps
+        // refreshing itself.
         let last: Option<(chrono::DateTime<chrono::Utc>,)> = sqlx::query_as(
-            "SELECT scanned_at FROM image_scan_findings WHERE image = $1 \
+            "SELECT scanned_at FROM image_scan_findings WHERE server_id = $1 AND image = $2 \
              ORDER BY scanned_at DESC LIMIT 1",
         )
+        .bind(member.id)
         .bind(&image)
         .fetch_optional(pool)
         .await
@@ -100,9 +109,9 @@ async fn sweep_once(
             }
         }
 
-        tracing::info!("Image scanner: scanning {image}");
-        if let Err(e) = image_scans::scan_and_store(pool, agent, &image).await {
-            tracing::warn!("Image scan failed for {image}: {e:?}");
+        tracing::info!("Image scanner: scanning {image} on {}", member.name);
+        if let Err(e) = image_scans::scan_and_store(pool, member.id, agent, &image).await {
+            tracing::warn!("Image scan failed for {image} on {}: {e:?}", member.name);
         }
 
         // Yield between scans so the agent isn't slammed.

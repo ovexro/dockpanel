@@ -319,13 +319,17 @@ pub async fn apply_security_fix(
 pub async fn compliance_report(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
 ) -> Result<Html<String>, ApiError> {
-    // Fetch latest scan
+    // Fetch the latest scan OF THIS SERVER. The handler already scoped the
+    // agent it asks for the live overview below, then paired that answer with
+    // whichever server's scan finished most recently — a compliance document
+    // built to be filed and forwarded, describing two machines as one.
     let scan: Option<(uuid::Uuid, String, i32, i32, i32, i32, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
         "SELECT id, status, findings_count, critical_count, warning_count, info_count, completed_at \
-         FROM security_scans WHERE status = 'completed' ORDER BY completed_at DESC LIMIT 1"
-    ).fetch_optional(&state.db).await
+         FROM security_scans WHERE server_id = $1 AND status = 'completed' \
+         ORDER BY completed_at DESC LIMIT 1"
+    ).bind(server_id).fetch_optional(&state.db).await
         .map_err(|e| internal_error("compliance report scan lookup", e))?;
 
     // Fetch overview from agent

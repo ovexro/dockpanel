@@ -39,14 +39,17 @@ pub struct FindingRow {
 pub async fn trigger_scan(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
 
-    // Create scan record (server_id NULL for local/self-hosted)
+    // The scan record names the host that was scanned. This handler resolved
+    // the right agent and then threw the id away, so every manual scan — of any
+    // member — was filed against no server at all.
     let scan_id: uuid::Uuid = sqlx::query_scalar(
-        "INSERT INTO security_scans (scan_type, status) VALUES ('full', 'running') RETURNING id",
+        "INSERT INTO security_scans (server_id, scan_type, status) VALUES ($1, 'full', 'running') RETURNING id",
     )
+    .bind(server_id)
     .fetch_one(&state.db)
     .await
     .map_err(|e| internal_error("trigger scan", e))?;
@@ -120,8 +123,9 @@ pub async fn trigger_scan(
             // Check if hash changed (potential integrity violation)
             let existing: Option<(String,)> = match sqlx::query_as(
                 "SELECT sha256_hash FROM file_integrity_baselines \
-                 WHERE server_id IS NULL AND file_path = $1",
+                 WHERE server_id = $1 AND file_path = $2",
             )
+            .bind(server_id)
             .bind(path)
             .fetch_optional(&state.db)
             .await {
@@ -165,11 +169,14 @@ pub async fn trigger_scan(
             }
 
             // Upsert baseline
+            // Binding the host is what ARMS this upsert — the arbiter named a
+            // column the INSERT never supplied, and a NULL never conflict-matches.
             if let Err(e) = sqlx::query(
-                "INSERT INTO file_integrity_baselines (file_path, sha256_hash, file_size) \
-                 VALUES ($1, $2, $3) \
-                 ON CONFLICT (server_id, file_path) DO UPDATE SET sha256_hash = $2, file_size = $3, updated_at = NOW()",
+                "INSERT INTO file_integrity_baselines (server_id, file_path, sha256_hash, file_size) \
+                 VALUES ($1, $2, $3, $4) \
+                 ON CONFLICT (server_id, file_path) DO UPDATE SET sha256_hash = $3, file_size = $4, updated_at = NOW()",
             )
+            .bind(server_id)
             .bind(path)
             .bind(hash)
             .bind(size)
@@ -209,7 +216,7 @@ pub async fn trigger_scan(
         notifications::fire_alert(
             &state.db,
             claims.sub,
-            None,
+            Some(server_id),
             None,
             "security",
             severity,
@@ -232,15 +239,20 @@ pub async fn trigger_scan(
 pub async fn list_scans(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(server_id, _agent): ServerScope,
 ) -> Result<Json<Vec<ScanRow>>, ApiError> {
     require_admin(&claims.role)?;
 
+    // The old predicate was not a filter, it was the absence of one: it
+    // matched everything precisely because nothing ever wrote the column. Now
+    // that scans name their host, the list shows the selected server's history.
     let scans: Vec<ScanRow> = sqlx::query_as(
         "SELECT id, scan_type, status, findings_count, critical_count, warning_count, info_count, \
          started_at, completed_at FROM security_scans \
-         WHERE server_id IS NULL \
+         WHERE server_id = $1 \
          ORDER BY created_at DESC LIMIT 20",
     )
+    .bind(server_id)
     .fetch_all(&state.db)
     .await
     .map_err(|e| internal_error("list scans", e))?;
@@ -252,15 +264,20 @@ pub async fn list_scans(
 pub async fn get_scan(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(server_id, _agent): ServerScope,
     Path(scan_id): Path<uuid::Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
 
+    // Scoped as well as id-keyed: the detail view is reached from the scoped
+    // list, so answering for a scan of a different host would contradict the
+    // page the operator is on.
     let scan: ScanRow = sqlx::query_as(
         "SELECT id, scan_type, status, findings_count, critical_count, warning_count, info_count, \
-         started_at, completed_at FROM security_scans WHERE id = $1",
+         started_at, completed_at FROM security_scans WHERE id = $1 AND server_id = $2",
     )
     .bind(scan_id)
+    .bind(server_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| internal_error("get scan", e))?
@@ -286,24 +303,27 @@ pub async fn get_scan(
 pub async fn posture(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(server_id, _agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
 
-    // Get latest scan
+    // Get latest scan for the selected server
     let latest: Option<ScanRow> = sqlx::query_as(
         "SELECT id, scan_type, status, findings_count, critical_count, warning_count, info_count, \
          started_at, completed_at FROM security_scans \
-         WHERE server_id IS NULL AND status = 'completed' \
+         WHERE server_id = $1 AND status = 'completed' \
          ORDER BY completed_at DESC LIMIT 1",
     )
+    .bind(server_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| internal_error("posture", e))?;
 
-    // Get total scans count
+    // Get total scans count for that server
     let (total_scans,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM security_scans WHERE server_id IS NULL",
+        "SELECT COUNT(*) FROM security_scans WHERE server_id = $1",
     )
+    .bind(server_id)
     .fetch_one(&state.db)
     .await
     .map_err(|e| internal_error("posture", e))?;

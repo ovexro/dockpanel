@@ -211,11 +211,11 @@ pub struct ScanByImageRequest {
 pub async fn scan_image(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Json(body): Json<ScanByImageRequest>,
 ) -> Result<Json<ImageScanResult>, ApiError> {
     require_admin(&claims.role)?;
-    let result = scan_and_store(&state.db, &agent, &body.image).await?;
+    let result = scan_and_store(&state.db, server_id, &agent, &body.image).await?;
     Ok(Json(result))
 }
 
@@ -223,7 +223,7 @@ pub async fn scan_image(
 pub async fn scan_app(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Path(name): Path<String>,
 ) -> Result<Json<ImageScanResult>, ApiError> {
     require_admin(&claims.role)?;
@@ -232,7 +232,7 @@ pub async fn scan_app(
         .await?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "App not found or has no image"))?;
 
-    let result = scan_and_store(&state.db, &agent, &image).await?;
+    let result = scan_and_store(&state.db, server_id, &agent, &image).await?;
     Ok(Json(result))
 }
 
@@ -240,7 +240,7 @@ pub async fn scan_app(
 pub async fn get_app_scan(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Path(name): Path<String>,
 ) -> Result<Json<Option<ScanFindingRow>>, ApiError> {
     require_admin(&claims.role)?;
@@ -250,14 +250,19 @@ pub async fn get_app_scan(
         None => return Ok(Json(None)),
     };
 
+    // The app was resolved on the scoped server, so the scan must come from the
+    // scoped server too. Reading by image alone answered with whichever host
+    // scanned that name last — a badge about a container the operator is not
+    // looking at.
     let row: Option<(String, String, i32, i32, i32, i32, i32, serde_json::Value, chrono::DateTime<chrono::Utc>)> =
         sqlx::query_as(
             "SELECT image, scanner, critical_count, high_count, medium_count, low_count, \
              unknown_count, vulnerabilities, scanned_at \
              FROM image_scan_findings \
-             WHERE image = $1 \
+             WHERE server_id = $1 AND image = $2 \
              ORDER BY scanned_at DESC LIMIT 1",
         )
+        .bind(server_id)
         .bind(&image)
         .fetch_optional(&state.db)
         .await
@@ -267,9 +272,17 @@ pub async fn get_app_scan(
 }
 
 /// GET /api/image-scan/recent — Latest result for every scanned image.
+/// This is the only handler in the module that never took a `ServerScope` at
+/// all, and it is the one that hydrates the Apps page's vulnerability badges.
+/// The frontend keys the response into a `Record<image, finding>`, so a
+/// fleet-wide `DISTINCT ON (image)` collapsed every host's result for an image
+/// into one row, last writer wins, with no duplicate and no error to notice —
+/// just a wrong number. Scoping the query is what keeps that map correct
+/// without the client having to change.
 pub async fn list_recent(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(server_id, _agent): ServerScope,
 ) -> Result<Json<Vec<ScanFindingRow>>, ApiError> {
     require_admin(&claims.role)?;
 
@@ -279,8 +292,10 @@ pub async fn list_recent(
                 image, scanner, critical_count, high_count, medium_count, low_count, \
                 unknown_count, vulnerabilities, scanned_at \
              FROM image_scan_findings \
+             WHERE server_id = $1 \
              ORDER BY image, scanned_at DESC",
         )
+        .bind(server_id)
         .fetch_all(&state.db)
         .await
         .map_err(|e| internal_error("list image scans", e))?;
@@ -311,8 +326,15 @@ fn row_to_finding(
 /// exists, allow the deploy and trigger a background scan so the next deploy
 /// of the same image enforces the gate. This avoids blocking deploys for
 /// 30-180s on first encounter while still hardening the steady state.
+///
+/// ⚠ The lookup is scoped to the DEPLOY TARGET. Reading by image alone let a
+/// clean scan on one host wave a vulnerable image onto another, and a dirty
+/// scan on one host block a deploy on another — and because a foreign row
+/// satisfied the 7-day freshness test, the background scan that was supposed to
+/// arm the gate on THIS host never fired either.
 pub async fn preflight_gate(
     pool: &sqlx::PgPool,
+    server_id: uuid::Uuid,
     agent: &crate::services::agent::AgentHandle,
     template_id: &str,
 ) -> Result<(), ApiError> {
@@ -332,9 +354,10 @@ pub async fn preflight_gate(
     let recent: Option<(i32, i32, i32, i32, i32)> = sqlx::query_as(
         "SELECT critical_count, high_count, medium_count, low_count, unknown_count \
          FROM image_scan_findings \
-         WHERE image = $1 AND scanned_at > NOW() - INTERVAL '7 days' \
+         WHERE server_id = $1 AND image = $2 AND scanned_at > NOW() - INTERVAL '7 days' \
          ORDER BY scanned_at DESC LIMIT 1",
     )
+    .bind(server_id)
     .bind(&image)
     .fetch_optional(pool)
     .await
@@ -370,7 +393,7 @@ pub async fn preflight_gate(
             let agent_clone = agent.clone();
             let img = image.clone();
             tokio::spawn(async move {
-                if let Err(e) = scan_and_store(&pool_clone, &agent_clone, &img).await {
+                if let Err(e) = scan_and_store(&pool_clone, server_id, &agent_clone, &img).await {
                     tracing::warn!("Background image scan failed for {img}: {e:?}");
                 }
             });
@@ -428,6 +451,7 @@ async fn resolve_app_image(
 /// gate and the background scheduler can call it.
 pub async fn scan_and_store(
     pool: &sqlx::PgPool,
+    server_id: uuid::Uuid,
     agent: &crate::services::agent::AgentHandle,
     image: &str,
 ) -> Result<ImageScanResult, ApiError> {
@@ -448,9 +472,10 @@ pub async fn scan_and_store(
 
     sqlx::query(
         "INSERT INTO image_scan_findings \
-         (image, scanner, critical_count, high_count, medium_count, low_count, unknown_count, vulnerabilities) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+         (server_id, image, scanner, critical_count, high_count, medium_count, low_count, unknown_count, vulnerabilities) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
+    .bind(server_id)
     .bind(&result.image)
     .bind(&result.scanner)
     .bind(result.critical_count as i32)
@@ -463,11 +488,18 @@ pub async fn scan_and_store(
     .await
     .map_err(|e| internal_error("store image scan", e))?;
 
-    // Trim history per image to keep the table lean — keep last 30 entries.
+    // Trim history per (server, image) — keep last 30 entries.
+    //
+    // The cap was per IMAGE, which was correct only while one host existed. Now
+    // that rows carry a host, an unscoped trim would make a busy server's scans
+    // evict a quiet server's ONLY row, and the quiet server's app badge would
+    // go blank despite having been scanned. The scope is what keeps the
+    // documented "most recent 30 scans per image" true per machine.
     sqlx::query(
-        "DELETE FROM image_scan_findings WHERE image = $1 AND id NOT IN \
-         (SELECT id FROM image_scan_findings WHERE image = $1 ORDER BY scanned_at DESC LIMIT 30)",
+        "DELETE FROM image_scan_findings WHERE server_id = $1 AND image = $2 AND id NOT IN \
+         (SELECT id FROM image_scan_findings WHERE server_id = $1 AND image = $2 ORDER BY scanned_at DESC LIMIT 30)",
     )
+    .bind(server_id)
     .bind(&result.image)
     .execute(pool)
     .await

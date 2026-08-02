@@ -58,7 +58,7 @@ pub async fn run(
 
         // Only run auto-healing if enabled globally
         if is_enabled(&pool).await {
-            auto_restart_services(&pool, &agent).await;
+            auto_restart_services(&pool, &agents).await;
             auto_clean_disk(&pool, &agents).await;
             auto_renew_ssl(&pool, &agent).await;
             auto_sleep_idle_containers(&pool, &agent).await;
@@ -91,28 +91,76 @@ async fn is_enabled(pool: &PgPool) -> bool {
     row.map(|r| r.0 == "true").unwrap_or(false)
 }
 
-/// Auto-restart crashed services (service_down alerts that are firing).
-async fn auto_restart_services(pool: &PgPool, agent: &AgentClient) {
-    // Recovery check: if an exhausted service is now running, clear the state
-    let exhausted_services: Vec<(String,)> = sqlx::query_as(
-        "SELECT state_key FROM alert_state WHERE alert_type = 'service_down' AND current_state = 'exhausted'"
-    ).fetch_all(pool).await.unwrap_or_default();
+/// Restart crashed services and containers — on the host they crashed on.
+///
+/// Every read here used to be fleet-blind and the restart always went to the
+/// panel's own agent. That combination did not misbehave, and the reason is
+/// worth stating: the alert engine also read the panel's agent while labelling
+/// the rows with the oldest `servers` row, so the label was wrong, this function
+/// ignored the label, and the restart landed on the machine the reading actually
+/// came from. **Two bugs that cancel are two bugs.** The alert engine now writes
+/// correct server ids, which ends the accident — nginx dying on a member would
+/// restart nginx on the panel — so this must be scoped in the same ship, and is.
+///
+/// Three properties this now holds, mirroring `auto_clean_disk`:
+/// * **Each firing service is healed on its own agent**, resolved through
+///   `AgentRegistry::for_server`, driven by a JOIN that carries the server the
+///   row already names.
+/// * **The cooldown is real, and it is per server.** It counted `activity_logs`
+///   rows written with the nil uuid, which violates `fk_activity_logs_user`, so
+///   the insert always failed and the count was always 0: neither the 10-minute
+///   gap nor the give-up-after-3 rule had ever engaged, and a crash-looping
+///   service was restarted every 120 seconds for ever. The row is now written
+///   against the server's owner AND stamped with `server_id`, so two hosts
+///   running a service of the same name no longer share one budget.
+///   ⚠ This ARMS the exhaustion path for the first time: a service that fails 3
+///   restarts in 30 minutes now opens a managed incident and stops being healed
+///   until it comes back up. That is the designed behaviour and it has never
+///   once run.
+/// * **Recovery is scoped too.** The state clears and the incident resolves for
+///   the server the service actually recovered on, not for whichever row the
+///   `servers` table happened to return first.
+async fn auto_restart_services(pool: &PgPool, agents: &AgentRegistry) {
+    // Recovery check: if an exhausted service is now running, clear the state.
+    // The JOIN is what carries the host: `alert_state` is keyed per server, and
+    // the owner and name we resolve here are the ones the alert engine stamped
+    // onto the incident title we are about to match.
+    let exhausted_rows: Vec<(uuid::Uuid, String, uuid::Uuid, String)> = sqlx::query_as(
+        "SELECT a.server_id, a.state_key, s.user_id, s.name \
+         FROM alert_state a JOIN servers s ON s.id = a.server_id \
+         WHERE a.alert_type = 'service_down' AND a.current_state = 'exhausted' \
+           AND a.server_id IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
 
-    if !exhausted_services.is_empty() {
-        // The local server, resolved the same way check_service_health resolves
-        // it — its owner and name are what the alert engine stamped onto the
-        // incident title we are about to resolve.
-        let local_server: Option<(uuid::Uuid, String)> = sqlx::query_as(
-            "SELECT user_id, name FROM servers ORDER BY created_at ASC LIMIT 1",
-        )
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten();
+    // Group by host so `/services/health` is asked once per machine rather than
+    // once per exhausted service.
+    let mut exhausted_by_server: std::collections::HashMap<
+        uuid::Uuid,
+        (uuid::Uuid, String, Vec<String>),
+    > = std::collections::HashMap::new();
+    for (server_id, state_key, user_id, server_name) in exhausted_rows {
+        exhausted_by_server
+            .entry(server_id)
+            .or_insert_with(|| (user_id, server_name, Vec::new()))
+            .2
+            .push(state_key);
+    }
+
+    for (server_id, (owner_id, server_name, service_names)) in exhausted_by_server {
+        let agent = match agents.for_server(server_id).await {
+            Ok(a) => a,
+            Err(e) => {
+                tracing::debug!("Auto-healer: no agent for {server_name} ({server_id}): {e}");
+                continue;
+            }
+        };
 
         if let Ok(health_result) = agent.get("/services/health").await {
             if let Some(services_arr) = health_result.as_array() {
-                for (service_name,) in &exhausted_services {
+                for service_name in &service_names {
                     let is_running = services_arr.iter().any(|svc| {
                         svc.get("name").and_then(|n| n.as_str()) == Some(service_name.as_str())
                             && svc.get("status").and_then(|s| s.as_str()) == Some("running")
@@ -121,9 +169,9 @@ async fn auto_restart_services(pool: &PgPool, agent: &AgentClient) {
                     if is_running {
                         // Service recovered! Clear exhausted state
                         let _ = sqlx::query(
-                            "DELETE FROM alert_state WHERE alert_type = 'service_down' AND state_key = $1 AND current_state = 'exhausted'"
-                        ).bind(service_name).execute(pool).await;
-                        tracing::info!("Auto-healer: {service_name} recovered, cleared exhausted state");
+                            "DELETE FROM alert_state WHERE server_id = $1 AND alert_type = 'service_down' AND state_key = $2 AND current_state = 'exhausted'"
+                        ).bind(server_id).bind(service_name).execute(pool).await;
+                        tracing::info!("Auto-healer: {service_name} recovered on {server_name}, cleared exhausted state");
 
                         // Resolve the associated incident — the one the alert
                         // engine opened for THIS service on THIS box, matched by
@@ -137,21 +185,19 @@ async fn auto_restart_services(pool: &PgPool, agent: &AgentClient) {
                         // status page green mid-outage with no incident update to
                         // show for it. Same unscoped-title-match class as the
                         // incidents.rs and uptime.rs resolves.
-                        if let Some((owner_id, ref server_name)) = local_server {
-                            let _ = sqlx::query(
-                                "UPDATE managed_incidents SET status = 'resolved', updated_at = NOW() \
-                                 WHERE user_id = $1 AND title IN ($2, $3) \
-                                 AND status NOT IN ('resolved', 'postmortem')"
-                            )
-                            .bind(owner_id)
-                            .bind(format!("Service {service_name} is stopped on {server_name}"))
-                            .bind(format!("Service {service_name} is failed on {server_name}"))
-                            .execute(pool).await;
-                        }
+                        let _ = sqlx::query(
+                            "UPDATE managed_incidents SET status = 'resolved', updated_at = NOW() \
+                             WHERE user_id = $1 AND title IN ($2, $3) \
+                             AND status NOT IN ('resolved', 'postmortem')"
+                        )
+                        .bind(owner_id)
+                        .bind(format!("Service {service_name} is stopped on {server_name}"))
+                        .bind(format!("Service {service_name} is failed on {server_name}"))
+                        .execute(pool).await;
 
                         notifications::notify_panel(pool, None,
                             &format!("Service recovered: {}", service_name),
-                            &format!("{} is running again after auto-healer exhaustion. Monitoring resumed.", service_name),
+                            &format!("{} is running again on {} after auto-healer exhaustion. Monitoring resumed.", service_name, server_name),
                             "info", "auto_heal", Some("/incidents")).await;
 
                         crate::services::system_log::log_event(
@@ -165,10 +211,14 @@ async fn auto_restart_services(pool: &PgPool, agent: &AgentClient) {
         }
     }
 
-    // Find service_down alerts that are currently firing
-    let firing: Vec<(String,)> = match sqlx::query_as(
-        "SELECT state_key FROM alert_state \
-         WHERE alert_type = 'service_down' AND current_state = 'firing' AND state_key != ''",
+    // Find service_down alerts that are currently firing, each carrying the
+    // server it fired on. The row is the authority on the host — the same rule
+    // the webhook routes learned at v2.57.0.
+    let firing: Vec<(uuid::Uuid, String, uuid::Uuid, String)> = match sqlx::query_as(
+        "SELECT a.server_id, a.state_key, s.user_id, s.name \
+         FROM alert_state a JOIN servers s ON s.id = a.server_id \
+         WHERE a.alert_type = 'service_down' AND a.current_state = 'firing' \
+           AND a.state_key != '' AND a.server_id IS NOT NULL",
     )
     .fetch_all(pool)
     .await
@@ -177,19 +227,32 @@ async fn auto_restart_services(pool: &PgPool, agent: &AgentClient) {
         Err(_) => return,
     };
 
-    for (service_name,) in &firing {
+    for (server_id, service_name, user_id, server_name) in &firing {
+        let (server_id, user_id) = (*server_id, *user_id);
         if service_name.is_empty() {
             continue;
         }
 
-        // GAP 12: Check restart count in last 30 minutes — give up after 3 attempts
+        let agent = match agents.for_server(server_id).await {
+            Ok(a) => a,
+            Err(e) => {
+                tracing::debug!("Auto-healer: no agent for {server_name} ({server_id}): {e}");
+                continue;
+            }
+        };
+
+        // GAP 12: Check restart count in last 30 minutes — give up after 3 attempts.
+        // Scoped to this server: a service of the same name on two hosts had
+        // shared one budget, so a crash loop on one box would have exhausted
+        // healing for a healthy namesake on the other.
         let restart_count: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM activity_logs \
              WHERE action = 'auto_heal.restart_service' \
-             AND target_name = $1 \
+             AND target_name = $1 AND server_id = $2 \
              AND created_at > NOW() - INTERVAL '30 minutes'",
         )
         .bind(service_name)
+        .bind(server_id)
         .fetch_one(pool)
         .await
         .unwrap_or((0,));
@@ -198,16 +261,10 @@ async fn auto_restart_services(pool: &PgPool, agent: &AgentClient) {
             // Stop healing — service is in a crash loop. Create incident and notify.
             tracing::warn!("Auto-healer gave up on {service_name} after 3 restarts in 30 minutes");
 
-            // Get user_id from the first server for the incident
-            let server: Option<(uuid::Uuid, uuid::Uuid, String)> = sqlx::query_as(
-                "SELECT id, user_id, name FROM servers ORDER BY created_at ASC LIMIT 1",
-            )
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
-
-            if let Some((_server_id, user_id, server_name)) = server {
+            // The owner and name come from the row's own server. This used to
+            // be the oldest `servers` row, so a member's crash loop opened an
+            // incident naming the panel — on the panel owner's status page.
+            {
                 let incident_title = format!("Auto-healer exhausted: {} keeps crashing on {}", service_name, server_name);
                 let incident_msg = format!(
                     "{} has been restarted 3 times in 30 minutes on {} without recovering. Manual intervention required.",
@@ -253,11 +310,14 @@ async fn auto_restart_services(pool: &PgPool, agent: &AgentClient) {
                 ).await;
             }
 
-            // Clear the firing alert state so we don't keep trying
+            // Clear the firing alert state so we don't keep trying — on THIS
+            // server only. Unscoped, giving up on a member's nginx also stopped
+            // the panel's own nginx from ever being healed again.
             let _ = sqlx::query(
                 "UPDATE alert_state SET current_state = 'exhausted' \
-                 WHERE alert_type = 'service_down' AND state_key = $1 AND current_state = 'firing'",
+                 WHERE server_id = $1 AND alert_type = 'service_down' AND state_key = $2 AND current_state = 'firing'",
             )
+            .bind(server_id)
             .bind(service_name)
             .execute(pool)
             .await;
@@ -269,10 +329,11 @@ async fn auto_restart_services(pool: &PgPool, agent: &AgentClient) {
         let recent_heal: Option<(i64,)> = sqlx::query_as(
             "SELECT COUNT(*) FROM activity_logs \
              WHERE action = 'auto_heal.restart_service' \
-             AND target_name = $1 \
+             AND target_name = $1 AND server_id = $2 \
              AND created_at > NOW() - INTERVAL '10 minutes'",
         )
         .bind(service_name)
+        .bind(server_id)
         .fetch_optional(pool)
         .await
         .ok()
@@ -283,7 +344,7 @@ async fn auto_restart_services(pool: &PgPool, agent: &AgentClient) {
             continue;
         }
 
-        tracing::info!("Auto-heal: restarting service {service_name} (attempt {} of 3 in 30m window)", restart_count.0 + 1);
+        tracing::info!("Auto-heal: restarting service {service_name} on {server_name} (attempt {} of 3 in 30m window)", restart_count.0 + 1);
 
         let result = agent
             .post(
@@ -308,18 +369,21 @@ async fn auto_restart_services(pool: &PgPool, agent: &AgentClient) {
             ).await;
         }
 
-        // Log the auto-healing action
-        // Use a system UUID for auto-healer activity
-        let system_id = uuid::Uuid::nil();
-        activity::log_activity(
+        // Written against the server's OWNER, not the nil uuid, and stamped
+        // with the server. This row IS the cooldown gate read above — written
+        // against the nil uuid it violated `fk_activity_logs_user` and failed
+        // every time, so the count was always 0 and a crash-looping service was
+        // restarted every 120 seconds for ever, with no audit trail of any of it.
+        activity::log_activity_on_server(
             pool,
-            system_id,
+            user_id,
             "auto-healer",
             "auto_heal.restart_service",
             Some("service"),
             Some(service_name),
-            Some(&format!("success={success}, result={details}")),
+            Some(&format!("server={server_name} success={success}, result={details}")),
             None,
+            Some(server_id),
         )
         .await;
 
@@ -328,95 +392,102 @@ async fn auto_restart_services(pool: &PgPool, agent: &AgentClient) {
         if success {
             let _ = sqlx::query(
                 "UPDATE alert_state SET current_state = 'ok', fired_at = NULL, last_notified_at = NULL \
-                 WHERE alert_type = 'service_down' AND state_key = $1 AND current_state = 'firing'",
+                 WHERE server_id = $1 AND alert_type = 'service_down' AND state_key = $2 AND current_state = 'firing'",
             )
+            .bind(server_id)
             .bind(service_name)
             .execute(pool)
             .await;
 
-            // Get the local server for the resolve notification
-            let server: Option<(uuid::Uuid, uuid::Uuid, String)> = sqlx::query_as(
-                "SELECT id, user_id, name FROM servers ORDER BY created_at ASC LIMIT 1",
+            notifications::resolve_alert(
+                pool,
+                user_id,
+                Some(server_id),
+                None,
+                "service_down",
+                &format!("Service {} auto-healed on {}", service_name, server_name),
+                &format!(
+                    "The {} service was automatically restarted by auto-healer on server {}.",
+                    service_name, server_name
+                ),
             )
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
+            .await;
 
-            if let Some((server_id, user_id, server_name)) = server {
-                notifications::resolve_alert(
-                    pool,
-                    user_id,
-                    Some(server_id),
-                    None,
-                    "service_down",
-                    &format!("Service {} auto-healed on {}", service_name, server_name),
-                    &format!(
-                        "The {} service was automatically restarted by auto-healer on server {}.",
-                        service_name, server_name
-                    ),
-                )
-                .await;
-            }
-
-            tracing::info!("Auto-heal: service {service_name} restarted successfully, alert resolved");
+            tracing::info!("Auto-heal: service {service_name} restarted successfully on {server_name}, alert resolved");
         }
     }
 
-    // Auto-restart exited/dead Docker containers
-    if let Ok(containers) = agent.get("/apps").await {
-        if let Some(arr) = containers.as_array() {
-            for c in arr {
-                let name = c.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let state = c.get("state").and_then(|v| v.as_str()).unwrap_or("");
-                let container_id = c.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    // Auto-restart exited/dead Docker containers, on every online server.
+    //
+    // ⚠ This block had never run once, for two independent reasons, and both
+    // were invisible because a missing JSON field reads as an empty string. The
+    // agent's `/apps` entries carry `status` and `container_id`
+    // (`DeployedApp`, agent `services/docker_apps.rs`); this asked for `state`
+    // and `id`, so the state test could never match "exited" and the emptiness
+    // guard could never pass. The alert engine reads the correct field name for
+    // the same payload — in the same subsystem, for the same containers.
+    for member in agents.online_fleet().await {
+        let containers = match member.agent.get("/apps").await {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let arr = match containers.as_array() {
+            Some(a) => a.clone(),
+            None => continue,
+        };
 
-                if (state == "exited" || state == "dead") && !name.is_empty() && !container_id.is_empty() {
-                    // Check restart count in last 30 minutes — give up after 3 attempts
-                    let restart_count: (i64,) = sqlx::query_as(
-                        "SELECT COUNT(*) FROM activity_logs \
-                         WHERE action = 'auto_heal.container_restart' AND target_name = $1 \
-                         AND created_at > NOW() - INTERVAL '30 minutes'"
-                    ).bind(name).fetch_one(pool).await.unwrap_or((0,));
+        for c in &arr {
+            let name = c.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let state = c.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            let container_id = c.get("container_id").and_then(|v| v.as_str()).unwrap_or("");
 
-                    if restart_count.0 >= 3 {
-                        tracing::warn!("Auto-healer gave up on container {name} after 3 restarts in 30 minutes");
-                        continue;
-                    }
+            if (state != "exited" && state != "dead") || name.is_empty() || container_id.is_empty() {
+                continue;
+            }
 
-                    // 10-minute cooldown between attempts
-                    let recent_heal: (i64,) = sqlx::query_as(
-                        "SELECT COUNT(*) FROM activity_logs \
-                         WHERE action = 'auto_heal.container_restart' AND target_name = $1 \
-                         AND created_at > NOW() - INTERVAL '10 minutes'"
-                    ).bind(name).fetch_one(pool).await.unwrap_or((0,));
+            // Check restart count in last 30 minutes — give up after 3 attempts
+            let restart_count: (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM activity_logs \
+                 WHERE action = 'auto_heal.container_restart' AND target_name = $1 AND server_id = $2 \
+                 AND created_at > NOW() - INTERVAL '30 minutes'"
+            ).bind(name).bind(member.id).fetch_one(pool).await.unwrap_or((0,));
 
-                    if recent_heal.0 > 0 {
-                        continue;
-                    }
+            if restart_count.0 >= 3 {
+                tracing::warn!("Auto-healer gave up on container {name} on {} after 3 restarts in 30 minutes", member.name);
+                continue;
+            }
 
-                    tracing::info!("Auto-heal: restarting container {name} (attempt {} of 3)", restart_count.0 + 1);
+            // 10-minute cooldown between attempts
+            let recent_heal: (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM activity_logs \
+                 WHERE action = 'auto_heal.container_restart' AND target_name = $1 AND server_id = $2 \
+                 AND created_at > NOW() - INTERVAL '10 minutes'"
+            ).bind(name).bind(member.id).fetch_one(pool).await.unwrap_or((0,));
 
-                    let result = agent.post(
-                        &format!("/apps/{}/restart", container_id),
-                        None::<serde_json::Value>,
-                    ).await;
+            if recent_heal.0 > 0 {
+                continue;
+            }
 
-                    let success = result.is_ok();
-                    let system_id = uuid::Uuid::nil();
-                    activity::log_activity(
-                        pool, system_id, "auto-healer", "auto_heal.container_restart",
-                        Some("container"), Some(name),
-                        Some(&format!("success={success}, state={state}")),
-                        None,
-                    ).await;
+            tracing::info!("Auto-heal: restarting container {name} on {} (attempt {} of 3)", member.name, restart_count.0 + 1);
 
-                    if success {
-                        tracing::info!("Auto-healer: restarted container {name}");
-                    } else {
-                        tracing::warn!("Auto-healer: failed to restart container {name}");
-                    }
-                }
+            let result = member.agent.post(
+                &format!("/apps/{}/restart", container_id),
+                None::<serde_json::Value>,
+            ).await;
+
+            let success = result.is_ok();
+            activity::log_activity_on_server(
+                pool, member.user_id, "auto-healer", "auto_heal.container_restart",
+                Some("container"), Some(name),
+                Some(&format!("server={} success={success}, state={state}", member.name)),
+                None,
+                Some(member.id),
+            ).await;
+
+            if success {
+                tracing::info!("Auto-healer: restarted container {name} on {}", member.name);
+            } else {
+                tracing::warn!("Auto-healer: failed to restart container {name} on {}", member.name);
             }
         }
     }

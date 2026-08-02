@@ -75,11 +75,11 @@ pub struct GenerateRequest {
 pub async fn generate(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Json(body): Json<GenerateRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let spdx = generate_and_store(&state.db, &agent, &body.image).await?;
+    let spdx = generate_and_store(&state.db, server_id, &agent, &body.image).await?;
     Ok(Json(serde_json::json!({
         "image": body.image,
         "generated_at": chrono::Utc::now().to_rfc3339(),
@@ -91,14 +91,14 @@ pub async fn generate(
 pub async fn generate_app(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Path(name): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
     let image = resolve_app_image(&agent, &name)
         .await?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "App not found or has no image"))?;
-    let spdx = generate_and_store(&state.db, &agent, &image).await?;
+    let spdx = generate_and_store(&state.db, server_id, &agent, &image).await?;
     Ok(Json(serde_json::json!({
         "image": image,
         "generated_at": chrono::Utc::now().to_rfc3339(),
@@ -111,7 +111,7 @@ pub async fn generate_app(
 pub async fn download_app_sbom(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Path(name): Path<String>,
 ) -> Result<Response, ApiError> {
     require_admin(&claims.role)?;
@@ -119,8 +119,13 @@ pub async fn download_app_sbom(
         .await?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "App not found or has no image"))?;
 
+    // The app was resolved on the scoped server; the document must be that
+    // server's. The filename is built from the app name on THIS host, so an
+    // unscoped read handed the operator another machine's SBOM under this
+    // machine's label.
     let row: Option<(serde_json::Value,)> =
-        sqlx::query_as("SELECT spdx FROM image_sbom WHERE image = $1")
+        sqlx::query_as("SELECT spdx FROM image_sbom WHERE server_id = $1 AND image = $2")
+            .bind(server_id)
             .bind(&image)
             .fetch_optional(&state.db)
             .await
@@ -154,12 +159,14 @@ pub async fn download_app_sbom(
 pub async fn get_image_sbom(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
+    ServerScope(server_id, _agent): ServerScope,
     Path(image): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
     let row: Option<(serde_json::Value, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT spdx, generated_at FROM image_sbom WHERE image = $1",
+        "SELECT spdx, generated_at FROM image_sbom WHERE server_id = $1 AND image = $2",
     )
+    .bind(server_id)
     .bind(&image)
     .fetch_optional(&state.db)
     .await
@@ -218,6 +225,7 @@ async fn resolve_app_image(
 
 async fn generate_and_store(
     pool: &sqlx::PgPool,
+    server_id: uuid::Uuid,
     agent: &crate::services::agent::AgentHandle,
     image: &str,
 ) -> Result<serde_json::Value, ApiError> {
@@ -235,12 +243,18 @@ async fn generate_and_store(
         .cloned()
         .ok_or_else(|| internal_error("agent returned no spdx field", "missing field"))?;
 
+    // ⚠ The arbiter must name the CURRENT primary key. `image_sbom` was keyed
+    // on the bare image, so two hosts' documents overwrote each other; the key
+    // is now `(server_id, image)`. An arbiter that names no unique index does
+    // not fall back — Postgres raises 42P10 at execution time, so leaving this
+    // as it was would have turned every SBOM generation into a 500.
     sqlx::query(
-        "INSERT INTO image_sbom (image, format, spdx, generated_at) \
-         VALUES ($1, 'spdx-json', $2, NOW()) \
-         ON CONFLICT (image) DO UPDATE \
+        "INSERT INTO image_sbom (server_id, image, format, spdx, generated_at) \
+         VALUES ($1, $2, 'spdx-json', $3, NOW()) \
+         ON CONFLICT (server_id, image) DO UPDATE \
             SET spdx = EXCLUDED.spdx, generated_at = NOW()",
     )
+    .bind(server_id)
     .bind(image)
     .bind(&spdx)
     .execute(pool)

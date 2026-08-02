@@ -380,11 +380,13 @@ async fn main() {
     services::status_notices::start_worker(state.db.clone());
 
     // Spawn supervised background tasks
-    let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
+    // Fleet-wide schedule query, so it gets the registry: a site is backed up on the
+    // server that holds its files. See `run_scheduled_backup`.
+    let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
     // The scheduler decrypts database credentials to include them in site
     // backups, so it needs the same secret the restore path uses.
     let s_jwt_bs = state.config.jwt_secret.clone();
-    spawn_supervised("backup_scheduler", &shutdown_tx, move |rx| services::backup_scheduler::run(s_db.clone(), s_agent.clone(), s_jwt_bs.clone(), rx));
+    spawn_supervised("backup_scheduler", &shutdown_tx, move |rx| services::backup_scheduler::run(s_db.clone(), s_agents.clone(), s_jwt_bs.clone(), rx));
 
     let s_db = state.db.clone();
     spawn_supervised("server_monitor", &shutdown_tx, move |rx| services::server_monitor::run(s_db.clone(), rx));
@@ -392,14 +394,19 @@ async fn main() {
     let s_db = state.db.clone();
     spawn_supervised("uptime_monitor", &shutdown_tx, move |rx| services::uptime::run(s_db.clone(), rx));
 
-    let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
-    spawn_supervised("security_scanner", &shutdown_tx, move |rx| services::security_scanner::run(s_db.clone(), s_agent.clone(), rx));
+    // Both scanners take a MACHINE as their subject rather than a row, so each
+    // sweeps the whole fleet through the registry. See `online_fleet`.
+    let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
+    spawn_supervised("security_scanner", &shutdown_tx, move |rx| services::security_scanner::run(s_db.clone(), s_agents.clone(), rx));
 
-    let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
-    spawn_supervised("image_scanner", &shutdown_tx, move |rx| services::image_scanner::run(s_db.clone(), s_agent.clone(), rx));
+    let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
+    spawn_supervised("image_scanner", &shutdown_tx, move |rx| services::image_scanner::run(s_db.clone(), s_agents.clone(), rx));
 
-    let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
-    spawn_supervised("alert_engine", &shutdown_tx, move |rx| services::alert_engine::run(s_db.clone(), s_agent.clone(), rx));
+    // Its GPU, service-health and container checks each ask ONE machine what it
+    // has, so each runs per online server against that server's own agent.
+    // See `online_fleet`.
+    let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
+    spawn_supervised("alert_engine", &shutdown_tx, move |rx| services::alert_engine::run(s_db.clone(), s_agents.clone(), rx));
 
     // The healer gets the REGISTRY as well as the legacy local client: its disk
     // heal acts on whichever server's alert is firing, which is not necessarily
@@ -421,17 +428,25 @@ async fn main() {
     let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
     spawn_supervised("preview_cleanup", &shutdown_tx, move |rx| services::preview_cleanup::run(s_db.clone(), s_agents.clone(), rx));
 
-    let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
-    spawn_supervised("backup_verifier", &shutdown_tx, move |rx| services::backup_verifier::run(s_db.clone(), s_agent.clone(), rx));
+    // Every verifier query is fleet-wide, so it gets the registry: an archive is read
+    // on the host that wrote it. See `verify_one`.
+    let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
+    spawn_supervised("backup_verifier", &shutdown_tx, move |rx| services::backup_verifier::run(s_db.clone(), s_agents.clone(), rx));
 
-    let (s_db, s_agent, s_jwt) = (state.db.clone(), state.agent.clone(), state.config.jwt_secret.clone());
-    spawn_supervised("backup_policy_executor", &shutdown_tx, move |rx| services::backup_policy_executor::run(s_db.clone(), s_agent.clone(), s_jwt.clone(), rx));
+    // Each leg resolves its own host: sites and databases per row, volumes per policy.
+    // See `execute_policy`.
+    let (s_db, s_agents, s_jwt) = (state.db.clone(), state.agents.clone(), state.config.jwt_secret.clone());
+    spawn_supervised("backup_policy_executor", &shutdown_tx, move |rx| services::backup_policy_executor::run(s_db.clone(), s_agents.clone(), s_jwt.clone(), rx));
 
-    let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
-    spawn_supervised("drill_scheduler", &shutdown_tx, move |rx| services::drill_scheduler::run(s_db.clone(), s_agent.clone(), rx));
+    // A drill restores a backup on the server that owns it — running one elsewhere
+    // certifies DR for a machine it never tested. See `dispatch_policy_drills`.
+    let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
+    spawn_supervised("drill_scheduler", &shutdown_tx, move |rx| services::drill_scheduler::run(s_db.clone(), s_agents.clone(), rx));
 
-    let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
-    spawn_supervised("telemetry_collector", &shutdown_tx, move |rx| services::telemetry_collector::run(s_db.clone(), s_agent.clone(), rx));
+    // Local BY INTENT, not by omission: it diagnoses the panel host itself. It takes
+    // the registry so that intent is stated in the type and calls `agents.local()`.
+    let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
+    spawn_supervised("telemetry_collector", &shutdown_tx, move |rx| services::telemetry_collector::run(s_db.clone(), s_agents.clone(), rx));
 
     // Periodic cleanup of token blacklist and rate limiters (every 15 minutes)
     let cleanup_blacklist = state.token_blacklist.clone();
