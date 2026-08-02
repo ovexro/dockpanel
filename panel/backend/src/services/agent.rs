@@ -1113,9 +1113,12 @@ impl AgentRegistry {
             }
         }
 
-        // Fetch from DB and cache
-        let row: Option<(String, String, Option<String>)> = sqlx::query_as(
-            "SELECT agent_url, agent_token, cert_fingerprint FROM servers WHERE id = $1 AND status != 'pending'",
+        // Fetch from DB and cache. `is_local` is read too, and `agent_url` is
+        // read as nullable, because the local row has NEITHER a URL nor a
+        // fingerprint: `ensure_local_server` inserts it without one, since
+        // nothing ever dials the local agent over TCP.
+        let row: Option<(Option<String>, String, Option<String>, bool)> = sqlx::query_as(
+            "SELECT agent_url, agent_token, cert_fingerprint, is_local FROM servers WHERE id = $1 AND status != 'pending'",
         )
         .bind(server_id)
         .fetch_optional(&self.db)
@@ -1123,7 +1126,21 @@ impl AgentRegistry {
         .map_err(|e| AgentError::Connection(format!("DB lookup failed: {e}")))?;
 
         match row {
-            Some((url, token, fingerprint)) if !url.is_empty() => {
+            // The local server, reached without the short-circuit above. That
+            // happens whenever `local_server_id` is still None — which is a real
+            // state, not a theoretical one: `ensure_local_server` returns
+            // `Uuid::nil()` when no admin exists yet, so nothing sets the cached
+            // id until someone completes setup or logs in.
+            //
+            // Without this arm the fallthrough asks the local row for an
+            // `agent_url` it does not have and returns NotFound, so every
+            // background service that resolves its OWN server would refuse to
+            // act. Threading the fleet onto `for_server` is what makes that
+            // reachable, and a single-server install is the commonest
+            // deployment there is — so this arm is load-bearing for them, not
+            // an edge case.
+            Some((_, _, _, true)) => Ok(AgentHandle::Local(self.local.clone())),
+            Some((Some(url), token, fingerprint, false)) if !url.is_empty() => {
                 let client = RemoteAgentClient::new_with_pin(url, token, fingerprint);
                 self.remote_cache.write().await.insert(server_id, client.clone());
                 Ok(AgentHandle::Remote(client))

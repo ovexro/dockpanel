@@ -410,11 +410,16 @@ async fn main() {
     let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
     spawn_supervised("metrics_collector", &shutdown_tx, move |rx| services::metrics_collector::run(s_db.clone(), s_agent.clone(), rx));
 
-    let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
-    spawn_supervised("deploy_scheduler", &shutdown_tx, move |rx| services::deploy_scheduler::run(s_db.clone(), s_agent.clone(), rx));
+    // The deploy scheduler queries EVERY server's cron deploys, so it gets the
+    // registry: each row is deployed on the server that owns it. See
+    // `trigger_deploy_task`.
+    let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
+    spawn_supervised("deploy_scheduler", &shutdown_tx, move |rx| services::deploy_scheduler::run(s_db.clone(), s_agents.clone(), rx));
 
-    let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
-    spawn_supervised("preview_cleanup", &shutdown_tx, move |rx| services::preview_cleanup::run(s_db.clone(), s_agent.clone(), rx));
+    // Previews are torn down on the server their git deploy lives on, resolved
+    // through the JOIN the sweep already performs.
+    let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
+    spawn_supervised("preview_cleanup", &shutdown_tx, move |rx| services::preview_cleanup::run(s_db.clone(), s_agents.clone(), rx));
 
     let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
     spawn_supervised("backup_verifier", &shutdown_tx, move |rx| services::backup_verifier::run(s_db.clone(), s_agent.clone(), rx));

@@ -4,6 +4,77 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.57.0] - 2026-08-02
+
+**A schedule belongs to the machine that owns it.**
+
+v2.56.0 threaded exactly one background service — the disk healer — through the
+per-server agent registry. Eleven others, and two webhook routes nobody had
+counted, still queried the whole fleet and acted on whichever machine runs the
+panel. This release closes both paths that were destructive rather than merely
+wrong, and the chain that made v2.56.0's own fix insufficient.
+
+Driven on a two-box fleet on the published v2.56.0. A member's cron git deploy
+ran **entirely on the panel host** — cloned into the panel's own
+`/var/lib/dockpanel/git/api`, built there, bound the panel's port — while the
+member ran nothing at all. Six times, each logged as
+`Deploy success (scheduled)`.
+
+The sharp edge is the checkout path, `/var/lib/dockpanel/git/{name}`, which is
+keyed by **name alone** while `idx_git_deploys_name_server` makes a deploy name
+unique only **per server**. Two servers may legitimately own an `api`, so on the
+executing host they share one working directory: whichever cloned first owns
+`origin`, and the other fetches against it, hard-resets it, and builds the
+**wrong repository** into the other tenant's container name — then reports
+success. Both directions were observed on one box. Nothing catches it, because
+the post-deploy health check fetches the deployment's public domain, which still
+resolves to the untouched container on the machine that was never deployed to.
+
+**Fixed**
+
+- **Scheduled git deploys run on the server that owns them.** `trigger_deploy_task`
+  resolved `AgentHandle::Local` three lines before it read the row carrying
+  `server_id`; it now resolves that server and **refuses out loud** when it is
+  unreachable, rather than falling back to the local host — the fallback was the
+  defect. Both scheduler queries now select `server_id`.
+- **Both deploy webhooks too.** A webhook carries a secret, not a session, so it
+  has no `ServerScope` to read a server from — which is why both reached for the
+  local agent. The row is the authority: a push to a deployment or a site owned
+  by a remote server no longer builds, replaces containers and rewrites vhosts on
+  the panel host.
+- **Preview teardown names its host.** `git_previews` carries no server of its
+  own, but the sweep already joins `git_deploys`, whose `server_id` is `NOT NULL`.
+  An expired preview is torn down on the machine it actually runs on; an
+  unreachable server keeps its row for the next sweep instead of having a
+  same-named container destroyed elsewhere.
+- **A one-time schedule is no longer lost, or replayed for ever.** Reachability
+  is checked *before* the schedule is cleared, so an unreachable member keeps the
+  operator's only copy of the instruction. And the clear is now *checked*: a
+  successful run leaves the row `running`, which the one-time query does not
+  exclude, so a clear that silently failed redeployed production every 60 seconds.
+- **`metrics_collector` labels local readings with the local server.** It asked
+  for the *oldest* server row under a comment claiming it asked for the local one.
+  These readings come from the local agent, so mislabelling them writes the panel
+  host's disk usage against a member's `server_id` — which `alert_engine`
+  thresholds, and which v2.56.0's now-correctly-scoped healer would then act on,
+  cleaning the member because the panel is full. Reachable whenever the local row
+  is not the first ever created: `servers.user_id` is `ON DELETE CASCADE`, so
+  deleting the founding admin drops the local server row and the next restart
+  mints a newer one.
+- **`for_server` recognises the local server from the database.** `ensure_local_server`
+  returns a nil id until an admin exists, and the local row has no `agent_url`, so
+  resolving the local server could return `NotFound`. Threading the fleet onto
+  `for_server` is what made that reachable — without this a **single-server**
+  install would have had every threaded service refuse to act on its own box.
+
+**Still fleet-blind, and tracked:** `backup_scheduler`, `backup_policy_executor`,
+`drill_scheduler`, `backup_verifier`, `security_scanner`, `image_scanner`,
+`alert_engine`, `telemetry_collector`. None of them destroy data — they read or
+attribute against the wrong host. `telemetry_collector` is legitimately local-only.
+
+New pin `unattended-host-scope-pin-e2e.sh` §F — 15 arms, all 15 red against
+v2.56.0, no skips.
+
 ## [2.56.0] - 2026-08-01
 
 **An unattended service must name the host it acts on.**

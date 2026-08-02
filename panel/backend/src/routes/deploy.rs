@@ -377,14 +377,19 @@ pub async fn webhook(
         return Err(err(StatusCode::NOT_FOUND, "Invalid webhook"));
     }
 
-    // Get domain
-    let domain: Option<(String,)> = sqlx::query_as("SELECT domain FROM sites WHERE id = $1")
-        .bind(site_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| internal_error("webhook", e))?;
+    // Get domain AND the server the site lives on. `sites.server_id` is NOT NULL
+    // (20260319000000_multi_server.sql:76), so the row always names its machine.
+    let site_row: Option<(String, uuid::Uuid)> =
+        sqlx::query_as("SELECT domain, server_id FROM sites WHERE id = $1")
+            .bind(site_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| internal_error("webhook", e))?;
 
-    let domain = domain.map(|(d,)| d).unwrap_or_default();
+    let (domain, site_server_id) = match site_row {
+        Some((d, s)) => (d, Some(s)),
+        None => (String::new(), None),
+    };
 
     // Check for active critical/major incidents — skip webhook deploy during outage
     let active_incidents: (i64,) = sqlx::query_as(
@@ -398,8 +403,25 @@ pub async fn webhook(
         return Ok(Json(serde_json::json!({ "ok": false, "message": "Deploy skipped: active incident" })));
     }
 
-    // Resolve the agent for this webhook (use local agent for webhook-triggered deploys)
-    let agent = crate::services::agent::AgentHandle::Local(state.agents.local().clone());
+    // Resolve the agent for the server this SITE lives on. A webhook has no
+    // authenticated caller and therefore no `ServerScope`, which is why this
+    // used to take the local agent — but the site row names its server, and
+    // deploying a remote tenant's site onto the panel host writes their files
+    // and their vhost on the wrong machine.
+    let site_server_id = match site_server_id {
+        Some(s) => s,
+        None => return Err(err(StatusCode::NOT_FOUND, "Invalid webhook")),
+    };
+    let agent = match state.agents.for_server(site_server_id).await {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::warn!(
+                "Webhook deploy for {domain} refused: its server {site_server_id} is \
+                 unreachable ({e}) — refusing to deploy on a different host"
+            );
+            return Err(err(StatusCode::BAD_GATEWAY, "Deploy target server is unreachable"));
+        }
+    };
 
     // Execute deploy in background (webhook should return quickly)
     let db = state.db.clone();

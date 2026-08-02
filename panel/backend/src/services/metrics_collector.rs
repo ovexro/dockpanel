@@ -18,9 +18,25 @@ pub async fn run(pool: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync:
             }
         }
 
-        // Get the local server's ID for multi-server charting
+        // Get the local server's ID for multi-server charting.
+        //
+        // This asked for the OLDEST server row, not the local one, while its own
+        // name and comment claimed otherwise. On a single-box install the two
+        // coincide, which is why it survived; on a fleet they come apart as soon
+        // as the local row is not the first ever created. That is reachable:
+        // `servers.user_id` is ON DELETE CASCADE, so deleting the founding admin
+        // deletes the local server row with them, and the next restart has
+        // `ensure_local_server` mint a NEW one — now the newest row in the table.
+        //
+        // The consequence is not a wrong chart. These readings are taken from
+        // the LOCAL agent, so mislabelling them writes the panel host's cpu, mem
+        // and disk against a MEMBER's server_id. `alert_engine` thresholds on
+        // that row, and v2.56.0's `auto_clean_disk` — which now correctly
+        // resolves the alerting server's own agent — would faithfully clean the
+        // MEMBER because the PANEL is full. Ask for the local server by the flag
+        // that actually means it.
         let local_server_id: Option<uuid::Uuid> = sqlx::query_scalar(
-            "SELECT id FROM servers ORDER BY created_at ASC LIMIT 1",
+            "SELECT id FROM servers WHERE is_local = true LIMIT 1",
         )
         .fetch_optional(&pool)
         .await

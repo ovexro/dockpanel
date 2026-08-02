@@ -1338,8 +1338,27 @@ pub async fn webhook(
         .and_then(|r| r.strip_prefix("refs/heads/"))
         .unwrap_or("");
 
-    // Resolve agent for webhook (use local agent)
-    let agent = AgentHandle::Local(state.agents.local().clone());
+    // Resolve the agent for the server this deployment lives on.
+    //
+    // A webhook has no authenticated caller, so it has no `ServerScope` to read
+    // an `X-Server-Id` header from — which is why this used to reach for the
+    // local agent. The row itself is the authority, and the same handler file
+    // already establishes that pattern for `update` (see the comment at the
+    // `server_id` fetch there: reading it from the ROW "means the guard consults
+    // the server the deploy actually lives on, which is the one whose nginx it
+    // will overwrite"). A push to a deployment owned by a remote server must not
+    // build, replace containers and rewrite vhosts on the panel host.
+    let agent = match state.agents.for_server(config.server_id).await {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::warn!(
+                "Webhook deploy for {} refused: its server {} is unreachable ({e}) — \
+                 refusing to deploy on a different host",
+                config.name, config.server_id
+            );
+            return Err(err(StatusCode::BAD_GATEWAY, "Deploy target server is unreachable"));
+        }
+    };
 
     // Handle branch deletion (GitHub sends after=0000... on delete)
     let is_branch_delete = payload.get("deleted").and_then(|v| v.as_bool()).unwrap_or(false)
@@ -2216,7 +2235,7 @@ fn parse_github_repo(url: &str) -> Option<(String, String)> {
 /// Trigger a deploy task from the scheduler (no SSE, no provision logs).
 pub async fn trigger_deploy_task(
     db: sqlx::PgPool,
-    agent: crate::services::agent::AgentClient,
+    agents: crate::services::agent::AgentRegistry,
     git_deploy_id: Uuid,
     user_id: Uuid,
     triggered_by: String,
@@ -2233,9 +2252,6 @@ pub async fn trigger_deploy_task(
         return;
     }
 
-    // Wrap the AgentClient in an AgentHandle for uniform API
-    let agent = AgentHandle::Local(agent);
-
     // Fetch config FIRST — before acquiring the lock — so a config-fetch error
     // (or a row deleted between the scheduler's list and now) returns WITHOUT
     // having flipped status to 'building' and stranding it for the self-heal window.
@@ -2243,6 +2259,34 @@ pub async fn trigger_deploy_task(
         .bind(git_deploy_id).fetch_optional(&db).await {
         Ok(Some(c)) => c,
         _ => return,
+    };
+
+    // Resolve the agent for the server this deployment LIVES ON, not for
+    // whichever box happens to be running the panel.
+    //
+    // This used to be `AgentHandle::Local(agent)`, decided before the row was
+    // even read. `git_deploys.server_id` is NOT NULL and
+    // `idx_git_deploys_name_server` makes `name` unique only PER SERVER, so two
+    // servers may legitimately own a deployment called the same thing — and the
+    // agent's checkout path is `/var/lib/dockpanel/git/{name}`, keyed by name
+    // alone. Driven on a two-box fleet against v2.56.0: a member's cron deploy
+    // ran entirely on the panel host, and because both owned an `api`, whichever
+    // cloned first owned the checkout while the other silently built the WRONG
+    // repository into it and logged `Deploy success (scheduled)`. The member
+    // never ran anything at all.
+    //
+    // Refuse rather than fall back to the local agent when the server cannot be
+    // reached — the fallback is the defect, not the remedy.
+    let agent = match agents.for_server(config.server_id).await {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::warn!(
+                "Scheduled deploy skipped for {} ({git_deploy_id}): its server {} is \
+                 unreachable ({e}) — NOT deploying. Refusing to act on a different host.",
+                config.name, config.server_id
+            );
+            return;
+        }
     };
 
     let email: String = match sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
