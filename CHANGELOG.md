@@ -4,6 +4,86 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.59.0] - 2026-08-02
+
+**The panel host is a machine too.**
+
+Four releases threaded background services so an unattended action names the host
+it acts on. This one fixes the half none of them looked at: which hosts the panel
+can *see*. DockPanel kept per-host telemetry in two stores written by mutually
+exclusive halves of the fleet, so every check built on one was structurally blind
+to the other.
+
+`servers.cpu_usage` and its siblings are written only by the check-in handler,
+which only an agent phoning home reaches — and phone-home starts only from
+`agent.env`, a file only `install-agent.sh` writes. **The panel's own box has no
+such file**, so its row held NULL in every one of those columns, on every install
+ever made. `metrics_history` was the mirror: written only against the local
+server's id, so no member ever had a row in it.
+
+### Fixed — the panel host could not be alerted on
+
+- **The panel host could never raise a CPU, memory or disk alert.** Its readings
+  were NULL and the alert engine guards each threshold on the value being
+  present, so all three silently skipped, for ever. On a single-server install —
+  the default and commonest shape — that is *every* resource alert the product
+  offers.
+- **Automatic disk recovery had therefore never executed on a single-server
+  install.** `auto_clean_disk` is triggered by a firing `disk` alert, and that
+  host could not raise one. The feature was reachable only on a fleet, from a
+  member.
+- The panel's own hardware line on the Servers page was suppressed for the same
+  reason: it renders only when CPU cores or RAM are known, and neither was.
+
+### Fixed — members had no history
+
+- **No memory-leak detection for any member.** The trend check reads
+  `metrics_history` and a member had no rows in it.
+- **A member's 24-hour uptime sparkline was 144 empty buckets** — drawn as a host
+  that had been down for a day while it was checking in every 60 seconds. It is
+  derived purely from the presence of history rows.
+- **The Prometheus scrape returned one server on a fleet of any size**, though
+  `FEATURES.md` advertises a gauge per server. The exporter is written
+  fleet-wide; the table under it only ever held one host.
+- The fleet-overview endpoint's CPU, memory and disk columns were null for every
+  member.
+
+### Changed
+
+- `metrics_collector` takes the agent registry and reads **every online server
+  through that server's own agent**, concurrently, so one slow host cannot make a
+  30-second tick fall behind. It is now the single writer of `metrics_history`
+  for the whole fleet, and — for the local row only — of the scalar columns a
+  member reports by phoning home. Members keep getting theirs from check-in.
+- `AgentRegistry::online_fleet` now reports `is_local`, so an iterating service
+  can tell the panel's row from a member's without a second query.
+- The offline sweep now names its `is_local` exemption in SQL. This is a no-op
+  today and deliberately so: the local row's `last_seen_at` is NULL, and `NULL <
+  …` is NULL rather than true, so the sweep has never matched it. That accident
+  is now a stated rule, because `status = 'online'` is the predicate of both the
+  fleet iterator and the alert engine's own query.
+
+### Upgrade impact
+
+- **Prometheus consumers on a fleet will start receiving one series per server
+  where they received one in total.** Any dashboard or alerting rule doing a bare
+  `sum` or reading a single value changes meaning without erroring. This is the
+  advertised behaviour finally holding; it is still a shape change.
+- **The panel host becomes eligible for automatic disk cleaning for the first
+  time**, if auto-healing is enabled. That path cleans logs and `/tmp` files
+  older than seven days, and — only when separately opted in — reclaims dangling
+  images and build cache. It never touches volumes, site files or the database
+  directory.
+- Existing history rows are untouched; no migration.
+
+### Testing
+
+- `unattended-host-scope-pin-e2e.sh` gains §H (72 → 82 assertions), **10 of them
+  watched red against v2.58.0** before being trusted. Among them the arm the last
+  four releases each needed and none had: a **class** arm over the spawn sites
+  asserting that exactly one background service may still hold the legacy
+  single-agent handle. A per-defect arm cannot see a sibling left behind.
+
 ## [2.58.0] - 2026-08-02
 
 **A scan belongs to the machine that was scanned.**

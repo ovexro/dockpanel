@@ -1191,8 +1191,8 @@ impl AgentRegistry {
     /// member's readings end up stamped with a member's id and taken from the
     /// panel, which is the whole class of defect this returns a fleet to avoid.
     pub async fn online_fleet(&self) -> Vec<FleetMember> {
-        let rows: Vec<(Uuid, Uuid, String)> = sqlx::query_as(
-            "SELECT id, user_id, name FROM servers WHERE status = 'online' \
+        let rows: Vec<(Uuid, Uuid, String, bool)> = sqlx::query_as(
+            "SELECT id, user_id, name, is_local FROM servers WHERE status = 'online' \
              ORDER BY is_local DESC",
         )
         .fetch_all(&self.db)
@@ -1200,9 +1200,9 @@ impl AgentRegistry {
         .unwrap_or_default();
 
         let mut fleet = Vec::with_capacity(rows.len());
-        for (id, user_id, name) in rows {
+        for (id, user_id, name, is_local) in rows {
             match self.for_server(id).await {
-                Ok(agent) => fleet.push(FleetMember { id, user_id, name, agent }),
+                Ok(agent) => fleet.push(FleetMember { id, user_id, name, is_local, agent }),
                 Err(e) => tracing::debug!("Fleet iteration: skipping {name} ({id}) — no agent: {e}"),
             }
         }
@@ -1216,6 +1216,11 @@ pub struct FleetMember {
     pub id: Uuid,
     pub user_id: Uuid,
     pub name: String,
+    /// True for the box the API itself runs on. Load-bearing for anything that
+    /// writes a row the check-in handler would otherwise have written: a member
+    /// reports its own scalars by phoning home, and this host has nobody to
+    /// phone. See `metrics_collector`.
+    pub is_local: bool,
     pub agent: AgentHandle,
 }
 

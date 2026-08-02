@@ -414,8 +414,13 @@ async fn main() {
     let (s_db, s_agent, s_agents) = (state.db.clone(), state.agent.clone(), state.agents.clone());
     spawn_supervised("auto_healer", &shutdown_tx, move |rx| services::auto_healer::run(s_db.clone(), s_agent.clone(), s_agents.clone(), rx));
 
-    let (s_db, s_agent) = (state.db.clone(), state.agent.clone());
-    spawn_supervised("metrics_collector", &shutdown_tx, move |rx| services::metrics_collector::run(s_db.clone(), s_agent.clone(), rx));
+    // Reads every online server through its OWN agent: `metrics_history` is what
+    // the trend alerts, the uptime sparkline, the Prometheus scrape and the fleet
+    // overview all consume, and it used to carry the local id and nothing else.
+    // It is also the only writer of the panel row's scalar columns, which no
+    // check-in ever reaches. See `metrics_collector`.
+    let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
+    spawn_supervised("metrics_collector", &shutdown_tx, move |rx| services::metrics_collector::run(s_db.clone(), s_agents.clone(), rx));
 
     // The deploy scheduler queries EVERY server's cron deploys, so it gets the
     // registry: each row is deployed on the server that owns it. See

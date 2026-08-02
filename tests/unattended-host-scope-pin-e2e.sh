@@ -533,22 +533,52 @@ else
   skip "F12 — agent.rs not extractable"
 fi
 
-# F13 — the laundering step. The reading is taken from the LOCAL agent, so the
-# server_id it is stored under decides which machine every downstream threshold
-# and heal is about.
+# F13 — the laundering step. The server_id a reading is stored under decides
+# which machine every downstream threshold and heal is about.
+#
+# ⚠ RE-POINTED at s302, and the reason is the point. This arm used to require the
+# literal `FROM servers WHERE is_local = true` INSIDE the collector, because s299
+# fixed the laundering by making that one lookup ask for the right row. s302
+# removed the lookup altogether: the collector now iterates `online_fleet` and
+# takes each id from the member it just read, so there is no single "local" id to
+# derive and the whole class of derivation is gone. The property is unchanged and
+# is now stronger; only its home moved. Per lesson #150 a re-pointed arm owes a
+# companion proving the caller still REACHES the new home — F13c below — or a
+# resolver nothing calls would satisfy it.
 if [ -n "$MET_S" ]; then
-  if has "$MET_S" "FROM servers WHERE is_local = true"; then
-    ok "F13 metrics_collector labels local readings with the LOCAL server"
+  if has "$MET_S" '\.bind\(member\.id\)'; then
+    ok "F13 metrics_collector labels each reading with the server it was read from"
   else
-    bad "F13 metrics_collector still derives 'local' by row age — local readings can be stored against a member"
+    bad "F13 metrics_collector does not stamp readings per member — readings can be stored against the wrong machine"
   fi
   if has "$MET_S" "ORDER BY created_at ASC LIMIT 1"; then
     bad "F13b the oldest-row derivation is still present in metrics_collector"
   else
     ok "F13b the oldest-row derivation is gone"
   fi
+  if has "$MET_S" 'online_fleet\(\)'; then
+    ok "F13c the collector actually reaches the fleet primitive it takes its ids from"
+  else
+    bad "F13c the collector never calls online_fleet — F13's ids come from somewhere unproven"
+  fi
 else
   skip "F13 — metrics_collector.rs not extractable"
+fi
+
+# F13d — and the primitive those ids come from must not itself launder. This is
+# the assertion that moved out of the collector: whoever resolves "which server"
+# must not do it by row age.
+if [ -n "$AGENT_S" ]; then
+  OF=$(flat "$(grep -A 10 -E 'pub async fn online_fleet' <<< "$AGENT_S" || true)")
+  if has "$OF" 'ORDER BY created_at'; then
+    bad "F13d online_fleet orders the fleet by row age — the laundering moved rather than left"
+  elif has "$OF" 'is_local'; then
+    ok "F13d online_fleet resolves each server by identity, never by row age"
+  else
+    bad "F13d online_fleet does not name is_local — nothing distinguishes the panel row while iterating"
+  fi
+else
+  skip "F13d — agent.rs not extractable"
 fi
 
 
@@ -922,6 +952,155 @@ else
   if [ "$OFFENDERS" -eq 0 ]; then
     ok "G28 no background service resolves its agent through the silently-local convenience path ($BG_COUNT files)"
   fi
+fi
+
+echo
+echo "§H the panel host is watched too, and the legacy handle has an allow-list (s302)"
+
+# The class this section pins is the one the previous four releases each fixed an
+# instance of without ever stating: a check whose driving data is written by only
+# ONE kind of host is structurally blind to the other kind. Two stores were
+# involved. The scalar columns on `servers` are written only by the check-in
+# handler, which only a phoning-home MEMBER reaches, so the panel's own row was
+# NULL for ever and its cpu/memory/disk thresholds never evaluated. The history
+# table was written only against the local id, so no member had a trend alert, an
+# uptime sparkline or a scrape series.
+#
+# H5 is the arm that matters most and the one nobody had: it is a CLASS arm over
+# the SPAWN SITES, not a per-service arm. Four releases in a row shipped a
+# per-defect arm and left a sibling on the legacy handle; an allow-list of one
+# goes red the moment a new service joins it, or an old one is missed.
+MC=panel/backend/src/services/metrics_collector.rs
+SM=panel/backend/src/services/server_monitor.rs
+MN=panel/backend/src/main.rs
+AG=panel/backend/src/services/agent.rs
+
+for f in "$MC" "$SM" "$MN" "$AG"; do
+  [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
+done
+
+MC_S=$(subj "$MC" || true); SM_S=$(subj "$SM" || true)
+MN_S=$(subj "$MN" || true); AG_S=$(subj "$AG" || true)
+
+# H1 — the collector takes the REGISTRY. Keyed on the flattened signature: a Rust
+# parameter list wraps, and a line-oriented `has` over raw source measures nothing
+# (lesson #168 — and as a PRESENCE arm this fails loudly rather than green).
+if [ -n "$MC_S" ]; then
+  MC_RUN=$(sig "$MC_S" "run")
+  if has "$MC_RUN" 'AgentRegistry'; then
+    ok "H1 metrics_collector::run takes the AgentRegistry"
+  else
+    bad "H1 metrics_collector::run does not take the AgentRegistry — it cannot reach any host but its own"
+  fi
+else
+  skip "H1 — metrics_collector.rs not extractable"
+fi
+
+# H2 — and actually iterates it.
+if [ -n "$MC_S" ]; then
+  if has "$MC_S" 'online_fleet\(\)'; then
+    ok "H2 metrics_collector iterates the online fleet"
+  else
+    bad "H2 metrics_collector never iterates the fleet — members get no history rows"
+  fi
+else
+  skip "H2 — metrics_collector.rs not extractable"
+fi
+
+# H3 — every history row is stamped with the server it was READ FROM. The defect
+# shape was a single lookup of the local id bound into every insert, so the arm
+# asserts that lookup is gone from this subject AND that a per-member id is bound.
+if [ -n "$MC_S" ]; then
+  if has "$MC_S" 'is_local = true'; then
+    bad "H3 metrics_collector still resolves one 'local' id — every reading lands on that one server"
+  elif has "$MC_S" '\.bind\(member\.id\)'; then
+    ok "H3 metrics_collector stamps each reading with the server it was read from"
+  else
+    bad "H3 metrics_collector binds no per-member id to its history writes"
+  fi
+else
+  skip "H3 — metrics_collector.rs not extractable"
+fi
+
+# H4 — the panel row's scalar columns get a writer at last. Flattened: the UPDATE
+# is a multi-line SQL string literal, so a line-oriented match would find only its
+# first fragment.
+if [ -n "$MC_S" ]; then
+  MC_UPD=$(flat "$MC_S")
+  if has "$MC_UPD" 'UPDATE servers SET.*cpu_usage' && has "$MC_S" 'is_local'; then
+    ok "H4 the local server's scalar columns are written by the collector"
+  else
+    bad "H4 nothing writes the panel row's cpu/memory/disk — its thresholds can never evaluate"
+  fi
+else
+  skip "H4 — metrics_collector.rs not extractable"
+fi
+
+# H5 — THE CLASS ARM. Exactly one spawn may still hold the legacy single-agent
+# handle, and it must be the healer (whose SSL and auto-sleep legs are a recorded
+# remainder). Any other service on that handle acts on this box no matter which
+# host its rows belong to.
+if [ -n "$MN_S" ]; then
+  LEGACY=$(count "$MN_S" 'state\.agent\.clone\(\)')
+  if [ "$LEGACY" -eq 1 ]; then
+    if has "$(flat "$(grep -B 2 -A 2 -E 'state\.agent\.clone\(\)' <<< "$MN_S" || true)")" 'auto_healer'; then
+      ok "H5 exactly one background service still holds the legacy local agent handle, and it is auto_healer"
+    else
+      bad "H5 the one legacy-handle spawn is NOT auto_healer — a different service is acting on this box regardless of host"
+    fi
+  else
+    bad "H5 $LEGACY spawns hold the legacy local agent handle (allow-list is exactly 1: auto_healer)"
+  fi
+else
+  skip "H5 — main.rs not extractable"
+fi
+
+# H6 — the offline sweep states its exemption instead of inheriting it from a
+# NULL. `status = 'online'` gates online_fleet and the alert engine's own query,
+# so a local row that can be swept offline drops the panel out of every
+# fleet-iterating service at once.
+if [ -n "$SM_S" ]; then
+  if has "$(flat "$SM_S")" "UPDATE servers SET status = 'offline'.*is_local = false"; then
+    ok "H6 the offline sweep exempts the local row explicitly"
+  else
+    bad "H6 the offline sweep does not name is_local — the exemption rests on a NULL comparison nobody stated"
+  fi
+else
+  skip "H6 — server_monitor.rs not extractable"
+fi
+
+# H7 — the shared fleet primitive carries the flag the collector branches on.
+#
+# ⚠ The window is bounded by the struct's own closing brace, NOT by `-A n`. The
+# first draft used `grep -A 12` and printed a confident GREEN against v2.58.0,
+# where the field does not exist: twelve lines after a six-line struct run into
+# `ensure_local_server`, whose body contains `WHERE is_local = true`. A fixed
+# window is not a declaration (p31), and the only reason this was caught is that
+# the arm was run against the previous tag and required to be red (#158).
+if [ -n "$AG_S" ]; then
+  AG_FLEET=$(flat "$(awk '/pub struct FleetMember/{f=1} f{print; if(/^\}/) exit}' <<< "$AG_S")")
+  if [ -z "$AG_FLEET" ]; then
+    bad "H7 could not extract the FleetMember declaration — the arm cannot mean anything"
+  elif has "$AG_FLEET" 'is_local'; then
+    ok "H7 FleetMember carries is_local"
+  else
+    bad "H7 FleetMember has no is_local — nothing can tell the panel row from a member while iterating"
+  fi
+else
+  skip "H7 — agent.rs not extractable"
+fi
+
+# H8 — the fleet reads are concurrent. Serial round trips over N hosts inside a
+# 30-second interval fall behind, and tokio's default MissedTickBehavior then
+# fires the backlog back to back.
+if [ -n "$MC_S" ]; then
+  if has "$MC_S" 'join_all'; then
+    ok "H8 the fleet is read concurrently, so a large fleet cannot outrun the tick"
+  else
+    bad "H8 the collector reads the fleet serially — N round trips inside a 30s interval"
+  fi
+else
+  skip "H8 — metrics_collector.rs not extractable"
 fi
 
 echo
