@@ -1,11 +1,16 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::services::agent::AgentClient;
+use crate::services::agent::AgentRegistry;
 use crate::services::notifications;
 
 /// Run the backup verifier — every 6 hours, picks unverified backups and verifies them.
-pub async fn run(db: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
+///
+/// Every driving query is fleet-wide, so the verifier gets the REGISTRY: an archive is
+/// read on the host that wrote it. Verifying a member's backup against the panel's disk
+/// finds nothing, marks a good archive `failed`, and — because the driving queries skip
+/// any backup that already has a verification row — never looks at it again.
+pub async fn run(db: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
     tracing::info!("Backup verifier started");
 
     // Initial delay: 5 minutes after startup
@@ -22,7 +27,7 @@ pub async fn run(db: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync::b
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                if let Err(e) = tick(&db, &agent).await {
+                if let Err(e) = tick(&db, &agents).await {
                     tracing::error!("Backup verifier error: {e}");
                 }
             }
@@ -34,7 +39,7 @@ pub async fn run(db: PgPool, agent: AgentClient, mut shutdown_rx: tokio::sync::b
     }
 }
 
-async fn tick(db: &PgPool, agent: &AgentClient) -> Result<(), String> {
+async fn tick(db: &PgPool, agents: &AgentRegistry) -> Result<(), String> {
     // Find policies that have verify_after_backup enabled
     let policies_exist: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM backup_policies WHERE verify_after_backup = TRUE AND enabled = TRUE"
@@ -45,9 +50,13 @@ async fn tick(db: &PgPool, agent: &AgentClient) -> Result<(), String> {
         return Ok(());
     }
 
-    // Pick up to 3 unverified site backups (created in last 7 days, not yet verified)
-    let site_backups: Vec<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT b.id, s.domain, b.filename FROM backups b \
+    // Pick up to 3 unverified site backups (created in last 7 days, not yet verified).
+    // `s.server_id` rides the JOIN this query already makes — the same shape
+    // `preview_cleanup` uses, and the reason no migration is needed for `backups`.
+    // It is NOT NULL (20260319000000_multi_server.sql:76) and a site never moves
+    // hosts: nothing in the codebase issues `UPDATE sites SET server_id`.
+    let site_backups: Vec<(Uuid, String, String, Uuid)> = sqlx::query_as(
+        "SELECT b.id, s.domain, b.filename, s.server_id FROM backups b \
          JOIN sites s ON s.id = b.site_id \
          LEFT JOIN backup_verifications bv ON bv.backup_type = 'site' AND bv.backup_id = b.id \
          WHERE bv.id IS NULL AND b.created_at > NOW() - INTERVAL '7 days' \
@@ -55,39 +64,60 @@ async fn tick(db: &PgPool, agent: &AgentClient) -> Result<(), String> {
     )
     .fetch_all(db).await.map_err(|e| e.to_string())?;
 
-    for (backup_id, domain, filename) in &site_backups {
-        verify_one(db, agent, "site", *backup_id, &domain, &filename, None, None).await;
+    for (backup_id, domain, filename, server_id) in &site_backups {
+        verify_one(db, agents, *server_id, "site", *backup_id, domain, filename, None, None).await;
     }
 
-    // Pick up to 3 unverified database backups
-    let db_backups: Vec<(Uuid, String, String, String)> = sqlx::query_as(
-        "SELECT db.id, db.db_type, db.db_name, db.filename FROM database_backups db \
+    // Database backups resolve their server through the site that owns the database,
+    // not through `database_backups.server_id`: that column is nullable and a policy
+    // with no server writes NULL into it. `sites.server_id` is NOT NULL, so this join
+    // cannot produce an ambiguous host. Same join `create_db_backup` already makes.
+    let db_backups: Vec<(Uuid, String, String, String, Uuid)> = sqlx::query_as(
+        "SELECT db.id, db.db_type, db.db_name, db.filename, s.server_id FROM database_backups db \
+         JOIN databases d ON d.id = db.database_id \
+         JOIN sites s ON s.id = d.site_id \
          LEFT JOIN backup_verifications bv ON bv.backup_type = 'database' AND bv.backup_id = db.id \
          WHERE bv.id IS NULL AND db.created_at > NOW() - INTERVAL '7 days' \
          ORDER BY db.created_at DESC LIMIT 3"
     )
     .fetch_all(db).await.map_err(|e| e.to_string())?;
 
-    for (backup_id, db_type, db_name, filename) in &db_backups {
-        verify_one(db, agent, "database", *backup_id, &db_name, &filename, Some(db_type), None).await;
+    for (backup_id, db_type, db_name, filename, server_id) in &db_backups {
+        verify_one(db, agents, *server_id, "database", *backup_id, db_name, filename, Some(db_type), None).await;
     }
 
-    // Pick up to 2 unverified volume backups
-    let vol_backups: Vec<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT vb.id, vb.container_name, vb.filename FROM volume_backups vb \
+    // A volume backup has no site to join through, so `vb.server_id` is the only
+    // handle — which is why `create_volume_backup` had to stop stamping it from
+    // "some online server". Rows written before that fix may still carry a wrong or
+    // NULL id; NULL ones are skipped below rather than silently verified here.
+    let vol_backups: Vec<(Uuid, String, String, Option<Uuid>)> = sqlx::query_as(
+        "SELECT vb.id, vb.container_name, vb.filename, vb.server_id FROM volume_backups vb \
          LEFT JOIN backup_verifications bv ON bv.backup_type = 'volume' AND bv.backup_id = vb.id \
          WHERE bv.id IS NULL AND vb.created_at > NOW() - INTERVAL '7 days' \
          ORDER BY vb.created_at DESC LIMIT 2"
     )
     .fetch_all(db).await.map_err(|e| e.to_string())?;
 
-    for (backup_id, container_name, filename) in &vol_backups {
-        verify_one(db, agent, "volume", *backup_id, &container_name, &filename, None, Some(container_name.as_str())).await;
+    for (backup_id, container_name, filename, server_id) in &vol_backups {
+        let Some(sid) = server_id else {
+            // Deliberately NOT `for_server_or_local`. An unscoped volume backup is a
+            // row we cannot place, and defaulting it to this host is exactly the
+            // wrong-host read being removed. Leaving it unverified keeps it eligible.
+            tracing::warn!(
+                "Volume backup {backup_id} ({filename}) has no server_id — leaving it \
+                 unverified rather than reading this host's disk for it."
+            );
+            continue;
+        };
+        verify_one(db, agents, *sid, "volume", *backup_id, container_name, filename, None, Some(container_name.as_str())).await;
     }
 
+    // "considered", not "verified": a row whose server is unreachable is skipped
+    // above, and the old wording printed the same line whether every backup passed
+    // or every one errored.
     let total = site_backups.len() + db_backups.len() + vol_backups.len();
     if total > 0 {
-        tracing::info!("Backup verifier: verified {total} backups");
+        tracing::info!("Backup verifier: considered {total} backups");
     }
 
     Ok(())
@@ -95,7 +125,8 @@ async fn tick(db: &PgPool, agent: &AgentClient) -> Result<(), String> {
 
 async fn verify_one(
     db: &PgPool,
-    agent: &AgentClient,
+    agents: &AgentRegistry,
+    server_id: Uuid,
     backup_type: &str,
     backup_id: Uuid,
     name: &str,
@@ -103,12 +134,28 @@ async fn verify_one(
     db_type: Option<&str>,
     container_name: Option<&str>,
 ) {
-    // Create verification record
+    // Resolve BEFORE inserting the record. A verification row is written 'running'
+    // and the driving queries skip any backup that already has one, so a row created
+    // for a server we then decline to reach would burn this backup's only chance of
+    // ever being verified.
+    let agent = match agents.for_server(server_id).await {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::warn!(
+                "Not verifying {backup_type} backup {filename} ({backup_id}): its server \
+                 {server_id} is unreachable ({e}). Leaving it unverified so a later tick \
+                 can retry, rather than reading this host's disk for another host's archive."
+            );
+            return;
+        }
+    };
+
+    // `server_id` is bound: the row records which host actually read the archive.
     let verif_id: Uuid = match sqlx::query_scalar(
-        "INSERT INTO backup_verifications (backup_type, backup_id, status, started_at) \
-         VALUES ($1, $2, 'running', NOW()) RETURNING id"
+        "INSERT INTO backup_verifications (backup_type, backup_id, server_id, status, started_at) \
+         VALUES ($1, $2, $3, 'running', NOW()) RETURNING id"
     )
-    .bind(backup_type).bind(backup_id)
+    .bind(backup_type).bind(backup_id).bind(server_id)
     .fetch_one(db).await {
         Ok(id) => id,
         Err(e) => {

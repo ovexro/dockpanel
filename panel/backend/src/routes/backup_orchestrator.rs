@@ -1106,7 +1106,7 @@ pub struct CreateVolumeBackupRequest {
 pub async fn create_volume_backup(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(scope_server_id, agent): ServerScope,
     Json(req): Json<CreateVolumeBackupRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     // Validate container/volume names to prevent path traversal in agent URLs
@@ -1128,9 +1128,12 @@ pub async fn create_volume_backup(
     let filename = result.get("filename").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let size_bytes = result.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0) as i64;
 
-    let server_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM servers WHERE status = 'online' LIMIT 1"
-    ).fetch_optional(&state.db).await.unwrap_or(None);
+    // The row records the server the archive was actually written on, which is the
+    // one `ServerScope` just resolved the agent for — NOT "some online server".
+    // Picking an arbitrary row here labelled the backup with a host that never held
+    // it, and two background services read this column to decide where to act: the
+    // verifier looks for the file there, and the drill scheduler restores from it.
+    let server_id: Option<Uuid> = Some(scope_server_id);
 
     // v2.8.2: integrity chain. Scope previous_hash by (container_id, volume_name)
     // so re-creating the same logical volume re-chains rather than forking.
@@ -1227,15 +1230,19 @@ pub struct VerifyRequest {
 pub async fn trigger_verify(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(scope_server_id, agent): ServerScope,
     Json(req): Json<VerifyRequest>,
 ) -> Result<(StatusCode, Json<BackupVerification>), ApiError> {
-    // Create pending verification record
+    // Create pending verification record. `server_id` is bound rather than left
+    // NULL: the verification ran against the agent `ServerScope` resolved, so the
+    // row can say which host actually read the archive. Leaving it NULL is what
+    // made this column dead in every writer while the UI still rendered a Server
+    // field for it.
     let verification: BackupVerification = sqlx::query_as(
-        "INSERT INTO backup_verifications (backup_type, backup_id, status, started_at) \
-         VALUES ($1, $2, 'running', NOW()) RETURNING *"
+        "INSERT INTO backup_verifications (backup_type, backup_id, server_id, status, started_at) \
+         VALUES ($1, $2, $3, 'running', NOW()) RETURNING *"
     )
-    .bind(&req.backup_type).bind(req.backup_id)
+    .bind(&req.backup_type).bind(req.backup_id).bind(scope_server_id)
     .fetch_one(&state.db).await
     .map_err(|e| internal_error("trigger verify", e))?;
 

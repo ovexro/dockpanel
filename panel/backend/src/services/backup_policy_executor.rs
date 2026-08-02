@@ -5,7 +5,7 @@ use chrono::{Datelike, Timelike};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::services::agent::AgentClient;
+use crate::services::agent::{AgentHandle, AgentRegistry};
 use crate::services::notifications;
 
 /// Row from the policy query.
@@ -122,7 +122,7 @@ async fn resolve_destination(db: &PgPool, policy: &PolicyRow) -> Option<Resolved
 /// Stated here rather than left to be discovered from a storage bill; a
 /// resource-agnostic prune is the fix, and it needs an agent-side change.
 async fn upload_to_destination(
-    agent: &AgentClient,
+    agent: &AgentHandle,
     dest: &ResolvedDestination,
     filepath: &str,
     label: &str,
@@ -159,7 +159,16 @@ async fn upload_to_destination(
 }
 
 /// Run the backup policy executor loop — checks every 60 seconds for due policies.
-pub async fn run(db: PgPool, agent: AgentClient, jwt_secret: String, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
+/// Fleet-wide policy query, so it takes the REGISTRY. Each leg resolves its own host:
+/// sites and databases per ROW (via `sites.server_id`, which is NOT NULL), volumes per
+/// POLICY (their subject list comes from the agent, so there is no row to read).
+///
+/// Left local, the volume leg was the worst shape in the codebase: it enumerated the
+/// PANEL's containers, tarred the PANEL's volumes, stamped each row with the member's
+/// `server_id`, and reported success — with no failure path at all. s298's correctly
+/// scoped `auto_healer` then refused to prune those rows, because they claimed to
+/// belong to another host, so retention was enforced on nothing.
+pub async fn run(db: PgPool, agents: AgentRegistry, jwt_secret: String, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
     tracing::info!("Backup policy executor started");
 
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -167,7 +176,7 @@ pub async fn run(db: PgPool, agent: AgentClient, jwt_secret: String, mut shutdow
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                if let Err(e) = tick(&db, &agent, &jwt_secret).await {
+                if let Err(e) = tick(&db, &agents, &jwt_secret).await {
                     tracing::error!("Backup policy executor error: {e}");
                 }
             }
@@ -182,7 +191,7 @@ pub async fn run(db: PgPool, agent: AgentClient, jwt_secret: String, mut shutdow
 /// Track last stale-backup check to avoid spamming (once per hour).
 static LAST_STALE_CHECK: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
-async fn tick(db: &PgPool, agent: &AgentClient, jwt_secret: &str) -> Result<(), String> {
+async fn tick(db: &PgPool, agents: &AgentRegistry, jwt_secret: &str) -> Result<(), String> {
     let now = chrono::Utc::now();
 
     // Fetch all enabled policies
@@ -207,7 +216,7 @@ async fn tick(db: &PgPool, agent: &AgentClient, jwt_secret: &str) -> Result<(), 
         }
 
         tracing::info!("Executing backup policy '{}' ({})", policy.name, policy.id);
-        execute_policy(db, agent, policy, jwt_secret).await;
+        execute_policy(db, agents, policy, jwt_secret).await;
     }
 
     // Record backup storage metric for growth tracking. SUM(BIGINT) returns
@@ -250,7 +259,7 @@ async fn tick(db: &PgPool, agent: &AgentClient, jwt_secret: &str) -> Result<(), 
     Ok(())
 }
 
-async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow, jwt_secret: &str) {
+async fn execute_policy(db: &PgPool, agents: &AgentRegistry, policy: &PolicyRow, jwt_secret: &str) {
     let mut successes = 0;
     let mut failures = 0;
 
@@ -303,13 +312,32 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow, jw
 
     // Backup sites
     if policy.backup_sites {
-        let sites: Vec<(Uuid, String)> = sqlx::query_as(
-            "SELECT id, domain FROM sites WHERE user_id = $1"
+        // `server_id` rides along: a site is archived on the host that holds its
+        // files. NOT NULL, so there is no ambiguous case to default.
+        let sites: Vec<(Uuid, String, Uuid)> = sqlx::query_as(
+            "SELECT id, domain, server_id FROM sites WHERE user_id = $1"
         )
         .bind(policy.user_id)
         .fetch_all(db).await.unwrap_or_default();
 
-        for (site_id, domain) in &sites {
+        for (site_id, domain, site_server_id) in &sites {
+            // Resolve THIS site's host. Never fall back to local: archiving a member's
+            // site against the panel's own /var/www either fails every night for ever,
+            // or — where the same domain legally exists on both hosts — silently tars
+            // the wrong machine's files and prunes the member's real off-site copies.
+            let agent = match agents.for_server(*site_server_id).await {
+                Ok(a) => a,
+                Err(e) => {
+                    failures += 1;
+                    tracing::warn!(
+                        "Policy '{}': skipping site {domain} — its server {site_server_id} \
+                         is unreachable ({e}). Not archiving it on another host.",
+                        policy.name
+                    );
+                    continue;
+                }
+            };
+            let agent = &agent;
             // WITH the site's databases — a policy-driven backup that omitted
             // them would reintroduce, on the automated path, exactly the gap
             // v2.34.0 closed on the manual one.
@@ -407,14 +435,31 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow, jw
 
     // Backup databases
     if policy.backup_databases {
-        let databases: Vec<(Uuid, String, String, String, String)> = sqlx::query_as(
-            "SELECT d.id, d.name, d.engine, d.db_user, d.db_password_enc \
+        // `s.server_id` comes free from the join this query already makes — the same
+        // shape `create_db_backup` uses. Without it the panel `docker exec`s whatever
+        // answers to `dockpanel-db-{name}` on ITS OWN host, and that name is unique
+        // only per site, so the dump can be another tenant's database entirely.
+        let databases: Vec<(Uuid, String, String, String, String, Uuid)> = sqlx::query_as(
+            "SELECT d.id, d.name, d.engine, d.db_user, d.db_password_enc, s.server_id \
              FROM databases d JOIN sites s ON d.site_id = s.id WHERE s.user_id = $1"
         )
         .bind(policy.user_id)
         .fetch_all(db).await.unwrap_or_default();
 
-        for (db_id, db_name, engine, user, password_enc) in &databases {
+        for (db_id, db_name, engine, user, password_enc, db_server_id) in &databases {
+            let agent = match agents.for_server(*db_server_id).await {
+                Ok(a) => a,
+                Err(e) => {
+                    failures += 1;
+                    tracing::warn!(
+                        "Policy '{}': skipping database {db_name} — its server \
+                         {db_server_id} is unreachable ({e}).",
+                        policy.name
+                    );
+                    continue;
+                }
+            };
+            let agent = &agent;
             let password = crate::services::secrets_crypto::decrypt_credential_or_legacy(password_enc, jwt_secret);
             let container_name = format!("dockpanel-db-{db_name}");
             let body = serde_json::json!({
@@ -461,7 +506,7 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow, jw
                         "INSERT INTO database_backups (database_id, server_id, filename, size_bytes, db_type, db_name, encrypted, policy_id, destination_id, uploaded, sha256_hash, previous_hash, chain_valid) \
                          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, TRUE)"
                     )
-                    .bind(db_id).bind(policy.server_id).bind(&filename).bind(size_bytes)
+                    .bind(db_id).bind(*db_server_id).bind(&filename).bind(size_bytes)
                     .bind(engine).bind(db_name).bind(encrypted).bind(policy.id)
                     .bind(destination.as_ref().map(|d| d.id)).bind(uploaded)
                     .bind(if sha256_hash.is_empty() { None } else { Some(&sha256_hash) })
@@ -498,7 +543,41 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow, jw
     if policy.backup_volumes && !owner_is_admin {
         tracing::warn!("Policy '{}': skipping volume backup — owner is not an admin", policy.name);
     }
-    if policy.backup_volumes && owner_is_admin {
+    if policy.backup_volumes && owner_is_admin { 'vol: {
+        // Volumes have no per-row host to read: the subject list comes from asking an
+        // agent for its containers, so the POLICY's server decides which agent. When
+        // the policy names none — the only thing the UI can currently produce, since
+        // the policy form has no server picker — resolve the local server EXPLICITLY
+        // and record that id, rather than writing the policy's NULL through.
+        //
+        // Recording the server actually reached (not `policy.server_id`) is the whole
+        // point: the two used to differ, which is what made `auto_healer` refuse to
+        // prune these rows for ever.
+        let vol_server_id = match policy.server_id {
+            Some(sid) => Some(sid),
+            None => agents.local_server_id().await,
+        };
+        let Some(vol_server_id) = vol_server_id else {
+            tracing::warn!(
+                "Policy '{}': skipping volume backup — no server on the policy and the \
+                 local server id is not yet known (setup incomplete).",
+                policy.name
+            );
+            break 'vol;
+        };
+        let agent = match agents.for_server(vol_server_id).await {
+            Ok(a) => a,
+            Err(e) => {
+                failures += 1;
+                tracing::warn!(
+                    "Policy '{}': skipping volume backup — server {vol_server_id} is \
+                     unreachable ({e}). Not tarring another host's volumes under its name.",
+                    policy.name
+                );
+                break 'vol;
+            }
+        };
+        let agent = &agent;
         // Get Docker containers with volumes
         match agent.get("/apps").await {
             Ok(apps) => {
@@ -555,7 +634,7 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow, jw
                                                 "INSERT INTO volume_backups (container_id, container_name, server_id, volume_name, filename, size_bytes, policy_id, destination_id, uploaded, sha256_hash, previous_hash, chain_valid) \
                                                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, TRUE)"
                                             )
-                                            .bind(container_id).bind(container_name).bind(policy.server_id)
+                                            .bind(container_id).bind(container_name).bind(vol_server_id)
                                             .bind(vol_name).bind(&filename).bind(size_bytes).bind(policy.id)
                                             .bind(destination.as_ref().map(|d| d.id)).bind(uploaded)
                                             .bind(if sha256_hash.is_empty() { None } else { Some(&sha256_hash) })
@@ -584,7 +663,7 @@ async fn execute_policy(db: &PgPool, agent: &AgentClient, policy: &PolicyRow, jw
                 failures += 1;
             }
         }
-    }
+    }}
 
     // An upload failure is NOT a backup failure — the file exists locally, and it
     // is counted in `successes` because it was taken. It IS a disaster-recovery

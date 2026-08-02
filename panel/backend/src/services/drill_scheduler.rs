@@ -11,7 +11,7 @@ use chrono::{Datelike, Timelike};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::services::agent::AgentClient;
+use crate::services::agent::{AgentHandle, AgentRegistry};
 
 #[derive(sqlx::FromRow)]
 struct DuePolicy {
@@ -19,11 +19,21 @@ struct DuePolicy {
     name: String,
     drill_schedule: String,
     last_drill_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Fallback host when a backup row carries no server of its own. Nullable, and
+    /// NULL is the only value the UI can produce — the policy form has no server
+    /// picker — so it is resolved to the local server explicitly rather than being
+    /// allowed to mean "whichever box happens to run the scheduler".
+    server_id: Option<Uuid>,
 }
 
+/// The policy query is fleet-wide, so this takes the REGISTRY: a drill restores a
+/// backup on the server that owns it. A drill that runs on the wrong host certifies
+/// disaster recovery for a machine it never touched — and because the Drills tab has
+/// no server column and nothing alerts on drill outcomes, that certification is the
+/// only artifact anyone sees. It also feeds the chain-of-trust compliance report.
 pub async fn run(
     db: PgPool,
-    agent: AgentClient,
+    agents: AgentRegistry,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
 ) {
     tracing::info!("Drill scheduler started");
@@ -33,7 +43,7 @@ pub async fn run(
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                if let Err(e) = tick(&db, &agent).await {
+                if let Err(e) = tick(&db, &agents).await {
                     tracing::error!("Drill scheduler error: {e}");
                 }
             }
@@ -45,11 +55,11 @@ pub async fn run(
     }
 }
 
-async fn tick(db: &PgPool, agent: &AgentClient) -> Result<(), String> {
+async fn tick(db: &PgPool, agents: &AgentRegistry) -> Result<(), String> {
     let now = chrono::Utc::now();
 
     let policies: Vec<DuePolicy> = sqlx::query_as(
-        "SELECT id, name, drill_schedule, last_drill_at \
+        "SELECT id, name, drill_schedule, last_drill_at, server_id \
          FROM backup_policies \
          WHERE enabled = TRUE AND drill_enabled = TRUE"
     )
@@ -74,77 +84,123 @@ async fn tick(db: &PgPool, agent: &AgentClient) -> Result<(), String> {
             "UPDATE backup_policies SET last_drill_at = NOW() WHERE id = $1"
         ).bind(policy.id).execute(db).await;
 
-        dispatch_db_drill(db, agent, policy.id).await;
-        dispatch_volume_drill(db, agent, policy.id).await;
+        dispatch_policy_drills(db, agents, policy).await;
     }
 
     Ok(())
 }
 
-/// Find the latest db backup tied to the policy and dispatch a drill.
-/// Skip if a drill is already running for that server (concurrency cap = 1/server).
-async fn dispatch_db_drill(db: &PgPool, agent: &AgentClient, policy_id: Uuid) {
-    let row: Option<(Uuid, Option<Uuid>, String, String, String)> = sqlx::query_as(
+/// Dispatch this policy's db + volume drills together.
+///
+/// The guard is consulted ONCE, here, for both legs — and that ordering is
+/// load-bearing rather than tidiness. It used to be consulted inside each leg, which
+/// was harmless only because `server_id` was always NULL and the guard returned
+/// "nothing running" for NULL. Populating `server_id` (the whole point of this change)
+/// ARMS the guard, and the db leg inserts its own `running` row before the volume leg
+/// looks — so the volume leg would find the db drill it had just triggered, log
+/// "another drill running on same server", and return. Volume drills would never run
+/// again, once per week, silently. Checking once per policy keeps the cap the comment
+/// always claimed (one policy's drills in flight per server) without a leg starving
+/// its own sibling.
+async fn dispatch_policy_drills(db: &PgPool, agents: &AgentRegistry, policy: &DuePolicy) {
+    let db_row: Option<(Uuid, Option<Uuid>, String, String, String)> = sqlx::query_as(
         "SELECT id, server_id, db_type, db_name, filename \
          FROM database_backups \
          WHERE policy_id = $1 \
          ORDER BY created_at DESC LIMIT 1"
-    ).bind(policy_id).fetch_optional(db).await.ok().flatten();
+    ).bind(policy.id).fetch_optional(db).await.ok().flatten();
 
-    let Some((backup_id, server_id, db_type, db_name, filename)) = row else {
-        tracing::debug!("No db backup tied to policy {policy_id}; skipping db drill");
-        return;
-    };
-
-    if has_running_drill_for_server(db, server_id).await {
-        tracing::info!("Skipping db drill for policy {policy_id} — another drill running on same server");
-        return;
-    }
-
-    enqueue_drill(
-        db, agent, "database", backup_id, server_id,
-        serde_json::json!({
-            "db_type": db_type,
-            "db_name": db_name,
-            "filename": filename,
-        }),
-        "/backups/drill/db",
-    ).await;
-}
-
-async fn dispatch_volume_drill(db: &PgPool, agent: &AgentClient, policy_id: Uuid) {
-    let row: Option<(Uuid, Option<Uuid>, String, String)> = sqlx::query_as(
+    let vol_row: Option<(Uuid, Option<Uuid>, String, String)> = sqlx::query_as(
         "SELECT id, server_id, container_name, filename \
          FROM volume_backups \
          WHERE policy_id = $1 \
          ORDER BY created_at DESC LIMIT 1"
-    ).bind(policy_id).fetch_optional(db).await.ok().flatten();
+    ).bind(policy.id).fetch_optional(db).await.ok().flatten();
 
-    let Some((backup_id, server_id, container_name, filename)) = row else {
-        tracing::debug!("No volume backup tied to policy {policy_id}; skipping volume drill");
-        return;
-    };
-
-    if has_running_drill_for_server(db, server_id).await {
-        tracing::info!("Skipping volume drill for policy {policy_id} — another drill running on same server");
+    if db_row.is_none() && vol_row.is_none() {
+        tracing::debug!("No backups tied to policy {}; skipping drills", policy.id);
         return;
     }
 
-    enqueue_drill(
-        db, agent, "volume", backup_id, server_id,
-        serde_json::json!({
-            "container_name": container_name,
-            "filename": filename,
-        }),
-        "/backups/drill/volume",
-    ).await;
+    // Which host owns this policy's drills. A backup row's own `server_id` wins; the
+    // policy's is the fallback; and when both are absent the LOCAL server is named
+    // explicitly. Naming it is what makes the concurrency guard and the audit row work
+    // at all — `for_server_or_local` would reach the same agent while leaving the row
+    // NULL, preserving both bugs.
+    let server_id = match db_row.as_ref().and_then(|r| r.1)
+        .or_else(|| vol_row.as_ref().and_then(|r| r.1))
+        .or(policy.server_id)
+    {
+        Some(sid) => sid,
+        None => match agents.local_server_id().await {
+            Some(sid) => sid,
+            None => {
+                tracing::warn!(
+                    "Policy {} has no server and the local server id is not yet known \
+                     (setup incomplete) — skipping drills this tick.", policy.id
+                );
+                return;
+            }
+        },
+    };
+
+    let agent = match agents.for_server(server_id).await {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::warn!(
+                "Skipping drills for policy {} — server {server_id} is unreachable ({e}). \
+                 Not drilling on a different host: a drill that runs elsewhere certifies \
+                 disaster recovery for a machine it never tested.", policy.id
+            );
+            return;
+        }
+    };
+
+    if has_running_drill_for_server(db, server_id).await {
+        tracing::info!(
+            "Skipping drills for policy {} — another drill is already running on server {server_id}",
+            policy.id
+        );
+        return;
+    }
+
+    if let Some((backup_id, _, db_type, db_name, filename)) = db_row {
+        enqueue_drill(
+            db, &agent, "database", backup_id, server_id,
+            serde_json::json!({
+                "db_type": db_type,
+                "db_name": db_name,
+                "filename": filename,
+            }),
+            "/backups/drill/db",
+        ).await;
+    }
+
+    if let Some((backup_id, _, container_name, filename)) = vol_row {
+        enqueue_drill(
+            db, &agent, "volume", backup_id, server_id,
+            serde_json::json!({
+                "container_name": container_name,
+                "filename": filename,
+            }),
+            "/backups/drill/volume",
+        ).await;
+    }
 }
 
-async fn has_running_drill_for_server(db: &PgPool, server_id: Option<Uuid>) -> bool {
-    let Some(sid) = server_id else { return false };
+/// True if a drill is already in flight for this server.
+///
+/// The age bound is not cosmetic. The completion UPDATE runs in a detached
+/// `tokio::spawn` with no timeout, so a panel restart mid-drill strands a row at
+/// `running` for ever. With `server_id` NULL this guard never fired and the leak was
+/// invisible; now that it fires, an unbounded count would let ONE stranded row disable
+/// DR verification for that machine permanently. A drill that has been "running" for
+/// over two hours is not running.
+async fn has_running_drill_for_server(db: &PgPool, sid: Uuid) -> bool {
     let count: Option<(i64,)> = sqlx::query_as(
         "SELECT COUNT(*) FROM backup_drills \
-         WHERE server_id = $1 AND status IN ('pending', 'running')"
+         WHERE server_id = $1 AND status IN ('pending', 'running') \
+         AND started_at > NOW() - INTERVAL '2 hours'"
     ).bind(sid).fetch_one(db).await.ok();
     count.map(|(n,)| n > 0).unwrap_or(false)
 }
@@ -154,10 +210,10 @@ async fn has_running_drill_for_server(db: &PgPool, server_id: Option<Uuid>) -> b
 /// drills end up indistinguishable in the audit trail (backup_drills + Drills tab).
 async fn enqueue_drill(
     db: &PgPool,
-    agent: &AgentClient,
+    agent: &AgentHandle,
     backup_type: &str,
     backup_id: Uuid,
-    server_id: Option<Uuid>,
+    server_id: Uuid,
     body: serde_json::Value,
     agent_path: &str,
 ) {

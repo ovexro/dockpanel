@@ -5,7 +5,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::auth::{AdminUser, ServerScope};
+use crate::auth::AdminUser;
 use crate::error::{agent_error, err, internal_error, paginate, ApiError};
 use crate::AppState;
 
@@ -300,11 +300,18 @@ pub async fn update_config(
 // ── Preview Report ─────────────────────────────────────────────────────
 
 /// GET /api/telemetry/preview — Preview what would be sent (admin only).
+/// NOTE: this handler deliberately takes no per-request server scope extractor.
+/// `telemetry_events` has no server dimension —
+/// every row is written by `telemetry_collector` from the PANEL host's own agent. Taking
+/// the caller's `X-Server-Id` (which the frontend sends on every request from a global
+/// picker) paired a fleet MEMBER's hostname, kernel and service list with the PANEL's
+/// events in one document, under a note asserting it is exactly what would be sent. The
+/// events are panel-local, so the system block must be too.
 pub async fn preview(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let agent = state.agents.local();
     // Get unsent events
     let events: Vec<(uuid::Uuid, String, String, String, serde_json::Value, chrono::DateTime<chrono::Utc>)> =
         sqlx::query_as(
@@ -413,8 +420,9 @@ pub async fn send_now(
 pub async fn export_report(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Panel-local for the same reason as `preview` above: the events have no server.
+    let agent = state.agents.local();
     let events: Vec<(uuid::Uuid, String, String, String, serde_json::Value, chrono::DateTime<chrono::Utc>)> =
         sqlx::query_as(
             "SELECT id, event_type, category, message, context, created_at \
