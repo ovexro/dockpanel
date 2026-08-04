@@ -106,8 +106,27 @@ jobs:
     container:
       image: ${{ matrix.distro }}
     steps:
+      # BOUNDED AND RETRIED ON PURPOSE (s305). This step reaches a distro's own
+      # package mirror, which is the one thing in this matrix we do not control.
+      # It hung on `ubuntu:22.04` on two consecutive release runs — 18 minutes on
+      # the first, still going at 6 on the second — while the identical step
+      # passed on ubuntu:20.04 and 24.04 in the SAME runs, and a re-run of the
+      # very same job passed. So it is intermittent rather than broken, roughly a
+      # coin flip on that one image.
+      #
+      # Unbounded, that costs a whole release run: nothing here had a timeout, so
+      # the only limit was the 6-hour workflow default, and a stall looks exactly
+      # like a slow job right up until someone goes and reads the step. Each
+      # attempt is now capped and retried, so a mirror stall costs ~4 minutes and
+      # a genuine failure still fails the job with a real message.
+      #
+      # `timeout` is coreutils and is present on every image in this matrix. The
+      # body goes in a file rather than a shell function because these run inside
+      # the distro container, whose /bin/sh is not always bash.
       - name: Install fetch deps
         run: |
+          set -eu
+          cat > /tmp/install-fetch-deps.sh <<'DEPS'
           set -eux
           if command -v apt-get >/dev/null 2>&1; then
             apt-get update -qq
@@ -124,9 +143,36 @@ jobs:
           elif command -v yum >/dev/null 2>&1; then
             yum install -y curl ca-certificates file >/dev/null
           else
-            echo "FAIL: no supported package manager in ${{ matrix.distro }} — this matrix entry cannot fetch the release assets."
+            echo "FAIL: no supported package manager — this matrix entry cannot fetch the release assets."
             exit 1
           fi
+          DEPS
+
+          for attempt in 1 2 3; do
+            echo "::group::package install attempt ${attempt}"
+            # Capture the status with `|| rc=$?`, NOT by reading $? after an `if`:
+            # a false `if` with no `else` is itself a SUCCESS, so `rc=$?` on the
+            # line after `fi` reads 0 every time and the branch below would
+            # report "exited 0" for a run that actually timed out. Caught by
+            # testing the timeout path rather than only the happy one.
+            rc=0
+            timeout 240 sh /tmp/install-fetch-deps.sh || rc=$?
+            if [ "$rc" = 0 ]; then
+              echo "::endgroup::"
+              exit 0
+            fi
+            echo "::endgroup::"
+            # 124 is timeout(1)'s "the command was killed at the deadline".
+            if [ "$rc" = 124 ]; then
+              echo "::warning::package install timed out after 240s on attempt ${attempt} (distro mirror stalled)"
+            else
+              echo "::warning::package install exited ${rc} on attempt ${attempt}"
+            fi
+            sleep 15
+          done
+
+          echo "FAIL: could not install curl/ca-certificates/file after 3 attempts."
+          exit 1
 
       - name: Download published binaries (amd64)
         run: |
