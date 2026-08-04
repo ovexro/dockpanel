@@ -78,6 +78,10 @@ interface PanelLoginEntry {
   time: string;
   action: string;
   success: boolean;
+  user: string;
+  ip: string | null;
+  /** The attempt named an email with no account — the enumeration signature. */
+  unknown_user: boolean;
 }
 
 interface AuditLogEntry {
@@ -1141,6 +1145,8 @@ export default function Security() {
               <table className="w-full">
                 <thead><tr className="bg-dark-900">
                   <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Time</th>
+                  <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Account</th>
+                  <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">From</th>
                   <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Action</th>
                   <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Status</th>
                 </tr></thead>
@@ -1148,6 +1154,19 @@ export default function Security() {
                   {loginAudit.panel.map((e, i) => (
                     <tr key={i} className="table-row-hover">
                       <td className="px-5 py-2 text-xs text-dark-200 font-mono">{new Date(e.time).toLocaleString()}</td>
+                      <td className="px-5 py-2 text-sm text-dark-50 font-mono">
+                        {e.user || "—"}
+                        {/* Repeated attempts against addresses that do not exist are
+                            what credential stuffing and user enumeration look like.
+                            Until v2.60.0 these rows were rejected by a foreign key
+                            and never reached this table at all. */}
+                        {e.unknown_user && (
+                          <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-medium bg-danger-500/15 text-danger-400 align-middle">
+                            no such account
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-5 py-2 text-xs text-dark-200 font-mono">{e.ip || "—"}</td>
                       <td className="px-5 py-2 text-sm text-dark-50">{e.action}</td>
                       <td className="px-5 py-2">
                         <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${e.success ? "bg-rust-500/15 text-rust-400" : "bg-danger-500/15 text-danger-400"}`}>

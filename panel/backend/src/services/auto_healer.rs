@@ -715,15 +715,24 @@ async fn ssl_renewal_blocked(
 async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
     // Widen the window to 45 days so we pick up short-lived (6-day) and
     // 45-day-profile certs with enough lead time. ARI trims this further.
+    // `s.server_id` is selected but the renewal itself still runs against the
+    // panel's own agent — see the note on this function's remaining fleet leg.
+    // It is read here for the two things that must name a host whatever the
+    // renewal does: the cooldown row and the failure alert. Both used to launder
+    // that identity, the alert through `ORDER BY created_at ASC LIMIT 1` below.
+    // The column is NOT NULL since the multi-server migration, so this needs no
+    // migration and cannot widen the result set.
     let sites: Vec<(
         uuid::Uuid, String, uuid::Uuid, String, Option<i32>, Option<String>, Option<String>,
         chrono::DateTime<chrono::Utc>,
         Option<chrono::DateTime<chrono::Utc>>,
         Option<chrono::DateTime<chrono::Utc>>,
         Option<String>,
+        uuid::Uuid,
     )> = match sqlx::query_as(
         "SELECT s.id, s.domain, s.user_id, s.runtime, s.proxy_port, s.php_version, s.root_path, \
-                s.ssl_expiry, s.ssl_renewal_at, s.ssl_renewal_checked_at, s.ssl_profile \
+                s.ssl_expiry, s.ssl_renewal_at, s.ssl_renewal_checked_at, s.ssl_profile, \
+                s.server_id \
          FROM sites s \
          WHERE s.ssl_enabled = TRUE AND s.ssl_expiry IS NOT NULL \
          AND s.ssl_expiry < NOW() + INTERVAL '45 days'",
@@ -739,7 +748,8 @@ async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
 
     for row in &sites {
         let (site_id, domain, user_id, runtime, proxy_port, php_version, root_path,
-             ssl_expiry, ssl_renewal_at_initial, ssl_renewal_checked_at, ssl_profile) = row;
+             ssl_expiry, ssl_renewal_at_initial, ssl_renewal_checked_at, ssl_profile,
+             server_id) = row;
         let mut ssl_renewal_at = *ssl_renewal_at_initial;
         let owner_email: String = match sqlx::query_scalar(
             "SELECT email FROM users WHERE id = $1",
@@ -878,16 +888,31 @@ async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
             Err(e) => e.to_string(),
         };
 
-        let system_id = uuid::Uuid::nil();
-        activity::log_activity(
+        // THIS ROW IS THE COOLDOWN. The gate above counts these, so until v2.60.0
+        // it was counting rows that could not exist: this call passed
+        // `uuid::Uuid::nil()`, `fk_activity_logs_user` rejected the insert, and
+        // `log_activity` swallowed the error into a warn. `COUNT(*)` was therefore
+        // permanently 0, the `if recent > 0 { continue }` above never fired, and a
+        // certificate DockPanel cannot renew was re-ordered from the CA on every
+        // 120-second tick, for ever — by the cooldown whose own comment says it
+        // exists "to prevent hammering the CA if renewal keeps failing". The agent
+        // does not cheaply refuse these: it validates the domain's shape and then
+        // places a real ACME order, so this was real load on Let's Encrypt.
+        //
+        // Named against the site's OWNER (a real `users` row) and stamped with the
+        // site's server, exactly as `auto_heal.restart_service` has been since
+        // v2.58.0. The stamp also makes the gate per-host rather than per-domain
+        // if the fleet leg lands later.
+        activity::log_activity_on_server(
             pool,
-            system_id,
+            *user_id,
             "auto-healer",
             "auto_heal.renew_ssl",
             Some("site"),
             Some(domain),
             Some(&format!("site_id={site_id}, success={success}, result={details}")),
             None,
+            Some(*server_id),
         )
         .await;
 
@@ -938,15 +963,19 @@ async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
             // Panel notification
             notifications::notify_panel(pool, None, &format!("SSL renewed: {}", domain), &format!("SSL certificate for {} was automatically renewed", domain), "info", "ssl", None).await;
         } else {
-            // Fire an alert so the user is notified about the SSL renewal failure
-            let server: Option<(uuid::Uuid,)> = sqlx::query_as(
-                "SELECT id FROM servers ORDER BY created_at ASC LIMIT 1",
-            )
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
-
+            // Fire an alert so the user is notified about the SSL renewal failure.
+            //
+            // The server this alert names is the one the SITE is on. It used to be
+            // `SELECT id FROM servers ORDER BY created_at ASC LIMIT 1` — the oldest
+            // row on the panel, with no filter of any kind, which is the laundering
+            // shape this project has been removing since v2.56.0. That row is
+            // deterministically the panel's own local server (it is created at
+            // startup and cannot be deleted), so a member's certificate failure was
+            // filed against the panel. `routes/alerts.rs` admits only rows matching
+            // the caller's selected server or a NULL one, so an admin who had
+            // switched the picker to the affected member could not see the critical
+            // alert about that member's own certificate.
+            //
             // Deduped: the attempt cooldown is one hour for short-lived profiles,
             // so an unconditional alert here would page two dozen times a day for
             // a single stuck certificate — and the security scanner alerts on the
@@ -954,7 +983,7 @@ async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
             notifications::fire_alert_deduped(
                 pool,
                 *user_id,
-                server.map(|s| s.0),
+                Some(*server_id),
                 Some(*site_id),
                 "ssl_renewal_failure",
                 "critical",
@@ -1799,11 +1828,16 @@ async fn auto_sleep_idle_containers(pool: &PgPool, agent: &AgentClient) {
                     .execute(pool)
                     .await;
 
-                    activity::log_activity(
-                        pool, uuid::Uuid::nil(), "auto-sleeper", "container.auto_sleep",
+                    // No user initiates an auto-sleep and `container_sleep_config`
+                    // names no owner, so this genuinely has no user to name — which
+                    // is what NULL is for. It passed the nil uuid instead, so the
+                    // insert was rejected and stopping a customer's container left
+                    // no audit record at all.
+                    activity::log_activity_system(
+                        pool, "auto-sleeper", "container.auto_sleep",
                         Some("container"), Some(container_name),
                         Some(&format!("Idle {}+ minutes", threshold_minutes)),
-                        None,
+                        None, None,
                     ).await;
 
                     // Notify

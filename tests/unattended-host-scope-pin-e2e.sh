@@ -1104,6 +1104,207 @@ else
 fi
 
 echo
+echo "§I the nil uuid is not a user (s303 / v2.60.0) — THE CLASS, not four instances"
+
+# Four writers reached for `Uuid::nil()` as "no user". `activity_logs.user_id` is
+# nullable with an FK to `users`, so a nil is a non-NULL value naming a row that
+# does not exist: the insert is rejected with 23503 and `log_activity` swallows it
+# into a warn. None of the four ever recorded anything, and TWO of them read their
+# own rows back as a rate limit — a COUNT(*) that could only return 0 standing in
+# for a cooldown.
+#
+# §B2 and G26 already pin this for auto_clean_disk and auto_restart_services, one
+# function each. That is exactly the per-instance shape lesson #170 says cannot
+# hold a class: both were green while three siblings were broken. I1 is the class
+# arm — it reads EVERY backend source file, so a new writer is covered the day it
+# is written rather than the day someone remembers to add an arm.
+
+# The subject list must be asserted before it is trusted: an arm that enumerates
+# its own subjects and finds none prints green having examined nothing (#143).
+NIL_FILES=$(find panel/backend/src -name '*.rs' | wc -l)
+if [ "$NIL_FILES" -lt 40 ]; then
+  bad "I0 only $NIL_FILES backend sources found — I1 would examine almost nothing; refusing to trust it"
+else
+  ok "I0 the class arm's subject list holds $NIL_FILES backend sources"
+
+  # Every log_activity* call site, flattened onto one line each so a wrapped
+  # argument list is measured whole and cannot bleed into its neighbour.
+  NIL_CALLS=0
+  NIL_BAD=""
+  while IFS= read -r f; do
+    FS=$(code "$f")
+    has "$FS" 'log_activity' || continue
+    CALLW=$(stmt "$FS" 'log_activity(_on_server|_system)?\(' 12)
+    NIL_CALLS=$((NIL_CALLS + $(count "$CALLW" 'log_activity(_on_server|_system)?\(')))
+    if has "$CALLW" 'log_activity(_on_server|_system)?\([^)]*[Uu]uid::nil'; then
+      NIL_BAD="$NIL_BAD $f"
+    fi
+  done < <(find panel/backend/src -name '*.rs')
+
+  # …and the calls themselves must be plausible, or the loop above matched nothing.
+  if [ "$NIL_CALLS" -lt 100 ]; then
+    bad "I1 only $NIL_CALLS log_activity call sites matched — the extraction is broken, not the code clean"
+  elif [ -n "$NIL_BAD" ]; then
+    bad "I1 activity written as the nil uuid in:$NIL_BAD — those rows violate fk_activity_logs_user and are never stored"
+  else
+    ok "I1 none of the $NIL_CALLS log_activity call sites names the nil uuid as a user"
+  fi
+
+  # I1b — and the call site is not the only way in. `auth.rs` passed the class
+  # arm above for eight releases by routing the same sentinel through a
+  # one-line helper (`fn zero_uuid() -> Uuid { Uuid::nil() }`), so the grep saw
+  # `zero_uuid()` and found nothing to complain about. A pattern that launders
+  # itself through a name is still the pattern. This forbids the FACTORY: a
+  # function whose entire body hands back a nil uuid.
+  #
+  # The one legitimate nil in the tree is a cached-admin sentinel inside a
+  # larger function in agent.rs, which this cannot match by construction.
+  NIL_FACTORY=""
+  while IFS= read -r f; do
+    FS=$(code "$f")
+    has "$FS" 'Uuid::nil' || continue
+    if has "$(flat "$FS")" 'fn [a-z_]+\(\) *-> *(uuid::)?Uuid *\{ *(uuid::)?Uuid::nil\(\) *\}'; then
+      NIL_FACTORY="$NIL_FACTORY $f"
+    fi
+  done < <(find panel/backend/src -name '*.rs')
+
+  if [ -n "$NIL_FACTORY" ]; then
+    bad "I1b a nil-uuid factory is defined in:$NIL_FACTORY — it launders the sentinel past the class arm above"
+  else
+    ok "I1b no helper exists whose whole job is to hand back a nil uuid"
+  fi
+fi
+
+# I2 — the writer that IS a cooldown. It must name a real owner and stamp the
+# host, exactly as auto_restart_services has since v2.58.0 (G26 is its twin).
+SSL=$(fnbody "$AH_S" "auto_renew_ssl")
+if [ -z "$SSL" ]; then
+  bad "I2 could not extract auto_renew_ssl — every §I SSL arm below is meaningless"
+else
+  if has "$(flat "$SSL")" 'log_activity_on_server\(' && ! has "$SSL" '[Uu]uid::nil'; then
+    ok "I2 the SSL renewal attempt is recorded against the site's owner and server"
+  else
+    bad "I2 the SSL renewal record still uses the nil uuid — the anti-CA-hammering cooldown stays dead"
+  fi
+
+  # I3 — a gate must read something its own subject writes. This is the severed
+  # pair stated directly: the action counted and the action logged are one string.
+  if has "$SSL" "action = 'auto_heal.renew_ssl'" && has "$SSL" '"auto_heal.renew_ssl"'; then
+    ok "I3 auto_renew_ssl records the very action its cooldown counts"
+  else
+    bad "I3 the SSL cooldown counts an action this function never writes — it can never engage"
+  fi
+
+  # I4 — the failure alert names the site's own server. `ORDER BY created_at ASC
+  # LIMIT 1` over `servers` is the laundering shape §G outlawed for the healer;
+  # it resolves to the panel's own row, so a member's cert failure was filed
+  # against the panel and hidden from the picker that would show it.
+  if has "$(flat "$SSL")" 'ORDER BY created_at ASC LIMIT 1'; then
+    bad "I4 auto_renew_ssl still stamps its alert with the oldest servers row instead of the site's server"
+  else
+    ok "I4 auto_renew_ssl does not resolve a server by taking the oldest row"
+  fi
+fi
+
+# I5 — auto-sleep genuinely has no user to name, so it must say so in the way the
+# schema sanctions (NULL) rather than by inventing a uuid.
+SLEEP=$(fnbody "$AH_S" "auto_sleep_idle_containers")
+if [ -z "$SLEEP" ]; then
+  bad "I5 could not extract auto_sleep_idle_containers"
+elif has "$(flat "$SLEEP")" 'log_activity_system\('; then
+  ok "I5 stopping a customer's container leaves an audit row with no invented user"
+else
+  bad "I5 auto-sleep still writes its audit row with a user that does not exist — stopping a container leaves no record"
+fi
+
+# I6 — the login branch that matters. A failed login against an address with no
+# account is what credential stuffing and user enumeration look like; it was the
+# ONLY failure branch that named a nil uuid, so the panel recorded the one case
+# that is not enumeration and dropped the one that is.
+AUTH=panel/backend/src/routes/auth.rs
+AUTH_S=$(subj "$AUTH" || true)
+if [ -z "$AUTH_S" ]; then
+  bad "I6 could not read $AUTH"
+else
+  if has "$AUTH_S" 'log_activity_system\(' && ! has "$AUTH_S" 'zero_uuid|[Uu]uid::nil'; then
+    ok "I6 a login against a non-existent account is recorded"
+  else
+    bad "I6 login failures against unknown accounts still write a nil uuid — the enumeration signature is invisible"
+  fi
+fi
+
+# I7 — and it must be READABLE. The write landing is worth nothing if the audit
+# surface cannot name the account or the origin: the login writers pass no
+# target_name, so the column this reader used to select as "user" was NULL on
+# every row it has ever returned.
+SECR=panel/backend/src/routes/security.rs
+SECR_S=$(subj "$SECR" || true)
+if [ -z "$SECR_S" ]; then
+  bad "I7 could not read $SECR"
+else
+  # Bounded on the function's own braces, not a fixed window: the columns live
+  # on the SELECT line and the recognisable token on the WHERE line below it, so
+  # a `grep -A n` anchored on either one misses the other (p31, and this arm
+  # printed a false RED against a correct fix before it was written this way).
+  AUDQ=$(flat "$(fnbody "$SECR_S" "login_audit")")
+  if [ -z "$AUDQ" ]; then
+    bad "I7 could not locate the login-audit query — the arm would measure nothing"
+  elif ! has "$AUDQ" 'auth.login_failed'; then
+    bad "I7 login_audit no longer reads auth.login_failed — the arm is measuring the wrong function"
+  elif has "$AUDQ" 'user_email' && has "$AUDQ" 'ip_address'; then
+    ok "I7 the login-audit feed carries the account and the origin of each attempt"
+  else
+    bad "I7 the login-audit query still omits user_email/ip_address — every row renders anonymous"
+  fi
+fi
+
+# I8 — the reader side of the same severed pair. The writer has stamped
+# server_id since v2.58.0 and its own cooldown reads it back; this suppression
+# query was left on the bare service name, and every host has an `nginx`.
+if [ -n "$AE_S" ]; then
+  HEALQ=$(stmt "$AE_S" "action = 'auto_heal.restart_service'" 5)
+  if [ -z "$HEALQ" ]; then
+    bad "I8 could not locate the heal-suppression query in alert_engine.rs"
+  elif has "$HEALQ" 'server_id = \$2'; then
+    ok "I8 a heal on one host does not suppress the same service's alert on another"
+  else
+    bad "I8 the heal-suppression count is still fleet-wide — healing nginx on one server mutes nginx on all of them"
+  fi
+else
+  skip "I8 — alert_engine.rs not extractable"
+fi
+
+# I9 — the fourth writer, and the one the obvious audit misses: written
+# `.unwrap_or_else(uuid::Uuid::nil)`, with no parentheses, so a `Uuid::nil()`
+# grep does not find it. It fed a NOT NULL column with a foreign key.
+WH=panel/backend/src/routes/whmcs.rs
+WH_S=$(subj "$WH" || true)
+if [ -z "$WH_S" ]; then
+  bad "I9 could not read $WH"
+elif has "$WH_S" 'unwrap_or(_else)?\( *(uuid::)?Uuid::nil'; then
+  bad "I9 whmcs still defaults a missing local server to the nil uuid — an FK violation surfaced as a 500"
+else
+  ok "I9 a missing local server is reported, not laundered into a sentinel uuid"
+fi
+
+# I10 — the structural guarantee behind all of the above. `user_id` is an Option
+# in exactly one place, the private writer, so a caller must choose between
+# naming a user and declaring there is none. Re-introducing a nil-defaulting
+# public helper is what this arm exists to catch.
+ACT=panel/backend/src/services/activity.rs
+ACT_S=$(subj "$ACT" || true)
+if [ -z "$ACT_S" ]; then
+  bad "I10 could not read $ACT"
+else
+  if has "$(sig "$ACT_S" "log_activity_system")" 'user_email' \
+     && ! has "$(sig "$ACT_S" "log_activity_system")" 'user_id'; then
+    ok "I10 the no-user writer takes no user id at all, so there is nothing to pass a sentinel into"
+  else
+    bad "I10 log_activity_system still accepts a user id — the sentinel can come straight back"
+  fi
+fi
+
+echo
 echo "----------------------------------------------"
 printf '  PASS %d   FAIL %d   SKIP %d\n' "$PASS" "$FAIL" "$SKIP"
 echo

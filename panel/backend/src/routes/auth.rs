@@ -21,11 +21,6 @@ use crate::models::User;
 use crate::services::{activity, email, notifications, security_hardening};
 use crate::AppState;
 
-/// A zero-valued UUID used for activity logging when there is no authenticated user.
-fn zero_uuid() -> uuid::Uuid {
-    uuid::Uuid::nil()
-}
-
 /// Generate a secure random token and its SHA-256 hash.
 fn generate_token() -> (String, String) {
     let token = uuid::Uuid::new_v4().to_string().replace('-', "");
@@ -202,10 +197,21 @@ pub async fn login(
             let parsed = PasswordHash::new(dummy_hash).unwrap();
             let _ = Argon2::default().verify_password(body.password.as_bytes(), &parsed);
             record_login_attempt(&state.login_attempts, &ip);
-            // Log failed login with email only (no user ID available)
-            activity::log_activity(
-                &state.db, zero_uuid(), &body.email, "auth.login_failed",
-                None, None, Some("unknown_user"), Some(&ip),
+            // Log failed login with email only (no user ID available).
+            //
+            // This is the branch that matters for detection and it is the one that
+            // was never recorded. It used to pass the nil uuid, which
+            // `fk_activity_logs_user` rejects, so the insert failed and the warning
+            // was swallowed — for every release this endpoint has existed. The
+            // wrong-password-for-a-real-account branch above names a real user and
+            // therefore landed, so the panel recorded the one failure mode that is
+            // NOT enumeration and dropped the one that is: credential stuffing and
+            // username probing are, by definition, attempts against emails that do
+            // not exist. `GET /api/security/login-audit` could not show them
+            // because there was nothing to show.
+            activity::log_activity_system(
+                &state.db, &body.email, "auth.login_failed",
+                None, None, Some("unknown_user"), Some(&ip), None,
             ).await;
             return Err(err(StatusCode::UNAUTHORIZED, "Invalid credentials"));
         }

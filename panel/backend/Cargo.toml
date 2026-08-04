@@ -1,6 +1,6 @@
 [package]
 name = "dockpanel-api"
-version = "2.59.0"
+version = "2.60.0"
 edition = "2024"
 
 [profile.release]

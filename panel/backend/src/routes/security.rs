@@ -229,25 +229,43 @@ pub async fn login_audit(
     AdminUser(_claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // Panel logins from activity_logs
-    let panel_logins: Vec<(String, String, Option<String>, chrono::DateTime<chrono::Utc>)> =
-        sqlx::query_as(
-            "SELECT action, COALESCE(details, ''), target_name, created_at FROM activity_logs \
+    // Panel logins from activity_logs.
+    //
+    // This reads `user_email` and `ip_address`, which is the only way this table
+    // can identify anything: the login writers pass `None` for both `target_type`
+    // and `target_name`, so the `target_name` this used to select as "user" was
+    // NULL on every row ever written. The account is in `user_email` and the
+    // origin is in `ip_address` — the two facts an operator looking at a failed
+    // login actually needs, and neither was leaving the database.
+    let panel_logins: Vec<(
+        String,
+        String,
+        String,
+        Option<String>,
+        chrono::DateTime<chrono::Utc>,
+    )> = sqlx::query_as(
+        "SELECT action, COALESCE(details, ''), user_email, ip_address, created_at \
+             FROM activity_logs \
              WHERE action IN ('auth.login', 'auth.login_failed', 'auth.2fa_verify') \
              ORDER BY created_at DESC LIMIT 50",
-        )
-        .fetch_all(&state.db)
-        .await
-        .unwrap_or_default();
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
 
     let panel: Vec<serde_json::Value> = panel_logins
         .iter()
-        .map(|(action, details, target, time)| {
+        .map(|(action, details, email, ip, time)| {
             serde_json::json!({
                 "type": "panel",
                 "action": action,
                 "details": details,
-                "user": target,
+                "user": email,
+                "ip": ip,
+                // `details` is "unknown_user" exactly when the attempt named an
+                // email with no account — the enumeration signature. Surfaced as
+                // its own flag so the UI does not have to parse a free-text field.
+                "unknown_user": details == "unknown_user",
                 "time": time,
                 "success": !action.contains("failed"),
             })

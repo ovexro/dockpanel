@@ -4,6 +4,77 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.60.0] - 2026-08-04
+
+**The nil uuid is not a user.**
+
+Four places in the panel wrote an audit row for "no user" by passing a
+zero-valued UUID. `activity_logs.user_id` is nullable and its foreign key points
+at `users`, so a nil is not "nobody" — it is a non-NULL value naming a row that
+does not exist and cannot be created. Postgres rejected every one of those
+inserts, the error was swallowed into a log warning, and **none of the four ever
+recorded anything.**
+
+Two of them were reading their own rows back as a rate limit.
+
+### Certificate renewals stopped hammering the CA
+
+`auto_renew_ssl` gates its retries on a count of its own audit rows — the
+cooldown whose comment says it exists "to prevent hammering the CA if renewal
+keeps failing". That count could only ever return zero, so the gate never
+engaged: a certificate DockPanel could not renew was re-ordered from Let's
+Encrypt **on every 120-second tick, indefinitely**. The agent does not refuse
+these cheaply either; it validates the domain's shape and places a real ACME
+order. Renewal attempts are now recorded against the site's owner and stamped
+with the site's server, which drops a stuck certificate from roughly 720 orders
+a day to 4 (or 24 on the short-lived profile).
+
+The same function filed its failure alert against `SELECT id FROM servers ORDER
+BY created_at ASC LIMIT 1` — the oldest row on the panel, with no filter. That
+is deterministically the panel's own server, so on a fleet a member's expiring
+certificate raised a critical alert attributed to the wrong machine, which the
+alerts page then hid from anyone whose server picker was set to the member it
+was actually about. It now names the site's own server.
+
+### Failed logins against unknown accounts are recorded at all
+
+The login handler wrote a real user id when the password was wrong for an
+existing account, and the nil uuid when the email matched no account. So the
+panel recorded the one failure mode that is *not* user enumeration and dropped
+the one that is: credential stuffing and username probing are, by definition,
+attempts against addresses that do not exist. `GET /api/security/login-audit`
+had nothing to show because nothing had been stored.
+
+The audit feed also now carries the account and the origin of each attempt. It
+was selecting `target_name` as the "user" column, and both login writers pass no
+`target_name` — so that field was NULL on every row the table has ever
+rendered. Panel Login Activity gains **Account** and **From** columns, and
+flags an attempt against an address with no account.
+
+### Also
+
+- **Auto-sleep leaves an audit record.** Stopping a customer's container wrote
+  nothing at all. Nothing initiates an auto-sleep, so this uses the new
+  no-user writer, which stores NULL — what the schema has always sanctioned.
+- **A heal on one host no longer mutes another host's alert.** The alert
+  engine's five-minute "auto-healer recently handled this" suppression counted
+  `auto_heal.restart_service` rows by service name with no server predicate,
+  while the writer has stamped `server_id` since 2.58.0. Every host has an
+  `nginx`, so healing one silenced them all.
+- **A panel with no local server row reports it.** The WHMCS app-migration
+  endpoint defaulted a missing source server to the nil uuid and fed it to a
+  NOT NULL column with a foreign key, turning a clear precondition failure into
+  an opaque 500 three statements later.
+
+### Internal
+
+`log_activity_system` is the sanctioned way to say "no user"; `user_id` is an
+`Option` in exactly one private function, so a caller must choose between
+naming a user and declaring there is none rather than inventing a third answer.
+The regression suite gains a **class** arm reading all 109 backend sources and
+202 call sites, plus one that forbids a nil-uuid factory — the indirection that
+hid the login writer from a call-site grep for eight releases.
+
 ## [2.59.0] - 2026-08-02
 
 **The panel host is a machine too.**

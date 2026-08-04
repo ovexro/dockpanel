@@ -345,9 +345,22 @@ pub async fn start_migration(
     ).fetch_optional(&state.db).await
     .map_err(|e| internal_error("get local server", e))?;
 
-    let source_server_id = source_id
-        .map(|(id,)| id)
-        .unwrap_or_else(uuid::Uuid::nil);
+    // Guarded like `target` above, rather than laundered into a sentinel. This
+    // used to be `.unwrap_or_else(uuid::Uuid::nil)`, and `app_migrations.
+    // source_server_id` is NOT NULL with a foreign key to `servers(id)`, so a
+    // panel with no local server row answered a migration request with an opaque
+    // 500 from a constraint violation three statements later instead of saying
+    // what was wrong. (It also hid from the obvious audit: `Uuid::nil()` greps
+    // find the call with parentheses, not this one without them.)
+    let source_server_id = match source_id {
+        Some((id,)) => id,
+        None => {
+            return Err(err(
+                StatusCode::CONFLICT,
+                "This panel has no local server registered, so there is nothing to migrate from",
+            ))
+        }
+    };
 
     if source_server_id == body.target_server_id {
         return Err(err(StatusCode::BAD_REQUEST, "Source and target servers are the same"));

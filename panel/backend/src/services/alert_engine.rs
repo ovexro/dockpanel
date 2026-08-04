@@ -1186,14 +1186,22 @@ async fn check_service_health(pool: &PgPool, member: &FleetMember) {
         }
 
         if status == "stopped" || status == "failed" {
-            // Skip alerting if auto-healer recently handled this service (within 5 minutes)
+            // Skip alerting if auto-healer recently handled this service (within 5
+            // minutes) — ON THIS HOST. The writer of these rows has stamped
+            // `server_id` since v2.58.0 and its own cooldown reads it back, but
+            // this reader was left matching on `target_name` alone, so a heal of
+            // `nginx` on one server silenced the `service_down` alert for `nginx`
+            // on every other server for five minutes. Service names are the least
+            // distinctive key in the fleet — every host has an `nginx` — so this
+            // is the shape that goes wrong the moment a second server exists.
             let recently_healed: Option<(i64,)> = sqlx::query_as(
                 "SELECT COUNT(*) FROM activity_logs \
                  WHERE action = 'auto_heal.restart_service' \
-                 AND target_name = $1 \
+                 AND target_name = $1 AND server_id = $2 \
                  AND created_at > NOW() - INTERVAL '5 minutes'",
             )
             .bind(name)
+            .bind(server_id)
             .fetch_optional(pool)
             .await
             .ok()
