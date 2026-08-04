@@ -531,12 +531,24 @@ async fn auto_clean_disk(pool: &PgPool, agents: &AgentRegistry) {
     for (server_id, user_id, server_name) in firing {
         // Cooldown is per server: a fleet where one box is chronically full must
         // not suppress healing on another that has just filled up.
+        // Keyed on `server_id`, like the four other cooldown gates in this file.
+        // It used to key on `target_name` holding the server's UUID as text —
+        // which worked, but spent the operator-facing column on a machine
+        // identifier, so the audit feed rendered this row as a bare UUID. The
+        // column that means "which host" now exists, so the gate uses it and
+        // `target_name` is free to hold the server's name.
+        //
+        // One-time effect on upgrade: rows written under the old convention
+        // carry no `server_id`, so they no longer suppress. A host whose disk
+        // alert is firing may therefore clean its logs once more than the hour
+        // would otherwise allow. The action is idempotent and this does not
+        // repeat.
         let recent: Option<(i64,)> = sqlx::query_as(
             "SELECT COUNT(*) FROM activity_logs \
-             WHERE action = 'auto_heal.clean_logs' AND target_name = $1 \
+             WHERE action = 'auto_heal.clean_logs' AND server_id = $1 \
              AND created_at > NOW() - INTERVAL '1 hour'",
         )
-        .bind(server_id.to_string())
+        .bind(server_id)
         .fetch_optional(pool)
         .await
         .ok()
@@ -571,16 +583,19 @@ async fn auto_clean_disk(pool: &PgPool, agents: &AgentRegistry) {
             .is_ok();
 
         // Written against the server's OWNER, not the nil uuid — this row is both
-        // the cooldown gate and the operator's only record that this ran.
-        activity::log_activity(
+        // the cooldown gate and the operator's only record that this ran. The
+        // host now travels in `server_id`, which is what the gate above reads,
+        // so `target_name` can say which machine in words.
+        activity::log_activity_on_server(
             pool,
             user_id,
             "auto-healer",
             "auto_heal.clean_logs",
             Some("server"),
-            Some(&server_id.to_string()),
+            Some(&server_name),
             Some(&format!("server={server_name} success={success}")),
             None,
+            Some(server_id),
         )
         .await;
 

@@ -4,6 +4,81 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.61.0] - 2026-08-04
+
+**The panel stops lying.**
+
+Five places where DockPanel told the operator something that was not true. None
+of them were failures of the underlying feature — in each case the machinery
+worked and the account of it did not.
+
+### A shared terminal outlived its stated expiry, in public
+
+`POST /api/terminal/share` saves terminal output behind a public link and
+promises it for one hour. The viewer that serves that link computed how long the
+share had left, clamped a negative result to zero, and **rendered the content
+regardless** — while the page's own countdown printed "Expired" above it. The
+only thing that removed an expired share was a retention sweep that runs once a
+day, so a link advertised as lasting an hour served root shell output to anyone
+holding it for up to twenty-four.
+
+The operator's own share list had always applied the expiry correctly and hidden
+those rows, so the panel reported a share as gone while the URL still worked.
+
+Expiry is now decided by whoever answers the request, and both readers reach that
+decision through the same function so they cannot disagree again. An expired
+share is answered exactly like an unknown one. The unauthenticated route also
+validates the share id, which the revoke path has always done.
+
+### The web terminal and live log streaming say what is actually wrong
+
+Both mint a ticket signed with the **selected** server's agent token, then the
+browser opens a socket to the panel's own address — which reaches the panel's
+agent, which verifies with its own key and rejects it. With a fleet member
+selected, both features therefore failed, and both blamed the network for it: the
+terminal reported "Connection lost" and offered to reconnect, and the log viewer
+retried every three seconds indefinitely.
+
+Both now answer at the point the ticket is minted, naming the server you have
+selected and saying the feature runs on the panel host. The terminal shows that
+as a notice rather than an error, and the log viewer no longer retries a decision
+the panel has already made. Reading, searching and downloading a member's logs
+were never affected and still work.
+
+The server shell being switched off now says so in the same way, and names the
+setting.
+
+### The audit log can say which machine an action happened on
+
+`activity_logs.server_id` has been written since 2.58.0 and stamped by the
+auto-healer's own writers since 2.60.0. Nothing displayed it: the API's row type
+never declared the column, so `SELECT *` dropped it before serialisation, and the
+audit page rendered nine fields with no host among them. On a fleet, every entry
+read as though it had happened on the panel.
+
+The feed now carries the host and resolves it to the server's name. Automatic log
+cleanups previously spent the operator-facing target column on the server's UUID,
+because the hourly cooldown keyed on it; the cooldown now keys on `server_id`,
+like the four other gates beside it, and the target column names the machine.
+
+Upgrade note: cleanup rows written before this release carry no `server_id`, so
+they no longer suppress. A host whose disk alert is firing may clean its logs
+once more than the hour would otherwise allow. The action is idempotent and this
+does not repeat.
+
+### The multi-server guide no longer promises three things that do not exist
+
+It listed the web terminal, log streaming and "per-server dashboards" among what
+you can do on a remote server. The first two are panel-host only, for the reason
+above, and there is no per-server dashboard view. The guide now says which
+features terminate on the panel host and what to use instead.
+
+### Notes
+
+No migration — every column already existed. Eleven new regression assertions
+(1009 → 1020), including a tripwire that fails if a streaming proxy is added
+before the terminal ticket binds its own domain.
+
 ## [2.60.0] - 2026-08-04
 
 **The nil uuid is not a user.**

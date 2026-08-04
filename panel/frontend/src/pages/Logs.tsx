@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import SystemLogsContent from "./SystemLogs";
 import AuditLogContent from "./Activity";
 
@@ -409,14 +409,24 @@ function SiteLogsContent() {
         ...prev,
         `Stream error: ${e instanceof Error ? e.message : "Failed to connect"}`,
       ]);
-      // Retry on token fetch failure too
-      if (!userStoppedRef.current) {
+
+      // A mint that failed on a status the server CHOSE will fail the same way
+      // in five seconds. Selecting a fleet member is the case that matters: the
+      // panel cannot stream to one, says so, and retrying that for ever buried
+      // the explanation under "reconnecting" lines. Only a transport-level
+      // failure — no status at all, or a gateway/unavailable — is worth another
+      // attempt.
+      const status = e instanceof ApiError ? e.status : 0;
+      const worthRetrying = status === 0 || status === 502 || status === 503 || status === 504;
+
+      if (!userStoppedRef.current && worthRetrying) {
         reconnectTimerRef.current = setTimeout(() => {
           if (!userStoppedRef.current) {
             connectStream(true);
           }
         }, 5000);
       } else {
+        userStoppedRef.current = true;
         setStreaming(false);
       }
     }

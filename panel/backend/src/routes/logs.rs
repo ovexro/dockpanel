@@ -183,9 +183,12 @@ pub async fn search_site_logs(
 pub async fn stream_token(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Query(q): Query<StreamTokenQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Answer here rather than minting a ticket the receiving agent must reject.
+    crate::helpers::require_local_agent_scope(&state, server_id, "Live log streaming").await?;
+
     // System-level streaming requires admin
     if q.site_id.is_none() && claims.role != "admin" {
         return Err(err(

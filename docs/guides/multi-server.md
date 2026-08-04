@@ -121,13 +121,33 @@ The sidebar shows a server selector at the top. Choose a server to scope all ope
 - Manage SSL certificates
 - Create and restore backups
 - Run diagnostics
-- View logs and metrics
+- Read logs (search, tail and download)
 - Manage firewall rules
-- Access the web terminal
+
+### What is panel-host only
+
+Three features terminate on the panel's own machine and cannot yet be pointed at
+a fleet member. Select the panel server to use them:
+
+- **The web terminal.** Ticket-based, and the browser reaches the agent through
+  the panel's own address, so a member's shell is not reachable from the panel UI.
+  Use SSH for a member. DockPanel says so when you try, naming the server you
+  have selected, rather than appearing to fail.
+- **Live log streaming** (the "Stream" toggle on the Logs page), for the same
+  reason. Reading, searching and downloading a member's logs works normally --
+  only the live tail is affected.
+- **The live metrics socket** behind the dashboard gauges. A member's metrics
+  still arrive, on the interval below.
 
 ### Metrics and monitoring
 
-The remote agent periodically reports metrics (CPU, RAM, disk, network) to the central panel. You can see per-server dashboards, set up alerts, and monitor uptime -- all from the single panel.
+The remote agent periodically reports metrics (CPU, RAM, disk, network) to the
+central panel. You can set up alerts and monitor uptime across the fleet from the
+single panel.
+
+The dashboard's own gauges show the **panel host**. Per-server metrics are
+collected and stored for every member, but there is no per-server dashboard view
+yet.
 
 ### Reseller server allocation
 

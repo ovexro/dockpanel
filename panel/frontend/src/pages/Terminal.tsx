@@ -4,7 +4,7 @@ import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 
 interface Site {
   id: string;
@@ -118,6 +118,9 @@ export default function Terminal() {
   const [connected, setConnected] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
+  // A deliberate answer from the panel (feature switched off, or the selected
+  // server is a fleet member) rather than something that went wrong.
+  const [notice, setNotice] = useState("");
   const [sites, setSites] = useState<Site[]>([]);
   const [selectedSite, setSelectedSite] = useState(initialSiteId);
 
@@ -190,6 +193,7 @@ export default function Terminal() {
     async (siteIdParam?: string) => {
       if (!termRef.current) return;
       setError("");
+      setNotice("");
       setStatus("");
 
       // Clear any pending reconnect timer
@@ -332,9 +336,20 @@ export default function Terminal() {
           }
         });
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to connect");
+        const message = e instanceof Error ? e.message : "Failed to connect";
+
+        // 403 (the terminal is switched off) and 501 (a fleet member is
+        // selected) are the panel answering a question, not a fault. Painting
+        // them in the red fault colour beside a Reconnect button invited the
+        // operator to retry a decision. Say what it is and where it lives.
+        const configured = e instanceof ApiError && (e.status === 403 || e.status === 501);
+        setNotice(configured ? message : "");
+        setError(configured ? "" : message);
+
         term.writeln(
-          `\r\n\x1b[31m● Error: ${e instanceof Error ? e.message : "Connection failed"}\x1b[0m`
+          configured
+            ? `\r\n\x1b[33m● ${message}\x1b[0m`
+            : `\r\n\x1b[31m● Error: ${message}\x1b[0m`
         );
       }
     },
@@ -769,6 +784,18 @@ export default function Terminal() {
                 </code>
               </div>
             )}
+          </div>
+        )}
+
+        {notice && (
+          <div className="px-6 py-2 bg-amber-500/10 text-amber-300 text-sm border-b border-amber-500/20 shrink-0 flex items-center justify-between">
+            <span>{notice}</span>
+            <button
+              onClick={() => setNotice("")}
+              className="text-amber-300 hover:text-amber-200 ml-4 text-xs"
+            >
+              Dismiss
+            </button>
           </div>
         )}
 

@@ -214,7 +214,13 @@ else
 fi
 
 # B3 — and it must write SOMETHING, or the gate it reads can never be satisfied.
-if has "$CLEAN" "log_activity\("; then
+# Either writer satisfies that: the capability is "a row exists for the gate to
+# count", not one spelling of it. Keyed on the bare `log_activity(` alone, this
+# arm went red when s304 moved the call to the `_on_server` variant so the host
+# could travel in `server_id` instead of squatting in `target_name` — correct
+# code, red arm, which is the failure the suite header warns about. §J8 pins the
+# stronger property: that this writer and its cooldown agree on the SAME key.
+if has "$CLEAN" "log_activity(_on_server)?\("; then
   ok "B3 auto_clean_disk still records the action it gates itself on"
 else
   bad "B3 no activity record written — the cooldown query can never find a row"
@@ -1302,6 +1308,172 @@ else
   else
     bad "I10 log_activity_system still accepts a user id — the sentinel can come straight back"
   fi
+fi
+
+# ── §J the panel stops lying (s304) ────────────────────────────────────────
+#
+# Five places where DockPanel told the operator something untrue. The unifying
+# shape is a SECOND READER that disagrees with the first, or a first reader that
+# never existed at all.
+
+echo
+echo "§J the panel stops lying (s304)"
+
+TERM_R=panel/backend/src/routes/terminal.rs
+LOGS_R=panel/backend/src/routes/logs.rs
+ACTR=panel/backend/src/routes/activity.rs
+ACTTSX=panel/frontend/src/pages/Activity.tsx
+HELP=panel/backend/src/helpers.rs
+
+for f in "$TERM_R" "$LOGS_R" "$ACTR" "$ACTTSX" "$HELP"; do
+  [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
+done
+
+TERM_S=$(subj "$TERM_R" || true)
+LOGS_S=$(subj "$LOGS_R" || true)
+ACTR_S=$(subj "$ACTR" || true)
+ACTTSX_S=$(subj "$ACTTSX" || true)
+HELP_S=$(subj "$HELP" || true)
+
+# Call sites of a function, definition excluded — the definition line is the one
+# that carries `fn`. Counting raw occurrences would let a pin pass on a helper
+# nobody calls.
+callsites() { grep -E -- "$2" <<< "$1" | grep -vcE '(^|[^[:alnum:]_])fn[[:space:]]' || true; }
+
+# J1 — the public share viewer decides expiry itself. It used to compute the
+# remaining seconds, clamp a negative to zero and render the content anyway, so
+# an unauthenticated URL served root terminal output for as long as the row
+# survived — and only a once-a-day retention sweep removed it. A sweep is a
+# housekeeper, not an access control.
+if [ -z "$TERM_S" ]; then
+  bad "J1 could not read $TERM_R"
+else
+  VS=$(fnbody "$TERM_S" "view_shared")
+  if [ -z "$VS" ]; then
+    bad "J1 could not extract view_shared — the arm measured nothing"
+  elif has "$(flat "$VS")" 'share_lifetime\(' && has "$(flat "$VS")" 'ok_or_else'; then
+    ok "J1 the public share viewer refuses an expired share instead of rendering it"
+  else
+    bad "J1 view_shared no longer rejects on the shared lifetime decision — an expired share renders"
+  fi
+fi
+
+# J2 — and BOTH readers reach that decision through the same function. The defect
+# was precisely that they disagreed: the operator's list skipped an expired share
+# while the public viewer showed it, so the panel reported a share as gone while
+# the URL still served it.
+if [ -z "$TERM_S" ]; then
+  skip "J2 — terminal routes not extractable"
+elif [ "$(callsites "$TERM_S" 'share_lifetime\(')" -ge 2 ]; then
+  ok "J2 the operator's list and the public viewer share one expiry rule, so they cannot drift"
+else
+  bad "J2 fewer than two callers of the shared expiry rule — a reader has its own copy again"
+fi
+
+# J3 — the public route takes no authentication, so the id is the only
+# credential and gets the shape check the revoke path always had.
+if [ -z "$TERM_S" ]; then
+  skip "J3 — terminal routes not extractable"
+elif has "$(flat "$(fnbody "$TERM_S" "view_shared")")" 'valid_share_id\('; then
+  ok "J3 the unauthenticated viewer validates the share id before querying"
+else
+  bad "J3 view_shared no longer validates the share id"
+fi
+
+# J4 — both streaming tickets refuse at the MINT when a fleet member is selected.
+# The ticket is signed with the selected server's agent token while the browser
+# can only reach the panel's own agent, so the receiving agent rejected it and
+# the UI blamed the network: the terminal said "Connection lost" and the log
+# viewer reconnected every three seconds for ever.
+for pair in "ws_token:$TERM_R:$TERM_S:the web terminal" "stream_token:$LOGS_R:$LOGS_S:live log streaming"; do
+  fn=${pair%%:*}; rest=${pair#*:}; file=${rest%%:*}; rest=${rest#*:}
+  src=${rest%:*}; label=${rest##*:}
+  if [ -z "$src" ]; then
+    bad "J4 could not read $file"
+    continue
+  fi
+  BODY=$(flat "$(fnbody "$src" "$fn")")
+  if [ -z "$BODY" ]; then
+    bad "J4 could not extract $fn — the arm measured nothing"
+  elif has "$BODY" 'require_local_agent_scope\('; then
+    ok "J4 $label refuses a fleet member at the mint, before any socket is dialled"
+  else
+    bad "J4 $fn mints a ticket for any selected server again — $label fails as a network error"
+  fi
+done
+
+# J5 — and it can only do that because it keeps the id. `ServerScope` resolved it
+# and both handlers bound it to `_server_id` and threw it away; the knowledge to
+# answer honestly was already in the handler.
+for pair in "ws_token:$TERM_S" "stream_token:$LOGS_S"; do
+  fn=${pair%%:*}; src=${pair#*:}
+  [ -n "$src" ] || continue
+  if has "$(sig "$src" "$fn")" 'ServerScope\( *_server_id'; then
+    bad "J5 $fn discards the resolved server id again — it cannot tell which host was selected"
+  else
+    ok "J5 $fn keeps the resolved server id rather than discarding it"
+  fi
+done
+
+# J6 — the audit feed can say which host. `activity_logs.server_id` has been
+# written since v2.58.0 and stamped by the healer's own writers since v2.60.0,
+# and was read only by this file's cooldown gates: the struct never declared it,
+# so `SELECT *` dropped it and the one surface an operator reads showed nothing.
+# Cross-tree by construction — a backend-only arm would pass on a dead column.
+if [ -z "$ACTR_S" ] || [ -z "$ACTTSX_S" ]; then
+  bad "J6 could not read both trees"
+else
+  B_OK=0; F_OK=0
+  has "$(flat "$(grep -A 16 -E 'struct ActivityLog' <<< "$ACTR_S" || true)")" 'server_id' && B_OK=1
+  has "$(flat "$(grep -A 16 -E 'interface ActivityEntry' <<< "$ACTTSX_S" || true)")" 'server_id' && F_OK=1
+  if [ "$B_OK" = 1 ] && [ "$F_OK" = 1 ]; then
+    ok "J6 the host travels from the audit row to the audit page in both trees"
+  else
+    bad "J6 the audit feed lost the host again (backend=$B_OK frontend=$F_OK) — a stamp with no reader"
+  fi
+fi
+
+# J7 — and it renders a NAME. The column holds a uuid; a feed that prints one is
+# no more legible than a feed that prints nothing.
+if [ -z "$ACTR_S" ]; then
+  skip "J7 — activity route not extractable"
+elif has "$(flat "$ACTR_S")" 'LEFT JOIN servers' && has "$(flat "$ACTTSX_S")" 'server_name'; then
+  ok "J7 the audit feed resolves the host to its name in both trees"
+else
+  bad "J7 the audit feed no longer resolves the host name — the operator reads a uuid"
+fi
+
+# J8 — THE SEVERED PAIR. `auto_heal.clean_logs` spent the operator-facing
+# `target_name` column on the server's uuid because the hourly cooldown keyed on
+# it. Writer and reader must agree, and they must agree on `server_id` — moving
+# one without the other silently disarms the gate and the prune returns to every
+# 120 seconds, which is the defect v2.60.0 fixed elsewhere in this same file.
+if [ -z "$AH_S" ]; then
+  skip "J8 — auto_healer not extractable"
+else
+  ACD=$(flat "$(fnbody "$AH_S" "auto_clean_disk")")
+  READER_OK=0; WRITER_OK=0
+  has "$ACD" "auto_heal\.clean_logs' AND server_id" && READER_OK=1
+  has "$ACD" 'log_activity_on_server\(' && WRITER_OK=1
+  if [ "$READER_OK" = 1 ] && [ "$WRITER_OK" = 1 ]; then
+    ok "J8 the clean_logs cooldown and its writer agree on server_id, so the gate survives the rename"
+  else
+    bad "J8 clean_logs writer/reader disagree (reader=$READER_OK writer=$WRITER_OK) — the hourly gate is disarmed"
+  fi
+fi
+
+# J9 — TRIPWIRE, and the reason this ship stopped where it did. A backend
+# WebSocket proxy would carry a member-signed ticket to the member's own agent,
+# which honours it — including the `domain` query parameter the ticket does NOT
+# bind, and which an empty value turns into a root login shell. Two independent
+# things confine that to the panel today: nginx points both stream paths at the
+# local socket, and the local agent rejects a ticket signed elsewhere. A proxy
+# removes both at once. Bind the domain into the signed ticket FIRST.
+UPGRADES=$(grep -rlE 'WebSocketUpgrade' panel/backend/src --include=*.rs | sort | tr '\n' ' ')
+if [ "$(printf '%s' "$UPGRADES" | wc -w)" -eq 1 ] && [[ "$UPGRADES" == *ws_metrics* ]]; then
+  ok "J9 still exactly one WebSocket handler (ws_metrics) — no stream proxy has been added"
+else
+  bad "J9 a new WebSocket handler exists ($UPGRADES) — bind the domain into the terminal ticket BEFORE proxying, or an empty domain is a root shell on every host"
 fi
 
 echo

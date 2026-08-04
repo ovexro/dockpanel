@@ -30,9 +30,12 @@ struct TerminalTicket {
 pub async fn ws_token(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Query(q): Query<TerminalQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Answer here rather than minting a ticket the receiving agent must reject.
+    crate::helpers::require_local_agent_scope(&state, server_id, "The web terminal").await?;
+
     // Server-level terminal requires admin role
     if q.site_id.is_none() && claims.role != "admin" {
         return Err(err(
@@ -49,7 +52,14 @@ pub async fn ws_token(
                 .await
                 .map_err(|e| internal_error("ws token", e))?;
         if disabled.map(|r| r.0 == "true").unwrap_or(false) {
-            return Err(err(StatusCode::FORBIDDEN, "Server terminal is disabled"));
+            // Name the switch and where it lives. The page cannot read this
+            // setting itself, so this sentence is the only thing that tells an
+            // operator the shell is off by choice rather than broken.
+            return Err(err(
+                StatusCode::FORBIDDEN,
+                "The server shell is switched off for this panel \
+                 (Settings → Security → Server terminal). Per-site shells are unaffected.",
+            ));
         }
     }
 
@@ -100,6 +110,47 @@ pub async fn ws_token(
         "token": token,
         "domain": domain,
     })))
+}
+
+/// A share's stated lifetime: one hour. Quoted back to the operator by
+/// `list_shares` and counted down on the public page.
+const SHARE_TTL_SECS: i64 = 3600;
+
+/// `share_output` mints exactly 12 hex characters. `revoke_share` has always
+/// checked that shape before touching the database; the public viewer never did.
+fn valid_share_id(id: &str) -> bool {
+    id.len() == 12 && id.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Split a stored share into `(created_at, seconds_left, content)`, or `None`
+/// when it is expired or carries no usable timestamp.
+///
+/// **Both readers must go through here.** Until this was written they disagreed:
+/// the operator's own share list skipped anything past its hour, while the public
+/// viewer computed the same number, clamped it to zero and rendered the content
+/// regardless — so the panel reported a share as gone while an unauthenticated
+/// URL still served it. What it serves is root terminal output, and the only
+/// thing that eventually removed the row was a retention sweep that runs once a
+/// day. A daily sweep is a housekeeper, not an access control; expiry has to be
+/// decided by whoever answers the request.
+fn share_lifetime(raw: &str, now: i64) -> Option<(i64, i64, &str)> {
+    let (created_ts, content) = match raw.find('|') {
+        Some(pos) => (raw[..pos].parse::<i64>().unwrap_or(0), &raw[pos + 1..]),
+        None => (0, raw),
+    };
+
+    // A row whose timestamp will not parse cannot be shown to have life left,
+    // so it is not granted any. The operator's list has always read it that way.
+    if created_ts <= 0 {
+        return None;
+    }
+
+    let remaining = SHARE_TTL_SECS - (now - created_ts);
+    if remaining <= 0 {
+        return None;
+    }
+
+    Some((created_ts, remaining, content))
 }
 
 /// POST /api/terminal/share — Save terminal output for sharing (temporary, 1 hour expiry).
@@ -155,7 +206,7 @@ pub async fn revoke_share(
     require_admin(&claims.role)?;
 
     // Validate share_id format (12 hex chars)
-    if id.len() != 12 || !id.chars().all(|c| c.is_ascii_hexdigit()) {
+    if !valid_share_id(&id) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid share ID"));
     }
 
@@ -192,14 +243,12 @@ pub async fn list_shares(
 
     for (key, value) in &rows {
         let share_id = key.strip_prefix("terminal_share_").unwrap_or(key);
-        let created_ts: i64 = value.split('|').next()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
 
-        let remaining = if created_ts > 0 { 3600 - (now - created_ts) } else { 0 };
-        if remaining <= 0 {
-            continue; // Already expired, will be cleaned up by retention
-        }
+        // Already expired, or unparsable: retention will collect the row. The
+        // public viewer applies this same rule, so the two answers agree.
+        let Some((created_ts, remaining, _)) = share_lifetime(value, now) else {
+            continue;
+        };
 
         shares.push(serde_json::json!({
             "share_id": share_id,
@@ -217,6 +266,12 @@ pub async fn view_shared(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<axum::response::Html<String>, ApiError> {
+    // This route takes no authentication, so the id is the only credential and
+    // it gets the same shape check the revoke path applies.
+    if !valid_share_id(&id) {
+        return Err(err(StatusCode::NOT_FOUND, "Share expired or not found"));
+    }
+
     let content: Option<(String,)> =
         sqlx::query_as("SELECT value FROM settings WHERE key = $1")
             .bind(format!("terminal_share_{id}"))
@@ -229,20 +284,13 @@ pub async fn view_shared(
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Share expired or not found"))?
         .0;
 
-    // Strip timestamp prefix (format: "unix_ts|content") and compute remaining seconds
-    let (created_ts, content) = if let Some(pos) = raw.find('|') {
-        let ts: i64 = raw[..pos].parse().unwrap_or(0);
-        (ts, &raw[pos + 1..])
-    } else {
-        (0i64, raw.as_str())
-    };
-
+    // Expiry is enforced HERE, on the way out, not by the daily retention sweep.
+    // A row that outlived its hour is answered exactly like a row that never
+    // existed — same status, same wording, so the response cannot be used to
+    // tell an expired share apart from an unknown id.
     let now = chrono::Utc::now().timestamp();
-    let remaining = if created_ts > 0 {
-        std::cmp::max(0, 3600 - (now - created_ts))
-    } else {
-        3600i64
-    };
+    let (_created_ts, remaining, content) = share_lifetime(&raw, now)
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Share expired or not found"))?;
 
     let escaped = content.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
 

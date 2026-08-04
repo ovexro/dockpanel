@@ -691,6 +691,62 @@ pub fn open_provision_log(
     }
 }
 
+/// Refuse, at the mint, a stream whose transport can only ever reach the panel's
+/// own agent — when the caller has a different server selected.
+///
+/// The terminal and log-stream tickets are signed with the SELECTED server's
+/// agent token, because both handlers take `ServerScope`. The browser then dials
+/// `window.location.host`, and nginx pins that path to the LOCAL agent socket, so
+/// the receiving agent verifies a ticket signed with somebody else's key and
+/// answers 401. The result was a promised capability that failed for every fleet
+/// member, and failed dishonestly: the terminal reported "Connection lost" and the
+/// log viewer retried every three seconds for ever, both describing a network
+/// problem that did not exist.
+///
+/// The knowledge to say so was already here. `ServerScope` resolves the id and
+/// both handlers bound it and threw it away. Comparing it against the local
+/// server answers before a socket is opened.
+///
+/// This deliberately does NOT proxy the stream. A backend WebSocket proxy would
+/// deliver a member-signed ticket to the member's own agent — which would honour
+/// it, including its `domain` query parameter, which the ticket does not bind and
+/// which an empty value turns into a root login shell. Today two independent
+/// things confine that to the panel host. Removing both, before the domain is
+/// bound into the signed ticket, would widen it to every host in the fleet.
+pub async fn require_local_agent_scope(
+    state: &crate::AppState,
+    scoped_server_id: uuid::Uuid,
+    feature: &str,
+) -> Result<(), crate::error::ApiError> {
+    let local_id = state.agents.local_server_id().await;
+
+    // No local row registered yet: `ServerScope` would already have rejected the
+    // request, so there is nothing left to disagree with.
+    if local_id == Some(scoped_server_id) || local_id.is_none() {
+        return Ok(());
+    }
+
+    let name: Option<(String,)> = sqlx::query_as("SELECT name FROM servers WHERE id = $1")
+        .bind(scoped_server_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+
+    let which = name
+        .map(|r| r.0)
+        .unwrap_or_else(|| scoped_server_id.to_string());
+
+    Err(crate::error::err(
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        &format!(
+            "{feature} runs on the panel host only. \"{which}\" is a fleet member, \
+             and the panel cannot yet stream to one. Switch back to the panel \
+             server to use it."
+        ),
+    ))
+}
+
 #[cfg(test)]
 mod provision_log_tests {
     use super::*;

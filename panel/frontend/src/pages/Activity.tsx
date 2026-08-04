@@ -11,6 +11,11 @@ interface ActivityEntry {
   details: string | null;
   ip_address: string | null;
   created_at: string;
+  // Which host the action ran on. The column has been written since v2.58.0 but
+  // never reached this page, so on a fleet every row read as if it had happened
+  // here. Null for a panel-wide action that belongs to no single host.
+  server_id: string | null;
+  server_name: string | null;
 }
 
 function actionBadge(action: string): { bg: string; text: string } {
@@ -138,6 +143,7 @@ export default function AuditLogContent() {
                   <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3">User</th>
                   <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 w-36">Action</th>
                   <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 hidden md:table-cell">Target</th>
+                  <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 w-36 hidden md:table-cell">Host</th>
                   <th scope="col" className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-3 hidden lg:table-cell">Details</th>
                 </tr>
               </thead>
@@ -159,6 +165,16 @@ export default function AuditLogContent() {
                       <td className="px-5 py-3 text-sm text-dark-50 hidden md:table-cell font-mono">
                         {entry.target_type && <span className="text-dark-300 text-xs mr-1">{entry.target_type}:</span>}
                         {entry.target_name || <span className="text-dark-300">-</span>}
+                      </td>
+                      <td className="px-5 py-3 text-sm hidden md:table-cell font-mono">
+                        {entry.server_name ? (
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-xs bg-dark-700 text-dark-100 truncate max-w-[130px]">{entry.server_name}</span>
+                        ) : entry.server_id ? (
+                          // Stamped with a host that has since been deleted.
+                          <span className="text-dark-300 text-xs" title={entry.server_id}>deleted server</span>
+                        ) : (
+                          <span className="text-dark-300">-</span>
+                        )}
                       </td>
                       <td className="px-5 py-3 text-sm text-dark-200 truncate max-w-[250px] hidden lg:table-cell font-mono">
                         {entry.details || <span className="text-dark-300">-</span>}
@@ -188,6 +204,9 @@ export default function AuditLogContent() {
                         {entry.target_type && <span className="text-dark-300">{entry.target_type}: </span>}
                         {entry.target_name}{entry.details && <span className="text-dark-300 ml-2">{entry.details}</span>}
                       </div>
+                    )}
+                    {entry.server_name && (
+                      <div className="text-xs text-dark-300 font-mono truncate">on {entry.server_name}</div>
                     )}
                   </div>
                 );
