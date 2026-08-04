@@ -1,6 +1,6 @@
 # DockPanel Feature Manifest
 
-> **Version**: v2.61.0 | **Total**: 60+ major features, ~285 capabilities
+> **Version**: v2.62.0 | **Total**: 60+ major features, ~285 capabilities
 >
 > This file is the single source of truth for what DockPanel offers.
 > Update it whenever features are added, changed, or removed.
@@ -214,8 +214,8 @@ honest:
 | Panel services RAM (agent + API) | ~49 MB | measured | 2026-07-27 |
 | Full-stack RAM (with bundled PostgreSQL) | ~109 MB | measured | 2026-07-27 |
 | App templates | 153 | derived | every commit |
-| HTTP routes | 811 (529 backend + 282 agent) | derived | every commit |
-| Regression-pin assertions | 1020 (30 suites) | derived | every commit |
+| HTTP routes | 806 (524 backend + 282 agent) | derived | every commit |
+| Regression-pin assertions | 1026 (30 suites) | derived | every commit |
 | Frontend pages | 51 | derived | every commit |
 | DB migrations | 101 | derived | every commit |
 | Supervised background services | 15 | derived | every commit |

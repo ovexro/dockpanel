@@ -1385,22 +1385,50 @@ fi
 # can only reach the panel's own agent, so the receiving agent rejected it and
 # the UI blamed the network: the terminal said "Connection lost" and the log
 # viewer reconnected every three seconds for ever.
-for pair in "ws_token:$TERM_R:$TERM_S:the web terminal" "stream_token:$LOGS_R:$LOGS_S:live log streaming"; do
-  fn=${pair%%:*}; rest=${pair#*:}; file=${rest%%:*}; rest=${rest#*:}
-  src=${rest%:*}; label=${rest##*:}
-  if [ -z "$src" ]; then
-    bad "J4 could not read $file"
-    continue
-  fi
-  BODY=$(flat "$(fnbody "$src" "$fn")")
-  if [ -z "$BODY" ]; then
-    bad "J4 could not extract $fn — the arm measured nothing"
-  elif has "$BODY" 'require_local_agent_scope\('; then
-    ok "J4 $label refuses a fleet member at the mint, before any socket is dialled"
-  else
-    bad "J4 $fn mints a ticket for any selected server again — $label fails as a network error"
-  fi
-done
+#
+# ⚠ s305: this arm USED TO ITERATE A HARDCODED TWO-ELEMENT LIST. That is the
+# mock-that-supplies-its-own-target shape — an arm which enumerates its own
+# subjects can never see a subject that was never added to it, so a THIRD mint
+# of this class would have been invisible to it for ever. The subjects are now
+# derived FROM SOURCE: a streaming ticket mint is a route handler whose name
+# ends `_token` and whose signature takes a per-server scope. `iac`'s API-token
+# pair and `rotate_token` are correctly excluded because they take no scope.
+# Per lesson #143 an arm that enumerates its own subjects must ASSERT the
+# enumeration first, or an empty list prints green having measured nothing.
+#
+# GREEN AT BOTH TAGS BY DESIGN — this is a HARDENING of an arm that already
+# passed, not a new defect, so it cannot satisfy required-red (#172/#180).
+# MUTATION-TESTED instead, and the mutation is the whole justification: append a
+# third `_token` handler taking a per-server scope and omitting the guard, then
+# run both versions. The old hardcoded arm prints TWO GREENS and never mentions
+# it; this one enumerates THREE and goes red on the new one. Do not "simplify"
+# it back to a literal list.
+MINTS=$(for f in panel/backend/src/routes/*.rs; do
+  perl -0777 -ne 'while (/pub async fn ([a-z_0-9]*_token)\s*\((.*?)\)\s*->/gs) {
+    my ($n,$a)=($1,$2); next unless $a =~ /ServerScope\(/; print "$ARGV:$n\n"; }' "$f"
+done | sort)
+MINT_N=$(printf '%s\n' "$MINTS" | grep -c . || true)
+if [ "$MINT_N" -lt 2 ]; then
+  bad "J4 enumerated only $MINT_N scoped ticket mints — the enumeration is broken, not the code (expected at least the terminal and log-stream mints)"
+else
+  ok "J4 enumerated $MINT_N streaming ticket mints from source, not from a list this arm carries"
+  while IFS=: read -r file fn; do
+    [ -n "$fn" ] || continue
+    src=$(subj "$file" || true)
+    if [ -z "$src" ]; then
+      bad "J4 could not read $file"
+      continue
+    fi
+    BODY=$(flat "$(fnbody "$src" "$fn")")
+    if [ -z "$BODY" ]; then
+      bad "J4 could not extract $fn — the arm measured nothing"
+    elif has "$BODY" 'require_local_agent_scope\('; then
+      ok "J4 $fn refuses a fleet member at the mint, before any socket is dialled"
+    else
+      bad "J4 $fn mints a ticket for any selected server again — that stream fails as a network error"
+    fi
+  done <<< "$MINTS"
+fi
 
 # J5 — and it can only do that because it keeps the id. `ServerScope` resolved it
 # and both handlers bound it to `_server_id` and threw it away; the knowledge to
@@ -1474,6 +1502,70 @@ if [ "$(printf '%s' "$UPGRADES" | wc -w)" -eq 1 ] && [[ "$UPGRADES" == *ws_metri
   ok "J9 still exactly one WebSocket handler (ws_metrics) — no stream proxy has been added"
 else
   bad "J9 a new WebSocket handler exists ($UPGRADES) — bind the domain into the terminal ticket BEFORE proxying, or an empty domain is a root shell on every host"
+fi
+
+
+# J10 — s305, and this is the arm the old hardcoded J4 could never have been.
+# A raw browser stream cannot carry the selected server: the fetch wrapper in
+# `api.ts` is the ONLY thing in the client that sends that header, and neither
+# the WebSocket nor the EventSource constructor takes headers at all. So the
+# backend's scope extractor resolves EVERY such stream to the panel's own agent
+# whatever the picker says. Two of the three surfaces of this class were fixed
+# by naming it at the mint; the dashboard's metrics socket was left, and it wrote
+# the PANEL's cpu/memory/disk into the same state the server-scoped poll fills,
+# so the tiles changed machine on the 3s reconnect timer with the badge still
+# reading "Live".
+#
+# The rule, keyed on the capability rather than today's spelling: a component
+# that opens a raw socket must prove which host it is describing — either it
+# obtains its URL from a signed ticket (guarded server-side, see J4) or it
+# consults the server selection before opening (guarded client-side). Neither
+# means an unscoped socket.
+WSFILES=$(grep -rlE 'new WebSocket\(' panel/frontend/src --include=*.tsx --include=*.ts | sort)
+WS_N=$(printf '%s\n' "$WSFILES" | grep -c . || true)
+if [ "$WS_N" -lt 3 ]; then
+  bad "J10 found only $WS_N raw WebSocket openers in the client — the enumeration is broken, not the code (terminal, logs and the dashboard all open one)"
+else
+  ok "J10 enumerated $WS_N raw WebSocket openers from source"
+  while read -r f; do
+    [ -n "$f" ] || continue
+    FSRC=$(subj "$f" || true)
+    if [ -z "$FSRC" ]; then
+      bad "J10 could not read $f"
+    elif has "$FSRC" 'token' || has "$FSRC" 'isLocal'; then
+      ok "J10 $(basename "$f") proves its host — ticket-guarded or selection-guarded"
+    else
+      bad "J10 $(basename "$f") opens a raw socket without a ticket or a server-selection gate — it will stream the PANEL host under whatever server is selected"
+    fi
+  done <<< "$WSFILES"
+fi
+
+# J11 — the other half of the same class. Server-Sent Events are a raw browser
+# stream too, so an SSE handler that resolves a per-server agent has exactly the
+# dashboard socket's defect. Today all six read user-owned rows by id and touch
+# no agent, which is why none of them was affected; this arm makes that a
+# property rather than a coincidence.
+#
+# GREEN AT BOTH TAGS BY DESIGN — a tripwire for a regression that does not exist
+# yet cannot be red at the previous tag (#180). MUTATION-TESTED instead: append
+# an SSE handler taking a per-server scope and this arm names it and fails.
+# A future session re-deriving this as a false green should read that sentence
+# before deleting a tripwire.
+SSE_SCOPED=$(for f in panel/backend/src/routes/*.rs; do
+  perl -0777 -ne 'while (/pub async fn ([a-z_0-9]+)\s*\((.*?)\)\s*->\s*([^{]*)\{/gs) {
+    my ($n,$a,$r)=($1,$2,$3); next unless $r =~ /Sse</; next unless $a =~ /ServerScope\(/;
+    print "$ARGV:$n "; }' "$f"
+done)
+SSE_ALL=$(for f in panel/backend/src/routes/*.rs; do
+  perl -0777 -ne 'while (/pub async fn ([a-z_0-9]+)\s*\((.*?)\)\s*->\s*([^{]*)\{/gs) {
+    my ($n,$a,$r)=($1,$2,$3); next unless $r =~ /Sse</; print "$ARGV:$n\n"; }' "$f"
+done | grep -c . || true)
+if [ "$SSE_ALL" -lt 3 ]; then
+  bad "J11 enumerated only $SSE_ALL SSE handlers — the enumeration is broken, not the code"
+elif [ -z "$SSE_SCOPED" ]; then
+  ok "J11 none of the $SSE_ALL SSE handlers resolves a per-server agent, so no event stream can describe the wrong host"
+else
+  bad "J11 an SSE handler now resolves a per-server agent ($SSE_SCOPED) — a browser event stream cannot send the server header, so it will read the PANEL host"
 fi
 
 echo

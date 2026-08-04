@@ -269,27 +269,19 @@ async fn main() {
     tokio::spawn(services::agent_unit::heal_agent_unit());
 
     // Start phone-home if configured (remote agent mode)
-    let remote_mode = if let Some(mut ph_config) = services::phone_home::PhoneHomeConfig::from_env() {
+    if let Some(mut ph_config) = services::phone_home::PhoneHomeConfig::from_env() {
         ph_config.cert_fingerprint = Some(cert_fingerprint.clone());
         tokio::spawn(services::phone_home::run(ph_config, cpu_sampler.clone()));
-        true
-    } else {
-        false
-    };
-
-    // In remote mode, also start a TCP listener on localhost for command forwarding
-    if remote_mode {
-        let tcp_app = app.clone();
-        tokio::spawn(async move {
-            let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:9090")
-                .await
-                .expect("Failed to bind TCP listener for remote mode");
-            tracing::info!("Agent TCP listener on 127.0.0.1:9090 (remote command forwarding)");
-            if let Err(e) = axum::serve(tcp_listener, tcp_app).await {
-                tracing::error!("Remote-mode TCP server error: {e}");
-            }
-        });
     }
+
+    // A member used to ALSO bind 127.0.0.1:9090 and serve the ENTIRE router
+    // there — `app.clone()`, so files, terminal, exec, databases and the SSH
+    // hardening routes all answered on it. Its only caller in the tree was the
+    // command poller removed in s305, which could never execute anything, so
+    // the port was a second full-surface door that existed to serve nothing.
+    // Both are gone; a member is reached on :9443 with TLS and fingerprint
+    // pinning, and locally on the unix socket. Do not reintroduce a plaintext
+    // loopback copy of the whole router to make some future forwarder easier.
 
     // Multi-server: start TLS-wrapped TCP listener for remote panel connections.
     // Set AGENT_LISTEN_TCP=0.0.0.0:9443 to enable. The listener always terminates

@@ -105,11 +105,18 @@ pub async fn run(config: PhoneHomeConfig, cpu: CpuSampler) {
     // Initial delay to let the agent fully start
     tokio::time::sleep(Duration::from_secs(5)).await;
 
-    // Spawn command poller alongside checkin loop
-    let cmd_config = config.clone();
-    tokio::spawn(async move {
-        command_poll_loop(cmd_config).await;
-    });
+    // There is no command poller here any more (s305). Every fleet member ran
+    // one: it asked the panel for queued commands every five seconds and mapped
+    // each to a local HTTP call. The panel could only ever queue ONE of the
+    // eleven actions this side accepted, and that one named a route this agent
+    // does not serve — so in the whole life of the feature no member could
+    // execute anything, and the queue was empty everywhere. What it did carry
+    // was a forwarder that pasted a caller-supplied string straight into a
+    // request path against a loopback listener serving the WHOLE agent API.
+    // Reconciling the two vocabularies — the obvious one-line "fix" — would have
+    // switched that on rather than off. Per-host work goes through the panel's
+    // own per-server resolver, which authenticates, checks ownership and calls
+    // the agent's real route directly.
 
     // Spawn auto-update checker (every 6 hours)
     let update_config = config.clone();
@@ -151,151 +158,6 @@ pub async fn run(config: PhoneHomeConfig, cpu: CpuSampler) {
         }
 
         tokio::time::sleep(Duration::from_secs(60)).await;
-    }
-}
-
-#[derive(serde::Deserialize)]
-struct RemoteCommand {
-    id: String,
-    action: String,
-    payload: serde_json::Value,
-}
-
-/// Poll central API for pending commands and execute them locally via the agent HTTP server.
-async fn command_poll_loop(config: PhoneHomeConfig) {
-    let client = reqwest::Client::new();
-    let poll_url = format!("{}/api/agent/commands", config.central_url);
-    let result_url = format!("{}/api/agent/commands/result", config.central_url);
-    let agent_url = "http://127.0.0.1:9090"; // Agent's own HTTP listener
-
-    // Wait for local agent HTTP to be ready
-    tokio::time::sleep(Duration::from_secs(3)).await;
-
-    // Read local agent token for forwarding requests
-    let agent_token = std::env::var("AGENT_TOKEN").unwrap_or_default();
-
-    loop {
-        match client
-            .get(&poll_url)
-            .header("Authorization", format!("Bearer {}", config.server_token))
-            .timeout(Duration::from_secs(10))
-            .send()
-            .await
-        {
-            Ok(resp) if resp.status().is_success() => {
-                if let Ok(commands) = resp.json::<Vec<RemoteCommand>>().await {
-                    for cmd in commands {
-                        let result = execute_command(
-                            &client, agent_url, &agent_token, &cmd.action, &cmd.payload,
-                        )
-                        .await;
-
-                        let (status, result_body) = match result {
-                            Ok(body) => ("completed", Some(body)),
-                            Err(e) => {
-                                tracing::error!("Command {} failed: {e}", cmd.action);
-                                ("failed", Some(serde_json::json!({ "error": e })))
-                            }
-                        };
-
-                        // Report result back to central
-                        let _ = client
-                            .post(&result_url)
-                            .header("Authorization", format!("Bearer {}", config.server_token))
-                            .json(&serde_json::json!({
-                                "command_id": cmd.id,
-                                "status": status,
-                                "result": result_body,
-                            }))
-                            .timeout(Duration::from_secs(10))
-                            .send()
-                            .await;
-                    }
-                }
-            }
-            Ok(resp) => {
-                tracing::debug!("Command poll: HTTP {}", resp.status());
-            }
-            Err(e) => {
-                tracing::debug!("Command poll error: {e}");
-            }
-        }
-
-        tokio::time::sleep(Duration::from_secs(5)).await;
-    }
-}
-
-/// Execute a command by forwarding it to the local agent HTTP API.
-/// Maps action names to agent API endpoints.
-async fn execute_command(
-    client: &reqwest::Client,
-    agent_url: &str,
-    agent_token: &str,
-    action: &str,
-    payload: &serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    // Strict allowlist of permitted actions
-    const ALLOWED_COMMANDS: &[&str] = &[
-        "site.create",
-        "site.delete",
-        "ssl.provision",
-        "nginx.reload",
-        "health",
-        "restart_agent",
-        "check_health",
-        "update_agent",
-        "sync_config",
-        "run_security_scan",
-        "run_backup",
-    ];
-
-    if !ALLOWED_COMMANDS.contains(&action) {
-        return Err(format!("Action not allowed: {action}"));
-    }
-
-    // Map action names to HTTP method + path
-    let (method, path): (&str, String) = match action {
-        // Site operations
-        "site.create" => ("POST", "/sites".to_string()),
-        "site.delete" => ("DELETE", format!("/sites/{}", payload["domain"].as_str().unwrap_or(""))),
-        // SSL
-        "ssl.provision" => ("POST", "/ssl/provision".to_string()),
-        // Nginx
-        "nginx.reload" => ("POST", "/nginx/reload".to_string()),
-        // System
-        "health" | "check_health" => ("GET", "/health".to_string()),
-        "restart_agent" => ("POST", "/system/restart".to_string()),
-        "update_agent" => ("POST", "/system/update".to_string()),
-        "sync_config" => ("POST", "/system/sync-config".to_string()),
-        "run_security_scan" => ("POST", "/security/scan".to_string()),
-        "run_backup" => ("POST", "/backups/run".to_string()),
-        _ => return Err(format!("Unknown action: {action}")),
-    };
-
-    let url = format!("{agent_url}{path}");
-    let builder = match method {
-        "GET" => client.get(&url),
-        "POST" => client.post(&url).json(payload),
-        "PUT" => client.put(&url).json(payload),
-        "DELETE" => client.delete(&url),
-        _ => return Err(format!("Unsupported method: {method}")),
-    };
-
-    let resp = builder
-        .header("Authorization", format!("Bearer {agent_token}"))
-        .timeout(Duration::from_secs(60))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let status = resp.status();
-    let body: serde_json::Value = resp.json().await.unwrap_or(serde_json::json!({}));
-
-    if status.is_success() {
-        Ok(body)
-    } else {
-        let error = body["error"].as_str().unwrap_or("Unknown error");
-        Err(format!("HTTP {status}: {error}"))
     }
 }
 

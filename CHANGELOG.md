@@ -4,6 +4,71 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.62.0] - 2026-08-04
+
+**The dashboard describes the machine you picked.**
+
+v2.61.0 fixed two of the three screens that could quietly report the wrong host.
+This is the third, and it was the one on the first page you see.
+
+### The dashboard's own tiles showed the panel host under any selected server
+
+The dashboard opens a WebSocket for live CPU, memory and network. A browser
+WebSocket cannot send request headers, and `X-Server-Id` — the header that tells
+the panel which machine you selected — is attached by the HTTP client wrapper,
+which the socket does not go through. So the socket resolved to the panel's own
+agent **whatever the server picker said**.
+
+That alone would have been merely wrong. What made it hard to notice is that the
+same page also polls three REST endpoints for the same three values whenever the
+socket is down, and those *are* correctly scoped to the selected server. Both
+paths write the same state. The result: with a fleet member selected, the tiles
+showed **that member while the socket was down and the panel host while it was
+up**, swapping on the three-second reconnect timer, with the status dot still
+reading "Live".
+
+The socket is no longer opened when a remote server is selected. The five-second
+poll already reads the right host, so a member's tiles are now correct rather
+than merely honest, and the badge names the server it is polling. Switching
+servers also refreshes immediately instead of waiting out the interval.
+
+### Removed: the remote-command channel that could never execute a command
+
+Every fleet member ran a poller that asked the panel for queued commands every
+five seconds. The panel's dispatch allow-list and the agent's execution
+allow-list were written independently and shared exactly one action out of ten —
+and that one named an agent route that does not exist. Seven of the agent's own
+eleven actions pointed at routes it does not serve either. No screen ever called
+it and no command was ever queued.
+
+It is removed rather than completed, because completing it was the dangerous
+option: the forwarder pasted a caller-supplied string straight into a request
+path, aimed at a **loopback listener that served the entire agent API** —
+files, terminal, exec, databases. Reconciling the two allow-lists, the obvious
+one-line "fix", would have switched that on. Per-host operations already have a
+correct path: the panel's per-server resolver, which authenticates, checks
+ownership, and calls the agent's real route directly.
+
+Gone with it: `GET/POST /api/servers/{id}/commands*`, `GET /api/agent/commands`,
+`POST /api/agent/commands/result`, and the agent's `127.0.0.1:9090` listener.
+The `agent_commands` table is left in place — it is empty and harmless, and
+dropping it would destroy any record of attempted commands on an existing
+install.
+
+**Upgrade impact:** the agent no longer binds port 9090, so 9090 is no longer on
+the security scanner's expected-port list. A box running something else there —
+Prometheus and Cockpit both default to 9090 — will now see one "Unexpected open
+port" warning. That is the scanner working, not a false positive.
+
+### Regression pins
+
+`unattended-host-scope-pin-e2e.sh` grows from 105 to 111 assertions. The arm
+that guards this class **used to iterate a hardcoded list of two**, so a third
+surface of the same defect was invisible to it by construction; it now derives
+its subjects from source. Two new arms cover the rest of the class: every raw
+browser stream in the client must prove which host it describes, and no
+server-sent-event handler may resolve a per-server agent.
+
 ## [2.61.0] - 2026-08-04
 
 **The panel stops lying.**

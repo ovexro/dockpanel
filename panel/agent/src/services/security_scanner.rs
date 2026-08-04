@@ -236,8 +236,15 @@ async fn scan_open_ports() -> Vec<Finding> {
     let mut findings = Vec::new();
     let mut seen_ports = std::collections::HashSet::new();
 
-    // Expected ports on a web/panel server
-    let expected_ports: &[u16] = &[22, 25, 80, 443, 993, 995, 3080, 5432, 5450, 9090];
+    // Expected ports on a web/panel server. This list means "ports DockPanel
+    // itself puts here", so an entry outlives its listener as a blind spot:
+    // 9090 was dropped in s305 with the loopback command-forwarding listener
+    // that bound it. Anything answering on 9090 now is genuinely not ours and
+    // gets the warning it should. (Upgrade impact: a box running something else
+    // there — Prometheus and Cockpit both default to 9090 — will see one new
+    // "Unexpected open port" finding. That is the scanner working, not a false
+    // positive.)
+    let expected_ports: &[u16] = &[22, 25, 80, 443, 993, 995, 3080, 5432, 5450];
 
     let output = match tokio::time::timeout(
         std::time::Duration::from_secs(10),

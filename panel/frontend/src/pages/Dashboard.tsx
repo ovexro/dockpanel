@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import { useServer } from "../context/ServerContext";
 import { formatSize, formatRate, formatUptime, timeAgo } from "../utils/format";
 
 interface SiteDetail {
@@ -222,6 +223,11 @@ function tempColor(temp: number): string {
 }
 
 export default function Dashboard() {
+  // Which machine this page is describing. Every REST read below carries the
+  // selection in `X-Server-Id` (attached by the fetch wrapper in `api.ts`); the
+  // live socket cannot carry it at all, which is why the socket is gated on
+  // `isLocal` further down.
+  const { isLocal, loading: serversLoading, activeServer, activeServerId } = useServer();
   const [system, setSystem] = useState<SystemInfo | null>(null);
   const [sites, setSites] = useState<SiteSummary>({ total: 0, active: 0 });
   const [dbCount, setDbCount] = useState(0);
@@ -405,8 +411,33 @@ export default function Dashboard() {
       .catch(() => {});
   }, []);
 
-  // WebSocket connection for live metrics
+  // WebSocket connection for live metrics — PANEL HOST ONLY, deliberately.
+  //
+  // The browser's WebSocket API cannot set request headers, so this socket
+  // cannot carry the selected server the way every REST read on this page does
+  // (the fetch wrapper in `api.ts` is the only thing in the client that sends
+  // that header). The backend's scope extractor therefore resolves this socket
+  // to the LOCAL agent no matter what the picker says — so opening it while a
+  // member is selected streams the PANEL's numbers into `setSystem`,
+  // `setProcesses` and `setNetwork`, the same state the server-scoped poll below
+  // writes. The two would alternate on the 3s reconnect timer and the tiles
+  // would silently change machine.
+  //
+  // The fix is not to proxy the socket: a streaming proxy must not land before
+  // the terminal ticket binds its own domain (see the J9 tripwire), and it is
+  // not needed here anyway. The poll below already reads the selected host
+  // every 5s through the header, so leaving the socket shut makes a member's
+  // tiles CORRECT, not merely honest.
   useEffect(() => {
+    if (serversLoading || !isLocal) {
+      // Not an error state — the poll below owns this case. Both flags must be
+      // cleared or the poll stays disabled: the teardown deliberately nulls
+      // `onclose` before closing, so nothing else resets them.
+      setWsConnected(false);
+      wsConnectedRef.current = false;
+      return;
+    }
+
     function connect() {
       if (reconnectTimer.current) {
         clearTimeout(reconnectTimer.current);
@@ -468,8 +499,15 @@ export default function Dashboard() {
         wsRef.current = null;
         ws.close();
       }
+      // Nulling `onclose` above means the socket's own handler will NOT run, so
+      // this is the only place the flags get cleared on a server switch. Without
+      // it, switching from the panel host to a member leaves `wsConnected` true:
+      // the poll below is guarded on it, so it would never run and the tiles
+      // would freeze on the panel's last values while the badge read "Live".
+      setWsConnected(false);
+      wsConnectedRef.current = false;
     };
-  }, []);
+  }, [isLocal, serversLoading]);
 
   // Polling logic — interval depends on WebSocket state
   useEffect(() => {
@@ -486,7 +524,10 @@ export default function Dashboard() {
     // WS connected: poll slow data every 15s; disconnected: poll everything every 5s
     const interval = setInterval(tick, wsConnected ? 15000 : 5000);
     return () => clearInterval(interval);
-  }, [wsConnected, fetchSlowData, fetchRealtimeData]);
+    // `activeServerId` is a dependency because every read above resolves the
+    // host at call time from the stored selection: without it a server switch
+    // would leave the previous machine's numbers on screen until the next tick.
+  }, [wsConnected, activeServerId, fetchSlowData, fetchRealtimeData]);
 
   // Feature #7: Disk full prediction based on historical usage trend
   const diskForecast = useMemo(() => {
@@ -535,7 +576,16 @@ export default function Dashboard() {
             <h1 className="page-header-title">Dashboard</h1>
             <p className="text-xs text-dark-400 mt-0.5">{system?.hostname || "Loading..."}</p>
           </div>
-          <span className="flex items-center gap-1.5" title={wsConnected ? "Receiving live metrics via WebSocket" : "Polling metrics via HTTP"}>
+          <span
+            className="flex items-center gap-1.5"
+            title={
+              wsConnected
+                ? "Receiving live metrics via WebSocket"
+                : isLocal
+                  ? "Polling metrics via HTTP"
+                  : `Polling ${activeServer?.name ?? "this server"} over HTTP every 5s — the live socket reads the panel host only, so it is not used for a remote server`
+            }
+          >
             <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? "bg-rust-500 animate-pulse" : "bg-dark-400"}`} />
             <span className="text-[10px] text-dark-400 font-mono">{wsConnected ? "Live" : "Polling"}</span>
           </span>

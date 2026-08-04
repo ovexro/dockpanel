@@ -1,6 +1,5 @@
 pub mod activity;
 pub mod agent_checkin;
-pub mod agent_commands;
 pub mod alerts;
 pub mod agent_updates;
 pub mod api_keys;
@@ -33,7 +32,6 @@ pub mod escalation_policies;
 pub mod drift;
 pub mod security;
 pub mod security_scans;
-pub mod server_actions;
 pub mod servers;
 pub mod settings;
 pub mod stacks;
@@ -1113,8 +1111,6 @@ pub fn router() -> Router<AppState> {
         //        reach it.
         .route("/api/agent/version", get(agent_updates::latest_version))
         .route("/api/agent/checkin", post(agent_checkin::checkin))
-        .route("/api/agent/commands", get(agent_commands::poll))
-        .route("/api/agent/commands/result", post(agent_commands::report_result))
         // API Keys
         .route("/api/api-keys", get(api_keys::list).post(api_keys::create))
         .route("/api/api-keys/{id}", delete(api_keys::revoke))
@@ -1133,9 +1129,6 @@ pub fn router() -> Router<AppState> {
         .route("/api/servers/{id}/rotate-cert-pin", post(servers::rotate_cert_pin))
         .route("/api/servers/{id}/uptime", get(servers::uptime))
         .route("/api/servers/{id}/metrics", get(metrics::server_metrics))
-        .route("/api/servers/{id}/commands", get(server_actions::list_commands))
-        .route("/api/servers/{id}/commands/dispatch", post(server_actions::dispatch))
-        .route("/api/servers/{id}/commands/{cmd_id}", get(server_actions::command_status))
         // Teams
         .route("/api/teams", get(teams::list).post(teams::create))
         .route("/api/teams/{id}", delete(teams::remove))
