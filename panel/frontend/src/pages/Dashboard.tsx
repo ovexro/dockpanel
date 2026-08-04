@@ -246,7 +246,6 @@ export default function Dashboard() {
   const [sitesList, setSitesList] = useState<SiteDetail[]>([]);
   const [wsConnected, setWsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
-  const wsConnectedRef = useRef(false);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Feature #1: Docker container overview
@@ -430,11 +429,10 @@ export default function Dashboard() {
   // tiles CORRECT, not merely honest.
   useEffect(() => {
     if (serversLoading || !isLocal) {
-      // Not an error state — the poll below owns this case. Both flags must be
-      // cleared or the poll stays disabled: the teardown deliberately nulls
-      // `onclose` before closing, so nothing else resets them.
+      // Not an error state — the live-tile poll below owns this case, and it is
+      // guarded on `wsConnected`, so the flag must be cleared here: the teardown
+      // deliberately nulls `onclose` before closing, so nothing else resets it.
       setWsConnected(false);
-      wsConnectedRef.current = false;
       return;
     }
 
@@ -448,12 +446,10 @@ export default function Dashboard() {
 
       ws.onopen = () => {
         setWsConnected(true);
-        wsConnectedRef.current = true;
       };
 
       ws.onclose = () => {
         setWsConnected(false);
-        wsConnectedRef.current = false;
         wsRef.current = null;
         // Reconnect after 3 seconds
         reconnectTimer.current = setTimeout(connect, 3000);
@@ -461,7 +457,6 @@ export default function Dashboard() {
 
       ws.onerror = () => {
         setWsConnected(false);
-        wsConnectedRef.current = false;
       };
 
       ws.onmessage = (event) => {
@@ -500,34 +495,40 @@ export default function Dashboard() {
         ws.close();
       }
       // Nulling `onclose` above means the socket's own handler will NOT run, so
-      // this is the only place the flags get cleared on a server switch. Without
+      // this is the only place the flag gets cleared on a server switch. Without
       // it, switching from the panel host to a member leaves `wsConnected` true:
-      // the poll below is guarded on it, so it would never run and the tiles
-      // would freeze on the panel's last values while the badge read "Live".
+      // the live-tile poll below is guarded on it, so it would never run and the
+      // tiles would freeze on the panel's last values while the badge read "Live".
       setWsConnected(false);
-      wsConnectedRef.current = false;
     };
   }, [isLocal, serversLoading]);
 
-  // Polling logic — interval depends on WebSocket state
+  // Slow data — always 15s, whatever the socket is doing.
+  //
+  // These two cadences used to share one timer, so the interval that exists to
+  // make the LIVE tiles keep up (5s, whenever the socket is not supplying them)
+  // also dragged sites, databases, containers, activity and the mail queue along
+  // with it. That was invisible while the socket was almost always up. It stops
+  // being invisible once the socket is deliberately not opened for a remote
+  // server: slow data would have polled three times as often, through the
+  // panel-to-agent hop, for values that change on the order of minutes.
+  //
+  // `activeServerId` is a dependency because every read resolves the host at
+  // call time from the stored selection — without it a server switch would
+  // leave the previous machine's numbers on screen until the next tick.
   useEffect(() => {
-    // Initial fetch of everything
     fetchSlowData();
-    if (!wsConnectedRef.current) fetchRealtimeData();
+    const slow = setInterval(fetchSlowData, 15000);
+    return () => clearInterval(slow);
+  }, [activeServerId, fetchSlowData]);
 
-    const tick = () => {
-      fetchSlowData();
-      // Only poll real-time endpoints when WS is disconnected
-      if (!wsConnectedRef.current) fetchRealtimeData();
-    };
-
-    // WS connected: poll slow data every 15s; disconnected: poll everything every 5s
-    const interval = setInterval(tick, wsConnected ? 15000 : 5000);
-    return () => clearInterval(interval);
-    // `activeServerId` is a dependency because every read above resolves the
-    // host at call time from the stored selection: without it a server switch
-    // would leave the previous machine's numbers on screen until the next tick.
-  }, [wsConnected, activeServerId, fetchSlowData, fetchRealtimeData]);
+  // Live tiles — 5s, and only when the socket is not already supplying them.
+  useEffect(() => {
+    if (wsConnected) return;
+    fetchRealtimeData();
+    const fast = setInterval(fetchRealtimeData, 5000);
+    return () => clearInterval(fast);
+  }, [wsConnected, activeServerId, fetchRealtimeData]);
 
   // Feature #7: Disk full prediction based on historical usage trend
   const diskForecast = useMemo(() => {

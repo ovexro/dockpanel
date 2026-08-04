@@ -4,6 +4,36 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.62.1] - 2026-08-04
+
+Two corrections to v2.62.0, both found auditing that release's own diff.
+
+### The dashboard polled slow data three times as often on a remote server
+
+v2.62.0 stops opening the metrics socket when a remote server is selected, which
+leaves the page permanently in its polling state. That state drove **one** timer
+for two different jobs: the five-second interval that keeps the live CPU/memory/
+network tiles current also refetched sites, databases, containers, recent
+activity and the mail queue on every tick.
+
+While the socket was almost always connected, that only happened during an
+outage and nobody noticed. With a member selected it became the steady state —
+so the slow reads ran at 5s instead of 15s, each through the panel-to-agent hop,
+for values that change on the order of minutes.
+
+The two cadences are now separate timers: slow data every 15 seconds regardless
+of socket state, live tiles every 5 seconds and only when the socket is not
+already supplying them. A dropped socket now also refetches immediately instead
+of waiting out the interval.
+
+### Removed a flag that nothing read
+
+`wsConnectedRef` existed so a long-lived interval callback could see the current
+socket state without being recreated. Splitting the timers means both effects
+re-run when that state changes and read it directly, leaving the ref written in
+five places and read in none. Removed rather than left as a writer with no
+reader.
+
 ## [2.62.0] - 2026-08-04
 
 **The dashboard describes the machine you picked.**
