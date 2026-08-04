@@ -632,3 +632,36 @@ pub async fn import_vault(
 
     Ok(Json(serde_json::json!({ "ok": true, "imported": imported })))
 }
+
+#[cfg(test)]
+mod vault_key_tests {
+    use super::get_encryption_key;
+    use crate::services::secrets_crypto::{decrypt, encrypt};
+
+    /// The premise behind the s306 auto-inject fix, executed rather than
+    /// asserted: the vault key is DERIVED from the JWT secret and is never
+    /// equal to it, so a caller that hands the cipher a JWT secret cannot read
+    /// anything the panel wrote.
+    ///
+    /// The third assertion is the one that explains four and a half months of
+    /// silence. AES-GCM is authenticated, so the wrong key does not yield
+    /// plausible-looking rubbish a caller might notice — it yields `Err`. A
+    /// reader that discarded that error had nothing left to report.
+    #[test]
+    fn the_vault_key_is_not_the_jwt_secret() {
+        let jwt = "0123456789abcdef0123456789abcdef";
+        let key = get_encryption_key(jwt);
+        assert_ne!(key, jwt, "the vault key must not be the JWT secret itself");
+
+        let sealed = encrypt("hunter2", &key).expect("sealing with the derived key");
+        assert_eq!(
+            decrypt(&sealed, &key).expect("opening with the derived key"),
+            "hunter2"
+        );
+        assert!(
+            decrypt(&sealed, jwt).is_err(),
+            "the JWT secret must not open the vault — if it ever does, the two \
+             key spaces have collapsed and the derivation is decorative"
+        );
+    }
+}

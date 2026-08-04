@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.62.1.** The version stamp, the template count and every
+> **Reflects v2.63.0.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -395,7 +395,7 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. Thirty suites, **1026 assertions**, all green at the current commit:
+survivable. Thirty suites, **1042 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
@@ -403,7 +403,7 @@ survivable. Thirty suites, **1026 assertions**, all green at the current commit:
 | `mail-auth-autosleep-pin-e2e.sh` | 28 |
 | `site-backup-databases-pin-e2e.sh` | 52 |
 | `git-deploy-sandbox-pin-e2e.sh` | 20 |
-| `ssl-correctness-pin-e2e.sh` | 37 |
+| `ssl-correctness-pin-e2e.sh` | 45 |
 | `nginx-listen-pin-e2e.sh` | 17 |
 | `rpm-install-pin-e2e.sh` | 34 |
 | `mail-rpm-pin-e2e.sh` | 22 |
@@ -416,7 +416,7 @@ survivable. Thirty suites, **1026 assertions**, all green at the current commit:
 | `nginx-headers-pin-e2e.sh` | 78 |
 | `update-rollback-pin-e2e.sh` | 36 |
 | `agent-error-propagation-pin-e2e.sh` | 21 |
-| `backup-destinations-git-env-pin-e2e.sh` | 27 |
+| `backup-destinations-git-env-pin-e2e.sh` | 35 |
 | `agent-sandbox-paths-pin-e2e.sh` | 10 |
 | `backup-lands-pin-e2e.sh` | 31 |
 | `migration-analyze-async-pin-e2e.sh` | 28 |

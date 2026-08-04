@@ -592,6 +592,21 @@ async fn execute_deploy(
     if success {
         let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_default();
         if !jwt_secret.is_empty() {
+            // The vault is NOT encrypted under the JWT secret — it is encrypted
+            // under the key derived from it. Every writer goes through the
+            // derivation in `routes::secrets`, and so does the manual "Inject"
+            // button beside it, which runs this same query against the same
+            // rows and PUTs the same body to the same agent route. This path
+            // passed the raw JWT secret instead, so every decrypt returned Err.
+            //
+            // Nothing could report that. AES-GCM authenticates, so a wrong key
+            // cannot yield garbage — it yields an error, which `if let Ok` threw
+            // away; `env_pairs` then stayed empty, and the agent call and the
+            // only log line both sit inside `if !env_pairs.is_empty()`. A
+            // feature on the README, in FEATURES.md, in the guide and behind a
+            // UI checkbox was inert and silent at the same time.
+            let encryption_key = crate::routes::secrets::get_encryption_key(&jwt_secret);
+
             let inject_rows: Vec<(String, String)> = sqlx::query_as(
                 "SELECT s.key, s.encrypted_value FROM secrets s \
                  JOIN secret_vaults v ON v.id = s.vault_id AND v.site_id = $1 \
@@ -602,15 +617,36 @@ async fn execute_deploy(
 
             if !inject_rows.is_empty() {
                 let mut env_pairs = Vec::new();
+                let mut undecryptable = 0usize;
                 for (key, encrypted_value) in &inject_rows {
-                    if let Ok(value) = crate::services::secrets_crypto::decrypt(encrypted_value, &jwt_secret) {
-                        env_pairs.push(serde_json::json!({ "key": key, "value": value }));
+                    match crate::services::secrets_crypto::decrypt(encrypted_value, &encryption_key) {
+                        Ok(value) => {
+                            env_pairs.push(serde_json::json!({ "key": key, "value": value }));
+                        }
+                        // The NAME is enough to act on; never the ciphertext and
+                        // never the key. Skipping quietly is what hid the wrong
+                        // key material here for four months.
+                        Err(e) => {
+                            undecryptable += 1;
+                            tracing::warn!("Auto-inject: could not decrypt secret {key} for {domain}: {e}");
+                        }
                     }
                 }
                 if !env_pairs.is_empty() {
                     let body = serde_json::json!({ "vars": env_pairs });
-                    let _ = agent.put(&format!("/nginx/env/{domain}"), body).await;
-                    tracing::info!("Auto-injected {} secrets into {domain} after deploy", env_pairs.len());
+                    match agent.put(&format!("/nginx/env/{domain}"), body).await {
+                        Ok(_) => tracing::info!(
+                            "Auto-injected {} secrets into {domain} after deploy", env_pairs.len()
+                        ),
+                        Err(e) => tracing::warn!(
+                            "Auto-inject: the agent refused the env write for {domain}: {e}"
+                        ),
+                    }
+                } else if undecryptable > 0 {
+                    tracing::warn!(
+                        "Auto-inject: all {undecryptable} auto-inject secrets for {domain} \
+                         failed to decrypt — nothing was injected"
+                    );
                 }
             }
         }

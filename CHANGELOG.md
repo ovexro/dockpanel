@@ -4,6 +4,66 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.63.0] - 2026-08-04
+
+**The automatic path threw away what the manual path kept.**
+
+Two features had a working half and a silent one. In both cases the button an
+operator clicks did the job correctly, and the unattended path beside it — same
+data, same destination — dropped the result on the floor and had no way to say
+so.
+
+### Auto-injected secrets never arrived, and could not report that they hadn't
+
+A vault secret marked **auto-inject** is supposed to be written into the site's
+environment after every successful git deploy. Since the vault gained its own
+key derivation, that never once happened.
+
+The vault is not encrypted under the JWT secret; it is encrypted under a key
+*derived* from it. Every writer used the derivation, and so does the manual
+**Inject** button — which runs the same query over the same rows and sends the
+same body to the same agent route. The post-deploy path passed the raw JWT
+secret instead, so every decryption failed.
+
+Nothing could report it. AES-GCM is authenticated, so the wrong key cannot
+produce garbage — it produces an error, which was discarded; the list of
+variables then stayed empty, and both the agent call and the only log line sat
+inside a branch that could not be entered. A feature listed in the README, in
+the feature matrix, in its own guide and behind a checkbox in the UI was inert
+and completely silent about it.
+
+Auto-inject now uses the same derivation as every other vault reader, names any
+secret it cannot decrypt, and says so when it injected nothing because none of
+them could be read. An agent that refuses the write is reported too.
+
+### A renewed certificate left the panel describing the retired one
+
+The security scanner renews certificates that are within 30 days of expiry. It
+is the **only** automatic renewal on a stock install, because auto-healing ships
+switched off — and it runs for every host the panel knows, its own included.
+
+It renewed correctly and discarded the new expiry date the agent handed back, so
+`sites.ssl_expiry` kept the value written when the certificate was first issued.
+The dashboard countdown ran down to zero and the expiry alert walked its whole
+warning ladder — 30, 14, 7, 3, 1 day — and then raised **EXPIRED**, at critical
+severity, on a certificate that had renewed perfectly and was serving traffic.
+
+It could not recover on its own, either: that alert resolves only when the days
+remaining *increase*, which cannot happen while nothing rewrites the column.
+Escalation then re-paged it for a week.
+
+The scanner now records what it installed, clearing the renewal-hint columns
+alongside it so the next cycle does not reuse a window computed for the
+certificate it just replaced. When the agent returns an expiry it cannot parse,
+that is now a warning rather than silence.
+
+### A post-renewal lookup keyed on a domain instead of the site
+
+After renewing, the scanner re-read the site to rebuild its full nginx config,
+looking it up by domain. A domain is unique only *per server*, so on a fleet
+that lookup could return a different host's row — and the rebuild it feeds is
+sent to the host being scanned. It now reads the row it already resolved, by id.
+
 ## [2.62.1] - 2026-08-04
 
 Two corrections to v2.62.0, both found auditing that release's own diff.

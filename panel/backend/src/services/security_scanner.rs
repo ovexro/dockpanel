@@ -378,14 +378,67 @@ async fn auto_fix_safe_findings(
                     )
                     .await
                 {
-                    Ok(_) => {
+                    Ok(result) => {
                         tracing::info!("Auto-fix: SSL renewed successfully for {domain}");
+
+                        // Record the certificate we just installed. The agent
+                        // returns `expiry` and every other renewal path stores
+                        // it; this one dropped it, so the panel's view stayed
+                        // frozen at the value written when the certificate was
+                        // first issued. The dashboard countdown ran to zero and
+                        // `check_ssl_expiry` walked the whole warning ladder
+                        // down to the EXPIRED sentinel on a certificate that had
+                        // renewed perfectly — and could never recover, because
+                        // `ssl_decision` resolves only when `days_left` RISES,
+                        // which cannot happen while nothing rewrites this
+                        // column.
+                        //
+                        // This is the ONLY automatic renewal on a stock install
+                        // (`auto_heal_enabled` is seeded false) and it runs for
+                        // every host in `online_fleet()`, the panel's own
+                        // included — so the stale value was not a fleet-only
+                        // condition.
+                        //
+                        // All three columns move together, as in
+                        // `auto_healer::auto_renew_ssl` and `ssl::renew`: a
+                        // surviving `ssl_renewal_at` is an ARI window computed
+                        // for the certificate this one just replaced.
+                        match result
+                            .get("expiry")
+                            .and_then(|v| v.as_str())
+                            .and_then(crate::helpers::parse_agent_cert_expiry)
+                        {
+                            Some(expiry) => {
+                                let _ = sqlx::query(
+                                    "UPDATE sites SET ssl_expiry = $1, ssl_renewal_at = NULL, \
+                                     ssl_renewal_checked_at = NULL, updated_at = NOW() WHERE id = $2",
+                                )
+                                .bind(expiry)
+                                .bind(site_id)
+                                .execute(pool)
+                                .await;
+                            }
+                            None => {
+                                tracing::warn!(
+                                    "Auto-fix: renewed {domain} but could not read the new expiry \
+                                     from the agent (raw: {:?}) — the countdown and the expiry \
+                                     alert will keep describing the retired certificate",
+                                    result.get("expiry")
+                                );
+                            }
+                        }
 
                         // Preserve the site's full config (WAF/CSP/Permissions-
                         // Policy/rate-limit/custom_nginx/bot-protection) — the
                         // agent's provision only renders a subset. Best-effort.
-                        if let Ok(site) = sqlx::query_as::<_, crate::models::Site>("SELECT * FROM sites WHERE domain = $1")
-                            .bind(domain)
+                        //
+                        // Keyed on the id already resolved above, not on the
+                        // domain: `domain` is unique only per server
+                        // (`idx_sites_domain_server`), so a lookup on it could
+                        // hand back another host's row and push that host's
+                        // vhost through THIS host's agent.
+                        if let Ok(site) = sqlx::query_as::<_, crate::models::Site>("SELECT * FROM sites WHERE id = $1")
+                            .bind(site_id)
                             .fetch_one(pool)
                             .await
                         {

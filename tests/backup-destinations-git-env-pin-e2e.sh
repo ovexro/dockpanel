@@ -321,5 +321,86 @@ else
 fi
 
 echo
+echo "§10 a vault read derives its key — the raw JWT secret is not the vault key (s306)"
+
+# Same shape as #94 at the top of this file, one layer down: the git deploy's
+# environment was assembled correctly and never arrived, because the only reader
+# of auto-inject secrets unlocked them with the wrong key material. AES-GCM
+# authenticates, so a wrong key cannot yield garbage — it yields an Err, which a
+# bare `if let Ok` discarded, leaving the agent call and the only log line inside
+# an `if !env_pairs.is_empty()` that could not be entered.
+#
+# THE SUBJECTS ARE DERIVED, NOT LISTED. `secrets_crypto` exposes two families:
+# the vault pair `encrypt`/`decrypt`, whose key is `secrets::get_encryption_key`,
+# and the `*_credential*` family, whose key IS the JWT secret. Only the first is
+# in scope. A hardcoded list of its call sites is precisely the arm that cannot
+# see the next one (lesson #182) — this defect sat in a file such a list would
+# never have named.
+VAULT_CALL='secrets_crypto::(encrypt|decrypt)\('
+VAULT_FILES=()
+while IFS= read -r f; do
+  [ -n "$f" ] && VAULT_FILES+=("$f")
+done < <(grep -rlE "$VAULT_CALL" panel/backend/src --include=*.rs 2>/dev/null | sort)
+
+if [ "${#VAULT_FILES[@]}" -lt 3 ]; then
+  bad "enumerated only ${#VAULT_FILES[@]} files calling the vault cipher — implausible, so every arm below would pass having examined nothing"
+else
+  ok "enumerated ${#VAULT_FILES[@]} files calling the vault cipher"
+
+  for f in "${VAULT_FILES[@]}"; do
+    if [ "$(countre "$f" 'get_encryption_key')" -gt 0 ]; then
+      ok "$(basename "$f") derives the vault key"
+    else
+      bad "$(basename "$f") calls the vault cipher without ever deriving the key — its reads decrypt to Err and its writes are unreadable by every other caller"
+    fi
+  done
+fi
+
+# The defect itself, as a negative over the whole backend rather than over the
+# enumeration above: the vault cipher may never be handed a JWT secret. This is
+# the arm that would have been red for the four and a half months the feature
+# was advertised and inert.
+JWT_AS_VAULT_KEY='secrets_crypto::(encrypt|decrypt)\([^;]*,[[:space:]]*&?[A-Za-z_.]*jwt_secret'
+JWT_KEYED=0
+for f in $(grep -rlE "$VAULT_CALL" panel/backend/src --include=*.rs 2>/dev/null); do
+  n=$(countre "$f" "$JWT_AS_VAULT_KEY")
+  if [ "$n" -gt 0 ]; then
+    JWT_KEYED=$((JWT_KEYED + n))
+    bad "$(basename "$f") unlocks the vault with the JWT secret instead of the derived key"
+  fi
+done
+if [ "$JWT_KEYED" -eq 0 ]; then
+  ok "no vault read or write is keyed on the JWT secret"
+fi
+
+# The working sibling is the reason this is a correctness bug and not a design
+# question: the manual Inject button runs the same query against the same rows
+# and PUTs the same body to the same agent route. If it ever stops doing so, the
+# arm above loses the reference implementation it is measured against.
+SECRETS_RS=panel/backend/src/routes/secrets.rs
+DEPLOY_RS=panel/backend/src/routes/deploy.rs
+for f in "$SECRETS_RS" "$DEPLOY_RS"; do
+  [ -f "$f" ] || { bad "missing file: $f"; continue; }
+  assert_readable "$f" || continue
+  if [ "$(countre "$f" 'auto_inject = TRUE')" -gt 0 ] && [ "$(countre "$f" '/nginx/env/')" -gt 0 ]; then
+    ok "$(basename "$f") still selects the auto-inject rows and pushes them to the agent"
+  else
+    bad "$(basename "$f") no longer performs the auto-inject it is pinned against"
+  fi
+done
+
+# A skipped secret must be sayable, and the arm has to be keyed on THIS path's
+# own diagnostics: `deploy.rs` is a large file with warnings all over it, so an
+# arm asking only whether the file can warn at all is green on the broken tree
+# too — it would have passed for the whole time the feature was dead. The
+# `Auto-inject:` prefix belongs to this block alone; the success line reads
+# `Auto-injected`, so it cannot satisfy this on its own.
+if [ "$(countf "$DEPLOY_RS" '"Auto-inject: ')" -gt 0 ]; then
+  ok "deploy.rs reports the secrets it could not decrypt"
+else
+  bad "deploy.rs swallows decrypt failures again — an inert auto-inject looks exactly like an empty vault"
+fi
+
+echo
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

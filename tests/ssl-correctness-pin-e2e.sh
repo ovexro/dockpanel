@@ -255,6 +255,104 @@ mkstub 'echo inactive; exit 3'
 check "a unit that never starts still fails"             "$(runhelper 2)" "1"
 
 echo
+echo "── F: a renewal records the certificate it installed (s306) ──"
+
+# §D above pins that a renewal FAILURE is announced. It says nothing about a
+# renewal SUCCESS, and that is where the panel's view of a certificate went
+# stale: the scanner's auto-fix renewed correctly and discarded the `expiry` the
+# agent returned, so `sites.ssl_expiry` stayed at the value written when the
+# certificate was first issued. The dashboard countdown ran to zero and the
+# warning ladder walked down to the EXPIRED sentinel on a certificate that had
+# renewed perfectly — with no way back, because the resolve branch fires only
+# when the remaining days RISE.
+#
+# These arms strip comments first. The code under test explains this defect in
+# its own comments, naming the very columns being asserted, and a raw grep would
+# match the prose and stay green while the write-back was removed.
+# (feedback_source_pin_prose_trap; the stripper is the FIXED one — a `/*` inside
+# a string literal must not open a block comment, lesson #136.)
+sslcode() {
+  awk '{ t=$0; sub(/^[ \t]+/,"",t); if (t !~ /^\/\//) print }' "$1" \
+    | awk '
+        /^[ \t]*\/\*/ { inblk=1 }
+        !inblk { print }
+        /\*\/[ \t]*$/ { inblk=0 }
+      ' \
+    | awk '/^#\[cfg\(test\)\]/ { intest=1 } !intest { print }'
+}
+sslcount() { sslcode "$1" | grep -cE -- "$2" || true; }
+
+# THE SUBJECTS ARE DERIVED. Every backend file that asks an agent to issue or
+# renew a certificate FOR A ROW IN `sites` must store what came back. A
+# hardcoded list is the arm that cannot see the next one — and the path that
+# carried this defect is one a list written from memory would have missed,
+# because it is a security scanner rather than an SSL route (lesson #182).
+#
+# Both halves of the predicate are load-bearing, and each was added because the
+# looser version named something real that is not in this class:
+#
+#   * `format!("/ssl/…` — the AGENT call. Matching the bare path also matches
+#     the panel's own route table (`mod.rs` registers `/api/ssl/{id}/renew`),
+#     which issues nothing.
+#   * a reference to the `sites` table — the certificate must be one the panel
+#     TRACKS. `mail.rs` provisions for a mail host and works entirely in
+#     `mail_domains`; it holds no `sites` row, so there is no expiry column for
+#     it to write and demanding one would be a false red for ever.
+#
+# Named here rather than filtered silently, so the next session extends the
+# class deliberately instead of rediscovering the exclusions.
+RENEW_CALLERS=()
+RENEW_SKIPPED=0
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  if grep -qE 'FROM sites|UPDATE sites|INTO sites' "$f"; then
+    RENEW_CALLERS+=("$f")
+  else
+    RENEW_SKIPPED=$((RENEW_SKIPPED + 1))
+  fi
+done < <(grep -rlE 'format!\("/ssl/(provision/|\{)' \
+           "$REPO/panel/backend/src" --include=*.rs 2>/dev/null | sort)
+[ "$RENEW_SKIPPED" -gt 0 ] && \
+  echo "  · $RENEW_SKIPPED agent SSL caller(s) hold no sites row and are out of this class"
+
+if [ "${#RENEW_CALLERS[@]}" -lt 3 ]; then
+  bad "enumerated only ${#RENEW_CALLERS[@]} backend callers of an agent SSL issue/renew route — implausible, so the arms below would pass having examined nothing"
+else
+  ok "enumerated ${#RENEW_CALLERS[@]} backend callers of an agent SSL issue/renew route"
+  for f in "${RENEW_CALLERS[@]}"; do
+    if [ "$(sslcount "$f" 'ssl_expiry[ ]*=[ ]*\$')" -gt 0 ]; then
+      ok "$(basename "$f") stores the expiry it was handed"
+    else
+      bad "$(basename "$f") renews a certificate and never records it — the panel keeps describing the retired one, down to a false EXPIRED it cannot resolve"
+    fi
+  done
+fi
+
+# The ARI trap: on a RENEWAL the two bookkeeping columns must move with the
+# expiry. A surviving `ssl_renewal_at` is a window computed for the certificate
+# that was just replaced. (Initial issuance in sites.rs has nothing to clear, so
+# this is asserted on the renewal paths that carry the pattern, not on every
+# writer.)
+for f in "$REPO/panel/backend/src/services/security_scanner.rs" \
+         "$REPO/panel/backend/src/services/auto_healer.rs"; do
+  if [ "$(sslcount "$f" 'ssl_renewal_at = NULL')" -gt 0 ] \
+  && [ "$(sslcount "$f" 'ssl_renewal_checked_at = NULL')" -gt 0 ]; then
+    ok "$(basename "$f") clears both ARI columns when it records a renewal"
+  else
+    bad "$(basename "$f") records a renewal without clearing the ARI window computed for the retired certificate"
+  fi
+done
+
+# And the host-blind re-read that already wrote across hosts. `domain` is unique
+# only per server, so a post-renewal lookup keyed on it can return another
+# host's row — which this path then pushes as a vhost through THIS host's agent.
+if [ "$(sslcount "$REPO/panel/backend/src/services/security_scanner.rs" 'FROM sites WHERE domain')" -eq 0 ]; then
+  ok "the scanner's post-renewal re-read is not keyed on a domain"
+else
+  bad "the scanner re-reads the site by domain after renewing — on a fleet that can rebuild another host's vhost through this host's agent"
+fi
+
+echo
 echo "──────────────────────────────────────────"
 printf 'PASS: %d   FAIL: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
