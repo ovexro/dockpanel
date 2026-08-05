@@ -129,6 +129,144 @@ pub fn restore_note(restored: bool) -> &'static str {
     }
 }
 
+/// The two denies the static branch of both templates carries from v2.68.0. Kept as
+/// one block so the retrofit below writes exactly what a fresh render would.
+const STATIC_DENIES: &str = "\n\
+    \x20   # Retrofitted: a site switched from php to static keeps its application\n\
+    \x20   # source in the same docroot. Both denies exist in every php preset.\n\
+    \x20   location ~ /\\.(?!well-known) {\n\
+    \x20       deny all;\n\
+    \x20   }\n\
+    \n\
+    \x20   location ~ \\.php$ {\n\
+    \x20       deny all;\n\
+    \x20   }\n";
+
+/// Decide whether a vhost needs the denies, and return the patched body if so.
+///
+/// Pure, so the decision is testable without a box: the caller does the I/O and
+/// the `nginx -t` gate. A vhost qualifies when it renders the STATIC branch
+/// (`index index.html index.htm;`) and carries no FastCGI handler — a php vhost
+/// already has these denies inside its preset branch. Returns `None` for anything
+/// already patched, which is what makes the migration idempotent.
+pub fn patch_static_vhost(body: &str) -> Option<String> {
+    if !body.contains("index index.html index.htm;")
+        || body.contains("fastcgi_pass")
+        || body.contains("location ~ /\\.(?!well-known)")
+    {
+        return None;
+    }
+    Some(
+        body.lines()
+            .map(|line| {
+                if line.trim() == "index index.html index.htm;" {
+                    format!("{line}\n{STATIC_DENIES}")
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+/// Retrofit the static branch's denies onto site vhosts already on disk.
+///
+/// v2.68.0 fixed the TEMPLATE. A template reaches a site only when something
+/// re-renders its vhost, and nothing re-renders on upgrade — so a site already
+/// switched from php to static keeps serving `wp-config.php`, `.env` and
+/// `.git/config` as plain text after its operator has updated. v2.68.1 put the
+/// retrofit in `scripts/update.sh`, and that reaches the PANEL host only: the
+/// script's own header records that an agent-only box never runs it (it syncs a
+/// git repo, dumps a postgres container, replaces the API — an agent box has
+/// none of that), so a fleet member's sites stayed exposed. The agent owns
+/// `/etc/nginx/sites-enabled` on every box it runs on, panel and member alike,
+/// which makes this the only place the fix reaches the whole population.
+///
+/// Scoped by what the vhost IS: the static branch's `index index.html
+/// index.htm;` and no FastCGI handler. A php vhost already carries these denies
+/// inside its preset branch. Idempotent, and it declines to run at all if the
+/// server's config is ALREADY failing `nginx -t` — that check is whole-server,
+/// so one unrelated broken vhost would otherwise make this revert edits it made
+/// correctly and blame itself for a fault it did not cause.
+pub async fn retrofit_static_denies() {
+    let dir = std::path::Path::new("/etc/nginx/sites-enabled");
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+
+    let mut candidates: Vec<(std::path::PathBuf, String, String)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("conf") {
+            continue;
+        }
+        if path.file_name().and_then(|n| n.to_str()) == Some("dockpanel-panel.conf") {
+            continue;
+        }
+        let Ok(body) = std::fs::read_to_string(&path) else { continue };
+        let Some(patched) = patch_static_vhost(&body) else { continue };
+        candidates.push((path, body, patched));
+    }
+
+    if candidates.is_empty() {
+        return;
+    }
+
+    // Refuse to touch anything on a box whose nginx is already unhappy.
+    match test_config().await {
+        Ok(out) if out.success => {}
+        _ => {
+            tracing::warn!(
+                "Skipping the static-vhost deny retrofit on {} vhost(s): nginx -t already fails, \
+                 so a post-edit check could not tell my change from the existing fault",
+                candidates.len()
+            );
+            return;
+        }
+    }
+
+    let mut written: Vec<(std::path::PathBuf, String)> = Vec::new();
+    for (path, previous, patched) in &candidates {
+        let tmp = path.with_extension("conf.retrofit");
+        if std::fs::write(&tmp, patched)
+            .and_then(|_| std::fs::rename(&tmp, path))
+            .is_ok()
+        {
+            written.push((path.clone(), previous.clone()));
+        } else {
+            std::fs::remove_file(&tmp).ok();
+            tracing::warn!("Could not retrofit denies onto {}", path.display());
+        }
+    }
+    if written.is_empty() {
+        return;
+    }
+
+    match test_config().await {
+        Ok(out) if out.success => {
+            let names: Vec<String> = written
+                .iter()
+                .map(|(p, _)| p.file_name().unwrap_or_default().to_string_lossy().to_string())
+                .collect();
+            tracing::info!(
+                "Retrofitted dotfile/.php denies onto {} static vhost(s): {}",
+                written.len(),
+                names.join(", ")
+            );
+            reload().await.ok();
+        }
+        _ => {
+            for (path, previous) in &written {
+                restore_or_remove(&path.to_string_lossy(), Some(previous));
+            }
+            tracing::error!(
+                "nginx -t rejected the static-vhost deny retrofit — all {} file(s) reverted, \
+                 sites untouched",
+                written.len()
+            );
+        }
+    }
+}
+
 /// Detect the server's primary (non-loopback, non-docker) interface IP for nginx listen directives.
 /// Returns empty string if detection fails (templates fall back to wildcard listen).
 fn detect_bind_ip() -> String {
@@ -546,6 +684,45 @@ pub async fn reload() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── static-vhost deny retrofit — s311 / v2.68.2 ─────────────────────
+    //
+    // The defect these guard against is not "the denies are missing from the
+    // template" (v2.68.0 fixed that and a pin suite covers it). It is that a
+    // template fix does not reach a vhost already written, and the site that
+    // most needs it — one switched from php to static — is exactly a vhost
+    // already written.
+
+    const STATIC_VHOST: &str = "server {\n    listen 80;\n    server_name a.example;\n    root /var/www/a.example/public;\n    index index.html index.htm;\n\n    location / {\n        try_files $uri $uri/ =404;\n    }\n}\n";
+
+    #[test]
+    fn retrofit_patches_a_static_vhost_once_and_only_once() {
+        let patched = patch_static_vhost(STATIC_VHOST).expect("a static vhost is a candidate");
+        assert!(patched.contains("location ~ /\\.(?!well-known)"));
+        assert!(patched.contains("location ~ \\.php$"));
+        // The site must keep working: the original serving block survives.
+        assert!(patched.contains("try_files $uri $uri/ =404;"));
+        assert!(patched.contains("root /var/www/a.example/public;"));
+        // Idempotent — a second pass is not a candidate at all.
+        assert!(patch_static_vhost(&patched).is_none());
+        // Exactly one insertion, not one per line.
+        assert_eq!(patched.matches("deny all;").count(), 2);
+    }
+
+    #[test]
+    fn retrofit_skips_a_php_vhost() {
+        // A php vhost carries the denies in its preset branch already, and its
+        // `.php` location is a HANDLER — denying it would stop the site dead.
+        let php = "server {\n    index index.html index.htm;\n    location ~ \\.php$ {\n        fastcgi_pass unix:/run/php/php8.3-fpm.sock;\n    }\n}\n";
+        assert!(patch_static_vhost(php).is_none());
+    }
+
+    #[test]
+    fn retrofit_skips_a_vhost_that_is_not_static() {
+        // A proxy vhost has no static index line; nothing to key on, nothing to do.
+        let proxy = "server {\n    location / {\n        proxy_pass http://127.0.0.1:3000;\n    }\n}\n";
+        assert!(patch_static_vhost(proxy).is_none());
+    }
 
     // ── custom_nginx per-statement validation — s241 C2 ─────────────────
 

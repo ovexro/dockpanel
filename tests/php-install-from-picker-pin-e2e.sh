@@ -471,6 +471,26 @@ else
   bad "nothing retrofits the denies onto vhosts already on disk — the fix reaches new renders only"
 fi
 
+# …and update.sh reaches the PANEL HOST ONLY. Its own header records why: an
+# agent-only box has no repo, no postgres container and no frontend, so the panel
+# updater was replaced there by agent-self-update.sh, which fetches one binary.
+# A fleet member's static vhosts therefore need the retrofit inside the AGENT,
+# which is the process that owns /etc/nginx/sites-enabled on every box. Keyed on
+# the function AND its call site: a migration nothing invokes is the s310 shape.
+AG_NGINX=panel/agent/src/services/nginx.rs
+AG_MAIN=panel/agent/src/main.rs
+if [ ! -f "$AG_NGINX" ] || [ ! -f "$AG_MAIN" ]; then
+  bad "MISSING agent subject file — the fleet-side arm is measuring nothing"
+elif ! grep -q 'fn retrofit_static_denies' "$AG_NGINX"; then
+  bad "the agent has no vhost retrofit — a fleet member's switched site stays exposed after update"
+elif ! grep -q 'retrofit_static_denies()' "$AG_MAIN"; then
+  bad "the agent's retrofit exists and nothing calls it at startup"
+elif ! grep -q 'fn patch_static_vhost' "$AG_NGINX"; then
+  bad "the retrofit decision is not a testable pure function — it cannot be exercised without a box"
+else
+  ok "the agent retrofits its own static vhosts at startup, so the fix reaches fleet members"
+fi
+
 # Second control, on the other side: the php branches must still carry the denies
 # these arms were modelled on. A zero here would mean the greps above are matching
 # a pattern this codebase no longer writes.

@@ -75,6 +75,15 @@ async fn main() {
     std::fs::create_dir_all("/var/backups/dockpanel/volumes").ok();
     std::fs::create_dir_all("/var/www/acme/.well-known/acme-challenge").ok();
 
+    // One-shot migration, idempotent: give static vhosts already on disk the denies
+    // v2.68.0 added to the template. The template alone reaches a site only when
+    // something re-renders its vhost, and nothing re-renders on upgrade — so an
+    // already-switched site keeps serving its PHP source. update.sh carries the same
+    // retrofit, but its own header records that an agent-only box never runs it, so
+    // this is the copy that reaches a fleet member. Awaited deliberately: it must
+    // finish before the agent starts serving vhost writes of its own.
+    services::nginx::retrofit_static_denies().await;
+
     // Load auth token: prefer AGENT_TOKEN env var, then file, then generate new
     let token_path = format!("{CONFIG_DIR}/agent.token");
     let token = if let Ok(env_token) = std::env::var("AGENT_TOKEN") {

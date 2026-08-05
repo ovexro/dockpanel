@@ -4,6 +4,31 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.68.2] - 2026-08-05
+
+### Security — v2.68.1's retrofit reached the panel host, not the fleet
+
+- **`update.sh` is the panel updater, and an agent-only box never runs it.** Its
+  own header says so: a fleet member has no git repo, no postgres container and no
+  frontend, which is why `agent-self-update.sh` exists and fetches a single binary
+  instead. So v2.68.1's retrofit protected sites on the panel host and left a
+  fleet member's switched site serving `wp-config.php` exactly as before — the same
+  shape as the defect it was fixing, one layer out.
+- **The agent now performs the retrofit itself, at startup.** The agent is the
+  process that owns `/etc/nginx/sites-enabled` on every box it runs on, panel and
+  member alike, so this is the only place the fix reaches the whole population.
+  Same scoping and same idempotence as the script version, and it **declines to
+  run at all when `nginx -t` is already failing** — that check is whole-server, so
+  one unrelated broken vhost would otherwise make the migration revert edits it had
+  made correctly and blame itself for a fault it did not cause. On success it
+  reloads; on failure every file it wrote is restored.
+- The decision is a pure function (`patch_static_vhost`) with unit tests, so
+  "which vhosts qualify" is exercised without a box: a static vhost is patched
+  once and only once, a PHP vhost is skipped (its `.php` location is a *handler* —
+  denying it would stop the site dead), and a proxy vhost is not a candidate.
+  The patched output was served through a real nginx: `403` for `/wp-config.php`
+  and `/.git/config`, `200` for `/index.html`, `/.well-known/` still reaching ACME.
+
 ## [2.68.1] - 2026-08-05
 
 ### Security — v2.68.0's fix did not reach the sites that already had the problem
