@@ -98,6 +98,38 @@ if [ -n "$V_AGENT" ] && [ -n "$V_BACKEND" ] && [ -n "$V_CLI" ] && [ -n "$V_FRONT
   fi
 fi
 
+# CHANGELOG section check — BLOCKING
+# The Release workflow writes the release body from CHANGELOG.md and REFUSES a tag
+# with no matching section. When it refuses, `changelog` fails and build/release/
+# smoke-test are SKIPPED — so the tag exists, the workflow "ran", and NO RELEASE
+# PUBLISHES. That is the s232 shape, and it happened again at s276 on v2.46.0.
+#
+# ⚠ s310: this block spent an unknown number of releases in `.git/hooks/pre-push`,
+# which git does not run — `core.hooksPath` is `scripts/hooks`, and
+# `git rev-parse --git-path hooks/pre-push` answers `scripts/hooks/pre-push`. The
+# copy carrying this check was the DEAD one (8 changelog references there, 0 here,
+# against 8 `version` references here proving the grep was pointed correctly), so
+# the guard that exists specifically to stop a tag-with-no-release was itself
+# unreachable, while reference_dockpanel_ops recorded it as blocking. A safety net
+# in a file nothing executes is the same shape as the defect it guards against.
+#
+# Checked on every push, not just tag pushes: the version bump lands one commit
+# before the tag, and catching it there is what leaves the tag clean.
+if [ -n "$V_AGENT" ] && [ -f CHANGELOG.md ]; then
+  echo ""
+  echo "=== CHANGELOG section check ==="
+  # Accept "## [2.46.0]", "## v2.46.0" and "## 2.46.0" — the file uses the first.
+  if grep -qE "^## (\[)?v?${V_AGENT}(\])?([[:space:]]|$)" CHANGELOG.md; then
+    echo -e "${GREEN}CHANGELOG has a section for ${V_AGENT}${NC}"
+  else
+    echo -e "${RED}BLOCKED: CHANGELOG.md has no section for v${V_AGENT}.${NC}"
+    echo -e "${RED}  Add '## [${V_AGENT}] - $(date +%Y-%m-%d)' before tagging — the release${NC}"
+    echo -e "${RED}  body is written from it, and without it the release job fails while${NC}"
+    echo -e "${RED}  build/release/smoke-test SKIP, so the tag exists with no release.${NC}"
+    FOUND=1
+  fi
+fi
+
 # Dependency audit — BLOCKING
 # v2.11.1 cleared 33 Dependabot advisories + 4 RustSec findings Dependabot never
 # surfaced. They piled up over ~4 releases because nothing ever failed loudly:
