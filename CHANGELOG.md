@@ -4,6 +4,30 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.68.1] - 2026-08-05
+
+### Security — v2.68.0's fix did not reach the sites that already had the problem
+
+- **Updating to v2.68.0 did not protect a site already switched to static.** The
+  fix was to the vhost *template*, and a template reaches a site only when
+  something re-renders its vhost — a runtime switch, an SSL issuance, a settings
+  change. Nothing re-renders on upgrade. So the one site that most needed it, a
+  PHP site switched to static under v2.67.0, kept serving `wp-config.php`, `.env`
+  and `.git/config` after its operator had updated and been told it was fixed.
+- **`update.sh` now retrofits both denies onto static vhosts already on disk.**
+  Scoped by what the vhost *is* — the static branch's `index index.html
+  index.htm;` and no FastCGI handler — so PHP vhosts, which already carry these
+  denies in their preset branch, are untouched. Additive, idempotent, and every
+  edit is validated by `nginx -t` with a per-file rollback: a security retrofit
+  must not be the thing that takes a site down. Verified by migrating a real
+  rendered v2.67.0 static vhost and serving the result through nginx — `403` for
+  `/wp-config.php` and `/.git/config`, `200` for `/index.html`, and `/.well-known/`
+  still reaching the ACME path rather than being denied.
+- ⚠ **The update stops the disclosure; it cannot un-serve what was already
+  fetched.** If a site was static while holding real credentials, treat those
+  credentials as exposed for that window. `grep -iE 'wp-config|\.env|/\.git' /var/log/nginx/<domain>.access.log`
+  shows whether anything asked for them.
+
 ## [2.68.0] - 2026-08-05
 
 ### Security — switching a site to static published its PHP source

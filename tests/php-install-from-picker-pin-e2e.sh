@@ -453,6 +453,24 @@ for tpl in panel/agent/src/templates/nginx/http.conf panel/agent/src/templates/n
   fi
 done
 
+# A template fix reaches a site only when something RE-RENDERS its vhost — a
+# runtime switch, an SSL issuance, a settings change. Nothing re-renders on
+# upgrade. So the site that most needs this fix, one already switched to static
+# under v2.67.0, would keep serving its source after the operator updated and was
+# told it was fixed. v2.68.1 retrofits the denies onto existing static vhosts in
+# update.sh, the same shape as the v2.47.1 index.html migration. Without this arm
+# the two template arms above are green while the field is still exposed.
+UPD=scripts/update.sh
+if [ ! -f "$UPD" ]; then
+  bad "MISSING SUBJECT FILE: $UPD"
+elif ! grep -q 'sites-enabled' "$UPD"; then
+  bad "$UPD no longer touches site vhosts at all — this arm is measuring nothing"
+elif grep -qF 'location ~ /\\.(?!well-known)' "$UPD" && grep -q 'nginx -t' "$UPD"; then
+  ok "update.sh retrofits the denies onto existing static vhosts, validated by nginx -t"
+else
+  bad "nothing retrofits the denies onto vhosts already on disk — the fix reaches new renders only"
+fi
+
 # Second control, on the other side: the php branches must still carry the denies
 # these arms were modelled on. A zero here would mean the greps above are matching
 # a pattern this codebase no longer writes.

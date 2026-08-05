@@ -651,6 +651,63 @@ if [ -d /etc/nginx/sites-enabled ]; then
         fi
     done
 fi
+
+# ── v2.68.1: retrofit the static branch's denies onto EXISTING site vhosts ───
+# v2.68.0 fixed the TEMPLATE, and a template only reaches a site when something
+# re-renders its vhost — a runtime switch, an SSL issuance, a settings change.
+# Nothing re-renders on upgrade. So the site that most needs this fix, one already
+# switched from php to static under v2.67.0, keeps serving wp-config.php, .env and
+# .git/config as plain text after the operator has updated and been told it is
+# fixed. Same shape as the v2.47.1 index.html migration below: a fix that reaches
+# only new renders is a fix nobody in the field receives.
+#
+# Scoped by what the vhost IS, not by what we guess it was: a static vhost has the
+# static branch's `index index.html index.htm;` and no fastcgi handler. A php vhost
+# already carries these denies inside its preset branch and is skipped. Additive,
+# idempotent (guarded on the deny already being present), and every edit is
+# validated by `nginx -t` with a per-file rollback — a security retrofit must never
+# be the thing that takes a customer's site down.
+if [ -d /etc/nginx/sites-enabled ]; then
+    for site_conf in /etc/nginx/sites-enabled/*.conf; do
+        [ -f "$site_conf" ] || continue
+        case "$(basename "$site_conf")" in
+            dockpanel-panel.conf) continue ;;
+        esac
+        grep -q 'index index.html index.htm;' "$site_conf" || continue
+        grep -q 'fastcgi_pass' "$site_conf" && continue
+        grep -qF 'location ~ /\.(?!well-known)' "$site_conf" && continue
+
+        cp -p "$site_conf" "$site_conf.pre-2680" 2>/dev/null || true
+        if awk '
+            { print }
+            /^[[:space:]]*index index\.html index\.htm;[[:space:]]*$/ {
+                print "";
+                print "    # v2.68.1: a site switched from php to static keeps its application";
+                print "    # source in the same docroot. Both denies exist in every php preset.";
+                print "    location ~ /\\.(?!well-known) {";
+                print "        deny all;";
+                print "    }";
+                print "";
+                print "    location ~ \\.php$ {";
+                print "        deny all;";
+                print "    }";
+            }
+        ' "$site_conf.pre-2680" > "$site_conf.new" 2>/dev/null && [ -s "$site_conf.new" ]; then
+            mv "$site_conf.new" "$site_conf"
+            if nginx -t > /dev/null 2>&1; then
+                rm -f "$site_conf.pre-2680"
+                log "Retrofitted dotfile/.php denies onto static vhost $site_conf"
+                NGINX_NEEDS_RELOAD=1
+            else
+                mv "$site_conf.pre-2680" "$site_conf"
+                log "WARN: denies rejected by nginx -t for $site_conf — reverted, site untouched"
+            fi
+        else
+            rm -f "$site_conf.new" "$site_conf.pre-2680"
+            log "WARN: could not retrofit denies onto $site_conf — skipped"
+        fi
+    done
+fi
 # ── v2.8.22: ensure panel vhost includes dockpanel-panel.locations/*.conf ─
 # Drop-in dir for path-mounted tool reverse-proxies. Webmail uses this in
 # v2.8.22+ (writes webmail.conf on install, deletes on remove). Pre-v2.8.22
