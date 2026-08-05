@@ -471,6 +471,7 @@ pub async fn create(
                 d,
                 &headers,
                 domain_claim::Holder::New,
+                &claims.role,
             )
             .await?,
         ),
@@ -612,6 +613,7 @@ pub async fn update(
                     d,
                     &headers,
                     domain_claim::Holder::GitDeploy(id),
+                    &claims.role,
                 )
                 .await?,
             )

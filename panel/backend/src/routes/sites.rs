@@ -263,6 +263,7 @@ pub async fn create(
         &body.domain,
         &headers,
         domain_claim::Holder::New,
+        &claims.role,
     )
     .await?;
 
@@ -2132,7 +2133,7 @@ pub async fn add_alias(
     // live domain as an alias and hijack its traffic / intercept its ACME
     // HTTP-01 challenge. Reject reserved domains and any domain already served
     // by a site or git deployment on this server.
-    let alias = ensure_domain_available(&state, &agent, &body.alias, server_id, &headers).await?;
+    let alias = ensure_domain_available(&state, &agent, &body.alias, server_id, &headers, &claims.role).await?;
 
     let result = agent
         .post(
@@ -2434,7 +2435,7 @@ pub async fn clone_site(
                 &format!("Site creation rate limit: max {max_sites} sites per hour")));
         }
     }
-    let target_domain = &ensure_domain_available(&state, &agent, target_domain, server_id, &headers).await?;
+    let target_domain = &ensure_domain_available(&state, &agent, target_domain, server_id, &headers, &claims.role).await?;
     // Atomically reserve the reseller site-quota slot AFTER the (fallible) domain checks
     // so a rejected clone cannot leak a quota slot; this mirrors create(), where the
     // reserve is the last pre-check before the mutation. Release it if the INSERT fails;
@@ -2710,6 +2711,7 @@ pub async fn rename_domain(
         &requested,
         &headers,
         domain_claim::Holder::Site(id),
+        &claims.role,
     )
     .await?;
 
@@ -3264,6 +3266,7 @@ async fn ensure_domain_available(
     domain: &str,
     server_id: Uuid,
     headers: &HeaderMap,
+    claimant_role: &str,
 ) -> Result<String, ApiError> {
     domain_claim::ensure_claimable(
         &state.db,
@@ -3272,6 +3275,7 @@ async fn ensure_domain_available(
         domain,
         headers,
         domain_claim::Holder::New,
+        claimant_role,
     )
     .await
 }
@@ -3443,6 +3447,142 @@ pub async fn toggle_bot_protection(
     Ok(Json(serde_json::json!({
         "ok": true,
         "bot_protection": mode,
+    })))
+}
+
+#[derive(serde::Deserialize)]
+pub struct TransferSiteRequest {
+    /// The new owner, by email. Email rather than id because the operator doing
+    /// this is reading a list of people, not a list of UUIDs.
+    pub email: String,
+}
+
+/// The tables that keep their own copy of `user_id` beside a `site_id`.
+///
+/// Derived, not remembered: these are every table in the schema carrying BOTH
+/// columns. Everything else a site owns — `databases`, `crons`, `backups`,
+/// `ssl_certificates` — reaches its owner THROUGH `site_id`, so it follows the
+/// transfer with no statement of its own. Getting this list wrong is the failure
+/// mode that matters: a row left behind keeps the previous owner able to see and
+/// act on part of a site they no longer hold, and nothing would report it.
+const OWNERSHIP_DENORMALIZED_TABLES: [&str; 4] =
+    ["alerts", "monitors", "secret_vaults", "whmcs_service_map"];
+
+/// POST /api/sites/{id}/transfer — hand a site to another account. Admin only.
+///
+/// The point of the whole `client` design (GitHub #51). DockPanel has exactly one
+/// ownership axis, `sites.user_id`, and 108 ownership-scoped reads that all say
+/// `WHERE user_id = $1`. Moving the row therefore moves the site completely, and
+/// every one of those reads keeps working without being touched — which is why
+/// this is a transfer rather than an access-control list. An ACL would have had
+/// to widen all 108, keep 57 `claims.sub` INSERTs in step, and get two name-keyed
+/// cleanups right whose own comments record that they already shipped a
+/// cross-account delete once.
+///
+/// ⚠ Transfer is EXCLUSIVE: the previous owner loses the site. That is the
+/// ISPConfig shape — a client owns its domains and the admin sees them by being
+/// admin — but it is not shared management, and the UI says so rather than
+/// letting an operator discover it afterwards.
+///
+/// One transaction, because a half-transferred site is worse than a failed one:
+/// the row would answer to the new owner while its alerts and secret vaults still
+/// answered to the old one.
+pub async fn transfer(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(body): Json<TransferSiteRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if claims.role != "admin" {
+        return Err(err(StatusCode::FORBIDDEN, "Admin only"));
+    }
+
+    let site: Option<(Uuid, String, Uuid)> =
+        sqlx::query_as("SELECT id, domain, user_id FROM sites WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| internal_error("load site", e))?;
+    let (site_id, domain, previous_owner) =
+        site.ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    let email = body.email.trim().to_ascii_lowercase();
+    let recipient: Option<(Uuid, String)> =
+        sqlx::query_as("SELECT id, role FROM users WHERE lower(email) = $1")
+            .bind(&email)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| internal_error("load recipient", e))?;
+    let (new_owner, new_owner_role) =
+        recipient.ok_or_else(|| err(StatusCode::NOT_FOUND, "No account with that email"))?;
+
+    if new_owner == previous_owner {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "That account already owns this site",
+        ));
+    }
+    // A suspended account must not be handed a live site: `auth.rs` rejects its
+    // every request, so the site would land somewhere nobody can reach.
+    if new_owner_role == "suspended" {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "That account is suspended. Restore it before transferring a site to it.",
+        ));
+    }
+
+    let mut tx = state
+        .db
+        .begin()
+        .await
+        .map_err(|e| internal_error("begin transfer", e))?;
+
+    sqlx::query("UPDATE sites SET user_id = $1 WHERE id = $2")
+        .bind(new_owner)
+        .bind(site_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| internal_error("transfer site", e))?;
+
+    let mut moved = serde_json::Map::new();
+    for table in OWNERSHIP_DENORMALIZED_TABLES {
+        // The table name comes from a const array in this file and never from a
+        // request, so the format! cannot carry anything an caller supplied.
+        let n = sqlx::query(&format!(
+            "UPDATE {table} SET user_id = $1 WHERE site_id = $2"
+        ))
+        .bind(new_owner)
+        .bind(site_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| internal_error("transfer dependent rows", e))?
+        .rows_affected();
+        moved.insert(table.to_string(), serde_json::json!(n));
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| internal_error("commit transfer", e))?;
+
+    crate::services::activity::log_activity(
+        &state.db,
+        claims.sub,
+        &claims.email,
+        "site.transfer",
+        Some("site"),
+        Some(&domain),
+        Some(&format!("{previous_owner} -> {new_owner} ({email})")),
+        crate::routes::client_ip(&headers).as_deref(),
+    )
+    .await;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "domain": domain,
+        "previous_owner": previous_owner,
+        "new_owner": new_owner,
+        "dependent_rows_moved": moved,
     })))
 }
 

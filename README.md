@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>The most feature-packed free server panel ever built.</strong><br>
-  Self-hosted. Docker-native. Written in Rust. Panel services run on <strong>~49MB of RAM</strong>. 807 HTTP routes. 153 app templates. 1103 regression assertions. ~45MB binaries. Zero subscriptions.
+  Self-hosted. Docker-native. Written in Rust. Panel services run on <strong>~49MB of RAM</strong>. 808 HTTP routes. 153 app templates. 1108 regression assertions. ~45MB binaries. Zero subscriptions.
 </p>
 
 <p align="center">
@@ -189,7 +189,7 @@ found, including what is still broken.
 ### Operations
 - **Multi-Server** — Manage remote servers from one panel. Agent auto-registers.
 - **DNS** — Cloudflare + PowerDNS. Zone templates, propagation checker, DNSSEC. Cloudflare cache purge, security settings, Cloudflare Tunnel.
-- **Container Management** — Auto-sleep (scale to zero), auto-update detection, per-user isolation policies, app migration between servers.
+- **Container Management** — Auto-sleep (stop idle containers), auto-update detection, per-user isolation policies.
 - **Mail** — Postfix + Dovecot + OpenDKIM. Webmail (Roundcube), spam filter (Rspamd), SMTP relay.
 - **Monitoring** — HTTP/TCP/ping uptime checks, SLA tracking, PagerDuty integration.
 - **Prometheus + Grafana** — Token-gated `/api/metrics` scrape endpoint (off by default) plus a drop-in [fleet dashboard](dashboards/dockpanel-grafana.json) covering CPU/memory/disk, GPU utilization/VRAM/temp/power, sites, and alerts. See [docs/guides/prometheus.md](docs/guides/prometheus.md).
@@ -227,11 +227,10 @@ found, including what is still broken.
 - **Reseller Accounts** — Admin → Reseller → User hierarchy with quotas.
 - **White-Label** — Custom logo, colors, panel name per reseller.
 - **OAuth/SSO** — Google, GitHub, GitLab login.
-- **Extension API** — Webhook events with HMAC signing and scoped API keys.
+- **Extension API** — Webhook events with HMAC signing.
 - **WHMCS Integration** — Provisioning, suspension, termination hooks. Auto-create users from billing.
 - **Horizontal Auto-Scaling** — Rule-based CPU thresholds with min/max replicas and cooldown.
-- **Migration Wizard** — Import from cPanel, HestiaCP. Plesk (beta). App migration between servers.
-- **Teams** — Multi-user access with role-based permissions.
+- **Migration Wizard** — Import from cPanel, HestiaCP. Plesk (beta).
 
 ## Architecture
 

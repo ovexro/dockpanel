@@ -87,6 +87,7 @@ pub async fn create(
         &requested,
         &headers,
         crate::services::domain_claim::Holder::New,
+        &claims.role,
     )
     .await?;
 

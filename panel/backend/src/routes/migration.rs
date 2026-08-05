@@ -430,6 +430,12 @@ pub async fn import(
     // `is_reserved_domain_for` reads the Host header — BASE_URL is empty on a
     // routine install, which is the whole reason that variant exists.
     let claim_headers = headers.clone();
+    // Carried for the same reason as the headers: the claim happens inside the
+    // spawned task, after `claims` has been moved. `import` is already
+    // admin-only (`require_admin` above), so this can never be a client today —
+    // it is passed so that the choke point sees a real role from every caller
+    // rather than a placeholder some later refactor would have to remember.
+    let claim_role = claims.role.clone();
 
     tokio::spawn(async move {
         let mut results = serde_json::json!({
@@ -470,6 +476,7 @@ pub async fn import(
                 domain,
                 &claim_headers,
                 crate::services::domain_claim::Holder::New,
+                &claim_role,
             )
             .await;
 

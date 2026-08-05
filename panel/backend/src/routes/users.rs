@@ -56,6 +56,20 @@ pub async fn list(
 
     Ok(Json(users))
 }
+/// The role values an operator may assign through this module.
+///
+/// ONE list, because there were three identical copies — create, update and the
+/// un-suspend restore — and adding `client` to the database CHECK and to the user
+/// editor still left all three refusing it, so the role existed everywhere except
+/// where it is written. `suspended` is deliberately absent: it is reached through
+/// `toggle_suspend`, never assigned directly.
+const ASSIGNABLE_ROLES: [&str; 4] = ["admin", "reseller", "user", "client"];
+
+/// The message that names them. `err` takes a `&str`, so this cannot be built
+/// from the list at runtime — a unit test asserts it mentions every one instead,
+/// which is the same guarantee by a different route.
+const ASSIGNABLE_ROLES_MSG: &str = "Role must be one of: admin, reseller, user, client";
+
 
 /// POST /api/users — Create a new user (admin only).
 pub async fn create(
@@ -76,8 +90,8 @@ pub async fn create(
     }
 
     let role = body.role.as_deref().unwrap_or("user");
-    if !["admin", "reseller", "user"].contains(&role) {
-        return Err(err(StatusCode::BAD_REQUEST, "Role must be admin, reseller, or user"));
+    if !ASSIGNABLE_ROLES.contains(&role) {
+        return Err(err(StatusCode::BAD_REQUEST, ASSIGNABLE_ROLES_MSG));
     }
 
     // Check email uniqueness
@@ -163,8 +177,8 @@ pub async fn update(
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
 
     if let Some(ref role) = body.role {
-        if !["admin", "reseller", "user"].contains(&role.as_str()) {
-            return Err(err(StatusCode::BAD_REQUEST, "Role must be admin, reseller, or user"));
+        if !ASSIGNABLE_ROLES.contains(&role.as_str()) {
+            return Err(err(StatusCode::BAD_REQUEST, ASSIGNABLE_ROLES_MSG));
         }
         let role_changed = role.as_str() != _user.role;
         // An admin cannot change their OWN role (mirrors the self-guards on
@@ -263,7 +277,7 @@ pub async fn toggle_suspend(
     let (new_role, action) = if user.role == "suspended" {
         // Un-suspend: restore previous role (stored in reset_token) or default to "user"
         let original_role = user.reset_token.as_deref().unwrap_or("user");
-        let role = if ["admin", "reseller", "user"].contains(&original_role) {
+        let role = if ASSIGNABLE_ROLES.contains(&original_role) {
             original_role.to_string()
         } else {
             "user".to_string()
@@ -423,4 +437,42 @@ pub async fn remove(
     ).await;
 
     Ok(Json(serde_json::json!({ "ok": true, "email": user.email })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_role_message_names_every_assignable_role() {
+        // The list and the sentence describing it are two facts that must agree,
+        // and `err` takes a `&str` so the sentence cannot be built from the list.
+        // Adding a role to the array and forgetting the message would tell an
+        // operator their valid role is invalid.
+        for role in ASSIGNABLE_ROLES {
+            assert!(
+                ASSIGNABLE_ROLES_MSG.contains(role),
+                "role {role:?} is assignable but the error message does not name it"
+            );
+        }
+    }
+
+    #[test]
+    fn suspended_is_not_directly_assignable() {
+        // It is reached through toggle_suspend, which also stashes the previous
+        // role. Allowing it here would suspend an account without recording what
+        // to restore it to.
+        assert!(!ASSIGNABLE_ROLES.contains(&"suspended"));
+    }
+
+    #[test]
+    fn the_client_role_is_assignable_and_survives_an_unsuspend() {
+        // s312 / GitHub #51. Three separate copies of this list existed — create,
+        // update and the un-suspend restore — so a role added to the database
+        // CHECK and the user editor was still refused by all three. The restore
+        // path matters most: a role missing from the list is silently downgraded
+        // to "user" when the account is un-suspended, which would hand a client
+        // back a role that can create sites.
+        assert!(ASSIGNABLE_ROLES.contains(&"client"));
+    }
 }

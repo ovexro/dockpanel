@@ -231,6 +231,7 @@ pub async fn deploy(
                 &d,
                 &headers,
                 crate::services::domain_claim::Holder::New,
+                &claims.role,
             )
             .await?,
         ),

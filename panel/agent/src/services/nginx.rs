@@ -129,38 +129,84 @@ pub fn restore_note(restored: bool) -> &'static str {
     }
 }
 
-/// The two denies the static branch of both templates carries from v2.68.0. Kept as
-/// one block so the retrofit below writes exactly what a fresh render would.
-const STATIC_DENIES: &str = "\n\
-    \x20   # Retrofitted: a site switched from php to static keeps its application\n\
-    \x20   # source in the same docroot. Both denies exist in every php preset.\n\
-    \x20   location ~ /\\.(?!well-known) {\n\
-    \x20       deny all;\n\
-    \x20   }\n\
-    \n\
-    \x20   location ~ \\.php$ {\n\
-    \x20       deny all;\n\
-    \x20   }\n";
+/// The line that identifies the static branch, in BOTH templates. One constant,
+/// because this string being written twice is what produced the v2.68.2 defect
+/// below: the decision tested it one way and the insertion another.
+const STATIC_INDEX: &str = "index index.html index.htm;";
 
-/// Decide whether a vhost needs the denies, and return the patched body if so.
+/// The denies the static branch of both templates carries.
+///
+/// Each block is paired with the marker that proves it is ALREADY present, so a
+/// vhost patched by an earlier version gains only what it lacks instead of a
+/// duplicated block. v2.68.0/.1/.2 answered "what population does this fix reach"
+/// wrongly three times in a row; this is that question asked of the retrofit's own
+/// prior output, which is the one place it had not been asked.
+///
+/// The rendered layout is not byte-identical to a fresh render and does not need
+/// to be: the template emits its denies after `location / { try_files … }` while
+/// these land straight after the index line, and regex locations win over prefix
+/// locations regardless of order. Order does not change what is served.
+const STATIC_DENIES: &[(&str, &str)] = &[
+    (
+        "location ~ /\\.(?!well-known)",
+        "\n\
+        \x20   # Retrofitted: a site switched from php to static keeps its application\n\
+        \x20   # source in the same docroot. Every deny here exists in the php presets.\n\
+        \x20   location ~ /\\.(?!well-known) {\n\
+        \x20       deny all;\n\
+        \x20   }\n",
+    ),
+    (
+        "location ~ \\.php$",
+        "\n\
+        \x20   location ~ \\.php$ {\n\
+        \x20       deny all;\n\
+        \x20   }\n",
+    ),
+    (
+        "location ~ ^/sites/.*/private/",
+        "\n\
+        \x20   # drupal's private file store: no dot segment and no .php suffix, so\n\
+        \x20   # neither deny above covers it.\n\
+        \x20   location ~ ^/sites/.*/private/ {\n\
+        \x20       deny all;\n\
+        \x20   }\n",
+    ),
+];
+
+/// Decide whether a vhost needs any deny it does not have, and return the patched
+/// body if so.
 ///
 /// Pure, so the decision is testable without a box: the caller does the I/O and
-/// the `nginx -t` gate. A vhost qualifies when it renders the STATIC branch
-/// (`index index.html index.htm;`) and carries no FastCGI handler — a php vhost
-/// already has these denies inside its preset branch. Returns `None` for anything
-/// already patched, which is what makes the migration idempotent.
+/// the `nginx -t` gate. A vhost qualifies when it renders the STATIC branch and
+/// carries no FastCGI handler — a php vhost already has these denies inside its
+/// preset branch. Returns `None` when nothing is missing, which is what makes the
+/// migration idempotent.
+///
+/// ⚠ The candidacy test and the insertion test must be the SAME test. They were
+/// not: candidacy asked `body.contains(STATIC_INDEX)` (a substring, anywhere) and
+/// insertion asked `line.trim() == STATIC_INDEX` (a whole line). An index line
+/// carrying a trailing comment satisfied the first and never the second, so the
+/// file was rewritten with zero denies added — and the caller, which keys its
+/// success log on the write rather than on the content, reported that vhost as
+/// retrofitted. A false green on an unprotected site, repeating every restart.
 pub fn patch_static_vhost(body: &str) -> Option<String> {
-    if !body.contains("index index.html index.htm;")
-        || body.contains("fastcgi_pass")
-        || body.contains("location ~ /\\.(?!well-known)")
-    {
+    if !body.lines().any(|line| line.trim() == STATIC_INDEX) || body.contains("fastcgi_pass") {
+        return None;
+    }
+    let missing: String = STATIC_DENIES
+        .iter()
+        .filter(|(marker, _)| !body.contains(marker))
+        .map(|(_, block)| *block)
+        .collect();
+    if missing.is_empty() {
         return None;
     }
     Some(
         body.lines()
             .map(|line| {
-                if line.trim() == "index index.html index.htm;" {
-                    format!("{line}\n{STATIC_DENIES}")
+                if line.trim() == STATIC_INDEX {
+                    format!("{line}\n{missing}")
                 } else {
                     line.to_string()
                 }
@@ -700,13 +746,65 @@ mod tests {
         let patched = patch_static_vhost(STATIC_VHOST).expect("a static vhost is a candidate");
         assert!(patched.contains("location ~ /\\.(?!well-known)"));
         assert!(patched.contains("location ~ \\.php$"));
+        assert!(patched.contains("location ~ ^/sites/.*/private/"));
         // The site must keep working: the original serving block survives.
         assert!(patched.contains("try_files $uri $uri/ =404;"));
         assert!(patched.contains("root /var/www/a.example/public;"));
         // Idempotent — a second pass is not a candidate at all.
         assert!(patch_static_vhost(&patched).is_none());
         // Exactly one insertion, not one per line.
-        assert_eq!(patched.matches("deny all;").count(), 2);
+        assert_eq!(patched.matches("deny all;").count(), 3);
+    }
+
+    #[test]
+    fn retrofit_adds_only_the_deny_an_earlier_version_missed() {
+        // The reach question asked of this function's OWN prior output. A box
+        // patched by v2.68.2 carries two denies; v2.68.3 adds a third. It must
+        // gain exactly that one and duplicate neither of the others — the shape
+        // that made a template fix, then a panel-only fix, each reach the wrong
+        // population.
+        let v2682 = patch_static_vhost(STATIC_VHOST).expect("candidate");
+        let stale = v2682.replace(
+            "\n    # drupal's private file store: no dot segment and no .php suffix, so\n    # neither deny above covers it.\n    location ~ ^/sites/.*/private/ {\n        deny all;\n    }\n",
+            "",
+        );
+        assert!(!stale.contains("sites/.*/private"), "fixture must model a v2.68.2 body");
+        assert_eq!(stale.matches("deny all;").count(), 2);
+
+        let upgraded = patch_static_vhost(&stale).expect("a two-deny body is still a candidate");
+        assert_eq!(upgraded.matches("deny all;").count(), 3);
+        assert_eq!(upgraded.matches("location ~ /\\.(?!well-known)").count(), 1);
+        assert_eq!(upgraded.matches("location ~ \\.php$").count(), 1);
+        assert_eq!(upgraded.matches("location ~ ^/sites/.*/private/").count(), 1);
+        assert!(patch_static_vhost(&upgraded).is_none());
+    }
+
+    #[test]
+    fn retrofit_never_returns_a_body_it_added_nothing_to() {
+        // The caller logs "Retrofitted … onto <file>" on any successful WRITE, not
+        // on content. So a Some(_) carrying zero denies is a false green on an
+        // unprotected vhost, repeating every restart. It happened: candidacy asked
+        // `contains(index…)` (substring) and insertion asked `trim() ==` (whole
+        // line), and a trailing comment satisfied one and never the other.
+        let commented = STATIC_VHOST.replace(
+            "    index index.html index.htm;\n",
+            "    index index.html index.htm; # set by hand\n",
+        );
+        assert!(commented.contains("index index.html index.htm;"), "substring still present");
+        assert!(
+            !commented.lines().any(|l| l.trim() == "index index.html index.htm;"),
+            "…but no whole line matches — the two predicates disagree on this input",
+        );
+
+        // Whatever the verdict, it may never be "changed, with nothing added".
+        for body in [&commented, &STATIC_VHOST.to_string()] {
+            if let Some(out) = patch_static_vhost(body) {
+                assert!(
+                    out.contains("deny all;"),
+                    "returned a patched body with no deny in it",
+                );
+            }
+        }
     }
 
     #[test]

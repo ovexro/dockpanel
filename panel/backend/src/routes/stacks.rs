@@ -82,12 +82,14 @@ async fn claim_stack_domain(
     headers: &HeaderMap,
     domain: Option<&str>,
     holder: Holder,
+    claimant_role: &str,
 ) -> Result<Option<String>, ApiError> {
     let Some(raw) = domain.map(str::trim).filter(|d| !d.is_empty()) else {
         return Ok(None);
     };
     let claimed =
-        domain_claim::ensure_claimable(&state.db, agent, server_id, raw, headers, holder).await?;
+        domain_claim::ensure_claimable(&state.db, agent, server_id, raw, headers, holder, claimant_role)
+            .await?;
     Ok(Some(claimed))
 }
 
@@ -234,6 +236,7 @@ pub async fn create(
         &headers,
         body.domain.as_deref(),
         Holder::New,
+        &claims.role,
     )
     .await?;
 
@@ -472,6 +475,7 @@ pub async fn update(
         &headers,
         body.domain.as_deref(),
         Holder::Stack(id),
+        &claims.role,
     )
     .await?;
 

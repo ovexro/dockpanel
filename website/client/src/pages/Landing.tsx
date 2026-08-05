@@ -240,7 +240,7 @@ const allFeatures = [
   { name: 'Auto-Healing', desc: 'Restart services, clear disk, kill runaway processes', icon: Wrench },
   { name: 'Audit Log', desc: 'Immutable, tamper-resistant, with session recording', icon: ClipboardList },
   { name: 'Email Server', desc: 'Postfix + Dovecot + DKIM, virtual domains & aliases', icon: Mail },
-  { name: 'Reseller & White-Label', desc: 'Custom branding, teams, billing integration', icon: Users },
+  { name: 'Reseller & White-Label', desc: 'Custom branding, sub-accounts, billing integration', icon: Users },
   { name: 'Multi-Server', desc: 'Manage a fleet from one dashboard', icon: Server },
   { name: 'OAuth / SSO', desc: 'GitHub & Google login out of the box', icon: LogIn },
   { name: 'Nixpacks Build', desc: '30+ languages without writing a Dockerfile', icon: Package },

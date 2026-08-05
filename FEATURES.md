@@ -1,6 +1,6 @@
 # DockPanel Feature Manifest
 
-> **Version**: v2.68.2 | **Total**: 60+ major features, ~285 capabilities
+> **Version**: v2.69.0 | **Total**: 60+ major features, ~285 capabilities
 >
 > This file is the single source of truth for what DockPanel offers.
 > Update it whenever features are added, changed, or removed.
@@ -83,9 +83,8 @@
 | **Reseller Accounts** | Admin→Reseller→User hierarchy, quotas, server allocation | `routes/resellers.rs`, `reseller_dashboard.rs` | `ResellerDashboard.tsx`, `ResellerUsers.tsx` | `reseller_profiles`, `reseller_servers` |
 | **White-Label** | Per-reseller logo, panel name, accent color, hide branding | `routes/settings.rs` (branding endpoint) | (in CommandLayout, Login) | `reseller_profiles` |
 | **Users** | CRUD, role assignment (admin/reseller/user) | `routes/users.rs` | (in Settings) | `users` |
-| **Teams** | Create teams, invite members, assign roles | `routes/teams.rs` | (in Settings) | `teams`, `team_members`, `team_invites` |
-| **API Keys** | Programmatic access tokens with rotation | `routes/api_keys.rs` | (in Settings) | `api_keys` |
-| **Extensions** | Webhook integrations, HMAC-signed events, scoped API keys | `routes/extensions.rs` | `Extensions.tsx` | `extensions`, `extension_events` |
+| **API Keys** | Key CRUD and rotation. ⚠ **Not an authentication mechanism** — see §Withdrawn Claims | `routes/api_keys.rs` | (in Settings) | `api_keys` |
+| **Extensions** | Webhook integrations, HMAC-signed events | `routes/extensions.rs` | `Extensions.tsx` | `extensions`, `extension_events` |
 | **Activity Log** | Full audit trail of all mutations | `routes/activity.rs` | (in Logs) | `activity_logs` |
 | **Settings** | SMTP, branding, retention, webhooks, export/import | `routes/settings.rs` | `Settings.tsx` | `settings` |
 
@@ -172,7 +171,6 @@
 | **Wildcard SSL** | DNS-01 challenge via Cloudflare API, multi-part TLD support | `routes/sites.rs` | `SiteDetail.tsx` |
 | **WHMCS Billing** | Webhook provisioning/suspension/termination, auto-create users | `routes/whmcs.rs` | `Integrations.tsx` |
 | **Terraform/Pulumi** | IaC token management, resource listing API (sites, databases) | `routes/iac.rs` | `Integrations.tsx` |
-| **App Migration** | Migrate containers between servers, progress tracking | `routes/whmcs.rs` | `Integrations.tsx` |
 
 ## Database (Advanced)
 
@@ -180,6 +178,20 @@
 |---------|-------------|---------|----------|
 | **Visual Schema Browser** | Tables, columns, indexes, foreign key relationships in one view | `routes/databases.rs` | `Databases.tsx` |
 | **Point-in-Time Recovery** | WAL archiving (PostgreSQL), binlog retention (MySQL), restore to timestamp | `routes/databases.rs` | `Databases.tsx` |
+
+## Withdrawn Claims
+
+Capabilities this project advertised and does not have. They are recorded rather
+than quietly deleted, because a claim that merely disappears from one surface
+tends to survive on the others — and because an evaluator who read the old text
+deserves to find out what happened to it.
+
+| Claim | Where it appeared | What is actually there | Withdrawn |
+|-------|-------------------|------------------------|-----------|
+| **Teams** — "multi-user access with role-based permissions", UI "(in Settings)" | `README.md`, `FEATURES.md`, `COMPARISON.md`, dockpanel.dev | `routes/teams.rs` is 477 lines of working, routed endpoints that grant **nothing**: `team_members` is read by that file and no other, so no authorization path anywhere consults team membership. There is no Teams UI — the word does not occur in the shipped frontend bundle — and the invite email links to `/teams/accept`, an SPA route that does not exist, so the recipient is redirected to the dashboard and the token is discarded. The schema attaches `team_id` to **`servers`**, not `sites`. | 2026-08-05 |
+| **API Keys** — "programmatic access tokens", "scoped API keys" | `README.md`, `FEATURES.md`, `docs/api-reference.md` | Keys in all three families (`dp_`, `dpiac_`, `dpx_`) are generated, hashed, stored and handed to the operator with "won't be shown again" — and **no code path ever reads a stored hash back to authenticate a request**. The sole bearer-token extractor does exactly one thing with the value: JWT decode. `last_used_at` has no writer. The keys are real strings that open nothing. | 2026-08-05 |
+| **App Migration** — "migrate containers between servers, progress tracking" | `README.md`, `FEATURES.md`, `Integrations.tsx` | The endpoint writes one row with `status='in_progress'` and there is **no `UPDATE app_migrations` anywhere in the repository** — no worker, no progress, no terminal state. The Integrations tab that reads the table is real, so an operator sees a migration that is permanently 0% and never completes. | 2026-08-05 |
+| **Auto-sleep "scale to zero"** | `README.md` | Containers scale *to* zero and do not come back on their own: the Start control never clears `is_sleeping`, and the only endpoint that does has no caller in the frontend. Wording corrected to "stop idle containers"; the wake path is a tracked defect, not a claim. | 2026-08-05 |
 
 ## Verified Metrics
 
@@ -214,10 +226,10 @@ honest:
 | Panel services RAM (agent + API) | ~49 MB | measured | 2026-07-27 |
 | Full-stack RAM (with bundled PostgreSQL) | ~109 MB | measured | 2026-07-27 |
 | App templates | 153 | derived | every commit |
-| HTTP routes | 807 (525 backend + 282 agent) | derived | every commit |
-| Regression-pin assertions | 1103 (30 suites) | derived | every commit |
+| HTTP routes | 808 (526 backend + 282 agent) | derived | every commit |
+| Regression-pin assertions | 1108 (30 suites) | derived | every commit |
 | Frontend pages | 51 | derived | every commit |
-| DB migrations | 101 | derived | every commit |
+| DB migrations | 102 | derived | every commit |
 | Supervised background services | 15 | derived | every commit |
 
 Five of these were wrong when the register was built (s272), some by a factor of

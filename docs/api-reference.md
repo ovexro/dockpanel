@@ -540,6 +540,16 @@ Create a webhook integration.
 | DELETE | `/api/users/{id}` | Delete user |
 
 ### Teams (7)
+
+> ⚠ **These endpoints grant no access.** They create teams, invite members and
+> validate roles, but `team_members` is read by `routes/teams.rs` and by nothing
+> else, so no authorization path in the panel consults team membership — the
+> `admin` / `developer` / `viewer` roles have no effect on any resource. There is
+> also no Teams UI, and the invite email links to an SPA route that does not
+> exist. Documented because the endpoints are real and routed; do not build
+> against them expecting them to authorize anything. See `FEATURES.md`
+> §Withdrawn Claims.
+
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET/POST | `/api/teams` | List/create teams |
@@ -558,6 +568,13 @@ Create a webhook integration.
 | GET/POST/PUT/DELETE | `/api/reseller/users` | Reseller's sub-users |
 
 ### API Keys (4)
+
+> ⚠ **A key issued here authenticates nothing.** The endpoints below generate,
+> hash, store and rotate keys, and no code path ever reads a stored hash back to
+> authenticate a request — the only bearer-token extractor JWT-decodes the value
+> and nothing else. Authenticate with the session cookie or a JWT. See
+> `FEATURES.md` §Withdrawn Claims.
+
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET/POST | `/api/api-keys` | List/create |

@@ -765,6 +765,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/sites/{id}/runtime", put(sites::switch_runtime))
         .route("/api/sites/{id}/limits", put(sites::update_limits))
         .route("/api/sites/{id}/domain", put(sites::rename_domain))
+        .route("/api/sites/{id}/transfer", post(sites::transfer))
         .route("/api/sites/{id}/toggle", put(sites::toggle_enabled))
         .route("/api/sites/{id}/fastcgi-cache", put(sites::toggle_fastcgi_cache))
         .route("/api/sites/{id}/fastcgi-cache/purge", post(sites::purge_fastcgi_cache))

@@ -240,6 +240,7 @@ export default function Users() {
                         <option value="admin">admin</option>
                         <option value="reseller">reseller</option>
                         <option value="user">user</option>
+                        <option value="client">client</option>
                       </select>
                     ) : (
                       <button onClick={() => { setEditTarget(user.id); setEditRole(user.role); }} className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium cursor-pointer ${user.role === "admin" ? "bg-accent-600/15 text-accent-400" : user.role === "reseller" ? "bg-rust-500/15 text-rust-400" : "bg-accent-500/15 text-accent-400"}`}>{user.role}</button>
@@ -409,10 +410,11 @@ export default function Users() {
                   className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
                 >
                   <option value="user">User</option>
+                  <option value="client">Client</option>
                   <option value="reseller">Reseller</option>
                   <option value="admin">Admin</option>
                 </select>
-                <p className="text-xs text-dark-400 mt-1">Admin has full access, User has limited access</p>
+                <p className="text-xs text-dark-400 mt-1">Admin has full access. User has limited access. <strong>Client</strong> can manage only the sites transferred to it and cannot create new ones — transfer a site from its own page.</p>
               </div>
             </div>
             <div className="flex justify-end gap-2 mt-6">

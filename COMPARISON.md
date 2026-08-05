@@ -33,7 +33,7 @@ An honest comparison. We're not shy about where DockPanel leads — and we're up
 
 **A complete developer toolkit** — Git push-to-deploy with Nixpacks auto-build (30+ languages, no Dockerfile needed), preview environments with TTL, a full CLI for automation, and Infrastructure as Code (YAML export/import). These are features that RunCloud and Ploi charge $8-15/month for. DockPanel includes all of them for free.
 
-**Business-ready out of the box** — Multi-server management (unlimited), reseller accounts with quotas and white-label branding, OAuth/SSO (Google, GitHub, GitLab), extension API with HMAC-signed webhooks, migration wizard (import from cPanel/Plesk/HestiaCP), and teams with role-based access. Most panels don't have even half of these at any price.
+**Business-ready out of the box** — Multi-server management (unlimited), reseller accounts with quotas and white-label branding, OAuth/SSO (Google, GitHub, GitLab), extension API with HMAC-signed webhooks, and a migration wizard (import from cPanel/Plesk/HestiaCP). Most panels don't have even half of these at any price.
 
 **Per-image CVE scanning with deploy gating** — No other free Docker-native panel ships this. Every running app is scanned against the Anchore grype vulnerability database, a severity badge surfaces on the Apps list, and a configurable gate refuses new deploys on images with critical/high/medium CVEs. Coolify, Dokploy, Portainer CE, and CyberPanel all leave this to third-party tooling. DockPanel ships it in the Settings UI, defaults it off, and makes it one click to enable.
 

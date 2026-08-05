@@ -1763,7 +1763,21 @@ async fn enable_site(Path(domain): Path<String>) -> Result<Json<serde_json::Valu
         return Err((StatusCode::NOT_FOUND, format!("No disabled config backup for {domain}")));
     }
 
-    std::fs::copy(&backup_path, &conf_path)
+    // The backup holds the body as it was when the site was disabled. For a site
+    // switched php→static under v2.67.0 and disabled before the operator upgraded,
+    // that is the UNPATCHED body — and the startup retrofit cannot reach it: it
+    // scans sites-enabled for `*.conf`, while this is `*.conf.disabled` in
+    // sites-available, failing both tests. A plain copy therefore re-arms the
+    // disclosure v2.68.0 shipped for, at the exact moment the body goes back into
+    // service. Patch on the way in: restoring is the only path by which a disabled
+    // body is ever served, so this is where that population is reachable.
+    let backup = std::fs::read_to_string(&backup_path)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Read disabled config: {e}")))?;
+    let patched = services::nginx::patch_static_vhost(&backup);
+    if patched.is_some() {
+        tracing::info!("Retrofitted static denies onto {domain} while re-enabling it");
+    }
+    std::fs::write(&conf_path, patched.as_deref().unwrap_or(&backup))
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Restore config: {e}")))?;
     std::fs::remove_file(&backup_path).ok();
 

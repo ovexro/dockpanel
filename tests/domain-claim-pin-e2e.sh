@@ -458,6 +458,75 @@ if S=$(subj "$APPS_BE"); then
 fi
 
 echo
+echo "== §F  the client gate lives at the choke point, and no caller can fake it =="
+
+# s312 / GitHub #51. A `client` holds sites and may not bring a NEW domain into
+# service. The gate is one check inside ensure_claimable rather than a role check
+# at each creating handler, for the reason this whole file exists: git_deploys,
+# docker_apps and stacks all materialise a served vhost WITHOUT inserting into
+# `sites`, so gates bolted onto the four `INSERT INTO sites` sites would have left
+# three doors open. These arms pin the choke point, not the spelling.
+if S=$(subj "$CLAIM"); then
+  B=$(fnbody "$S" ensure_claimable)
+  if [ -z "$B" ]; then
+    bad "§F: could not extract ensure_claimable — the arms are not measuring anything"
+  else
+    if derives "$B" 'may_claim_new'; then
+      ok "the shared guard consults the claim-permission rule"
+    else
+      bad "the shared guard no longer consults the claim-permission rule"
+    fi
+    # Ordering: refusing AFTER the occupancy lookup would let a client probe which
+    # domains are free by reading which error comes back.
+    g=$(grep -nE 'may_claim_new' <<< "$B" | head -1 | cut -d: -f1)
+    o=$(grep -nE 'find_occupant' <<< "$B" | head -1 | cut -d: -f1)
+    if [ -n "$g" ] && [ -n "$o" ] && [ "$g" -lt "$o" ]; then
+      ok "the permission check precedes the occupancy lookup"
+    else
+      bad "a refused claimant still learns whether the domain was free"
+    fi
+  fi
+
+  R=$(fnbody "$S" may_claim_new)
+  if [ -z "$R" ]; then
+    bad "§F: could not extract may_claim_new"
+  elif derives "$R" 'Holder::New'; then
+    ok "the rule is keyed on the NEW-domain transition, not on a resource kind"
+  else
+    bad "the rule stopped keying on Holder::New — a rename may now be refused, or a create allowed"
+  fi
+fi
+
+# The arm that matters most. Every call site must pass a role it READ from the
+# request; a literal makes the gate vacuous while leaving every other arm green.
+# Flattened, because these calls are formatted across many lines.
+BYPASS=0
+for f in "$SITES" "$STAGING" "$MIG" "$GITDEP" "$APPS_BE" panel/backend/src/routes/stacks.rs; do
+  S=$(subj "$f") || continue
+  F=$(tr '\n' ' ' <<< "$S")
+  # A string literal in the role position of a call to the guard.
+  while IFS= read -r hit; do
+    [ -z "$hit" ] && continue
+    BYPASS=$((BYPASS+1))
+    bad "$(basename "$f") passes a hardcoded role to the guard: $hit"
+  done < <(grep -oE 'ensure_claimable\([^;]*"(admin|reseller|user|client)"[^;]*\)' <<< "$F")
+done
+[ "$BYPASS" -eq 0 ] && ok "no claim path hardcodes the role the gate reads"
+
+# And the rule must actually be reachable from a real role value: the string the
+# gate compares against has to be the same one the database CHECK permits.
+MIGR=$(ls panel/backend/migrations/*client_role.sql 2>/dev/null | head -1)
+if [ -n "$MIGR" ] && [ -f "$MIGR" ]; then
+  if grep -qE "CHECK \(role IN \(.*'client'.*\)\)" "$MIGR"; then
+    ok "the database permits the role value the gate refuses on"
+  else
+    bad "the migration does not admit 'client' — the gate can never fire"
+  fi
+else
+  bad "no client-role migration found — the gate refuses a value no account can hold"
+fi
+
+echo
 echo "──────────────────────────────────────────"
 echo "PASS: $PASS   FAIL: $FAIL"
 [ "$FAIL" -eq 0 ]

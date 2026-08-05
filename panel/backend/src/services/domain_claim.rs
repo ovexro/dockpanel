@@ -85,6 +85,35 @@ impl Occupant {
     }
 }
 
+/// The role that holds sites but may not introduce new ones (GitHub #51).
+///
+/// Deliberately a `const` rather than a literal at each comparison: the value
+/// also lives in a database CHECK constraint and in the user editor, and a role
+/// string that means "deny" is the worst possible thing to typo — a misspelling
+/// does not fail, it silently grants.
+pub const CLIENT_ROLE: &str = "client";
+
+/// Whether `role` may make the claim `holder` describes.
+///
+/// The restriction is on the TRANSITION, not on the resource: `Holder::New` is
+/// by definition "no existing row may hold this domain", i.e. a domain entering
+/// service for the first time. Every other variant re-claims a domain on behalf
+/// of a row that already exists, which is management of something the caller was
+/// already authorised for by the ownership check in its own handler.
+///
+/// Putting it HERE rather than at each creating handler is the whole design.
+/// This module exists because eleven domain-introducing paths each carried their
+/// own subset of guards and drifted apart — the header above lists what that
+/// cost. Four role checks bolted onto the four `INSERT INTO sites` sites would
+/// have rebuilt exactly that: `git_deploys`, `docker_apps` and `stacks` all
+/// materialise a served vhost without ever inserting into `sites`, so a client
+/// blocked from creating a site could still have deployed a git app on a new
+/// domain. Nine call sites reach this function and `tests/domain-claim-pin-e2e.sh`
+/// already fails the build when a new surface does not.
+pub fn may_claim_new(role: &str, holder: Holder) -> bool {
+    !(role == CLIENT_ROLE && matches!(holder, Holder::New))
+}
+
 /// Normalise a domain for storage and comparison.
 ///
 /// Hostnames are case-insensitive, but `is_valid_domain` accepts uppercase and
@@ -113,11 +142,20 @@ pub async fn ensure_claimable(
     domain: &str,
     headers: &HeaderMap,
     holder: Holder,
+    claimant_role: &str,
 ) -> Result<String, ApiError> {
     let domain = normalise(domain);
 
     if !is_valid_domain(&domain) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid domain"));
+    }
+    if !may_claim_new(claimant_role, holder) {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "This account can manage the domains it holds but cannot bring a new \
+             one into service. Ask an administrator to create it and transfer it \
+             to you.",
+        ));
     }
     if is_reserved_domain_for(&domain, headers) {
         return Err(err(
@@ -246,5 +284,53 @@ mod tests {
     fn normalise_does_not_merge_genuinely_different_domains() {
         assert_ne!(normalise("a.b.com"), normalise("a-b.com"));
         assert_ne!(normalise("example.com"), normalise("example.net"));
+    }
+
+    // ── the client gate — s312 / GitHub #51 ─────────────────────────────
+
+    #[test]
+    fn a_client_may_not_bring_a_new_domain_into_service() {
+        assert!(!may_claim_new(CLIENT_ROLE, Holder::New));
+    }
+
+    #[test]
+    fn a_client_may_still_manage_the_domains_it_holds() {
+        // The whole point of the role: it HOLDS sites. A rename re-claims a
+        // domain on behalf of a row that already exists, and the handler's own
+        // ownership check has already established the caller may act on it.
+        // Refusing these would make the role useless rather than restricted.
+        let id = Uuid::nil();
+        assert!(may_claim_new(CLIENT_ROLE, Holder::Site(id)));
+        assert!(may_claim_new(CLIENT_ROLE, Holder::GitDeploy(id)));
+        assert!(may_claim_new(CLIENT_ROLE, Holder::Stack(id)));
+    }
+
+    #[test]
+    fn every_other_role_is_unaffected() {
+        // The gate must be a pure addition. If it refused anyone else, the
+        // regression would be invisible here and loud in production.
+        for role in ["admin", "reseller", "user", "suspended", ""] {
+            assert!(
+                may_claim_new(role, Holder::New),
+                "role {role:?} must still be able to claim a new domain here — \
+                 whether it may act at all is decided by its own handler's guard"
+            );
+        }
+    }
+
+    #[test]
+    fn the_refusal_is_keyed_on_the_exact_role_string() {
+        // A near-miss must NOT be treated as a client: this function fails OPEN
+        // by construction (it returns true for anything it does not recognise),
+        // so the only thing standing between a client and a new domain is that
+        // this string matches what the database CHECK and the user editor write.
+        for near in ["Client", "CLIENT", "clients", "client ", " client"] {
+            assert!(
+                may_claim_new(near, Holder::New),
+                "{near:?} is not the role value — if this ever becomes a client, \
+                 the value has drifted from the migration and the editor"
+            );
+        }
+        assert_eq!(CLIENT_ROLE, "client");
     }
 }

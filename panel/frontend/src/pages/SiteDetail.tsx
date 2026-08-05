@@ -149,6 +149,10 @@ export default function SiteDetail() {
   const [cloneMsg, setCloneMsg] = useState("");
   const [showCloneInput, setShowCloneInput] = useState(false);
   const [cloneDomainValue, setCloneDomainValue] = useState("");
+  const [showTransfer, setShowTransfer] = useState(false);
+  const [transferEmail, setTransferEmail] = useState("");
+  const [transferring, setTransferring] = useState(false);
+  const [transferMsg, setTransferMsg] = useState("");
 
   // Custom SSL Upload
   const [showSslUpload, setShowSslUpload] = useState(false);
@@ -541,6 +545,43 @@ export default function SiteDetail() {
                   {cloning ? "Cloning..." : "Clone"}
                 </button>
               )}
+              {user?.role === "admin" && (
+                showTransfer ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="email"
+                      value={transferEmail}
+                      onChange={(e) => setTransferEmail(e.target.value)}
+                      autoFocus
+                      className="w-56 px-3 py-2 bg-dark-900 border border-dark-500 rounded-lg text-sm font-mono text-dark-100"
+                      placeholder="new owner's email"
+                    />
+                    <button
+                      disabled={!transferEmail || transferring}
+                      onClick={() => {
+                        setTransferring(true);
+                        setTransferMsg("");
+                        api.post(`/sites/${id}/transfer`, { email: transferEmail })
+                          .then(() => { setShowTransfer(false); setTransferMsg(`Transferred to ${transferEmail}. You no longer own this site.`); })
+                          .catch((err) => setTransferMsg(err instanceof Error ? err.message : "Transfer failed"))
+                          .finally(() => setTransferring(false));
+                      }}
+                      className="px-3 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium disabled:opacity-50"
+                    >
+                      {transferring ? "Transferring..." : "Transfer"}
+                    </button>
+                    <button onClick={() => setShowTransfer(false)} className="px-3 py-2 bg-dark-600 text-dark-200 rounded-lg text-sm font-medium">Cancel</button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setShowTransfer(true)}
+                    title="Hand this site to another account. Ownership is exclusive — the current owner loses access."
+                    className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 transition-colors"
+                  >
+                    Transfer
+                  </button>
+                )
+              )}
               <button
                 onClick={handleDelete}
                 className="px-4 py-2 bg-danger-500/10 text-danger-400 rounded-lg text-sm font-medium hover:bg-danger-500/20 transition-colors"
@@ -603,6 +644,11 @@ export default function SiteDetail() {
         <div className={`mb-4 px-4 py-3 rounded-lg text-sm ${
           cloneMsg.includes("cloned") ? "bg-rust-500/10 text-rust-400 border border-rust-500/20" : "bg-danger-500/10 text-danger-400 border border-danger-500/20"
         }`}>{cloneMsg}</div>
+      )}
+      {transferMsg && (
+        <div className={`mb-4 px-4 py-3 rounded-lg text-sm ${
+          transferMsg.includes("Transferred") ? "bg-rust-500/10 text-rust-400 border border-rust-500/20" : "bg-danger-500/10 text-danger-400 border border-danger-500/20"
+        }`}>{transferMsg}</div>
       )}
 
       {/* Details */}

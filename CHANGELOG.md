@@ -4,6 +4,99 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.69.0] - 2026-08-05
+
+### Added — a `client` role, and a way to hand a site to one (GitHub #51)
+
+- **`client`** is a new role for a principal who **holds** sites and manages them
+  — mail, PHP version, containers, settings — but **cannot bring a new domain
+  into service**. Requested by an operator migrating from ISPConfig, where this
+  is the ordinary shape.
+- **`POST /api/sites/{id}/transfer`** (admin only) hands a site to another
+  account by email, in one transaction: the `sites` row plus the four tables that
+  keep their own copy of `user_id` beside a `site_id` (`alerts`, `monitors`,
+  `secret_vaults`, `whmcs_service_map`). Everything else a site owns —
+  `databases`, `crons`, `backups` — reaches its owner through `site_id` and
+  follows with no statement of its own.
+- ⚠ **Transfer is exclusive**: the previous owner loses the site. This is
+  ownership, not sharing. Shared management of one domain by two accounts does
+  not exist and is not what this adds.
+
+  Ownership stays a single axis, `sites.user_id`, deliberately. A client who
+  *owns* the row passes all 108 ownership-scoped reads in the backend natively,
+  so none of them had to change. The alternative — widening every read to "owner
+  or delegate" — would have had to keep 57 INSERTs that stamp the acting user in
+  step, and get two name-keyed cleanups right whose own comments record that they
+  already shipped a cross-account delete once.
+
+  The refusal to claim a new domain lives at **one** place:
+  `services::domain_claim::ensure_claimable`, which every domain-introducing path
+  already funnels through. Role checks on the four `INSERT INTO sites` sites
+  would have left three doors open — `git_deploys`, `docker_apps` and `stacks`
+  all materialise a served vhost without ever inserting into `sites`.
+
+- The role selector offers `client` in both the create and edit forms, and the
+  site page grows an admin-only **Transfer** control.
+
+### Fixed — the role a migration and a UI knew about but the write path refused
+
+- `routes/users.rs` carried **three identical copies** of the assignable-role
+  allow-list (create, update, and the un-suspend restore). Adding `client` to the
+  database CHECK and to the user editor still left all three rejecting it. They
+  are now one constant. The restore path was the sharp one: a role missing from
+  that list is silently downgraded to `user` when an account is un-suspended —
+  which would have handed a suspended client back a role that can create sites.
+
+### Security — the static-vhost retrofit, completed
+
+v2.68.0–.2 closed a disclosure where a site switched from PHP to static served
+`wp-config.php`, `.env` and `.git/config` as plain text. Three gaps remained.
+
+- **A disabled site re-enabled into the unpatched body.** `disable_site` backs the
+  vhost up to `sites-available/{domain}.conf.disabled`, and the startup retrofit
+  scans `sites-enabled` for `*.conf` — so the backup fails both tests, and
+  `enable_site` restored it with a plain copy and no re-render. A site switched
+  to static and disabled before the operator upgraded came back **armed**. The
+  restore now patches on the way in, which is the only path by which a disabled
+  body is ever served again.
+- **One PHP deny the static branch did not subsume**:
+  `location ~ ^/sites/.*/private/`. It has no dot segment and no `.php` suffix,
+  so neither static deny covered it, and a Drupal site switched to static served
+  everything under `sites/*/private/` — the directory that exists precisely to
+  hold what Drupal was told not to publish. Verified by serving both configs
+  through a real nginx: 200 with the file's contents before, 403 after, with
+  `/index.html`, Drupal's *public* files and `/.well-known/` all still 200.
+- **The retrofit could report success on a vhost it did not protect.** Candidacy
+  tested `contains("index index.html index.htm;")` (a substring, anywhere) while
+  insertion tested `line.trim() ==` (a whole line), so an index line carrying a
+  trailing comment satisfied one and never the other: the file was rewritten with
+  zero denies added, and the caller — which logs on the write, not on the content
+  — named it as retrofitted. One predicate now decides both.
+- The retrofit also **adds a deny an earlier version missed** instead of skipping
+  a vhost it has already touched, so a box patched by v2.68.2 gains the new one
+  without duplicating the other two.
+
+### Changed — claims this project made and does not back
+
+Corrected on every surface that carried them, including two the audit trail had
+never listed: `COMPARISON.md` and the public site's landing page. `FEATURES.md`
+gains a **Withdrawn Claims** section recording what each said and what is
+actually there, because a claim that merely disappears from one surface tends to
+survive on the others.
+
+- **Teams** — `routes/teams.rs` is 477 lines of working, routed endpoints that
+  grant nothing: `team_members` is read by that file and no other, so no
+  authorization path consults team membership. There is no Teams UI, and the
+  invite email links to an SPA route that does not exist.
+- **API keys** — generated, hashed, stored and handed over with "won't be shown
+  again", and no code path ever reads a stored hash back to authenticate a
+  request. The Settings card and the API reference now say so.
+- **App Migration** — writes one row with `status='in_progress'`; there is no
+  `UPDATE app_migrations` anywhere in the repository. The tab now says it is not
+  implemented rather than pointing at a control that does not exist.
+- **Auto-sleep "scale to zero"** — containers stop and do not come back on their
+  own. Wording corrected; the wake path is a tracked defect.
+
 ## [2.68.2] - 2026-08-05
 
 ### Security — v2.68.1's retrofit reached the panel host, not the fleet
