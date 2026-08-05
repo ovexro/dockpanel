@@ -19,6 +19,36 @@ pub struct CmdOutput {
 /// importer copied the imported site's files one level above it and then
 /// deleted `public` on its way past — so every import produced a vhost whose
 /// document root did not exist.
+/// The one sentence that identifies the filler page as ours.
+///
+/// It is a constant rather than a literal at each site because the page is
+/// WRITTEN when a site is created and READ back when a git deploy has to decide
+/// whether a document root holds a real site or only our own filler. A deploy
+/// that adopted a page it merely guessed was ours would delete an operator's
+/// file, so the writer and the reader have to be the same string by
+/// construction rather than by anyone remembering to update both.
+pub const PLACEHOLDER_MARKER: &str = "Site is ready. Upload your files to replace this page.";
+
+/// The filler page written into a new site's document root.
+pub fn placeholder_page(domain: &str) -> String {
+    format!(
+        "<!DOCTYPE html><html><head><title>{domain}</title></head>\
+         <body><h1>Welcome to {domain}</h1>\
+         <p>{PLACEHOLDER_MARKER}</p></body></html>"
+    )
+}
+
+/// Whether `path` is a file the panel itself wrote as filler.
+///
+/// Keyed on content, never on the name. `index.html` is the most ordinary
+/// filename there is and an operator's own upload must never be mistaken for
+/// ours; a file that cannot be read is, deliberately, not ours.
+pub fn is_placeholder_page(path: &std::path::Path) -> bool {
+    std::fs::read_to_string(path)
+        .map(|body| body.contains(PLACEHOLDER_MARKER))
+        .unwrap_or(false)
+}
+
 pub fn document_root_for(site_dir: &str, runtime: &str) -> String {
     match runtime {
         "proxy" | "node" | "python" => site_dir.to_string(),

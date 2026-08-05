@@ -113,5 +113,112 @@ code "$INSTALL" 'git clone .*-b "\$VERSION"' \
      || ok "the advertised website copy of install.sh matches scripts/install.sh"
 
 echo
+echo "D. The FIRST deploy of a panel-created site (s307)"
+# s261 found that git deploy had never worked on a hardened install. s307 found
+# that its first run had never worked on ANY install: creating a site writes a
+# filler page into the document root, and git refuses a destination that exists
+# and is not empty — so the opening deploy of every site the panel itself made
+# failed, taking with it every step gated on a successful deploy.
+#
+# Windows are bound on the declaration's own closing brace, never on a fixed
+# -A count, and an empty extraction FAILS rather than passing silently.
+DEPLOYSVC="$REPO/panel/agent/src/services/deploy.rs"
+NGINXSVC="$REPO/panel/agent/src/services/nginx.rs"
+fn_body() { perl -0777 -ne 'print $1 if /\n((?:pub )?(?:async )?fn '"$2"'\b.*?\n\})\n/s' "$1"; }
+
+CLONE_FN="$(fn_body "$DEPLOYSVC" clone_or_pull)"
+if [ "$(printf '%s' "$CLONE_FN" | wc -l)" -ge 40 ]; then
+  ok "extracted the clone_or_pull body ($(printf '%s' "$CLONE_FN" | wc -l) lines) — the arms below read real code"
+else
+  bad "could not extract clone_or_pull — every arm below is vacuous"
+fi
+
+CLONE_DEST="$(printf '%s' "$CLONE_FN" | sed -E 's|[[:space:]]*//.*$||' | grep -E '"clone",' || true)"
+if [ -n "$CLONE_DEST" ] && ! grep -qE '&site_dir\]' <<< "$CLONE_DEST"; then
+  ok "the fresh clone does not target the site directory git will refuse"
+else
+  bad "the fresh clone targets the populated site directory again — first deploy fails"
+fi
+printf '%s' "$CLONE_FN" | sed -E 's|[[:space:]]*//.*$||' | grep -qE 'deploy-staging' \
+  && ok "it stages beside the site, where nginx cannot serve a half-finished checkout" \
+  || bad "the staging directory is gone — a partial clone is reachable over HTTP"
+printf '%s' "$CLONE_FN" | sed -E 's|[[:space:]]*//.*$||' | grep -qE 'foreign_entries\(' \
+  && ok "a destination holding files the panel did not write is refused" \
+  || bad "nothing checks the destination — a real site can be destroyed by a deploy"
+printf '%s' "$CLONE_FN" | grep -qE 'Refusing to deploy into' \
+  && ok "and the refusal names what it found instead of failing blank" \
+  || bad "the refusal no longer tells the operator which files blocked it"
+
+# The merge must be entry by entry. A whole-directory rename cannot work — the
+# destination is non-empty, which is the entire reason this path exists — and
+# the entries the clone does NOT supply must survive, or a repository with no
+# public/ leaves a static site with no document root at all.
+MERGE_FN="$(fn_body "$DEPLOYSVC" merge_into)"
+if [ -n "$MERGE_FN" ]; then
+  ok "extracted the merge_into body — the arms below read real code"
+else
+  bad "merge_into is gone — the entries the clone does not supply are unprotected"
+fi
+printf '%s' "$MERGE_FN" | sed -E 's|[[:space:]]*//.*$||' | grep -qE 'read_dir\(from\)' \
+  && ok "the merge walks the staged clone entry by entry" \
+  || bad "the merge no longer iterates — an unreplaced document root is at risk"
+# An ABSENCE arm over a window that does not exist passes having examined
+# nothing, which reads exactly like a clean sweep. Assert the subject first.
+if [ -z "$MERGE_FN" ]; then
+  bad "the whole-destination-wipe arm has no subject to read — it cannot report a catch"
+elif printf '%s' "$MERGE_FN" | sed -E 's|[[:space:]]*//.*$||' | grep -qE 'remove_dir_all\((&)?to\)'; then
+  bad "the merge clears the whole destination — a repo without public/ loses its document root"
+else
+  ok "the merge never clears the whole destination, so an unreplaced document root survives"
+fi
+
+# CLASS ARM, subjects derived FROM SOURCE. The filler page is WRITTEN when a
+# site is created and READ BACK when a deploy decides whether a document root
+# holds a real site. If those two ever spell it separately they can drift, and
+# a deploy would then either refuse every fresh site or adopt an operator's
+# file. Read the sentence out of the constant, then count it across the crate.
+MARKER="$(perl -0777 -ne 'print $1 if /PLACEHOLDER_MARKER: &str = "([^"]+)"/' "$NGINXSVC")"
+if [ -n "$MARKER" ]; then
+  ok "the filler page's identifying sentence is declared once, as a constant"
+else
+  bad "PLACEHOLDER_MARKER is gone — the writer and the reader can drift apart"
+fi
+# An empty needle makes `grep -F` match every line, so the count arm would go
+# red with a meaningless five-figure number and hide WHY. Guard it explicitly.
+if [ -z "$MARKER" ]; then
+  bad "the re-inlining arm has no sentence to count — blocked by the missing constant above"
+else
+  MARKER_N=$(grep -rF -- "$MARKER" "$REPO/panel/agent/src" 2>/dev/null | wc -l)
+  if [ "$MARKER_N" -eq 1 ]; then
+    ok "and nothing re-inlines it — $MARKER_N occurrence in panel/agent/src, the declaration"
+  else
+    bad "the sentence appears $MARKER_N times in panel/agent/src — writer and reader can now disagree"
+  fi
+fi
+code "$NGINXSVC" 'read_to_string\(path\)' \
+     "the page is recognised by CONTENT — an operator's own index.html is not ours to delete"
+code "$REPO/panel/agent/src/routes/nginx.rs" 'placeholder_page\(' \
+     "and put_site writes it through that same helper rather than a second literal"
+
+# CLASS ARM: every path in this file that materialises a checkout on disk must
+# hand it to the user the web server runs as. atomic_deploy always did; the
+# non-atomic path never did, so a green deploy left a tree the application
+# could not write to. Subjects are the clone invocations, found here rather
+# than listed — but only the ones that SHIP. This arm's first run went red on
+# two subjects inside the file's own test module, which run git against scratch
+# directories and hold no site to hand over; the arm was right and the class
+# definition was loose, so the boundary is drawn here and the count is printed
+# rather than filtered away in silence.
+SHIPPED=$(sed -E 's|[[:space:]]*//.*$||' "$DEPLOYSVC" | sed -n '1,/#\[cfg(test)\]/p')
+ALL_CLONES=$(sed -E 's|[[:space:]]*//.*$||' "$DEPLOYSVC" | grep -cE '"clone",')
+CHOWN_SUBJECTS=$(grep -cE '"clone",' <<< "$SHIPPED")
+CHOWN_N=$(grep -cE 'args\(\["-R", "www-data:www-data"' <<< "$SHIPPED")
+if [ "$CHOWN_SUBJECTS" -ge 2 ] && [ "$CHOWN_N" -ge "$CHOWN_SUBJECTS" ]; then
+  ok "all $CHOWN_SUBJECTS shipped checkout paths chown to www-data ($((ALL_CLONES - CHOWN_SUBJECTS)) test-only clones excluded by name)"
+else
+  bad "$CHOWN_SUBJECTS shipped checkout paths but only $CHOWN_N chown — a deploy succeeds and the app cannot write"
+fi
+
+echo
 printf 'passed %d, failed %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

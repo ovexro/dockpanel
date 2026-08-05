@@ -4,6 +4,50 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.64.0] - 2026-08-05
+
+**The first deploy of a site the panel made itself has never worked.**
+
+Creating a site writes a placeholder page into its document root, so the
+directory is never empty. `git clone` refuses a destination that already exists
+and is not empty. Every site created through the panel therefore failed its
+opening git deploy with `fatal: destination path ... already exists and is not
+an empty directory`, and only started working once someone emptied the web root
+by hand.
+
+Atomic deploys were never affected — they build each release in its own
+directory — but atomic deploys are **off by default**, so the path that failed
+is the one a new install actually takes.
+
+### What the failure took with it
+
+The panel runs five things only on a successful deploy, and a deploy that dies
+at the clone reaches none of them: Laravel migrations, the post-deploy health
+check, the completion notification, the deploy-log success record, and the
+auto-injection of vault secrets that 2.63.0 had just repaired. That fix was
+correct and still unreachable on a first deploy.
+
+### The fix, and the two things it is careful about
+
+The clone now goes to a staging directory beside the site and its contents are
+moved into place entry by entry.
+
+- **Files the panel did not write are refused, never deleted.** The placeholder
+  is recognised by its content rather than by its name, so an `index.html` an
+  operator uploaded is not mistaken for ours. A directory holding anything
+  unrecognised stops the deploy and the message names the files that blocked it.
+- **A repository with no `public/` still leaves a document root behind.**
+  Entries the clone does not supply are left alone, so a static or PHP site
+  keeps serving; the deploy log says plainly that the placeholder is still what
+  visitors get, instead of reporting a clean deploy over a page nobody asked for.
+
+### Deploys no longer hand the site to the wrong user
+
+`atomic_deploy` has always chowned its release directory to `www-data`. The
+non-atomic path never did, so a checkout made by the agent stayed owned by root
+and PHP-FPM could not write to it — uploads, caches and generated files all
+failed after a deploy that reported success. Both paths now do the same thing.
+
 ## [2.63.0] - 2026-08-04
 
 **The automatic path threw away what the manual path kept.**

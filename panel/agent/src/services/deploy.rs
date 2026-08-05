@@ -46,6 +46,76 @@ pub(crate) fn ssh_command(key_path: &str) -> Result<String, String> {
     ))
 }
 
+/// Top-level entries of a site directory that the panel cannot prove it wrote.
+///
+/// Creating a site populates the web root — a filler page in whichever
+/// directory `services::nginx::document_root_for` picks — so a first deploy
+/// never meets an empty destination, and git refuses to clone into one that is
+/// not empty. Clearing the way is only defensible for files the panel wrote
+/// itself, which is why this asks about CONTENT rather than trusting a name:
+/// `index.html` is the most ordinary filename there is. A non-empty answer
+/// means refuse, and the names are returned so the refusal can say which.
+fn foreign_entries(site_dir: &str) -> Vec<String> {
+    let entries = match std::fs::read_dir(site_dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+    let mut foreign: Vec<String> = entries
+        .flatten()
+        .filter(|entry| !panel_owned(&entry.path()))
+        .map(|entry| entry.file_name().to_string_lossy().to_string())
+        .collect();
+    foreign.sort();
+    foreign
+}
+
+/// Whether `path` is something the panel put there and may clear away.
+///
+/// A directory qualifies only when everything below it does. An empty one
+/// qualifies because it holds nothing of the operator's; an unreadable one does
+/// not, because absence of proof is not proof.
+fn panel_owned(path: &Path) -> bool {
+    if !path.is_dir() {
+        return crate::services::nginx::is_placeholder_page(path);
+    }
+    match std::fs::read_dir(path) {
+        Ok(entries) => entries.flatten().all(|entry| panel_owned(&entry.path())),
+        Err(_) => false,
+    }
+}
+
+/// Move every top-level entry of `from` into `to`, returning what was moved.
+///
+/// Renaming the clone onto the site directory cannot work: that directory
+/// exists and is not empty, which is the entire reason this path exists, and
+/// `rename` refuses a non-empty destination. So the move goes entry by entry —
+/// and an entry the clone does NOT supply is left alone, which is what keeps a
+/// document root present when a repository ships no `public/`.
+fn merge_into(from: &Path, to: &Path) -> Result<Vec<String>, String> {
+    let entries = std::fs::read_dir(from)
+        .map_err(|e| format!("Failed to read the staged clone: {e}"))?;
+    let mut moved = Vec::new();
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let target = to.join(&name);
+
+        if target.is_symlink() || target.is_file() {
+            std::fs::remove_file(&target)
+                .map_err(|e| format!("Failed to replace {}: {e}", target.display()))?;
+        } else if target.is_dir() {
+            std::fs::remove_dir_all(&target)
+                .map_err(|e| format!("Failed to replace {}: {e}", target.display()))?;
+        }
+
+        std::fs::rename(entry.path(), &target)
+            .map_err(|e| format!("Failed to move {} into place: {e}", name.to_string_lossy()))?;
+        moved.push(name.to_string_lossy().to_string());
+    }
+
+    Ok(moved)
+}
+
 /// Clone or pull a git repository to the site's webroot.
 pub async fn clone_or_pull(
     domain: &str,
@@ -102,29 +172,29 @@ pub async fn clone_or_pull(
         output_buf.push_str(&String::from_utf8_lossy(&reset.stdout));
         output_buf.push_str(&String::from_utf8_lossy(&reset.stderr));
     } else {
-        // Fresh clone
+        // Fresh clone.
+        //
+        // The destination is not reliably empty. Creating a site writes a filler
+        // page into the document root, so git — which refuses any destination
+        // that exists and is not empty — used to fail the FIRST deploy of every
+        // site the panel itself created, and with it every step the panel runs
+        // only on a successful deploy.
+        //
+        // Cloning to one side and moving the result in keeps two properties that
+        // "delete the directory, then clone" does not: a repository shipping no
+        // `public/` still leaves a document root behind, and anything the panel
+        // did not write is refused rather than destroyed.
         std::fs::create_dir_all(&site_dir)
             .map_err(|e| format!("Failed to create site dir: {e}"))?;
 
-        let mut cmd = safe_command("git");
-        cmd.args(["clone", "--branch", branch, "--single-branch", "--depth", "50", repo_url, &site_dir])
-            .env("GIT_TERMINAL_PROMPT", "0");
-        if let Some(ref ssh) = env_ssh {
-            cmd.env("GIT_SSH_COMMAND", ssh);
-        }
-
-        let clone = tokio::time::timeout(
-            std::time::Duration::from_secs(300),
-            cmd.output(),
-        )
-        .await
-        .map_err(|_| "git clone timed out".to_string())?
-        .map_err(|e| format!("git clone failed: {e}"))?;
-
-        output_buf.push_str(&String::from_utf8_lossy(&clone.stdout));
-        output_buf.push_str(&String::from_utf8_lossy(&clone.stderr));
-
-        if !clone.status.success() {
+        let foreign = foreign_entries(&site_dir);
+        if !foreign.is_empty() {
+            output_buf.push_str(&format!(
+                "==> Refusing to deploy into {site_dir}: it already holds files the panel did \
+                 not write ({}).\n    Move them aside, or turn on atomic deploys, which build \
+                 each release in its own directory.\n",
+                foreign.join(", ")
+            ));
             return Ok(DeployResult {
                 success: false,
                 output: output_buf,
@@ -132,7 +202,84 @@ pub async fn clone_or_pull(
                 duration_ms: start.elapsed().as_millis() as u64,
             });
         }
+
+        // Stage beside the site, never inside it: nginx serves the site
+        // directory and must never be able to see a half-finished checkout.
+        let staging = format!("{WEBROOT}/.{domain}.deploy-staging");
+        let _ = std::fs::remove_dir_all(&staging);
+
+        let mut cmd = safe_command("git");
+        cmd.args(["clone", "--branch", branch, "--single-branch", "--depth", "50", repo_url, &staging])
+            .env("GIT_TERMINAL_PROMPT", "0");
+        if let Some(ref ssh) = env_ssh {
+            cmd.env("GIT_SSH_COMMAND", ssh);
+        }
+
+        let clone = match tokio::time::timeout(
+            std::time::Duration::from_secs(300),
+            cmd.output(),
+        )
+        .await
+        {
+            Ok(Ok(c)) => c,
+            Ok(Err(e)) => {
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err(format!("git clone failed: {e}"));
+            }
+            Err(_) => {
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err("git clone timed out".to_string());
+            }
+        };
+
+        output_buf.push_str(&String::from_utf8_lossy(&clone.stdout));
+        output_buf.push_str(&String::from_utf8_lossy(&clone.stderr));
+
+        if !clone.status.success() {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Ok(DeployResult {
+                success: false,
+                output: output_buf,
+                commit_hash: None,
+                duration_ms: start.elapsed().as_millis() as u64,
+            });
+        }
+
+        let moved = match merge_into(Path::new(&staging), Path::new(&site_dir)) {
+            Ok(m) => m,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err(e);
+            }
+        };
+        let _ = std::fs::remove_dir_all(&staging);
+        output_buf.push_str(&format!("==> Placed {} entries into {site_dir}\n", moved.len()));
+
+        // Static and PHP sites are served from `public/`. When the repository
+        // supplies none, the filler directory survives the merge and remains
+        // exactly what a visitor gets — report that instead of a clean deploy
+        // over a page nobody asked for.
+        let public_dir = Path::new(&site_dir).join("public");
+        if !moved.iter().any(|name| name == "public")
+            && public_dir.is_dir()
+            && panel_owned(&public_dir)
+        {
+            output_buf.push_str(
+                "==> NOTE: this repository has no public/ directory, and static and PHP sites \
+                 are served from one, so visitors still get the placeholder page. Move the \
+                 site's files under public/, or use a runtime that proxies to a process.\n",
+            );
+        }
     }
+
+    // Ownership, as the atomic path already does for its release directory: a
+    // checkout made by the agent belongs to the agent, PHP-FPM runs as
+    // www-data, and without this the deploy reports success and the application
+    // then cannot write to its own directory.
+    let _ = safe_command("chown")
+        .args(["-R", "www-data:www-data", &site_dir])
+        .output()
+        .await;
 
     // Get current commit hash
     let hash = safe_command("git")
@@ -635,4 +782,137 @@ pub fn generate_deploy_key(domain: &str) -> Result<(String, String), String> {
         .to_string();
 
     Ok((public_key, key_path))
+}
+
+#[cfg(test)]
+mod first_deploy_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join("dockpanel-first-deploy-tests").join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    fn write(path: &Path, body: &str) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("parent");
+        }
+        std::fs::write(path, body).expect("write");
+    }
+
+    /// The filler page must be recognised through the SAME helper that writes
+    /// it, and an operator's own file must not be.
+    #[test]
+    fn only_the_panels_own_page_is_adoptable() {
+        let root = scratch("ownership");
+
+        let ours = root.join("public/index.html");
+        write(&ours, &crate::services::nginx::placeholder_page("example.test"));
+        assert!(panel_owned(&ours), "the page the panel writes must read as the panel's");
+        assert!(panel_owned(&root.join("public")), "a directory of only filler is adoptable");
+
+        let theirs = root.join("public/about.html");
+        write(&theirs, "<h1>my real page</h1>");
+        assert!(!panel_owned(&theirs), "an operator's file is never the panel's");
+        assert!(
+            !panel_owned(&root.join("public")),
+            "one foreign file makes the whole directory foreign"
+        );
+    }
+
+    /// A site directory as `put_site` leaves it is fully adoptable, in BOTH
+    /// document-root layouts; anything else is named rather than deleted.
+    #[test]
+    fn a_freshly_created_site_is_adoptable_and_a_real_one_is_not() {
+        for layout in ["public/index.html", "index.html"] {
+            let root = scratch(&format!("fresh-{}", layout.replace('/', "-")));
+            write(&root.join(layout), &crate::services::nginx::placeholder_page("example.test"));
+            assert!(
+                foreign_entries(root.to_str().unwrap()).is_empty(),
+                "a site the panel just created must be clonable into ({layout})"
+            );
+        }
+
+        let root = scratch("occupied");
+        write(&root.join("public/index.html"), &crate::services::nginx::placeholder_page("example.test"));
+        write(&root.join("wp-config.php"), "<?php // a real site");
+        let foreign = foreign_entries(root.to_str().unwrap());
+        assert_eq!(foreign, vec!["wp-config.php".to_string()],
+            "a real site must be refused, and named");
+    }
+
+    /// The merge replaces what the clone supplies and LEAVES what it does not —
+    /// the property that keeps a document root present when a repository has no
+    /// `public/`.
+    #[test]
+    fn merge_replaces_what_it_supplies_and_keeps_what_it_does_not() {
+        let base = scratch("merge");
+        let site = base.join("site");
+        let staged = base.join("staged");
+
+        write(&site.join("public/index.html"), &crate::services::nginx::placeholder_page("example.test"));
+        write(&staged.join("index.php"), "<?php echo 'app';");
+        write(&staged.join(".git/HEAD"), "ref: refs/heads/main\n");
+
+        let moved = merge_into(&staged, &site).expect("merge");
+        assert!(moved.contains(&"index.php".to_string()));
+        assert!(moved.contains(&".git".to_string()), "the repository itself must move too");
+        assert!(site.join("index.php").is_file(), "the repository's files land in the site");
+        assert!(
+            site.join("public/index.html").is_file(),
+            "an untouched document root must survive, or nginx serves nothing"
+        );
+    }
+
+    /// The premise, EXECUTED rather than asserted: real git really does refuse
+    /// the destination `put_site` leaves behind. If this ever stops being true
+    /// the whole staging dance is unnecessary, and this test says so.
+    #[test]
+    fn git_refuses_the_destination_a_new_site_leaves_behind() {
+        let base = scratch("git-premise");
+        let origin = base.join("origin");
+        std::fs::create_dir_all(&origin).unwrap();
+
+        let git = |args: &[&str], cwd: &Path| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(cwd)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output()
+                .expect("git must be installed for this test to mean anything")
+        };
+        git(&["init", "-q", "-b", "main", "."], &origin);
+        write(&origin.join("index.php"), "<?php");
+        git(&["add", "-A"], &origin);
+        git(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"], &origin);
+
+        for layout in ["public/index.html", "index.html"] {
+            let dest = base.join(format!("dest-{}", layout.replace('/', "-")));
+            write(&dest.join(layout), &crate::services::nginx::placeholder_page("example.test"));
+
+            let out = git(
+                &["clone", "-q", origin.to_str().unwrap(), dest.to_str().unwrap()],
+                &base,
+            );
+            assert!(
+                !out.status.success(),
+                "git cloned into a populated web root ({layout}) — the staging path is now dead code"
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr).to_lowercase();
+            assert!(
+                stderr.contains("not an empty directory") || stderr.contains("already exists"),
+                "unexpected git failure for {layout}: {stderr}"
+            );
+        }
+
+        // ...and an empty destination is fine, so it really is the emptiness.
+        let empty = base.join("dest-empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        let out = git(&["clone", "-q", origin.to_str().unwrap(), empty.to_str().unwrap()], &base);
+        assert!(out.status.success(), "an empty destination must still clone");
+    }
 }

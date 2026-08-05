@@ -306,11 +306,10 @@ async fn put_site(
     } else {
         let index_path = format!("{actual_root}/index.html");
         if !std::path::Path::new(&index_path).exists() {
-            let _ = std::fs::write(&index_path, format!(
-                "<!DOCTYPE html><html><head><title>{domain}</title></head>\
-                 <body><h1>Welcome to {domain}</h1>\
-                 <p>Site is ready. Upload your files to replace this page.</p></body></html>"
-            ));
+            let _ = std::fs::write(
+                &index_path,
+                crate::services::nginx::placeholder_page(&domain),
+            );
         }
     }
 
