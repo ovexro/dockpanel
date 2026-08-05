@@ -215,9 +215,34 @@ else
 fi
 
 if grep -q "sessions_revoked_at" <<< "$PANIC"; then
-  ok "panic revokes every issued session, not just the doors"
+  ok "panic WRITES the session-revocation watermark"
 else
   bad "panic only locks the doors — the stolen session that reached the root shell keeps working"
+fi
+
+# ⚠ The arm above says WRITES, and that wording is load-bearing. It shipped in
+# v2.65.0 reading "panic revokes every issued session, not just the doors" — a
+# claim about every READER, tested by grepping one WRITER. It was green while
+# `ws_metrics.rs` hand-decoded JWTs and never consulted the watermark, so a
+# stolen admin token could open a NEW process-list socket after the button was
+# pressed. A watermark nothing reads revokes nothing; pin the readers.
+#
+# Class arm: every hand-rolled Claims decode outside the AuthUser extractor must
+# consult the watermark. Keyed on `.read()` — the OPERATION — not on the bare
+# token, which now appears in explanatory comments in these same files and would
+# keep this green on deleted code (the source-pin prose trap).
+DECODERS=$(grep -rln 'decode::<Claims>' --include='*.rs' "$BE" | grep -v '/auth\.rs$' | sort)
+if [ -z "$DECODERS" ]; then
+  bad "found no hand-rolled Claims decoders at all — this arm is measuring nothing"
+else
+  ok "enumerated $(wc -l <<< "$DECODERS") hand-rolled Claims decoder file(s) outside auth.rs"
+  for f in $DECODERS; do
+    if grep -q 'sessions_revoked_at\.read()' "$f"; then
+      ok "  $(basename "$f") enforces session revocation on its own decode path"
+    else
+      bad "  $(basename "$f") decodes a JWT by hand and never checks sessions_revoked_at — panic cannot close this channel"
+    fi
+  done
 fi
 
 # The response used to hardcode terminals_killed:true while DISCARDING the
@@ -232,6 +257,24 @@ if grep -q "agent_reached" <<< "$PANIC"; then
   ok "and it says whether the agent was reached at all"
 else
   bad "an unreachable agent is indistinguishable from a successful kill"
+fi
+
+# A terminal share is an UNAUTHENTICATED public URL — `GET /terminal/shared/{id}`
+# is registered in the no-auth block and its handler takes no auth extractor —
+# serving up to 500KB of terminal output for an hour. Lockdown does not reach it
+# (lockdown is tested at the doors; this is not a door), so before v2.66.0 panic
+# left the intruder's own share serving to the whole internet while the UI said
+# "all sessions revoked". Keyed on the DELETE, not on the key name, which now
+# appears in the comment above the statement.
+if grep -qE "DELETE FROM settings WHERE key LIKE 'terminal_share_%'" <<< "$PANIC"; then
+  ok "panic revokes every terminal share"
+else
+  bad "panic leaves public terminal shares serving — the one channel lockdown cannot close"
+fi
+if grep -q "shares_revoked" <<< "$PANIC"; then
+  ok "and it reports how many it revoked"
+else
+  bad "shares are revoked but the count is dropped — the operator cannot tell"
 fi
 
 # The agent half: `pkill -u www-data` is a GUESS about which processes are ours,

@@ -102,14 +102,23 @@ export default function SecurityHardening() {
         await api.post("/security/lockdown/activate", { reason: "Manual admin lockdown" });
         showMsg("success", "Lockdown activated");
       } else if (type === "panic") {
-        const r = await api.post<{ agent_reached: boolean; terminals_killed: number | null; server_terminals_killed: number | null }>("/security/panic", {});
+        const r = await api.post<{ agent_reached: boolean; terminals_killed: number | null; server_terminals_killed: number | null; sessions_revoked: boolean; shares_revoked: number }>("/security/panic", {});
+        // Say what the server reported, not what we hope it did — see the
+        // matching comment in Security.tsx.
+        const sess = r.sessions_revoked ? "all sessions revoked" : "SESSION REVOCATION FAILED";
+        const shares = r.shares_revoked > 0 ? `, ${r.shares_revoked} terminal share${r.shares_revoked === 1 ? "" : "s"} revoked` : "";
         if (!r.agent_reached) {
-          showMsg("error", "Panic: system locked and sessions revoked, but the agent could not be reached — TERMINALS MAY STILL BE RUNNING. Check the server.");
+          showMsg("error", `Panic: system locked and ${sess}${shares}, but the agent could not be reached — TERMINALS MAY STILL BE RUNNING. Check the server.`);
         } else {
           const n = r.terminals_killed ?? 0;
           const root = r.server_terminals_killed ?? 0;
-          showMsg("success", `Panic mode activated — ${n} terminal${n === 1 ? "" : "s"} killed${root > 0 ? ` (${root} server/root)` : ""}, all sessions revoked, system locked`);
+          showMsg(r.sessions_revoked ? "success" : "error", `Panic mode activated — ${n} terminal${n === 1 ? "" : "s"} killed${root > 0 ? ` (${root} server/root)` : ""}, ${sess}${shares}, system locked`);
         }
+        // Panic revoked this admin's own session; loadData() would 401 and
+        // hard-navigate to /login, destroying the report. Redirect on our own
+        // terms instead, after the operator has had time to read it.
+        setTimeout(() => { window.location.href = "/login"; }, 6000);
+        return;
       }
       loadData();
     } catch (e) { showMsg("error", e instanceof Error ? e.message : "Failed"); }

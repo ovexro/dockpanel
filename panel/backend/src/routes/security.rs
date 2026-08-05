@@ -566,6 +566,20 @@ pub async fn panic_button(
     let _ = sqlx::query("INSERT INTO settings (key, value) VALUES ('self_registration_enabled', 'false') ON CONFLICT (key) DO UPDATE SET value = 'false'")
         .execute(&state.db).await;
 
+    // Revoke every terminal share. A share is an UNAUTHENTICATED public URL
+    // (`GET /api/terminal/shared/{id}` carries no auth extractor) holding up to
+    // 500KB of operator-supplied terminal output, and lockdown does not reach it
+    // — lockdown is tested at the doors, and this is not a door. So without this
+    // the panic button left the intruder's own share serving to the whole
+    // internet for the rest of its hour, while the UI said "all sessions
+    // revoked". `revoke_share`/`list_shares` exist and are correct, but have
+    // never had a frontend caller, so there was no in-panel way to close one.
+    let shares_revoked = sqlx::query("DELETE FROM settings WHERE key LIKE 'terminal_share_%'")
+        .execute(&state.db)
+        .await
+        .map(|r| r.rows_affected())
+        .unwrap_or(0);
+
     // Audit + alert
     security_hardening::audit_log(
         &state.db, "panic", Some(&claims.email), None,
@@ -579,6 +593,7 @@ pub async fn panic_button(
         "terminals_killed": terminals_killed,
         "server_terminals_killed": server_terminals_killed,
         "sessions_revoked": revoked,
+        "shares_revoked": shares_revoked,
         "registration_disabled": true,
         "lockdown_active": true,
     })))

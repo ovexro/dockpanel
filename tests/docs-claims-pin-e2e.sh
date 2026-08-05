@@ -609,6 +609,41 @@ elif [ "$stale_hits" -eq 0 ]; then
   ok "none of the ${#SUPERSEDED[@]} superseded figures has reappeared on any of the ${#STALE_SURFACES[@]} surfaces"
 fi
 
+
+# ── s309: the forecast the guide advertised and the query could not reach ──
+#
+# docs/guides/monitoring.md publishes a disk-full forecast ("full within 48
+# hours"). disk_full_forecast() refuses any window under 6 hours, and the caller
+# took `LIMIT 60` against a 30s collector cadence — a ~30-minute window, so the
+# alert could not fire for ANY input on ANY install. It never had: this box held
+# 20,159 metrics rows at a 30.0s mean gap and 0 disk_forecast alerts, against 7
+# for memory_leak, which runs the identical query WITHOUT the time gate.
+#
+# The unit test covering disk_full_forecast was green throughout — correctly, it
+# tests the pure function and supplies its own 8-hour trend. Nothing measured
+# the CALLER's window. That is what this arm exists for: a row-count bound here
+# is a dead feature with a live doc claim.
+echo
+echo "── s309: the disk-full forecast the guide promises must be reachable ──"
+
+DISK_Q=$(sed -n '/GAP 6: Disk-full forecast/,/fetch_all/p' panel/backend/src/services/alert_engine.rs)
+if [ -z "$DISK_Q" ]; then
+  bad "could not extract the disk-forecast query — this arm is measuring nothing"
+else
+  ok "extracted the disk-forecast query ($(wc -l <<< "$DISK_Q") lines)"
+  if grep -qE "created_at > NOW\(\) - INTERVAL" <<< "$DISK_Q"; then
+    ok "the disk trend is bounded by TIME, so the 6-hour minimum is reachable"
+  else
+    bad "the disk trend is bounded by ROW COUNT — at a 30s cadence the 6h minimum can never be met and the advertised forecast cannot fire"
+  fi
+fi
+
+if grep -q "Disk-Full Forecast" docs/guides/monitoring.md; then
+  ok "the guide still publishes the forecast (the claim this arm defends)"
+else
+  ok "the guide no longer publishes the forecast — claim withdrawn, arm moot"
+fi
+
 echo
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

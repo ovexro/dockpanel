@@ -270,9 +270,19 @@ async fn check_resource_thresholds(pool: &PgPool) {
         }
 
         // GAP 6: Disk-full forecast — check if disk will be full within 48 hours based on trend
+        // Bounded by TIME, not by row count. `LIMIT 60` against a 30s collector
+        // cadence (metrics_collector.rs:9) is a ~30-minute window, and
+        // disk_full_forecast requires 6 hours — so the forecast this guide
+        // advertises ("full within 48 hours") could never fire, for any input,
+        // on any install. Proven on this box: 20,159 rows at a measured 30.0s
+        // mean gap, and `alerts` holds 0 disk_forecast rows against 7 for
+        // memory_leak, which runs the identical query without the time gate.
+        // 12h at 30s is ~1440 rows; the LIMIT stays as a bound on a stalled or
+        // backfilled collector, not as the window itself.
         let disk_trend: Vec<(f32, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
             "SELECT disk_pct, created_at FROM metrics_history \
-             WHERE server_id = $1 ORDER BY created_at DESC LIMIT 60",
+             WHERE server_id = $1 AND created_at > NOW() - INTERVAL '12 hours' \
+             ORDER BY created_at DESC LIMIT 1440",
         )
         .bind(server.id)
         .fetch_all(pool)
@@ -286,14 +296,15 @@ async fn check_resource_thresholds(pool: &PgPool) {
         // `alerts` row per minute for a single event — and, because nothing ever
         // resolved them, a check_escalations re-page every 30 minutes forever.
         //
-        // That storm is/was live for memory_leak. disk_forecast is currently
-        // UNREACHABLE and has never fired: metrics_history is written every 30s
-        // (metrics_collector.rs:9) and the query below takes LIMIT 60, so the
-        // window is always ~30 minutes and disk_full_forecast's 6-hour minimum
-        // can never be met. It is gated here anyway so the pattern can't storm
-        // if the sampling cadence or window ever changes — but re-enabling the
-        // forecast is a separate change (widen the query to a time window), not
-        // something this gate does on its own.
+        // That storm is/was live for memory_leak. disk_forecast was UNREACHABLE
+        // and had never fired, for the reason recorded above the query: a
+        // row-count LIMIT against a 30s cadence could not span the 6-hour
+        // minimum. The query is now time-bounded, so this is the tick where the
+        // forecast becomes reachable for the first time — which is exactly why
+        // the gate below matters rather than being belt-and-braces. It is the
+        // thing standing between a real forecast and the per-minute page storm
+        // memory_leak demonstrated. Verified load-bearing before arming this:
+        // all 7 memory_leak fires on this box carry a non-null resolved_at.
         match disk_full_forecast(&disk_trend) {
             Some((hours_to_full, rate_per_hour, current_pct)) => {
                 if claim_trend_fire(pool, server.id, "disk_forecast", cooldown).await {
@@ -1985,7 +1996,13 @@ mod tests {
         assert!(rate > 0.9 && rate < 1.1);
         assert_eq!(pct, 78.0);
 
-        // Same slope inside a 30-minute window is the install-time write spike.
+        // Same slope inside a 30-minute window returns None — correct for the
+        // function, and until v2.66.0 this was ALSO the only window the caller
+        // could ever supply (`LIMIT 60` at a 30s cadence), so the feature was
+        // dead in production while this test stayed green. The assertions here
+        // were never wrong; they are about the pure function, and nothing
+        // measured the caller. That gap is now pinned at the query itself in
+        // `docs-claims-pin-e2e.sh` — do not treat this arm as covering it.
         let short: Vec<_> = std::iter::repeat((78.0f32, ts(0)))
             .take(9)
             .chain(std::iter::once((70.0f32, ts(30))))

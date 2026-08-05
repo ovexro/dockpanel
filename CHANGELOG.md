@@ -4,6 +4,61 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.66.0] - 2026-08-05
+
+### Fixed — the panic button's remaining channels
+
+- **The metrics WebSocket ignored session revocation.** `/api/ws/metrics` decodes
+  its JWT by hand rather than going through the `AuthUser` extractor, and never
+  consulted `sessions_revoked_at`. A stolen admin token could therefore open a
+  **new** socket *after* the panic button was pressed and stream the full process
+  list, network connections and system info every 5 seconds until its own 2-hour
+  expiry — a live view of the operator's incident response, for the intruder it
+  was pressed against. The channel now enforces revocation, with the comparison
+  kept identical to `AuthUser` so the two gates cannot drift.
+- **Panic did not revoke terminal shares.** A share is an unauthenticated public
+  URL holding up to 500KB of terminal output for an hour; lockdown is enforced at
+  the doors and a public GET is not a door. Panic now deletes every share and
+  reports the count. (`revoke_share`/`list_shares` existed, correct and
+  admin-gated, but have never had a frontend caller — so there was no in-panel
+  way to close one.)
+- **The kill report destroyed itself before it could be read.** Panic revokes the
+  pressing admin's own session — correct, since they cannot know theirs is not
+  the stolen one — and both panic screens then called `loadData()`, whose 401
+  hard-navigated to `/login` within one round trip. The operator lost the report,
+  including the "TERMINALS MAY STILL BE RUNNING. Check the server." warning. Both
+  screens now hold the result and redirect on their own terms.
+- **`sessions_revoked` was computed honestly and thrown away.** Both UIs appended
+  "all sessions revoked" unconditionally — the same defect v2.65.0 removed for
+  `terminals_killed: true`, one field to the left. Both now report what the
+  server returned.
+
+### Fixed — a monitoring claim the query could not reach
+
+- **The disk-full forecast could never fire, on any install.**
+  `docs/guides/monitoring.md` advertises an alert when the disk is projected full
+  within 48 hours; `disk_full_forecast()` requires a 6-hour window, and the caller
+  took `LIMIT 60` against a 30-second collector cadence — a ~30-minute window. The
+  query is now bounded by time. Its sibling `memory_leak`, which runs the identical
+  query without the time gate, had fired 7 times over the same period; this had
+  fired zero times, ever. The anti-storm gate it routes through was verified
+  load-bearing before arming it.
+
+### Testing
+
+- `auth-doors-pin-e2e.sh` 28 → 32. **One existing arm was corrected, not added
+  to:** it asserted "panic revokes every issued session, not just the doors" by
+  grepping the panic function for the watermark — a claim about every *reader*,
+  tested against one *writer*. It was green throughout the defect above. It now
+  says `WRITES`, and a new class arm requires every hand-rolled `Claims` decoder
+  outside `auth.rs` to enforce revocation on its own path.
+- `docs-claims-pin-e2e.sh` gains an arm requiring the disk-forecast query to be
+  time-bounded. The existing unit test was correct about the pure function and
+  supplied its own 8-hour trend; nothing measured the caller's window, which is
+  how a dead feature kept a green test and a live doc claim.
+- All 32 suites green at 1081 assertions; the three new defect arms verified red
+  at v2.65.0, each naming its own defect.
+
 ## [2.65.0] - 2026-08-05
 
 **The controls you reach for during an incident now do what they say.** Three of

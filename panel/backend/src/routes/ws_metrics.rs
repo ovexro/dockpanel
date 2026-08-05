@@ -98,6 +98,33 @@ pub async fn handler(
         }
     }
 
+    // Global session revocation — the panic button and `POST /auth/revoke-all`
+    // both write `sessions_revoked_at`, and `AuthUser` refuses any token minted
+    // before it. This handler decodes the JWT by hand rather than going through
+    // that extractor, so without this block it was the one authenticated channel
+    // panic could not close: a stolen admin token could open a NEW socket after
+    // the button was pressed and stream the process list every 5 seconds until
+    // its own 2h expiry — a live view of the operator's incident response, for
+    // the intruder it was pressed against.
+    //
+    // The comparison is deliberately IDENTICAL to the one in `AuthUser` — two
+    // gates enforcing one invariant must not drift. `iat` is whole seconds, so
+    // a token minted in the same second as the revoke survives at both sites;
+    // tightening that is a single change to BOTH, not an asymmetric one here
+    // (which would also reject the admin's own re-login inside that second).
+    {
+        let revoked_at = state.sessions_revoked_at.read().await;
+        if let Some(ts) = *revoked_at {
+            if (claims.iat as i64) < ts {
+                return axum::http::Response::builder()
+                    .status(401)
+                    .body(axum::body::Body::from("Session revoked. Please log in again."))
+                    .unwrap()
+                    .into_response();
+            }
+        }
+    }
+
     // Live host telemetry (system info, full process list, network connections, GPU)
     // is admin-only — the equivalent REST endpoints (system::info, logs::processes,
     // logs::network) all require AdminUser. ServerScope's no-X-Server-Id fallback

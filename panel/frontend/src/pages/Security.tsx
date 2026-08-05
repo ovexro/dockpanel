@@ -262,15 +262,29 @@ export default function Security() {
           break;
         }
         case "panic": {
-          const r = await api.post<{ agent_reached: boolean; terminals_killed: number | null; server_terminals_killed: number | null }>("/security/panic", {});
+          const r = await api.post<{ agent_reached: boolean; terminals_killed: number | null; server_terminals_killed: number | null; sessions_revoked: boolean; shares_revoked: number }>("/security/panic", {});
+          // Report what the server actually did. `sessions_revoked` was already
+          // being computed honestly and thrown away here, while this string said
+          // "all sessions revoked" unconditionally — the same shape as the
+          // hardcoded `terminals_killed: true` that v2.65.0 removed, one field
+          // to the left.
+          const sess = r.sessions_revoked ? "all sessions revoked" : "SESSION REVOCATION FAILED";
+          const shares = r.shares_revoked > 0 ? `, ${r.shares_revoked} terminal share${r.shares_revoked === 1 ? "" : "s"} revoked` : "";
           if (!r.agent_reached) {
-            setMessage({ text: "Panic: locked down and sessions revoked, but the agent was unreachable — terminals may still be running", type: "error" });
+            setMessage({ text: `Panic: locked down and ${sess}, but the agent was unreachable — terminals may still be running${shares}`, type: "error" });
           } else {
             const n = r.terminals_killed ?? 0;
             const root = r.server_terminals_killed ?? 0;
-            setMessage({ text: `Panic mode activated — ${n} terminal${n === 1 ? "" : "s"} killed${root > 0 ? ` (${root} server/root)` : ""}, all sessions revoked`, type: "success" });
+            setMessage({ text: `Panic mode activated — ${n} terminal${n === 1 ? "" : "s"} killed${root > 0 ? ` (${root} server/root)` : ""}, ${sess}${shares}`, type: r.sessions_revoked ? "success" : "error" });
           }
-          loadData();
+          // Panic revokes THIS admin's session too (correct — they cannot know
+          // their own is not the stolen one). So do NOT call loadData(): its
+          // requests 401 and api.ts hard-navigates to /login within one round
+          // trip, destroying the report above before it can be read — including
+          // the "terminals may still be running" warning, the single most
+          // important sentence here. Mirrors the existing self-revocation
+          // handling in Settings.tsx ("Revoke all sessions").
+          setTimeout(() => { window.location.href = "/login"; }, 6000);
           break;
         }
       }
