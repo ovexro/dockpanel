@@ -4,6 +4,32 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.64.1] - 2026-08-05
+
+**A deploy could be made twice.** 2.64.0 fixed the first git deploy of a site and
+broke the second, on the non-atomic path. Found by driving a real box one step
+further than the fix required.
+
+Handing the checkout to `www-data` — which 2.64.0 added so PHP-FPM could write to
+it — leaves the agent, which runs as root, looking at a repository owned by
+somebody else. Git refuses that by design (`detected dubious ownership`), so the
+`fetch` and `reset` of every subsequent deploy failed while the first one still
+succeeded.
+
+Each git invocation now declares the specific directory it is about to use, at
+command scope. The exception is per path — never a wildcard — and command scope
+is required rather than incidental: git deliberately ignores `safe.directory`
+written in a repository's own config, which is the one file an attacker would
+control.
+
+### The same defect, already shipped, in the atomic path
+
+`atomic_deploy` has always chowned its release directory, and two readers ran
+`git rev-parse` against those directories afterwards. Both were silently
+answering "no commit" — so every release listed for an atomic-deploy site has
+been missing its commit hash for as long as the feature has existed. Fixed by
+the same exception.
+
 ## [2.64.0] - 2026-08-05
 
 **The first deploy of a site the panel made itself has never worked.**

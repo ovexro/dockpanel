@@ -219,6 +219,43 @@ else
   bad "$CHOWN_SUBJECTS shipped checkout paths but only $CHOWN_N chown — a deploy succeeds and the app cannot write"
 fi
 
+
+# CLASS ARM: chowning a checkout to the web server's user and then reading it
+# back as root is a pair, and the second half is easy to forget. Git refuses a
+# repository owned by somebody else, so EVERY `git -C` in this file that points
+# at a path the agent hands to www-data must also declare that path safe — and
+# it must be command scope, because git ignores `safe.directory` written in the
+# repository's own config. Found by driving: the FIRST deploy worked and the
+# SECOND failed, and `list_releases` had been answering None on every atomic
+# release since the chown was written. Subjects are found, not listed.
+#
+# ⚠ Subjects are GIT invocations, which is narrower than "lines containing -C".
+# This arm's first run counted 6 and found 5, because `generate_deploy_key`
+# passes ssh-keygen a `-C` too — and there it means the key's COMMENT, not a
+# directory. Two programs, one flag spelling, one wrong class. The subject list
+# is therefore resolved back to the command being run, and the non-git match is
+# printed rather than dropped in silence.
+CLASSIFY='
+  my @lines = split /\n/, $src; my ($git, $safe, $other) = (0,0,0); my $cur = "";
+  for my $l (@lines) {
+    $cur = "git"     if $l =~ /safe_command(?:_sync)?\("git"\)/;
+    $cur = "notgit"  if $l =~ /safe_command(?:_sync)?\("(?!git")[^"]+"\)/;
+    next unless $l =~ /"-C",/;
+    if ($cur eq "git") { $git++; }
+    else               { $other++; }
+  }
+  for my $l (@lines) { $safe++ if $l =~ /"-c",\s*&(?:safe_dir|format!\("safe\.directory)/; }
+  print "$git $safe $other";
+'
+read -r CGIT CSAFE COTHER <<< "$(SRC="$SHIPPED" perl -e '$src=$ENV{SRC};'"$CLASSIFY")"
+if [ "${CGIT:-0}" -ge 4 ] && [ "${CSAFE:-0}" -ge "${CGIT:-0}" ]; then
+  ok "all $CGIT shipped git -C invocations declare their directory safe ($COTHER non-git -C excluded by name)"
+else
+  bad "$CGIT shipped git -C invocations but only $CSAFE safe.directory — a re-deploy dies on dubious ownership"
+fi
+nocode "$DEPLOYSVC" 'safe\.directory=\*' \
+     "and none of them widens the exception to every path on the box"
+
 echo
 printf 'passed %d, failed %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

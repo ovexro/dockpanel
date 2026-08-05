@@ -133,10 +133,20 @@ pub async fn clone_or_pull(
         None => None,
     };
 
+    // The checkout is handed to the web server's user, and this process is root.
+    // Git refuses to operate on a repository owned by somebody else — the
+    // `dubious ownership` guard, which exists so root cannot be tricked into
+    // running hooks out of an untrusted user's tree. Here the agent placed the
+    // repository there deliberately, so the exception is declared per path and
+    // per invocation. It has to be command-scope: git ignores `safe.directory`
+    // from a repository's own config, which is exactly the file an attacker
+    // would control.
+    let safe_dir = format!("safe.directory={site_dir}");
+
     if Path::new(&git_dir).exists() {
         // Git pull (fetch + reset to match remote)
         let mut cmd = safe_command("git");
-        cmd.args(["-C", &site_dir, "fetch", "origin", branch])
+        cmd.args(["-c", &safe_dir, "-C", &site_dir, "fetch", "origin", branch])
             .env("GIT_TERMINAL_PROMPT", "0");
         if let Some(ref ssh) = env_ssh {
             cmd.env("GIT_SSH_COMMAND", ssh);
@@ -164,7 +174,7 @@ pub async fn clone_or_pull(
 
         // Reset to remote branch
         let reset = safe_command("git")
-            .args(["-C", &site_dir, "reset", "--hard", &format!("origin/{branch}")])
+            .args(["-c", &safe_dir, "-C", &site_dir, "reset", "--hard", &format!("origin/{branch}")])
             .output()
             .await
             .map_err(|e| format!("git reset failed: {e}"))?;
@@ -283,7 +293,7 @@ pub async fn clone_or_pull(
 
     // Get current commit hash
     let hash = safe_command("git")
-        .args(["-C", &site_dir, "rev-parse", "--short", "HEAD"])
+        .args(["-c", &safe_dir, "-C", &site_dir, "rev-parse", "--short", "HEAD"])
         .output()
         .await
         .ok()
@@ -444,7 +454,8 @@ pub async fn atomic_deploy(
 
     // Get commit hash
     let commit_hash = safe_command("git")
-        .args(["-C", &release_dir, "rev-parse", "--short", "HEAD"])
+        .args(["-c", &format!("safe.directory={release_dir}"),
+               "-C", &release_dir, "rev-parse", "--short", "HEAD"])
         .output()
         .await
         .ok()
@@ -680,11 +691,15 @@ pub fn list_releases(domain: &str) -> Result<Vec<ReleaseInfo>, String> {
                 .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
                 .unwrap_or_default();
 
-            // Get commit hash from release
+            // Get commit hash from release. Same ownership exception as the
+            // deploy paths: `atomic_deploy` hands each release to www-data, so
+            // reading it back as root needs the directory declared safe — and
+            // without that this silently answered None on every atomic release.
             let git_dir = format!("{}/{}", e.path().display(), ".git");
             let commit = if Path::new(&git_dir).exists() {
                 crate::safe_cmd::safe_command_sync("git")
-                    .args(["-C", &e.path().to_string_lossy(), "rev-parse", "--short", "HEAD"])
+                    .args(["-c", &format!("safe.directory={}", e.path().display()),
+                           "-C", &e.path().to_string_lossy(), "rev-parse", "--short", "HEAD"])
                     .output()
                     .ok()
                     .and_then(|o| if o.status.success() {
@@ -914,5 +929,63 @@ mod first_deploy_tests {
         std::fs::create_dir_all(&empty).unwrap();
         let out = git(&["clone", "-q", origin.to_str().unwrap(), empty.to_str().unwrap()], &base);
         assert!(out.status.success(), "an empty destination must still clone");
+    }
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+
+    /// EXECUTED, not asserted: git really does refuse a repository owned by
+    /// another user, and the command-scope exception really does lift it. If
+    /// either half ever stops being true this test says so, rather than the
+    /// second deploy of every site saying it for us.
+    ///
+    /// Skipped unless running as root with a spare uid to chown to, because
+    /// that is the only configuration in which the guard engages at all.
+    #[test]
+    fn a_checkout_owned_by_another_user_needs_the_exception() {
+        if !nix_is_root() { eprintln!("skipped: needs root to chown"); return; }
+        let dir = std::env::temp_dir().join("dockpanel-ownership-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let git = |args: &[&str]| {
+            std::process::Command::new("git").args(args).current_dir(&dir)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output().expect("git must be installed")
+        };
+        git(&["init", "-q", "-b", "main", "."]);
+        std::fs::write(dir.join("f.txt"), "x").unwrap();
+        git(&["add", "-A"]);
+        git(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"]);
+
+        // hand it to another uid, exactly as the deploy paths do
+        let chown = std::process::Command::new("chown")
+            .args(["-R", "nobody", dir.to_str().unwrap()]).status().expect("chown");
+        if !chown.success() { eprintln!("skipped: chown unavailable"); return; }
+
+        let path = dir.to_str().unwrap();
+        let bare = std::process::Command::new("git")
+            .args(["-C", path, "rev-parse", "--short", "HEAD"])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output().unwrap();
+        assert!(!bare.status.success(),
+            "git accepted a repository owned by another user — the exception is now dead code");
+
+        let guarded = std::process::Command::new("git")
+            .args(["-c", &format!("safe.directory={path}"), "-C", path, "rev-parse", "--short", "HEAD"])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output().unwrap();
+        assert!(guarded.status.success(),
+            "the command-scope exception no longer lifts the guard: {}",
+            String::from_utf8_lossy(&guarded.stderr));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn nix_is_root() -> bool {
+        std::process::Command::new("id").arg("-u").output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "0").unwrap_or(false)
     }
 }
