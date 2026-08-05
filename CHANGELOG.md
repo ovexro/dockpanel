@@ -4,6 +4,80 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.70.0] - 2026-08-05
+
+### Fixed — the public status page was open on every install, and the documented switch did not govern it (SECURITY)
+
+⚠ **Upgrade impact: `/status` is now closed until you turn it on.** If you were
+relying on a status page you never explicitly enabled, re-enable it under
+**Settings → Public Status Page**. Read the rest of this entry first — it says
+what that page has been publishing.
+
+- **Four routes answered with no authentication and exactly one of them checked
+  anything.** `/api/status-page` read `settings.status_page_enabled` and failed
+  closed — that is the switch the Settings UI writes and the guide documents.
+  But `/status`, the page an actual visitor loads, is served by
+  `/api/status-page/public`, which read a **different** flag,
+  `status_page_config.enabled`. That flag defaults `TRUE` in the column *and*
+  again in the fallback used when the table has no row at all, and no migration
+  ever seeds the table — so it failed open twice, and a panel published its
+  status page **from first boot, with no operator action.**
+  `/api/status-page/subscribe` and `/unsubscribe` read nothing at all.
+
+- **What that page publishes is not just uptime.** The alert engine, the
+  auto-healer, the uptime checker and the backup executor all open incidents
+  marked visible on the status page automatically, and their titles name your
+  infrastructure — *"Service mariadb is stopped on This Server"*, *"Disk at 53%
+  on This Server"*. On our own demo host, `/api/status-page/public` was serving
+  five unresolved incidents, the oldest from 2026-05-02, to anyone who asked.
+
+- **The publish decision now lives in one place**,
+  `services::public_status::require_enabled`, and all four public routes call
+  it. It fails closed on an absent setting, on a value that is not the literal
+  `"true"`, and on a query that errors. `status_page_config.enabled` survives as
+  a display preference — it hides the `/status` page while leaving the monitor
+  endpoint up — but it is no longer a publish decision.
+  `tests/status-page-gate-pin-e2e.sh` computes the route list from the router
+  and fails the build if a fifth public status route is ever added without the
+  gate.
+
+- **Ungated `subscribe` wrote rows.** An unauthenticated caller could insert
+  arbitrary addresses into `status_page_subscribers` as `verified = TRUE`, and
+  delete anyone else's, on an install whose status page was never turned on.
+
+### Fixed — an off switch that reported success and did nothing
+
+- `PUT /api/status-page/config` ran `INSERT ... ON CONFLICT DO NOTHING` with **no
+  conflict target**, against a table whose only unique index was the
+  `gen_random_uuid()` primary key — so the clause could never fire and every save
+  inserted another row. The `UPDATE` that followed then matched N rows and
+  returned an arbitrary one, while the public reader took an **unordered**
+  `LIMIT 1`. An operator could untick *Enabled*, get a `200` and a form showing
+  it off, and still be publishing from a different row.
+- Migration `20260805120000_status_page_config_unique.sql` dedupes — keeping the
+  **oldest** row per operator, which is the one the public reader now selects, so
+  the migration cannot change what a panel publishes — then makes `user_id`
+  unique. `update_config` names a real conflict target; the public read is
+  ordered.
+
+### Fixed — docs and controls that described a different product
+
+- `docs/guides/status-page.md` promised *"When disabled, visiting `/status`
+  returns a 404."* That was false for four and a half months. It is true now, and
+  the guide carries an upgrade note saying it was not, plus a **What gets
+  published** section naming the auto-filed incidents.
+- The Settings toggle described itself as sharing *"monitor status ... at
+  `/api/status-page`"* — the endpoint nobody visits. It now says it is the master
+  switch for `/status`, that it is off by default, and enumerates what goes
+  public.
+- The status-page **Enabled** checkbox was an unlabelled control on the Incidents
+  screen, absent from the guide's own field list. It is now *"Show /status page"*,
+  documented, and sits under a line stating that nothing is public until the
+  Settings master switch is on.
+- `FEATURES.md` headed its background-services section **"11 supervised"** while
+  `main.rs` derives **15**, and the register 130 lines below it already said 15.
+  Corrected.
+
 ## [2.69.0] - 2026-08-05
 
 ### Added — a `client` role, and a way to hand a site to one (GitHub #51)

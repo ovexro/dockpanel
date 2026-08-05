@@ -733,14 +733,17 @@ export default function Settings() {
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600">
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Public Status Page</h3>
-            <p className="text-xs text-dark-200 mt-0.5">Share monitor status publicly at /api/status-page</p>
+            <p className="text-xs text-dark-200 mt-0.5">The master switch for everything served publicly at /status — off by default</p>
           </div>
           <div className="p-5">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-dark-100">Enable public status page</p>
                 <p className="text-xs text-dark-300 mt-0.5">
-                  Exposes all enabled monitor statuses (name + status only, no URLs) at a public JSON endpoint
+                  Publishes, to anyone on the internet with no login: every enabled monitor's name and
+                  status, your status-page components, and any incident marked visible on the status page —
+                  including the ones the alert engine files for you, whose titles name your servers and
+                  services. Appearance and history are configured under Incidents.
                 </p>
               </div>
               <button

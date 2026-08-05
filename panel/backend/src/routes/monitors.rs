@@ -510,15 +510,8 @@ pub async fn force_check(
 pub async fn status_page(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // Check if status page is enabled
-    let enabled: Option<(String,)> = sqlx::query_as(
-        "SELECT value FROM settings WHERE key = 'status_page_enabled'"
-    ).fetch_optional(&state.db).await
-        .map_err(|e| internal_error("status page enabled check", e))?;
-
-    if enabled.map(|(v,)| v).unwrap_or_else(|| "false".to_string()) != "true" {
-        return Err(err(StatusCode::NOT_FOUND, "Status page not enabled"));
-    }
+    // The one gate every unauthenticated status-page route passes through.
+    crate::services::public_status::require_enabled(&state.db).await?;
 
     // Get all enabled monitors (no user filter — this is public)
     let monitors: Vec<(String, String, String, Option<i32>, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(

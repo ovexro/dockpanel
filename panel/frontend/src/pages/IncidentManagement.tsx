@@ -492,9 +492,13 @@ export default function IncidentManagement() {
             <input type="text" value={config.logo_url || ""} onChange={e => setConfig({ ...config, logo_url: e.target.value || null })}
               className="w-full px-3 py-2 bg-dark-900 border border-dark-500 rounded-lg text-sm font-mono text-dark-50 outline-none" />
           </div>
+          <p className="text-xs text-dark-300 font-mono">
+            Nothing here is public until <span className="text-dark-100">Settings &rarr; Public Status Page</span> is
+            switched on. That toggle is the master switch; these control what the page looks like once it is.
+          </p>
           <div className="flex gap-6 text-sm font-mono">
             <label className="flex items-center gap-2 text-dark-100">
-              <input type="checkbox" checked={config.enabled} onChange={e => setConfig({ ...config, enabled: e.target.checked })} /> Enabled
+              <input type="checkbox" checked={config.enabled} onChange={e => setConfig({ ...config, enabled: e.target.checked })} /> Show /status page
             </label>
             <label className="flex items-center gap-2 text-dark-100">
               <input type="checkbox" checked={config.show_subscribe} onChange={e => setConfig({ ...config, show_subscribe: e.target.checked })} /> Show Subscribe

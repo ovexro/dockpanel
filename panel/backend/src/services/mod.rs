@@ -19,6 +19,7 @@ pub mod prerequisites;
 pub mod preview_cleanup;
 pub mod metrics_collector;
 pub mod prometheus_exporter;
+pub mod public_status;
 pub mod notifications;
 pub mod on_call;
 pub mod panel_snapshot;

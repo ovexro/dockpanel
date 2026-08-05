@@ -528,9 +528,14 @@ pub async fn update_config(
     AdminUser(claims): AdminUser,
     Json(req): Json<UpdateConfigRequest>,
 ) -> Result<Json<StatusPageConfig>, ApiError> {
-    // Ensure config exists
+    // Ensure config exists. The conflict TARGET is load-bearing: without it the
+    // clause can only absorb a primary-key collision, and the primary key
+    // defaults to gen_random_uuid(), so the guard was inert and every PUT
+    // inserted another row. The UPDATE below then matched N rows and
+    // `fetch_one` returned an arbitrary one — an operator could untick
+    // "Enabled", get a 200 and a form showing false, and still be publishing.
     let _ = sqlx::query(
-        "INSERT INTO status_page_config (user_id) VALUES ($1) ON CONFLICT DO NOTHING"
+        "INSERT INTO status_page_config (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING"
     )
     .bind(claims.sub)
     .execute(&state.db).await;
@@ -687,6 +692,11 @@ pub async fn subscribe(
     State(state): State<AppState>,
     Json(req): Json<SubscribeRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // A disabled status page has no subscribers to take. Ungated, this wrote
+    // attacker-supplied addresses into `status_page_subscribers` as
+    // `verified = TRUE` on installs that never turned the feature on.
+    crate::services::public_status::require_enabled(&state.db).await?;
+
     if req.email.is_empty() || !req.email.contains('@') || req.email.len() > 255 {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid email address"));
     }
@@ -712,6 +722,8 @@ pub async fn unsubscribe(
     State(state): State<AppState>,
     Json(req): Json<SubscribeRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    crate::services::public_status::require_enabled(&state.db).await?;
+
     let _ = sqlx::query("DELETE FROM status_page_subscribers WHERE email = $1")
         .bind(&req.email)
         .execute(&state.db).await;
@@ -743,10 +755,18 @@ pub async fn list_subscribers(
 pub async fn public_status_page(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // Get config
+    // The one gate every unauthenticated status-page route passes through. This
+    // endpoint is what `/status` actually fetches, and until v2.70.0 it was
+    // governed by nothing the operator UI writes.
+    crate::services::public_status::require_enabled(&state.db).await?;
+
+    // Get config. ORDER BY is load-bearing, not decoration: `update_config` used
+    // to insert a fresh row on every PUT (see the migration that made
+    // `user_id` unique), so an install can carry duplicates, and an unordered
+    // LIMIT 1 would let two reads of the same table disagree.
     let config: Option<(String, String, Option<String>, String, bool, bool, i32, bool)> = sqlx::query_as(
         "SELECT title, description, logo_url, accent_color, show_subscribe, show_incident_history, history_days, enabled \
-         FROM status_page_config LIMIT 1"
+         FROM status_page_config ORDER BY created_at ASC, id ASC LIMIT 1"
     )
     .fetch_optional(&state.db).await
     .map_err(|e| internal_error("public status page", e))?;
