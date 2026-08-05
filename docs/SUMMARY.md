@@ -24,6 +24,7 @@
   - [SBOMs](guides/sbom.md)
   - [Themes & Layouts](guides/themes.md)
   - [Sessions](guides/sessions.md)
+  - [Roles & Site Ownership](guides/roles-and-ownership.md)
 - [API Reference](api-reference.md)
 - [CLI Reference](cli-reference.md)
 - [Troubleshooting](troubleshooting.md)
