@@ -299,9 +299,13 @@ One user may create at most **Site Creation Rate Limit** sites per hour (default
 
 While **Canary File Monitoring** is on, DockPanel checks hidden canary files in sensitive directories (`/etc/`, `/root/`, `/home/`, `/var/www/`) every 2 minutes and alerts if their access times change. Canary monitoring, suspicious-event ingestion and auto-lockdown expiry run independently of the auto-healer's own switch.
 
-### Backup Integrity Chain
+### Backup Integrity Hashes
 
-Each backup includes a SHA-256 hash of its contents and a reference to the previous backup's hash, forming an integrity chain. If an attacker tampers with backup files, the chain breaks and alerts fire.
+Backups taken through the panel record a SHA-256 hash of the archive and the hash of the previous backup of the same resource. Both appear in the chain-of-trust report.
+
+**What this does not do, stated plainly:** nothing re-computes those hashes afterwards, so a tampered archive is not detected and no alert fires. The hashes are a record of what was written at the time — useful for comparing against a copy you verify yourself — not tamper detection.
+
+**And two paths record no hash at all:** *site* backups created by a schedule or by a backup policy. Manual site backups and every database and volume backup do record one. A report for a backup with no hash shows `—` rather than a value.
 
 ### Suspicious Command Detection
 

@@ -114,7 +114,6 @@ pub struct DatabaseBackup {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub sha256_hash: Option<String>,
     pub previous_hash: Option<String>,
-    pub chain_valid: Option<bool>,
 }
 
 #[derive(serde::Serialize, sqlx::FromRow)]
@@ -131,7 +130,6 @@ pub struct VolumeBackup {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub sha256_hash: Option<String>,
     pub previous_hash: Option<String>,
-    pub chain_valid: Option<bool>,
 }
 
 #[derive(serde::Serialize, sqlx::FromRow)]
@@ -927,9 +925,9 @@ pub async fn create_db_backup(
 
     // v2.8.2: integrity chain — same pattern as routes/backups.rs for site backups.
     let sha256_hash = result.get("sha256").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let previous_hash: Option<String> = sqlx::query_scalar(
+    let previous_hash: Option<String> = sqlx::query_scalar::<_, Option<String>>(
         "SELECT sha256_hash FROM database_backups WHERE database_id = $1 ORDER BY created_at DESC LIMIT 1"
-    ).bind(db_id).fetch_optional(&state.db).await.unwrap_or(None);
+    ).bind(db_id).fetch_optional(&state.db).await.unwrap_or(None).flatten();
 
     let backup: DatabaseBackup = sqlx::query_as(
         "INSERT INTO database_backups (database_id, server_id, filename, size_bytes, db_type, db_name, encrypted, sha256_hash, previous_hash, chain_valid) \
@@ -1138,9 +1136,9 @@ pub async fn create_volume_backup(
     // v2.8.2: integrity chain. Scope previous_hash by (container_id, volume_name)
     // so re-creating the same logical volume re-chains rather than forking.
     let sha256_hash = result.get("sha256").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let previous_hash: Option<String> = sqlx::query_scalar(
+    let previous_hash: Option<String> = sqlx::query_scalar::<_, Option<String>>(
         "SELECT sha256_hash FROM volume_backups WHERE container_id = $1 AND volume_name = $2 ORDER BY created_at DESC LIMIT 1"
-    ).bind(&req.container_id).bind(&req.volume_name).fetch_optional(&state.db).await.unwrap_or(None);
+    ).bind(&req.container_id).bind(&req.volume_name).fetch_optional(&state.db).await.unwrap_or(None).flatten();
 
     let backup: VolumeBackup = sqlx::query_as(
         "INSERT INTO volume_backups (container_id, container_name, server_id, volume_name, filename, size_bytes, sha256_hash, previous_hash, chain_valid) \
@@ -1570,7 +1568,6 @@ pub struct ChainReportBackup {
     pub size_bytes: i64,
     pub sha256_hash: Option<String>,
     pub previous_hash: Option<String>,
-    pub chain_valid: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     // Kind-specific extras — exactly one set is populated, the others are None.
     pub site_id: Option<Uuid>,
@@ -1606,9 +1603,15 @@ pub struct ChainReportDrill {
     pub error_message: Option<String>,
 }
 
+// No validity verdict here, deliberately. `chain_valid` is written TRUE by every
+// one of its seven INSERTs — five literal, two by column default — is UPDATEd
+// nowhere, and no verifier exists that could ever compute it: `previous_hash` is
+// copied out of the newest row rather than recomputed from the predecessor
+// artifact. A verdict this document cannot evaluate has no business being
+// rendered in it, so the report carries what the panel genuinely recorded and
+// stops there. Re-adding a verdict field means building the verifier first.
 #[derive(serde::Serialize)]
 pub struct ChainIntegrity {
-    pub chain_valid: bool,
     pub verifications_passed: i64,
     pub drills_passed: i64,
 }
@@ -1650,11 +1653,11 @@ async fn build_chain_report(
         "site" => {
             let row: Option<(
                 Uuid, Uuid, String, String, i64,
-                Option<String>, Option<String>, Option<bool>,
+                Option<String>, Option<String>,
                 chrono::DateTime<chrono::Utc>,
             )> = sqlx::query_as(
                 "SELECT b.id, b.site_id, s.domain, b.filename, b.size_bytes, \
-                        b.sha256_hash, b.previous_hash, b.chain_valid, b.created_at \
+                        b.sha256_hash, b.previous_hash, b.created_at \
                    FROM backups b JOIN sites s ON s.id = b.site_id \
                   WHERE b.id = $1"
             )
@@ -1662,14 +1665,13 @@ async fn build_chain_report(
             .fetch_optional(&state.db).await
             .map_err(|e| internal_error("chain report: load site backup", e))?;
 
-            let (id, site_id, resource_name, filename, size_bytes, sha256_hash, previous_hash, chain_valid, created_at) =
+            let (id, site_id, resource_name, filename, size_bytes, sha256_hash, previous_hash, created_at) =
                 row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Backup not found"))?;
 
             ChainReportBackup {
                 kind: "site".into(),
                 id, resource_name, filename, size_bytes,
                 sha256_hash, previous_hash,
-                chain_valid: chain_valid.unwrap_or(true),
                 created_at,
                 site_id: Some(site_id),
                 database_id: None, container_id: None, volume_name: None, db_type: None,
@@ -1678,11 +1680,11 @@ async fn build_chain_report(
         "database" => {
             let row: Option<(
                 Uuid, Uuid, String, String, String, i64,
-                Option<String>, Option<String>, Option<bool>,
+                Option<String>, Option<String>,
                 chrono::DateTime<chrono::Utc>,
             )> = sqlx::query_as(
                 "SELECT id, database_id, db_name, db_type, filename, size_bytes, \
-                        sha256_hash, previous_hash, chain_valid, created_at \
+                        sha256_hash, previous_hash, created_at \
                    FROM database_backups \
                   WHERE id = $1"
             )
@@ -1690,14 +1692,13 @@ async fn build_chain_report(
             .fetch_optional(&state.db).await
             .map_err(|e| internal_error("chain report: load database backup", e))?;
 
-            let (id, database_id, resource_name, db_type, filename, size_bytes, sha256_hash, previous_hash, chain_valid, created_at) =
+            let (id, database_id, resource_name, db_type, filename, size_bytes, sha256_hash, previous_hash, created_at) =
                 row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Backup not found"))?;
 
             ChainReportBackup {
                 kind: "database".into(),
                 id, resource_name, filename, size_bytes,
                 sha256_hash, previous_hash,
-                chain_valid: chain_valid.unwrap_or(true),
                 created_at,
                 site_id: None,
                 database_id: Some(database_id),
@@ -1708,11 +1709,11 @@ async fn build_chain_report(
         "volume" => {
             let row: Option<(
                 Uuid, String, String, String, String, i64,
-                Option<String>, Option<String>, Option<bool>,
+                Option<String>, Option<String>,
                 chrono::DateTime<chrono::Utc>,
             )> = sqlx::query_as(
                 "SELECT id, container_id, container_name, volume_name, filename, size_bytes, \
-                        sha256_hash, previous_hash, chain_valid, created_at \
+                        sha256_hash, previous_hash, created_at \
                    FROM volume_backups \
                   WHERE id = $1"
             )
@@ -1720,7 +1721,7 @@ async fn build_chain_report(
             .fetch_optional(&state.db).await
             .map_err(|e| internal_error("chain report: load volume backup", e))?;
 
-            let (id, container_id, container_name, volume_name, filename, size_bytes, sha256_hash, previous_hash, chain_valid, created_at) =
+            let (id, container_id, container_name, volume_name, filename, size_bytes, sha256_hash, previous_hash, created_at) =
                 row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Backup not found"))?;
 
             ChainReportBackup {
@@ -1729,7 +1730,6 @@ async fn build_chain_report(
                 resource_name: format!("{container_name}:{volume_name}"),
                 filename, size_bytes,
                 sha256_hash, previous_hash,
-                chain_valid: chain_valid.unwrap_or(true),
                 created_at,
                 site_id: None, database_id: None,
                 container_id: Some(container_id),
@@ -1797,8 +1797,6 @@ async fn build_chain_report(
 
     let verifications_passed = verifications.iter().filter(|v| v.status == "passed").count() as i64;
     let drills_passed = drills.iter().filter(|d| d.status == "passed").count() as i64;
-    let chain_valid = backup.chain_valid;
-
     Ok(ChainReport {
         panel_version: env!("CARGO_PKG_VERSION").to_string(),
         generated_at: chrono::Utc::now(),
@@ -1806,7 +1804,6 @@ async fn build_chain_report(
         verifications,
         drills,
         chain_integrity: ChainIntegrity {
-            chain_valid,
             verifications_passed,
             drills_passed,
         },

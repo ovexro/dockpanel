@@ -233,13 +233,33 @@ pub async fn webhook(
             ).bind(service_id).fetch_optional(&state.db).await.ok().flatten();
 
             if let Some((Some(user_id),)) = mapping {
-                sqlx::query("UPDATE users SET role = 'suspended' WHERE id = $1")
-                    .bind(user_id).execute(&state.db).await.ok();
+                // `role` doubles as the status column, so suspending OVERWRITES the only
+                // record of what the account was — and the unsuspend arm below restores
+                // everyone to 'user'. An admin round-tripped through billing therefore
+                // comes back as a plain user, with nobody left holding the privilege to
+                // promote them again. The panel's own twin in `users.rs` stashes the prior
+                // role before suspending; this path has no equivalent, so it declines to
+                // touch a privileged account rather than destroying its role. Reachable:
+                // the provision arm above adopts an EXISTING user by email with no role
+                // filter, so the operator's own account maps here the moment their address
+                // is also a billing contact.
+                let changed = sqlx::query(
+                    "UPDATE users SET role = 'suspended' WHERE id = $1 AND role NOT IN ('admin', 'reseller')"
+                )
+                    .bind(user_id).execute(&state.db).await
+                    .map(|r| r.rows_affected()).unwrap_or(0);
 
                 sqlx::query("UPDATE whmcs_service_map SET status = 'suspended' WHERE whmcs_service_id = $1")
                     .bind(service_id).execute(&state.db).await.ok();
 
-                tracing::info!("WHMCS suspended service {service_id}");
+                if changed == 0 {
+                    tracing::warn!(
+                        "WHMCS suspend for service {service_id} changed no user row — the mapped \
+                         account is already suspended or holds a privileged role"
+                    );
+                } else {
+                    tracing::info!("WHMCS suspended service {service_id}");
+                }
             }
             Ok(Json(serde_json::json!({ "ok": true, "action": "suspended" })))
         }

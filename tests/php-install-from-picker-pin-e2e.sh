@@ -394,5 +394,74 @@ else
 fi
 
 echo
+echo "§8 the direction §7 made reachable — php -> static (s311)"
+
+# §7 pins static -> php. Every one of its arms is about that direction, and the
+# defect was in the other one: v2.67.0 made `UPDATE sites SET runtime` reachable
+# for the first time, and `document_root_for` maps static and php to the SAME
+# {site_dir}/public — the property the switch's own reasoning cites as making it
+# safe. So a docroot full of application source keeps being served, by a vhost
+# that has just lost every protection.
+#
+# All twelve `deny all` blocks in each template live inside php preset branches.
+# The static branch had root + index + try_files and nothing else, so the switch
+# published wp-config.php and .git/config as plain text — verified by rendering
+# both configs and serving them through a real nginx: 403 under php, 200 with the
+# database password in the body under static.
+#
+# These arms are scoped to the STATIC BRANCH ONLY. An arm grepping either whole
+# file would have been green throughout the defect's entire life, because the
+# denies it looks for were present twelve times over, in the branch that was not
+# broken. Strip full-line comments first: the fix carries a comment naming the
+# very files it protects (lesson #149 — an arm matching the prose that narrates
+# the check).
+tstrip() { sed 's/^[[:space:]]*#.*//' <<< "$1"; }
+hasF() { grep -qF -- "$2" <<< "$1"; }
+
+for tpl in panel/agent/src/templates/nginx/http.conf panel/agent/src/templates/nginx/https.conf; do
+  [ -f "$tpl" ] || { bad "missing $tpl — the arms below would read nothing"; continue; }
+
+  # Bound the window on the branch's own terminator, never a fixed -A count
+  # (lesson #172): the php branch below it contains all twelve denies, so a
+  # window that overruns turns this section permanently, silently green.
+  win=$(tstrip "$(awk '/index index\.html index\.htm/,/\{% (elif|endif)/' "$tpl")")
+  base=$(basename "$tpl")
+
+  if [ -z "$win" ] || ! hasF "$win" 'try_files'; then
+    bad "$base: could not extract the static branch — every arm below is meaningless"
+    continue
+  fi
+
+  # CONTROL, and it is the load-bearing one: the same window must NOT contain
+  # the php handler. If it does, the extraction has bled into the php branch and
+  # the two arms after it are reading the wrong code.
+  if hasF "$win" 'fastcgi_pass'; then
+    bad "$base: the static window bled into the php branch — its greens prove nothing"
+    continue
+  fi
+
+  if hasF "$win" 'location ~ /\.(?!well-known)'; then
+    ok "$base: the static branch denies dotfiles — .env and .git/ survive the switch"
+  else
+    bad "$base: static branch serves dotfiles — switching to static publishes .env and .git/config"
+  fi
+
+  if hasF "$win" 'location ~ \.php$'; then
+    ok "$base: the static branch refuses .php source rather than serving it"
+  else
+    bad "$base: static branch serves .php as plain text — wp-config.php becomes readable"
+  fi
+done
+
+# Second control, on the other side: the php branches must still carry the denies
+# these arms were modelled on. A zero here would mean the greps above are matching
+# a pattern this codebase no longer writes.
+if [ "$(grep -cF 'deny all' panel/agent/src/templates/nginx/http.conf)" -ge 12 ]; then
+  ok "the php preset branches still carry their own denies (the arms are non-vacuous)"
+else
+  bad "fewer denies than expected in http.conf — re-derive what this section is matching"
+fi
+
+echo
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

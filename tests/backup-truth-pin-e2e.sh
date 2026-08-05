@@ -325,6 +325,109 @@ for f in "$EXEC" "$SCHED"; do
   fi
 done
 
+echo "== §8  the chain report states only what the panel actually recorded (s311) =="
+#
+# `chain_valid` was written TRUE by all seven of its INSERTs — five literal, two
+# by column default — UPDATEd nowhere, and read back with `.unwrap_or(true)`.
+# `chain-report.typ` then rendered it TWICE as a bold green YES, under a footer
+# telling the reader that a break "indicates either a missing intermediate backup
+# or a tampered artifact". No verifier existed, and none could: `previous_hash` is
+# copied out of the newest row rather than recomputed from the predecessor
+# artifact. The document certified tamper-evidence the system had no mechanism to
+# evaluate, in a PDF built to be handed to an auditor.
+#
+# The column and its writers survive (dropping a column is a migration, and this
+# release does not need one). What must not come back is a RENDERED or SERVED
+# verdict. So these arms are about readers and outputs, never about the INSERTs.
+TYP=panel/backend/templates/chain-report.typ
+if [ ! -f "$TYP" ]; then
+  bad "MISSING SUBJECT FILE: $TYP"
+else
+  TYP_SRC=$(cat "$TYP")
+  # CONTROL FIRST. Both arms below are absence arms, and an absence arm over an
+  # unreadable or renamed subject is the most reassuring way for a pin to be
+  # wrong (lesson #143). If the template no longer renders the two hash rows,
+  # this section is measuring a file that is not the chain report any more.
+  if [ "$(count "$TYP_SRC" 'SHA-256')" != "0" ] && [ "$(count "$TYP_SRC" 'Previous hash')" != "0" ]; then
+    ok "the chain report still renders the hashes it genuinely recorded (control)"
+  else
+    bad "$TYP does not render SHA-256/Previous hash — the absence arms below mean nothing"
+  fi
+
+  if [ "$(count "$TYP_SRC" 'Chain valid|chain_valid')" = "0" ]; then
+    ok "the report renders no chain-validity verdict"
+  else
+    bad "the report renders a chain-validity verdict again — nothing can compute it"
+  fi
+
+  # The footer prose is the half that made it an assertion rather than a field:
+  # it told the reader what a break MEANS. A verdict nobody computes must not
+  # come back wearing an explanation.
+  if [ "$(count "$TYP_SRC" 'tampered artifact|break in the chain')" = "0" ]; then
+    ok "the footer no longer explains a verdict the panel cannot reach"
+  else
+    bad "the footer claims a chain break implies tampering — that claim is unbacked"
+  fi
+fi
+
+if S=$(subj "$ORCH"); then
+  # Every surviving mention must be a WRITE. A reader is what puts the verdict
+  # back on a surface — the struct field, the SELECT list, the .unwrap_or(true).
+  TOTAL=$(count "$S" 'chain_valid')
+  WRITES=$(count "$(grep -E 'INSERT INTO' <<< "$S" || true)" 'chain_valid')
+  if [ "$TOTAL" = "$WRITES" ]; then
+    ok "chain_valid survives only in INSERTs — no reader, no DTO field ($WRITES)"
+  else
+    bad "chain_valid has $((TOTAL - WRITES)) non-INSERT occurrence(s) — something reads the verdict again"
+  fi
+
+  # The section itself must survive with its two genuinely computed fields, or
+  # the arms above would also pass on a report that simply lost the section.
+  if has "$S" 'verifications_passed' && has "$S" 'drills_passed'; then
+    ok "the chain-integrity section keeps the two counts it can actually derive"
+  else
+    bad "the chain-integrity section lost its computed fields — this was a deletion too far"
+  fi
+fi
+
+# The same claim lived in a published guide, and there it was stronger than the
+# PDF's: "If an attacker tampers with backup files, the chain breaks and alerts
+# fire." Nothing re-computes a hash and no alert exists, so removing the verdict
+# from the report while leaving that sentence up would have moved the lie rather
+# than retiring it. Prose, so it is read raw on purpose.
+HARDEN=docs/guides/security-hardening.md
+if [ ! -f "$HARDEN" ]; then
+  bad "MISSING SUBJECT FILE: $HARDEN"
+elif ! grep -q 'SHA-256' "$HARDEN"; then
+  bad "$HARDEN no longer describes backup hashing — this arm is measuring nothing"
+elif grep -qi 'the chain breaks and alerts fire' "$HARDEN"; then
+  bad "the hardening guide promises tamper alerts that no code can fire"
+else
+  ok "the hardening guide does not promise tamper detection the panel cannot do"
+fi
+
+echo "== §9  no backup/site query names a column the schema does not have (s311) =="
+#
+# `sites.rs` health_summary selected `last_response_ms` from `monitors`, whose
+# column is `last_response_time` — a 42703 at parse-analyze, so an unconditional
+# 500 from the day it shipped (e65893c, 2026-03-22) until v2.68.0. The backend
+# has ZERO compile-checked queries (`sqlx::query!` count is 0 against 728
+# unchecked `query_as(`), so nothing but execution could ever have caught it.
+#
+# ⚠ This is a REGRESSION pin on the one literal, not the class sweep. The class
+# arm — every identifier in a SELECT list exists in the migrations for that table
+# — needs either a live database or a migration parser, and neither belongs in a
+# pure-source suite. Recorded here so the next person knows what is NOT covered.
+BAD_COL=$(grep -rn 'last_response_ms' --include=*.rs panel/backend/src panel/agent/src 2>/dev/null | wc -l)
+GOOD_COL=$(grep -rn 'last_response_time' --include=*.rs panel/backend/src panel/agent/src 2>/dev/null | wc -l)
+if [ "$GOOD_COL" -eq 0 ]; then
+  bad "neither column name appears in the backend — this arm is measuring nothing"
+elif [ "$BAD_COL" -eq 0 ]; then
+  ok "no query selects last_response_ms ($GOOD_COL use(s) of the real column as control)"
+else
+  bad "$BAD_COL query/queries name last_response_ms again — monitors has no such column"
+fi
+
 echo
 echo "backup-truth: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

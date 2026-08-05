@@ -1293,6 +1293,28 @@ else
   ok "I9 a missing local server is reported, not laundered into a sentinel uuid"
 fi
 
+# I9b (s311) — the same file, the same shape one level up: an UNATTENDED external
+# caller mutating a column that is also the account's only record of what it was.
+# `role` doubles as the status column, so `SET role = 'suspended'` overwrites it,
+# and the unsuspend arm restores everyone to 'user'. An admin round-tripped
+# through billing therefore comes back as a plain user with nobody left able to
+# promote them — and it is reachable, because the provision arm adopts an
+# EXISTING user by email with no role filter, so the operator's own account maps
+# here the moment their address is also a billing contact. The panel's own twin
+# in users.rs stashes the prior role first; this path has no equivalent.
+#
+# Keyed on the UPDATE's own predicate, not on a comment or a helper name: the
+# guard has to be in the statement or it is not a guard.
+if [ -z "$WH_S" ]; then
+  : # already reported by I9
+elif ! has "$WH_S" "UPDATE users SET role = 'suspended'"; then
+  bad "I9b no suspend UPDATE found in whmcs.rs — this arm is measuring nothing"
+elif has "$WH_S" "UPDATE users SET role = 'suspended' WHERE id = \\\$1 AND role NOT IN"; then
+  ok "I9b the billing webhook cannot overwrite a privileged role"
+else
+  bad "I9b the billing webhook suspends any role — an admin round trip demotes them permanently"
+fi
+
 # I10 — the structural guarantee behind all of the above. `user_id` is an Option
 # in exactly one place, the private writer, so a caller must choose between
 # naming a user and declaring there is none. Re-introducing a nil-defaulting

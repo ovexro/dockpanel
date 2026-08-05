@@ -2311,7 +2311,7 @@ pub async fn health_summary(
 
     // Uptime: latest monitor status + response time
     let monitor: Option<(String, Option<i32>, bool)> = sqlx::query_as(
-        "SELECT status, last_response_ms, enabled FROM monitors WHERE site_id = $1 ORDER BY created_at DESC LIMIT 1"
+        "SELECT status, last_response_time, enabled FROM monitors WHERE site_id = $1 ORDER BY created_at DESC LIMIT 1"
     ).bind(id).fetch_optional(db).await
         .map_err(|e| internal_error("health summary monitor check", e))?;
     let (monitor_status, response_time, monitor_enabled) = monitor

@@ -4,7 +4,76 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [2.67.0] - 2026-08-05
+## [2.68.0] - 2026-08-05
+
+### Security — switching a site to static published its PHP source
+
+- **A site switched from PHP to static served `wp-config.php`, `.env` and
+  `.git/config` as plain text.** Every one of the twelve `deny all` blocks in the
+  vhost templates lives inside a PHP preset branch; the static branch had a
+  document root, an index and `try_files` and nothing else. That gap was harmless
+  while a static site could only ever hold static files — v2.67.0's runtime switch
+  is what let a document root full of application source become static, and both
+  runtimes resolve to the same `{site_dir}/public`, which is the property that
+  made the switch look safe. Verified by rendering both configs and serving them
+  through nginx: `403` for `/wp-config.php` and `/.git/config` under PHP, `200`
+  with the database password in the response body under static.
+- **The static branch now refuses dotfiles and `.php` source outright**, matching
+  what the PHP presets already did. `/.well-known/` is exempt, so ACME challenges
+  are unaffected. This applies to every static site on its next vhost rebuild, not
+  only to switched ones: a static site that was serving `.php` as plaintext or
+  exposing `.git/` stops doing so.
+- **The switch's warning no longer reassures.** It said the files are not touched
+  and switching back restores execution — both true of execution, neither true of
+  disclosure. It now says what stops being hidden and advises moving anything
+  sensitive out of `public/` first.
+- **A billing webhook can no longer overwrite a privileged role.** `role` doubles
+  as the account status column, so WHMCS `SuspendAccount` overwrote it and
+  `UnsuspendAccount` restored *everyone* to `user`: an admin round-tripped through
+  billing came back as a plain user, with nobody left holding the privilege to
+  promote them again. Reachable because provisioning adopts an existing user by
+  email with no role filter. The suspend now declines to touch `admin`/`reseller`
+  accounts and logs when it does — the panel's own suspend, which stashes the
+  prior role first, is unaffected.
+
+### Changed — the chain-of-trust report no longer certifies what it cannot measure
+
+- **The chain-of-trust PDF/JSON reported `Chain valid: YES` from a constant.**
+  `chain_valid` is written `TRUE` by all seven of its INSERTs, is UPDATEd nowhere,
+  and was read back with `.unwrap_or(true)`; no verifier exists, and none could,
+  because `previous_hash` is copied from the newest row rather than recomputed
+  from the predecessor artifact. The report rendered that constant twice, in bold
+  green, under a footer telling the reader a break "indicates either a missing
+  intermediate backup or a tampered artifact" — a tamper-evidence claim the panel
+  had no mechanism to evaluate, in a document built to hand to an auditor.
+- The report now carries only what the panel genuinely recorded: the SHA-256 and
+  previous-hash values, the verification count and the drill count. Its footer
+  states that hashes are recorded when the backup is taken and not re-computed
+  since. `chain_valid` is no longer rendered, and no longer appears in the
+  `/backup-orchestrator` list responses. The column and its writers are untouched.
+- **The same promise was in the hardening guide, in a stronger form** — *"If an
+  attacker tampers with backup files, the chain breaks and alerts fire."* No code
+  re-computes a hash and no such alert exists, so removing the verdict from the
+  report while leaving that sentence up would have moved the claim rather than
+  retired it. The guide now says what the hashes are for and what they are not, and
+  names the two paths that record no hash at all: site backups created by a
+  schedule or by a policy (2 of the 7 backup INSERTs; database and volume backups
+  do record one).
+
+### Fixed
+
+- **`GET /api/sites/{id}/health-summary` was an unconditional 500.** It selected
+  `last_response_ms` from `monitors`, whose column is `last_response_time` — a
+  `42703` at parse-analyze, so the endpoint had never once returned successfully
+  since it shipped on 2026-03-22. The backend has no compile-checked queries, so
+  only execution could have caught it.
+- **A predecessor backup with no hash was reported as a database error.** The
+  `previous_hash` lookups decoded a nullable column as a non-null `String`, so the
+  ordinary "the previous backup has no hash" case became a decode failure —
+  logged as `DB error fetching previous backup hash` at one site and silently
+  swallowed at the four others. All five now decode it as the nullable value it is.
+
+
 
 ### Added — change a site between static and PHP (#99)
 

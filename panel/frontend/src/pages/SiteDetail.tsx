@@ -698,9 +698,14 @@ export default function SiteDetail() {
                 {runtimeTarget === "static" && (
                   <div className="rounded-lg border border-dark-600 p-3 space-y-3">
                     <p className="text-xs text-dark-200">
-                      PHP stops executing on this site — <span className="font-mono">.php</span> files
-                      will be served or downloaded as plain files rather than run. The files themselves
-                      are not touched, and switching back restores execution.
+                      PHP stops executing on this site. Your files are not touched, and switching back
+                      restores execution — but anything the PHP vhost was hiding is a static file from
+                      now on, so the static vhost refuses <span className="font-mono">.php</span> source
+                      and dotfiles (<span className="font-mono">.env</span>,{" "}
+                      <span className="font-mono">.git/</span>) outright rather than serving them.
+                      Anything else in <span className="font-mono">public/</span> — database dumps,
+                      backups, <span className="font-mono">composer.json</span> — becomes publicly
+                      downloadable. Move it out before switching.
                     </p>
                     <div className="flex items-center gap-2">
                       <button

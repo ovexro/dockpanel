@@ -196,10 +196,16 @@ pub async fn create(
 
                 // Feature 13: Backup integrity chain — compute hash and link to previous
                 let sha256_hash = result.get("sha256").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let previous_hash: Option<String> = match sqlx::query_scalar(
+                // `::<_, Option<String>>` is load-bearing: sha256_hash is NULLABLE and the
+                // scheduled writers leave it NULL, so decoding it as a bare String turns the
+                // ordinary "predecessor has no hash" case into a decode ERROR — which this
+                // arm then reported as `DB error fetching previous backup hash`, blaming the
+                // database for a column the panel itself never filled in. Same annotation at
+                // the four sibling sites, which swallow the same error into `unwrap_or(None)`.
+                let previous_hash: Option<String> = match sqlx::query_scalar::<_, Option<String>>(
                     "SELECT sha256_hash FROM backups WHERE site_id = $1 ORDER BY created_at DESC LIMIT 1"
                 ).bind(id).fetch_optional(&db).await {
-                    Ok(v) => v,
+                    Ok(v) => v.flatten(),
                     Err(e) => {
                         tracing::warn!("DB error fetching previous backup hash: {e}");
                         None

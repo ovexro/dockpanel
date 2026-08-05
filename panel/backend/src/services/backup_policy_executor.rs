@@ -484,9 +484,9 @@ async fn execute_policy(db: &PgPool, agents: &AgentRegistry, policy: &PolicyRow,
                     let encrypted = encryption_key.is_some();
 
                     let sha256_hash = resp.get("sha256").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let previous_hash: Option<String> = sqlx::query_scalar(
+                    let previous_hash: Option<String> = sqlx::query_scalar::<_, Option<String>>(
                         "SELECT sha256_hash FROM database_backups WHERE database_id = $1 ORDER BY created_at DESC LIMIT 1"
-                    ).bind(db_id).fetch_optional(db).await.unwrap_or(None);
+                    ).bind(db_id).fetch_optional(db).await.unwrap_or(None).flatten();
 
                     let mut uploaded = false;
                     if let (Some(dest), false) = (&destination, destination_down) {
@@ -612,9 +612,9 @@ async fn execute_policy(db: &PgPool, agents: &AgentRegistry, policy: &PolicyRow,
                                             let size_bytes = resp.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0) as i64;
 
                                             let sha256_hash = resp.get("sha256").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                            let previous_hash: Option<String> = sqlx::query_scalar(
+                                            let previous_hash: Option<String> = sqlx::query_scalar::<_, Option<String>>(
                                                 "SELECT sha256_hash FROM volume_backups WHERE container_id = $1 AND volume_name = $2 ORDER BY created_at DESC LIMIT 1"
-                                            ).bind(container_id).bind(vol_name).fetch_optional(db).await.unwrap_or(None);
+                                            ).bind(container_id).bind(vol_name).fetch_optional(db).await.unwrap_or(None).flatten();
 
                                             let mut uploaded = false;
                                             if let (Some(dest), false) = (&destination, destination_down) {
