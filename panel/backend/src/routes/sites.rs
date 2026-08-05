@@ -1365,6 +1365,159 @@ pub async fn switch_php(
     Ok(Json(updated))
 }
 
+/// The runtimes this switch will move a site BETWEEN — deliberately only two.
+///
+/// `proxy`, `node` and `python` are excluded, and not for caution's sake: they
+/// are a different shape of change. Each needs a `proxy_port`, node/python
+/// additionally need an `app_command` that `create_site` puts through a
+/// per-runtime prefix whitelist, and — the part that actually bites — the agent's
+/// `document_root_for` (`agent/src/services/nginx.rs:52`) maps those three to the
+/// site directory itself while `static` and `php` BOTH map to `{site_dir}/public`.
+/// So static⇄php is purely a vhost rebuild, whereas anything involving a proxying
+/// runtime is a vhost rebuild PLUS moving the document root out from under files
+/// the operator already put there. Issue #99 asked for html→PHP and was answered
+/// with exactly this half; the other half is a separate feature, not a longer
+/// version of this list.
+const SWITCHABLE_RUNTIMES: &[&str] = &["static", "php"];
+
+/// PUT /api/sites/{id}/runtime — Switch a site between the static and PHP runtimes.
+#[derive(serde::Deserialize)]
+pub struct SwitchRuntimeRequest {
+    pub runtime: String,
+    /// Required when switching TO php. Ignored when switching to static.
+    pub php_version: Option<String>,
+}
+
+pub async fn switch_runtime(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    ServerScope(_server_id, agent): ServerScope,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SwitchRuntimeRequest>,
+) -> Result<Json<Site>, ApiError> {
+    let target = body.runtime.trim();
+
+    if !SWITCHABLE_RUNTIMES.contains(&target) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            &format!(
+                "Runtime can only be switched between {}. Changing to or from a proxying \
+                 runtime moves the document root and is not supported here.",
+                SWITCHABLE_RUNTIMES.join(" and ")
+            ),
+        ));
+    }
+
+    let site: Site = sqlx::query_as("SELECT * FROM sites WHERE id = $1 AND user_id = $2")
+        .bind(id)
+        .bind(claims.sub)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| internal_error("switch runtime", e))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    if !SWITCHABLE_RUNTIMES.contains(&site.runtime.as_str()) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            &format!(
+                "This site runs the '{}' runtime. Only {} sites can be switched.",
+                site.runtime,
+                SWITCHABLE_RUNTIMES.join(" and ")
+            ),
+        ));
+    }
+
+    if site.runtime == target {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            &format!("Site is already running the '{target}' runtime"),
+        ));
+    }
+
+    // A PHP target needs a version, and it must be stated rather than guessed: a
+    // site that was PHP once still carries its old `php_version`, and silently
+    // reusing it would switch the operator onto a version they never chose on
+    // this trip through the control.
+    let php_version = if target == "php" {
+        let version = body
+            .php_version
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| {
+                err(
+                    StatusCode::BAD_REQUEST,
+                    "php_version is required when switching to the PHP runtime",
+                )
+            })?;
+        if !PHP_VERSIONS.contains(&version) {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                &format!("Invalid PHP version. Allowed: {}", PHP_VERSIONS.join(", ")),
+            ));
+        }
+        Some(version.to_string())
+    } else {
+        None
+    };
+
+    // Rebuild the FULL vhost with only the runtime (and its PHP version) changed,
+    // for the same reason `switch_php` does: a hand-rolled partial body drops the
+    // site's WAF / CSP / Permissions-Policy / bot-protection.
+    //
+    // The agent side needs no new code. `put_site` already refuses a PHP version
+    // the server does not have (with the message that offers to install it),
+    // writes the per-site FPM pool, reloads PHP-FPM, and only re-points nginx once
+    // the pool socket actually exists — the fail-safe that stops a switch from
+    // 502-ing the site, which is the failure the reporter had already hit by hand.
+    let mut updated_site = site.clone();
+    updated_site.runtime = target.to_string();
+    updated_site.php_version = php_version.clone();
+    let agent_body = build_nginx_body(&updated_site);
+
+    let agent_path = format!("/nginx/sites/{}", site.domain);
+    agent
+        .put(&agent_path, agent_body)
+        .await
+        .map_err(|e| agent_error("Nginx update", e))?;
+
+    // Only after the vhost is actually live. A failed agent write above leaves the
+    // row describing what is really being served.
+    let updated: Site = sqlx::query_as(
+        "UPDATE sites SET runtime = $1, php_version = $2, updated_at = NOW() \
+         WHERE id = $3 RETURNING *",
+    )
+    .bind(target)
+    .bind(php_version.as_deref())
+    .bind(id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| internal_error("switch runtime", e))?;
+
+    tracing::info!(
+        "Runtime switched {} -> {} for {}",
+        site.runtime,
+        target,
+        site.domain
+    );
+    activity::log_activity(
+        &state.db,
+        claims.sub,
+        &claims.email,
+        "site.runtime_switch",
+        Some("site"),
+        Some(&site.domain),
+        Some(&match php_version.as_deref() {
+            Some(v) => format!("{} -> {} {}", site.runtime, target, v),
+            None => format!("{} -> {}", site.runtime, target),
+        }),
+        None,
+    )
+    .await;
+
+    Ok(Json(updated))
+}
+
 /// GET /api/php/versions — List available PHP versions (proxy to agent).
 pub async fn php_versions(
     State(_state): State<AppState>,

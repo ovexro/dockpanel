@@ -54,7 +54,8 @@ SYSTEM_RS=panel/backend/src/routes/system.rs
 PHP_RS=panel/agent/src/routes/php.rs
 NGINX_RS=panel/agent/src/routes/nginx.rs
 PKG_RS=panel/agent/src/services/pkg.rs
-for f in "$PICKER" "$SITES_TSX" "$DETAIL_TSX" "$SITES_RS" "$SYSTEM_RS" "$PHP_RS" "$NGINX_RS" "$PKG_RS"; do
+MOD_RS=panel/backend/src/routes/mod.rs
+for f in "$PICKER" "$SITES_TSX" "$DETAIL_TSX" "$SITES_RS" "$SYSTEM_RS" "$PHP_RS" "$NGINX_RS" "$PKG_RS" "$MOD_RS"; do
   [ -f "$f" ] || { echo "missing $f"; exit 1; }
 done
 
@@ -79,6 +80,7 @@ SRC_SITES_RS=$(strip "$SITES_RS")
 SRC_SYSTEM_RS=$(strip "$SYSTEM_RS")
 SRC_PHP_RS=$(strip "$PHP_RS")
 SRC_NGINX_RS=$(strip "$NGINX_RS")
+SRC_MOD_RS=$(strip "$MOD_RS")
 
 # Here-strings, never pipelines: `grep -q` closing a pipe kills the upstream sed
 # with SIGPIPE and `pipefail` turns that into a failed arm, non-deterministically.
@@ -315,6 +317,80 @@ if [ "$inline" -le 1 ]; then
   ok "the literal appears $inline time(s) — the declaration itself"
 else
   bad "the version literal is written out $inline times in one file"
+fi
+
+echo
+echo "§7 the runtime switch the picker exists to serve (#99, s310)"
+
+# HybridRCG, 2026-08-05: "I cant seem to find a way to change a site from html to
+# php?" — his workaround was deleting the site and adding it back. Nothing in the
+# tree issued `UPDATE sites SET runtime` while fourteen other site columns were
+# updatable, so the answer was that there was no button, not that he had missed it.
+# These arms pin the half that was promised in the thread that same morning.
+
+if has "$SRC_MOD_RS" 'sites/{id}/runtime'; then
+  ok "the runtime switch is registered as a route"
+else
+  bad "no /api/sites/{id}/runtime route — #99 is unreachable again"
+fi
+
+if has "$SRC_SITES_RS" 'const SWITCHABLE_RUNTIMES'; then
+  ok "the switchable runtimes are declared once, as a closed list"
+else
+  bad "no SWITCHABLE_RUNTIMES declaration — the target runtime is unbounded"
+fi
+
+# The closed list is the whole safety argument. `document_root_for` maps proxy,
+# node and python to the site directory while static and php both map to
+# {site_dir}/public — so admitting a proxying runtime here turns a vhost rebuild
+# into a document-root move, silently, on somebody's live site.
+switchable=$(grep -A2 'const SWITCHABLE_RUNTIMES' <<< "$SRC_SITES_RS")
+if [ -z "$switchable" ]; then
+  bad "could not extract SWITCHABLE_RUNTIMES — the next two arms would read nothing"
+elif hasE "$switchable" '"(proxy|node|python)"'; then
+  bad "SWITCHABLE_RUNTIMES admits a proxying runtime — that moves the document root"
+else
+  ok "SWITCHABLE_RUNTIMES excludes every runtime whose document root differs"
+fi
+
+RUNTIME_FN=$(fnbody "$SRC_SITES_RS" switch_runtime)
+if [ -z "$RUNTIME_FN" ]; then
+  bad "switch_runtime not found — every arm below reads an empty window"
+else
+  if has "$RUNTIME_FN" 'php_version is required'; then
+    ok "switching to php demands an explicit version"
+  else
+    bad "no explicit-version guard — a stale php_version column gets silently reused"
+  fi
+
+  # The ordering invariant, and the only one here that is about correctness
+  # rather than reach: the vhost is written FIRST, so a refused agent write
+  # leaves the row describing what is actually being served. Reversed, a site
+  # whose nginx write failed would read as switched in the panel and in the API.
+  put_at=$(grep -n 'agent$' <<< "$RUNTIME_FN" | head -1 | cut -d: -f1)
+  [ -z "$put_at" ] && put_at=$(grep -n '\.put(' <<< "$RUNTIME_FN" | head -1 | cut -d: -f1)
+  upd_at=$(grep -n 'UPDATE sites SET runtime' <<< "$RUNTIME_FN" | head -1 | cut -d: -f1)
+  if [ -z "$put_at" ] || [ -z "$upd_at" ]; then
+    bad "could not locate both the agent write and the UPDATE — ordering unverified"
+  elif [ "$put_at" -lt "$upd_at" ]; then
+    ok "the vhost is written before the row is updated (line $put_at before $upd_at)"
+  else
+    bad "the row is updated before the vhost — a failed nginx write reads as a switch"
+  fi
+fi
+
+if has "$SRC_DETAIL_TSX" '/runtime`'; then
+  ok "the site page actually calls the switch — the button #99 asked for exists"
+else
+  bad "no frontend caller: the endpoint is built and unreachable, which was the original complaint"
+fi
+
+# The picker reports whether a version is installed AND its FPM socket is up.
+# Firing the switch anyway is what surprises29 hit at s288 in the sibling control.
+if has "$SRC_DETAIL_TSX" 'runtimePhpReady'; then
+  ok "the switch is held back until the chosen PHP version is really usable"
+else
+  bad "the switch ignores the picker's readiness — it can fire at an uninstalled version"
 fi
 
 echo

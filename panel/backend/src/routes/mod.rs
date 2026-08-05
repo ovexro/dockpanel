@@ -762,6 +762,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/sites/{id}", get(sites::get_one).delete(sites::remove))
         .route("/api/sites/{id}/provision-log", get(sites::provision_log))
         .route("/api/sites/{id}/php", put(sites::switch_php))
+        .route("/api/sites/{id}/runtime", put(sites::switch_runtime))
         .route("/api/sites/{id}/limits", put(sites::update_limits))
         .route("/api/sites/{id}/domain", put(sites::rename_domain))
         .route("/api/sites/{id}/toggle", put(sites::toggle_enabled))

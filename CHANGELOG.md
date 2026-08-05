@@ -4,6 +4,52 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.67.0] - 2026-08-05
+
+### Added — change a site between static and PHP (#99)
+
+- **A site can now be switched between the static and PHP runtimes from its own
+  page.** Reported by HybridRCG: *"I cant seem to find a way to change a site from
+  html to php?"* — the workaround was deleting the site and adding it back. He was
+  not missing a button; nothing in the codebase issued `UPDATE sites SET runtime`,
+  while fourteen other site columns were updatable. `PUT /api/sites/{id}/runtime`
+  rebuilds the full vhost and updates the row, in that order, so a refused nginx
+  write leaves the site describing what is actually being served.
+- **The document root does not move.** `static` and `php` both resolve to
+  `{site_dir}/public`, so existing files keep being served across the switch —
+  `.html` keeps working and `.php` starts executing. Switching back stops
+  execution without touching the files.
+- **Switching to PHP requires an explicit version**, rather than silently reusing
+  the `php_version` a site carried from an earlier life. The picker offers to
+  install a version the server does not have, and the switch is held back until
+  that version is installed *and* its FPM socket is up — the agent already refuses
+  otherwise, waits for the per-site pool socket to appear, and keeps the shared
+  socket rather than pointing nginx at one that does not exist.
+- Deliberately scoped to static⇄PHP. The proxying runtimes (`proxy`, `node`,
+  `python`) resolve their document root to the site directory itself rather than
+  `public/`, so moving to or from them relocates the operator's files — a
+  different change, and not one this control will make by accident: the accepted
+  targets are a closed list.
+
+### Fixed
+
+- **`FEATURES.md` still stamped v2.65.0 after the v2.66.0 release**, so
+  `docs-claims-pin-e2e.sh` was red at `df11639`. v2.66.0 corrected the sibling
+  stamp in `docs/testing.md` and recorded the lesson that counts and stamps are
+  separate edits — while a fifth surface of the same class stayed stale. The
+  suites had been run before the version bump, which is when that arm can pass.
+
+### Changed
+
+- `live-surfaces-check.sh` now asserts that the newest tag actually has a
+  **published release**, not merely that the latest published release is sane.
+  Arm 5 reads `/releases/latest`, which answers with whatever published most
+  recently — so a tag whose release never publishes left every check green while
+  `install.sh`, `install-agent.sh`, `update.sh`, the panel's update banner and the
+  website all kept resolving the previous version. The new arm is age-gated: a tag
+  is only a failure once it is older than the build window, so a release in flight
+  does not turn the run red.
+
 ## [2.66.0] - 2026-08-05
 
 ### Fixed — the panic button's remaining channels

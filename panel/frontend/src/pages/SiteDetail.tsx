@@ -69,6 +69,20 @@ export default function SiteDetail() {
   // an uninstalled version stays selected while its install callout is up, and
   // only becomes the site's version once the switch actually goes through.
   const [phpChoice, setPhpChoice] = useState("");
+  // #99: which runtime the operator is proposing to switch to, or null when the
+  // row is just displaying. Held separately from `phpChoice` so an abandoned
+  // runtime switch cannot leave the PHP Version picker on a version the site is
+  // not running.
+  const [runtimeTarget, setRuntimeTarget] = useState<"static" | "php" | null>(null);
+  const [runtimePhpChoice, setRuntimePhpChoice] = useState("8.3");
+  // The picker reports whether the chosen version is actually installed AND its
+  // FPM socket is running. Holding the switch back on `false` mirrors what the
+  // PHP Version control already does for an existing PHP site; without it the
+  // button fires a switch the agent then refuses. Defaults true, matching the
+  // picker's own permissive fallback for a version it has no record of.
+  const [runtimePhpReady, setRuntimePhpReady] = useState(true);
+  const [switchingRuntime, setSwitchingRuntime] = useState(false);
+  const [runtimeMessage, setRuntimeMessage] = useState("");
   const [savingLimits, setSavingLimits] = useState(false);
   const [limitsMessage, setLimitsMessage] = useState("");
   const [rateLimit, setRateLimit] = useState<string>("");
@@ -601,7 +615,127 @@ export default function SiteDetail() {
           <div className="px-5 py-4 grid grid-cols-3">
             <dt className="text-sm font-medium text-dark-200">Runtime</dt>
             <dd className="text-sm text-dark-50 col-span-2">
-              {runtimeLabels[site.runtime] || site.runtime}
+              <div className="space-y-2">
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span>{runtimeLabels[site.runtime] || site.runtime}</span>
+                  {/* #99: the reporter's workaround was deleting the site and
+                      recreating it, because there was no control here at all.
+                      Offered only between static and PHP — the proxying runtimes
+                      move the document root, which is a different change. */}
+                  {(site.runtime === "static" || site.runtime === "php") && !runtimeTarget && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRuntimeMessage("");
+                        setRuntimePhpChoice(site.php_version || "8.3");
+                        setRuntimeTarget(site.runtime === "static" ? "php" : "static");
+                      }}
+                      className="text-xs px-2 py-1 rounded-lg border border-dark-600 text-dark-100 hover:text-dark-50 hover:border-dark-500"
+                    >
+                      {site.runtime === "static" ? "Switch to PHP" : "Switch to static"}
+                    </button>
+                  )}
+                  {switchingRuntime && <span className="text-xs text-dark-200">Switching...</span>}
+                  {runtimeMessage && (
+                    <span className={`text-xs ${runtimeMessage.startsWith("Switched") ? "text-rust-400" : "text-danger-400"}`}>
+                      {runtimeMessage}
+                    </span>
+                  )}
+                </div>
+
+                {runtimeTarget === "php" && (
+                  <div className="rounded-lg border border-dark-600 p-3 space-y-3">
+                    <p className="text-xs text-dark-200">
+                      The document root does not move — <span className="font-mono">public/</span> keeps
+                      serving the files that are already there. Existing <span className="font-mono">.html</span>{" "}
+                      files keep working; <span className="font-mono">.php</span> files start executing.
+                    </p>
+                    <PhpVersionPicker
+                      className="max-w-xs"
+                      value={runtimePhpChoice}
+                      canInstall={user?.role === "admin"}
+                      disabled={switchingRuntime}
+                      onChange={(v, ready) => { setRuntimePhpChoice(v); setRuntimePhpReady(ready); }}
+                    />
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={switchingRuntime || !runtimePhpReady}
+                        title={runtimePhpReady ? undefined : `PHP ${runtimePhpChoice} is not installed on this server yet — install it above first.`}
+                        onClick={async () => {
+                          setSwitchingRuntime(true);
+                          setRuntimeMessage("");
+                          try {
+                            const updated = await api.put<Site>(`/sites/${id}/runtime`, {
+                              runtime: "php",
+                              php_version: runtimePhpChoice,
+                            });
+                            setSite(updated);
+                            setRuntimeTarget(null);
+                            setRuntimeMessage(`Switched to PHP ${runtimePhpChoice}`);
+                          } catch (err) {
+                            setRuntimeMessage(err instanceof Error ? err.message : "Switch failed");
+                          } finally {
+                            setSwitchingRuntime(false);
+                          }
+                        }}
+                        className="text-xs px-3 py-1.5 rounded-lg bg-rust-600 text-white hover:bg-rust-500 disabled:opacity-50"
+                      >
+                        Switch to PHP {runtimePhpChoice}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={switchingRuntime}
+                        onClick={() => { setRuntimeTarget(null); setRuntimeMessage(""); }}
+                        className="text-xs px-3 py-1.5 rounded-lg border border-dark-600 text-dark-100 hover:text-dark-50"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {runtimeTarget === "static" && (
+                  <div className="rounded-lg border border-dark-600 p-3 space-y-3">
+                    <p className="text-xs text-dark-200">
+                      PHP stops executing on this site — <span className="font-mono">.php</span> files
+                      will be served or downloaded as plain files rather than run. The files themselves
+                      are not touched, and switching back restores execution.
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={switchingRuntime}
+                        onClick={async () => {
+                          setSwitchingRuntime(true);
+                          setRuntimeMessage("");
+                          try {
+                            const updated = await api.put<Site>(`/sites/${id}/runtime`, { runtime: "static" });
+                            setSite(updated);
+                            setRuntimeTarget(null);
+                            setRuntimeMessage("Switched to static");
+                          } catch (err) {
+                            setRuntimeMessage(err instanceof Error ? err.message : "Switch failed");
+                          } finally {
+                            setSwitchingRuntime(false);
+                          }
+                        }}
+                        className="text-xs px-3 py-1.5 rounded-lg bg-danger-600 text-white hover:bg-danger-500 disabled:opacity-50"
+                      >
+                        Switch to static
+                      </button>
+                      <button
+                        type="button"
+                        disabled={switchingRuntime}
+                        onClick={() => { setRuntimeTarget(null); setRuntimeMessage(""); }}
+                        className="text-xs px-3 py-1.5 rounded-lg border border-dark-600 text-dark-100 hover:text-dark-50"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </dd>
           </div>
           {site.proxy_port && (

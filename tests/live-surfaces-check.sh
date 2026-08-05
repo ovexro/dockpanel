@@ -374,6 +374,77 @@ else
 fi
 
 echo
+echo "── 5b. Class B — the newest TAG actually has a published RELEASE ──"
+
+# s310. v2.66.0 was tagged and pushed, and every signal a lazy check reads said
+# shipped: main and the tag were both on origin, verified separately, and all
+# four build jobs went green. There was no release object for eighteen minutes,
+# and nothing here would ever have said so — arm 5 above reads /releases/LATEST,
+# which answers with whatever published most recently. A tag that never publishes
+# does not make that arm fail. It makes it quietly describe the PREVIOUS release,
+# whose assets are entirely valid, and report a green ✓.
+#
+# That gap is not a reporting detail, because /releases/latest IS the install
+# path: scripts/setup.sh:890, scripts/install-agent.sh:202 and scripts/update.sh
+# :189 all resolve it, as do the panel's own update banner
+# (services/telemetry_collector.rs:20) and the marketing site's /security page.
+# So a publish that fails after the builds go green serves the PREVIOUS binaries
+# to every new install and every `update.sh` run, while README, FEATURES.md and
+# the docs all claim the new version — and `update.sh` redeploying the old tag
+# looks exactly like a successful deploy.
+#
+# This has happened. At s232 the v2.11.8 tag was on the remote with every build
+# job green, and the release step died at `Install cosign` on a sigstore network
+# error, so no release object existed at all and the smoke-test job that
+# `needs: release` was SKIPPED. Every lazy signal said shipped.
+#
+# ⚠ The grace window is the whole design problem, and getting it wrong makes this
+# arm worse than useless. This workflow also runs on any push touching
+# FEATURES.md — and EVERY release touches FEATURES.md, because the register
+# carries the assertion counts. So this arm fires roughly ninety seconds into an
+# eighteen-minute build, at a moment when the newest tag legitimately has no
+# release yet. An arm that goes red on every correct release trains the reader to
+# ignore a red run on ship day, which is the one day it matters. A tag is
+# therefore only a failure once it is old enough that the build must have
+# finished. v2.65.0 took 17m40s and v2.66.0 18m16s; 45 minutes is ~2.5x.
+TAG_GRACE_MIN=${TAG_GRACE_MIN:-45}
+
+if ! command -v jq >/dev/null 2>&1; then
+  bad "jq is not installed — the newest-tag check cannot parse the API response"
+elif tags=$("${GH_API[@]}" "https://api.github.com/repos/$REPO/tags?per_page=100" 2>/dev/null); then
+  # The tags endpoint does not promise an order, so sort rather than trusting it.
+  newest=$(jq -r '.[].name // empty' <<<"$tags" 2>/dev/null \
+           | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+  if [ -z "$newest" ]; then
+    bad "no vX.Y.Z tag could be read for $REPO — the newest-tag check lost its subject"
+  elif [ -z "${tag:-}" ]; then
+    # Arm 5 owns $tag. If it could not name the latest release, this arm has
+    # nothing to compare against and must say so rather than invent a verdict.
+    bad "arm 5 could not name the latest published release, so the newest tag went unchecked"
+  elif [ "$newest" = "$tag" ]; then
+    ok "the newest tag $newest is the latest published release"
+  else
+    # The exception path — and the only branch that spends extra API calls.
+    tagsha=$(jq -r --arg t "$newest" '.[] | select(.name == $t) | .commit.sha // empty' <<<"$tags" | head -1)
+    tagged_at=$("${GH_API[@]}" "https://api.github.com/repos/$REPO/commits/$tagsha" 2>/dev/null \
+                | jq -r '.commit.committer.date // empty')
+    if [ -z "$tagged_at" ]; then
+      bad "$newest has no published release and its age could not be read — treat it as an unpublished release, not as unknown"
+    else
+      age_min=$(( ( $(date -u +%s) - $(date -u -d "$tagged_at" +%s) ) / 60 ))
+      if [ "$age_min" -lt "$TAG_GRACE_MIN" ]; then
+        ok "$newest has no release yet, but it is only ${age_min}m old — inside the ${TAG_GRACE_MIN}m build window"
+        note "if this is still true on the next run the publish FAILED; /releases/latest still answers $tag"
+      else
+        bad "$newest was tagged ${age_min}m ago and has NO published release — /releases/latest still answers $tag, so every new install, every update.sh and the panel's update banner are being served $tag while the docs claim $newest"
+      fi
+    fi
+  fi
+else
+  bad "could not read the tag list for $REPO — the newest-tag check did not run"
+fi
+
+echo
 echo "── 6. Class C — committed == built == served ──"
 
 # The marketing site is built by hand and served straight off the origin, behind
