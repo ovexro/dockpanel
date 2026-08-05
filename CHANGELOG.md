@@ -4,6 +4,55 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.71.0] - 2026-08-05
+
+### Fixed — the `client` role shipped in v2.69.0 could not be used, and the handover it enabled was one-way (GitHub #51)
+
+Both defects were reported from the field by the operator who had just adopted
+the feature, within a day of it landing. Both are ours.
+
+- **A client signed in and every request was refused with *"Server not found or
+  access denied"*.** The selected server is kept in `localStorage`, which is
+  per-BROWSER and not per-account, and `GET /api/servers` is scoped to the
+  caller — no non-admin owns a `servers` row, so a client's server list comes
+  back empty. `ServerContext` only ever *corrected* a stale selection when it
+  could find a local server to replace it with, and with an empty list it could
+  not, so the id the admin had left on that browser survived and was attached to
+  every request as `X-Server-Id`. Anyone testing a client account on their own
+  machine hit this immediately; a browser that had never held an admin session
+  did not, which is why it passed a first test and failed the second. The stale
+  id is now dropped when the account's own list cannot back it, and cleared on
+  sign-out so it never crosses accounts in the first place.
+
+- **Transferring a site removed it from the admin's panel with no way back.**
+  Ownership is a single axis and every site read asks whether the row belongs to
+  the caller — which is exactly why a `client` needed no other change, and also
+  meant that an admin who handed a site over lost it from their own list, got
+  *Site not found* on its page, and could no longer reach the **Transfer**
+  control, because that control was rendered only on that page. `docs/guides/
+  roles-and-ownership.md` promised the opposite in print, and so did the
+  handler's own doc comment.
+
+### Added — Sites → **All sites on this server**
+
+An admin-only, read-only view of every site on the box with its owner beside it,
+and a **Transfer** button on each row — so a handover can be undone. It is a
+list, not a back door: `GET /api/admin/sites` is a narrow projection, and no
+per-site read was widened. An admin still cannot open, edit or delete a site
+they do not own; they transfer it back to themselves first.
+
+- The transfer recipient is now **picked from the account list** rather than
+  typed, on both the new list and the site page. The endpoint answered 404 on an
+  unknown address, so a text field could only ever fail after the fact.
+- New pin suite `site-transfer-visibility-pin-e2e.sh` (19 assertions). Transfer
+  had **no** regression coverage at all before this release. Its §B arm is a
+  negative one — it exists to go red if a future change widens a site read for
+  admins instead of adding a view.
+- `docs/guides/roles-and-ownership.md`: the role table's *Sees* column described
+  a capability the code has never had, for `admin` **and** for `reseller` (a
+  reseller sees its sub-accounts and a site *count*, not their sites). Corrected,
+  with the way back documented.
+
 ## [2.70.0] - 2026-08-05
 
 ### Fixed — the public status page was open on every install, and the documented switch did not govern it (SECURITY)

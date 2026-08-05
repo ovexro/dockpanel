@@ -8,11 +8,17 @@ and no second owner. Almost everything below follows from that.
 
 | Role | Can create sites | Sees | Intended for |
 |------|------------------|------|--------------|
-| `admin` | Yes | Everything on the panel | You |
-| `reseller` | Yes | Its own sub-accounts and their sites | Selling hosting on |
+| `admin` | Yes | Only what it owns, **plus a read-only list of every site on the server** | You |
+| `reseller` | Yes | Its own sub-accounts, and how many sites each holds | Selling hosting on |
 | `user` | Yes | Only what it owns | An ordinary self-serve account |
 | `client` | **No** | Only what it owns | Someone who manages domains you gave them |
 | `suspended` | — | Nothing; every request is refused | Set by the Suspend action, not assigned directly |
+
+The `admin` row used to promise the whole panel, and the `reseller` row promised
+its sub-accounts' **sites**. Neither was true: every site read in the
+panel is scoped to the account making it, and always has been. What an admin
+actually gets is described under *Transfer is exclusive* below; a reseller sees
+its sub-accounts and a site **count** per account, not the sites themselves.
 
 `client` is the newest and the only one that is a *restriction* rather than a
 promotion. A client manages the sites it holds — mail, PHP version, containers,
@@ -30,9 +36,22 @@ they should hold.
 ### Transfer is exclusive
 
 **The account you transfer to becomes the owner, and the previous owner stops
-being one.** This is a handover, not a share. You keep seeing the site because
-you are an admin and admins see everything — but if you transfer a site from one
-ordinary account to another, the first one loses it.
+being one.** This is a handover, not a share. That applies to you as well: after
+you transfer a site it leaves **your** Sites list, and its page answers *Site not
+found*, because every per-site read asks whether the row belongs to the account
+making the request and the answer is now no.
+
+**How to find it again, and how to take it back.** Sites → tick **All sites on
+this server**. That is an admin-only, read-only view of every site on the box
+with its owner beside it, and each row carries a **Transfer** button — so the
+handover is reversible from there. It is a list, not a back door: you still
+cannot open, edit, or delete a site you do not own. Transfer it back to yourself
+first, and it behaves normally again.
+
+This guide claimed the opposite for four days — it said an administrator kept
+sight of a transferred site by virtue of the role — and the panel had no way back
+at all until the operator who had just used the feature reported being stuck
+([#51](https://github.com/ovexro/dockpanel/issues/51)).
 
 If what you want is two accounts managing one domain at the same time, DockPanel
 does not do that today. Say so on

@@ -53,13 +53,30 @@ export function ServerProvider({ children }: { children: ReactNode }) {
       const data = await api.get<Server[]>("/servers");
       setServers(data);
 
-      // If no active server selected, default to local
+      // If no active server selected, default to local.
+      //
+      // ⚠ The `else` below is load-bearing and its absence was a 403 on every
+      // request. `dp-active-server` is localStorage, so it is per-BROWSER, not
+      // per-account, and `GET /api/servers` is `WHERE user_id = $1` — no
+      // non-admin owns a `servers` row, so a client's list comes back EMPTY.
+      // Without the else, `data.find(is_local)` was undefined, the stale id the
+      // admin left on that browser was never cleared, `api.ts` kept attaching it
+      // as `X-Server-Id`, and `ServerScope` answered
+      // "Server not found or access denied" for a server the client does not own.
+      // Reported from the field on #51 by an operator testing a client account in
+      // his own browser — the one way anybody would test it.
       const stored = localStorage.getItem("dp-active-server");
       if (!stored || !data.find((s) => s.id === stored)) {
         const local = data.find((s) => s.is_local);
         if (local) {
           localStorage.setItem("dp-active-server", local.id);
           setActiveServerIdState(local.id);
+        } else {
+          // Nothing in this account's list can back the stored id. Drop it and
+          // send no header at all, which `ServerScope` resolves to the local
+          // server rather than refusing.
+          localStorage.removeItem("dp-active-server");
+          setActiveServerIdState(null);
         }
       }
     } catch {

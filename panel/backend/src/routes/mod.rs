@@ -759,6 +759,11 @@ pub fn router() -> Router<AppState> {
         .route("/api/users/{id}/reset-password", post(users::reset_password))
         // Sites
         .route("/api/sites", get(sites::list).post(sites::create))
+        // Read-only, admin-only, and the ONLY site read that looks past
+        // `user_id`. It is what makes `POST /api/sites/{id}/transfer` reversible
+        // — without it an admin who hands a site to a client cannot see the row
+        // again, and the Transfer control lives on a page that then 404s them.
+        .route("/api/admin/sites", get(sites::list_for_admin))
         .route("/api/sites/{id}", get(sites::get_one).delete(sites::remove))
         .route("/api/sites/{id}/provision-log", get(sites::provision_log))
         .route("/api/sites/{id}/php", put(sites::switch_php))

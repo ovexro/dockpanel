@@ -153,6 +153,7 @@ export default function SiteDetail() {
   const [transferEmail, setTransferEmail] = useState("");
   const [transferring, setTransferring] = useState(false);
   const [transferMsg, setTransferMsg] = useState("");
+  const [transferTargets, setTransferTargets] = useState<{ id: string; email: string; role: string }[]>([]);
 
   // Custom SSL Upload
   const [showSslUpload, setShowSslUpload] = useState(false);
@@ -314,6 +315,16 @@ export default function SiteDetail() {
       setEnvVars(data.vars);
     } catch { setEnvVars([]); }
   };
+
+  // Accounts a site can be handed to. Admin-only endpoint, and Transfer is
+  // admin-only too, so this exposes nothing the caller could not already read.
+  useEffect(() => {
+    if (user?.role !== "admin") return;
+    api
+      .get<{ id: string; email: string; role: string }[]>("/users")
+      .then((rows) => setTransferTargets(rows.filter((u) => u.role !== "suspended" && u.id !== user?.id)))
+      .catch(() => setTransferTargets([]));
+  }, [user?.role, user?.id]);
 
   useEffect(() => {
     api
@@ -548,21 +559,34 @@ export default function SiteDetail() {
               {user?.role === "admin" && (
                 showTransfer ? (
                   <div className="flex items-center gap-2">
-                    <input
-                      type="email"
+                    {/* Picked, not typed. The endpoint answers 404 "No account
+                        with that email" on a typo, so a text field could only
+                        fail late — and an operator does not carry their clients'
+                        addresses in their head. */}
+                    <select
                       value={transferEmail}
                       onChange={(e) => setTransferEmail(e.target.value)}
                       autoFocus
-                      className="w-56 px-3 py-2 bg-dark-900 border border-dark-500 rounded-lg text-sm font-mono text-dark-100"
-                      placeholder="new owner's email"
-                    />
+                      className="w-64 px-3 py-2 bg-dark-900 border border-dark-500 rounded-lg text-sm text-dark-100"
+                    >
+                      <option value="">Choose an account…</option>
+                      {transferTargets.map((u) => (
+                        <option key={u.id} value={u.email}>{u.email} ({u.role})</option>
+                      ))}
+                    </select>
                     <button
                       disabled={!transferEmail || transferring}
                       onClick={() => {
                         setTransferring(true);
                         setTransferMsg("");
                         api.post(`/sites/${id}/transfer`, { email: transferEmail })
-                          .then(() => { setShowTransfer(false); setTransferMsg(`Transferred to ${transferEmail}. You no longer own this site.`); })
+                          .then(() => {
+                            setShowTransfer(false);
+                            setTransferMsg(
+                              `Transferred to ${transferEmail}. You no longer own this site — ` +
+                              `find it again under Sites → "All sites on this server".`
+                            );
+                          })
                           .catch((err) => setTransferMsg(err instanceof Error ? err.message : "Transfer failed"))
                           .finally(() => setTransferring(false));
                       }}

@@ -13,6 +13,7 @@ use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
+use crate::auth::AdminUser;
 use crate::auth::AuthUser;
 use crate::auth::ServerScope;
 use crate::error::{internal_error, err, agent_error, paginate, ApiError};
@@ -193,6 +194,11 @@ pub struct CreateSiteRequest {
 }
 
 /// GET /api/sites — List all sites for the current user.
+///
+/// Scoped to the caller, with no role branch, and every per-site read below is
+/// the same. That is the single ownership axis the `client` role rests on — an
+/// account that OWNS the row passes all of it natively. See `list_for_admin`
+/// for the one read that is allowed to look past it, and why it had to exist.
 pub async fn list(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
@@ -211,6 +217,70 @@ pub async fn list(
     .fetch_all(&state.db)
     .await
     .map_err(|e| internal_error("list sites", e))?;
+
+    Ok(Json(sites))
+}
+
+/// One site as an admin sees it on the all-sites view, with its owner resolved.
+///
+/// Deliberately NOT [`Site`]. `Site` is `#[derive(FromRow)]` over `SELECT *` and
+/// is bound at three dozen call sites in this crate; a field with no matching
+/// column breaks every one of them at runtime, and a struct that carried an
+/// owner would sooner or later be handed to a per-site handler that must keep
+/// asking "is this yours?". This projection holds only what the list renders,
+/// so it cannot be mistaken for a site the caller may act on.
+#[derive(serde::Serialize, sqlx::FromRow)]
+pub struct AdminSiteRow {
+    pub id: Uuid,
+    pub domain: String,
+    pub runtime: String,
+    pub status: String,
+    pub enabled: bool,
+    pub ssl_enabled: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub parent_site_id: Option<Uuid>,
+    pub user_id: Uuid,
+    pub owner_email: Option<String>,
+    pub owner_role: Option<String>,
+}
+
+/// GET /api/admin/sites — every site on this server, with its owner. Admin only.
+///
+/// **This route exists because `transfer` was a one-way door.** Ownership is one
+/// axis and `list` above is scoped to the caller with no role branch — so the
+/// moment an admin handed a site to a client, the row left their list, `get_one`
+/// answered 404, and the Transfer control, which is rendered only on the site's
+/// own page, became unreachable. There was no way back through the panel at all,
+/// while `docs/guides/roles-and-ownership.md` promised the opposite in print.
+/// Reported from the field on #51 by the operator who had just used the feature.
+///
+/// It is a READ, and only a read. It does not widen the ownership predicate of
+/// any per-site handler — an admin still cannot open, edit or delete a site they
+/// do not own. What it restores is the two things the handover needs to be
+/// reversible: seeing that the site exists, and knowing whose it is. `transfer`
+/// itself already looks the site up by id without an ownership filter
+/// (`:3543`), so the way back needed no new write.
+pub async fn list_for_admin(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+    ServerScope(server_id, _agent): ServerScope,
+    Query(params): Query<ListQuery>,
+) -> Result<Json<Vec<AdminSiteRow>>, ApiError> {
+    let (limit, offset) = paginate(params.limit, params.offset);
+
+    let sites: Vec<AdminSiteRow> = sqlx::query_as(
+        "SELECT s.id, s.domain, s.runtime, s.status, s.enabled, s.ssl_enabled, \
+                s.created_at, s.parent_site_id, s.user_id, \
+                u.email AS owner_email, u.role AS owner_role \
+         FROM sites s LEFT JOIN users u ON u.id = s.user_id \
+         WHERE s.server_id = $1 ORDER BY s.created_at DESC LIMIT $2 OFFSET $3",
+    )
+    .bind(server_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| internal_error("list sites for admin", e))?;
 
     Ok(Json(sites))
 }
@@ -3479,10 +3549,15 @@ const OWNERSHIP_DENORMALIZED_TABLES: [&str; 4] =
 /// cleanups right whose own comments record that they already shipped a
 /// cross-account delete once.
 ///
-/// ⚠ Transfer is EXCLUSIVE: the previous owner loses the site. That is the
-/// ISPConfig shape — a client owns its domains and the admin sees them by being
-/// admin — but it is not shared management, and the UI says so rather than
-/// letting an operator discover it afterwards.
+/// ⚠ Transfer is EXCLUSIVE: the previous owner loses the site, **including when
+/// the previous owner is an admin**. This comment used to claim the role itself
+/// kept an administrator's view of a transferred site, and that was never true:
+/// `list` and every per-site read in this file are `WHERE user_id = $1` with no
+/// role branch, so a transferring admin lost the row from their list and got 404
+/// from `get_one`. Because the Transfer control was rendered only on the site's
+/// own page, the handover had no way back through the panel at all.
+/// `list_for_admin` is that way back; this handler needed no change, because its
+/// own lookup below is by id and is deliberately not ownership-filtered.
 ///
 /// One transaction, because a half-transferred site is worse than a failed one:
 /// the row would answer to the new owner while its alerts and secret vaults still
