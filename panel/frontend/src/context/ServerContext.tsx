@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from "react";
 import { api } from "../api";
+import { useAuth } from "./AuthContext";
 
 export interface Server {
   id: string;
@@ -42,6 +43,7 @@ const ServerContext = createContext<ServerContextType>({
 });
 
 export function ServerProvider({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
   const [servers, setServers] = useState<Server[]>([]);
   const [activeServerId, setActiveServerIdState] = useState<string | null>(
     () => localStorage.getItem("dp-active-server")
@@ -86,12 +88,19 @@ export function ServerProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // ⚠ Keyed on the ACCOUNT, not just on mount. The server list is per-account —
+  // `GET /api/servers` is `WHERE user_id = $1` — and signing in is an SPA state
+  // change, not a remount, so an effect that runs once at boot leaves the
+  // previous account's list (and the selection derived from it) in place until
+  // the 60s tick. That window is exactly long enough for a client's first screen
+  // to fail with "Server not found or access denied" on a fix that had already
+  // shipped. Re-read whenever the account changes.
   useEffect(() => {
     fetchServers();
     // Refresh server list every 60s
     const interval = setInterval(fetchServers, 60000);
     return () => clearInterval(interval);
-  }, [fetchServers]);
+  }, [fetchServers, user?.id]);
 
   const setActiveServerId = useCallback((id: string | null) => {
     if (id) {

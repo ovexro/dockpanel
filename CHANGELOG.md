@@ -4,6 +4,21 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.71.1] - 2026-08-05
+
+### Fixed — v2.71.0's own fix did not take effect until a minute after sign-in
+
+The self-heal that drops a stale server selection runs in an effect keyed on
+mount. **Signing in is a state change, not a remount**, so after v2.71.0 a client
+signing in on a browser that had held an admin session still sent the stale
+`X-Server-Id` — and still saw *"Server not found or access denied"* — until the
+60-second refresh happened to fire. The fix was correct and arrived a minute late,
+which for a first impression is the same as not arriving.
+
+The server list is per-account (`GET /api/servers` is scoped to the caller), so
+the effect that reads it is now keyed on the signed-in account. Found by tracing
+the fix's own timing rather than by re-reading the diff; a 20th arm pins it.
+
 ## [2.71.0] - 2026-08-05
 
 ### Fixed — the `client` role shipped in v2.69.0 could not be used, and the handover it enabled was one-way (GitHub #51)

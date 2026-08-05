@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# site-transfer-visibility-pin-e2e.sh — s314 / v2.71.0
+# site-transfer-visibility-pin-e2e.sh — s314 / v2.71.0 (D3 added v2.71.1)
 #
 # Pins the fix for a handover that was a ONE-WAY DOOR, and for the reason the
 # role it created could not be used at all.
@@ -277,6 +277,18 @@ elif grep -qE 'removeItem\("dp-active-server"\)' <<< "$LOGOUT"; then
   ok "D2 AuthContext drops the selected server on logout"
 else
   bad "D2 AuthContext drops the selected server on logout"
+fi
+
+# And the self-heal must run when the ACCOUNT changes, not only at boot. Signing
+# in is an SPA state change, not a remount, so an effect keyed on mount alone
+# leaves the previous account's selection in place until the 60s poll — long
+# enough for a client's first screen to fail on a fix that had already shipped.
+EFFECT=$(perl -0777 -ne 'print $1 if /useEffect\(\(\)\s*=>\s*\{\s*fetchServers\(\);(.*?)\}, \[([^\]]*)\]\);/s' <<< "$SC")
+DEPS=$(perl -0777 -ne 'print $1 if /fetchServers\(\);.*?\}, \[([^\]]*)\]\);/s' <<< "$SC")
+if grep -qE 'user\?\.id' <<< "$DEPS"; then
+  ok "D3 the server list is re-read when the signed-in account changes"
+else
+  bad "D3 the server list is re-read when the signed-in account changes"
 fi
 
 echo "== §E  the prose no longer promises what the code does not do =="
