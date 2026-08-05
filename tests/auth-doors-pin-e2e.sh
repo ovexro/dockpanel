@@ -194,6 +194,113 @@ else
   bad "the UI never reads recording coverage — operators are told 'disabled' while members still record"
 fi
 
+# ─────────────────────────────────────────────────────────────────────────────
+# s308 — THE SAME LESSON ONE LAYER FURTHER ON: a control's blast radius is what
+# it GATES. D1/D2/D3 above are about doors that forgot a gate. These are about
+# the EMERGENCY control, which gated the doors and nothing else.
+#
+# Lockdown is tested at login, OAuth, passkey and site creation — every one of
+# them a door. Nothing tests it against a token that has ALREADY been minted. So
+# the panic button locked the doors while the intruder was already inside, and
+# the admin session that got them there kept working for the rest of its two
+# hours. Panic must therefore revoke sessions, not merely lock down.
+echo
+echo "── s308: the panic button ──"
+
+PANIC=$(sed -n '/pub async fn panic_button/,/^}/p' "$BE/routes/security.rs")
+if [ -z "$PANIC" ]; then
+  bad "could not extract panic_button — every arm below is measuring nothing"
+else
+  ok "extracted panic_button ($(wc -l <<< "$PANIC") lines) — the arms below read real code"
+fi
+
+if grep -q "sessions_revoked_at" <<< "$PANIC"; then
+  ok "panic revokes every issued session, not just the doors"
+else
+  bad "panic only locks the doors — the stolen session that reached the root shell keeps working"
+fi
+
+# The response used to hardcode terminals_killed:true while DISCARDING the
+# agent's Result, so an unreachable agent and a successful kill produced the
+# same reassurance. What the agent reports is what gets reported.
+if grep -qE '"terminals_killed": true' <<< "$PANIC"; then
+  bad "panic still asserts terminals_killed:true regardless of what the agent did"
+else
+  ok "panic does not assert a kill it did not observe"
+fi
+if grep -q "agent_reached" <<< "$PANIC"; then
+  ok "and it says whether the agent was reached at all"
+else
+  bad "an unreachable agent is indistinguishable from a successful kill"
+fi
+
+# The agent half: `pkill -u www-data` is a GUESS about which processes are ours,
+# and it guessed wrong in the one direction that matters — a SERVER terminal is
+# deliberately kept as root, so the shell most worth killing was the one process
+# the control could not reach.
+AGENT_KILL=$(sed -n '/async fn kill_terminals/,/^}/p' panel/agent/src/routes/security.rs)
+if [ -z "$AGENT_KILL" ]; then
+  bad "could not extract kill_terminals — the arms below are measuring nothing"
+else
+  ok "extracted kill_terminals — the arms below read real code"
+fi
+if grep -q "TERMINAL_PIDS" <<< "$AGENT_KILL"; then
+  ok "the kill walks a registry of shells this agent started, rather than guessing by user"
+else
+  bad "the kill still guesses by user and command name, so a root server terminal survives it"
+fi
+if grep -qE 'ACTIVE_TERMINALS\.swap\(0' <<< "$AGENT_KILL"; then
+  bad "the session counter is zeroed without killing — an attacker gets a fresh full quota"
+else
+  ok "the counter is not zeroed independently of the kill"
+fi
+
+# Both ends of the registry, because either alone leaks: register without forget
+# grows for ever and kills reaped pids; forget without register kills nothing.
+TERM_SRC=panel/agent/src/routes/terminal.rs
+if grep -q "register_terminal(child_pid" "$TERM_SRC" && grep -q "forget_terminal(child_pid" "$TERM_SRC"; then
+  ok "every spawned shell is registered on open and forgotten on close"
+else
+  bad "the pid registry is written at only one end — it either leaks or kills nothing"
+fi
+
+echo
+echo "── s308: the sessions screen its own guide describes ──"
+
+# Three endpoints, complete and caller-scoped, with zero callers in the shipped
+# bundle — while docs/guides/sessions.md told a user to click controls that were
+# not there, as the response to a suspected compromise.
+for ep in "auth/sessions" "export-my-data"; do
+  # NOT `grep -rc … || echo 0`: grep exits 1 on no match, so the fallback
+  # APPENDS a second zero and `[ "0\n0" -ge 1 ]` dies with a bash error. The arm
+  # then goes red for a reason that has nothing to do with the defect, which is
+  # a false negative wearing a false positive's clothes. Count, don't fall back.
+  n=$(grep -c "$ep" panel/frontend/src/pages/Settings.tsx 2>/dev/null | head -1)
+  if [ "${n:-0}" -ge 1 ]; then
+    ok "Settings calls $ep — the guide's screen exists"
+  else
+    bad "$ep still has no caller; the guide documents a screen that is not built"
+  fi
+done
+
+# The guide's own corrected claims. Each of these was false at v2.64.2.
+SESSDOC=docs/guides/sessions.md
+if grep -qiE "^There is no location column|does not geolocate" "$SESSDOC"; then
+  ok "the guide no longer promises a Location column the schema cannot hold"
+else
+  bad "the guide still claims a Location column; user_sessions has no such field"
+fi
+if grep -qi "panel-wide, not account-wide" "$SESSDOC"; then
+  ok "the guide says Revoke All is panel-wide, not 'everywhere except this session'"
+else
+  bad "the guide still describes Revoke All as sparing your current session"
+fi
+if grep -qiE "does \*\*not\*\* bind a session to its originating IP" "$SESSDOC"; then
+  ok "the guide no longer claims session IP binding or concurrent-session limits"
+else
+  bad "the guide still claims IP binding / concurrent limits; neither setting has ever existed"
+fi
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   printf '\033[0;32mauth-doors pins: %d passed\033[0m\n' "$PASS"

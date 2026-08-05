@@ -4,6 +4,52 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.65.0] - 2026-08-05
+
+**The controls you reach for during an incident now do what they say.** Three of
+them did not, and each failed in the direction that reads as safety.
+
+**The panic button could not kill the shell it exists to kill.** It ran
+`pkill -u www-data`, which reaches the sandboxed site terminals and misses the
+*server* terminal — which is deliberately kept as root, and is therefore the one
+shell an intruder is most likely to be holding. It then reset the active-session
+counter to zero without having killed those sessions, which handed whoever was
+there a fresh full quota of terminals. The agent now kills from a registry of the
+shells it actually started, so a server terminal is killed like any other, and
+the counter reaches zero because the sessions are gone rather than by decree.
+
+**And it locked the doors while the intruder was already inside.** Lockdown is
+enforced at login, OAuth, passkey and site creation — all of them doors. Nothing
+tested it against a token that had already been issued, so the stolen admin
+session that produced the root shell kept working for the rest of its two hours,
+and another terminal was one request away. Panic now revokes every issued
+session. This logs the pressing admin out too; during a panic that is the correct
+trade, and an admin can log straight back in while lockdown holds everyone else
+out.
+
+**It also reported success it had not observed.** The call to the agent discarded
+its result and the response asserted `terminals_killed: true` unconditionally, so
+an unreachable agent produced exactly the same reassurance as a successful kill.
+The response now carries what the agent actually reported — how many shells died,
+how many of those were server terminals, and whether the agent was reached at all
+— and the UI says so, loudly, when it was not.
+
+**Settings > Sessions now exists.** The guide has been describing it for a long
+time: a list of your active sessions, each with a Revoke button, and an Export My
+Data download. All three endpoints were already built, correct and scoped to the
+calling user — they simply had no caller anywhere in the frontend. Wiring them
+gives every user self-service revocation of their own devices, which previously
+did not exist at any privilege level: the only session control on the page was
+"Revoke All Sessions", which is admin-only and panel-wide.
+
+**And the guide it came from has been corrected.** `docs/guides/sessions.md` made
+five claims that were not true: an approximate-location column (there is no
+location data in the schema at all), a "Revoke All Other Sessions" button that
+spares your current session (it is panel-wide and logs out every user), session
+binding to the originating IP, and a per-user concurrent-session limit. Neither
+of the last two has ever existed as a setting. The page now says what the code
+does, including the honest bound on what the GDPR export contains.
+
 ## [2.64.2] - 2026-08-05
 
 **Security: a compromised site could become root on the next deploy.** 2.64.0

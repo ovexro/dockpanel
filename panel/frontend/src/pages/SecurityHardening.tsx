@@ -102,8 +102,14 @@ export default function SecurityHardening() {
         await api.post("/security/lockdown/activate", { reason: "Manual admin lockdown" });
         showMsg("success", "Lockdown activated");
       } else if (type === "panic") {
-        await api.post("/security/panic", {});
-        showMsg("success", "Panic mode activated — all terminals killed, system locked");
+        const r = await api.post<{ agent_reached: boolean; terminals_killed: number | null; server_terminals_killed: number | null }>("/security/panic", {});
+        if (!r.agent_reached) {
+          showMsg("error", "Panic: system locked and sessions revoked, but the agent could not be reached — TERMINALS MAY STILL BE RUNNING. Check the server.");
+        } else {
+          const n = r.terminals_killed ?? 0;
+          const root = r.server_terminals_killed ?? 0;
+          showMsg("success", `Panic mode activated — ${n} terminal${n === 1 ? "" : "s"} killed${root > 0 ? ` (${root} server/root)` : ""}, all sessions revoked, system locked`);
+        }
       }
       loadData();
     } catch (e) { showMsg("error", e instanceof Error ? e.message : "Failed"); }

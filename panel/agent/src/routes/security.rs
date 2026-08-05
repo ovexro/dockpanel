@@ -183,16 +183,55 @@ async fn panel_jail_status() -> Json<serde_json::Value> {
 
 /// POST /security/kill-terminals — Kill all active terminal sessions (Feature 11: Panic).
 async fn kill_terminals() -> Json<serde_json::Value> {
-    // Reset the active terminal counter (sessions will close when PTY dies)
-    let killed = super::terminal::ACTIVE_TERMINALS.swap(0, std::sync::atomic::Ordering::SeqCst);
+    // Kill the shells this agent actually started, from the registry, rather
+    // than guessing at them by user and command name. `pkill -u www-data` alone
+    // never reached a SERVER terminal, which runs as root on purpose — so the
+    // one shell an intruder is most likely to be holding was the one the panic
+    // button could not touch. Server terminals are counted separately because
+    // "we killed the root shell" is the fact an operator needs during an
+    // incident, and the old response could not tell them.
+    let pids: Vec<(i32, bool)> = {
+        let mut reg = super::terminal::TERMINAL_PIDS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        reg.drain(..).collect()
+    };
 
-    // Kill all PTY child processes owned by www-data (site terminals)
+    let mut killed = 0u32;
+    let mut root_killed = 0u32;
+    for (pid, is_root) in &pids {
+        // SIGKILL, not SIGTERM: this is the emergency control, and a shell that
+        // ignores the polite signal is exactly the one worth worrying about.
+        let hit = unsafe { libc::kill(*pid, libc::SIGKILL) } == 0;
+        if hit {
+            killed += 1;
+            if *is_root {
+                root_killed += 1;
+            }
+        }
+    }
+
+    // Backstop for anything spawned inside a site shell that outlived its
+    // parent. Deliberately still scoped to bash: widening it to every www-data
+    // process would take PHP-FPM down with it.
     let _ = safe_command("pkill")
         .args(["-u", "www-data", "-f", "bash"])
         .output().await;
 
-    tracing::warn!("PANIC: Killed {} terminal sessions", killed);
-    Json(serde_json::json!({ "killed": killed }))
+    // Every registered shell is gone, so the slot count is zero by fact rather
+    // than by decree. It used to be zeroed WITHOUT the kill, which handed an
+    // attacker a fresh full quota of sessions.
+    super::terminal::ACTIVE_TERMINALS.store(0, std::sync::atomic::Ordering::SeqCst);
+
+    tracing::warn!(
+        "PANIC: killed {killed} of {} registered terminal sessions ({root_killed} server/root)",
+        pids.len()
+    );
+    Json(serde_json::json!({
+        "killed": killed,
+        "registered": pids.len(),
+        "server_terminals_killed": root_killed,
+    }))
 }
 
 /// GET /security/forensic-snapshot — Capture system state for forensics (Feature 10).

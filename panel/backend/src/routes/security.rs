@@ -523,8 +523,44 @@ pub async fn panic_button(
     // Activate lockdown
     security_hardening::activate_lockdown(&state.db, "panic", reason).await;
 
-    // Tell agent to kill all terminal sessions
-    let _ = agent.post("/security/kill-terminals", Some(serde_json::json!({}))).await;
+    // Tell agent to kill all terminal sessions. The Result used to be discarded
+    // and the response then claimed `terminals_killed: true` unconditionally —
+    // so an agent that was unreachable, or that killed nothing, produced exactly
+    // the same reassurance as one that worked. What the agent reports is what
+    // gets reported.
+    let kill = agent
+        .post("/security/kill-terminals", Some(serde_json::json!({})))
+        .await;
+    let (terminals_killed, server_terminals_killed, agent_reached) = match &kill {
+        Ok(v) => (
+            v.get("killed").and_then(|k| k.as_u64()),
+            v.get("server_terminals_killed").and_then(|k| k.as_u64()),
+            true,
+        ),
+        Err(e) => {
+            tracing::error!("PANIC: agent did not kill terminals: {e}");
+            (None, None, false)
+        }
+    };
+
+    // Revoke every issued session. Lockdown is enforced at the doors — login,
+    // OAuth, passkey, site creation — and nothing tests it against a token that
+    // has already been minted. Without this leg, the stolen admin session that
+    // got an intruder their root shell keeps working for the rest of its two
+    // hours, and they simply request another terminal. This logs the pressing
+    // admin out too; during a panic that is the correct trade, and an admin can
+    // log back in while lockdown keeps everyone else out.
+    let revoked = sqlx::query(
+        "INSERT INTO settings (key, value, updated_at) VALUES ('sessions_revoked_at', $1, NOW()) \
+         ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()",
+    )
+    .bind(chrono::Utc::now().to_rfc3339())
+    .execute(&state.db)
+    .await
+    .is_ok();
+    if revoked {
+        *state.sessions_revoked_at.write().await = Some(chrono::Utc::now().timestamp());
+    }
 
     // Disable self-registration at DB level
     let _ = sqlx::query("INSERT INTO settings (key, value) VALUES ('self_registration_enabled', 'false') ON CONFLICT (key) DO UPDATE SET value = 'false'")
@@ -539,7 +575,10 @@ pub async fn panic_button(
 
     Ok(Json(serde_json::json!({
         "status": "panic_activated",
-        "terminals_killed": true,
+        "agent_reached": agent_reached,
+        "terminals_killed": terminals_killed,
+        "server_terminals_killed": server_terminals_killed,
+        "sessions_revoked": revoked,
         "registration_disabled": true,
         "lockdown_active": true,
     })))

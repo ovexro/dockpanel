@@ -262,8 +262,14 @@ export default function Security() {
           break;
         }
         case "panic": {
-          await api.post("/security/panic", {});
-          setMessage({ text: "Panic mode activated", type: "success" });
+          const r = await api.post<{ agent_reached: boolean; terminals_killed: number | null; server_terminals_killed: number | null }>("/security/panic", {});
+          if (!r.agent_reached) {
+            setMessage({ text: "Panic: locked down and sessions revoked, but the agent was unreachable — terminals may still be running", type: "error" });
+          } else {
+            const n = r.terminals_killed ?? 0;
+            const root = r.server_terminals_killed ?? 0;
+            setMessage({ text: `Panic mode activated — ${n} terminal${n === 1 ? "" : "s"} killed${root > 0 ? ` (${root} server/root)` : ""}, all sessions revoked`, type: "success" });
+          }
           loadData();
           break;
         }

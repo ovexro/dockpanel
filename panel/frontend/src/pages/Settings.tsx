@@ -25,6 +25,15 @@ interface ApiKey {
   created_at: string;
 }
 
+interface Session {
+  id: string;
+  ip_address: string | null;
+  user_agent: string | null;
+  created_at: string;
+  last_seen_at: string;
+  is_current: boolean;
+}
+
 interface ExportConfig {
   settings: Record<string, string>;
   [key: string]: unknown;
@@ -160,6 +169,7 @@ export default function Settings() {
 
   // API Keys
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
+  const [sessions, setSessions] = useState<Session[]>([]);
   const [showNewKey, setShowNewKey] = useState(false);
   const [newKeyName, setNewKeyName] = useState("");
   const [newKeyResult, setNewKeyResult] = useState<string | null>(null);
@@ -279,6 +289,13 @@ export default function Settings() {
           setTimeout(() => { window.location.href = "/login"; }, 2000);
           break;
         }
+        case "revoke_session": {
+          if (!data) break;
+          await api.delete(`/auth/sessions/${data.id}`);
+          setSessions(sessions.filter((s) => s.id !== data.id));
+          setMessage({ text: "Session revoked", type: "success" });
+          break;
+        }
         case "revoke_key": {
           if (!data) break;
           await api.delete(`/api-keys/${data.id}`);
@@ -338,6 +355,7 @@ export default function Settings() {
       .then((d) => setUpdateCount(d.count))
       .catch(() => {});
     api.get<ApiKey[]>("/api-keys").then(setApiKeys).catch(() => {});
+    api.get<{ sessions: Session[] }>("/auth/sessions").then((r) => setSessions(r.sessions)).catch(() => {});
     api.get<{ lagging: { name: string; agent_version: string }[] }>("/settings/recording-coverage")
       .then((d) => setRecordingLagging(d.lagging || []))
       .catch(() => {});
@@ -502,9 +520,9 @@ export default function Settings() {
       {/* Inline confirmation bar */}
       {pendingConfirm && (
         <div className={`mb-4 px-4 py-3 rounded-lg border flex items-center justify-between ${
-          ["revoke_sessions", "revoke_key"].includes(pendingConfirm.type) ? "border-danger-500/30 bg-danger-500/5" : "border-warn-500/30 bg-warn-500/5"
+          ["revoke_sessions", "revoke_session", "revoke_key"].includes(pendingConfirm.type) ? "border-danger-500/30 bg-danger-500/5" : "border-warn-500/30 bg-warn-500/5"
         }`}>
-          <span className={`text-xs font-mono ${["revoke_sessions", "revoke_key"].includes(pendingConfirm.type) ? "text-danger-400" : "text-warn-400"}`}>
+          <span className={`text-xs font-mono ${["revoke_sessions", "revoke_session", "revoke_key"].includes(pendingConfirm.type) ? "text-danger-400" : "text-warn-400"}`}>
             {pendingConfirm.label}
           </span>
           <div className="flex items-center gap-2 shrink-0 ml-4">
@@ -1675,13 +1693,72 @@ export default function Settings() {
           <div className="px-5 py-3 border-b border-dark-600">
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Sessions</h3>
           </div>
-          <div className="p-5 flex items-center justify-between">
+          <div className="divide-y divide-dark-600">
+            {sessions.length === 0 && (
+              <div className="px-5 py-4 text-xs text-dark-400">No active sessions recorded.</div>
+            )}
+            {sessions.map((s) => (
+              <div key={s.id} className="px-5 py-3 flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-sm text-dark-100 flex items-center gap-2">
+                    <span className="font-mono">{s.ip_address || "unknown"}</span>
+                    {s.is_current && (
+                      <span className="px-1.5 py-0.5 bg-ok-500/10 text-ok-400 rounded text-[10px] font-medium uppercase tracking-wider">
+                        This device
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-xs text-dark-300 mt-0.5 truncate" title={s.user_agent || ""}>
+                    {s.user_agent || "unknown client"}
+                  </p>
+                  <p className="text-[11px] text-dark-400 mt-0.5 font-mono">
+                    last seen {new Date(s.last_seen_at).toLocaleString()}
+                  </p>
+                </div>
+                {!s.is_current && (
+                  <button
+                    onClick={() => setPendingConfirm({ type: "revoke_session", label: `Revoke the session from ${s.ip_address || "unknown"}?`, data: { id: s.id } })}
+                    className="shrink-0 px-3 py-1.5 bg-danger-500/10 text-danger-400 rounded text-xs font-medium hover:bg-danger-500/20"
+                  >
+                    Revoke
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="p-5 border-t border-dark-600 flex items-center justify-between gap-4">
             <div>
-              <p className="text-sm text-dark-100">Active Sessions</p>
-              <p className="text-xs text-dark-300 mt-0.5">Force all users to re-login</p>
+              <p className="text-sm text-dark-100">Revoke every session, panel-wide</p>
+              <p className="text-xs text-dark-300 mt-0.5">
+                Logs out <span className="text-warn-400">every user of this panel</span>, not just you. Admin only.
+              </p>
             </div>
             <button onClick={() => setPendingConfirm({ type: "revoke_sessions", label: "Revoke all sessions? All users (including you) will be logged out." })}
-              className="px-3 py-1.5 bg-danger-500/10 text-danger-400 rounded text-xs font-medium hover:bg-danger-500/20">Revoke All Sessions</button>
+              className="shrink-0 px-3 py-1.5 bg-danger-500/10 text-danger-400 rounded text-xs font-medium hover:bg-danger-500/20">Revoke All Sessions</button>
+          </div>
+          <div className="p-5 border-t border-dark-600 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm text-dark-100">Export my data</p>
+              <p className="text-xs text-dark-300 mt-0.5">Everything this panel holds about your account, as JSON.</p>
+            </div>
+            <button
+              onClick={async () => {
+                try {
+                  const d = await api.get<Record<string, unknown>>("/auth/export-my-data");
+                  const url = URL.createObjectURL(new Blob([JSON.stringify(d, null, 2)], { type: "application/json" }));
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = "dockpanel-my-data.json";
+                  a.click();
+                  URL.revokeObjectURL(url);
+                } catch (e) {
+                  setMessage({ text: e instanceof Error ? e.message : "Export failed", type: "error" });
+                }
+              }}
+              className="shrink-0 px-3 py-1.5 bg-dark-600 text-dark-100 rounded text-xs font-medium hover:bg-dark-500"
+            >
+              Export My Data
+            </button>
           </div>
         </div>
 

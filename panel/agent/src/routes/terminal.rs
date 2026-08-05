@@ -18,6 +18,34 @@ use super::AppState;
 use crate::services::command_filter;
 
 pub static ACTIVE_TERMINALS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Every shell this agent has spawned, by pid, so the panic button can kill the
+/// ones it actually started.
+///
+/// The panic button used to run `pkill -u www-data -f bash`, which is a guess
+/// about which processes are ours, and it guessed wrong in the one direction
+/// that matters: a SERVER terminal is deliberately kept as root
+/// (`open_pty_shell`), so the single most dangerous shell on the box — the one
+/// an intruder with a stolen admin session is holding — was the one process the
+/// emergency control could not reach. A registry is not a guess.
+pub static TERMINAL_PIDS: std::sync::Mutex<Vec<(i32, bool)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Record a shell this agent spawned. `is_root` is true for a server terminal.
+pub fn register_terminal(pid: i32, is_root: bool) {
+    TERMINAL_PIDS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push((pid, is_root));
+}
+
+/// Forget a shell that has already exited.
+pub fn forget_terminal(pid: i32) {
+    TERMINAL_PIDS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|(p, _)| *p != pid);
+}
 static LAST_CONNECT: AtomicU64 = AtomicU64::new(0);
 const MAX_TERMINAL_SESSIONS: u32 = 20;
 
@@ -334,6 +362,8 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: Stri
         }
     };
 
+    register_terminal(child_pid as i32, site_domain.is_none());
+
     let raw_fd = master_fd.as_raw_fd();
 
     // Duplicate the fd so reader and writer are independent
@@ -611,6 +641,8 @@ async fn handle_terminal(mut socket: WebSocket, domain: String, user_email: Stri
             libc::waitpid(child_pid as i32, &mut status, 0);
         }
     }
+
+    forget_terminal(child_pid as i32);
 
     // Release terminal session slot
     let _ = ACTIVE_TERMINALS.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| Some(v.saturating_sub(1)));
