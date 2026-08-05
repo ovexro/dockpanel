@@ -212,11 +212,65 @@ code "$REPO/panel/agent/src/routes/nginx.rs" 'placeholder_page\(' \
 SHIPPED=$(sed -E 's|[[:space:]]*//.*$||' "$DEPLOYSVC" | sed -n '1,/#\[cfg(test)\]/p')
 ALL_CLONES=$(sed -E 's|[[:space:]]*//.*$||' "$DEPLOYSVC" | grep -cE '"clone",')
 CHOWN_SUBJECTS=$(grep -cE '"clone",' <<< "$SHIPPED")
-CHOWN_N=$(grep -cE 'args\(\["-R", "www-data:www-data"' <<< "$SHIPPED")
-if [ "$CHOWN_SUBJECTS" -ge 2 ] && [ "$CHOWN_N" -ge "$CHOWN_SUBJECTS" ]; then
-  ok "all $CHOWN_SUBJECTS shipped checkout paths chown to www-data ($((ALL_CLONES - CHOWN_SUBJECTS)) test-only clones excluded by name)"
+CHOWN_N=$(grep -cE 'hand_tree_to_web_user\(' <<< "$SHIPPED")
+# The helper is called once per shipped checkout path plus once at its own
+# declaration, so the subject count is the callers.
+CHOWN_CALLS=$(grep -cE '^\s*hand_tree_to_web_user\(&' <<< "$SHIPPED")
+if [ "$CHOWN_SUBJECTS" -ge 2 ] && [ "$CHOWN_CALLS" -ge "$CHOWN_SUBJECTS" ]; then
+  ok "all $CHOWN_SUBJECTS shipped checkout paths reach hand_tree_to_web_user ($((ALL_CLONES - CHOWN_SUBJECTS)) test-only clones excluded by name)"
 else
-  bad "$CHOWN_SUBJECTS shipped checkout paths but only $CHOWN_N chown — a deploy succeeds and the app cannot write"
+  bad "$CHOWN_SUBJECTS shipped checkout paths but only $CHOWN_CALLS reach the handover — a deploy succeeds and the app cannot write"
+fi
+
+# PAIRED WITH THE ABOVE: the ownership work moved into a helper at v2.64.2, and
+# an arm that only checks the callers reach it would stay green if the helper
+# stopped doing the job. Extracting a helper moves the subject of every pin that
+# measured it, so both halves are pinned: the callers reach it, and it still
+# hands the tree over.
+if [ "$CHOWN_N" -ge 3 ] \
+   && grep -qE 'args\(\["-R", "www-data:www-data"' <<< "$SHIPPED"; then
+  ok "and hand_tree_to_web_user still chowns the tree to www-data"
+else
+  bad "hand_tree_to_web_user no longer chowns to www-data — every caller is now a no-op"
+fi
+
+# THE ESCALATION ARM. v2.64.0 chowned the whole checkout, `.git` included, and
+# v2.64.1 then told git to accept a repository it did not own. Together those
+# let a compromised site write `.git/config` and have root execute it on the
+# next deploy — reproduced end to end with no hook file at all, via one
+# `core.fsmonitor` line. The handover must therefore SKIP the repository, and
+# take it back for root afterwards. Both halves, because either alone is the
+# defect.
+if grep -qE 'OsStr::new\("\.git"\)' <<< "$SHIPPED" \
+   && grep -qE 'continue;' <<< "$SHIPPED"; then
+  ok "the handover skips .git rather than handing the repository to the web user"
+else
+  bad "the handover no longer skips .git — the site can write config and hooks that root executes"
+fi
+if grep -qE 'args\(\["-R", "root:root", &git_dir\]\)' <<< "$SHIPPED" \
+   && grep -qE 'args\(\["-R", "go-rwx", &git_dir\]\)' <<< "$SHIPPED"; then
+  ok "and the repository is taken back for root, unreadable to anyone else"
+else
+  bad "the repository is not reclaimed as root-only — a checkout inherited from v2.64.x stays writable"
+fi
+
+# The site directory carries the sticky bit, or the application can simply
+# unlink a root-owned `.git` and leave a repository of its own in its place —
+# which would defeat every arm above without touching one of them.
+if grep -qE 'args\(\["3775", dir\]\)' <<< "$SHIPPED"; then
+  ok "and the site directory is setgid+sticky, so the site cannot replace .git wholesale"
+else
+  bad "the site directory is not sticky — the application can unlink .git and plant its own"
+fi
+
+# A repository root does not own is DISCARDED, never repaired in place:
+# chowning content the web user wrote back to root and then executing it is the
+# same defect with an extra step.
+if grep -qE 'discard_repo_we_do_not_own\(&site_dir' <<< "$SHIPPED" \
+   && grep -qE 'remove_dir_all\(&git_dir\)' <<< "$SHIPPED"; then
+  ok "a repository root does not own is discarded before any git runs against it"
+else
+  bad "a foreign repository is adopted rather than discarded — the escalation survives an upgrade"
 fi
 
 
@@ -248,13 +302,42 @@ CLASSIFY='
   print "$git $safe $other";
 '
 read -r CGIT CSAFE COTHER <<< "$(SRC="$SHIPPED" perl -e '$src=$ENV{SRC};'"$CLASSIFY")"
-if [ "${CGIT:-0}" -ge 4 ] && [ "${CSAFE:-0}" -ge "${CGIT:-0}" ]; then
-  ok "all $CGIT shipped git -C invocations declare their directory safe ($COTHER non-git -C excluded by name)"
+# ⚠ INVERTED AT v2.64.2, and the inversion is the point. This arm used to demand
+# a `safe.directory` on every shipped `git -C`. That demand was the escalation:
+# the exception exists to let root operate on a tree somebody else owns, and the
+# somebody else here is the web user. The requirement is now the opposite — the
+# ownership guard stays switched ON, and the repository is kept root's instead.
+if [ "${CGIT:-0}" -ge 4 ] && [ "${CSAFE:-0}" -eq 0 ]; then
+  ok "none of the $CGIT shipped git -C invocations lifts the ownership guard ($COTHER non-git -C excluded by name)"
 else
-  bad "$CGIT shipped git -C invocations but only $CSAFE safe.directory — a re-deploy dies on dubious ownership"
+  bad "$CSAFE of $CGIT shipped git -C invocations still declare a directory safe — root will run git out of a tree the site controls"
 fi
-nocode "$DEPLOYSVC" 'safe\.directory=\*' \
-     "and none of them widens the exception to every path on the box"
+
+# The suppression pair, on every shipped git invocation. Ownership is the real
+# control; this is what protects a site upgrading from v2.64.x, whose repository
+# was writable and may already carry a payload. Command scope beats repo config,
+# so it is inert from the first deploy after this version.
+GITCMDS=$(grep -cE 'safe_command(_sync)?\("git"\)' <<< "$SHIPPED")
+NOEXEC_N=$(grep -cE '\.args\(GIT_NO_EXEC\)' <<< "$SHIPPED")
+if [ "$GITCMDS" -ge 4 ] && [ "$NOEXEC_N" -ge "$GITCMDS" ]; then
+  ok "all $GITCMDS shipped git invocations carry GIT_NO_EXEC"
+else
+  bad "$GITCMDS shipped git invocations but only $NOEXEC_N carry GIT_NO_EXEC — repo config can still execute"
+fi
+if grep -qE 'core\.hooksPath=' <<< "$SHIPPED" && grep -qE '"core\.fsmonitor="' <<< "$SHIPPED"; then
+  ok "and GIT_NO_EXEC suppresses BOTH hooks and fsmonitor — a hook file is not the only vector"
+else
+  bad "GIT_NO_EXEC no longer covers both vectors; core.fsmonitor alone needs no hook file and no executable bit"
+fi
+
+# The reset's exit status is READ. It was not, so a reset that failed — most
+# reachably on a branch change over a checkout holding local commits — reported
+# a successful deploy over the previous release.
+if grep -qE 'if !reset\.status\.success\(\)' <<< "$SHIPPED"; then
+  ok "a failed git reset fails the deploy instead of reporting success"
+else
+  bad "reset.status is never read — a failed reset still reports a successful deploy"
+fi
 
 echo
 printf 'passed %d, failed %d\n' "$PASS" "$FAIL"

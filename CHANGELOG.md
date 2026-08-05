@@ -4,6 +4,42 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.64.2] - 2026-08-05
+
+**Security: a compromised site could become root on the next deploy.** 2.64.0
+handed the whole git checkout to `www-data` so PHP-FPM could write it, and 2.64.1
+then told git to accept a repository it no longer owned. Those two together gave
+the application write access to its own `.git`, and git reads a repository's
+`config` and `hooks/` as instruction — so a site under someone else's control
+could have the agent, which runs as root, execute a command of their choosing on
+the next deploy. It needs no hook file and no executable bit: one line appended
+to `.git/config` is enough. Sites deployed from git on the default (non-atomic)
+path are affected; **upgrade before your next deploy.**
+
+The fix keeps both requirements without trading one for the other. The working
+tree still belongs to `www-data`, so applications write their own uploads, caches
+and `.env` exactly as before, and untracked files still survive a deploy. But
+`.git` stays root's, unreadable to anyone else, and the site directory is now
+setgid and sticky so the application cannot unlink the repository and leave one
+of its own in its place. With root owning every repository it touches, git's
+ownership guard is switched back on and the `safe.directory` exceptions are gone.
+
+Two consequences worth stating plainly:
+
+- **A repository that root does not own is discarded and re-cloned, not adopted.**
+  Repairing one in place would mean taking ownership of content the web user
+  wrote and then executing it, which is the same defect with an extra step. Sites
+  deployed under 2.64.0 or 2.64.1 will therefore re-clone once, on their first
+  deploy after upgrading. Nothing untracked is lost.
+- Every git invocation now also runs with hooks and `core.fsmonitor` disabled at
+  command scope, which overrides whatever a repository's own config says. That is
+  what protects the first deploy after upgrading, before the re-clone happens.
+
+Also fixed: a failed `git reset` reported a successful deploy, most reachably when
+a site's branch changes over a checkout holding local commits. And `list_releases`
+can read commit hashes again — atomic-deploy releases have been showing no commit
+hash since the feature shipped, because they were handed to `www-data` too.
+
 ## [2.64.1] - 2026-08-05
 
 **A deploy could be made twice.** 2.64.0 fixed the first git deploy of a site and

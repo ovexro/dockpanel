@@ -116,6 +116,105 @@ fn merge_into(from: &Path, to: &Path) -> Result<Vec<String>, String> {
     Ok(moved)
 }
 
+/// Arguments prefixed to every `git` invocation the agent makes against a
+/// deployed tree.
+///
+/// Ownership is the real control: `.git` belongs to root and the web user
+/// cannot write it (`hand_tree_to_web_user`). These are the belt to that pair of
+/// braces, and they earn their place on installs upgrading from v2.64.0 or
+/// v2.64.1, whose repositories were handed to www-data and may already carry a
+/// planted hook or `core.fsmonitor` written while they were writable. Command
+/// scope overrides a repository's own config, so a payload placed before this
+/// version was installed is inert from the first deploy after it.
+///
+/// `core.hooksPath` may name a directory that does not exist; git treats that as
+/// "no hooks" rather than an error.
+const GIT_NO_EXEC: [&str; 4] = [
+    "-c",
+    "core.hooksPath=/var/empty/dockpanel-no-hooks",
+    "-c",
+    "core.fsmonitor=",
+];
+
+/// Whether `path` is owned by uid 0.
+#[cfg(unix)]
+fn owned_by_root(path: &str) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).map(|m| m.uid() == 0).unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn owned_by_root(_path: &str) -> bool {
+    true
+}
+
+/// Refuse to run git as root out of a repository root does not own.
+///
+/// `git` reads a repository's `config` and `hooks/` as executable instruction,
+/// so the only repository root may safely operate on is root's own. A foreign
+/// one is discarded rather than repaired: repairing means chowning content the
+/// web user wrote back to root and then executing it, which is the original
+/// defect with an extra step. The caller clones again — one extra clone on a
+/// site upgrading from v2.64.x, and no adoption at all of a repository planted
+/// by a compromised application.
+fn discard_repo_we_do_not_own(site_dir: &str, output_buf: &mut String) {
+    let git_dir = format!("{site_dir}/.git");
+    if !Path::new(&git_dir).exists() || owned_by_root(&git_dir) {
+        return;
+    }
+    output_buf.push_str(
+        "==> This site's repository is not owned by root, so running git against it as root \
+         is unsafe. Discarding it and cloning the branch again.\n",
+    );
+    let _ = std::fs::remove_dir_all(&git_dir);
+}
+
+/// Hand a deployed tree to the web server without handing over the repository.
+///
+/// PHP-FPM runs as www-data and must be able to write the application's own
+/// directory — that requirement is real, and it is why v2.64.0 added a
+/// recursive chown. The mistake was its reach: a recursive chown includes
+/// `.git`, which gives the application `config` and `hooks/`, and git runs both
+/// as root on the next deploy.
+///
+/// So the tree is split. Everything the application needs is the application's;
+/// `.git` is root's and unreadable to anyone else. The site directory itself
+/// stays root-owned, group www-data, setgid so files the application creates
+/// keep the group, and **sticky** so the application cannot unlink `.git` and
+/// leave a repository of its own in its place.
+///
+/// The repository is never handed over even momentarily: chowning the whole tree
+/// and taking `.git` back would leave a window in which the application can
+/// write a file that root then owns and executes.
+async fn hand_tree_to_web_user(dir: &str) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if entry.file_name() == std::ffi::OsStr::new(".git") {
+                continue;
+            }
+            let _ = safe_command("chown")
+                .args(["-R", "www-data:www-data", &entry.path().to_string_lossy()])
+                .output()
+                .await;
+        }
+    }
+
+    let _ = safe_command("chown").args(["root:www-data", dir]).output().await;
+    let _ = safe_command("chmod").args(["3775", dir]).output().await;
+
+    let git_dir = format!("{dir}/.git");
+    if Path::new(&git_dir).exists() {
+        let _ = safe_command("chown")
+            .args(["-R", "root:root", &git_dir])
+            .output()
+            .await;
+        let _ = safe_command("chmod")
+            .args(["-R", "go-rwx", &git_dir])
+            .output()
+            .await;
+    }
+}
+
 /// Clone or pull a git repository to the site's webroot.
 pub async fn clone_or_pull(
     domain: &str,
@@ -133,20 +232,21 @@ pub async fn clone_or_pull(
         None => None,
     };
 
-    // The checkout is handed to the web server's user, and this process is root.
-    // Git refuses to operate on a repository owned by somebody else — the
-    // `dubious ownership` guard, which exists so root cannot be tricked into
-    // running hooks out of an untrusted user's tree. Here the agent placed the
-    // repository there deliberately, so the exception is declared per path and
-    // per invocation. It has to be command-scope: git ignores `safe.directory`
-    // from a repository's own config, which is exactly the file an attacker
-    // would control.
-    let safe_dir = format!("safe.directory={site_dir}");
+    // Git's `dubious ownership` guard exists so root cannot be tricked into
+    // running hooks out of a tree that another user controls. v2.64.1 lifted it,
+    // per path and per invocation, so that deploys would keep working after
+    // v2.64.0 handed the whole checkout — `.git` included — to www-data. The two
+    // together made every git-deployed site a www-data-to-root escalation: the
+    // site writes one line into `.git/config` and the next deploy executes it as
+    // root. The guard stays switched on now, and the repository is kept root's
+    // own instead — see `hand_tree_to_web_user`.
+    discard_repo_we_do_not_own(&site_dir, &mut output_buf);
 
     if Path::new(&git_dir).exists() {
         // Git pull (fetch + reset to match remote)
         let mut cmd = safe_command("git");
-        cmd.args(["-c", &safe_dir, "-C", &site_dir, "fetch", "origin", branch])
+        cmd.args(GIT_NO_EXEC)
+            .args(["-C", &site_dir, "fetch", "origin", branch])
             .env("GIT_TERMINAL_PROMPT", "0");
         if let Some(ref ssh) = env_ssh {
             cmd.env("GIT_SSH_COMMAND", ssh);
@@ -174,13 +274,27 @@ pub async fn clone_or_pull(
 
         // Reset to remote branch
         let reset = safe_command("git")
-            .args(["-c", &safe_dir, "-C", &site_dir, "reset", "--hard", &format!("origin/{branch}")])
+            .args(GIT_NO_EXEC)
+            .args(["-C", &site_dir, "reset", "--hard", &format!("origin/{branch}")])
             .output()
             .await
             .map_err(|e| format!("git reset failed: {e}"))?;
 
         output_buf.push_str(&String::from_utf8_lossy(&reset.stdout));
         output_buf.push_str(&String::from_utf8_lossy(&reset.stderr));
+
+        // The fetch above is checked and this was not, so a reset that failed —
+        // most reachably when the configured branch changes and the old checkout
+        // still holds local commits — reported a successful deploy over a
+        // working tree still serving the previous release.
+        if !reset.status.success() {
+            return Ok(DeployResult {
+                success: false,
+                output: output_buf,
+                commit_hash: None,
+                duration_ms: start.elapsed().as_millis() as u64,
+            });
+        }
     } else {
         // Fresh clone.
         //
@@ -219,7 +333,8 @@ pub async fn clone_or_pull(
         let _ = std::fs::remove_dir_all(&staging);
 
         let mut cmd = safe_command("git");
-        cmd.args(["clone", "--branch", branch, "--single-branch", "--depth", "50", repo_url, &staging])
+        cmd.args(GIT_NO_EXEC)
+            .args(["clone", "--branch", branch, "--single-branch", "--depth", "50", repo_url, &staging])
             .env("GIT_TERMINAL_PROMPT", "0");
         if let Some(ref ssh) = env_ssh {
             cmd.env("GIT_SSH_COMMAND", ssh);
@@ -282,18 +397,15 @@ pub async fn clone_or_pull(
         }
     }
 
-    // Ownership, as the atomic path already does for its release directory: a
-    // checkout made by the agent belongs to the agent, PHP-FPM runs as
-    // www-data, and without this the deploy reports success and the application
-    // then cannot write to its own directory.
-    let _ = safe_command("chown")
-        .args(["-R", "www-data:www-data", &site_dir])
-        .output()
-        .await;
+    // PHP-FPM runs as www-data and must be able to write the application's own
+    // directory; root runs git and must not be steerable by what the application
+    // writes. Both, without handing over `.git`.
+    hand_tree_to_web_user(&site_dir).await;
 
     // Get current commit hash
     let hash = safe_command("git")
-        .args(["-c", &safe_dir, "-C", &site_dir, "rev-parse", "--short", "HEAD"])
+        .args(GIT_NO_EXEC)
+        .args(["-C", &site_dir, "rev-parse", "--short", "HEAD"])
         .output()
         .await
         .ok()
@@ -424,7 +536,8 @@ pub async fn atomic_deploy(
     };
 
     let mut cmd = safe_command("git");
-    cmd.args(["clone", "--branch", branch, "--single-branch", "--depth", "1", repo_url, &release_dir])
+    cmd.args(GIT_NO_EXEC)
+        .args(["clone", "--branch", branch, "--single-branch", "--depth", "1", repo_url, &release_dir])
         .env("GIT_TERMINAL_PROMPT", "0");
     if let Some(ref ssh) = env_ssh {
         cmd.env("GIT_SSH_COMMAND", ssh);
@@ -454,8 +567,8 @@ pub async fn atomic_deploy(
 
     // Get commit hash
     let commit_hash = safe_command("git")
-        .args(["-c", &format!("safe.directory={release_dir}"),
-               "-C", &release_dir, "rev-parse", "--short", "HEAD"])
+        .args(GIT_NO_EXEC)
+        .args(["-C", &release_dir, "rev-parse", "--short", "HEAD"])
         .output()
         .await
         .ok()
@@ -633,11 +746,11 @@ pub async fn atomic_deploy(
         }
     }
 
-    // Ensure correct ownership
-    let _ = safe_command("chown")
-        .args(["-R", "www-data:www-data", &release_dir])
-        .output()
-        .await;
+    // Ensure correct ownership. Same split as the non-atomic path: this release
+    // has always been handed to www-data wholesale, which is why `list_releases`
+    // could never read its commit hash back without an ownership exception — and
+    // why an exception was there to be lifted at all.
+    hand_tree_to_web_user(&release_dir).await;
 
     // Clean up old releases (keep N most recent)
     if let Ok(entries) = std::fs::read_dir(&releases_dir) {
@@ -691,15 +804,17 @@ pub fn list_releases(domain: &str) -> Result<Vec<ReleaseInfo>, String> {
                 .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
                 .unwrap_or_default();
 
-            // Get commit hash from release. Same ownership exception as the
-            // deploy paths: `atomic_deploy` hands each release to www-data, so
-            // reading it back as root needs the directory declared safe — and
-            // without that this silently answered None on every atomic release.
+            // Get commit hash from release. This answered None on every atomic
+            // release for as long as the feature existed, because the release
+            // had been handed to www-data; it now reads back because `.git`
+            // stays root's. A release still owned by www-data — one written by
+            // a version before this — is left answering None rather than
+            // adopted, for the reason `discard_repo_we_do_not_own` gives.
             let git_dir = format!("{}/{}", e.path().display(), ".git");
             let commit = if Path::new(&git_dir).exists() {
                 crate::safe_cmd::safe_command_sync("git")
-                    .args(["-c", &format!("safe.directory={}", e.path().display()),
-                           "-C", &e.path().to_string_lossy(), "rev-parse", "--short", "HEAD"])
+                    .args(GIT_NO_EXEC)
+                    .args(["-C", &e.path().to_string_lossy(), "rev-parse", "--short", "HEAD"])
                     .output()
                     .ok()
                     .and_then(|o| if o.status.success() {
@@ -935,51 +1050,274 @@ mod first_deploy_tests {
 #[cfg(test)]
 mod ownership_tests {
     use super::*;
+    use std::path::PathBuf;
 
-    /// EXECUTED, not asserted: git really does refuse a repository owned by
-    /// another user, and the command-scope exception really does lift it. If
-    /// either half ever stops being true this test says so, rather than the
-    /// second deploy of every site saying it for us.
+    /// Build a repository in the state v2.64.0/v2.64.1 left every git-deployed
+    /// site in — owned by another uid — and return its path plus a payload
+    /// planted in its config the way a compromised application would.
     ///
-    /// Skipped unless running as root with a spare uid to chown to, because
-    /// that is the only configuration in which the guard engages at all.
-    #[test]
-    fn a_checkout_owned_by_another_user_needs_the_exception() {
-        if !nix_is_root() { eprintln!("skipped: needs root to chown"); return; }
-        let dir = std::env::temp_dir().join("dockpanel-ownership-test");
+    /// The payload is `core.fsmonitor`, not a hook file: it needs no executable
+    /// bit and no `hooks/` directory, which is what makes the escalation cheap.
+    fn a_repo_owned_by_someone_else(name: &str) -> Option<(PathBuf, PathBuf)> {
+        if !nix_is_root() {
+            eprintln!("skipped: needs root to chown");
+            return None;
+        }
+        let dir = std::env::temp_dir().join(name);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
         let git = |args: &[&str]| {
-            std::process::Command::new("git").args(args).current_dir(&dir)
-                .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_SYSTEM", "/dev/null")
-                .output().expect("git must be installed")
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output()
+                .expect("git must be installed")
         };
         git(&["init", "-q", "-b", "main", "."]);
         std::fs::write(dir.join("f.txt"), "x").unwrap();
         git(&["add", "-A"]);
         git(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"]);
 
-        // hand it to another uid, exactly as the deploy paths do
+        let proof = dir.join("EXECUTED-AS-ROOT");
+        let payload = format!(
+            "[core]\n\tfsmonitor = \"/bin/sh -c 'id -u > {}'\"\n",
+            proof.display()
+        );
+        let mut cfg = std::fs::read_to_string(dir.join(".git/config")).unwrap();
+        cfg.push_str(&payload);
+        std::fs::write(dir.join(".git/config"), cfg).unwrap();
+
         let chown = std::process::Command::new("chown")
-            .args(["-R", "nobody", dir.to_str().unwrap()]).status().expect("chown");
-        if !chown.success() { eprintln!("skipped: chown unavailable"); return; }
+            .args(["-R", "nobody", dir.to_str().unwrap()])
+            .status()
+            .expect("chown");
+        if !chown.success() {
+            eprintln!("skipped: chown unavailable");
+            let _ = std::fs::remove_dir_all(&dir);
+            return None;
+        }
+        Some((dir, proof))
+    }
 
-        let path = dir.to_str().unwrap();
+    /// EXECUTED, not asserted. Two halves, and the second is the control that
+    /// proves the first can fail: git still refuses a repository owned by
+    /// another user, and the command-scope `safe.directory` exception v2.64.1
+    /// shipped really does lift that refusal and really does then run the
+    /// application's own payload as root.
+    ///
+    /// If this control ever stops reproducing, the arm below it is measuring
+    /// nothing and must be re-derived rather than trusted.
+    #[test]
+    fn the_exception_v2_64_1_shipped_really_did_run_the_sites_code_as_root() {
+        let Some((dir, proof)) = a_repo_owned_by_someone_else("dockpanel-escalation-control")
+        else {
+            return;
+        };
+        let path = dir.to_str().unwrap().to_string();
+
         let bare = std::process::Command::new("git")
-            .args(["-C", path, "rev-parse", "--short", "HEAD"])
-            .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .output().unwrap();
-        assert!(!bare.status.success(),
-            "git accepted a repository owned by another user — the exception is now dead code");
+            .args(["-C", &path, "reset", "--hard", "HEAD"])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(
+            !bare.status.success(),
+            "git accepted a repository owned by another user — the ownership guard this fix \
+             relies on is gone, and `.git` being root's is no longer sufficient on its own"
+        );
+        assert!(!proof.exists(), "the guard refused the command and it ran anyway");
 
-        let guarded = std::process::Command::new("git")
-            .args(["-c", &format!("safe.directory={path}"), "-C", path, "rev-parse", "--short", "HEAD"])
-            .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .output().unwrap();
-        assert!(guarded.status.success(),
-            "the command-scope exception no longer lifts the guard: {}",
-            String::from_utf8_lossy(&guarded.stderr));
+        // The exact shape v2.64.1 shipped at deploy.rs:177.
+        let exploited = std::process::Command::new("git")
+            .args([
+                "-c",
+                &format!("safe.directory={path}"),
+                "-C",
+                &path,
+                "reset",
+                "--hard",
+                "HEAD",
+            ])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(
+            exploited.status.success(),
+            "the v2.64.1 shape no longer runs at all, so this control proves nothing: {}",
+            String::from_utf8_lossy(&exploited.stderr)
+        );
+        assert_eq!(
+            std::fs::read_to_string(&proof).unwrap_or_default().trim(),
+            "0",
+            "the v2.64.1 shape did not execute the planted payload as root, so the arm below \
+             is not measuring the defect it claims to"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `GIT_NO_EXEC` neutralises a planted payload **on its own**, with the
+    /// ownership guard deliberately taken out of the picture.
+    ///
+    /// The repository here is root's, so git raises no ownership objection and
+    /// the only thing standing between the payload and uid 0 is the suppression
+    /// pair. Testing this against a foreign-owned repository would pass whether
+    /// or not `GIT_NO_EXEC` does anything, because the guard would refuse the
+    /// command first — green for the wrong reason, which is the failure mode
+    /// this project keeps finding in its own arms.
+    #[test]
+    fn the_suppression_pair_neutralises_a_planted_payload_by_itself() {
+        let dir = std::env::temp_dir().join("dockpanel-escalation-closed");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output()
+                .expect("git must be installed")
+        };
+        git(&["init", "-q", "-b", "main", "."]);
+        std::fs::write(dir.join("f.txt"), "x").unwrap();
+        git(&["add", "-A"]);
+        git(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"]);
+
+        let proof = dir.join("EXECUTED");
+        let mut cfg = std::fs::read_to_string(dir.join(".git/config")).unwrap();
+        cfg.push_str(&format!(
+            "[core]\n\tfsmonitor = \"/bin/sh -c 'id -u > {}'\"\n",
+            proof.display()
+        ));
+        std::fs::write(dir.join(".git/config"), cfg).unwrap();
+        let path = dir.to_str().unwrap().to_string();
+
+        // Control: without the pair, this repository's own config runs.
+        let _ = std::process::Command::new("git")
+            .args(["-C", &path, "reset", "--hard", "HEAD"])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(
+            proof.exists(),
+            "the planted payload did not fire even without the suppression pair, so this arm \
+             cannot tell whether the pair does anything"
+        );
+        std::fs::remove_file(&proof).unwrap();
+
+        // Shipped shape.
+        let shipped = std::process::Command::new("git")
+            .args(GIT_NO_EXEC)
+            .args(["-C", &path, "reset", "--hard", "HEAD"])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(
+            shipped.status.success(),
+            "the shipped invocation failed outright, so it proves nothing about the payload: {}",
+            String::from_utf8_lossy(&shipped.stderr)
+        );
+        assert!(
+            !proof.exists(),
+            "the suppression pair did not stop the repository's own config executing as root"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A repository root does not own is discarded, not adopted.
+    #[test]
+    fn a_foreign_repository_is_discarded_rather_than_repaired() {
+        let Some((dir, _proof)) = a_repo_owned_by_someone_else("dockpanel-escalation-discard")
+        else {
+            return;
+        };
+        let path = dir.to_str().unwrap().to_string();
+        assert!(dir.join(".git").exists(), "fixture did not build a repository");
+        assert!(
+            !owned_by_root(&format!("{path}/.git")),
+            "fixture failed to hand the repository to another uid"
+        );
+
+        let mut out = String::new();
+        discard_repo_we_do_not_own(&path, &mut out);
+
+        assert!(
+            !dir.join(".git").exists(),
+            "a repository owned by another user was kept; the next deploy would run git \
+             against a tree that user controls"
+        );
+        assert!(
+            out.contains("not owned by root"),
+            "the discard was silent — the operator has no way to know a re-clone happened"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The split itself: after handing a tree over, `.git` is still root's and
+    /// is unreadable to anyone else, and the site directory carries the setgid
+    /// and sticky bits that stop the application replacing the repository.
+    #[test]
+    fn handing_the_tree_over_does_not_hand_over_the_repository() {
+        if !nix_is_root() {
+            eprintln!("skipped: needs root to chown");
+            return;
+        }
+        let dir = std::env::temp_dir().join("dockpanel-tree-split");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::create_dir_all(dir.join("public")).unwrap();
+        std::fs::write(dir.join(".git/config"), "[core]\n").unwrap();
+        std::fs::write(dir.join("public/index.php"), "<?php\n").unwrap();
+
+        let path = dir.to_str().unwrap().to_string();
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(hand_tree_to_web_user(&path));
+
+        assert!(
+            owned_by_root(&format!("{path}/.git")),
+            "the repository was handed to the web user — this is the v2.64.0 defect"
+        );
+        assert!(
+            owned_by_root(&format!("{path}/.git/config")),
+            "the repository's config was handed to the web user, which is all the \
+             escalation ever needed"
+        );
+
+        use std::os::unix::fs::PermissionsExt;
+        let git_mode = std::fs::metadata(dir.join(".git")).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            git_mode & 0o077,
+            0,
+            "the repository is readable or writable beyond root (mode {git_mode:o})"
+        );
+
+        let site_mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+        assert_eq!(
+            site_mode & 0o1000,
+            0o1000,
+            "the site directory is not sticky, so the application can unlink .git and leave \
+             a repository of its own in its place (mode {:o})",
+            site_mode & 0o7777
+        );
+        assert_eq!(
+            site_mode & 0o2000,
+            0o2000,
+            "the site directory is not setgid, so files the application creates will not \
+             carry the web group (mode {:o})",
+            site_mode & 0o7777
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
