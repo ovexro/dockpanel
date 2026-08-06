@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
-import { navGroups, type NavGroup } from "../data/navItems";
+import { navGroups, isNavVisible, type NavGroup } from "../data/navItems";
 
 const themeOrder = ["terminal", "midnight", "ember", "arctic", "clean", "clean-dark"] as const;
 
@@ -124,14 +124,9 @@ export function useLayoutState(): LayoutState {
     if (!user) return [];
     return navGroups.map(g => ({
       ...g,
-      items: g.items.filter(item => {
-        // Admin sees everything
-        if (user.role === "admin") return true;
-        // Reseller sees resellerVisible items + non-restricted items
-        if (user.role === "reseller") return item.resellerVisible || (!item.adminOnly && !item.resellerVisible);
-        // Regular user: hide adminOnly and resellerVisible items
-        return !item.adminOnly && !item.resellerVisible;
-      }),
+      // Extracted to `navItems.ts` so the command palette can read the same
+      // decision instead of having its own (it had none at all).
+      items: g.items.filter(item => isNavVisible(item, user.role)),
     })).filter(g => g.items.length > 0);
   }, [user]);
 

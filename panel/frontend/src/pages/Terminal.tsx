@@ -5,6 +5,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
 import { api, ApiError } from "../api";
+import { useAuth } from "../context/AuthContext";
 
 interface Site {
   id: string;
@@ -82,7 +83,12 @@ const themes: Record<string, Record<string, string>> = {
 };
 
 // ── Saved command snippets ──
-const snippets = [
+// Every one of these is a ROOT command against the host. A site shell is a
+// different machine as far as its occupant is concerned: it runs as www-data,
+// under `bash --restricted`, with NO_NEW_PRIVS set and a command blocklist —
+// so `systemctl restart nginx` and `docker ps` are not merely unhelpful there,
+// they are refused. Offering them on a site session is a menu of failures.
+const serverSnippets = [
   { label: "Restart Nginx", cmd: "systemctl restart nginx" },
   { label: "Restart PHP-FPM", cmd: "systemctl restart php8.3-fpm" },
   { label: "Disk Usage", cmd: "df -h" },
@@ -96,12 +102,32 @@ const snippets = [
   { label: "Persistent Session (tmux)", cmd: "tmux new-session -A -s dockpanel" },
 ];
 
+// Things that actually work from inside /var/www/<domain> as www-data.
+const siteSnippets = [
+  { label: "List Files", cmd: "ls -lah" },
+  { label: "Folder Size", cmd: "du -sh ." },
+  { label: "Largest Files", cmd: "du -ah . | sort -rh | head -20" },
+  { label: "Find Recently Changed", cmd: "find . -type f -mtime -1" },
+  { label: "PHP Version", cmd: "php -v" },
+  { label: "WP-CLI Info", cmd: "wp --info" },
+  { label: "Composer Install", cmd: "composer install --no-dev" },
+  { label: "Search In Files", cmd: "grep -rn 'needle' . | head -20" },
+];
+
 const IDLE_TIMEOUT = 30 * 60 * 1000; // 30 minutes
 const MAX_RECONNECT_ATTEMPTS = 3;
 
 export default function Terminal() {
   const [searchParams] = useSearchParams();
   const initialSiteId = searchParams.get("site") || "";
+  const { user } = useAuth();
+  // The server shell is admin-only and stays that way: `terminal.rs` refuses a
+  // ticket with no site to anybody else, and v2.75.0 bound that decision into
+  // the signed ticket precisely because a site owner could previously drop the
+  // scope and land in a root shell. What this page got wrong was not the gate —
+  // it was arriving at the gate by default. A site owner already has a terminal
+  // on the sites they own; this page just never opened it for them.
+  const isAdmin = user?.role === "admin";
   const termRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const xtermRef = useRef<XTerm | null>(null);
@@ -122,6 +148,7 @@ export default function Terminal() {
   // server is a fleet member) rather than something that went wrong.
   const [notice, setNotice] = useState("");
   const [sites, setSites] = useState<Site[]>([]);
+  const [sitesLoaded, setSitesLoaded] = useState(false);
   const [selectedSite, setSelectedSite] = useState(initialSiteId);
 
   // Snippets
@@ -173,7 +200,13 @@ export default function Terminal() {
 
   // Load sites
   useEffect(() => {
-    api.get<Site[]>("/sites").then(setSites).catch(() => setError("Failed to load sites"));
+    api
+      .get<Site[]>("/sites")
+      .then(setSites)
+      .catch(() => setError("Failed to load sites"))
+      // Distinguishes "no sites" from "not asked yet" — without it the
+      // owns-nothing notice below fires for a moment on every load.
+      .finally(() => setSitesLoaded(true));
   }, []);
 
   // Idle timeout reset
@@ -356,9 +389,18 @@ export default function Terminal() {
     [fontSize, themeName, resetIdleTimer]
   );
 
-  // Connect on mount
+  // Connect on mount.
+  //
+  // A non-admin with no `?site=` has nothing to connect to YET — their session
+  // is a site session and the site list has not arrived. Dialling anyway is what
+  // produced the report: sidebar → Terminal → an immediate "Admin access required
+  // for server terminal", from an account that does in fact have a terminal. The
+  // effect below picks their first site the moment the list lands.
   useEffect(() => {
-    connect(selectedSite || undefined);
+    // Conditional CONNECT, unconditional cleanup — an early return here would
+    // skip registering the teardown that disposes the xterm the auto-select
+    // effect goes on to create.
+    if (isAdmin || selectedSite) connect(selectedSite || undefined);
     return () => {
       if (idleTimer.current) clearTimeout(idleTimer.current);
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
@@ -368,6 +410,25 @@ export default function Terminal() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // A non-admin's default session is their own first site, chosen once the list
+  // arrives rather than at mount (it is empty at mount). `/sites` is already
+  // scoped to the caller, so "the first site" is always one they own.
+  // Must live BELOW `connect` — a dependency array naming it any earlier is
+  // evaluated during render, before the useCallback has initialised.
+  useEffect(() => {
+    if (isAdmin || selectedSite || sites.length === 0) return;
+    setSelectedSite(sites[0].id);
+    connect(sites[0].id);
+  }, [isAdmin, selectedSite, sites, connect]);
+
+  // ...and if they own none, say so rather than leaving a dead black rectangle.
+  useEffect(() => {
+    if (isAdmin || selectedSite || !sitesLoaded || sites.length > 0) return;
+    setNotice(
+      "This terminal opens a shell inside a site you own. No site is assigned to your account yet — once one is, it will appear in the selector above."
+    );
+  }, [isAdmin, selectedSite, sitesLoaded, sites]);
 
   // Handle resize
   useEffect(() => {
@@ -496,7 +557,9 @@ export default function Terminal() {
                 onChange={(e) => handleSiteChange(e.target.value)}
                 className="text-xs sm:text-sm border border-dark-500 rounded-lg px-2 sm:px-3 py-1 sm:py-1.5 bg-dark-800 max-w-[120px] sm:max-w-none"
               >
-                <option value="">Server root</option>
+                {/* The default option was the one shell a non-admin can never
+                    open, so the page refused itself before they touched it. */}
+                {isAdmin && <option value="">Server root</option>}
                 {sites.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.domain}
@@ -666,8 +729,10 @@ export default function Terminal() {
               Share
             </button>
 
-            {/* SSH Info */}
-            <button
+            {/* SSH Info — the credentials it prints are for the ROOT account on
+                the host (`server_utils.rs` reads /root/.ssh/authorized_keys), so
+                it is an operator panel, not a tenant one. */}
+            {isAdmin && <button
               onClick={() => setShowSshInfo(!showSshInfo)}
               className={`px-2 py-1 rounded text-xs transition-colors ${
                 showSshInfo
@@ -676,7 +741,7 @@ export default function Terminal() {
               }`}
             >
               SSH Info
-            </button>
+            </button>}
 
             {/* Record */}
             <button
@@ -705,7 +770,10 @@ export default function Terminal() {
         {/* Snippets bar */}
         {showSnippets && (
           <div className="flex flex-wrap gap-1.5 px-3 py-2 bg-dark-900 border-b border-dark-600 shrink-0">
-            {snippets.map((s) => (
+            {/* Keyed on the SESSION, not the role: an admin who selects a site is
+                in the same restricted www-data shell a client is, and wants the
+                same commands. */}
+            {(selectedSite ? siteSnippets : serverSnippets).map((s) => (
               <button
                 key={s.label}
                 onClick={() => {
@@ -725,8 +793,8 @@ export default function Terminal() {
           </div>
         )}
 
-        {/* SSH Info panel */}
-        {showSshInfo && (
+        {/* SSH Info panel — admin only, same reason as the button that opens it. */}
+        {isAdmin && showSshInfo && (
           <div className="px-3 py-2 bg-dark-900 border-b border-dark-600 space-y-1.5 shrink-0">
             <p className="text-xs text-dark-300 uppercase font-mono tracking-widest mb-1">
               SSH Connection

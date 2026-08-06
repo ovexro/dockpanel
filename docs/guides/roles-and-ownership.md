@@ -21,8 +21,26 @@ ownership* below. A `reseller` still sees its sub-accounts and a site **count**
 per account, not the sites themselves.
 
 `client` is the newest and the only one that is a *restriction* rather than a
-promotion. A client manages the sites it holds — mail, PHP version, containers,
-settings, files, backups, SSL — and cannot bring a new domain into service.
+promotion. A client manages the sites it holds — PHP version, settings, files,
+backups, SSL, and a shell inside each site it owns — and cannot bring a new
+domain into service.
+
+**Two capabilities this sentence used to list are not a client's, and never
+were.** *Mail* is administrator-only end to end: every handler in `routes/mail.rs`
+takes the `AdminUser` extractor and the Mail page redirects anybody else away, so
+a client cannot add, edit or remove a mailbox on its own domain — an admin does it
+for them. *Containers* likewise: every handler in `routes/docker_apps.rs` calls
+`require_admin`, because a container on this box belongs to the box rather than to
+a site. Corrected in v2.77.0 after an operator followed the list and found two of
+its seven items missing from the panel; the capability is what changed here, not
+the description — see *Withdrawn Claims* in `FEATURES.md`.
+
+What a client's shell is, precisely: selecting one of your sites in **Terminal**
+opens a session **inside that site's directory, as `www-data`**, under a
+restricted shell with no privilege escalation. It is not a server shell — that one
+is administrator-only, deliberately, and is the subject of the v2.75.0 security
+fix. Before v2.77.0 the Terminal page dialled the *server* shell by default, so a
+client met a refusal on a page they were in fact entitled to use.
 
 ## Giving a client a domain
 

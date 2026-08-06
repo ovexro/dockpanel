@@ -52,11 +52,20 @@ pub async fn ws_token(
     // Answer here rather than minting a ticket the receiving agent must reject.
     crate::helpers::require_local_agent_scope(&state, server_id, "The web terminal").await?;
 
-    // Server-level terminal requires admin role
+    // Server-level terminal requires admin role. This gate is load-bearing — see
+    // v2.75.0, where it guarded only the MINTING of a site-less ticket and the
+    // decision never travelled to the agent, so a site owner could drop the scope
+    // and reach a root shell. It stays exactly as strict as it is.
+    //
+    // What it should NOT do is read like a dead end. A site owner has a shell on
+    // every site they own; the page simply used to ask for the wrong one by
+    // default. Name the thing that works, the way the disabled-switch message
+    // below names its switch.
     if q.site_id.is_none() && claims.role != "admin" {
         return Err(err(
             StatusCode::FORBIDDEN,
-            "Admin access required for server terminal",
+            "The server shell is available to administrators only. \
+             Choose one of your own sites in the selector to open a shell inside it.",
         ));
     }
 

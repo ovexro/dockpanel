@@ -326,10 +326,15 @@ export default function Dashboard() {
       .get<Intelligence>("/dashboard/intelligence")
       .then(setIntel)
       .catch(() => setError("Failed to load dashboard intelligence"));
-    api
-      .get<{ container_id: string }[]>("/apps")
-      .then((list) => setAppCount(list.length))
-      .catch(() => {});
+    // Every handler in `routes/docker_apps.rs` calls `require_admin`, this one
+    // included — containers on the box belong to nobody in particular, so there is
+    // no tenant view of them to ask for. Same reasoning as the reads below.
+    if (isAdmin) {
+      api
+        .get<{ container_id: string }[]>("/apps")
+        .then((list) => setAppCount(list.length))
+        .catch(() => {});
+    }
     // Admin-gated in `routes/system.rs`. Asking as anybody else produced the
     // page's second error banner, beside the one from `/system/info`.
     if (isAdmin) {
@@ -350,11 +355,14 @@ export default function Dashboard() {
       .get<{ has_schedule: boolean; has_backup: boolean }>("/backup-setup-status")
       .then(setBackupSetup)
       .catch(() => {});
-    // Feature #1: Docker container overview
-    api
-      .get<{ total: number; running: number; stopped: number }>("/dashboard/docker")
-      .then(setDockerInfo)
-      .catch(() => {});
+    // Feature #1: Docker container overview. Admin-gated in the backend since
+    // v2.77.0 — it asks the agent for the same `/apps` the list above does.
+    if (isAdmin) {
+      api
+        .get<{ total: number; running: number; stopped: number }>("/dashboard/docker")
+        .then(setDockerInfo)
+        .catch(() => {});
+    }
     // Feature #2: Recent activity feed
     // Admin-gated in the backend; asking as anybody else is a refusal
     // every 5s that this page then swallows (activity feed).
@@ -364,26 +372,28 @@ export default function Dashboard() {
         .then(setRecentActivity)
         .catch(() => {});
     }
-    // Feature #8: Docker image disk usage
-    api
-      .get<DockerImage[] | DockerImagesResponse>("/apps/images")
-      .then((d) => {
-        const images: DockerImage[] = Array.isArray(d) ? d : ((d as DockerImagesResponse).images || []);
-        const totalMb = images.reduce((sum: number, img: DockerImage) => {
-          const size = img.size || img.Size || "0";
-          if (typeof size === "number") return sum + size / (1024 * 1024);
-          const match = String(size).match(/([\d.]+)\s*(GB|MB|KB)/i);
-          if (match) {
-            const val = parseFloat(match[1]);
-            if (match[2].toUpperCase() === "GB") return sum + val * 1024;
-            if (match[2].toUpperCase() === "MB") return sum + val;
-            return sum + val / 1024;
-          }
-          return sum;
-        }, 0);
-        setDockerDiskUsage(totalMb > 1024 ? `${(totalMb / 1024).toFixed(1)} GB` : `${totalMb.toFixed(0)} MB`);
-      })
-      .catch(() => {});
+    // Feature #8: Docker image disk usage — `docker_apps` again, so admin only.
+    if (isAdmin) {
+      api
+        .get<DockerImage[] | DockerImagesResponse>("/apps/images")
+        .then((d) => {
+          const images: DockerImage[] = Array.isArray(d) ? d : ((d as DockerImagesResponse).images || []);
+          const totalMb = images.reduce((sum: number, img: DockerImage) => {
+            const size = img.size || img.Size || "0";
+            if (typeof size === "number") return sum + size / (1024 * 1024);
+            const match = String(size).match(/([\d.]+)\s*(GB|MB|KB)/i);
+            if (match) {
+              const val = parseFloat(match[1]);
+              if (match[2].toUpperCase() === "GB") return sum + val * 1024;
+              if (match[2].toUpperCase() === "MB") return sum + val;
+              return sum + val / 1024;
+            }
+            return sum;
+          }, 0);
+          setDockerDiskUsage(totalMb > 1024 ? `${(totalMb / 1024).toFixed(1)} GB` : `${totalMb.toFixed(0)} MB`);
+        })
+        .catch(() => {});
+    }
     // Feature #3: Disk I/O metrics (endpoint takes ~1s due to sampling)
     // Admin-gated in `routes/system.rs` like the rest of that module.
     if (isAdmin) {
@@ -653,10 +663,17 @@ export default function Dashboard() {
             {showWidgetConfig ? "Done" : "Customize"}
           </button>
           <div className="h-4 w-px bg-dark-600 hidden sm:block" />
-          <Link to="/apps" className="hidden sm:flex px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium items-center gap-1.5 transition-colors">
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
-            Deploy App
-          </Link>
+          {/* The same dead end as "Add Site" below, one link earlier and missed
+              when that one was fixed: `Apps.tsx` bounces any non-admin straight
+              back here, and every handler in `routes/docker_apps.rs` requires
+              admin. Docker Apps is an operator capability, so say so by not
+              offering it. */}
+          {isAdmin && (
+            <Link to="/apps" className="hidden sm:flex px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium items-center gap-1.5 transition-colors">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
+              Deploy App
+            </Link>
+          )}
           {/* A `client` cannot bring a new domain into service by any route, so
               offering it the shortcut named for exactly that is a dead end —
               it lands on the one refusal the role is defined by. */}
@@ -704,22 +721,26 @@ export default function Dashboard() {
         <div className="bg-dark-800 rounded-lg border border-dark-500 p-4 mb-4">
           <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-3">Dashboard Widgets</h3>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            {/* `hostOnly` marks a widget fed by an admin-only read. Offering a
+                client a checkbox for a panel that can never draw is the same
+                empty promise as a menu entry that refuses — eight of these
+                fourteen were exactly that. */}
             {[
-              { id: "metrics", label: "CPU / Memory / Disk" },
-              { id: "disk_io", label: "Disk I/O" },
-              { id: "charts", label: "Historical Charts" },
+              { id: "metrics", label: "CPU / Memory / Disk", hostOnly: true },
+              { id: "disk_io", label: "Disk I/O", hostOnly: true },
+              { id: "charts", label: "Historical Charts", hostOnly: true },
               { id: "status_bar", label: "Status Bar" },
               { id: "health_banner", label: "Health Indicator" },
               { id: "sites_grid", label: "Sites Grid" },
-              { id: "activity", label: "Recent Activity" },
+              { id: "activity", label: "Recent Activity", hostOnly: true },
               { id: "issues", label: "Active Issues" },
               { id: "ssl_countdown", label: "SSL Countdown" },
-              { id: "network", label: "Network I/O" },
-              { id: "processes", label: "Top Processes" },
-              { id: "system_info", label: "System Info" },
-              { id: "onboarding", label: "Getting Started" },
+              { id: "network", label: "Network I/O", hostOnly: true },
+              { id: "processes", label: "Top Processes", hostOnly: true },
+              { id: "system_info", label: "System Info", hostOnly: true },
+              { id: "onboarding", label: "Getting Started", hostOnly: true },
               { id: "bookmarks", label: "Quick Links" },
-            ].map(w => (
+            ].filter(w => isAdmin || !w.hostOnly).map(w => (
               <label key={w.id} className="flex items-center gap-2 text-xs text-dark-200 cursor-pointer hover:text-dark-100">
                 <input type="checkbox" checked={isVisible(w.id)} onChange={() => toggleWidget(w.id)}
                   className="w-3.5 h-3.5 accent-rust-500" />
@@ -817,8 +838,13 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Getting Started */}
-      {isVisible("onboarding") && !dismissed && system && (() => {
+      {/* Getting Started. Explicitly admin-only: it is titled "set up your server"
+          and four of its five steps land on pages a client cannot open (/apps,
+          /settings, /backup-orchestrator are all adminOnly). It used to be gated
+          on `system` being loaded, which hid it from clients by accident — the
+          right outcome for the wrong reason, and it broke the moment the body
+          below stopped being keyed on `system`. */}
+      {isAdmin && isVisible("onboarding") && !dismissed && system && (() => {
         // Every check must be able to come back FALSE. "Run diagnostics" used to
         // sit here with `check: () => true`, so a box where nothing had been done
         // still reported 1/5 — a checklist that counts a step nobody performed
@@ -904,7 +930,16 @@ export default function Dashboard() {
         );
       })()}
 
-      {!system ? (
+      {/* `system` is an admin-only read — `fetchRealtimeData` returns early for
+          anybody else and the metrics socket 403s them (ws_metrics.rs), so there
+          are exactly two writers and both are gated. Keying the WHOLE body on it
+          therefore meant a client sat in this skeleton for ever: not "six missing
+          tiles" but six pulsing placeholders and nothing underneath, which is what
+          the field report meant by "the Dashboard also have no stats".
+          The skeleton is a LOADING state, so it belongs only to the account that
+          has something loading. Everything below now renders for every role, and
+          the host-level pieces carry their own `system &&` / `isAdmin &&`. */}
+      {isAdmin && !system ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" role="status" aria-live="polite">
           {[...Array(6)].map((_, i) => (
             <div key={i} className="bg-dark-800 rounded-lg border border-dark-500 p-4 animate-pulse">
@@ -915,8 +950,9 @@ export default function Dashboard() {
         </div>
       ) : (
         <>
-          {/* System Information */}
-          {isVisible("system_info") && <div className="hidden sm:grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-px bg-dark-600 border border-dark-500 rounded-lg overflow-hidden mb-6">
+          {/* System Information — host-level, so `system &&` rather than relying
+              on the outer gate that used to supply it. */}
+          {system && isVisible("system_info") && <div className="hidden sm:grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-px bg-dark-600 border border-dark-500 rounded-lg overflow-hidden mb-6">
             {[
               ["Hostname", system.hostname],
               ["OS", system.os],
@@ -932,8 +968,8 @@ export default function Dashboard() {
             ))}
           </div>}
 
-          {/* Resource Metrics — 3 column */}
-          {isVisible("metrics") && <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6 stagger-children">
+          {/* Resource Metrics — 3 column. Host CPU/memory/disk: admin-only data. */}
+          {system && isVisible("metrics") && <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6 stagger-children">
             {[
               { label: "CPU Usage", pct: system.cpu_usage, type: "cpu" as const, detail: `${system.cpu_count} cores${system.load_avg_1 !== undefined ? ` · Load ${system.load_avg_1?.toFixed(2)}` : ""}`,
                 icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><rect x="6" y="6" width="12" height="12" rx="1" /><path d="M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4M19 9h4m-4 6h4" strokeLinecap="round" /></svg> },
@@ -990,10 +1026,14 @@ export default function Dashboard() {
 
           {/* Status Bar — grid of stat cells */}
           {isVisible("status_bar") && <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-px bg-dark-600 border border-dark-600 rounded-lg overflow-hidden mb-6 shadow-sm shadow-black/5 stagger-children">
-            <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
-              <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Uptime</span>
-              <span className="text-sm text-dark-50 font-medium">{formatUptime(system.uptime_secs)}</span>
-            </div>
+            {/* The one host-derived cell in an otherwise tenant-safe grid, which is
+                why this bar could not simply be shown or hidden as a whole. */}
+            {system && (
+              <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
+                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Uptime</span>
+                <span className="text-sm text-dark-50 font-medium">{formatUptime(system.uptime_secs)}</span>
+              </div>
+            )}
             <Link to="/sites" className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
               <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Sites</span>
               <span className="text-sm text-dark-50 font-medium">{sites.total}{sites.active > 0 && <span className="text-rust-400 ml-1 text-xs">({sites.active} active)</span>}</span>
@@ -1002,16 +1042,25 @@ export default function Dashboard() {
               <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Databases</span>
               <span className="text-sm text-dark-50 font-medium">{dbCount}</span>
             </Link>
-            {/* Feature #1: Docker container overview */}
-            <Link to="/apps" className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
-              <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Docker</span>
-              <span className="text-sm text-dark-50 font-medium">
-                {dockerInfo?.running ?? 0}<span className="text-xs text-dark-300 font-normal">/{dockerInfo?.total ?? 0}</span>
-                <span className="text-[10px] text-dark-400 ml-1">running</span>
-              </span>
-            </Link>
+            {/* Feature #1: Docker container overview. Admin-only both ways: the
+                count comes from an admin endpoint, and the cell links to a page
+                that redirects anybody else. Rendered ungated it read "0/0 running"
+                to a client — a number, not a blank, and a false one. */}
+            {isAdmin && (
+              <Link to="/apps" className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
+                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Docker</span>
+                <span className="text-sm text-dark-50 font-medium">
+                  {dockerInfo?.running ?? 0}<span className="text-xs text-dark-300 font-normal">/{dockerInfo?.total ?? 0}</span>
+                  <span className="text-[10px] text-dark-400 ml-1">running</span>
+                </span>
+              </Link>
+            )}
             {intel && <>
-              <Link to="/security?tab=diagnostics" title="View system diagnostics that drive this score" className={`px-4 py-3 flex flex-col card-interactive ${
+              {/* /security is adminOnly. For anybody else the score is now built
+                  purely from their own alerts, certificates and backups (the host
+                  diagnostics term is admin-only since v2.77.0), so /monitoring is
+                  both reachable and the right explanation of the number. */}
+              <Link to={isAdmin ? "/security?tab=diagnostics" : "/monitoring"} title={isAdmin ? "View system diagnostics that drive this score" : "View the alerts and certificates behind this score"} className={`px-4 py-3 flex flex-col card-interactive ${
                 intel.health_score < 60 ? "bg-danger-500/5" : "bg-dark-800"
               }`}>
                 <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Health</span>
@@ -1043,7 +1092,9 @@ export default function Dashboard() {
                   : <span className="text-sm text-rust-400 font-medium">0</span>
                 }
               </Link>
-              <Link to="/backup-orchestrator" className={`px-4 py-3 flex flex-col card-interactive ${
+              {/* /backup-orchestrator is adminOnly; a client's backups live per-site,
+                  so send them where they can actually act on this count. */}
+              <Link to={isAdmin ? "/backup-orchestrator" : "/sites"} className={`px-4 py-3 flex flex-col card-interactive ${
                 intel.stale_backups > 0 ? "bg-warn-500/5" : "bg-dark-800"
               }`}>
                 <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Backups</span>
@@ -1053,13 +1104,18 @@ export default function Dashboard() {
                 }
               </Link>
             </>}
-            <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
-              <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Updates</span>
-              {updateCount > 0
-                ? <span className="text-sm text-warn-400 font-bold">{updateCount} available</span>
-                : <span className="text-sm text-rust-400 font-medium">up to date</span>
-              }
-            </div>
+            {/* `updateCount` is only ever fetched for an admin, so for anybody else
+                this cell asserted "up to date" about a machine it had not asked
+                about. An unhidden blank is honest; an unhidden zero is a claim. */}
+            {isAdmin && (
+              <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
+                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Updates</span>
+                {updateCount > 0
+                  ? <span className="text-sm text-warn-400 font-bold">{updateCount} available</span>
+                  : <span className="text-sm text-rust-400 font-medium">up to date</span>
+                }
+              </div>
+            )}
             {/* Disk I/O */}
             {diskIo && <>
               <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
@@ -1071,21 +1127,28 @@ export default function Dashboard() {
                 <span className="text-sm text-dark-50 font-medium font-mono">{formatRate(diskIo.write_bytes_sec)}</span>
               </div>
             </>}
-            {/* Feature #6: Bandwidth usage summary */}
-            <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
-              <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Bandwidth</span>
-              <span className="text-sm text-dark-50 font-medium">
-                <span className="text-dark-400">{"\u2193"}</span>{formatSize(bandwidthTotal.rx)}
-                <span className="text-dark-400 ml-1">{"\u2191"}</span>{formatSize(bandwidthTotal.tx)}
-              </span>
-            </div>
-            {/* Feature #9: Mail queue widget */}
-            <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
-              <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Mail Queue</span>
-              <span className={`text-sm font-medium ${(mailQueue ?? 0) > 0 ? "text-warn-400" : "text-dark-50"}`}>
-                {mailQueue ?? 0} <span className="text-[10px] text-dark-400">messages</span>
-              </span>
-            </div>
+            {/* Feature #6: Bandwidth usage summary. Derived from `network`, which
+                `fetchRealtimeData` only fetches for an admin \u2014 so this read
+                "0 B / 0 B" to everybody else, host traffic reported as none. */}
+            {isAdmin && (
+              <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
+                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Bandwidth</span>
+                <span className="text-sm text-dark-50 font-medium">
+                  <span className="text-dark-400">{"\u2193"}</span>{formatSize(bandwidthTotal.rx)}
+                  <span className="text-dark-400 ml-1">{"\u2191"}</span>{formatSize(bandwidthTotal.tx)}
+                </span>
+              </div>
+            )}
+            {/* Feature #9: Mail queue widget. `/mail/queue` is admin-gated, so the
+                same false zero \u2014 and mail is admin-only end to end anyway. */}
+            {isAdmin && (
+              <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
+                <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Mail Queue</span>
+                <span className={`text-sm font-medium ${(mailQueue ?? 0) > 0 ? "text-warn-400" : "text-dark-50"}`}>
+                  {mailQueue ?? 0} <span className="text-[10px] text-dark-400">messages</span>
+                </span>
+              </div>
+            )}
           </div>}
 
           {/* Reboot Required Warning */}

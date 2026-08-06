@@ -4,6 +4,96 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.77.0] - 2026-08-06
+
+### Fixed — a client's dashboard never drew, and the menus pointed the wrong way
+
+Reported on #51 by the operator the `client` role was built for: *"when i log in as
+a client .. i can see the sites, databases, but cant see the mail domain … The
+Dashboard also have no stats … when i click terminal the client cant access their
+section … Also file manager not available for their sites."*
+
+Four complaints, and they were not four bugs. Two were real, one was a page that
+already worked, and one was a feature that has never existed.
+
+**The dashboard showed a loading skeleton for ever.** The host `system` read is
+admin-only — `fetchRealtimeData` returns early for anybody else, and the live
+metrics socket refuses a non-admin — and the entire dashboard body was rendered
+behind `{!system ? skeleton : body}`. So a client got six pulsing placeholder
+cards and nothing underneath, permanently. Everything below that gate now renders
+for every role, with the host-level pieces carrying their own guards.
+
+Unhiding it exposed a second problem worth naming separately: four cells in the
+status grid did not merely go blank for a client, they made **affirmative false
+statements** — "up to date" from an update count that was never fetched, a mail
+queue of "0", bandwidth of "0 B / 0 B", "0/0 running" containers. A blank is
+honest; a zero is a claim. Those four are now admin-only, along with the setup
+checklist (four of its five steps land on pages a client cannot open) and the
+eight widget checkboxes that toggled panels a client can never draw.
+
+**The Terminal advertised the one shell a client cannot have, and hid the one it
+has.** A site owner has had a shell on every site they own for some time: it opens
+inside `/var/www/<domain>` as `www-data`, under a restricted shell with no
+privilege escalation. But the Terminal page auto-connected to the **server** shell
+on arrival, which is administrator-only by design — so a client reached the page
+from the sidebar and was refused instantly. The page now opens the caller's own
+first site when they are not an admin, the "Server root" option and the root SSH
+panel are admin-only, the snippet bar offers commands that work in the session you
+are actually in, and the refusal names the shell that does work instead of ending
+the sentence.
+
+⚠ The server-shell restriction itself is **unchanged and deliberate** — it is the
+v2.75.0 root-shell fix, and this release pins it with four regression arms that
+must stay green at both tags.
+
+**One menu-visibility rule, in one place.** The sidebar's role filter lived inline
+in a single hook, so the command palette — a second menu over the same pages — had
+no filter at all and offered `/users`, `/secrets`, `/security` and `/settings` to
+every account via Ctrl+K. Every one of those pages guards itself, so nothing
+leaked; what the palette handed out was a list of doors that refuse. Both menus now
+read one exported predicate over one registry. The dashboard's "Deploy App"
+shortcut had the same shape and is gated too — its sibling "Add Site" link, three
+lines below in the same file, had already been fixed for exactly this reason.
+
+**Not defects, stated plainly:** the file manager was never gated — all eight
+handlers take the ownership path and it is the first card on a site's page, in the
+reporter's own version. And DockPanel has no FTP, has never claimed one, and has no
+per-site system user to hang one on; the file manager and the per-site shell are
+the two ways in.
+
+### Security — the dashboard endpoint answered host-wide to every role
+
+Four reads in `dashboard.rs` were scoped by server but not by caller, so a
+non-admin received host facts through a route that looked tenant-shaped:
+
+- `docker_summary` made the very agent `/apps` call that `docker_apps::list_apps`
+  guards with `require_admin`, and guarded nothing — the ungated door to the list
+  next door.
+- `intelligence` forwarded the agent's `/diagnostics` blob verbatim, although that
+  endpoint is `AdminUser` on its own route.
+- the stale-backup count counted **every tenant's** sites on the box.
+- the host security-scan critical/warning totals reached every caller (that table
+  has no user column to filter by, so a non-admin now simply does not get one).
+
+Sections 1–4 of that handler were already `user_id`-scoped for everyone; these four
+were the exceptions. The scope is now decided once, at the top of the handler.
+
+### Documentation
+
+`docs/guides/roles-and-ownership.md` promised a client seven capabilities and two
+of them — **mail** and **containers** — are administrator-only and always were
+(`routes/mail.rs` is `AdminUser` on 42 of 42 handlers; every `docker_apps` handler
+calls `require_admin`). The guide is corrected, the client's per-site shell is
+documented for the first time, and a Withdrawn Claims row records it. The same
+sentence also survives in the `client` role migration's own comment, which
+**cannot** be corrected — `sqlx::migrate!` checksums applied migrations, so editing
+it would break the upgrade on every deployed install. It is left in place
+deliberately and recorded in `FEATURES.md` instead.
+
+New regression suite `tests/client-role-honesty-pin-e2e.sh` — 28 assertions,
+green at this commit and **red on 24 of them at v2.76.0**; the four §E arms are
+context guards that are green at both tags by design.
+
 ## [2.76.0] - 2026-08-06
 
 ### Security — a non-admin who owned one site could read the host's system logs

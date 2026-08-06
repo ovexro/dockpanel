@@ -13,6 +13,43 @@ export interface NavGroup {
   items: NavItem[];
 }
 
+/**
+ * The ONE place that decides whether a role may be shown a navigation entry.
+ *
+ * This lived inline in `useLayoutState` and nowhere else, so the command palette
+ * — a second menu over the same pages — simply never asked: Ctrl+K offered
+ * /users, /secrets, /security and /settings to every account. Each of those
+ * pages guards itself, so nothing leaked; what the palette handed out was a list
+ * of doors that refuse, which is the same broken promise as a sidebar entry that
+ * 403s. A decision inlined in two menus is a decision that drifts.
+ */
+export function isNavVisible(
+  item: Pick<NavItem, "adminOnly" | "resellerVisible">,
+  role: string,
+): boolean {
+  // Admin sees everything
+  if (role === "admin") return true;
+  // Reseller sees resellerVisible items + non-restricted items
+  if (role === "reseller") return !!item.resellerVisible || (!item.adminOnly && !item.resellerVisible);
+  // Everyone else (user / client): hide adminOnly and resellerVisible items
+  return !item.adminOnly && !item.resellerVisible;
+}
+
+/**
+ * The nav flags for a route, looked up from the registry above so callers cannot
+ * carry their own copy. A path with no nav row is unrestricted — per-site tools
+ * (/sites/:id/files, /sites/:id/backups) deliberately have no sidebar entry.
+ */
+export function navFlagsFor(path: string): Pick<NavItem, "adminOnly" | "resellerVisible"> {
+  const base = path.split("?")[0];
+  for (const group of navGroups) {
+    for (const item of group.items) {
+      if (item.to === base) return item;
+    }
+  }
+  return {};
+}
+
 export const navGroups: NavGroup[] = [
   {
     key: "hosting",

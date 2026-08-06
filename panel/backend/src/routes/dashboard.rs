@@ -1,7 +1,7 @@
 use axum::{extract::State, Json};
 
 use crate::auth::{AdminUser, AuthUser, ServerScope};
-use crate::error::{internal_error, ApiError};
+use crate::error::{internal_error, require_admin, ApiError};
 use crate::AppState;
 
 /// GET /api/dashboard/intelligence — Server health score + top issues + SSL countdowns.
@@ -93,32 +93,57 @@ pub async fn intelligence(
         })
         .collect();
 
-    // 5. Get diagnostics from agent
+    // Every read below this line is HOST-level, not tenant-level: the agent's own
+    // diagnostics, the server's backup freshness, the server's last security scan.
+    // Sections 1-4 above are already `user_id = $2` for everyone, admin included —
+    // this handler has always been "your alerts, your certificates". These three were
+    // the exceptions, and each one reached a non-admin: `/diagnostics` is `AdminUser`
+    // on its own route and was being forwarded verbatim; `stale_backups` counted every
+    // tenant's sites on the box; `security_scans` has no user column to filter by at
+    // all. So the scope is decided ONCE here rather than per-query.
+    let host_scoped = claims.role == "admin";
+    // A non-admin's user_id, or NULL for an admin — the `$2 IS NULL OR` arm below is
+    // what keeps this ONE query instead of two divergent ones.
+    let tenant: Option<uuid::Uuid> = if host_scoped { None } else { Some(claims.sub) };
+
+    // 5. Get diagnostics from agent (admin only — `system::diagnostics` is AdminUser on
+    //    its own route, and this handler must not be the way around that.)
     let mut diagnostics_summary = serde_json::json!(null);
-    if let Ok(diag) = agent.get("/diagnostics").await {
-        diagnostics_summary = diag;
+    if host_scoped {
+        if let Ok(diag) = agent.get("/diagnostics").await {
+            diagnostics_summary = diag;
+        }
     }
 
-    // 6. Backup freshness — sites with no backup in the last 7 days
+    // 6. Backup freshness — sites with no backup in the last 7 days.
+    //    Server-wide for an admin; only the caller's own sites for anyone else.
     let (stale_backups,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM sites s WHERE s.status = 'active' AND s.server_id = $1 \
+         AND ($2::uuid IS NULL OR s.user_id = $2) \
          AND NOT EXISTS (SELECT 1 FROM backups b WHERE b.site_id = s.id AND b.created_at > NOW() - INTERVAL '7 days')",
     )
     .bind(server_id)
+    .bind(tenant)
     .fetch_one(&state.db)
     .await
     .unwrap_or((0,));
 
-    // 7. Security scan — latest scan critical/warning counts
-    let scan_findings: Option<(i32, i32)> = sqlx::query_as(
-        "SELECT critical_count, warning_count FROM security_scans \
-         WHERE server_id = $1 AND status = 'completed' ORDER BY created_at DESC LIMIT 1",
-    )
-    .bind(server_id)
-    .fetch_optional(&state.db)
-    .await
-    .ok()
-    .flatten();
+    // 7. Security scan — latest scan critical/warning counts. `security_scans` is keyed
+    //    by server and has NO user column (20260312991000_security_scans.sql), so there
+    //    is nothing to scope it by: a non-admin simply does not get a host scan result.
+    let scan_findings: Option<(i32, i32)> = if host_scoped {
+        sqlx::query_as(
+            "SELECT critical_count, warning_count FROM security_scans \
+             WHERE server_id = $1 AND status = 'completed' ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(server_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+    } else {
+        None
+    };
     let (scan_crits, scan_warns) = scan_findings.unwrap_or((0, 0));
 
     // 8. Open incidents (scoped by user, not server — incidents are user-level)
@@ -257,11 +282,18 @@ pub async fn intelligence(
 }
 
 /// GET /api/dashboard/docker — Docker container summary.
+///
+/// Admin only, and it has to be: this asks the agent for `/apps`, the SAME call
+/// `docker_apps::list_apps` makes — and that handler gates it with `require_admin`.
+/// Containers on this box are not tenant-scoped in any way, so without the check
+/// this route was simply the ungated door to the list next door.
 pub async fn docker_summary(
-    AuthUser(_claims): AuthUser,
+    AuthUser(claims): AuthUser,
     State(_state): State<AppState>,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+
     let result = agent.get("/apps").await.ok();
 
     let apps = result.and_then(|r| r.as_array().cloned()).unwrap_or_default();
