@@ -461,21 +461,19 @@ export default function Sites() {
                   {displayed.map((site) => (
                 <tr key={site.id} className="hover:bg-dark-700/30 transition-colors">
                   <td className="px-5 py-4">
-                    {/* A site the admin does not own has no detail page — every
-                        per-site read is ownership-scoped and answers 404. Render
-                        it as text rather than a link that leads nowhere. */}
-                    {allSites && site.user_id !== user?.id ? (
-                      <span className="text-sm font-medium text-dark-100 font-mono" title="Owned by another account — transfer it back to open it">
-                        {site.domain}
-                      </span>
-                    ) : (
-                      <Link
-                        to={`/sites/${site.id}`}
-                        className="text-sm font-medium text-rust-400 hover:text-rust-300 font-mono"
-                      >
-                        {site.domain}
-                      </Link>
-                    )}
+                    {/* Every row links to its own page, including a site this
+                        admin does not own. That used to be rendered as inert
+                        text, correctly, because a per-site read answered 404 for
+                        anybody but the owner — so the operator who had handed a
+                        site to a client could see it here and go no further.
+                        An administrator now reaches any site on a machine they
+                        run, so the link goes somewhere. */}
+                    <Link
+                      to={`/sites/${site.id}`}
+                      className="text-sm font-medium text-rust-400 hover:text-rust-300 font-mono"
+                    >
+                      {site.domain}
+                    </Link>
                   </td>
                   <td className="px-5 py-4 text-sm text-dark-200 hidden sm:table-cell">
                     {runtimeLabels[site.runtime] || site.runtime}

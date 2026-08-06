@@ -6,7 +6,7 @@ use axum::{
 use std::time::Duration;
 use uuid::Uuid;
 
-use crate::auth::{AuthUser, ServerScope};
+use crate::auth::{AuthUser, ServerScope, Claims};
 use crate::error::{internal_error, err, agent_error, paginate, ApiError};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
@@ -32,18 +32,13 @@ pub struct Backup {
     pub databases_expected: i32,
 }
 
-/// Verify site ownership, return domain.
-async fn get_site_domain(state: &AppState, site_id: Uuid, user_id: Uuid) -> Result<String, ApiError> {
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT domain FROM sites WHERE id = $1 AND user_id = $2")
-            .bind(site_id)
-            .bind(user_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| internal_error("unknown", e))?;
-
-    row.map(|(d,)| d)
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))
+/// Helper: resolve a site this caller may act on, and return its domain.
+///
+/// One line over [`crate::helpers::site_domain_for_caller`], which is shared with
+/// the five other modules that each carried their own copy of this query. The
+/// rules — including why only the admin arm is scoped by server — live there.
+async fn get_site_domain(state: &AppState, site_id: Uuid, claims: &Claims) -> Result<String, ApiError> {
+    crate::helpers::site_domain_for_caller(state, site_id, claims).await
 }
 
 /// The databases attached to a site, ready to hand to the agent.
@@ -134,7 +129,7 @@ pub async fn create(
     Path(id): Path<Uuid>,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let domain = get_site_domain(&state, id, claims.sub).await?;
+    let domain = get_site_domain(&state, id, &claims).await?;
 
     let backup_id = Uuid::new_v4();
 
@@ -308,7 +303,7 @@ pub async fn list(
     Query(params): Query<BackupListQuery>,
 ) -> Result<Json<Vec<Backup>>, ApiError> {
     // Verify ownership
-    get_site_domain(&state, id, claims.sub).await?;
+    get_site_domain(&state, id, &claims).await?;
 
     let (limit, offset) = paginate(params.limit, params.offset);
 
@@ -332,7 +327,7 @@ pub async fn restore(
     Path((id, backup_id)): Path<(Uuid, Uuid)>,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let domain = get_site_domain(&state, id, claims.sub).await?;
+    let domain = get_site_domain(&state, id, &claims).await?;
 
     let backup: Backup = sqlx::query_as(
         "SELECT * FROM backups WHERE id = $1 AND site_id = $2",
@@ -523,7 +518,7 @@ pub async fn remove(
     Path((id, backup_id)): Path<(Uuid, Uuid)>,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = get_site_domain(&state, id, claims.sub).await?;
+    let domain = get_site_domain(&state, id, &claims).await?;
 
     let backup: Backup = sqlx::query_as(
         "SELECT * FROM backups WHERE id = $1 AND site_id = $2",
@@ -559,7 +554,7 @@ pub async fn restic_backup(
     ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = get_site_domain(&state, id, claims.sub).await?;
+    let domain = get_site_domain(&state, id, &claims).await?;
 
     let result = agent
         .post_long(
@@ -585,7 +580,7 @@ pub async fn restic_snapshots(
     ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = get_site_domain(&state, id, claims.sub).await?;
+    let domain = get_site_domain(&state, id, &claims).await?;
 
     let result = agent
         .get(&format!("/backups/{}/restic/snapshots", domain))
@@ -602,7 +597,7 @@ pub async fn restic_restore(
     ServerScope(_server_id, agent): ServerScope,
     Path((id, snapshot_id)): Path<(Uuid, String)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = get_site_domain(&state, id, claims.sub).await?;
+    let domain = get_site_domain(&state, id, &claims).await?;
 
     // Validate snapshot ID
     if snapshot_id.len() < 6 || !snapshot_id.chars().all(|c| c.is_ascii_hexdigit()) {

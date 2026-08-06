@@ -15,9 +15,17 @@ use uuid::Uuid;
 
 use crate::auth::AdminUser;
 use crate::auth::AuthUser;
+use crate::auth::Claims;
 use crate::auth::ServerScope;
 use crate::error::{internal_error, err, agent_error, paginate, ApiError};
 use crate::models::Site;
+
+/// `SELECT s.*` over [`crate::helpers::SITE_CALLER_PREDICATE`] — the full-row read
+/// used by every per-site handler in this module. Built once; the predicate itself
+/// is shared with the five other modules that resolve a site by caller.
+static SITE_FOR_CALLER_ALL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!("SELECT s.* FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE)
+});
 use crate::routes::is_valid_domain;
 use crate::routes::reseller_dashboard::check_reseller_quota;
 use crate::services::domain_claim;
@@ -254,12 +262,18 @@ pub struct AdminSiteRow {
 /// while `docs/guides/roles-and-ownership.md` promised the opposite in print.
 /// Reported from the field on #51 by the operator who had just used the feature.
 ///
-/// It is a READ, and only a read. It does not widen the ownership predicate of
-/// any per-site handler — an admin still cannot open, edit or delete a site they
-/// do not own. What it restores is the two things the handover needs to be
-/// reversible: seeing that the site exists, and knowing whose it is. `transfer`
-/// itself already looks the site up by id without an ownership filter
-/// (`:3543`), so the way back needed no new write.
+/// It is a READ, and only a read — this route lists, and nothing more. What it is
+/// no longer doing is standing in for the capability: when it shipped, seeing a
+/// site and handing it back was the whole of what an administrator could do with
+/// one they did not own, and the operator it was built for said that was not
+/// enough on a server he is responsible for. Acting on those sites is now decided
+/// by [`crate::helpers::SITE_CALLER_PREDICATE`], one predicate shared by every
+/// per-site handler, which admits the owner or an administrator of the machine
+/// the site runs on.
+///
+/// This read stays a narrow projection anyway. A caller that may act on a site
+/// asks for it by id through the ordinary handlers; nothing needs a list row it
+/// can mistake for an actionable site.
 pub async fn list_for_admin(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
@@ -1287,7 +1301,7 @@ pub async fn provision_log(
 ) -> Result<Sse<impl futures::Stream<Item = Result<Event, axum::BoxError>>>, ApiError> {
     // Verify ownership
     let exists: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM sites WHERE id = $1 AND user_id = $2"
+        &format!("SELECT s.id FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE)
     )
     .bind(id).bind(claims.sub)
     .fetch_optional(&state.db).await
@@ -1342,12 +1356,16 @@ pub async fn get_one(
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Site>, ApiError> {
-    let site: Site = sqlx::query_as(
-        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
-    )
-    .bind(id)
-    .bind(claims.sub)
-    .fetch_optional(&state.db)
+    // The two arms of [`crate::helpers::site_domain_for_caller`], for the whole
+    // row rather than the domain. This is the read the site's own page makes, so
+    // it is what decides whether an administrator can open a site at all — and
+    // until now it could not, which left the operator who had just handed a site
+    // to a client with a page that answered 404 and a control that lived only on
+    // it (#51).
+    let site: Site = sqlx::query_as(&SITE_FOR_CALLER_ALL)
+        .bind(id)
+        .bind(claims.sub)
+        .fetch_optional(&state.db)
     .await
     .map_err(|e| internal_error("get_one sites", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
@@ -1389,7 +1407,7 @@ pub async fn switch_php(
     }
 
     let site: Site = sqlx::query_as(
-        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+        SITE_FOR_CALLER_ALL.as_str(),
     )
     .bind(id)
     .bind(claims.sub)
@@ -1479,7 +1497,7 @@ pub async fn switch_runtime(
         ));
     }
 
-    let site: Site = sqlx::query_as("SELECT * FROM sites WHERE id = $1 AND user_id = $2")
+    let site: Site = sqlx::query_as(SITE_FOR_CALLER_ALL.as_str())
         .bind(id)
         .bind(claims.sub)
         .fetch_optional(&state.db)
@@ -1704,7 +1722,7 @@ pub async fn update_limits(
     Json(body): Json<UpdateLimitsRequest>,
 ) -> Result<Json<Site>, ApiError> {
     let site: Site = sqlx::query_as(
-        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+        SITE_FOR_CALLER_ALL.as_str(),
     )
     .bind(id)
     .bind(claims.sub)
@@ -1782,7 +1800,7 @@ pub async fn remove(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: Site = sqlx::query_as(
-        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+        SITE_FOR_CALLER_ALL.as_str(),
     )
     .bind(id)
     .bind(claims.sub)
@@ -1985,18 +2003,13 @@ pub async fn remove(
 // Redirect Rules (proxy to agent)
 // ──────────────────────────────────────────────────────────────
 
-/// Helper: get site domain from site ID + user ID.
-async fn site_domain(state: &AppState, site_id: Uuid, user_id: Uuid) -> Result<String, ApiError> {
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT domain FROM sites WHERE id = $1 AND user_id = $2")
-            .bind(site_id)
-            .bind(user_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| internal_error("remove sites", e))?;
-
-    row.map(|(d,)| d)
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))
+/// Helper: resolve a site this caller may act on, and return its domain.
+///
+/// Now one line over [`crate::helpers::site_domain_for_caller`], which is shared
+/// with the five modules that each carried their own copy of this query. Read the
+/// rules there — in particular why only the admin arm is scoped by server.
+async fn site_domain(state: &AppState, site_id: Uuid, claims: &Claims) -> Result<String, ApiError> {
+    crate::helpers::site_domain_for_caller(state, site_id, claims).await
 }
 
 /// GET /api/sites/{id}/redirects — List redirects.
@@ -2006,7 +2019,7 @@ pub async fn list_redirects(
     ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
     let result = agent
         .get(&format!("/nginx/redirects/{domain}"))
         .await
@@ -2046,7 +2059,7 @@ pub async fn add_redirect(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid redirect target: contains shell metacharacters"));
     }
 
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
     let result = agent
         .post(
             "/nginx/redirects/add",
@@ -2070,7 +2083,7 @@ pub async fn remove_redirect(
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
     let result = agent
         .post(
             &format!("/nginx/redirects/{domain}/remove"),
@@ -2092,7 +2105,7 @@ pub async fn list_protected(
     ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
     let result = agent
         .get(&format!("/nginx/password-protect/{domain}"))
         .await
@@ -2124,7 +2137,7 @@ pub async fn add_password_protect(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid username: must be alphanumeric (underscores and hyphens allowed)"));
     }
 
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
     let result = agent
         .post(
             "/nginx/password-protect",
@@ -2148,7 +2161,7 @@ pub async fn remove_password_protect(
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
     let result = agent
         .post(
             &format!("/nginx/password-protect/{domain}/remove"),
@@ -2170,7 +2183,7 @@ pub async fn list_aliases(
     ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
     let result = agent
         .get(&format!("/nginx/aliases/{domain}"))
         .await
@@ -2196,7 +2209,7 @@ pub async fn add_alias(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid alias: must be a valid domain name"));
     }
 
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
 
     // An alias becomes an nginx `server_name` on the caller's own vhost. Without
     // this guard any tenant could attach ANOTHER tenant's (or the panel's own)
@@ -2226,7 +2239,7 @@ pub async fn remove_alias(
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
     let result = agent
         .post(
             &format!("/nginx/aliases/{domain}/remove"),
@@ -2249,7 +2262,7 @@ pub async fn access_logs(
     Path(id): Path<Uuid>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
     let lines = params.get("lines").unwrap_or(&"200".to_string()).clone();
     let log_type = params.get("type").unwrap_or(&"access".to_string()).clone();
     let path = format!(
@@ -2270,7 +2283,7 @@ pub async fn site_stats(
     ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
     let result = agent
         .get(&format!("/nginx/site-stats/{domain}"))
         .await
@@ -2285,7 +2298,7 @@ pub async fn php_errors(
     ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
     let result = agent
         .get(&format!("/nginx/php-errors/{domain}"))
         .await
@@ -2299,7 +2312,7 @@ pub async fn health_check(
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
 
     // Check if site has SSL
     let ssl: Option<(bool,)> = sqlx::query_as("SELECT ssl_enabled FROM sites WHERE id = $1")
@@ -2362,7 +2375,7 @@ pub async fn health_summary(
 
     // Verify ownership
     let site: Option<(String, bool, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
-        "SELECT domain, ssl_enabled, ssl_expiry FROM sites WHERE id = $1 AND user_id = $2"
+        &format!("SELECT s.domain, s.ssl_enabled, s.ssl_expiry FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE)
     ).bind(id).bind(claims.sub).fetch_optional(db).await
         .map_err(|e| internal_error("health summary", e))?;
 
@@ -2477,7 +2490,7 @@ pub async fn clone_site(
     }
 
     // Get source site
-    let source: Option<Site> = sqlx::query_as("SELECT * FROM sites WHERE id = $1 AND user_id = $2")
+    let source: Option<Site> = sqlx::query_as(SITE_FOR_CALLER_ALL.as_str())
         .bind(id).bind(claims.sub).fetch_optional(&state.db).await
         .map_err(|e| internal_error("clone site", e))?;
     let source = source.ok_or_else(|| err(StatusCode::NOT_FOUND, "Source site not found"))?;
@@ -2660,7 +2673,7 @@ pub async fn upload_ssl(
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
 
     let mut agent_body = body.clone();
     agent_body["domain"] = serde_json::json!(domain);
@@ -2724,7 +2737,7 @@ pub async fn get_env_vars(
     ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
     let result = agent.get(&format!("/nginx/env/{domain}")).await
         .map_err(|e| agent_error("Env vars", e))?;
     Ok(Json(result))
@@ -2738,7 +2751,7 @@ pub async fn set_env_vars(
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
     agent.put(&format!("/nginx/env/{domain}"), body).await
         .map_err(|e| agent_error("Env vars", e))?;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -2755,7 +2768,7 @@ pub async fn rename_domain(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Get current site
     let site: crate::models::Site = sqlx::query_as(
-        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+        SITE_FOR_CALLER_ALL.as_str(),
     )
     .bind(id)
     .bind(claims.sub)
@@ -2861,7 +2874,7 @@ pub async fn toggle_enabled(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: crate::models::Site = sqlx::query_as(
-        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+        SITE_FOR_CALLER_ALL.as_str(),
     )
     .bind(id)
     .bind(claims.sub)
@@ -2925,7 +2938,7 @@ pub async fn toggle_fastcgi_cache(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: crate::models::Site = sqlx::query_as(
-        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+        SITE_FOR_CALLER_ALL.as_str(),
     )
     .bind(id)
     .bind(claims.sub)
@@ -2994,7 +3007,7 @@ pub async fn purge_fastcgi_cache(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: crate::models::Site = sqlx::query_as(
-        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+        SITE_FOR_CALLER_ALL.as_str(),
     )
     .bind(id)
     .bind(claims.sub)
@@ -3034,7 +3047,7 @@ pub async fn toggle_redis_cache(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: crate::models::Site = sqlx::query_as(
-        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+        SITE_FOR_CALLER_ALL.as_str(),
     )
     .bind(id)
     .bind(claims.sub)
@@ -3139,7 +3152,7 @@ pub async fn purge_redis_cache(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: crate::models::Site = sqlx::query_as(
-        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+        SITE_FOR_CALLER_ALL.as_str(),
     )
     .bind(id)
     .bind(claims.sub)
@@ -3179,7 +3192,7 @@ pub async fn toggle_waf(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: crate::models::Site = sqlx::query_as(
-        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+        SITE_FOR_CALLER_ALL.as_str(),
     )
     .bind(id)
     .bind(claims.sub)
@@ -3251,7 +3264,7 @@ pub async fn waf_logs(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: crate::models::Site = sqlx::query_as(
-        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+        SITE_FOR_CALLER_ALL.as_str(),
     )
     .bind(id)
     .bind(claims.sub)
@@ -3277,7 +3290,7 @@ pub async fn optimize_images(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: crate::models::Site = sqlx::query_as(
-        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+        SITE_FOR_CALLER_ALL.as_str(),
     )
     .bind(id)
     .bind(claims.sub)
@@ -3400,7 +3413,7 @@ pub async fn update_security_headers(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: crate::models::Site = sqlx::query_as(
-        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+        SITE_FOR_CALLER_ALL.as_str(),
     )
     .bind(id)
     .bind(claims.sub)
@@ -3476,7 +3489,7 @@ pub async fn toggle_bot_protection(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: crate::models::Site = sqlx::query_as(
-        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
+        SITE_FOR_CALLER_ALL.as_str(),
     )
     .bind(id)
     .bind(claims.sub)

@@ -4,6 +4,71 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.72.0] - 2026-08-06
+
+### Changed — an administrator can now repair any site on a machine they run
+
+Ownership decided both whose a site was **and** who could touch it. So handing a
+site to a `client` took it away from the administrator of the server it runs on:
+its page answered *Site not found*, its settings, logs, files, backups, SSL and
+terminal all refused, and the only thing left was to transfer it back. v2.71.0
+added a read-only list of every site on the box and called that the way back. The
+operator using the feature replied that an administrator who cannot fix a
+tenant's site is not much use on a server they are responsible for, and he was
+right ([#51](https://github.com/ovexro/dockpanel/issues/51)).
+
+Ownership still decides whose a site is, who sees it on their own Sites page, and
+who a transfer moves it to. It no longer decides what an operator may repair.
+
+Two bounds, both deliberate:
+
+- **It stops at the hardware you operate** — this box, plus any server you
+  registered yourself. Not a machine another administrator added.
+- **The admin's own Sites page is unchanged**, still listing only their own sites.
+  Everybody's is still behind Sites → *All sites on this server*.
+
+The rule is now **one predicate in one place**
+(`helpers::SITE_CALLER_PREDICATE`), shared by every per-site read. It replaces
+**eight** separately-named private copies of one query — two `site_domain`, four
+`get_site_domain`, two `get_site` — spread over thirteen modules, of which exactly
+one had drifted into being server-scoped while the rest were not. A guard
+duplicated per module is a guard that gets widened in one module.
+
+It also now reads `users.role` from the database rather than the role claim in the
+token, so a demoted account stops being an administrator immediately instead of
+when its session expires.
+
+### Fixed — every non-admin's first screen was an authorization error
+
+Signing in as anything other than an administrator landed you on a dashboard
+showing a red **"Admin access required"**, a heading stuck on *Loading…*, and
+buttons — Restart Nginx, Restart PHP, Reboot, Add Site — that could only fail.
+The dashboard asked the admin-only system endpoints as whoever was logged in, one
+of its error paths forwarded the API's own words to the page, and the poll
+reissued the whole set every five seconds, so it could not be dismissed.
+
+Present for every `user` and every `client` on every install. It is also, almost
+certainly, what was being reported as a client having no access to its own site:
+nothing was wrong with the site, and the panel said the most alarming thing it
+could on the way in.
+
+The dashboard now asks for what the account may have, and no page surfaces an
+authorization refusal aimed at somebody else as its own error.
+
+### Changed — the ownership pin now tests the change it was written to catch
+
+`site-transfer-visibility-pin-e2e.sh` §B existed to fail if a future release
+widened the site reads. It could not: its arms asserted a `user_id` predicate was
+**present**, and every realistic widening adds a disjunct and leaves it present.
+The mutation recorded as proof of that section tested deletion, which it does
+catch, rather than widening, which it did not — and one arm was passing on an
+unrelated query in the same function.
+
+Rewritten around the invariant instead of the token: one definition of the
+predicate, no module holding a private copy, the admin arm bounded to the
+machine, the role read from the database, and the admin's own list still scoped.
+Six arms, each mutation-tested to redden alone.
+
 ## [2.71.1] - 2026-08-05
 
 ### Fixed — v2.71.0's own fix did not take effect until a minute after sign-in

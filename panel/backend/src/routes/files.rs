@@ -5,8 +5,8 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::{AuthUser, ServerScope};
-use crate::error::{internal_error, err, agent_error, ApiError};
+use crate::auth::{AuthUser, ServerScope, Claims};
+use crate::error::{err, agent_error, ApiError};
 use crate::routes::is_safe_relative_path;
 use crate::AppState;
 
@@ -36,18 +36,13 @@ pub struct RenameBody {
     pub to: String,
 }
 
-/// Verify site ownership, return domain.
-async fn get_site_domain(state: &AppState, site_id: Uuid, user_id: Uuid) -> Result<String, ApiError> {
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT domain FROM sites WHERE id = $1 AND user_id = $2")
-            .bind(site_id)
-            .bind(user_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| internal_error("unknown", e))?;
-
-    row.map(|(d,)| d)
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))
+/// Helper: resolve a site this caller may act on, and return its domain.
+///
+/// One line over [`crate::helpers::site_domain_for_caller`], which is shared with
+/// the five other modules that each carried their own copy of this query. The
+/// rules — including why only the admin arm is scoped by server — live there.
+async fn get_site_domain(state: &AppState, site_id: Uuid, claims: &Claims) -> Result<String, ApiError> {
+    crate::helpers::site_domain_for_caller(state, site_id, claims).await
 }
 
 /// GET /api/sites/{id}/files?path=
@@ -58,7 +53,7 @@ pub async fn list_dir(
     ServerScope(_server_id, agent): ServerScope,
     Query(q): Query<PathQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = get_site_domain(&state, id, claims.sub).await?;
+    let domain = get_site_domain(&state, id, &claims).await?;
     let rel_path = q.path.as_deref().unwrap_or(".");
 
     if rel_path != "." && !is_safe_relative_path(rel_path) {
@@ -86,7 +81,7 @@ pub async fn read_file(
     ServerScope(_server_id, agent): ServerScope,
     Query(q): Query<PathQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = get_site_domain(&state, id, claims.sub).await?;
+    let domain = get_site_domain(&state, id, &claims).await?;
     let rel_path = q.path.as_deref().unwrap_or("");
 
     if rel_path.is_empty() {
@@ -120,7 +115,7 @@ pub async fn write_file(
     if !is_safe_relative_path(&body.path) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid path"));
     }
-    let domain = get_site_domain(&state, id, claims.sub).await?;
+    let domain = get_site_domain(&state, id, &claims).await?;
 
     let agent_path = format!("/files/{}/write", domain);
     let result = agent
@@ -142,7 +137,7 @@ pub async fn create_entry(
     ServerScope(_server_id, agent): ServerScope,
     Query(q): Query<PathQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = get_site_domain(&state, id, claims.sub).await?;
+    let domain = get_site_domain(&state, id, &claims).await?;
     let rel_path = q.path.as_deref().unwrap_or("");
     let entry_type = q.entry_type.as_deref().unwrap_or("file");
 
@@ -181,7 +176,7 @@ pub async fn rename_entry(
     if !is_safe_relative_path(&body.from) || !is_safe_relative_path(&body.to) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid path"));
     }
-    let domain = get_site_domain(&state, id, claims.sub).await?;
+    let domain = get_site_domain(&state, id, &claims).await?;
 
     let agent_path = format!("/files/{}/rename", domain);
     let result = agent
@@ -203,7 +198,7 @@ pub async fn delete_entry(
     ServerScope(_server_id, agent): ServerScope,
     Query(q): Query<PathQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = get_site_domain(&state, id, claims.sub).await?;
+    let domain = get_site_domain(&state, id, &claims).await?;
     let rel_path = q.path.as_deref().unwrap_or("");
 
     if rel_path.is_empty() {
@@ -234,7 +229,7 @@ pub async fn download_file(
     ServerScope(_server_id, agent): ServerScope,
     Query(q): Query<PathQuery>,
 ) -> Result<impl axum::response::IntoResponse, ApiError> {
-    let domain = get_site_domain(&state, id, claims.sub).await?;
+    let domain = get_site_domain(&state, id, &claims).await?;
     let rel_path = q.path.as_deref().unwrap_or("");
 
     if rel_path.is_empty() {
@@ -325,7 +320,7 @@ pub async fn upload_file(
             "File type not allowed (dangerous extension)"));
     }
 
-    let domain = get_site_domain(&state, id, claims.sub).await?;
+    let domain = get_site_domain(&state, id, &claims).await?;
 
     let agent_path = format!("/files/{}/upload", domain);
     let result = agent

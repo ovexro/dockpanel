@@ -483,7 +483,7 @@ pub async fn inject_to_site(
     let encryption_key = get_encryption_key(&state.config.jwt_secret);
 
     // Get domain for site
-    let domain: (String,) = sqlx::query_as("SELECT domain FROM sites WHERE id = $1 AND user_id = $2")
+    let domain: (String,) = sqlx::query_as(&format!("SELECT s.domain FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
         .bind(site_id).bind(claims.sub)
         .fetch_optional(&state.db).await
         .map_err(|e| internal_error("inject to site", e))?

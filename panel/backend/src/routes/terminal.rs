@@ -70,7 +70,7 @@ pub async fn ws_token(
             .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid site_id"))?;
 
         let row: Option<(String,)> =
-            sqlx::query_as("SELECT domain FROM sites WHERE id = $1 AND user_id = $2")
+            sqlx::query_as(&format!("SELECT s.domain FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
                 .bind(site_id)
                 .bind(claims.sub)
                 .fetch_optional(&state.db)

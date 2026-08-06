@@ -80,7 +80,7 @@ pub async fn provision(
     Query(q): Query<ProvisionQuery>,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let site: Site = sqlx::query_as("SELECT * FROM sites WHERE id = $1 AND user_id = $2")
+    let site: Site = sqlx::query_as(&format!("SELECT s.* FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
         .bind(id)
         .bind(claims.sub)
         .fetch_optional(&state.db)
@@ -244,7 +244,7 @@ pub async fn provision_dns01(
     ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let site: Site = sqlx::query_as("SELECT * FROM sites WHERE id = $1 AND user_id = $2")
+    let site: Site = sqlx::query_as(&format!("SELECT s.* FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
         .bind(id)
         .bind(claims.sub)
         .fetch_optional(&state.db)
@@ -417,7 +417,7 @@ pub async fn preflight_site(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let (domain,): (String,) =
-        sqlx::query_as("SELECT domain FROM sites WHERE id = $1 AND user_id = $2")
+        sqlx::query_as(&format!("SELECT s.domain FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
             .bind(id)
             .bind(claims.sub)
             .fetch_optional(&state.db)
@@ -445,7 +445,7 @@ pub async fn status(
     Path(id): Path<Uuid>,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let site: Site = sqlx::query_as("SELECT * FROM sites WHERE id = $1 AND user_id = $2")
+    let site: Site = sqlx::query_as(&format!("SELECT s.* FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
         .bind(id)
         .bind(claims.sub)
         .fetch_optional(&state.db)

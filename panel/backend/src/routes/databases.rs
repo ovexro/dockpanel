@@ -114,7 +114,7 @@ pub async fn create(
 ) -> Result<(StatusCode, Json<Database>), ApiError> {
     // Verify site ownership
     let site_exists: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM sites WHERE id = $1 AND user_id = $2")
+        sqlx::query_as(&format!("SELECT s.id FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
             .bind(body.site_id)
             .bind(claims.sub)
             .fetch_optional(&state.db)

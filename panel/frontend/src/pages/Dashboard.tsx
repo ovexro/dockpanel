@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { useServer } from "../context/ServerContext";
+import { useAuth } from "../context/AuthContext";
 import { formatSize, formatRate, formatUptime, timeAgo } from "../utils/format";
 
 interface SiteDetail {
@@ -228,6 +229,18 @@ export default function Dashboard() {
   // live socket cannot carry it at all, which is why the socket is gated on
   // `isLocal` further down.
   const { isLocal, loading: serversLoading, activeServer, activeServerId } = useServer();
+
+  // Almost everything this page reads is admin-only, and this page is where
+  // every account lands after signing in. Without the role it asked the
+  // whole system surface as anybody, and a non-admin's first screen was the
+  // refusal: `/system/info` is admin-gated, its catch below surfaced the API's
+  // own words, and the poll re-issued it every 5s — so a client saw a red
+  // "Admin access required" over a heading stuck on "Loading...", which is
+  // indistinguishable from having no access to their own site. Reported that
+  // way on #51, twice, by an operator who was testing a client account.
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+
   const [system, setSystem] = useState<SystemInfo | null>(null);
   const [sites, setSites] = useState<SiteSummary>({ total: 0, active: 0 });
   const [dbCount, setDbCount] = useState(0);
@@ -314,10 +327,14 @@ export default function Dashboard() {
       .get<{ container_id: string }[]>("/apps")
       .then((list) => setAppCount(list.length))
       .catch(() => {});
-    api
-      .get<{ count: number; security: number; reboot_required: boolean }>("/system/updates/count")
-      .then((d) => { setUpdateCount(d.count); setRebootRequired(d.reboot_required); })
-      .catch(() => setError("Failed to load system update status"));
+    // Admin-gated in `routes/system.rs`. Asking as anybody else produced the
+    // page's second error banner, beside the one from `/system/info`.
+    if (isAdmin) {
+      api
+        .get<{ count: number; security: number; reboot_required: boolean }>("/system/updates/count")
+        .then((d) => { setUpdateCount(d.count); setRebootRequired(d.reboot_required); })
+        .catch(() => setError("Failed to load system update status"));
+    }
     api
       .get<{ points: MetricPoint[] }>("/dashboard/metrics-history")
       .then((d) => setMetricsHistory(d.points || []))
@@ -336,10 +353,14 @@ export default function Dashboard() {
       .then(setDockerInfo)
       .catch(() => {});
     // Feature #2: Recent activity feed
-    api
-      .get<ActivityItem[]>("/activity?limit=5")
-      .then(setRecentActivity)
-      .catch(() => {});
+    // Admin-gated in the backend; asking as anybody else is a refusal
+    // every 5s that this page then swallows (activity feed).
+    if (isAdmin) {
+      api
+        .get<ActivityItem[]>("/activity?limit=5")
+        .then(setRecentActivity)
+        .catch(() => {});
+    }
     // Feature #8: Docker image disk usage
     api
       .get<DockerImage[] | DockerImagesResponse>("/apps/images")
@@ -361,19 +382,26 @@ export default function Dashboard() {
       })
       .catch(() => {});
     // Feature #3: Disk I/O metrics (endpoint takes ~1s due to sampling)
-    api
-      .get<DiskIoResponse>("/system/disk-io")
-      .then(setDiskIo)
-      .catch(() => {});
+    // Admin-gated in `routes/system.rs` like the rest of that module.
+    if (isAdmin) {
+      api
+        .get<DiskIoResponse>("/system/disk-io")
+        .then(setDiskIo)
+        .catch(() => {});
+    }
     // Feature #9: Mail queue count
-    api
-      .get<MailQueueResponse>("/mail/queue")
-      .then((d) => {
-        const count = d.count ?? (Array.isArray(d.queue) ? d.queue.length : 0);
-        setMailQueue(count);
-      })
-      .catch(() => {});
-  }, []);
+    // Admin-gated in the backend; asking as anybody else is a refusal
+    // every 5s that this page then swallows (mail queue).
+    if (isAdmin) {
+      api
+        .get<MailQueueResponse>("/mail/queue")
+        .then((d) => {
+          const count = d.count ?? (Array.isArray(d.queue) ? d.queue.length : 0);
+          setMailQueue(count);
+        })
+        .catch(() => {});
+    }
+  }, [isAdmin]);
 
   // Update check. Refetched every time the tab regains focus, because the row
   // behind this banner is cleared server-side — on the first boot after an
@@ -384,10 +412,14 @@ export default function Dashboard() {
   // person who is looking at it.
   useEffect(() => {
     const loadUpdateInfo = () => {
-      api
-        .get<UpdateInfo>("/telemetry/update-status")
-        .then(setUpdateInfo)
-        .catch(() => {});
+      // Admin-gated in the backend; asking as anybody else is a refusal this
+      // page then swallows (update status).
+      if (isAdmin) {
+        api
+          .get<UpdateInfo>("/telemetry/update-status")
+          .then(setUpdateInfo)
+          .catch(() => {});
+      }
     };
     loadUpdateInfo();
     window.addEventListener("focus", loadUpdateInfo);
@@ -396,10 +428,18 @@ export default function Dashboard() {
 
   // Fetch real-time system endpoints (only needed when WS is disconnected)
   const fetchRealtimeData = useCallback(() => {
+    // Every read here is admin-gated in `routes/system.rs`, so for anybody else
+    // this whole block is three refusals per tick and nothing to show. Not
+    // asking is the fix; swallowing the error would leave the tiles pretending
+    // to load for ever.
+    if (!isAdmin) return;
     api
       .get<SystemInfo>("/system/info")
       .then(setSystem)
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load system info"));
+      // Deliberately NOT the API's own message. This is the only catch on the
+      // page that forwarded it, and what it forwarded was an authorization
+      // refusal aimed at the operator rather than the reader.
+      .catch(() => setError("Failed to load system info"));
     api
       .get<Process[]>("/system/processes")
       .then(setProcesses)
@@ -408,7 +448,7 @@ export default function Dashboard() {
       .get<NetworkIface[]>("/system/network")
       .then(setNetwork)
       .catch(() => {});
-  }, []);
+  }, [isAdmin]);
 
   // WebSocket connection for live metrics — PANEL HOST ONLY, deliberately.
   //
@@ -575,7 +615,13 @@ export default function Dashboard() {
         <div className="flex items-center gap-3">
           <div>
             <h1 className="page-header-title">Dashboard</h1>
-            <p className="text-xs text-dark-400 mt-0.5">{system?.hostname || "Loading..."}</p>
+            {/* `system` is an admin-only read, so for anybody else it never
+                arrives — and "Loading..." that never resolves is the visible
+                half of the same defect as the refusal banner. Say what this
+                account is instead. */}
+            <p className="text-xs text-dark-400 mt-0.5">
+              {system?.hostname || (isAdmin ? "Loading..." : user?.email)}
+            </p>
           </div>
           <span
             className="flex items-center gap-1.5"
@@ -608,14 +654,21 @@ export default function Dashboard() {
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
             Deploy App
           </Link>
-          <Link to="/sites" className="px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors">
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
-            Add Site
-          </Link>
-          <Link to="/security" className="hidden sm:flex px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium items-center gap-1.5 transition-colors">
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z" /></svg>
-            Diagnostics
-          </Link>
+          {/* A `client` cannot bring a new domain into service by any route, so
+              offering it the shortcut named for exactly that is a dead end —
+              it lands on the one refusal the role is defined by. */}
+          {user?.role !== "client" && (
+            <Link to="/sites" className="px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
+              Add Site
+            </Link>
+          )}
+          {isAdmin && (
+            <Link to="/security" className="hidden sm:flex px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium items-center gap-1.5 transition-colors">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z" /></svg>
+              Diagnostics
+            </Link>
+          )}
           {/* Feature #4: Quick Server Actions — hidden on mobile.
               Shown only once there is something to restart. On a brand-new box
               these sat next to "Add Site" as the first thing an operator met,
@@ -624,7 +677,7 @@ export default function Dashboard() {
               Diagnostics (they post the same restart-service fix); Reboot has no
               other home, so it also appears whenever the system reports one is
               actually required. */}
-          {(sites.total > 0 || appCount > 0) && (
+          {isAdmin && (sites.total > 0 || appCount > 0) && (
             <>
               <div className="h-4 w-px bg-dark-600 hidden sm:block" />
               <button onClick={() => setConfirmAction("nginx")} className="hidden sm:inline-block px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs transition-colors">
@@ -635,7 +688,7 @@ export default function Dashboard() {
               </button>
             </>
           )}
-          {(rebootRequired || sites.total > 0 || appCount > 0) && (
+          {isAdmin && (rebootRequired || sites.total > 0 || appCount > 0) && (
             <button onClick={() => setConfirmAction("reboot")} className="hidden sm:inline-block px-2.5 py-1.5 bg-danger-500/10 border border-danger-500/20 rounded-lg text-xs text-danger-400 hover:bg-danger-500/20">
               {rebootRequired ? "Reboot required" : "Reboot"}
             </button>

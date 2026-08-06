@@ -6,6 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
+use crate::auth::Claims;
 use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::models::Site;
 use crate::services::activity;
@@ -17,14 +18,17 @@ pub struct CreateStagingRequest {
     pub domain: Option<String>,
 }
 
-/// Helper to fetch a site with ownership check.
-async fn get_site(state: &AppState, id: Uuid, user_id: Uuid) -> Result<Site, ApiError> {
-    sqlx::query_as::<_, Site>("SELECT * FROM sites WHERE id = $1 AND user_id = $2")
+/// Helper: resolve a site this caller may act on, as a full row.
+///
+/// Shares [`crate::helpers::SITE_CALLER_PREDICATE`] with every other per-site
+/// read, rather than keeping this module's own copy of an owner-only predicate.
+async fn get_site(state: &AppState, id: Uuid, claims: &Claims) -> Result<Site, ApiError> {
+    sqlx::query_as::<_, Site>(&format!("SELECT s.* FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
         .bind(id)
-        .bind(user_id)
+        .bind(claims.sub)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| internal_error("unknown", e))?
+        .map_err(|e| internal_error("resolve site for caller", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))
 }
 
@@ -43,7 +47,7 @@ pub async fn create(
     headers: axum::http::HeaderMap,
     Json(body): Json<CreateStagingRequest>,
 ) -> Result<(StatusCode, Json<Site>), ApiError> {
-    let parent = get_site(&state, id, claims.sub).await?;
+    let parent = get_site(&state, id, &claims).await?;
 
     if parent.status != "active" {
         return Err(err(StatusCode::BAD_REQUEST, "Parent site must be active"));
@@ -190,7 +194,7 @@ pub async fn get_staging(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Verify parent site ownership
-    let _parent = get_site(&state, id, claims.sub).await?;
+    let _parent = get_site(&state, id, &claims).await?;
 
     let staging: Option<Site> =
         sqlx::query_as("SELECT * FROM sites WHERE parent_site_id = $1")
@@ -229,7 +233,7 @@ pub async fn sync_to_staging(
     ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let parent = get_site(&state, id, claims.sub).await?;
+    let parent = get_site(&state, id, &claims).await?;
 
     let staging: Site =
         sqlx::query_as("SELECT * FROM sites WHERE parent_site_id = $1")
@@ -280,7 +284,7 @@ pub async fn push_to_prod(
     ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let parent = get_site(&state, id, claims.sub).await?;
+    let parent = get_site(&state, id, &claims).await?;
 
     let staging: Site =
         sqlx::query_as("SELECT * FROM sites WHERE parent_site_id = $1")
@@ -324,7 +328,7 @@ pub async fn destroy(
     ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let _parent = get_site(&state, id, claims.sub).await?;
+    let _parent = get_site(&state, id, &claims).await?;
 
     let staging: Site =
         sqlx::query_as("SELECT * FROM sites WHERE parent_site_id = $1")

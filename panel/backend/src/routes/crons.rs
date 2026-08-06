@@ -5,7 +5,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::{AuthUser, ServerScope};
+use crate::auth::{AuthUser, ServerScope, Claims};
 use crate::error::{internal_error, err, agent_error, paginate, ApiError};
 use crate::services::activity;
 use crate::services::agent::AgentHandle;
@@ -47,18 +47,13 @@ pub struct Cron {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Verify site ownership, return domain.
-async fn get_site_domain(state: &AppState, site_id: Uuid, user_id: Uuid) -> Result<String, ApiError> {
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT domain FROM sites WHERE id = $1 AND user_id = $2")
-            .bind(site_id)
-            .bind(user_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| internal_error("unknown", e))?;
-
-    row.map(|(d,)| d)
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))
+/// Helper: resolve a site this caller may act on, and return its domain.
+///
+/// One line over [`crate::helpers::site_domain_for_caller`], which is shared with
+/// the five other modules that each carried their own copy of this query. The
+/// rules — including why only the admin arm is scoped by server — live there.
+async fn get_site_domain(state: &AppState, site_id: Uuid, claims: &Claims) -> Result<String, ApiError> {
+    crate::helpers::site_domain_for_caller(state, site_id, claims).await
 }
 
 /// Sync this site's crons to the agent's system crontab.
@@ -107,7 +102,7 @@ pub async fn list(
     Path(id): Path<Uuid>,
     Query(params): Query<CronListQuery>,
 ) -> Result<Json<Vec<Cron>>, ApiError> {
-    get_site_domain(&state, id, claims.sub).await?;
+    get_site_domain(&state, id, &claims).await?;
 
     let (limit, offset) = paginate(params.limit, params.offset);
 
@@ -132,7 +127,7 @@ pub async fn create(
     Path(id): Path<Uuid>,
     Json(body): Json<CreateCronRequest>,
 ) -> Result<(StatusCode, Json<Cron>), ApiError> {
-    let domain = get_site_domain(&state, id, claims.sub).await?;
+    let domain = get_site_domain(&state, id, &claims).await?;
 
     // Validate command for injection
     if body.command.trim().is_empty() {
@@ -181,7 +176,7 @@ pub async fn update(
     Path((id, cron_id)): Path<(Uuid, Uuid)>,
     Json(body): Json<UpdateCronRequest>,
 ) -> Result<Json<Cron>, ApiError> {
-    let domain = get_site_domain(&state, id, claims.sub).await?;
+    let domain = get_site_domain(&state, id, &claims).await?;
 
     // Verify cron belongs to this site
     let existing: Option<(Uuid,)> =
@@ -249,7 +244,7 @@ pub async fn remove(
     ServerScope(_server_id, agent): ServerScope,
     Path((id, cron_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = get_site_domain(&state, id, claims.sub).await?;
+    let domain = get_site_domain(&state, id, &claims).await?;
 
     let deleted = sqlx::query("DELETE FROM crons WHERE id = $1 AND site_id = $2")
         .bind(cron_id)
@@ -284,7 +279,7 @@ pub async fn run_now(
     ServerScope(_server_id, agent): ServerScope,
     Path((id, cron_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = get_site_domain(&state, id, claims.sub).await?;
+    let domain = get_site_domain(&state, id, &claims).await?;
 
     let cron: Cron = sqlx::query_as(
         "SELECT * FROM crons WHERE id = $1 AND site_id = $2",

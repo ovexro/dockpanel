@@ -8,17 +8,17 @@ and no second owner. Almost everything below follows from that.
 
 | Role | Can create sites | Sees | Intended for |
 |------|------------------|------|--------------|
-| `admin` | Yes | Only what it owns, **plus a read-only list of every site on the server** | You |
+| `admin` | Yes | **Every site on a machine it runs, and can act on all of them** | You |
 | `reseller` | Yes | Its own sub-accounts, and how many sites each holds | Selling hosting on |
 | `user` | Yes | Only what it owns | An ordinary self-serve account |
 | `client` | **No** | Only what it owns | Someone who manages domains you gave them |
 | `suspended` | — | Nothing; every request is refused | Set by the Suspend action, not assigned directly |
 
-The `admin` row used to promise the whole panel, and the `reseller` row promised
-its sub-accounts' **sites**. Neither was true: every site read in the
-panel is scoped to the account making it, and always has been. What an admin
-actually gets is described under *Transfer is exclusive* below; a reseller sees
-its sub-accounts and a site **count** per account, not the sites themselves.
+The `admin` row is the one that changed most recently, and it changed because the
+promise came before the capability. For four days it described a reach the code
+did not have; the reach now exists and is described under *Transfer hands over
+ownership* below. A `reseller` still sees its sub-accounts and a site **count**
+per account, not the sites themselves.
 
 `client` is the newest and the only one that is a *restriction* rather than a
 promotion. A client manages the sites it holds — mail, PHP version, containers,
@@ -33,28 +33,35 @@ settings, files, backups, SSL — and cannot bring a new domain into service.
 The client can now sign in and manage that site. Repeat step 3 for each domain
 they should hold.
 
-### Transfer is exclusive
+### Transfer hands over ownership
 
 **The account you transfer to becomes the owner, and the previous owner stops
-being one.** This is a handover, not a share. That applies to you as well: after
-you transfer a site it leaves **your** Sites list, and its page answers *Site not
-found*, because every per-site read asks whether the row belongs to the account
-making the request and the answer is now no.
+being one.** Ownership is a single value, not a list. For an ordinary `user` or a
+`client` that is the whole story: a transferred site leaves their Sites list and
+its page stops answering them.
 
-**How to find it again, and how to take it back.** Sites → tick **All sites on
-this server**. That is an admin-only, read-only view of every site on the box
-with its owner beside it, and each row carries a **Transfer** button — so the
-handover is reversible from there. It is a list, not a back door: you still
-cannot open, edit, or delete a site you do not own. Transfer it back to yourself
-first, and it behaves normally again.
+**For you it is different, because you run the box.** An administrator can open,
+edit and delete any site on a machine they operate, whoever owns it. Ownership
+still decides whose a site is — who sees it on their own Sites page, and who a
+transfer moves it to — but it no longer decides what you are allowed to repair.
 
-This guide claimed the opposite for four days — it said an administrator kept
-sight of a transferred site by virtue of the role — and the panel had no way back
-at all until the operator who had just used the feature reported being stuck
-([#51](https://github.com/ovexro/dockpanel/issues/51)).
+Two things bound that reach, and both are deliberate:
 
-If what you want is two accounts managing one domain at the same time, DockPanel
-does not do that today. Say so on
+- **It stops at the hardware you operate** — this box, plus any server you
+  registered yourself. It does not extend to a machine another administrator
+  added.
+- **Your own Sites page still lists only your own sites.** To see everybody's,
+  Sites → tick **All sites on this server**, which shows every site on the box
+  with its owner beside it, and a **Transfer** button on each row.
+
+This is the second correction to this page in a week, and the direction reversed.
+The first one removed a reach the role did not have. Then the operator who had
+been using the feature pointed out that an administrator who cannot repair a
+tenant's site is not much use on a server they are responsible for, which was the
+better argument ([#51](https://github.com/ovexro/dockpanel/issues/51)).
+
+What still does not exist is two *non-admin* accounts holding one domain at once.
+If that is what you need, say so on
 [the issue tracker](https://github.com/ovexro/dockpanel/issues) rather than
 working around it — the workaround people reach for is a second account with a
 shared password, and that removes the audit trail that makes the panel worth

@@ -156,63 +156,92 @@ else
   bad "A5 GET /api/admin/sites is registered to sites::list_for_admin"
 fi
 
-echo "== §B  ownership is NOT widened anywhere else =="
+echo "== §B  site access has ONE definition, and its admin arm is bounded =="
 
-# ⚠ MUTATION TEST (run at HEAD, s314): adding ` OR $1 = $1` to get_one's
-# predicate — the shape a "let admins open it too" change would take — turns B2
-# red while B1 and B3 stay green, so the arm is per-handler and non-vacuous.
+# s315 REWROTE this section, and the reason matters more than the arms.
 #
-# Subject list COMPUTED from the file, not written here: every top-level fn in
-# sites.rs whose signature takes AuthUser AND whose body reads `FROM sites`.
-# A class arm that hardcodes its members cannot see the handler somebody adds
-# next year (lesson #181).
-OWNED=""
-for fn in $(grep -oE '^pub async fn [a-z_]+' <<< "$S" | awk '{print $4}'); do
-  sig=$(fnsig "$S" "$fn")
-  body=$(fnbody "$S" "$fn")
-  grep -qE 'AuthUser\(' <<< "$sig" || continue
-  grep -qE 'FROM sites' <<< "$body" || continue
-  OWNED="$OWNED $fn"
-done
-NOWNED=$(wc -w <<< "$OWNED")
+# §B used to assert that `list`, `get_one` and `remove` each still contained the
+# token `user_id = $`. Its own comment said it existed because "the temptation,
+# next time, is to add OR role='admin' to the reads themselves" — and it could not
+# have caught that. Every realistic widening ADDS a disjunct and leaves the token
+# in place. Reproduced: the mutation this suite recorded as proof of non-vacuity
+# (` OR $1 = $1` appended to get_one) left ALL FOUR arms green.
+#
+# The s314 ledger claimed a mutation test had proven the arm. It had proven the
+# DELETION case, which the arm does catch; the arm exists for the WIDENING case,
+# which it did not. Write down what a reader thinks the pin proves, then mutate
+# THAT.
+#
+# B-remove was worse: it stayed green through the s315 change while measuring
+# nothing, because `remove`'s body contains an unrelated `user_id = $` (the
+# reseller slot release). A file-wide token search inside a function is the same
+# false green as a file-wide search inside a file.
+#
+# So the invariant is no longer "every reader spells a predicate". It is: there is
+# exactly ONE predicate, it lives in one place, its admin arm is bounded by the
+# machine, and it trusts the database rather than the token.
 
-# An arm that enumerates its own subjects must assert the enumeration FIRST
-# (lesson #143) — an empty list makes every check below pass having examined
-# nothing. There are well over a dozen such handlers today; under 8 means the
-# extraction broke, not that the file shrank.
-if [ "$NOWNED" -lt 8 ]; then
-  bad "B0 handler enumeration produced $NOWNED owner-scoped site readers — extraction is broken, arms below are vacuous"
+HELPERS=panel/backend/src/helpers.rs
+[ -f "$HELPERS" ] || bad "MISSING SUBJECT FILE: $HELPERS"
+H=$(subj "$HELPERS") || bad "helpers.rs stripped to nothing"
+HRAW=$(perl -0777 -pe 's/\s+/ /g' "$HELPERS")
+
+# B1  ONE definition of the predicate, and it is in helpers.rs.
+NDEF=$(grep -c 'pub const SITE_CALLER_PREDICATE' <<< "$H")
+if [ "$NDEF" -eq 1 ]; then
+  ok "B1 the site-access predicate is defined exactly once, in helpers.rs"
 else
-  ok "B0 handler enumeration found $NOWNED AuthUser handlers reading FROM sites"
+  bad "B1 the site-access predicate is defined exactly once, in helpers.rs (found $NDEF)"
+fi
 
-  # The three that carry the whole ownership guarantee for the transfer story:
-  # the list the operator reads, the detail page, and delete. Each must keep a
-  # user_id predicate. Named explicitly because these three are what a future
-  # "make it convenient for admins" change would reach for first.
-  for fn in list get_one remove; do
-    body=$(fnbody "$S" "$fn")
-    if [ -z "$body" ]; then
-      bad "B-$fn sites::$fn exists"
-    elif grep -qE 'user_id = \$' <<< "$body"; then
-      ok "B-$fn sites::$fn is still ownership-scoped"
-    else
-      bad "B-$fn sites::$fn is still ownership-scoped — a site read lost its user_id predicate"
-    fi
-  done
+# B2  NOBODY carries an owner-only site lookup any more. Eight private helpers
+# used to — two `site_domain`, four `get_site_domain`, two `get_site` — and one of
+# the eight had drifted into being server-scoped while the others were not.
+# CONTROL first: the replacement must be present, or a zero below means the tree
+# moved rather than that the class is closed (lesson #143 / asserting a zero).
+NUSE=$(grep -rc 'SITE_CALLER_PREDICATE\|site_domain_for_caller' panel/backend/src/routes panel/backend/src/helpers.rs 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')
+NOLD=$(grep -rc 'FROM sites WHERE id = \$1 AND user_id = \$2' panel/backend/src/routes 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')
+if [ "$NUSE" -lt 12 ]; then
+  bad "B2 CONTROL failed: only $NUSE references to the shared resolver — the arm below would be vacuous"
+elif [ "$NOLD" -eq 0 ]; then
+  ok "B2 no module carries its own owner-only site lookup ($NUSE share the one predicate)"
+else
+  bad "B2 no module carries its own owner-only site lookup — $NOLD copies came back"
+fi
 
-  # And no role branch has crept into the reads. `transfer` legitimately checks
-  # claims.role, so the arm is scoped to the three readers above rather than to
-  # the file.
-  LEAKED=""
-  for fn in list get_one remove; do
-    body=$(fnbody "$S" "$fn")
-    grep -qE "claims\.role" <<< "$body" && LEAKED="$LEAKED $fn"
-  done
-  if [ -z "$LEAKED" ]; then
-    ok "B4 none of list/get_one/remove branches on claims.role"
-  else
-    bad "B4 role branch appeared in site reads:$LEAKED — ownership must stay one axis"
-  fi
+# B3  The admin arm is bounded by the MACHINE. Without both tokens the predicate
+# reads "any administrator, any site on this panel", which is a different and
+# much larger grant than the one that was decided.
+if grep -qE 'sv\.is_local' <<< "$HRAW" && grep -qE 'sv\.user_id = u\.id' <<< "$HRAW"; then
+  ok "B3 the admin arm is bounded to the local box or a server that admin registered"
+else
+  bad "B3 the admin arm is bounded to the local box or a server that admin registered"
+fi
+
+# B4  The role is read from the DATABASE, not from the token. A JWT keeps
+# asserting the role it was minted with, so a demoted account would otherwise go
+# on acting as an administrator until its session expired.
+if grep -qE "u\.role = 'admin'" <<< "$HRAW"; then
+  ok "B4 the admin arm reads users.role from the database"
+else
+  bad "B4 the admin arm reads users.role from the database"
+fi
+if grep -qE 'claims\.role' <<< "$H"; then
+  bad "B5 helpers.rs decides site access without consulting the token's role claim"
+else
+  ok "B5 helpers.rs decides site access without consulting the token's role claim"
+fi
+
+# B6  The admin's OWN Sites page is not widened. The window onto other people's
+# sites is the all-sites toggle (§A); conflating the two would make an operator's
+# own list unreadable on a busy box, and it is not what was asked for.
+LIST_BODY=$(fnbody "$S" list)
+if [ -z "$LIST_BODY" ]; then
+  bad "B6 sites::list exists"
+elif grep -qE 'user_id = \$1 AND server_id = \$2' <<< "$LIST_BODY"; then
+  ok "B6 sites::list is still scoped to the caller AND the server"
+else
+  bad "B6 sites::list is still scoped to the caller AND the server — the admin's own page was widened"
 fi
 
 echo "== §C  the way back is reachable, and the recipient is picked =="

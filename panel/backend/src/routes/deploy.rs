@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
+use crate::auth::Claims;
 use crate::error::{internal_error, err, agent_error, paginate, ApiError};
 use crate::routes::is_safe_shell_command;
 use crate::routes::sites::ProvisionStep;
@@ -70,17 +71,12 @@ pub struct LogsQuery {
     pub offset: Option<i64>,
 }
 
-/// Verify site ownership, return (domain, site_id).
-async fn get_site(state: &AppState, site_id: Uuid, user_id: Uuid) -> Result<String, ApiError> {
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT domain FROM sites WHERE id = $1 AND user_id = $2")
-            .bind(site_id)
-            .bind(user_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| internal_error("unknown", e))?;
-    row.map(|(d,)| d)
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))
+/// Helper: resolve a site this caller may act on, and return its domain.
+///
+/// One line over [`crate::helpers::site_domain_for_caller`] — the shared resolver
+/// this module used to keep its own copy of.
+async fn get_site(state: &AppState, site_id: Uuid, claims: &Claims) -> Result<String, ApiError> {
+    crate::helpers::site_domain_for_caller(state, site_id, claims).await
 }
 
 /// GET /api/sites/{id}/deploy — Get deploy config.
@@ -89,7 +85,7 @@ pub async fn get_config(
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Option<DeployConfig>>, ApiError> {
-    get_site(&state, id, claims.sub).await?;
+    get_site(&state, id, &claims).await?;
 
     let config: Option<DeployConfig> = sqlx::query_as(
         "SELECT * FROM deploy_configs WHERE site_id = $1",
@@ -109,7 +105,7 @@ pub async fn set_config(
     Path(id): Path<Uuid>,
     Json(body): Json<SetDeployRequest>,
 ) -> Result<Json<DeployConfig>, ApiError> {
-    let domain = get_site(&state, id, claims.sub).await?;
+    let domain = get_site(&state, id, &claims).await?;
 
     if body.repo_url.trim().is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "Repository URL is required"));
@@ -160,7 +156,7 @@ pub async fn remove_config(
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    get_site(&state, id, claims.sub).await?;
+    get_site(&state, id, &claims).await?;
 
     sqlx::query("DELETE FROM deploy_configs WHERE site_id = $1")
         .bind(id)
@@ -190,7 +186,7 @@ pub async fn trigger(
             "Deploy blocked: active critical/major incident in progress. Resolve the incident first."));
     }
 
-    let domain = get_site(&state, id, claims.sub).await?;
+    let domain = get_site(&state, id, &claims).await?;
 
     let config: DeployConfig = sqlx::query_as(
         "SELECT * FROM deploy_configs WHERE site_id = $1",
@@ -271,7 +267,7 @@ pub async fn keygen(
     ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = get_site(&state, id, claims.sub).await?;
+    let domain = get_site(&state, id, &claims).await?;
 
     let result = agent
         .post("/deploy/keygen", Some(serde_json::json!({ "domain": domain })))
@@ -304,7 +300,7 @@ pub async fn logs(
     Path(id): Path<Uuid>,
     Query(params): Query<LogsQuery>,
 ) -> Result<Json<Vec<DeployLog>>, ApiError> {
-    get_site(&state, id, claims.sub).await?;
+    get_site(&state, id, &claims).await?;
 
     let (limit, offset) = paginate(params.limit, params.offset);
 
@@ -699,7 +695,7 @@ pub async fn list_releases(
     ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<ReleaseInfo>>, ApiError> {
-    let domain = get_site(&state, id, claims.sub).await?;
+    let domain = get_site(&state, id, &claims).await?;
 
     let result = agent
         .get(&format!("/deploy/releases/{domain}"))
@@ -719,7 +715,7 @@ pub async fn rollback_release(
     ServerScope(_server_id, agent): ServerScope,
     Path((id, release_id)): Path<(Uuid, String)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = get_site(&state, id, claims.sub).await?;
+    let domain = get_site(&state, id, &claims).await?;
 
     let result = agent
         .post("/deploy/activate", Some(serde_json::json!({

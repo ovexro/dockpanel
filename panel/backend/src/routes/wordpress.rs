@@ -5,24 +5,18 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::{AuthUser, ServerScope};
+use crate::auth::{AuthUser, ServerScope, Claims};
 use crate::error::{internal_error, agent_error, err, require_admin, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
-/// Helper: get site domain after verifying ownership.
-async fn site_domain(state: &AppState, id: Uuid, user_id: Uuid) -> Result<String, ApiError> {
-    let site = sqlx::query_as::<_, crate::models::Site>(
-        "SELECT * FROM sites WHERE id = $1 AND user_id = $2",
-    )
-    .bind(id)
-    .bind(user_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| internal_error("unknown", e))?
-    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
-
-    Ok(site.domain)
+/// Helper: resolve a site this caller may act on, and return its domain.
+///
+/// One line over [`crate::helpers::site_domain_for_caller`], which is shared with
+/// the five other modules that each carried their own copy of this query. The
+/// rules — including why only the admin arm is scoped by server — live there.
+async fn site_domain(state: &AppState, site_id: Uuid, claims: &Claims) -> Result<String, ApiError> {
+    crate::helpers::site_domain_for_caller(state, site_id, claims).await
 }
 
 /// GET /api/sites/{id}/wordpress — Detect WP + get info + auto-update status.
@@ -32,7 +26,7 @@ pub async fn info(
     ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
 
     let resp: serde_json::Value = agent
         .get(&format!("/wordpress/{domain}/info"))
@@ -62,7 +56,7 @@ pub async fn install(
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
 
     let resp: serde_json::Value = agent
         .post(&format!("/wordpress/{domain}/install"), Some(body))
@@ -91,7 +85,7 @@ pub async fn plugins(
     ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
 
     let resp: serde_json::Value = agent
         .get(&format!("/wordpress/{domain}/plugins"))
@@ -108,7 +102,7 @@ pub async fn themes(
     ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
 
     let resp: serde_json::Value = agent
         .get(&format!("/wordpress/{domain}/themes"))
@@ -125,7 +119,7 @@ pub async fn update(
     ServerScope(_server_id, agent): ServerScope,
     Path((id, target)): Path<(Uuid, String)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
 
     if !["core", "plugins", "themes"].contains(&target.as_str()) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid target"));
@@ -167,7 +161,7 @@ pub async fn plugin_action(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid plugin action"));
     }
 
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
 
     let resp: serde_json::Value = agent
         .post(
@@ -193,7 +187,7 @@ pub async fn theme_action(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid theme action"));
     }
 
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
 
     let resp: serde_json::Value = agent
         .post(
@@ -214,7 +208,7 @@ pub async fn set_auto_update(
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
 
     let resp: serde_json::Value = agent
         .post(&format!("/wordpress/{domain}/auto-update"), Some(body))
@@ -323,7 +317,7 @@ pub async fn bulk_update(
 
     for site_id in &body.site_ids {
         let domain: Option<(String,)> = sqlx::query_as(
-            "SELECT domain FROM sites WHERE id = $1 AND user_id = $2 AND server_id = $3",
+            &format!("SELECT s.domain FROM sites s WHERE {} AND s.server_id = $3", crate::helpers::SITE_CALLER_PREDICATE),
         )
         .bind(site_id)
         .bind(claims.sub)
@@ -368,7 +362,7 @@ pub async fn vuln_scan(
     Path(id): Path<Uuid>,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let site: crate::models::Site = sqlx::query_as("SELECT * FROM sites WHERE id = $1 AND user_id = $2")
+    let site: crate::models::Site = sqlx::query_as(&format!("SELECT s.* FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
         .bind(id)
         .bind(claims.sub)
         .fetch_optional(&state.db)
@@ -424,7 +418,7 @@ pub async fn security_check(
     Path(id): Path<Uuid>,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let site: crate::models::Site = sqlx::query_as("SELECT * FROM sites WHERE id = $1 AND user_id = $2")
+    let site: crate::models::Site = sqlx::query_as(&format!("SELECT s.* FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
         .bind(id)
         .bind(claims.sub)
         .fetch_optional(&state.db)
@@ -448,7 +442,7 @@ pub async fn wp_harden(
     ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let site: crate::models::Site = sqlx::query_as("SELECT * FROM sites WHERE id = $1 AND user_id = $2")
+    let site: crate::models::Site = sqlx::query_as(&format!("SELECT s.* FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
         .bind(id)
         .bind(claims.sub)
         .fetch_optional(&state.db)
@@ -483,7 +477,7 @@ pub async fn update_safe(
     ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, claims.sub).await?;
+    let domain = site_domain(&state, id, &claims).await?;
 
     let result = agent
         .post_long(
