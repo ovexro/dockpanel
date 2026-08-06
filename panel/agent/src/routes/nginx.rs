@@ -268,7 +268,13 @@ async fn put_site(
     // site could remove that site's config while some *other* vhost was broken.
     // Nothing reloads nginx on that path, so the box kept serving from memory and
     // the loss only surfaced at the next reload.
-    let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+    //
+    // Where it lands is not a constant: a site the operator took offline keeps a
+    // stub in service and its real body parked beside it, and writing the render
+    // into service would put that site back on the internet. See
+    // `services::nginx::vhost_target_between`.
+    let target = services::nginx::vhost_target(&domain);
+    let config_path = target.path().to_string();
     let previous = std::fs::read_to_string(&config_path).ok();
     let tmp_path = format!("{config_path}.tmp");
     let write_result = std::fs::write(&tmp_path, &rendered)
@@ -311,6 +317,22 @@ async fn put_site(
                 crate::services::nginx::placeholder_page(&domain),
             );
         }
+    }
+
+    // A parked body is not in service, so there is nothing for `nginx -t` to read
+    // and nothing to reload. Returning the ordinary "configured and nginx
+    // reloaded" here would be the sentence that kept this invisible: the panel
+    // would report success for a change the operator cannot see, on a site it
+    // simultaneously displays as disabled.
+    if !target.is_live() {
+        tracing::info!("Site {domain} is disabled: saved its configuration to {config_path} and left the maintenance response in service");
+        return Ok(Json(NginxResponse {
+            success: true,
+            message: format!(
+                "Site {domain} is disabled — its configuration was saved and takes effect \
+                 when the site is enabled. Nginx was not reloaded."
+            ),
+        }));
     }
 
     // Test nginx config
@@ -705,6 +727,37 @@ async fn rename_site(
 
     // 4. Remove old config
     std::fs::remove_file(&old_conf).ok();
+
+    // 4b. Carry the parked body across too, if this site is disabled.
+    //
+    // What step 3 just rewrote is whatever nginx has in service, and for a
+    // disabled site that is the maintenance stub — which would leave the real
+    // body parked under the OLD name, where enabling the site will never look.
+    // The site becomes unenableable through the panel while its configuration
+    // sits on disk under a name nothing reads.
+    let (_, old_parked) = services::nginx::vhost_paths(&old_domain);
+    let (_, new_parked) = services::nginx::vhost_paths(new_domain);
+    if std::path::Path::new(&old_parked).exists() {
+        match std::fs::read_to_string(&old_parked) {
+            Ok(parked) => {
+                let carried = parked.replace(&old_domain, new_domain);
+                if std::fs::write(&new_parked, &carried).is_ok() {
+                    std::fs::remove_file(&old_parked).ok();
+                    tracing::info!(
+                        "Carried the parked configuration for disabled site {old_domain} over to {new_domain}"
+                    );
+                } else {
+                    tracing::warn!(
+                        "Could not carry the parked configuration for disabled site {old_domain} \
+                         over to {new_parked} — it can still be enabled under its old name"
+                    );
+                }
+            }
+            Err(e) => tracing::warn!(
+                "Could not read the parked configuration for disabled site {old_domain}: {e}"
+            ),
+        }
+    }
 
     // 5. Rename SSL certificates directory.
     //
@@ -1706,8 +1759,7 @@ async fn disable_site(Path(domain): Path<String>) -> Result<Json<serde_json::Val
     if !is_valid_domain(&domain) {
         return Err((StatusCode::BAD_REQUEST, "Invalid domain".into()));
     }
-    let conf_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
-    let backup_path = format!("/etc/nginx/sites-available/{domain}.conf.disabled");
+    let (conf_path, backup_path) = services::nginx::vhost_paths(&domain);
 
     // Check config exists
     if !std::path::Path::new(&conf_path).exists() {
@@ -1715,15 +1767,24 @@ async fn disable_site(Path(domain): Path<String>) -> Result<Json<serde_json::Val
     }
 
     // Back up the current config
+    let live = std::fs::read_to_string(&conf_path)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Read config: {e}")))?;
     std::fs::copy(&conf_path, &backup_path)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Backup config: {e}")))?;
+
+    // The maintenance response has to answer where the SITE answered. Naming the
+    // addresses here instead of taking them from the body being parked is what
+    // made disabling a site do nothing at all on any install whose panel knows
+    // its own address — see `services::nginx::listener_lines`.
+    let mut listeners = services::nginx::listener_lines(&live);
+    if listeners.trim().is_empty() {
+        listeners = "    listen 80;\n    listen [::]:80;\n".to_string();
+    }
 
     // Write a 503 maintenance page config
     let disabled_conf = format!(
         r#"server {{
-    listen 80;
-    listen [::]:80;
-    server_name {domain} www.{domain};
+{listeners}    server_name {domain} www.{domain};
     return 503;
     error_page 503 @maintenance;
     location @maintenance {{
@@ -1755,8 +1816,7 @@ async fn enable_site(Path(domain): Path<String>) -> Result<Json<serde_json::Valu
     if !is_valid_domain(&domain) {
         return Err((StatusCode::BAD_REQUEST, "Invalid domain".into()));
     }
-    let conf_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
-    let backup_path = format!("/etc/nginx/sites-available/{domain}.conf.disabled");
+    let (conf_path, backup_path) = services::nginx::vhost_paths(&domain);
 
     // Restore the backed-up config
     if !std::path::Path::new(&backup_path).exists() {

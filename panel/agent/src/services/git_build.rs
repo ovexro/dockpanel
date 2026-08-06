@@ -1009,7 +1009,11 @@ async fn setup_nginx_proxy(
     let rendered = crate::services::nginx::render_site_config(templates, domain, &site_config)
         .map_err(|e| format!("Failed to render nginx config: {e}"))?;
 
-    let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+    // A deploy to a site the operator took offline updates its parked body, so
+    // the deploy is not lost and the site stays off the internet until somebody
+    // enables it.
+    let target = crate::services::nginx::vhost_target(domain);
+    let config_path = target.path().to_string();
     // Snapshot first — a preview deploy synthesises `{branch}.{domain}` from a
     // pushed branch name, so this path can already belong to somebody else, and
     // `nginx -t` is a whole-server check an unrelated broken vhost can fail.
@@ -1023,6 +1027,14 @@ async fn setup_nginx_proxy(
         std::fs::remove_file(&tmp_path).ok();
         format!("Failed to activate nginx config: {e}")
     })?;
+
+    if !target.is_live() {
+        tracing::info!(
+            "Site {domain} is disabled: the deploy updated its parked configuration \
+             (proxy -> port {host_port}) and nginx was not reloaded"
+        );
+        return Ok(());
+    }
 
     match crate::services::nginx::test_config().await {
         Ok(output) if output.success => {

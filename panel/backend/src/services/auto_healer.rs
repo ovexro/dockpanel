@@ -962,7 +962,16 @@ async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
                 .fetch_one(pool)
                 .await
             {
-                if let Err(e) = agent
+                // Same rule as the security scanner's renewal arm: a disabled
+                // site is not rebuilt by an unattended loop. This one ticks
+                // every two minutes when enabled, so it was the faster route
+                // back onto the internet of the two.
+                if !site.enabled {
+                    tracing::info!(
+                        "Auto-heal: renewed SSL for {} but skipped the vhost rebuild — the site is disabled",
+                        site.domain
+                    );
+                } else if let Err(e) = agent
                     .put(
                         &format!("/nginx/sites/{}", site.domain),
                         crate::routes::sites::build_nginx_body(&site),

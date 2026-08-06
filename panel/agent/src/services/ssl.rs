@@ -588,7 +588,12 @@ pub async fn enable_ssl_for_site(
     let rendered = nginx::render_site_config(templates, domain, &ssl_config)
         .map_err(|e| format!("Template render error: {e}"))?;
 
-    let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+    // A site the operator took offline gets its parked body updated instead, so
+    // the certificate is already in it when the site is enabled again. Writing
+    // into service here is what used to bring a disabled site back the moment it
+    // gained a certificate.
+    let target = nginx::vhost_target(domain);
+    let config_path = target.path().to_string();
     let tmp_path = format!("{config_path}.tmp");
     tokio::fs::write(&tmp_path, &rendered)
         .await
@@ -596,6 +601,17 @@ pub async fn enable_ssl_for_site(
     tokio::fs::rename(&tmp_path, &config_path)
         .await
         .map_err(|e| format!("Failed to rename nginx config: {e}"))?;
+
+    if !target.is_live() {
+        tracing::info!(
+            "Site {domain} is disabled: its parked configuration now carries the certificate, \
+             and nginx was not reloaded"
+        );
+        // The canonical URL is left alone deliberately: nothing is being served
+        // over the new certificate yet, so moving WordPress to HTTPS now would
+        // point it at a name answering 503.
+        return Ok(crate::services::wordpress::CanonicalUrlOutcome::Untouched);
+    }
 
     let test_result = nginx::test_config()
         .await

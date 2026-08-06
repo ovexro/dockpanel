@@ -166,8 +166,14 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
-# Install curl and openssl if missing
-pkg_install curl openssl
+# Install curl and openssl if missing.
+#
+# `sshpass` rides along because a managed server is a backup SOURCE as often as
+# the panel host is, and password-authenticated SFTP destinations shell out to
+# it. `setup.sh` has installed it on the panel host since v2.48.6; a server added
+# through this script never got it, so the same destination worked from one box
+# and failed from another with no difference the operator could see. Issue #93.
+pkg_install curl openssl sshpass
 
 # Create directories
 echo "[3/7] Creating directories..."

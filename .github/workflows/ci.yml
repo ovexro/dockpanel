@@ -632,3 +632,48 @@ jobs:
       # control: a harness that cannot report a green is not reporting.
       - name: Stacks share a network, scope their names, and report real status
         run: bash tests/compose-stack-pin-e2e.sh
+
+  # s317: sixteen of the thirty-three suites named in docs/testing.md had no job
+  # here at all — auth-doors, sandbox-paths, site-backup-databases, the three
+  # mail pins, suspend-restore and nine more. They were green on the machine of
+  # whoever last ran them by hand and nothing else executed them, which is the
+  # same shape as the pre-push hook that spent an unknown number of releases in
+  # `.git/hooks/` where git does not look: a safety net nothing runs.
+  #
+  # This job runs EVERY suite, so a new one is covered on the day it is written
+  # rather than on the day somebody remembers to add a job. The suites that have
+  # their own job above keep it — a named job says which invariant broke, and
+  # these cost seconds each — so the overlap is deliberate, not an oversight.
+  #
+  # The two that need a prepared box are excluded and run in their own jobs with
+  # the setup they need: nginx-contract serves configs through a real nginx, and
+  # update-rollback drives restore-snapshot.sh end to end.
+  #
+  # The count guard is the point of the `find` (an arm that enumerates its own
+  # subjects must assert the enumeration first): a glob that matches nothing
+  # would otherwise report a green having run no suite at all.
+  regression-pins:
+    name: Every Regression Pin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Every source-only pin suite runs
+        run: |
+          shopt -s nullglob
+          failed=0
+          ran=0
+          for s in tests/*-pin-e2e.sh; do
+            case "$(basename "$s")" in
+              nginx-headers-pin-e2e.sh|update-rollback-pin-e2e.sh) continue ;;
+            esac
+            echo "── $s"
+            bash "$s" || failed=1
+            ran=$((ran + 1))
+          done
+          echo "ran $ran source-only pin suites"
+          if [ "$ran" -lt 30 ]; then
+            echo "::error::only $ran suites ran — the enumeration is wrong, so a green here proves nothing"
+            exit 1
+          fi
+          exit $failed

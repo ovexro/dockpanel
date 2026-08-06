@@ -449,8 +449,10 @@ export default function SiteDetail() {
         <div>
           <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">{site.domain}</h1>
           <div className="flex items-center gap-3 mt-2">
-            <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${statusColors[site.status] || "bg-dark-700 text-dark-200"}`}>
-              {site.status}
+            <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${
+              site.enabled === false ? "bg-amber-500/10 text-amber-400" : statusColors[site.status] || "bg-dark-700 text-dark-200"
+            }`}>
+              {site.enabled === false ? "disabled" : site.status}
             </span>
             <span className="text-sm text-dark-200">
               {runtimeLabels[site.runtime] || site.runtime}

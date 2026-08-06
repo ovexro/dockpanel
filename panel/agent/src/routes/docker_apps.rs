@@ -190,7 +190,10 @@ async fn expose_domain(
 
     match nginx::render_site_config(templates, domain, &site_config) {
         Ok(rendered) => {
-            let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+            // Exposing an app on a domain the operator took offline updates that
+            // domain's parked body instead of putting it back into service.
+            let target = nginx::vhost_target(domain);
+            let config_path = target.path().to_string();
             // Snapshot first: this path may already belong to a site or a
             // git deploy, and `nginx -t` below is a whole-server check that
             // an unrelated broken vhost is enough to fail.
@@ -204,6 +207,12 @@ async fn expose_domain(
                 tracing::warn!("Auto-proxy: failed to write nginx config for {domain}: {e}");
                 response["proxy_warning"] =
                     serde_json::json!(format!("Failed to write nginx config: {e}"));
+            } else if !target.is_live() {
+                tracing::info!("Auto-proxy: {domain} is disabled, saved the route to its parked configuration and left the maintenance response in service");
+                response["proxy_warning"] = serde_json::json!(format!(
+                    "{domain} is disabled, so the proxy configuration was saved but is not \
+                     serving. Enable the site to bring it up."
+                ));
             } else {
                 match nginx::test_config().await {
                     Ok(output) if output.success => {

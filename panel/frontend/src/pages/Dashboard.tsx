@@ -9,6 +9,9 @@ interface SiteDetail {
   id: string;
   domain?: string;
   status: string;
+  // A site the operator disabled is serving a maintenance response, not the
+  // site. Counting it as active is the same mistake the vhost writers made.
+  enabled?: boolean;
 }
 
 interface ActivityItem {
@@ -311,7 +314,7 @@ export default function Dashboard() {
         setSitesList(list);
         setSites({
           total: list.length,
-          active: list.filter((s) => s.status === "active").length,
+          active: list.filter((s) => s.status === "active" && s.enabled !== false).length,
         });
       })
       .catch(() => setError("Failed to load sites. Please try again."));
@@ -1109,7 +1112,12 @@ export default function Dashboard() {
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-px bg-dark-600">
                 {sitesList.slice(0, 12).map((s) => (
                   <Link key={s.id} to={`/sites/${s.id}`} className="bg-dark-800 px-3 py-2 flex items-center gap-2 hover:bg-dark-700/50 transition-colors">
-                    <div className={`w-2 h-2 rounded-full shrink-0 ${s.status === "active" ? "bg-rust-500" : "bg-dark-500"}`} />
+                    <div
+                      title={s.enabled === false ? "Disabled" : s.status}
+                      className={`w-2 h-2 rounded-full shrink-0 ${
+                        s.enabled === false ? "bg-amber-500" : s.status === "active" ? "bg-rust-500" : "bg-dark-500"
+                      }`}
+                    />
                     <span className="text-xs text-dark-100 truncate font-mono">{s.domain || s.id}</span>
                   </Link>
                 ))}

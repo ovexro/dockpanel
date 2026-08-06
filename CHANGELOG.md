@@ -4,6 +4,78 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.74.0] - 2026-08-06
+
+### Fixed — disabling a site did not take it offline, and where it did, the site came back by itself
+
+Two defects, both in the same place, found in that order.
+
+**Disabling a site did nothing at all on most installs.** The maintenance
+response written in the site's place named `listen 80`, while the vhost
+templates bind the server's own address — `listen 203.0.113.10:80` — whenever
+the panel knows it, which is the ordinary case. nginx attaches each server block
+to the socket its own directives name and picks a name among the blocks on the
+socket the request actually arrived on, so the maintenance block sat on the
+wildcard socket and was never consulted. The site went on serving its content,
+the panel displayed it as Disabled, and the agent reported success. Driven on a
+fresh box against the previous release: a disabled site answered `200` with its
+own page; giving the maintenance block the site's own address, and changing
+nothing else, turned the same request into `503 Site Disabled`. The response now
+takes its listeners — and its certificate, so a site with TLS can say it is
+disabled over HTTPS — from the configuration being replaced.
+
+**And where the maintenance response did work, the site came back on its own.**
+Disabling does not remove a site's nginx configuration. It parks the real body
+beside the live one and leaves a maintenance response in its place, so nginx
+keeps answering on the name while serving nothing.
+
+Five separate places rendered a complete vhost, and every one of them wrote to
+the live path without asking whether the operator had taken the site offline. So
+an ordinary settings change — PHP version, WAF mode, CSP, cache toggle, custom
+nginx, a git deploy, exposing a container, provisioning a certificate — replaced
+the maintenance response with a working site and reloaded nginx. The site went
+back on the internet immediately, and the panel went on displaying it as
+Disabled, because `sites.enabled` had exactly one reader in the whole backend:
+the guard inside the toggle that writes it.
+
+The unattended certificate-renewal loop did the same thing with nobody watching.
+On a stock install that is the only automatic renewal there is, and it rebuilds
+the vhost after every renewal — so a deliberately offline site with a certificate
+came back within about a week of that certificate entering its renewal window,
+and again on every sweep after that. With auto-heal switched on, within two
+minutes.
+
+Where a rendered vhost goes is now one decision in one place, and every writer
+asks it. A write for a disabled site refreshes the parked copy instead, and says
+so rather than reporting a reload that did not happen.
+
+The same change repairs a second defect. Re-enabling used to restore the body
+frozen at the moment the site went offline, silently reverting every setting
+changed in between — and a site that gained a certificate while offline came back
+on plain HTTP, because the frozen body has no TLS listener. Keeping the parked
+copy current means what comes back is the site as it is now. Renaming a disabled
+site also carries its parked body to the new name; previously it was stranded
+under the old one, where enabling would never look, leaving the site impossible
+to bring back from the panel at all.
+
+The panel side declines too: neither unattended loop pushes a vhost for a
+disabled site. That half arrives with the panel, so it protects managed servers
+before their agents are updated.
+
+- Disabled sites in the interface: the site detail header showed `active` for a
+  disabled site, and the dashboard counted it among the active ones and drew it
+  with a live dot. All three now agree with the banner that says the site is
+  disabled.
+- Password-authenticated SFTP backup destinations need `sshpass`, which only the
+  panel installer installed. Servers added with `install-agent.sh` now get it
+  too, and the prerequisite is documented for panels upgraded in place, since
+  `update.sh` upgrades binaries and installs no packages. (#93, partial)
+- Sixteen of the thirty-three regression-pin suites had no CI job and were run
+  only by hand. Every suite now runs on every push.
+
+New pin: `tests/site-disabled-stays-offline-pin-e2e.sh`, 19 assertions, each
+mutation-tested against a widening.
+
 ## [2.73.0] - 2026-08-06
 
 ### Fixed — a suspended account came back with the wrong role, and could arrange it itself

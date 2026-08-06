@@ -442,7 +442,28 @@ async fn auto_fix_safe_findings(
                             .fetch_one(pool)
                             .await
                         {
-                            if let Err(e) = agent
+                            // A site the operator disabled must not be put back
+                            // into service by a renewal nobody watched. The
+                            // rebuild used to go out unconditionally, and the
+                            // agent wrote it straight over the maintenance
+                            // response — so a deliberately offline site came
+                            // back on the internet on this loop's own schedule,
+                            // while the panel went on showing it as disabled.
+                            //
+                            // Agents from v2.74.0 park the body instead of
+                            // serving it, but this loop runs against every host
+                            // in the fleet and an agent is only updated when
+                            // somebody updates it. Declining here is what makes
+                            // the fix arrive with the PANEL. Nothing is lost by
+                            // skipping: renewal does not change what the vhost
+                            // contains, since the certificate paths it names are
+                            // stable symlinks.
+                            if !site.enabled {
+                                tracing::info!(
+                                    "Auto-fix: renewed SSL for {} but skipped the vhost rebuild — the site is disabled",
+                                    site.domain
+                                );
+                            } else if let Err(e) = agent
                                 .put(
                                     &format!("/nginx/sites/{}", site.domain),
                                     crate::routes::sites::build_nginx_body(&site),

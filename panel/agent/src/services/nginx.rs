@@ -83,6 +83,119 @@ pub fn domain_is_https(domain: &str) -> bool {
     })
 }
 
+/// The two places a site's vhost can live, and which one a write reaches.
+///
+/// Disabling a site does not remove its vhost. It parks the real body beside the
+/// live path and leaves a stub in its place, so nginx keeps answering on the
+/// name while serving nothing. Only the live file is ever read by nginx, which
+/// makes the choice between the two the difference between a site being on the
+/// internet and not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VhostTarget {
+    /// Nothing is parked for this domain, so the write goes into service.
+    Live(String),
+    /// The operator took this domain offline. Refresh the parked body and leave
+    /// the stub serving; nginx never reads this path, so no reload is owed.
+    Parked(String),
+}
+
+impl VhostTarget {
+    pub fn path(&self) -> &str {
+        match self {
+            VhostTarget::Live(p) | VhostTarget::Parked(p) => p,
+        }
+    }
+
+    /// True when the write reaches nginx — so a config test and a reload are
+    /// owed, and only then may the caller say the site was configured.
+    pub fn is_live(&self) -> bool {
+        matches!(self, VhostTarget::Live(_))
+    }
+}
+
+/// The listener and certificate directives of a rendered vhost, deduplicated and
+/// indented ready to drop into another server block.
+///
+/// **The defect this closes, and it is the whole feature.** The maintenance
+/// response written when a site is disabled hardcoded `listen 80;`, while every
+/// template binds the server's own address whenever the panel knows it —
+/// `listen 203.0.113.10:80;`. nginx attaches each server block to the listening
+/// socket its directives name, and selects a name among the servers attached to
+/// the socket a connection actually arrived on. So the maintenance block sat on
+/// the wildcard socket and was never consulted for a request arriving on the
+/// server's address: **the disabled site went on serving its own content, with
+/// the panel reporting it disabled and the agent reporting success.**
+///
+/// Copying the addresses out of the body being parked, rather than naming them
+/// here, means the response answers on exactly what the site answered on and
+/// keeps doing so when the templates change. The certificate lines come too,
+/// because a `listen …443 ssl` without them is a configuration nginx refuses —
+/// and a site with a certificate has to be able to say it is disabled over
+/// HTTPS, which is the only scheme its visitors are redirected to.
+pub fn listener_lines(vhost: &str) -> String {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut out = String::new();
+    for line in vhost.lines() {
+        let t = line.trim();
+        let wanted = t.starts_with("listen ")
+            || t.starts_with("ssl_certificate ")
+            || t.starts_with("ssl_certificate_key ");
+        if wanted && !seen.contains(&t) {
+            seen.push(t);
+            out.push_str("    ");
+            out.push_str(t);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Decide between an in-service path and a parked one.
+///
+/// Split from the domain-to-paths half so the decision itself is reachable from
+/// a test: everything it depends on arrives as an argument except the single
+/// filesystem question it exists to ask.
+///
+/// **The defect this closes.** Five writers rendered a complete vhost and each
+/// named the in-service path directly. So an ordinary settings change — PHP
+/// version, WAF mode, CSP, cache toggle, custom nginx, a git deploy, exposing a
+/// container, provisioning a certificate — replaced the stub with a working
+/// vhost and reloaded, putting a site the operator had deliberately taken
+/// offline back on the internet, while the panel went on displaying it as
+/// disabled. The unattended certificate-renewal loop did the same with nobody
+/// watching. None of the five is a choke point the others pass through, so the
+/// decision lives here rather than in any one of them.
+///
+/// It also repairs a second defect by construction. Re-enabling restores the
+/// body frozen at the moment the site went offline, so every setting changed in
+/// between was silently reverted — and a site that gained a certificate while
+/// offline came back on plain HTTP, because the frozen body has no TLS listener.
+/// Keeping the parked copy current means what comes back is the site as it is.
+pub fn vhost_target_between(in_service: &str, parked: &str) -> VhostTarget {
+    if std::path::Path::new(parked).exists() {
+        VhostTarget::Parked(parked.to_string())
+    } else {
+        VhostTarget::Live(in_service.to_string())
+    }
+}
+
+/// The in-service path and the parked path for a domain, in that order.
+///
+/// One spelling, because three call sites building these names by hand is how
+/// the parked file ended up with no reader outside the pair that wrote it.
+pub fn vhost_paths(domain: &str) -> (String, String) {
+    (
+        format!("/etc/nginx/sites-enabled/{domain}.conf"),
+        format!("/etc/nginx/sites-available/{domain}.conf.disabled"),
+    )
+}
+
+/// Where a freshly rendered vhost for `domain` must be written on this box.
+pub fn vhost_target(domain: &str) -> VhostTarget {
+    let (in_service, parked) = vhost_paths(domain);
+    vhost_target_between(&in_service, &parked)
+}
+
 /// Undo a vhost write: put `previous` back if there was one, otherwise remove the
 /// file we just created. Returns whether a previous config was restored.
 ///
@@ -730,6 +843,116 @@ pub async fn reload() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── where a rendered vhost lands — s317 / v2.74.0 ───────────────────
+    //
+    // These exercise the DECISION, not the two names it chooses between. It was
+    // extracted precisely so it could be reached from here: while it lived
+    // inline in five writers there was nothing a test could hold.
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("dockpanel-vhost-target-{name}"));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    #[test]
+    fn a_site_with_nothing_parked_is_written_into_service() {
+        let dir = scratch("live");
+        let in_service = dir.join("a.example.conf");
+        let parked = dir.join("a.example.conf.disabled");
+        std::fs::write(&in_service, "server {}").unwrap();
+
+        let target = vhost_target_between(in_service.to_str().unwrap(), parked.to_str().unwrap());
+
+        assert_eq!(target.path(), in_service.to_str().unwrap());
+        assert!(target.is_live(), "a live site still owes nginx a test and a reload");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_parked_body_takes_the_write_and_the_site_stays_offline() {
+        let dir = scratch("parked");
+        let in_service = dir.join("b.example.conf");
+        let parked = dir.join("b.example.conf.disabled");
+        std::fs::write(&in_service, "return 503;").unwrap();
+        std::fs::write(&parked, "server { listen 80; }").unwrap();
+
+        let target = vhost_target_between(in_service.to_str().unwrap(), parked.to_str().unwrap());
+
+        // The invariant the whole fix exists for: the render does not replace
+        // whatever is answering for this name.
+        assert_ne!(target.path(), in_service.to_str().unwrap());
+        assert_eq!(target.path(), parked.to_str().unwrap());
+        assert!(
+            !target.is_live(),
+            "nothing went into service, so no reload is owed and none may be claimed"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_stub_is_left_alone_even_when_the_parked_body_is_empty() {
+        // An empty file is still a parked body. Keying on content rather than
+        // existence would have made a truncated backup look like a live site.
+        let dir = scratch("empty");
+        let in_service = dir.join("d.example.conf");
+        let parked = dir.join("d.example.conf.disabled");
+        std::fs::write(&in_service, "return 503;").unwrap();
+        std::fs::write(&parked, "").unwrap();
+
+        let target = vhost_target_between(in_service.to_str().unwrap(), parked.to_str().unwrap());
+
+        assert!(!target.is_live());
+        assert_eq!(target.path(), parked.to_str().unwrap());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_maintenance_response_answers_where_the_site_answered() {
+        // The exact shape the templates emit when the panel knows its address.
+        // A stub naming `listen 80` is attached to a different socket and is
+        // never consulted, which is how disabling a site did nothing at all.
+        let vhost = "server {\n    listen 203.0.113.10:80;\n    listen [::]:80;\n    server_name a.example;\n    root /var/www/a.example/public;\n}\n";
+        let l = listener_lines(vhost);
+        assert!(l.contains("listen 203.0.113.10:80;"), "the site's own address must come across: {l}");
+        assert!(l.contains("listen [::]:80;"));
+        assert!(!l.contains("server_name"), "only listeners and certificates travel");
+        assert!(!l.contains("root "));
+    }
+
+    #[test]
+    fn a_tls_site_can_still_say_it_is_disabled_over_https() {
+        // `listen …443 ssl` without a certificate is a config nginx refuses, so
+        // the certificate lines have to travel with the listener.
+        let vhost = "server {\n    listen 203.0.113.10:80;\n    server_name a.example;\n}\nserver {\n    listen 203.0.113.10:443 ssl;\n    listen [::]:443 ssl;\n    ssl_certificate /etc/ssl/a/fullchain.pem;\n    ssl_certificate_key /etc/ssl/a/privkey.pem;\n    ssl_protocols TLSv1.2 TLSv1.3;\n}\n";
+        let l = listener_lines(vhost);
+        assert!(l.contains("listen 203.0.113.10:443 ssl;"));
+        assert!(l.contains("ssl_certificate /etc/ssl/a/fullchain.pem;"));
+        assert!(l.contains("ssl_certificate_key /etc/ssl/a/privkey.pem;"));
+        // Everything else about TLS has a working default; carrying it would be
+        // copying the site rather than its doorway.
+        assert!(!l.contains("ssl_protocols"));
+    }
+
+    #[test]
+    fn a_repeated_listener_is_emitted_once() {
+        // Both server blocks of the https template carry `listen [::]:80`, and
+        // nginx refuses a server block that names the same address twice.
+        let vhost = "server {\n    listen [::]:80;\n}\nserver {\n    listen [::]:80;\n}\n";
+        assert_eq!(listener_lines(vhost).matches("listen [::]:80;").count(), 1);
+    }
+
+    #[test]
+    fn both_paths_come_from_one_function_so_they_cannot_drift() {
+        // The writer that parks a body and every writer that has to notice it
+        // read the same two names from here.
+        let (in_service, parked) = vhost_paths("c.example");
+        assert!(in_service.ends_with("/sites-enabled/c.example.conf"));
+        assert!(parked.ends_with("/sites-available/c.example.conf.disabled"));
+        assert_ne!(in_service, parked);
+    }
 
     // ── static-vhost deny retrofit — s311 / v2.68.2 ─────────────────────
     //
