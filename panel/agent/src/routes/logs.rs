@@ -50,9 +50,14 @@ struct StreamQuery {
 
 #[derive(Deserialize)]
 struct StreamTicket {
-    #[allow(dead_code)]
     sub: String,
     purpose: String,
+    /// The logs this ticket authorises: a site's domain, or `@system` for the
+    /// admin-only host logs. `None` means a pre-fix panel that signed no scope.
+    /// This is the SIGNED decision the agent trusts instead of the browser's
+    /// `?domain=`/`?type=` — trusting those let a site-scoped ticket stream
+    /// `/var/log/auth.log` by asking for `type=auth` with the domain omitted.
+    scope: Option<String>,
 }
 
 /// GET /logs?type=nginx_access&lines=100&filter=404
@@ -138,45 +143,78 @@ async fn stream_handler(
     Query(q): Query<StreamQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
-    // Validate JWT ticket
+    // Validate JWT ticket, keeping the claims — the SIGNED scope is what decides
+    // which log this stream serves, not the browser-controlled query params.
     let token_value = state.token.read().await.clone();
-    let valid = q
-        .token
-        .as_deref()
-        .map(|t| {
-            let mut validation =
-                jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
-            validation.set_required_spec_claims(&["exp", "sub"]);
-            validation.validate_exp = true;
-            jsonwebtoken::decode::<StreamTicket>(
-                t,
-                &jsonwebtoken::DecodingKey::from_secret(token_value.as_bytes()),
-                &validation,
-            )
-            .map(|data| data.claims.purpose == "log_stream")
-            .unwrap_or(false)
-        })
-        .unwrap_or(false);
+    let claims = q.token.as_deref().and_then(|t| {
+        let mut validation =
+            jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+        validation.set_required_spec_claims(&["exp", "sub"]);
+        validation.validate_exp = true;
+        jsonwebtoken::decode::<StreamTicket>(
+            t,
+            &jsonwebtoken::DecodingKey::from_secret(token_value.as_bytes()),
+            &validation,
+        )
+        .ok()
+        .map(|data| data.claims)
+        .filter(|c| c.purpose == "log_stream")
+    });
 
-    if !valid {
-        return Response::builder()
-            .status(401)
-            .body("Unauthorized".into())
-            .unwrap();
-    }
-
-    let log_type_raw = q.r#type.clone().unwrap_or_else(|| "nginx_access".into());
-    let domain = q.domain.clone();
-
-    // Resolve the full log type (for site-specific logs)
-    let log_type = if let Some(ref d) = domain {
-        match log_type_raw.as_str() {
-            "access" => format!("nginx_access:{d}"),
-            "error" => format!("nginx_error:{d}"),
-            other => other.to_string(),
+    let claims = match claims {
+        Some(c) => c,
+        None => {
+            return Response::builder()
+                .status(401)
+                .body("Unauthorized".into())
+                .unwrap();
         }
-    } else {
-        log_type_raw
+    };
+
+    let requested_type = q.r#type.as_deref().unwrap_or("nginx_access");
+
+    // The log this stream serves is the SIGNED scope, never the `?domain=`/
+    // `?type=` params. A site ticket is pinned to its own domain AND to that
+    // site's own log types, so it can never reach the host logs; the panel only
+    // mints `@system` (host logs) for an admin. Reading these from the params
+    // was the escalation: a site owner streamed `/var/log/auth.log` by asking
+    // for `type=auth` with the domain omitted.
+    let log_type = match claims.scope.as_deref() {
+        // Admin system ticket: the host logs. There is no domain to pin; honour
+        // the requested system type and let resolve_log_path allow-list it.
+        Some("@system") => requested_type.to_string(),
+        // Site ticket: only this domain's own logs, and only site log types. A
+        // system type or a different domain is refused outright.
+        Some(domain) => match requested_type {
+            "access" => format!("nginx_access:{domain}"),
+            "error" => format!("nginx_error:{domain}"),
+            "php_error" | "php" => format!("php_error:{domain}"),
+            _ => {
+                return Response::builder()
+                    .status(403)
+                    .body("Log type not permitted for a site-scoped stream".into())
+                    .unwrap();
+            }
+        },
+        // Legacy ticket from a pre-fix panel: no scope was signed. Fall back to
+        // the old param-driven behaviour so an agent upgraded ahead of its panel
+        // keeps working, and log it so an unscoped stream is visible.
+        None => {
+            tracing::warn!(
+                "Log stream ticket for {} carries no scope (pre-fix panel); \
+                 trusting ?domain=/?type= — upgrade the panel to bind the scope",
+                claims.sub
+            );
+            let raw = requested_type.to_string();
+            match q.domain.as_deref() {
+                Some(d) => match raw.as_str() {
+                    "access" => format!("nginx_access:{d}"),
+                    "error" => format!("nginx_error:{d}"),
+                    other => other.to_string(),
+                },
+                None => raw,
+            }
+        }
     };
 
     // Enforce concurrent stream limit

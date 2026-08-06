@@ -37,6 +37,18 @@ struct StreamTicket {
     sub: String,
     purpose: String,
     exp: usize,
+    /// The logs this ticket authorises: a site's domain, or `@system` for the
+    /// admin-only host logs. It rides INSIDE the signature exactly as the
+    /// terminal ticket's `scope` does, and it is the fix for the same
+    /// escalation the terminal had: the agent used to read the scope from the
+    /// `?domain=` query param AND the log type from `?type=`, both
+    /// browser-controlled, so a site-scoped ticket dialled with `type=auth` and
+    /// the domain omitted streamed `/var/log/auth.log`. A site owner minting a
+    /// legitimate site ticket then read the host's SSH auth log. Binding the
+    /// scope into the signature is what closes it; `@system` contains an `@`,
+    /// which the agent's domain validation rejects, so it cannot collide with a
+    /// real domain.
+    scope: String,
 }
 
 /// GET /api/logs — System-wide logs (admin only).
@@ -219,10 +231,17 @@ pub async fn stream_token(
         }
     }
 
+    // The scope is the SIGNED decision, not `?domain=`/`?type=`. A site ticket
+    // is bound to its own domain; a system ticket (admin only, checked above)
+    // carries the `@system` sentinel so the agent knows the host logs are
+    // allowed without trusting any query param.
+    let scope = domain.clone().unwrap_or_else(|| "@system".to_string());
+
     let ticket = StreamTicket {
         sub: claims.email,
         purpose: "log_stream".to_string(),
         exp: (chrono::Utc::now() + chrono::Duration::seconds(60)).timestamp() as usize,
+        scope,
     };
 
     let token = encode(

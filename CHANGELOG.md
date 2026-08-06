@@ -4,6 +4,45 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.76.0] - 2026-08-06
+
+### Security — a non-admin who owned one site could read the host's system logs
+
+The twin of v2.75.0's terminal escalation, in the log streamer. The panel signs a
+`log_stream` ticket that authorises one site's logs, resolving the site's domain
+under an ownership check — but it returned that domain as a field *beside* the
+signed ticket, and the agent read both the domain (from `?domain=`) and the log
+type (from `?type=`) out of the browser-controlled query string. Asking for
+`type=auth` with the domain omitted streamed `/var/log/auth.log`; `type=syslog`
+streamed `/var/log/syslog`; any type outside `access`/`error` fell through the
+agent's pass-through arm straight into the system-log allow-list.
+
+So any non-admin who owned a single site could mint a legitimate, ownership-checked
+log ticket for that site, then open the stream asking for a system log and read the
+host's SSH authentication log — every login, with source IPs — or the full syslog.
+The panel's "admin required for system log streaming" check only fires at mint time
+for a *site-less* ticket; it never travelled to the agent.
+
+Reproduced end to end on a fresh box against the published v2.75.0: a `user`-role
+account owning one site streamed `/var/log/auth.log` and `/var/log/syslog` with the
+domain omitted. The scope now rides **inside** the signed ticket — a site's domain,
+or the `@system` marker for the admin-only host logs — exactly as the terminal
+ticket's scope does since v2.75.0. The agent takes both the domain and the
+permitted log types from the signed scope: a site ticket streams only that site's
+own `access`/`error`/`php` logs and is refused (`403`) for anything else, and a
+lying `?domain=` for a different tenant is ignored. Re-driven fixed on the same
+box: the system-log requests are refused, a lying domain resolves to the ticket's
+own site, the site owner still streams its own logs, and admin system streaming
+still works. Legacy tickets from a pre-fix panel fall back to the old behaviour and
+log a warning, so an agent upgraded ahead of its panel keeps working.
+
+This needs the fix on both the panel and the agent. A single-box install updates
+both together; on a multi-server panel each managed server's agent must be updated
+to close it there.
+
+New pin: `tests/logs-scope-signed-pin-e2e.sh`, 10 assertions, each mutation-tested
+against a widening; PASS 3 / FAIL 7 at v2.75.0.
+
 ## [2.75.0] - 2026-08-06
 
 ### Security — a non-admin who owned one site could open a root shell on the host
