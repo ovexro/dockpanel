@@ -14,6 +14,11 @@ pub struct TerminalQuery {
     pub site_id: Option<String>,
 }
 
+/// Marks a ticket as a server (root) shell. Not a valid domain — it contains an
+/// `@`, which the agent's own domain validation rejects — so it cannot collide
+/// with a site's name.
+pub const SERVER_SHELL_SCOPE: &str = "@server";
+
 #[derive(serde::Serialize)]
 struct TerminalTicket {
     sub: String,
@@ -23,6 +28,17 @@ struct TerminalTicket {
     /// signed ticket because the browser dials the agent directly — as a query
     /// param the user could suppress the recording of their own session.
     record: bool,
+    /// The shell this ticket authorises: a site's domain, or `@server` for the
+    /// admin root shell. It rides inside the signed ticket for the SAME reason
+    /// `record` does, and it is the fix for a real escalation: the agent used to
+    /// read the scope from a `?domain=` query param the browser controls, and an
+    /// EMPTY domain there spawns a root shell with no privilege drop. So any
+    /// non-admin who owned a single site could mint an ownership-checked
+    /// site-scoped ticket, then dial the agent with the domain omitted and get
+    /// an unrestricted root shell on the host. Binding the scope into the
+    /// signature makes the site-ownership check performed here the one that
+    /// governs the shell that opens there.
+    scope: String,
 }
 
 /// GET /api/terminal/token — Generate a short-lived terminal ticket.
@@ -92,11 +108,18 @@ pub async fn ws_token(
         true,
     )
     .await;
+    // `domain` is Some only for a site shell whose ownership was checked above,
+    // and None only on the admin-gated server-shell branch — so this is the
+    // authorisation decision, signed, not a hint the client can override.
+    let scope = domain
+        .clone()
+        .unwrap_or_else(|| SERVER_SHELL_SCOPE.to_string());
     let ticket = TerminalTicket {
         sub: claims.email,
         purpose: "terminal".to_string(),
         exp: (chrono::Utc::now() + chrono::Duration::seconds(60)).timestamp() as usize,
         record,
+        scope,
     };
 
     let token = encode(

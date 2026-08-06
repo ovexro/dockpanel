@@ -4,6 +4,38 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.75.0] - 2026-08-06
+
+### Security — a non-admin who owned one site could open a root shell on the host
+
+The terminal ticket the panel signs authorises a specific shell — a site's own
+directory, dropped to that site's `www-data`, or the admin root shell. But the
+panel returned the shell's scope (the site domain) as a field *beside* the signed
+ticket, and the agent read it from the `?domain=` query string. An empty domain
+there opens a **root** shell in `/root` with no privilege drop.
+
+So any non-admin who owned a single site could mint a legitimate, ownership-checked
+terminal ticket for that site, then open the WebSocket with the domain omitted and
+get an unrestricted root shell on the machine. The panel's "admin required" check
+only guards minting a ticket with *no* site; it never travelled to the agent, and
+the browser controls that query parameter.
+
+Reproduced end to end on a fresh box against the published v2.73.0: a `user`-role
+account owning one site got `uid=33(www-data)` with the domain present and
+`uid=0(root)` with it omitted. The scope now rides **inside** the signed ticket —
+the same place the recording flag already rides, and for the same reason — so the
+ownership check performed when the ticket is minted governs the shell that opens.
+Re-driven fixed on the same box: the domain-omitted connection now drops to
+`www-data`, the admin server shell still works, and a lying domain parameter is
+ignored.
+
+This needs the fix on both the panel and the agent. A single-box install updates
+both together; on a multi-server panel each managed server's agent must be updated
+to close it there.
+
+New pin: `tests/terminal-scope-signed-pin-e2e.sh`, 9 assertions, each
+mutation-tested against a widening; PASS 2 / FAIL 7 at v2.73.0.
+
 ## [2.74.0] - 2026-08-06
 
 ### Fixed — disabling a site did not take it offline, and where it did, the site came back by itself

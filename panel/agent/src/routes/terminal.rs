@@ -57,6 +57,12 @@ struct TermQuery {
     rows: Option<u16>,
 }
 
+/// A ticket whose `scope` is this value authorises the root server shell. Any
+/// other value is a site domain; the shell drops to www-data under that site's
+/// root. The panel writes it; it is not a valid domain (the `@` fails the domain
+/// check below), so it cannot be a site's name.
+const SERVER_SHELL_SCOPE: &str = "@server";
+
 #[derive(Deserialize)]
 struct TerminalTicket {
     sub: String,
@@ -67,6 +73,13 @@ struct TerminalTicket {
     /// Absent means an older panel minted the ticket: keep recording, which is
     /// what that panel already expected.
     record: Option<bool>,
+    /// The shell this ticket authorises: a site's domain, or `@server` for the
+    /// root shell. A SIGNED claim for the same reason `record` is one, and the
+    /// fix for an escalation: the scope used to come from the `?domain=` query
+    /// param, so a site-scoped ticket dialled with the domain omitted opened a
+    /// ROOT shell with no privilege drop. Now the ticket decides. Absent means
+    /// an older panel that did not bind it — see the fallback below.
+    scope: Option<String>,
 }
 
 /// GET /terminal/ws — WebSocket terminal.
@@ -113,11 +126,11 @@ async fn ws_handler(
             )
             .ok()
             .filter(|data| data.claims.purpose == "terminal")
-            .map(|data| (data.claims.sub, data.claims.record.unwrap_or(true)))
+            .map(|data| (data.claims.sub, data.claims.record.unwrap_or(true), data.claims.scope))
         });
-    let (user_email, record) = match user_email {
-        Some((email, record)) => (Some(email), record),
-        None => (None, true),
+    let (user_email, record, ticket_scope) = match user_email {
+        Some((email, record, scope)) => (Some(email), record, scope),
+        None => (None, true, None),
     };
     if user_email.is_none() {
         let _ = ACTIVE_TERMINALS.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| Some(v.saturating_sub(1)));
@@ -128,9 +141,30 @@ async fn ws_handler(
     }
     let user_email = user_email.unwrap();
 
-    let domain = q.domain.clone().unwrap_or_default();
+    // The scope is the SIGNED decision, not the `?domain=` param. Trusting the
+    // param let a site-scoped ticket open a root shell by omitting the domain.
+    // `@server` is the root shell (the panel only mints it for an admin, and it
+    // is not a valid domain); any other value is a site. A ticket with no scope
+    // came from a panel too old to bind it — fall back to the param it expected,
+    // and say so, so an unscoped root shell is visible in the log rather than
+    // silent.
+    let domain = match ticket_scope.as_deref() {
+        Some(SERVER_SHELL_SCOPE) => String::new(),
+        Some(scope) => scope.to_string(),
+        None => {
+            let legacy = q.domain.clone().unwrap_or_default();
+            if legacy.is_empty() {
+                tracing::warn!(
+                    "Terminal ticket for {user_email} carries no scope (pre-v2.75.0 panel); \
+                     opening a server shell from the query param"
+                );
+            }
+            legacy
+        }
+    };
 
-    // Validate domain format if provided (prevent path traversal)
+    // Validate domain format (prevent path traversal). Belt and suspenders: the
+    // scope is signed, but a directory name still reaches the filesystem below.
     if !domain.is_empty()
         && (domain.contains("..") || domain.contains('/') || domain.contains('\0'))
     {
