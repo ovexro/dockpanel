@@ -374,13 +374,12 @@ pub async fn restart(
 pub async fn remove(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
 
-    let stack: Option<(Uuid, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, name, domain FROM docker_stacks WHERE id = $1 AND user_id = $2",
+    let stack: Option<(Uuid, String, Option<String>, Option<Uuid>)> = sqlx::query_as(
+        "SELECT id, name, domain, server_id FROM docker_stacks WHERE id = $1 AND user_id = $2",
     )
     .bind(id)
     .bind(claims.sub)
@@ -388,7 +387,20 @@ pub async fn remove(
     .await
     .map_err(|e| internal_error("remove stacks", e))?;
 
-    let (_, name, domain) = stack.ok_or_else(|| err(StatusCode::NOT_FOUND, "Stack not found"))?;
+    let (_, name, domain, server_id) =
+        stack.ok_or_else(|| err(StatusCode::NOT_FOUND, "Stack not found"))?;
+
+    // This one deletes the row whatever the agent says (see below), so aiming it at the
+    // wrong host was worse than the same mistake elsewhere: the removal would find nothing,
+    // report success, drop the record, and leave the real host's containers and vhost
+    // running with nothing in the database naming them. Resolve from the row and refuse if
+    // that host is unreachable, so the record cannot outlive the thing it describes.
+    let agent = crate::helpers::agent_for_site_server(
+        &state,
+        server_id,
+        domain.as_deref().unwrap_or(&name),
+    )
+    .await?;
 
     // Remove all containers, and the vhost/certs the stack was fronted by. The
     // agent proves ownership of each before deleting it.

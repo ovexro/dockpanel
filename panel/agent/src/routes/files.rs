@@ -46,7 +46,6 @@ async fn list_dir(
     if !is_valid_domain(&domain) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
     }
-    files::ensure_site_root(&domain).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
     let rel = q.path.as_deref().unwrap_or("/");
     let safe = files::resolve_safe_path(&domain, rel)
         .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
@@ -126,7 +125,7 @@ async fn rename_entry(
     if !is_valid_domain(&domain) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
     }
-    let from = files::resolve_safe_path(&domain, &body.from)
+    let from = files::resolve_safe_child(&domain, &body.from)
         .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
     let to = files::resolve_safe_path(&domain, &body.to)
         .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
@@ -147,7 +146,7 @@ async fn delete_entry(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
     }
     let rel = q.path.as_deref().ok_or_else(|| err(StatusCode::BAD_REQUEST, "path required"))?;
-    let safe = files::resolve_safe_path(&domain, rel)
+    let safe = files::resolve_safe_child(&domain, rel)
         .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
 
     files::delete_entry(&safe)

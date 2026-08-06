@@ -4,6 +4,71 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.78.0] - 2026-08-06
+
+### Fixed — deleting a file could delete the whole site
+
+The file manager resolved a requested path, checked it was inside the site root,
+and acted on it. That check asks about containment, and containment is not
+identity: `.`, `""` and `/` all canonicalise to the site root itself, and a path
+always starts with itself, so all three passed. A delete handed one of them ran a
+recursive remove on the webroot and reported success. Destructive verbs now
+resolve through a variant that refuses the root and permits everything below it;
+listing the root, which is the file manager's default view, is unchanged.
+
+This one needs no fleet and no particular role — it is reachable on an ordinary
+single-server install.
+
+### Fixed — a site's files were resolved on one host and acted on from another
+
+Two questions had been collapsed into one. *Which site* is answered by a row the
+caller owns; *which host* was answered by the server the caller had selected in
+the UI. They agree on a single-box install, which is why the difference stayed
+invisible. On a fleet they part company: a client owns no server row — the only
+insert is administrator-gated — so no server header is sent and the local agent
+is used, while their site's row may name a different machine. An operator with
+two servers reaches the same state by opening a site on one while the switcher
+says the other, since the single-site read is not server-scoped even though both
+list reads are.
+
+The rule was already settled in this codebase. The webhook deploy path resolves
+the agent from the row and says why; the git-deploy update path does the same;
+every background service that walks these tables routes per row. It was the
+authenticated handlers — the buttons a person clicks — that never adopted it.
+Three of the worst now do:
+
+- **Deploy trigger** clones a repository into the site's webroot and runs its
+  build script as root. It sits in the same file as the webhook path that was
+  fixed for precisely this reason, and was left as it was.
+- **Site delete** aimed a site's database containers, its Redis index, its
+  firewall rule and its webroot at the selected host. The firewall step is the
+  one that is not namespaced by domain: it matched on port and action alone, so
+  it could remove an unrelated rule on the wrong machine.
+- **Stack delete** deleted its database record whatever the agent replied. Aimed
+  at the wrong host the removal found nothing, reported success, dropped the
+  record, and left the real host's containers and vhost running with nothing
+  naming them.
+
+A host that cannot be resolved is now refused rather than quietly replaced with
+the panel's own, because substituting is how one tenant's files end up on another
+tenant's machine.
+
+### Fixed — listing a folder could create it
+
+The list verb created the site root before resolving. Asked for a domain the host
+does not serve, it made `/var/www/<domain>` as root and answered `200` with an
+empty array — which then let write, create and upload land in a directory no
+vhost serves. Every other verb already failed loudly. That silence was the only
+reason a misdirected request could go unnoticed, and it is gone. A site whose
+document root was pointed somewhere other than `/var/www/<domain>` now says so
+instead of showing an empty invented folder.
+
+### Added
+
+- `wrong-host-dispatch-pin-e2e.sh` — 18 assertions. Thirteen are red at v2.77.0;
+  five are green at both tags on purpose, so a harness that measured nothing
+  could not read as a pass.
+
 ## [2.77.0] - 2026-08-06
 
 ### Fixed — a client's dashboard never drew, and the menus pointed the wrong way

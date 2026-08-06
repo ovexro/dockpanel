@@ -22,6 +22,15 @@ use sha2::{Sha256, Digest};
 /// local machine. Adding `server_id` on this arm would hide a client's own site
 /// whenever it lives on any other server, and it would do it by returning an
 /// empty list rather than an error, which is the direction nobody checks.
+///
+/// ⚠ That paragraph is true and its conclusion — do not filter this predicate by
+/// server — is still the right call. But it was read for years as though it also
+/// said the SITE is always local, and it does not say that. A caller's scope being
+/// local is a fact about the CALLER; the site's row names its own host and the two
+/// part company as soon as a fleet exists. Resolving WHICH SITE from here and WHICH
+/// HOST from the caller's selection is the actual defect, and filtering cannot fix
+/// it — the row has to choose the host. Use `site_agent_for_caller` below for
+/// anything that then talks to an agent.
 pub async fn site_domain_for_caller(
     state: &crate::AppState,
     site_id: uuid::Uuid,
@@ -37,6 +46,72 @@ pub async fn site_domain_for_caller(
 
     row.map(|(d,)| d)
         .ok_or_else(|| crate::error::err(axum::http::StatusCode::NOT_FOUND, "Site not found"))
+}
+
+/// Resolve a site the caller may act on, AND the agent for the host it actually runs on.
+///
+/// "Which server did the caller select" and "which server is this site on" are different
+/// questions. They agree on a single-box install and whenever an operator happens to have
+/// the right server selected, which is why the difference stayed invisible. They disagree
+/// silently the rest of the time: the header-derived scope falls back to the local agent
+/// when a caller owns no server row, while the site's row may name a fleet member — so the
+/// panel resolves the right domain and then asks the wrong machine about it.
+///
+/// The row is the authority. That rule is already stated and followed by the webhook deploy
+/// path, by the git-deploy update path, and by every background service that walks these
+/// tables; the authenticated HTTP handlers are the layer that never adopted it. A host that
+/// will not resolve is REFUSED — never quietly replaced with this one, because the failure
+/// mode of substituting is writing one tenant's files onto another machine.
+pub async fn site_agent_for_caller(
+    state: &crate::AppState,
+    site_id: uuid::Uuid,
+    claims: &crate::auth::Claims,
+) -> Result<(String, crate::services::agent::AgentHandle), crate::error::ApiError> {
+    let row: Option<(String, Option<uuid::Uuid>)> = sqlx::query_as(&format!(
+        "SELECT s.domain, s.server_id FROM sites s WHERE {SITE_CALLER_PREDICATE}"
+    ))
+    .bind(site_id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| crate::error::internal_error("resolve site agent for caller", e))?;
+
+    let (domain, server_id) = row
+        .ok_or_else(|| crate::error::err(axum::http::StatusCode::NOT_FOUND, "Site not found"))?;
+
+    let agent = agent_for_site_server(state, server_id, &domain).await?;
+    Ok((domain, agent))
+}
+
+/// Resolve the agent for the server a row names, refusing rather than substituting.
+///
+/// Split out because several handlers have already loaded the row (and so already hold its
+/// server id) and only need this half. The column is `NOT NULL` in the schema but optional
+/// in the structs that predate the fleet work, so the `None` arm is a real branch: it means
+/// a row older than the backfill, and guessing a host for it is exactly what must not happen.
+pub async fn agent_for_site_server(
+    state: &crate::AppState,
+    server_id: Option<uuid::Uuid>,
+    domain: &str,
+) -> Result<crate::services::agent::AgentHandle, crate::error::ApiError> {
+    let server_id = server_id.ok_or_else(|| {
+        tracing::warn!("Refusing to act on {domain}: its row names no server");
+        crate::error::err(
+            axum::http::StatusCode::CONFLICT,
+            "This site is not associated with a server",
+        )
+    })?;
+
+    state.agents.for_server(server_id).await.map_err(|e| {
+        tracing::warn!(
+            "Refusing to act on {domain}: its server {server_id} is unreachable ({e}) — \
+             acting through a different host would touch another machine's files"
+        );
+        crate::error::err(
+            axum::http::StatusCode::BAD_GATEWAY,
+            "The server this site lives on is unreachable",
+        )
+    })
 }
 
 /// The one predicate that decides whether a caller may act on a site.

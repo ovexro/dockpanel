@@ -26,6 +26,29 @@ pub fn resolve_safe_path(domain: &str, relative_path: &str) -> Result<PathBuf, S
     resolve_within(&base, relative_path)
 }
 
+/// Resolve a path that must name something INSIDE the site root — never the root itself.
+///
+/// `resolve_within` deliberately permits the site root, because listing it is the file
+/// manager's default view (`?path=/`). Containment and identity are different questions,
+/// though, and only the containment one was being asked: `.`, `""` and `/` all canonicalise
+/// to the webroot, and a path always starts with itself, so the traversal check passes them.
+/// A destructive verb handed that path is a request to erase the entire site in one call —
+/// `remove_dir_all` on the webroot takes the site with it, and the caller sees `success`.
+///
+/// So the read verbs keep using the permissive resolver and the destructive ones use this,
+/// which refuses the root and lets everything below it through unchanged.
+pub fn resolve_safe_child(domain: &str, relative_path: &str) -> Result<PathBuf, String> {
+    let base = PathBuf::from(format!("{WEBROOT}/{domain}"));
+    let resolved = resolve_within(&base, relative_path)?;
+    let canon_base = base
+        .canonicalize()
+        .map_err(|_| format!("Site root does not exist: {}", base.display()))?;
+    if resolved == canon_base {
+        return Err("Refusing to operate on the site root itself".into());
+    }
+    Ok(resolved)
+}
+
 /// Core of [`resolve_safe_path`], parameterized on the base directory so it is
 /// unit-testable. Guarantees the returned path is inside `base` AND that no symlink
 /// sits in the to-be-created portion of the path — otherwise a create/upload sink
@@ -94,13 +117,14 @@ pub(crate) fn resolve_within(base: &Path, relative_path: &str) -> Result<PathBuf
     Ok(canon)
 }
 
-/// Ensure site root directory exists.
-pub fn ensure_site_root(domain: &str) -> Result<PathBuf, String> {
-    let root = PathBuf::from(format!("{WEBROOT}/{domain}"));
-    std::fs::create_dir_all(&root)
-        .map_err(|e| format!("Failed to create site root: {e}"))?;
-    Ok(root)
-}
+// `ensure_site_root` used to live here, and `list` called it before resolving. It was the
+// only silent failure in the file manager: asked for a domain this host does not serve, it
+// created `/var/www/<domain>` as root and answered 200 with an empty listing, which then
+// unblocked write/create/upload into a directory no vhost serves. Every other verb already
+// fails loudly ("Site root does not exist"), and site provisioning creates the webroot, so
+// nothing legitimate depended on creating it here. Removing it turns that silence into an
+// error. Note it also means a site whose document root was pointed somewhere other than
+// `/var/www/<domain>` now reports that plainly instead of showing an empty invented folder.
 
 /// List directory contents.
 /// The `site_root` parameter is used to strip absolute paths to relative paths in the response.

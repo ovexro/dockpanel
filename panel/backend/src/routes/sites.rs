@@ -1795,7 +1795,6 @@ pub async fn update_limits(
 pub async fn remove(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -1808,6 +1807,14 @@ pub async fn remove(
     .await
     .map_err(|e| internal_error("remove sites", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    // Every destructive step below names this site by DOMAIN and runs on whichever host
+    // this handle points at. Taking the handle from the caller's selection meant a site on
+    // a fleet member had its databases, its firewall rule, its Redis index and its webroot
+    // aimed at the panel host instead — and the firewall arm is the one step that is not
+    // domain-namespaced, so it could match an unrelated rule there. The row names the host.
+    let agent =
+        crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     // Remove database containers before CASCADE deletes the records
     let databases: Vec<(String,)> = sqlx::query_as(

@@ -171,7 +171,6 @@ pub async fn remove_config(
 pub async fn trigger(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     // Check for active critical/major incidents — block deploy during outage
@@ -186,7 +185,11 @@ pub async fn trigger(
             "Deploy blocked: active critical/major incident in progress. Resolve the incident first."));
     }
 
-    let domain = get_site(&state, id, &claims).await?;
+    // The same rule the webhook path below already follows: this clones a repository into
+    // the site's webroot and runs its build script as root on whichever host it is handed.
+    // The webhook was fixed because it has no caller to take a host from; this one had a
+    // caller, took the host from them, and was left as it was. Both need the site's own row.
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let config: DeployConfig = sqlx::query_as(
         "SELECT * FROM deploy_configs WHERE site_id = $1",
