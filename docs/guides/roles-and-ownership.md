@@ -98,10 +98,43 @@ it refuses an ordinary `user`.
 
 ## Suspending and restoring
 
-Suspend is a separate action, not a role you assign. It stashes the account's
-current role, sets it to `suspended`, and revokes its sessions. Un-suspending
-restores the stashed role — including `client`, so a suspended client comes back
-a client rather than being quietly promoted to an account that can create sites.
+Suspend is a separate action, not a role you assign. It records the account's
+current role in `users.prior_role`, sets the role to `suspended`, and revokes its
+sessions. Un-suspending gives back the recorded role — including `client`, so a
+suspended client comes back a client rather than being quietly promoted to an
+account that can create sites, and an administrator comes back an administrator.
+
+Until v2.73.0 that record was kept in the same column as the password-reset
+token, and asking for a password reset overwrote it. A suspended account could do
+that itself from the public *Forgot password* form, so the un-suspend found
+nothing to restore and fell back to `user` — promoting a `client` and demoting an
+`admin`. The password-reset endpoints now refuse a suspended account, and the
+record has a column nothing else writes.
+
+**One case cannot be recovered, and un-suspending refuses rather than guessing.**
+An account suspended before v2.73.0 whose record was already destroyed has no
+previous role to give back — the activity log stores what a role became, never
+what it was. Un-suspending one of those returns a conflict explaining exactly
+that; set the role from the user editor, which also lifts the suspension. No
+default is applied, in either direction: `user` is the value that caused the bug,
+and `client` is not simply a smaller `user` — reseller management is scoped to
+`role = 'user'`, so an account handed `client` stays visible to its reseller
+while becoming unmanageable by them. Accounts suspended on v2.73.0 or later
+always have a record and are unaffected.
+
+Billing-driven suspension through the WHMCS webhook follows the same rules,
+including revoking the account's sessions — which it did not do before v2.73.0,
+so a billing suspension left the account working until its token expired, up to
+two hours later. Two differences remain, both deliberate: billing will not
+*suspend* an `admin` or `reseller` (a lapsed invoice must not lock an operator
+out of their own panel), and it will not *restore* one either — that direction
+had no guard at all until v2.73.0, so the webhook secret alone could return an
+operator role to an account the panel had suspended.
+
+Both directions honour the **Auto-suspend** checkbox on Integrations → WHMCS.
+Previously only suspension checked it, and none of the three WHMCS flags had a
+control at all — the screen's own save omitted them, which silently reset them
+to their defaults on every use.
 
 ## A note on what Teams is not
 

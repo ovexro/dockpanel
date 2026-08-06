@@ -4,6 +4,84 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.73.0] - 2026-08-06
+
+### Fixed — a suspended account came back with the wrong role, and could arrange it itself
+
+Suspending an account overwrites `users.role`, which is the only record of what
+the account was, so the previous role had to be kept somewhere until the account
+was un-suspended. It was kept in `users.reset_token` — the same column the public
+password-reset flow writes.
+
+That flow checked no role at all. It was the one door in the whole authentication
+surface that didn't: sign-in, the session middleware, two-factor, passkeys and
+OAuth all refuse a suspended account explicitly. So a suspended user could open
+the ordinary *Forgot password* form, and the request alone replaced the record of
+their role with a reset token — no administrator involved, no sign-in required,
+and the reset did not even have to be completed. Whether the token was left in
+place or cleared by finishing the reset, the un-suspend that followed found
+nothing usable and fell back to `user`.
+
+The visible result was an administrator pressing **Unsuspend**, intending to put
+an account back as it was, and promoting or demoting it instead:
+
+- a `client` came back as a `user` — and a `user` may bring a **new domain** into
+  service, which is the single capability the `client` role exists to withhold;
+- an `admin` or a `reseller` came back as a plain `user`, losing everything.
+
+The second of those is much older than the first and needs no `client` role
+present, so it is the one more likely to have already happened on a running
+install.
+
+**What changed.** The suspend stash has a column of its own, `users.prior_role`,
+which nothing else writes. Suspending records the previous role and setting it
+back reads that record; the password-reset column is left to the password-reset
+flow. Both places that suspend an account — the panel and the WHMCS billing
+webhook — now go through one pair of statements rather than keeping a copy each.
+
+**An un-suspend never guesses.** If the previous role is unknown, the account
+stays suspended and says so, rather than being handed some default. There is no
+ordering of these roles that makes a guess safe in either direction: `user` is
+the value that caused this bug, and `client` is not simply "less" than `user` —
+reseller management is scoped to `role = 'user'`, so an account handed `client`
+would still be listed by its reseller and no longer be manageable by them. The
+operator is told instead, and can set the role from the user editor, which also
+lifts the suspension.
+
+Five smaller corrections came with it:
+
+- **The billing webhook records a previous role too, and gives back what it
+  recorded** instead of a hardcoded `user`. Its deny-list (refusing to *suspend*
+  an `admin` or `reseller`) is kept — it guards a different hazard, a lapsed
+  invoice locking an operator out of their own panel.
+- **Billing can return an ordinary account to service, but never restores an
+  `admin` or `reseller`.** That direction previously had no guard at all, so an
+  account the *panel* had deliberately suspended could be handed its operator
+  role back by anyone holding the webhook secret, leaving no audit record.
+- **Suspending an account now cuts its sessions on every path.** The session
+  check refuses a token whose claim says `suspended`, and a token issued while
+  the account was a `user` keeps saying `user` until it expires — so a
+  billing-driven suspension previously did nothing at all for up to two hours.
+  The panel had always revoked; the webhook never had.
+- **Billing-driven *un*-suspension now honours the `auto_suspend` setting**, as
+  suspension and termination already did, and **all three settings finally have
+  controls** on the WHMCS integration screen. They were stored and returned by the
+  API but had no checkbox, and the screen's own save omitted them — which reset
+  them to their defaults every time it was used.
+- **The password-reset endpoints refuse a suspended account** — silently, for
+  *Forgot password*, which answers identically for every address on purpose so it
+  cannot be used to discover which addresses exist. A visible refusal there would
+  have disclosed which accounts are suspended to anyone who asked.
+
+**Upgrading.** A migration adds the column and moves any intact record across. It
+also fills in accounts suspended by the billing webhook, which never recorded one
+— for those, `user` is not a guess but the value they already had and would have
+been given anyway. Accounts suspended through the panel whose record was
+destroyed by a password reset are left empty on purpose, and un-suspending one
+asks an administrator to choose rather than picking for them.
+
+Pinned by `tests/suspend-restore-pin-e2e.sh`.
+
 ## [2.72.0] - 2026-08-06
 
 ### Changed — an administrator can now repair any site on a machine they run

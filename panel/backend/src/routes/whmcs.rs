@@ -86,6 +86,23 @@ pub async fn update_config(
     // Generate webhook secret for incoming hooks
     let webhook_secret = uuid::Uuid::new_v4().to_string().replace('-', "");
 
+    // An omitted flag means "leave it as it is", not "true".
+    //
+    // The panel's own WHMCS form posts only the three API fields, so every save
+    // from the UI used to force all three flags back to their defaults — silently
+    // re-enabling billing-driven suspension for an operator who had turned it off
+    // through the API. A setting that will not stay set is worse than one that
+    // does not exist, and it made the `auto_suspend` gate on the webhook's
+    // suspend/unsuspend arms unreliable in exactly the case it was added for.
+    let current: Option<(bool, bool, bool)> = sqlx::query_as(
+        "SELECT auto_provision, auto_suspend, auto_terminate FROM whmcs_config LIMIT 1",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    let (cur_provision, cur_suspend, cur_terminate) = current.unwrap_or((true, true, false));
+
     sqlx::query(
         "INSERT INTO whmcs_config (id, api_url, api_identifier, api_secret_encrypted, auto_provision, auto_suspend, auto_terminate, webhook_secret) \
          VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7) \
@@ -96,9 +113,9 @@ pub async fn update_config(
     .bind(&body.api_url)
     .bind(&body.api_identifier)
     .bind(&encrypted_secret)
-    .bind(body.auto_provision.unwrap_or(true))
-    .bind(body.auto_suspend.unwrap_or(true))
-    .bind(body.auto_terminate.unwrap_or(false))
+    .bind(body.auto_provision.unwrap_or(cur_provision))
+    .bind(body.auto_suspend.unwrap_or(cur_suspend))
+    .bind(body.auto_terminate.unwrap_or(cur_terminate))
     .bind(&webhook_secret)
     .execute(&state.db)
     .await
@@ -234,20 +251,28 @@ pub async fn webhook(
 
             if let Some((Some(user_id),)) = mapping {
                 // `role` doubles as the status column, so suspending OVERWRITES the only
-                // record of what the account was — and the unsuspend arm below restores
-                // everyone to 'user'. An admin round-tripped through billing therefore
-                // comes back as a plain user, with nobody left holding the privilege to
-                // promote them again. The panel's own twin in `users.rs` stashes the prior
-                // role before suspending; this path has no equivalent, so it declines to
-                // touch a privileged account rather than destroying its role. Reachable:
-                // the provision arm above adopts an EXISTING user by email with no role
-                // filter, so the operator's own account maps here the moment their address
-                // is also a billing contact.
-                let changed = sqlx::query(
-                    "UPDATE users SET role = 'suspended' WHERE id = $1 AND role NOT IN ('admin', 'reseller')"
+                // record of what the account was. This path used to have no stash at all,
+                // and the unsuspend arm below restored everyone to 'user' — so an account
+                // round-tripped through billing came back a plain user whatever it had
+                // been. It compensated with the deny-list below, which was complete when
+                // written and then silently holed: it names roles one by one, so it did
+                // not grow when `client` was added to ASSIGNABLE_ROLES, and a `client`
+                // round trip escalated into the `user` that may claim new domains.
+                //
+                // Now it stashes, through the same helper the panel uses, so the deny-list
+                // no longer has to carry that weight alone. It is KEPT regardless, because
+                // it guards a different hazard the stash does not touch: a lapsed invoice
+                // must never suspend the operator out of their own panel. Reachable — the
+                // provision arm above adopts an EXISTING user by email with no role filter,
+                // so the operator's own account maps here the moment their address is also
+                // a billing contact.
+                let changed = crate::helpers::suspend_account(
+                    &state,
+                    user_id,
+                    " AND role NOT IN ('admin', 'reseller')",
                 )
-                    .bind(user_id).execute(&state.db).await
-                    .map(|r| r.rows_affected()).unwrap_or(0);
+                .await
+                .unwrap_or(0);
 
                 sqlx::query("UPDATE whmcs_service_map SET status = 'suspended' WHERE whmcs_service_id = $1")
                     .bind(service_id).execute(&state.db).await.ok();
@@ -264,17 +289,45 @@ pub async fn webhook(
             Ok(Json(serde_json::json!({ "ok": true, "action": "suspended" })))
         }
 
-        "unsuspend" | "UnsuspendAccount" => {
+        // Gated on `auto_suspend`, like its twin above. It was the only arm of the
+        // three with no flag test, so an operator who deliberately turned
+        // billing-driven suspension OFF still got billing-driven UN-suspension —
+        // and since un-suspending rewrites the role, that was the half that could
+        // change a privilege. Suspend and unsuspend are one setting's two
+        // directions; honouring one and not the other is not a safe default.
+        "unsuspend" | "UnsuspendAccount" if auto_suspend => {
             let mapping: Option<(Option<uuid::Uuid>,)> = sqlx::query_as(
                 "SELECT user_id FROM whmcs_service_map WHERE whmcs_service_id = $1"
             ).bind(service_id).fetch_optional(&state.db).await.ok().flatten();
 
             if let Some((Some(user_id),)) = mapping {
-                sqlx::query("UPDATE users SET role = 'user' WHERE id = $1 AND role = 'suspended'")
-                    .bind(user_id).execute(&state.db).await.ok();
-
-                sqlx::query("UPDATE whmcs_service_map SET status = 'active' WHERE whmcs_service_id = $1")
-                    .bind(service_id).execute(&state.db).await.ok();
+                // Gives back the role recorded when the account was suspended,
+                // instead of the hardcoded 'user' that used to promote a `client`
+                // and demote an `admin` in the same statement.
+                //
+                // ⚠ The deny-list is not symmetry for its own sake. The suspend arm
+                // above refuses to touch a privileged account — but the panel can
+                // suspend one, and then this arm would have handed `admin` straight
+                // back, turning a webhook secret into a privilege-restoration
+                // primitive that leaves no activity-log row. Billing may return an
+                // ordinary account to service; it may not re-grant an operator role.
+                match crate::helpers::unsuspend_account(&state, user_id, &["admin", "reseller"]).await {
+                    Ok(Some(role)) => {
+                        sqlx::query("UPDATE whmcs_service_map SET status = 'active' WHERE whmcs_service_id = $1")
+                            .bind(service_id).execute(&state.db).await.ok();
+                        tracing::info!("WHMCS unsuspended service {service_id} as {role}");
+                    }
+                    // The service map is deliberately NOT marked active here: the
+                    // account is still suspended, and saying otherwise would leave
+                    // billing and the panel disagreeing with nothing to reconcile them.
+                    Ok(None) => tracing::warn!(
+                        "WHMCS unsuspend for service {service_id} left the account suspended — \
+                         either no previous role was recorded, or it is one billing may not restore"
+                    ),
+                    Err(_) => tracing::warn!(
+                        "WHMCS unsuspend for service {service_id} failed to read or write the role"
+                    ),
+                }
             }
             Ok(Json(serde_json::json!({ "ok": true, "action": "unsuspended" })))
         }

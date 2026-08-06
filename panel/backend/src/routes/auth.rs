@@ -854,6 +854,20 @@ pub async fn forgot_password(
         None => return Ok(Json(success_msg)),
     };
 
+    // A suspended account gets no reset token. Every other door already refuses
+    // one — login (:228), the JWT middleware (auth.rs:105), 2FA (:1184),
+    // passkeys and OAuth — and this was the single entry point with no role test
+    // at all, so a reset issued here could never be used for anything anyway.
+    //
+    // ⚠ Return the SAME success body, never an error. The handler above answers
+    // identically for every address on purpose, to defeat account enumeration; a
+    // refusal here would turn it into an oracle that additionally discloses
+    // WHICH addresses are suspended — a worse leak than the one being closed,
+    // handed to an unauthenticated caller.
+    if user.role == "suspended" {
+        return Ok(Json(success_msg));
+    }
+
     let (token, token_hash) = generate_token();
     let expires = chrono::Utc::now() + chrono::Duration::hours(1);
 
@@ -927,6 +941,14 @@ pub async fn reset_password(
     .map_err(|e| internal_error("reset password", e))?;
 
     let user = user.ok_or_else(|| err(StatusCode::BAD_REQUEST, "Invalid or expired reset token"))?;
+
+    // The same refusal as `forgot_password`, for a token minted before the
+    // account was suspended. Answers with the sentence an unknown token gets, so
+    // it stays silent about why — the response shape is the disclosure here, and
+    // this endpoint has no enumeration defence of its own to lean on.
+    if user.role == "suspended" {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid or expired reset token"));
+    }
 
     let salt = SaltString::generate(&mut OsRng);
     let hash = Argon2::default()

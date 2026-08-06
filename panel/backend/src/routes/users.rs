@@ -63,7 +63,11 @@ pub async fn list(
 /// editor still left all three refusing it, so the role existed everywhere except
 /// where it is written. `suspended` is deliberately absent: it is reached through
 /// `toggle_suspend`, never assigned directly.
-const ASSIGNABLE_ROLES: [&str; 4] = ["admin", "reseller", "user", "client"];
+///
+/// Public because `helpers::unsuspend_account` validates a stashed role against
+/// it. It is deliberately shared rather than copied — a fourth copy is how the
+/// first three got out of step.
+pub const ASSIGNABLE_ROLES: [&str; 4] = ["admin", "reseller", "user", "client"];
 
 /// The message that names them. `err` takes a `&str`, so this cannot be built
 /// from the list at runtime — a unit test asserts it mentions every one instead,
@@ -255,8 +259,16 @@ pub async fn update(
 
 /// POST /api/users/{id}/toggle-suspend — Suspend or un-suspend a user (admin only).
 ///
-/// When suspended, the user's role is set to "suspended" (previous role is stored in reset_token
-/// field temporarily). Un-suspending restores the original role. All sessions are invalidated.
+/// Suspending sets the user's role to "suspended" and records what it was in
+/// `users.prior_role`; un-suspending gives that role back. All sessions are
+/// invalidated either way.
+///
+/// The stash used to live in `users.reset_token`, which the public password-reset
+/// flow also writes — so a suspended account could destroy the record of its own
+/// role by asking for a password reset, and came back as a plain `user`. Both
+/// halves of the fix are elsewhere: the column is `prior_role` and the statements
+/// are `helpers::suspend_account` / `helpers::unsuspend_account`, shared with the
+/// billing webhook so the two cannot drift.
 pub async fn toggle_suspend(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
@@ -274,32 +286,32 @@ pub async fn toggle_suspend(
         .map_err(|e| internal_error("toggle_suspend", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
 
+    // Both arms write the role themselves, in one statement each, so the stash and
+    // the status can never come apart.
+    //
+    // An administrator restoring through the panel has no deny-list — they may
+    // give back anything that was recorded, including `admin`. The billing
+    // webhook passes one; see `helpers::unsuspend_account`.
     let (new_role, action) = if user.role == "suspended" {
-        // Un-suspend: restore previous role (stored in reset_token) or default to "user"
-        let original_role = user.reset_token.as_deref().unwrap_or("user");
-        let role = if ASSIGNABLE_ROLES.contains(&original_role) {
-            original_role.to_string()
-        } else {
-            "user".to_string()
-        };
-        (role, "user.unsuspend")
+        match crate::helpers::unsuspend_account(&state, id, &[]).await? {
+            Some(role) => (role, "user.unsuspend"),
+            // Only reachable for an account suspended by a build that predates
+            // `users.prior_role`, whose record the password-reset flow had already
+            // overwritten. Guessing here is the defect this whole change removes,
+            // so say what happened and name the way out instead.
+            None => {
+                return Err(err(
+                    StatusCode::CONFLICT,
+                    "This account was suspended by an older version and the record of its \
+                     previous role was lost, so un-suspending cannot know what to give back. \
+                     Set the role directly from the user editor — that also lifts the suspension.",
+                ))
+            }
+        }
     } else {
-        // Suspend: save current role in reset_token, set role to "suspended"
-        sqlx::query("UPDATE users SET reset_token = $1 WHERE id = $2")
-            .bind(&user.role)
-            .bind(id)
-            .execute(&state.db)
-            .await
-            .map_err(|e| internal_error("toggle_suspend", e))?;
+        crate::helpers::suspend_account(&state, id, "").await?;
         ("suspended".to_string(), "user.suspend")
     };
-
-    sqlx::query("UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2")
-        .bind(&new_role)
-        .bind(id)
-        .execute(&state.db)
-        .await
-        .map_err(|e| internal_error("toggle_suspend", e))?;
 
     // Actually revoke the user's live token(s) — a plain DELETE of user_sessions does
     // not invalidate the stateless JWT, so suspension would otherwise be a no-op for
@@ -469,10 +481,23 @@ mod tests {
     fn the_client_role_is_assignable_and_survives_an_unsuspend() {
         // s312 / GitHub #51. Three separate copies of this list existed — create,
         // update and the un-suspend restore — so a role added to the database
-        // CHECK and the user editor was still refused by all three. The restore
-        // path matters most: a role missing from the list is silently downgraded
-        // to "user" when the account is un-suspended, which would hand a client
-        // back a role that can create sites.
+        // CHECK and the user editor was still refused by all three.
+        //
+        // ⚠ This comment used to end by naming the harm outright — "silently
+        // downgraded to user when the account is un-suspended, which would hand
+        // a client back a role that can create sites" — above an assertion that
+        // could not detect it. Membership in this list was never what decided
+        // the restore: the stash it read lived in `users.reset_token`, which the
+        // public password-reset flow also wrote, so the value was frequently not
+        // a role at all and the fallback ran regardless of what this list said.
+        // The test described the bug and passed through it (s316; the fifth time
+        // a test in this project has spelled its own defect).
+        //
+        // The restore no longer reads a shared column and no longer falls back
+        // to `user`. What this assertion is actually good for is the narrower
+        // thing it always proved — that `client` is assignable at all — and the
+        // arms that cover the restore now live beside the code, in
+        // `helpers::suspend_restore_tests`, plus `tests/suspend-restore-pin-e2e.sh`.
         assert!(ASSIGNABLE_ROLES.contains(&"client"));
     }
 }

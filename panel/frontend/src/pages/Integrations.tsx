@@ -9,6 +9,9 @@ interface WhmcsConfig {
   configured: boolean;
   api_url: string;
   api_identifier: string;
+  auto_provision?: boolean;
+  auto_suspend?: boolean;
+  auto_terminate?: boolean;
   webhook_secret?: string;
 }
 
@@ -33,6 +36,12 @@ function WhmcsContent() {
   const [apiUrl, setApiUrl] = useState("");
   const [apiIdent, setApiIdent] = useState("");
   const [apiSecret, setApiSecret] = useState("");
+  // The three flags the webhook actually reads. They were stored and returned by
+  // the API but had no control, so the only way to change one was a raw request —
+  // and since this form omitted them, the next save from this page put them back.
+  const [autoProvision, setAutoProvision] = useState(true);
+  const [autoSuspend, setAutoSuspend] = useState(true);
+  const [autoTerminate, setAutoTerminate] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -47,6 +56,9 @@ function WhmcsContent() {
         if (cfg.configured) {
           setApiUrl(cfg.api_url);
           setApiIdent(cfg.api_identifier);
+          setAutoProvision(cfg.auto_provision ?? true);
+          setAutoSuspend(cfg.auto_suspend ?? true);
+          setAutoTerminate(cfg.auto_terminate ?? false);
         }
       } catch { /* ignore */ }
       setLoading(false);
@@ -56,7 +68,14 @@ function WhmcsContent() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await api.put("/whmcs/config", { api_url: apiUrl, api_identifier: apiIdent, api_secret: apiSecret });
+      await api.put("/whmcs/config", {
+        api_url: apiUrl,
+        api_identifier: apiIdent,
+        api_secret: apiSecret,
+        auto_provision: autoProvision,
+        auto_suspend: autoSuspend,
+        auto_terminate: autoTerminate,
+      });
       setMsg({ text: "WHMCS configured", type: "success" });
       const cfg = await api.get<WhmcsConfig>("/whmcs/config");
       setConfig(cfg);
@@ -103,6 +122,25 @@ function WhmcsContent() {
               <label className="block text-sm text-dark-200 mb-1">API Secret</label>
               <input type="password" value={apiSecret} onChange={e => setApiSecret(e.target.value)} placeholder="Enter to update" className="w-full px-3 py-2 text-sm border border-dark-500 rounded-lg" />
             </div>
+          </div>
+          <div className="space-y-2 pt-1">
+            <label className="flex items-center gap-2 text-sm text-dark-200">
+              <input type="checkbox" checked={autoProvision} onChange={e => setAutoProvision(e.target.checked)} className="accent-rust-500" />
+              Create an account when a service is provisioned
+            </label>
+            <label className="flex items-center gap-2 text-sm text-dark-200">
+              <input type="checkbox" checked={autoSuspend} onChange={e => setAutoSuspend(e.target.checked)} className="accent-rust-500" />
+              Suspend and un-suspend accounts with the service
+            </label>
+            <p className="text-xs text-dark-400 pl-6">
+              Off means billing never changes an account's role in either direction. Suspending
+              records the previous role and gives it back on un-suspend; billing can return an
+              ordinary account to service but never restores an admin or reseller.
+            </p>
+            <label className="flex items-center gap-2 text-sm text-dark-200">
+              <input type="checkbox" checked={autoTerminate} onChange={e => setAutoTerminate(e.target.checked)} className="accent-rust-500" />
+              Mark the service terminated on cancellation
+            </label>
           </div>
           <div className="flex items-center justify-between pt-2">
             <div>

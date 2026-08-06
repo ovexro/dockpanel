@@ -1305,14 +1305,39 @@ fi
 #
 # Keyed on the UPDATE's own predicate, not on a comment or a helper name: the
 # guard has to be in the statement or it is not a guard.
+# ⚠ REPOINTED s316 — the subject MOVED, and this arm's own "measuring nothing"
+# guard is what caught it. `role` used to be the stash as well as the status, and
+# the deny-list below was the whole compensation; the stash now has its own
+# column (`users.prior_role`) and both suspenders share one statement in
+# `helpers::suspend_account`. An arm still grepping whmcs.rs for the UPDATE would
+# have been measuring an absent subject — lesson #150, extracting a helper moves
+# the subject of every pin that measured it. So the arm follows the code, and is
+# paired with the check that the caller still REACHES it.
+#
+# The deny-list is KEPT on purpose even though the stash now exists: it guards a
+# different hazard, a lapsed invoice suspending the operator out of their own panel.
 if [ -z "$WH_S" ]; then
   : # already reported by I9
-elif ! has "$WH_S" "UPDATE users SET role = 'suspended'"; then
-  bad "I9b no suspend UPDATE found in whmcs.rs — this arm is measuring nothing"
-elif has "$WH_S" "UPDATE users SET role = 'suspended' WHERE id = \\\$1 AND role NOT IN"; then
+elif ! has "$WH_S" 'helpers::suspend_account'; then
+  bad "I9b whmcs no longer reaches the shared suspend statement — this arm is measuring nothing"
+elif has "$WH_S" "role NOT IN \\('admin', 'reseller'\\)"; then
   ok "I9b the billing webhook cannot overwrite a privileged role"
 else
   bad "I9b the billing webhook suspends any role — an admin round trip demotes them permanently"
+fi
+
+# I9c (s316) — the OTHER direction, which never had a guard at all. The unsuspend
+# arm restored every account to a hardcoded 'user', so one billing round trip
+# promoted a `client` into the role that may claim new domains and demoted an
+# `admin` in the same statement. It has to give back what was recorded.
+if [ -z "$WH_S" ]; then
+  : # already reported by I9
+elif has "$WH_S" "UPDATE users SET role = 'user'"; then
+  bad "I9c the billing webhook still restores every unsuspended account to 'user'"
+elif ! has "$WH_S" 'helpers::unsuspend_account'; then
+  bad "I9c whmcs does not reach the shared unsuspend statement — this arm is measuring nothing"
+else
+  ok "I9c the billing webhook gives back the role it recorded, not a hardcoded one"
 fi
 
 # I10 — the structural guarantee behind all of the above. `user_id` is an Option

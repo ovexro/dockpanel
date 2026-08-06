@@ -59,6 +59,161 @@ pub const SITE_CALLER_PREDICATE: &str = "s.id = $1 AND (s.user_id = $2 OR EXISTS
     SELECT 1 FROM users u, servers sv WHERE u.id = $2 AND u.role = 'admin' \
     AND sv.id = s.server_id AND (sv.is_local OR sv.user_id = u.id)))";
 
+// ── Suspension: the role an account gets back ───────────────────────────────
+//
+// Suspending overwrites `users.role`, which is the only record of what the
+// account was, so something has to hold the previous value until the account is
+// un-suspended. That used to be `users.reset_token` — a column the public
+// password-reset flow also writes, from an endpoint that checked no role at
+// all. A suspended account could therefore erase its own stash by asking for a
+// password reset, and the restore then handed back whatever the fallback said.
+//
+// The stash now has a column of its own, and both places that suspend an
+// account go through the two functions below rather than keeping a private copy
+// of the query. There were eight private copies of the last query that decided
+// an authorisation question in this codebase, under three different names, and
+// exactly one of them had quietly drifted (v2.72.0). Two is how that starts.
+
+/// Suspend an account, recording the role it held, and cut its live sessions.
+///
+/// The write is ONE statement, deliberately. The stash and the status change
+/// cannot come apart — there is no window in which `role` has been overwritten
+/// but nothing remembers what it was, which is what a read-then-write pair would
+/// leave open if the process died between them. Postgres evaluates every SET
+/// right-hand side against the OLD row, so `prior_role = role` takes the
+/// pre-update value.
+///
+/// `AND role <> 'suspended'` matters for the same reason: without it, suspending
+/// an already-suspended account would overwrite a perfectly good stash with the
+/// word `suspended`, and the account could then never be given its role back.
+///
+/// **Revoking the sessions is part of suspending, not a step callers remember.**
+/// The JWT middleware only refuses a token whose *claim* says `suspended`, and a
+/// token minted while the account was a `user` keeps saying `user` until it
+/// expires two hours later. The panel had always revoked; the billing webhook
+/// never had, so a billing suspension did nothing at all for up to two hours.
+/// Putting it here is the only way the two paths are actually the same rules,
+/// which is what the guide claims.
+///
+/// `extra_predicate` is appended to the WHERE clause for callers that may only
+/// suspend some accounts — the billing webhook refuses to touch a privileged
+/// one. It is `&'static str` so it cannot carry anything caller-supplied into
+/// the SQL. Returns the number of rows changed, so a caller can tell "suspended"
+/// from "declined".
+pub async fn suspend_account(
+    state: &crate::AppState,
+    id: uuid::Uuid,
+    extra_predicate: &'static str,
+) -> Result<u64, crate::error::ApiError> {
+    let sql = format!(
+        "UPDATE users SET prior_role = role, role = 'suspended', updated_at = NOW() \
+         WHERE id = $1 AND role <> 'suspended'{extra_predicate}"
+    );
+    let changed = sqlx::query(&sql)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map(|r| r.rows_affected())
+        .map_err(|e| crate::error::internal_error("suspend account", e))?;
+
+    if changed > 0 {
+        crate::routes::auth::revoke_all_user_sessions(state, id).await;
+    }
+    Ok(changed)
+}
+
+/// Which role an un-suspend may restore, given what was recorded.
+///
+/// Pure, and deliberately separated from the query it serves: this single
+/// expression IS the authorisation decision, and everything around it is I/O.
+/// Kept apart so it can be exercised exhaustively in-process — the async
+/// DB-bound wrapper cannot be, and a decision no test can reach is a decision
+/// that drifts. `None` means *leave the account suspended and say so*; it is
+/// never a default, and there is deliberately no branch here that invents a role.
+///
+/// An unrecognised stash — a role since retired, or a leftover from the old
+/// shared column — is treated exactly like no stash at all. It is never handed
+/// back verbatim: `users.role` carries a CHECK constraint, and a rejected write
+/// is a 500 on the button an administrator presses to undo their own action.
+pub fn role_to_restore(stashed: Option<&str>, deny: &[&str]) -> Option<String> {
+    let role = stashed?;
+    if !crate::routes::users::ASSIGNABLE_ROLES.contains(&role) {
+        return None;
+    }
+    if deny.contains(&role) {
+        return None;
+    }
+    Some(role.to_string())
+}
+
+/// Give back the role an account held before it was suspended.
+///
+/// Returns the restored role, or `None` when the account was left suspended —
+/// which happens in exactly two cases, both deliberate:
+///
+///   * **the prior role is unknown**, and
+///   * **the prior role is one `deny` forbids this caller to restore.**
+///
+/// **It never guesses, and that is the whole design.** An earlier draft fell back
+/// to the least-privileged role on an unknown stash, on the reasoning that
+/// `client` is strictly weaker than `user`. That reasoning was wrong: reseller
+/// management is scoped `AND role = 'user'`
+/// (`routes/reseller_dashboard.rs:243`, `:317`), so an account handed `client`
+/// is still listed by its reseller and can no longer be managed by them — the
+/// fallback would not withhold one capability, it would strand the account in a
+/// state no operator asked for. There is no ordering of these roles that makes a
+/// guess safe, so the caller is told instead.
+///
+/// `deny` is the same idea as `suspend_account`'s predicate, in the other
+/// direction. The billing webhook must not RESTORE a privileged role either: its
+/// suspend arm refuses to touch an `admin`, but before this it would happily hand
+/// `admin` back to an account the *panel* had suspended, which turned a webhook
+/// secret into a privilege-restoration primitive.
+///
+/// Reads `prior_role` with a narrow `SELECT` naming the column, never
+/// `SELECT *`. That is not style: `models::User` derives `FromRow` and thirteen
+/// queries load it that way, including the ones that authenticate a login. Keeping
+/// the new column out of that struct means a database restored from a snapshot
+/// older than this migration degrades THIS call alone instead of failing
+/// every login.
+pub async fn unsuspend_account(
+    state: &crate::AppState,
+    id: uuid::Uuid,
+    deny: &[&str],
+) -> Result<Option<String>, crate::error::ApiError> {
+    let stashed: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT prior_role FROM users WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| crate::error::internal_error("read prior role", e))?;
+
+    let stashed = stashed.and_then(|(r,)| r);
+    let Some(role) = role_to_restore(stashed.as_deref(), deny) else {
+        return Ok(None);
+    };
+
+    // Clear the stash in the same statement that consumes it. A stash left behind
+    // would be applied again by a later un-suspend, silently overriding whatever
+    // role an administrator had chosen in between.
+    //
+    // `AND role = 'suspended'` makes this idempotent and safe for a caller that
+    // has not already checked — the billing webhook receives an unsuspend hook for
+    // whatever state the account happens to be in, and must not rewrite the role
+    // of an account that was never suspended.
+    sqlx::query(
+        "UPDATE users SET role = $1, prior_role = NULL, updated_at = NOW() \
+         WHERE id = $2 AND role = 'suspended'",
+    )
+    .bind(&role)
+    .bind(id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| crate::error::internal_error("unsuspend account", e))?;
+
+    Ok(Some(role))
+}
+
 /// Hash an agent token using SHA-256. Agent tokens are high-entropy (UUIDs)
 /// so SHA-256 is sufficient — no need for slow hashing (argon2/bcrypt).
 pub fn hash_agent_token(token: &str) -> String {
@@ -88,6 +243,85 @@ pub fn cf_headers(token: &str, email: Option<&str>) -> reqwest::header::HeaderMa
         headers.insert("Authorization", bearer);
     }
     headers
+}
+
+#[cfg(test)]
+mod suspend_restore_tests {
+    use super::role_to_restore;
+
+    /// The sentence the whole change exists to make true: what comes back is what
+    /// was recorded, for every role that can be recorded — never something else.
+    #[test]
+    fn every_recorded_role_comes_back_as_itself() {
+        for role in crate::routes::users::ASSIGNABLE_ROLES {
+            assert_eq!(
+                role_to_restore(Some(role), &[]).as_deref(),
+                Some(role),
+                "un-suspending must return the role that was recorded, not a substitute"
+            );
+        }
+    }
+
+    /// ⚠ THE ARM THIS MODULE EXISTS FOR. An un-suspend must never invent a role.
+    /// The first draft of this change fell back to the least-privileged role on an
+    /// unknown stash; that was wrong, because there is no total ordering of these
+    /// roles — reseller management is scoped `AND role = 'user'`, so handing an
+    /// account `client` strands it outside its own reseller's reach rather than
+    /// merely withholding something. Any future `unwrap_or` here reintroduces a
+    /// silent role change on the one path nobody watches.
+    #[test]
+    fn an_unknown_prior_role_is_never_guessed() {
+        assert_eq!(role_to_restore(None, &[]), None, "no stash must not mean a default role");
+        assert_eq!(
+            role_to_restore(Some(""), &[]),
+            None,
+            "an empty stash must not mean a default role"
+        );
+    }
+
+    /// The old shared column held a 64-character SHA-256 digest. If one is still
+    /// sitting in a stash, it must be refused, not written into a
+    /// CHECK-constrained column where it becomes a 500 on the Unsuspend button.
+    ///
+    /// ⚠ Named around the digest rather than around the column, deliberately.
+    /// `tests/suspend-restore-pin-e2e.sh` §B asserts that the password-reset
+    /// column is named ONLY by the reset flow and the model, and a pin greps raw
+    /// source — so an identifier here spelling that column would have to be
+    /// excused in the arm, weakening the one census that would catch the stash
+    /// moving back. Keep the name clear of it.
+    #[test]
+    fn a_leftover_password_digest_is_refused_not_restored() {
+        // Synthetic, but the right SHAPE — 64 hex characters, which is what
+        // `auth::hash_token` produces and what would actually be sitting there.
+        let token = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+        assert_eq!(token.len(), 64, "the fixture must be the length a real digest is");
+        assert_eq!(role_to_restore(Some(token), &[]), None);
+        assert_eq!(
+            role_to_restore(Some("suspended"), &[]),
+            None,
+            "'suspended' is a status, never a role to restore"
+        );
+    }
+
+    /// The billing webhook may not hand back a privileged role. Its suspend arm
+    /// already refuses to touch one; without this the same secret could RESTORE
+    /// `admin` to an account the panel had deliberately suspended.
+    #[test]
+    fn a_denied_role_is_not_restored_and_the_account_stays_suspended() {
+        let deny = ["admin", "reseller"];
+        assert_eq!(role_to_restore(Some("admin"), &deny), None);
+        assert_eq!(role_to_restore(Some("reseller"), &deny), None);
+    }
+
+    /// The control that keeps the test above from passing vacuously: the same
+    /// deny-list must still let the ordinary roles through, or billing
+    /// un-suspension would be broken for everybody rather than guarded.
+    #[test]
+    fn the_deny_list_still_lets_ordinary_roles_through() {
+        let deny = ["admin", "reseller"];
+        assert_eq!(role_to_restore(Some("user"), &deny).as_deref(), Some("user"));
+        assert_eq!(role_to_restore(Some("client"), &deny).as_deref(), Some("client"));
+    }
 }
 
 #[cfg(test)]
