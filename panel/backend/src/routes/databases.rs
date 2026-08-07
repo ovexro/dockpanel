@@ -109,21 +109,29 @@ pub async fn list(
 pub async fn create(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<CreateDbRequest>,
 ) -> Result<(StatusCode, Json<Database>), ApiError> {
-    // Verify site ownership
-    let site_exists: Option<(Uuid,)> =
-        sqlx::query_as(&format!("SELECT s.id FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
-            .bind(body.site_id)
-            .bind(claims.sub)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| internal_error("create databases", e))?;
+    // Verify site ownership — and take the host from the same row while we are
+    // here. The container is created on whichever host the handle points at and
+    // then recorded against this site, so a misdispatch leaves a `databases` row
+    // naming a container that does not exist on the site's own machine, while the
+    // wrong machine keeps the container and the port. The row that decides WHICH
+    // SITE has to decide WHICH HOST too.
+    let site: Option<(Option<Uuid>, String)> = sqlx::query_as(&format!(
+        "SELECT s.server_id, s.domain FROM sites s WHERE {}",
+        crate::helpers::SITE_CALLER_PREDICATE
+    ))
+    .bind(body.site_id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("create databases", e))?;
 
-    if site_exists.is_none() {
-        return Err(err(StatusCode::NOT_FOUND, "Site not found"));
-    }
+    let (site_server_id, site_domain) =
+        site.ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    let agent =
+        crate::helpers::agent_for_site_server(&state, site_server_id, &site_domain).await?;
 
     // Hard per-account cap on total databases (independent of reseller quota) so a
     // single tenant cannot exhaust the shared, host-wide DB port pool / host RAM.

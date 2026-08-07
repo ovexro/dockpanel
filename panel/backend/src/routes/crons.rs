@@ -5,7 +5,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::{AuthUser, ServerScope, Claims};
+use crate::auth::{AuthUser, Claims};
 use crate::error::{internal_error, err, agent_error, paginate, ApiError};
 use crate::services::activity;
 use crate::services::agent::AgentHandle;
@@ -123,11 +123,10 @@ pub async fn list(
 pub async fn create(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<CreateCronRequest>,
 ) -> Result<(StatusCode, Json<Cron>), ApiError> {
-    let domain = get_site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     // Validate command for injection
     if body.command.trim().is_empty() {
@@ -172,11 +171,10 @@ pub async fn create(
 pub async fn update(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path((id, cron_id)): Path<(Uuid, Uuid)>,
     Json(body): Json<UpdateCronRequest>,
 ) -> Result<Json<Cron>, ApiError> {
-    let domain = get_site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     // Verify cron belongs to this site
     let existing: Option<(Uuid,)> =
@@ -241,10 +239,9 @@ pub async fn update(
 pub async fn remove(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path((id, cron_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = get_site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let deleted = sqlx::query("DELETE FROM crons WHERE id = $1 AND site_id = $2")
         .bind(cron_id)
@@ -276,10 +273,9 @@ pub async fn remove(
 pub async fn run_now(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path((id, cron_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = get_site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let cron: Cron = sqlx::query_as(
         "SELECT * FROM crons WHERE id = $1 AND site_id = $2",

@@ -5,7 +5,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::{AuthUser, ServerScope};
+use crate::auth::AuthUser;
 use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::services::activity;
 use crate::services::extensions::fire_event;
@@ -476,18 +476,18 @@ pub async fn inject_to_site(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path((vault_id, site_id)): Path<(Uuid, Uuid)>,
-    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     verify_vault(&state, vault_id, claims.sub).await?;
 
     let encryption_key = get_encryption_key(&state.config.jwt_secret);
 
-    // Get domain for site
-    let domain: (String,) = sqlx::query_as(&format!("SELECT s.domain FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
-        .bind(site_id).bind(claims.sub)
-        .fetch_optional(&state.db).await
-        .map_err(|e| internal_error("inject to site", e))?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+    // This writes DECRYPTED secrets into a site's nginx env on whichever host the
+    // handle points at. Taking that from the caller's selection meant one tenant's
+    // secrets could be written into the env of a machine their site does not run on
+    // — the one member of this family where a misdispatch is a disclosure and not
+    // merely a wrong answer. The row names the host.
+    let (domain, agent) =
+        crate::helpers::site_agent_for_caller(&state, site_id, &claims).await?;
 
     // Get all auto-inject secrets
     let rows: Vec<SecretRow> = sqlx::query_as(
@@ -511,22 +511,22 @@ pub async fn inject_to_site(
 
     // Write to site via agent
     let body = serde_json::json!({ "vars": env_pairs });
-    agent.put(&format!("/nginx/env/{}", domain.0), body).await
+    agent.put(&format!("/nginx/env/{}", domain), body).await
         .map_err(|e| agent_error("Inject secrets", e))?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "secrets.inject",
-        Some("site"), Some(&domain.0), Some(&format!("{} secrets", rows.len())), None,
+        Some("site"), Some(&domain), Some(&format!("{} secrets", rows.len())), None,
     ).await;
 
     fire_event(&state.db, "secrets.injected", serde_json::json!({
-        "site_id": site_id, "domain": &domain.0, "count": rows.len(),
+        "site_id": site_id, "domain": &domain, "count": rows.len(),
     }));
 
     Ok(Json(serde_json::json!({
         "ok": true,
         "injected": rows.len(),
-        "domain": domain.0,
+        "domain": domain,
     })))
 }
 

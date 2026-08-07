@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.78.0.** The version stamp, the template count and every
+> **Reflects v2.79.0.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -428,7 +428,7 @@ survivable. Thirty-eight suites, **1248 assertions**, all green at the current c
 | `ownership-delete-pin-e2e.sh` | 36 |
 | `compose-stack-pin-e2e.sh` | 43 |
 | `container-identity-pin-e2e.sh` | 38 |
-| `unattended-host-scope-pin-e2e.sh` | 113 |
+| `unattended-host-scope-pin-e2e.sh` | 114 |
 | `status-page-gate-pin-e2e.sh` | 17 |
 | `site-transfer-visibility-pin-e2e.sh` | 21 |
 | `suspend-restore-pin-e2e.sh` | 17 |
@@ -436,7 +436,7 @@ survivable. Thirty-eight suites, **1248 assertions**, all green at the current c
 | `terminal-scope-signed-pin-e2e.sh` | 9 |
 | `logs-scope-signed-pin-e2e.sh` | 10 |
 | `client-role-honesty-pin-e2e.sh` | 28 |
-| `wrong-host-dispatch-pin-e2e.sh` | 18 |
+| `wrong-host-dispatch-pin-e2e.sh` | 17 |
 
 **On a schedule, from outside** (`live-surfaces.yml`, daily). Every layer above
 runs because something changed, which is exactly why none of them could catch the

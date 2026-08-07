@@ -5,28 +5,19 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::{AuthUser, ServerScope, Claims};
+use crate::auth::{AuthUser, ServerScope};
 use crate::error::{internal_error, agent_error, err, require_admin, ApiError};
 use crate::services::activity;
 use crate::AppState;
 
-/// Helper: resolve a site this caller may act on, and return its domain.
-///
-/// One line over [`crate::helpers::site_domain_for_caller`], which is shared with
-/// the five other modules that each carried their own copy of this query. The
-/// rules — including why only the admin arm is scoped by server — live there.
-async fn site_domain(state: &AppState, site_id: Uuid, claims: &Claims) -> Result<String, ApiError> {
-    crate::helpers::site_domain_for_caller(state, site_id, claims).await
-}
 
 /// GET /api/sites/{id}/wordpress — Detect WP + get info + auto-update status.
 pub async fn info(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let resp: serde_json::Value = agent
         .get(&format!("/wordpress/{domain}/info"))
@@ -52,11 +43,10 @@ pub async fn info(
 pub async fn install(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let resp: serde_json::Value = agent
         .post(&format!("/wordpress/{domain}/install"), Some(body))
@@ -82,10 +72,9 @@ pub async fn install(
 pub async fn plugins(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let resp: serde_json::Value = agent
         .get(&format!("/wordpress/{domain}/plugins"))
@@ -99,10 +88,9 @@ pub async fn plugins(
 pub async fn themes(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let resp: serde_json::Value = agent
         .get(&format!("/wordpress/{domain}/themes"))
@@ -116,10 +104,9 @@ pub async fn themes(
 pub async fn update(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path((id, target)): Path<(Uuid, String)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     if !["core", "plugins", "themes"].contains(&target.as_str()) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid target"));
@@ -152,7 +139,6 @@ pub async fn update(
 pub async fn plugin_action(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path((id, action)): Path<(Uuid, String)>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -161,7 +147,7 @@ pub async fn plugin_action(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid plugin action"));
     }
 
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let resp: serde_json::Value = agent
         .post(
@@ -178,7 +164,6 @@ pub async fn plugin_action(
 pub async fn theme_action(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path((id, action)): Path<(Uuid, String)>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -187,7 +172,7 @@ pub async fn theme_action(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid theme action"));
     }
 
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let resp: serde_json::Value = agent
         .post(
@@ -204,11 +189,10 @@ pub async fn theme_action(
 pub async fn set_auto_update(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let resp: serde_json::Value = agent
         .post(&format!("/wordpress/{domain}/auto-update"), Some(body))
@@ -360,7 +344,6 @@ pub async fn vuln_scan(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
-    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: crate::models::Site = sqlx::query_as(&format!("SELECT s.* FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
         .bind(id)
@@ -369,6 +352,7 @@ pub async fn vuln_scan(
         .await
         .map_err(|e| internal_error("vuln scan", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+    let agent = crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     let result = agent
         .post(&format!("/wordpress/{}/vuln-scan", site.domain), None)
@@ -416,7 +400,6 @@ pub async fn security_check(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
-    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: crate::models::Site = sqlx::query_as(&format!("SELECT s.* FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
         .bind(id)
@@ -425,6 +408,7 @@ pub async fn security_check(
         .await
         .map_err(|e| internal_error("security check", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+    let agent = crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     let result = agent
         .get(&format!("/wordpress/{}/security-check", site.domain))
@@ -439,7 +423,6 @@ pub async fn wp_harden(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
-    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: crate::models::Site = sqlx::query_as(&format!("SELECT s.* FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
@@ -449,6 +432,7 @@ pub async fn wp_harden(
         .await
         .map_err(|e| internal_error("wp harden", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+    let agent = crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     let result = agent
         .post(&format!("/wordpress/{}/harden", site.domain), Some(body))
@@ -474,10 +458,9 @@ pub async fn wp_harden(
 pub async fn update_safe(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let result = agent
         .post_long(

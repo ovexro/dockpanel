@@ -1393,7 +1393,6 @@ pub struct SwitchPhpRequest {
 pub async fn switch_php(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<SwitchPhpRequest>,
 ) -> Result<Json<Site>, ApiError> {
@@ -1415,6 +1414,7 @@ pub async fn switch_php(
     .await
     .map_err(|e| internal_error("switch php", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+    let agent = crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     if site.runtime != "php" {
         return Err(err(
@@ -1480,7 +1480,6 @@ pub struct SwitchRuntimeRequest {
 pub async fn switch_runtime(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<SwitchRuntimeRequest>,
 ) -> Result<Json<Site>, ApiError> {
@@ -1504,6 +1503,7 @@ pub async fn switch_runtime(
         .await
         .map_err(|e| internal_error("switch runtime", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+    let agent = crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     if !SWITCHABLE_RUNTIMES.contains(&site.runtime.as_str()) {
         return Err(err(
@@ -1717,7 +1717,6 @@ pub struct UpdateLimitsRequest {
 pub async fn update_limits(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateLimitsRequest>,
 ) -> Result<Json<Site>, ApiError> {
@@ -1730,6 +1729,7 @@ pub async fn update_limits(
     .await
     .map_err(|e| internal_error("update limits", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+    let agent = crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     if let Some(rl) = body.rate_limit {
         if rl < 1 || rl > 10000 {
@@ -2023,10 +2023,9 @@ async fn site_domain(state: &AppState, site_id: Uuid, claims: &Claims) -> Result
 pub async fn list_redirects(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
     let result = agent
         .get(&format!("/nginx/redirects/{domain}"))
         .await
@@ -2050,7 +2049,6 @@ fn default_301() -> String {
 pub async fn add_redirect(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<AddRedirectBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -2066,7 +2064,7 @@ pub async fn add_redirect(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid redirect target: contains shell metacharacters"));
     }
 
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
     let result = agent
         .post(
             "/nginx/redirects/add",
@@ -2086,11 +2084,10 @@ pub async fn add_redirect(
 pub async fn remove_redirect(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
     let result = agent
         .post(
             &format!("/nginx/redirects/{domain}/remove"),
@@ -2109,10 +2106,9 @@ pub async fn remove_redirect(
 pub async fn list_protected(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
     let result = agent
         .get(&format!("/nginx/password-protect/{domain}"))
         .await
@@ -2131,7 +2127,6 @@ pub struct PasswordProtectBody {
 pub async fn add_password_protect(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<PasswordProtectBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -2144,7 +2139,7 @@ pub async fn add_password_protect(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid username: must be alphanumeric (underscores and hyphens allowed)"));
     }
 
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
     let result = agent
         .post(
             "/nginx/password-protect",
@@ -2164,11 +2159,10 @@ pub async fn add_password_protect(
 pub async fn remove_password_protect(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
     let result = agent
         .post(
             &format!("/nginx/password-protect/{domain}/remove"),
@@ -2187,10 +2181,9 @@ pub async fn remove_password_protect(
 pub async fn list_aliases(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
     let result = agent
         .get(&format!("/nginx/aliases/{domain}"))
         .await
@@ -2207,7 +2200,6 @@ pub struct AddAliasBody {
 pub async fn add_alias(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
     Json(body): Json<AddAliasBody>,
@@ -2216,14 +2208,31 @@ pub async fn add_alias(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid alias: must be a valid domain name"));
     }
 
-    let domain = site_domain(&state, id, &claims).await?;
+    // This handler needs the host as a VALUE, not just as a handle, so it reads both
+    // from the row rather than going through the domain-only resolver. Taking the id
+    // from the caller's selection meant the collision check below ran against one
+    // machine while the alias was written on another.
+    let (domain, site_server_id): (String, Option<Uuid>) = sqlx::query_as(&format!(
+        "SELECT s.domain, s.server_id FROM sites s WHERE {}",
+        crate::helpers::SITE_CALLER_PREDICATE
+    ))
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("add alias", e))?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    let agent = crate::helpers::agent_for_site_server(&state, site_server_id, &domain).await?;
+    let host = site_server_id
+        .ok_or_else(|| err(StatusCode::CONFLICT, "This site is not associated with a server"))?;
 
     // An alias becomes an nginx `server_name` on the caller's own vhost. Without
     // this guard any tenant could attach ANOTHER tenant's (or the panel's own)
     // live domain as an alias and hijack its traffic / intercept its ACME
     // HTTP-01 challenge. Reject reserved domains and any domain already served
     // by a site or git deployment on this server.
-    let alias = ensure_domain_available(&state, &agent, &body.alias, server_id, &headers, &claims.role).await?;
+    let alias = ensure_domain_available(&state, &agent, &body.alias, host, &headers, &claims.role).await?;
 
     let result = agent
         .post(
@@ -2242,11 +2251,10 @@ pub async fn add_alias(
 pub async fn remove_alias(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
     let result = agent
         .post(
             &format!("/nginx/aliases/{domain}/remove"),
@@ -2265,11 +2273,10 @@ pub async fn remove_alias(
 pub async fn access_logs(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
     let lines = params.get("lines").unwrap_or(&"200".to_string()).clone();
     let log_type = params.get("type").unwrap_or(&"access".to_string()).clone();
     let path = format!(
@@ -2287,10 +2294,9 @@ pub async fn access_logs(
 pub async fn site_stats(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
     let result = agent
         .get(&format!("/nginx/site-stats/{domain}"))
         .await
@@ -2302,10 +2308,9 @@ pub async fn site_stats(
 pub async fn php_errors(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
     let result = agent
         .get(&format!("/nginx/php-errors/{domain}"))
         .await
@@ -2676,11 +2681,10 @@ pub async fn clone_site(
 pub async fn upload_ssl(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let mut agent_body = body.clone();
     agent_body["domain"] = serde_json::json!(domain);
@@ -2741,10 +2745,9 @@ pub async fn install_php_extension(
 pub async fn get_env_vars(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
     let result = agent.get(&format!("/nginx/env/{domain}")).await
         .map_err(|e| agent_error("Env vars", e))?;
     Ok(Json(result))
@@ -2754,11 +2757,10 @@ pub async fn get_env_vars(
 pub async fn set_env_vars(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
     agent.put(&format!("/nginx/env/{domain}"), body).await
         .map_err(|e| agent_error("Env vars", e))?;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -2768,7 +2770,6 @@ pub async fn set_env_vars(
 pub async fn rename_domain(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
@@ -2784,6 +2785,16 @@ pub async fn rename_domain(
     .map_err(|e| internal_error("rename domain", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
+    // ⚠ The scope binding this replaces was spelled `_server_id` and was NOT unused —
+    // the underscore silenced the warning while the value was still being passed to
+    // the claim check below. Renaming a domain rewrites this site's vhost, so both
+    // the check and the write have to name the host the row does.
+    let agent =
+        crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
+    let host = site
+        .server_id
+        .ok_or_else(|| err(StatusCode::CONFLICT, "This site is not associated with a server"))?;
+
     let requested = body.get("new_domain")
         .and_then(|v| v.as_str())
         .unwrap_or("")
@@ -2797,7 +2808,7 @@ pub async fn rename_domain(
     let new_domain = domain_claim::ensure_claimable(
         &state.db,
         &agent,
-        _server_id,
+        host,
         &requested,
         &headers,
         domain_claim::Holder::Site(id),
@@ -2876,7 +2887,6 @@ pub async fn rename_domain(
 pub async fn toggle_enabled(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -2889,6 +2899,7 @@ pub async fn toggle_enabled(
     .await
     .map_err(|e| internal_error("toggle site", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+    let agent = crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     let enabled = body.get("enabled")
         .and_then(|v| v.as_bool())
@@ -2940,7 +2951,6 @@ pub async fn toggle_enabled(
 pub async fn toggle_fastcgi_cache(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -2953,6 +2963,7 @@ pub async fn toggle_fastcgi_cache(
     .await
     .map_err(|e| internal_error("toggle fastcgi cache", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+    let agent = crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     if site.runtime != "php" {
         return Err(err(StatusCode::BAD_REQUEST, "FastCGI cache is only available for PHP sites"));
@@ -3010,7 +3021,6 @@ pub async fn toggle_fastcgi_cache(
 pub async fn purge_fastcgi_cache(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: crate::models::Site = sqlx::query_as(
@@ -3022,6 +3032,7 @@ pub async fn purge_fastcgi_cache(
     .await
     .map_err(|e| internal_error("purge fastcgi cache", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+    let agent = crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     if !site.fastcgi_cache {
         return Err(err(StatusCode::BAD_REQUEST, "FastCGI cache is not enabled for this site"));
@@ -3049,7 +3060,6 @@ pub async fn purge_fastcgi_cache(
 pub async fn toggle_redis_cache(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -3062,6 +3072,7 @@ pub async fn toggle_redis_cache(
     .await
     .map_err(|e| internal_error("toggle redis cache", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+    let agent = crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     if site.runtime != "php" {
         return Err(err(StatusCode::BAD_REQUEST, "Redis object cache is only available for PHP sites"));
@@ -3155,7 +3166,6 @@ pub async fn toggle_redis_cache(
 pub async fn purge_redis_cache(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: crate::models::Site = sqlx::query_as(
@@ -3167,6 +3177,7 @@ pub async fn purge_redis_cache(
     .await
     .map_err(|e| internal_error("purge redis cache", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+    let agent = crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     if !site.redis_cache {
         return Err(err(StatusCode::BAD_REQUEST, "Redis cache is not enabled for this site"));
@@ -3194,7 +3205,6 @@ pub async fn purge_redis_cache(
 pub async fn toggle_waf(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -3207,6 +3217,7 @@ pub async fn toggle_waf(
     .await
     .map_err(|e| internal_error("toggle waf", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+    let agent = crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     let enabled = body.get("enabled").and_then(|v| v.as_bool())
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Missing 'enabled' boolean"))?;
@@ -3267,7 +3278,6 @@ pub async fn toggle_waf(
 pub async fn waf_logs(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: crate::models::Site = sqlx::query_as(
@@ -3279,6 +3289,7 @@ pub async fn waf_logs(
     .await
     .map_err(|e| internal_error("waf logs", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+    let agent = crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     let result = agent
         .get(&format!("/nginx/sites/{}/waf/logs?limit=50", site.domain))
@@ -3292,7 +3303,6 @@ pub async fn waf_logs(
 pub async fn optimize_images(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -3305,6 +3315,7 @@ pub async fn optimize_images(
     .await
     .map_err(|e| internal_error("optimize images", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+    let agent = crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     let format = body.get("format").and_then(|v| v.as_str()).unwrap_or("webp");
     let quality = body.get("quality").and_then(|v| v.as_u64()).unwrap_or(80);
@@ -3415,7 +3426,6 @@ pub(crate) fn build_nginx_body(site: &crate::models::Site) -> serde_json::Value 
 pub async fn update_security_headers(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -3428,6 +3438,7 @@ pub async fn update_security_headers(
     .await
     .map_err(|e| internal_error("security headers", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+    let agent = crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     let csp = body.get("csp_policy").and_then(|v| v.as_str()).map(|s| s.to_string());
     let perms = body.get("permissions_policy").and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -3491,7 +3502,6 @@ pub async fn update_security_headers(
 pub async fn toggle_bot_protection(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -3504,6 +3514,7 @@ pub async fn toggle_bot_protection(
     .await
     .map_err(|e| internal_error("bot protection", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+    let agent = crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     let mode = body.get("mode").and_then(|v| v.as_str()).unwrap_or("off");
     if !["off", "rate-limit", "challenge", "block"].contains(&mode) {

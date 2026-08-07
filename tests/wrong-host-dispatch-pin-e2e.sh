@@ -194,30 +194,86 @@ else
   bad "C3 it does not resolve per-server at all"
 fi
 
-# Subjects derived FROM SOURCE, not from a literal list. An arm that enumerates
-# its own subjects can never see a subject nobody added to it.
-declare -A SUBJ=( [sites::remove]="$SITES:remove:$SIT"
-                  [deploy::trigger]="$DEPLOY:trigger:$DEP"
-                  [stacks::remove]="$STACKS:remove:$STK" )
+# C4 — NO handler answers WHICH SITE from the row and WHICH HOST from the caller.
+#
+# ⚠ s321: THE LINE ABOVE THIS ONE USED TO READ "Subjects derived FROM SOURCE, not
+# from a literal list" — sitting directly on top of a hardcoded three-element
+# array. It was not derived from anything. It judged THREE handlers while sixty-two
+# call sites in seven modules spelled the pattern, and because the comment used the
+# vocabulary of the lesson, the gap read as already audited. That is the sharper
+# form of §J5's mistake in the sibling suite: a literal list under a comment
+# FORBIDDING literal lists is a missed application, but a literal list under a
+# comment CLAIMING to be derived is a false statement about coverage, and it was
+# written into the very suite that exists to police this defect class.
+#
+# The census below is real. A handler is IN the class when it resolves a site the
+# caller may act on — through a module resolver or a shared-predicate row read —
+# and then names that site's domain on an agent call. Those two facts together ARE
+# the defect: the row answered which site, the scope answered which host, and on a
+# fleet they disagree. Membership is computed per handler across every route
+# module, so a handler added tomorrow is judged the day it lands.
+#
+# Per lesson #143 the census is asserted BEFORE it is judged. An empty scan means
+# the extractor broke, not that the tree is clean, and it must fail loudly — a
+# violation count of zero over zero subjects is the reassuring direction.
+CENSUS=$(for f in panel/backend/src/routes/*.rs; do
+  perl -0777 -ne '
+    my $src = $_;
+    $src =~ s{^\s*///.*$}{}gm; $src =~ s{^\s*//.*$}{}gm;
+    my @at;
+    while ($src =~ /(?:pub )?async fn ([a-z_0-9]+)\s*\(/g) { push @at, [pos($src), $1]; }
+    for my $i (0 .. $#at) {
+      my ($start, $name) = @{$at[$i]};
+      my $end  = ($i < $#at) ? $at[$i+1][0] : length($src);
+      my $body = substr($src, $start, $end - $start);
+      # The FIXED form counts as a member too. Keying membership only on the
+      # unfixed spellings would shrink the denominator as handlers are converted,
+      # so the control would weaken exactly as the tree improved — and a handler
+      # that later lost its site resolution altogether would leave the census
+      # silently, which is the reassuring direction.
+      next unless $body =~ /SITE_CALLER_PREDICATE|SITE_FOR_CALLER_ALL|site_domain_for_caller|site_agent_for_caller|agent_for_site_server|let domain = (?:site_domain|get_site_domain|get_site)\(/;
+      my $scoped   = ($body =~ /ServerScope\(/)                    ? 1 : 0;
+      # Any use of the handle is enough. Keying on a literal "{domain}" missed
+      # `logs::site_logs`, which interpolates the domain into a log-type string
+      # first and passes THAT — the site is still the subject of the call.
+      my $usesagent = ($body =~ /(?:^|[^_a-z])agent\s*\n?\s*\./m || $body =~ /&agent\b/) ? 1 : 0;
+      # …unless the row read is ALSO constrained to the scoped server. Then the
+      # site set and the handle agree by construction and a remote site simply
+      # reports "not found" — correct, not a misdispatch. This is what separates
+      # `wordpress::bulk_update` and `all_wp_sites` from the real members.
+      my $pinned = ($body =~ /server_id = \$\d/) ? 1 : 0;
+      # A streaming-ticket mint is not a dispatcher: its handle is the SIGNING key
+      # and its scope id is the input to the local-only guard, so taking either
+      # from the row would delete the guard rather than aim it. Excluded by the
+      # PROPERTY of carrying that guard, never by name — a third mint written
+      # tomorrow is excluded for the same reason, and one written WITHOUT the
+      # guard is judged here (and by J4/J5 next door).
+      $pinned = 1 if $body =~ /require_local_agent_scope\(/;
+      # A handler that CREATES a site row is choosing a destination, not resolving
+      # an existing host. There is no row to take the answer from yet.
+      $pinned = 1 if $body =~ /INSERT INTO sites\b/;
+      $scoped = 0 if $pinned;
+      print "$ARGV:$name:$scoped$usesagent\n";
+    }
+  ' "$f"
+done | sort)
+CENSUS_N=$(printf '%s\n' "$CENSUS" | grep -c . || true)
+VIOL=$(printf '%s\n' "$CENSUS" | grep ':11$' || true)
+VIOL_N=$(printf '%s\n' "$VIOL" | grep -c . || true)
 
-for label in sites::remove deploy::trigger stacks::remove; do
-  entry="${SUBJ[$label]}"
-  fn="${entry#*:}"; fn="${fn%%:*}"
-  src="${entry#*:*:}"
-  body=$(fnbody "$src" "$fn")
-  if [ -z "$body" ]; then
-    bad "C4 $label — could not extract the handler body, the arm measured nothing"
-    continue
-  fi
-  # The handler must not take its agent from the caller's server selection.
-  if has "$body" 'ServerScope'; then
-    bad "C4 $label takes its agent from the caller's server selection, not from the row"
-  elif has "$body" 'agent_for_site_server|site_agent_for_caller'; then
-    ok "C4 $label resolves its agent from the row"
+if [ "$CENSUS_N" -lt 20 ]; then
+  bad "C4 the census found only $CENSUS_N site-resolving handlers — the extractor is broken, not the tree (this family spans seven modules)"
+else
+  ok "C4 censused $CENSUS_N site-resolving handlers across every route module, computed from source"
+  if [ "$VIOL_N" -eq 0 ]; then
+    ok "C4 none of them takes its agent from the caller's server selection"
   else
-    bad "C4 $label resolves its agent by neither route — it may have lost its agent entirely"
+    printf '%s\n' "$VIOL" | while IFS=: read -r file fn _; do
+      [ -n "$fn" ] || continue
+      bad "C4 $(basename "$file")::$fn resolves the site from the row and the host from the caller — the two questions are collapsed again"
+    done
   fi
-done
+fi
 
 STKBODY=$(fnbody "$STK" "remove")
 if [ -z "$STKBODY" ]; then

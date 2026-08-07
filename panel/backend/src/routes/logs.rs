@@ -81,18 +81,13 @@ pub async fn site_logs(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<uuid::Uuid>,
-    ServerScope(_server_id, agent): ServerScope,
     Query(q): Query<LogQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let row: Option<(String,)> =
-        sqlx::query_as(&format!("SELECT s.domain FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
-            .bind(id)
-            .bind(claims.sub)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| internal_error("site logs", e))?;
-
-    let (domain,) = row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+    // Asking the wrong host for a site's logs does not fail. That machine has no
+    // vhost by this name, so it answers with nothing, and nothing is exactly what a
+    // quiet site looks like — the operator reads "no traffic" instead of "wrong
+    // question". The row names the host.
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let log_type = q.log_type.as_deref().unwrap_or("access");
     if !["access", "error"].contains(&log_type) {
@@ -150,18 +145,12 @@ pub async fn search_site_logs(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<uuid::Uuid>,
-    ServerScope(_server_id, agent): ServerScope,
     Query(q): Query<SearchQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let row: Option<(String,)> =
-        sqlx::query_as(&format!("SELECT s.domain FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
-            .bind(id)
-            .bind(claims.sub)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| internal_error("search site logs", e))?;
-
-    let (domain,) = row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+    // Same as the reader above, and a search is the worse of the two: "no matching
+    // lines" is a confident negative answer, and an operator searching a remote
+    // site's access log for an attack would have got one.
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let log_type = q.log_type.as_deref().unwrap_or("access");
     let full_type = match log_type {

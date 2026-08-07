@@ -6,7 +6,7 @@ use axum::{
 use std::time::Duration;
 use uuid::Uuid;
 
-use crate::auth::{AuthUser, ServerScope, Claims};
+use crate::auth::{AuthUser, Claims};
 use crate::error::{internal_error, err, agent_error, paginate, ApiError};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
@@ -127,9 +127,8 @@ pub async fn create(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
-    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let domain = get_site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let backup_id = Uuid::new_v4();
 
@@ -325,9 +324,8 @@ pub async fn restore(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path((id, backup_id)): Path<(Uuid, Uuid)>,
-    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let domain = get_site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let backup: Backup = sqlx::query_as(
         "SELECT * FROM backups WHERE id = $1 AND site_id = $2",
@@ -516,9 +514,8 @@ pub async fn remove(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path((id, backup_id)): Path<(Uuid, Uuid)>,
-    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = get_site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let backup: Backup = sqlx::query_as(
         "SELECT * FROM backups WHERE id = $1 AND site_id = $2",
@@ -551,10 +548,9 @@ pub async fn remove(
 pub async fn restic_backup(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = get_site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let result = agent
         .post_long(
@@ -577,10 +573,9 @@ pub async fn restic_backup(
 pub async fn restic_snapshots(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = get_site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let result = agent
         .get(&format!("/backups/{}/restic/snapshots", domain))
@@ -594,10 +589,9 @@ pub async fn restic_snapshots(
 pub async fn restic_restore(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path((id, snapshot_id)): Path<(Uuid, String)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = get_site_domain(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     // Validate snapshot ID
     if snapshot_id.len() < 6 || !snapshot_id.chars().all(|c| c.is_ascii_hexdigit()) {

@@ -6,7 +6,7 @@ use axum::{
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-use crate::auth::{AuthUser, ServerScope};
+use crate::auth::AuthUser;
 use crate::auth::Claims;
 use crate::error::{internal_error, err, agent_error, paginate, ApiError};
 use crate::routes::is_safe_shell_command;
@@ -267,10 +267,9 @@ pub async fn trigger(
 pub async fn keygen(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = get_site(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let result = agent
         .post("/deploy/keygen", Some(serde_json::json!({ "domain": domain })))
@@ -695,10 +694,9 @@ async fn execute_deploy(
 pub async fn list_releases(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<ReleaseInfo>>, ApiError> {
-    let domain = get_site(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let result = agent
         .get(&format!("/deploy/releases/{domain}"))
@@ -715,10 +713,9 @@ pub async fn list_releases(
 pub async fn rollback_release(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path((id, release_id)): Path<(Uuid, String)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = get_site(&state, id, &claims).await?;
+    let (domain, agent) = crate::helpers::site_agent_for_caller(&state, id, &claims).await?;
 
     let result = agent
         .post("/deploy/activate", Some(serde_json::json!({

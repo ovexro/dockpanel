@@ -78,7 +78,6 @@ pub async fn provision(
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
     Query(q): Query<ProvisionQuery>,
-    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: Site = sqlx::query_as(&format!("SELECT s.* FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
         .bind(id)
@@ -87,6 +86,12 @@ pub async fn provision(
         .await
         .map_err(|e| internal_error("provision", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    // Issuing writes a certificate and rewrites the vhost for this domain on
+    // whichever host the handle points at. The predicate above already answered
+    // WHICH SITE from the row; the host has to come from the same place.
+    let agent =
+        crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     if site.status != "active" {
         return Err(err(
@@ -241,7 +246,6 @@ pub async fn provision_dns01(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
-    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: Site = sqlx::query_as(&format!("SELECT s.* FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
@@ -251,6 +255,11 @@ pub async fn provision_dns01(
         .await
         .map_err(|e| internal_error("dns01 provision", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    // The DNS-01 path issues for this domain and rebuilds its vhost, same as the
+    // HTTP-01 one above — so it needs the same host, from the same row.
+    let agent =
+        crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     if site.status != "active" {
         return Err(err(StatusCode::BAD_REQUEST, "Site must be active"));
@@ -443,7 +452,6 @@ pub async fn status(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
-    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let site: Site = sqlx::query_as(&format!("SELECT s.* FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
         .bind(id)
@@ -452,6 +460,13 @@ pub async fn status(
         .await
         .map_err(|e| internal_error("status", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    // A read, so a wrong host is not destructive — but it is still dishonest: asking
+    // this box about a certificate that lives on another one returns "no certificate"
+    // for a site that has a perfectly good one. `.ok()` below would swallow that into
+    // a null rather than an error, which is the shape nobody notices.
+    let agent =
+        crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     // Also fetch live status from agent
     let agent_path = format!("/ssl/status/{}", site.domain);
@@ -471,10 +486,21 @@ pub async fn renew(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
     Path(id): Path<Uuid>,
-    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let site: Site = sqlx::query_as("SELECT * FROM sites WHERE id = $1")
+    // ⚠ This read used to be `WHERE id = $1` with no caller and no server term,
+    // while `provision`, `provision_dns01` and `status` in this same file all went
+    // through the shared predicate. `AdminUser` is not a superuser here — an
+    // administrator's reach stops at the local box and the machines they registered
+    // themselves — so the only thing keeping this handler inside that boundary was
+    // the scope extractor's check on a header, which is not an authorisation the
+    // row ever agreed to. Adopting the sibling form makes the row decide, and that
+    // is what then makes it safe to take the host from the row as well.
+    let site: Site = sqlx::query_as(&format!(
+        "SELECT s.* FROM sites s WHERE {}",
+        crate::helpers::SITE_CALLER_PREDICATE
+    ))
         .bind(id)
+        .bind(claims.sub)
         .fetch_optional(&state.db)
         .await
         .map_err(|e| internal_error("ssl renew", e))?
@@ -483,6 +509,12 @@ pub async fn renew(
     if !site.ssl_enabled {
         return Err(err(StatusCode::BAD_REQUEST, "SSL is not enabled for this site"));
     }
+
+    // Renewing writes a certificate and rebuilds the vhost, both named by domain on
+    // whichever host this handle points at. The row names that host; the caller's
+    // selection only ever named the one they were looking at.
+    let agent =
+        crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     // Agent renew now needs the same context as provision so it can rebuild
     // the nginx config after issuing the new cert.
@@ -549,10 +581,17 @@ pub async fn revoke(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
     Path(id): Path<Uuid>,
-    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let site: Site = sqlx::query_as("SELECT * FROM sites WHERE id = $1")
+    // Same unscoped read as `renew`, and this is the worse half: it deletes the
+    // certificate files through the agent and then blanks every `ssl_*` column on
+    // the row, so an id belonging to a site outside the caller's boundary was a
+    // cross-boundary write even when the agent leg found nothing to delete.
+    let site: Site = sqlx::query_as(&format!(
+        "SELECT s.* FROM sites s WHERE {}",
+        crate::helpers::SITE_CALLER_PREDICATE
+    ))
         .bind(id)
+        .bind(claims.sub)
         .fetch_optional(&state.db)
         .await
         .map_err(|e| internal_error("ssl revoke", e))?
@@ -561,6 +600,11 @@ pub async fn revoke(
     if !site.ssl_enabled {
         return Err(err(StatusCode::BAD_REQUEST, "SSL is not enabled for this site"));
     }
+
+    // The deletion names the site by domain and lands on whichever host this handle
+    // points at, so it has to be the host the row names.
+    let agent =
+        crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
     let agent_path = format!("/ssl/{}", site.domain);
     agent

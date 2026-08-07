@@ -4,6 +4,77 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.79.0] - 2026-08-07
+
+### Security — force-renew and revoke acted outside the administrator's boundary
+
+`POST /api/ssl/{id}/renew` and `DELETE /api/ssl/{id}` loaded the site with
+`SELECT * FROM sites WHERE id = $1` — no owner term and no server term — while
+three other handlers in the same file went through the shared caller predicate.
+An administrator in DockPanel is not a superuser: their reach is the local box
+plus the machines they registered themselves. With that predicate missing, the
+only thing holding that line was the server-scope extractor's check on a request
+header, which is not an authorisation the site's row ever agreed to.
+
+Revoke is the sharper half — it deletes the certificate through the agent and
+then blanks every `ssl_*` column on the row, so naming a site outside your
+boundary was a cross-boundary write even when the agent leg found nothing to
+delete. Both now resolve through the same predicate as their siblings.
+
+### Fixed — a site's host came from the browser, in seventy-one more places
+
+v2.78.0 fixed three handlers that answered *which site* from the row and *which
+host* from the server switcher. This release finishes the family: **71 handlers
+across 10 route modules** now take both answers from the row, through
+`site_agent_for_caller` / `agent_for_site_server`, which refuse an unreachable
+host rather than substituting the local one.
+
+The two questions agree on a single-box install, which is why this survived the
+whole life of the fleet feature. On a fleet they diverge, and the consequences
+ranged from dishonest to destructive:
+
+- `logs::site_logs` and `logs::search_site_logs` asked the wrong machine about a
+  domain it does not serve. Nothing comes back, and nothing is what a quiet site
+  looks like — a search for an attack in a remote site's access log returned a
+  confident "no matching lines".
+- `secrets::inject_to_site` wrote decrypted secrets into the nginx environment of
+  a machine the site does not run on. The one member of this family where a
+  misdispatch is a disclosure rather than a wrong answer.
+- `databases::create` built the container on the caller's host and then recorded
+  it against a site living elsewhere, leaving a row naming a container that is not
+  there while the wrong machine keeps the container and the port.
+- `sites::rename_domain` and `sites::add_alias` ran their domain-collision check
+  against one machine and wrote the vhost on another. `rename_domain`'s scope
+  binding was spelled `_server_id` and was **not** unused — the underscore silenced
+  the warning while the value was still being passed to the claim check.
+- The rest — file manager, cron, backup, WordPress, SSL provisioning and site
+  settings verbs — acted on the wrong host's copy of a domain.
+
+Handlers that legitimately want the caller's server keep it: server-level
+operations, the two streaming-ticket mints (whose scope id is the input to the
+local-only guard and whose handle is a signing key), site creation and cloning
+(where the server is a destination, not a lookup), and queries already pinned to
+the scoped server.
+
+### Fixed — two regression arms judged a hand-written list of subjects
+
+`unattended-host-scope-pin-e2e.sh` §J5 iterated two handlers from a literal list,
+three lines below a comment added in an earlier release warning never to do that.
+It now reuses the source-derived enumeration its neighbour already computes.
+Mutation-testing it surfaced something worse than a blind spot: the old arm
+grepped for a specific spelling of the discarded binding, so **deleting the
+parameter outright read as compliance** — it would have certified the exact
+mistake this release could have made.
+
+`wrong-host-dispatch-pin-e2e.sh` §C4 carried the comment *"Subjects derived FROM
+SOURCE, not from a literal list"* directly above a hardcoded three-element array.
+It judged three handlers while sixty-two call sites spelled the pattern, and
+because the comment used the vocabulary of the rule, the gap read as audited. It
+now censuses every site-resolving handler in every route module — 92 today — and
+asserts that census is non-empty before judging it. Deriving it is what found the
+last four defects above; the module-scoped search that preceded it did not see
+them.
+
 ## [2.78.0] - 2026-08-06
 
 ### Fixed — deleting a file could delete the whole site

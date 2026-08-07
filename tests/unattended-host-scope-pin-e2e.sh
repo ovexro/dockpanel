@@ -1377,7 +1377,10 @@ for f in "$TERM_R" "$LOGS_R" "$ACTR" "$ACTTSX" "$HELP"; do
 done
 
 TERM_S=$(subj "$TERM_R" || true)
-LOGS_S=$(subj "$LOGS_R" || true)
+# No LOGS_S: J5 stopped naming logs.rs when it adopted J4's source-derived
+# enumeration, and each arm now reads its own subject inside the loop. `$LOGS_R`
+# stays in the missing-subject-file check above — logs.rs is still a subject, it
+# is simply no longer one this file names by hand.
 ACTR_S=$(subj "$ACTR" || true)
 ACTTSX_S=$(subj "$ACTTSX" || true)
 HELP_S=$(subj "$HELP" || true)
@@ -1480,15 +1483,44 @@ fi
 # J5 — and it can only do that because it keeps the id. `ServerScope` resolved it
 # and both handlers bound it to `_server_id` and threw it away; the knowledge to
 # answer honestly was already in the handler.
-for pair in "ws_token:$TERM_S" "stream_token:$LOGS_S"; do
-  fn=${pair%%:*}; src=${pair#*:}
-  [ -n "$src" ] || continue
-  if has "$(sig "$src" "$fn")" 'ServerScope\( *_server_id'; then
-    bad "J5 $fn discards the resolved server id again — it cannot tell which host was selected"
-  else
-    ok "J5 $fn keeps the resolved server id rather than discarding it"
-  fi
-done
+#
+# ⚠ s321: THIS ARM USED TO ITERATE A HARDCODED TWO-ELEMENT LIST — three lines
+# below the s305 paragraph above that forbids exactly that, and says so in the
+# imperative. It judged two handlers by name while the token it forbids is spelled
+# at 267 sites across 25 modules, so a THIRD mint of this class would have been
+# invisible to it for ever. That is lesson #267: a warning comment protects the
+# arm it sits in, not the file, and "the lesson is already written here" is
+# evidence the file needs auditing rather than evidence it is safe.
+#
+# It now reuses J4's source-derived `$MINTS`, so both arms judge the same
+# enumeration and a new mint is seen by BOTH the day it is added. Today that
+# resolves to the same two handlers the list named, so this is a HARDENING of an
+# arm that already passed — it cannot satisfy required-red (#172/#180) and is
+# MUTATION-TESTED instead, exactly as J4 was. Per lesson #143 the enumeration is
+# asserted BEFORE anything is judged, and a subject that cannot be read or
+# extracted is reported as measuring nothing rather than skipped in silence —
+# the previous `continue` on an empty source was that silent skip.
+if [ "$MINT_N" -lt 2 ]; then
+  bad "J5 enumerated only $MINT_N scoped ticket mints — the enumeration is broken, not the code (expected at least the terminal and log-stream mints)"
+else
+  ok "J5 judges the same $MINT_N mints J4 enumerated from source, not a list this arm carries"
+  while IFS=: read -r file fn; do
+    [ -n "$fn" ] || continue
+    src=$(subj "$file" || true)
+    if [ -z "$src" ]; then
+      bad "J5 could not read $file"
+      continue
+    fi
+    SIG=$(sig "$src" "$fn")
+    if [ -z "$SIG" ]; then
+      bad "J5 could not extract $fn — the arm measured nothing"
+    elif has "$SIG" 'ServerScope\( *_server_id'; then
+      bad "J5 $fn discards the resolved server id again — it cannot tell which host was selected"
+    else
+      ok "J5 $fn keeps the resolved server id rather than discarding it"
+    fi
+  done <<< "$MINTS"
+fi
 
 # J6 — the audit feed can say which host. `activity_logs.server_id` has been
 # written since v2.58.0 and stamped by the healer's own writers since v2.60.0,
