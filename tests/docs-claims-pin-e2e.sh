@@ -195,7 +195,9 @@ else
            twenty-one twenty-two twenty-three twenty-four twenty-five twenty-six
            twenty-seven twenty-eight twenty-nine thirty thirty-one thirty-two
            thirty-three thirty-four thirty-five thirty-six thirty-seven
-           thirty-eight thirty-nine forty"
+           thirty-eight thirty-nine forty forty-one forty-two forty-three
+           forty-four forty-five forty-six forty-seven forty-eight forty-nine
+           fifty"
     n=0; want_word=""
     for w in $words; do n=$((n+1)); [ "$n" -eq "$rows" ] && want_word="$w"; done
     if [ "$p_assert" != "$sum" ]; then

@@ -87,10 +87,16 @@ having.
 
 ### What moves with the site
 
-The `sites` row, and the four kinds of record that keep their own copy of the
-owner beside the site: **alerts, monitors, secret vaults, and WHMCS service
-mappings**. Everything else a site owns — databases, cron jobs, backups, SSL
-certificates — is reached *through* the site, so it follows automatically.
+The `sites` row, **its staging environment if it has one**, and the four kinds of
+record that keep their own copy of the owner beside the site: **alerts, monitors,
+secret vaults, and WHMCS service mappings**. Everything else a site owns —
+databases, cron jobs, backups, SSL certificates — is reached *through* the site,
+so it follows automatically.
+
+A staging environment is a second site in its own right, which is why it has to be
+named here. Until v2.82.0 it did not move, and the consequence was not cosmetic:
+the previous owner kept a shell inside a full copy of the new owner's files, and
+kept the control that pushes that copy over the new owner's live site.
 
 The whole transfer is one database transaction. It either happens completely or
 not at all; there is no state where the site answers to the new owner while its
@@ -114,6 +120,27 @@ Being a client also means not being an admin, so every administrative surface �
 users, servers, panel settings, updates, the firewall — refuses it, the same way
 it refuses an ordinary `user`.
 
+**The controls for what a client cannot do are no longer shown to it** (v2.82.0).
+Create Site, Clone, Create Staging and Add Alias used to be rendered and then
+refused, so the message above arrived only after the person had filled in a domain
+and, for a WordPress site, a set of administrator credentials. The rule has not
+changed; where you meet it has.
+
+### What a client can see that it could not before
+
+Two screens required an administrator over data that was already limited to the
+caller's own rows, so the check decided who was refused rather than what was
+returned (v2.82.0):
+
+- **Monitoring → Certificates.** A client sees the expiry dates of its own sites'
+  certificates. The dashboard tile had been reporting exactly these all along and
+  linking to a page that answered "Admin access required".
+- **Monitoring → Maintenance.** A client can schedule a maintenance window, which
+  silences its own alerts while it works on its own site.
+
+Still administrator-only, and correctly so: mail, containers, DNS, CDN, the server
+shell, and everything under the Admin group.
+
 ## Suspending and restoring
 
 Suspend is a separate action, not a role you assign. It records the account's
@@ -135,10 +162,16 @@ previous role to give back — the activity log stores what a role became, never
 what it was. Un-suspending one of those returns a conflict explaining exactly
 that; set the role from the user editor, which also lifts the suspension. No
 default is applied, in either direction: `user` is the value that caused the bug,
-and `client` is not simply a smaller `user` — reseller management is scoped to
-`role = 'user'`, so an account handed `client` stays visible to its reseller
-while becoming unmanageable by them. Accounts suspended on v2.73.0 or later
-always have a record and are unaffected.
+and `client` is not simply a smaller `user`, so there is no ordering of these
+roles that makes a guess safe. Accounts suspended on v2.73.0 or later always have
+a record and are unaffected.
+
+The specific consequence this used to describe — an account handed `client`
+staying visible to its reseller while becoming unmanageable by them — was fixed in
+v2.82.0. A reseller may now act on every account its own table lists, whether that
+account is a `user`, a `client`, or suspended. Administrators and other resellers
+remain out of reach, by an allow-list rather than by an exclusion, so a role added
+later does not silently become something a reseller may touch.
 
 Billing-driven suspension through the WHMCS webhook follows the same rules,
 including revoking the account's sessions — which it did not do before v2.73.0,

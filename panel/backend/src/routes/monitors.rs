@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{internal_error, err, paginate, require_admin, ApiError};
+use crate::error::{internal_error, err, paginate, ApiError};
 use crate::AppState;
 
 #[derive(serde::Deserialize)]
@@ -541,8 +541,13 @@ pub async fn certificate_dashboard(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&claims.role)?;
-
+    // No `require_admin`. The query below is already `WHERE user_id = $1`, so the
+    // gate never decided WHAT this returns — only WHO is refused their own rows.
+    // The Dashboard tile that links here reads the same certificates out of
+    // `dashboard::intelligence`, which is `AuthUser` and user-scoped, so a client
+    // was told "SSL — 2 certs, expires in 9 days" and then met "Admin access
+    // required" over "No SSL certificates found" on the page the tile points at.
+    // One of those two screens was lying about the same rows; it was this one.
     let certs: Vec<(uuid::Uuid, String, bool, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
         "SELECT id, domain, ssl_enabled, ssl_expiry FROM sites WHERE user_id = $1 AND ssl_enabled = true ORDER BY ssl_expiry ASC NULLS LAST"
     ).bind(claims.sub).fetch_all(&state.db).await.unwrap_or_default();
@@ -563,7 +568,11 @@ pub async fn create_maintenance(
     AuthUser(claims): AuthUser,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&claims.role)?;
+    // Maintenance windows are per-caller in all three statements — this INSERT
+    // stamps `user_id`, the list filters on it, the delete requires it — and what
+    // a window does is silence THAT caller's alerts. A site owner who has alerts
+    // (`alerts` is user-scoped for every role) is exactly who needs to silence
+    // them while they work on their own site.
     let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("Maintenance");
     let starts_at = body.get("starts_at").and_then(|v| v.as_str()).unwrap_or("");
     let ends_at = body.get("ends_at").and_then(|v| v.as_str()).unwrap_or("");
@@ -586,7 +595,7 @@ pub async fn list_maintenance(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&claims.role)?;
+    // Per-caller by `WHERE user_id = $1` — see `create_maintenance` above.
     let windows: Vec<(uuid::Uuid, String, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         "SELECT id, name, starts_at, ends_at FROM maintenance_windows WHERE user_id = $1 ORDER BY starts_at DESC LIMIT 20"
     ).bind(claims.sub).fetch_all(&state.db).await.unwrap_or_default();
@@ -606,7 +615,8 @@ pub async fn delete_maintenance(
     AuthUser(claims): AuthUser,
     Path(id): Path<uuid::Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&claims.role)?;
+    // `AND user_id = $2` is the authorization — a caller can only delete a window
+    // they own, which is the same rule the gate above used to approximate.
     sqlx::query("DELETE FROM maintenance_windows WHERE id = $1 AND user_id = $2").bind(id).bind(claims.sub).execute(&state.db).await.ok();
     Ok(Json(serde_json::json!({ "ok": true })))
 }

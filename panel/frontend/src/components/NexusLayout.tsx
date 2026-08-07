@@ -174,7 +174,8 @@ export default function NexusLayout() {
 
         {/* Footer */}
         <div className="p-4 border-t border-dark-700 space-y-3">
-          {/* Health */}
+          {/* Health — admins only; see `canSeeHealth` in useLayoutState. */}
+          {state.canSeeHealth && (
           <div className={`flex items-center gap-2.5 px-3 py-2 rounded-lg ${
   state.apiHealthy === true ? "bg-rust-500/10 border border-rust-500/10" :
   state.apiHealthy === false ? "bg-danger-500/10 border border-danger-500/10" :
@@ -189,6 +190,7 @@ export default function NexusLayout() {
               {state.apiHealthy === true ? "All Systems OK" : state.apiHealthy === false ? "Issues Detected" : "Checking..."}
             </span>
           </div>
+          )}
           {/* User + layout + logout */}
           <div className="flex items-center gap-2 px-3">
             <div className="w-8 h-8 rounded-full bg-rust-500/15 flex items-center justify-center text-rust-400 text-xs font-bold shrink-0">

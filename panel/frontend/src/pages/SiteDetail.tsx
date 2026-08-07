@@ -47,6 +47,8 @@ export default function SiteDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
+  /** Holds sites, cannot claim a new domain — see `domain_claim::ensure_claimable`. */
+  const isClient = user?.role === "client";
   const [site, setSite] = useState<Site | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -553,10 +555,18 @@ export default function SiteDetail() {
                   <button onClick={() => setShowCloneInput(false)} className="px-3 py-2 bg-dark-600 text-dark-200 rounded-lg text-sm font-medium">Cancel</button>
                 </div>
               ) : (
-                <button disabled={cloning} onClick={() => { setCloneDomainValue(`clone-${site?.domain}`); setShowCloneInput(true); }}
-                  className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 disabled:opacity-50 transition-colors">
-                  {cloning ? "Cloning..." : "Clone"}
-                </button>
+                /* Clone, Create Staging and Add Alias all end in
+                   `domain_claim::ensure_claimable`, so all three are refusals for a
+                   `client` — on the site they DO own, which is what made them read
+                   as a fault rather than a rule. Hidden rather than disabled: a
+                   disabled control still says "this is for you, later", and for
+                   this role there is no later. */
+                !isClient && (
+                  <button disabled={cloning} onClick={() => { setCloneDomainValue(`clone-${site?.domain}`); setShowCloneInput(true); }}
+                    className="px-4 py-2 bg-dark-700 text-dark-100 rounded-lg text-sm font-medium hover:bg-dark-600 disabled:opacity-50 transition-colors">
+                    {cloning ? "Cloning..." : "Clone"}
+                  </button>
+                )
               )}
               {user?.role === "admin" && (
                 showTransfer ? (
@@ -1896,12 +1906,16 @@ export default function SiteDetail() {
                     </button>
                   </div>
                 ) : (
-                  <button
-                    onClick={() => setShowStagingForm(true)}
-                    className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
-                  >
-                    Create Staging
-                  </button>
+                  /* See the Clone control above — a staging environment is a new
+                     domain and `ensure_claimable` refuses it for a client. */
+                  !isClient && (
+                    <button
+                      onClick={() => setShowStagingForm(true)}
+                      className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
+                    >
+                      Create Staging
+                    </button>
+                  )
                 )}
                 {stagingMessage && (
                   <p className={`text-xs ${stagingMessage.includes("failed") || stagingMessage.includes("Failed") ? "text-danger-400" : "text-rust-400"}`}>
@@ -2210,7 +2224,10 @@ export default function SiteDetail() {
                 </div>
               )}
 
-              {/* Add alias form */}
+              {/* Add alias form — an alias IS a new domain
+                  (`ensure_claimable`), so it is not a client's to add. Existing
+                  aliases stay listed above: they are part of the site they hold. */}
+              {!isClient && (
               <div className="flex items-end gap-3">
                 <div className="flex-1">
                   <label className="block text-xs font-medium text-dark-200 mb-1">Domain Alias</label>
@@ -2240,6 +2257,7 @@ export default function SiteDetail() {
                   Add Alias
                 </button>
               </div>
+              )}
 
               {aliasMsg && (
                 <p className={`text-xs ${aliasMsg.includes("Failed") || aliasMsg.includes("failed") ? "text-danger-400" : "text-rust-400"}`}>

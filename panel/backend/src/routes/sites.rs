@@ -3730,22 +3730,50 @@ pub async fn transfer(
         .await
         .map_err(|e| internal_error("begin transfer", e))?;
 
-    sqlx::query("UPDATE sites SET user_id = $1 WHERE id = $2")
-        .bind(new_owner)
-        .bind(site_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| internal_error("transfer site", e))?;
+    // ⚠ A STAGING ENVIRONMENT IS A SECOND `sites` ROW, AND IT USED TO STAY BEHIND.
+    //
+    // `staging::create` inserts one (`routes/staging.rs:168`) carrying
+    // `parent_site_id` (20260312700000_staging_sites.sql:2) and the CREATOR's
+    // `user_id`. This statement was `WHERE id = $2`, so the clone did not move with
+    // its parent — and the previous owner kept, on a site they no longer hold: the
+    // staging domain in their Sites list, a `www-data` shell inside a full copy of
+    // the new owner's document root (`wp-config.php` and its database credentials
+    // included), and the push-to-production control, which writes that copy OVER
+    // the new owner's live site. A departed owner with a WRITE into the new owner's
+    // production is the worst version of the failure this handler's own comment
+    // names: "a row left behind keeps the previous owner able to see and act on
+    // part of a site they no longer hold, and nothing would report it."
+    //
+    // Staging cannot nest — `staging::create` refuses a parent that is itself
+    // staging (`staging.rs:106`) — so one `OR parent_site_id` is the whole tree,
+    // not the first level of one.
+    let moved_ids: Vec<Uuid> = sqlx::query_as::<_, (Uuid,)>(
+        "UPDATE sites SET user_id = $1 WHERE id = $2 OR parent_site_id = $2 RETURNING id",
+    )
+    .bind(new_owner)
+    .bind(site_id)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|e| internal_error("transfer site", e))?
+    .into_iter()
+    .map(|(id,)| id)
+    .collect();
 
     let mut moved = serde_json::Map::new();
     for table in OWNERSHIP_DENORMALIZED_TABLES {
         // The table name comes from a const array in this file and never from a
         // request, so the format! cannot carry anything an caller supplied.
+        //
+        // Keyed on the ids the UPDATE above actually moved, not on `site_id = $2`:
+        // the staging row's alerts, monitors and vaults belong to the staging site,
+        // and scoping this to the parent alone would move the parent's dependents
+        // while leaving the child's with the departed owner — the same split this
+        // fix exists to close, one level down.
         let n = sqlx::query(&format!(
-            "UPDATE {table} SET user_id = $1 WHERE site_id = $2"
+            "UPDATE {table} SET user_id = $1 WHERE site_id = ANY($2)"
         ))
         .bind(new_owner)
-        .bind(site_id)
+        .bind(&moved_ids)
         .execute(&mut *tx)
         .await
         .map_err(|e| internal_error("transfer dependent rows", e))?

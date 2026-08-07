@@ -17,6 +17,7 @@ export default function GlassLayout() {
     incidentCount,
     notifCount,
     apiHealthy,
+    canSeeHealth,
     twoFaEnforced,
     twoFaEnabled,
     sidebarOpen,
@@ -265,8 +266,8 @@ export default function GlassLayout() {
 
         {/* ── Footer ─────────────────────────────────────────────── */}
         <div className="px-2 py-3 border-t border-dark-600/30">
-          {/* Collapsed: just the health dot centered */}
-          {!expanded && !sidebarOpen && (
+          {/* Collapsed: just the health dot centered — admins only. */}
+          {!expanded && !sidebarOpen && canSeeHealth && (
             <div className="flex flex-col items-center gap-3">
               <div
                 className={[
@@ -313,19 +314,23 @@ export default function GlassLayout() {
               {/* Health + layout + theme */}
               <div className="flex items-center justify-between px-3 mt-2">
                 <div className="flex items-center gap-2">
-                  <div
-                    className={[
-                      "w-1.5 h-1.5 rounded-full shrink-0",
-                      apiHealthy === null
-                        ? "bg-dark-400"
-                        : apiHealthy
-                          ? "bg-rust-500"
-                          : "bg-danger-500 animate-pulse",
-                    ].join(" ")}
-                  />
-                  <span className="text-[10px] text-dark-400">
-                    {apiHealthy === null ? "Checking..." : apiHealthy ? "Connected" : "Disconnected"}
-                  </span>
+                  {canSeeHealth && (
+                    <>
+                      <div
+                        className={[
+                          "w-1.5 h-1.5 rounded-full shrink-0",
+                          apiHealthy === null
+                            ? "bg-dark-400"
+                            : apiHealthy
+                              ? "bg-rust-500"
+                              : "bg-danger-500 animate-pulse",
+                        ].join(" ")}
+                      />
+                      <span className="text-[10px] text-dark-400">
+                        {apiHealthy === null ? "Checking..." : apiHealthy ? "Connected" : "Disconnected"}
+                      </span>
+                    </>
+                  )}
                 </div>
                 <div className="flex items-center gap-1">
                 <Link to="/notifications" className="relative p-1.5 text-dark-400 hover:text-dark-200 transition-colors rounded shrink-0" title="Notifications" aria-label="Notifications">

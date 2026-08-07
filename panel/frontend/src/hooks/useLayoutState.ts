@@ -17,6 +17,11 @@ export interface LayoutState {
   incidentCount: number;
   notifCount: number;
   apiHealthy: boolean | null;
+  /** Whether to render the host-health indicator at all. False for every
+   *  non-admin: `/settings/health` is admin-only, so there is nothing behind it
+   *  for them — and a permanent "Checking..." is a quieter version of the same
+   *  lie the pulsing "Disconnected" told. */
+  canSeeHealth: boolean;
   twoFaEnforced: boolean;
   twoFaEnabled: boolean;
   sidebarOpen: boolean;
@@ -98,9 +103,20 @@ export function useLayoutState(): LayoutState {
     return () => es.close();
   }, []);
 
-  // Health check polling
+  // Health check polling.
+  //
+  // `/settings/health` is admin-only, and this `.catch` did not distinguish "the
+  // panel is unwell" from "you were not allowed to ask" — so every non-admin got
+  // `apiHealthy === false` on the first tick and every 30s after, which the four
+  // layouts render as a pulsing red "Disconnected" / "Issues Detected" in the
+  // sidebar. A client signed in and the panel told them, on every page, that it
+  // was broken. Not asking is the fix; the state already models "unknown" as
+  // `null`, and `canSeeHealth` below keeps the indicator off the screen rather
+  // than leaving it to say "Checking..." for ever.
+  const isAdmin = user?.role === "admin";
   const healthTimer = useRef<ReturnType<typeof setInterval>>(undefined);
   useEffect(() => {
+    if (!isAdmin) return;
     const checkHealth = () => {
       api.get<{ db: string; agent: string }>("/settings/health")
         .then((h) => setApiHealthy(h.db === "ok" && h.agent === "ok"))
@@ -109,14 +125,19 @@ export function useLayoutState(): LayoutState {
     checkHealth();
     healthTimer.current = setInterval(checkHealth, 30000);
     return () => { if (healthTimer.current) clearInterval(healthTimer.current); };
-  }, []);
+  }, [isAdmin]);
 
-  // 2FA enforcement
+  // 2FA status AND whether the panel requires it.
+  //
+  // Both now come from `/auth/2fa/status`, which is `AuthUser`. Enforcement used
+  // to be read from `GET /api/settings` — an `AdminUser` route — with the 403
+  // swallowed by an empty catch, so `twoFaEnforced` stayed false for exactly the
+  // population the banner exists to warn, and only admins were ever told that
+  // admins had made 2FA mandatory.
   useEffect(() => {
-    api.get<Record<string, string>>("/settings").then(s => {
-      if (s.enforce_2fa === "true") setTwoFaEnforced(true);
-    }).catch(() => {});
-    api.get<{ enabled: boolean }>("/auth/2fa/status").then(d => setTwoFaEnabled(d.enabled)).catch(() => {});
+    api.get<{ enabled: boolean; enforced?: boolean }>("/auth/2fa/status")
+      .then(d => { setTwoFaEnabled(d.enabled); setTwoFaEnforced(!!d.enforced); })
+      .catch(() => {});
   }, []);
 
   // Filter nav groups by role
@@ -142,6 +163,7 @@ export function useLayoutState(): LayoutState {
     incidentCount,
     notifCount,
     apiHealthy,
+    canSeeHealth: !!isAdmin,
     twoFaEnforced,
     twoFaEnabled,
     sidebarOpen,

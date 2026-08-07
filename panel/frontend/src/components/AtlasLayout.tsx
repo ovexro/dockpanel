@@ -17,6 +17,7 @@ export default function AtlasLayout() {
     incidentCount,
     notifCount,
     apiHealthy,
+    canSeeHealth,
     twoFaEnforced,
     twoFaEnabled,
     sidebarOpen,
@@ -194,23 +195,25 @@ export default function AtlasLayout() {
               </Link>
             )}
 
-            {/* Health dot */}
-            <div
-              className={`w-2 h-2 rounded-full ${
-                apiHealthy === null
-                  ? "bg-dark-400"
-                  : apiHealthy
-                  ? "bg-rust-500"
-                  : "bg-danger-500 animate-pulse"
-              }`}
-              title={
-                apiHealthy === null
-                  ? "Checking..."
-                  : apiHealthy
-                  ? "Healthy"
-                  : "Health Issue"
-              }
-            />
+            {/* Health dot — admins only; see `canSeeHealth` in useLayoutState. */}
+            {canSeeHealth && (
+              <div
+                className={`w-2 h-2 rounded-full ${
+                  apiHealthy === null
+                    ? "bg-dark-400"
+                    : apiHealthy
+                    ? "bg-rust-500"
+                    : "bg-danger-500 animate-pulse"
+                }`}
+                title={
+                  apiHealthy === null
+                    ? "Checking..."
+                    : apiHealthy
+                    ? "Healthy"
+                    : "Health Issue"
+                }
+              />
+            )}
 
             {/* Notification bell */}
             <Link to="/notifications" className="relative p-1.5 text-dark-300 hover:text-dark-100 rounded-md hover:bg-dark-700/30" title="Notifications" aria-label="Notifications">

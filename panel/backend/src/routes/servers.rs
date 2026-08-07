@@ -41,17 +41,44 @@ pub struct Server {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// GET /api/servers — List current user's servers.
+/// GET /api/servers — the machines this caller may see.
+///
+/// **An administrator sees every machine; anybody else sees the ones they hold.**
+/// This used to be `WHERE user_id = $1` for everyone, and `servers.user_id` names
+/// whoever happened to register the row — the FIRST admin by `created_at` for the
+/// local one (`services::agent`), and the registering admin for a fleet member. So
+/// a panel's SECOND administrator opened Servers to "No servers found. The local
+/// server should appear automatically." — which reads as a broken install, on a box
+/// whose sites that same account can fully administer. It could not appear: nothing
+/// re-points `user_id`, and the only INSERT is this module's own.
+///
+/// Widening this is safe in the one direction that matters: `agent_token` carries
+/// `#[serde(skip_serializing)]` above, so the row this returns has never contained
+/// the credential that is root on the agent. A non-admin is unchanged and still
+/// sees only rows it owns — which for a `client` is none, because no non-admin can
+/// own one.
+///
+/// ⚠ SCOPE LIMIT, stated here rather than discovered later: this fixes the LIST.
+/// Seven sibling reads still resolve a machine through `servers.user_id` and so
+/// still under-report for a second admin — `routes/drift.rs:44` and `:84`,
+/// `services/drift.rs:296`, and the four fleet aggregations in
+/// `routes/dashboard.rs` (`:329`, `:371`, `:474`, `:494`). `routes/billing.rs:36`
+/// is NOT one of them: counting the servers a given account holds is what billing
+/// means. Closing the seven wants the one shared predicate this project already
+/// uses for sites (`helpers::SITE_CALLER_PREDICATE`), not seven edits.
 pub async fn list(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
 ) -> Result<Json<Vec<Server>>, ApiError> {
-    let servers: Vec<Server> =
-        sqlx::query_as("SELECT * FROM servers WHERE user_id = $1 ORDER BY is_local DESC, created_at DESC LIMIT 500")
-            .bind(claims.sub)
-            .fetch_all(&state.db)
-            .await
-            .map_err(|e| internal_error("list servers", e))?;
+    let servers: Vec<Server> = sqlx::query_as(
+        "SELECT * FROM servers WHERE ($2 OR user_id = $1) \
+         ORDER BY is_local DESC, created_at DESC LIMIT 500",
+    )
+    .bind(claims.sub)
+    .bind(claims.role == "admin")
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| internal_error("list servers", e))?;
 
     Ok(Json(servers))
 }

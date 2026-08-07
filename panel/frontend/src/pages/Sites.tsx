@@ -46,6 +46,8 @@ export default function Sites() {
   // leaves the admin's own list entirely — this is how they find it again, and
   // the only place from which a transfer can be undone.
   const isAdmin = user?.role === "admin";
+  /** The one role that may hold sites but never claim a new domain. */
+  const isClient = user?.role === "client";
   const [allSites, setAllSites] = useState(false);
   const [users, setUsers] = useState<PanelUser[]>([]);
   const [transferFor, setTransferFor] = useState<Site | null>(null);
@@ -169,12 +171,21 @@ export default function Sites() {
               className="px-3 py-1.5 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-400 focus:outline-none focus:border-dark-400"
             />
           )}
-          <button
-            onClick={() => setShowForm(!showForm)}
-            className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
-          >
-            {showForm ? "Cancel" : "Create Site"}
-          </button>
+          {/* A `client` holds sites and cannot bring a new domain into service —
+              that single refusal is what the role IS
+              (`services::domain_claim::ensure_claimable`). Offering the control
+              anyway meant the client filled in a domain, a runtime, a PHP version
+              and, for a WordPress choice, an admin username and password, pressed
+              Create, and only then met the refusal. Same predicate as
+              `Dashboard.tsx:680`, which already hides its create tile. */}
+          {!isClient && (
+            <button
+              onClick={() => setShowForm(!showForm)}
+              className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors"
+            >
+              {showForm ? "Cancel" : "Create Site"}
+            </button>
+          )}
         </div>
       </div>
 
@@ -428,10 +439,26 @@ export default function Sites() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0 1 12 16.5a17.92 17.92 0 0 1-8.716-2.247m0 0A9 9 0 0 1 3 12c0-1.47.353-2.856.978-4.082" />
           </svg>
           <p className="text-dark-200 font-medium text-lg">No sites yet</p>
-          <p className="text-dark-300 text-sm mt-2 max-w-md mx-auto">Deploy static, PHP, Node.js, or Python sites with automatic SSL certificates, nginx configuration, and one-click CMS installs.</p>
-          <button onClick={() => setShowForm(true)} className="mt-3 px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors">
-            Create your first site
-          </button>
+          {/* The empty state has to say something different to the one role that
+              cannot act on it. Inviting a client to "create your first site" is
+              the same broken promise as the button above, and it is worse here:
+              this is the screen they reach when a site they DO own has not been
+              transferred yet, so the panel answered "you have nothing, make one"
+              to someone whose only route is to ask their administrator. */}
+          {isClient ? (
+            <p className="text-dark-300 text-sm mt-2 max-w-md mx-auto">
+              No sites have been assigned to your account yet. Sites are created and handed
+              over by your administrator — once one is, it appears here and you can manage it
+              fully.
+            </p>
+          ) : (
+            <>
+              <p className="text-dark-300 text-sm mt-2 max-w-md mx-auto">Deploy static, PHP, Node.js, or Python sites with automatic SSL certificates, nginx configuration, and one-click CMS installs.</p>
+              <button onClick={() => setShowForm(true)} className="mt-3 px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 transition-colors">
+                Create your first site
+              </button>
+            </>
+          )}
         </div>
       ) : sites.length > 0 ? (
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-x-auto elevation-1">

@@ -6,6 +6,103 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.82.0] - 2026-08-07
+
+### Fixed — deleting an administrator could delete every site on the server
+
+A server belongs to whoever registered it: the local machine to the first
+administrator created, and each fleet member to the administrator who added it.
+That ownership is a foreign key with `ON DELETE CASCADE`, and every site carries
+a foreign key to its server with `ON DELETE CASCADE` as well. The two compose.
+Deleting the account therefore removed the server row, and the server row took
+**every site on that machine with it** — every owner's sites, not only the
+deleted account's — along with their backups, schedules, databases, cron jobs and
+deploy history. The panel reported success. The files and vhosts kept serving from
+disk, so nothing appeared wrong until someone opened the panel and found the
+inventory gone.
+
+Retiring the founding administrator after appointing a successor is the ordinary
+reason to open that screen, so this was reachable by the intended use of the
+feature. Deleting a user now hands their machines to the administrator performing
+the deletion, inside one transaction, and reports which machines moved — in the
+response and in the activity log. Refusing the delete instead would have been
+safe for the data and would have made such an account permanently undeletable,
+since nothing in the panel can re-assign a server.
+
+### Fixed — a panel's second administrator could not see any servers
+
+The server list was scoped to the caller's own rows for every role, so an
+administrator who had not personally registered a machine was shown "No servers
+found. The local server should appear automatically." It never could. An
+administrator now sees every machine; everyone else continues to see only what
+they hold. Seven related reads — the drift checks and the fleet aggregations on
+the dashboard — still resolve machines by owner and are unchanged for now; the
+limitation is recorded in the source.
+
+### Security — transferring a site left its staging environment behind
+
+A staging environment is a second site row pointing at its parent. Transfer moved
+only the parent, so the previous owner kept the staging clone: it stayed in their
+site list, they kept a shell inside a full copy of the new owner's document root —
+including any configuration file holding database credentials — and they kept the
+push-to-production control, which writes that copy over the new owner's live site.
+Transfer now moves a site together with its staging children, and the dependent
+rows follow the sites that actually moved.
+
+### Security — the site terminal's cross-site guard missed the relative path
+
+The guard that stops a site shell reading another site's files matched only the
+absolute path, while the shell's own working directory sits inside the directory
+being protected — so the relative spelling walked straight past it. Both spellings
+are now refused. The guard's real scope is documented in the source alongside it:
+all sites run as the same system user, so this is a barrier against the obvious
+mistake, not an isolation boundary. A real boundary needs a per-site user or a
+namespace, and is a separate change.
+
+### Fixed — the panel refused people their own certificates and maintenance windows
+
+Four endpoints required an administrator over queries that were already limited to
+the caller's own rows, so the check never decided what was returned — only who was
+turned away. The visible result was a dashboard tile reporting a site owner's SSL
+certificates and expiry dates, linking to a page that answered "Admin access
+required" over "No SSL certificates found". Site owners now see their own
+certificates and can schedule maintenance windows for their own alerts.
+
+### Fixed — a reseller could not manage accounts its own panel listed
+
+The reseller's user table listed every account beneath them, while the actions on
+those accounts required the account to still hold the default role. An account
+moved to the client role — the flow the roles guide prescribes — or suspended by
+an administrator stayed on screen with its site count and answered "User not
+found" to Reset Password and to Delete. Resellers can now act on the accounts they
+are shown; administrators and other resellers remain out of reach by an explicit
+allow-list.
+
+### Fixed — the panel told non-administrators it was broken, on every page
+
+The sidebar health indicator polled an administrator-only endpoint and rendered the
+refusal as a failure, so every non-administrator saw a pulsing red "Disconnected" /
+"Issues Detected" from the moment they signed in. The indicator is now shown only
+to the administrators it describes something for.
+
+### Fixed — "Require 2FA for all users" was never shown to the users it applied to
+
+The banner warning that two-factor authentication is mandatory read the setting
+from an administrator-only endpoint and discarded the refusal, so it could only
+ever appear for administrators — the one group that did not need telling. The flag
+now rides on the per-user 2FA status endpoint. Enrolment still lives on a page
+non-administrators cannot reach, so the panel tells them rather than blocking the
+login; blocking before there is a door would lock people out with no way back.
+
+### Fixed — clients were offered the one action their role forbids
+
+An account with the client role holds sites and cannot bring a new domain into
+service. The panel still offered Create Site, Clone, Create Staging and Add Alias,
+so the refusal arrived only after filling in a domain, a runtime, a PHP version
+and — for a WordPress site — an administrator username and password. Those controls
+are now hidden for that role, and the empty sites list explains that sites are
+handed over by an administrator instead of inviting the person to create one.
+
 ## [2.81.0] - 2026-08-07
 
 ### Fixed — resetting a MariaDB database password has never worked

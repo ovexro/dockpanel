@@ -61,9 +61,49 @@ const TERMINAL_BLOCKED_PATTERNS: &[&str] = &[
     "||", "&&",
     // Network config
     "iptables", "ip6tables", "nft ", "ufw ",
-    // Reading other sites
-    "/var/www/",
+    // Reading other sites.
+    //
+    // ⚠ READ THE SCOPE LIMIT BELOW BEFORE TREATING THIS AS A TENANT BOUNDARY.
+    //
+    // `/var/www/` alone matched only the ABSOLUTE spelling, and the site shell's
+    // own working directory is INSIDE `/var/www`, so the relative form walked
+    // straight past it: `cat ../other-site.com/wp-config.php` — another tenant's
+    // database credentials — was never examined by this list. `..` closes that
+    // spelling. It is not legitimate input from a shell whose entire purpose is a
+    // session inside one site's directory: every path a caller needs is at or
+    // below the cwd.
+    //
+    // Blunt on purpose, and the cost is worth naming rather than hiding: this is a
+    // SUBSTRING match, so `echo "done..."` is refused too. The narrower `"../"` was
+    // considered and rejected — it still admits a bare `cd ..`, after which every
+    // subsequent path is an ordinary relative name and the guard has nothing left
+    // to match. A pattern that one command steps around is worse than a blunt one,
+    // because it reads as protection.
+    //
+    // SITE terminals only: both call sites in `routes/terminal.rs` (`:545`, `:624`)
+    // test `is_site_terminal` first, so an administrator's server shell still takes
+    // `cd ..` normally.
+    "/var/www/", "..",
 ];
+
+/// ⚠ THE SCOPE LIMIT OF THE TWO PATTERNS ABOVE, stated here rather than left to
+/// be discovered by whoever trusts them next.
+///
+/// **This blocklist is a speed bump, not a tenant boundary, and it cannot be made
+/// into one.** There is no filesystem confinement behind it: the site-shell spawn
+/// in `routes/terminal.rs` performs `setgid`/`setuid`/`umask`/`chdir` and starts
+/// `bash --restricted` — no `chroot`, no mount namespace, no bind mount. Every
+/// site's PHP-FPM pool and every site tree resolve to the SAME `www-data` uid, so
+/// two tenants are one principal to the kernel and mode bits cannot separate them.
+/// `bash --restricted` does not help either: rbash forbids slashes in COMMAND
+/// NAMES, not in arguments.
+///
+/// So this list closes the two spellings a person actually types. A caller who
+/// wants the file can still reach it — through a symlink, through an editor's
+/// open dialog, through any interpreter, or by any spelling nobody has enumerated.
+/// A real boundary is a per-site uid or a namespace at spawn time, and it is a
+/// different change from this one.
+const _SITE_SHELL_IS_NOT_A_SANDBOX: () = ();
 
 /// Check if a command string is safe for cron execution.
 /// Rejects shell metacharacters and dangerous patterns.

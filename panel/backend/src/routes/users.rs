@@ -420,11 +420,65 @@ pub async fn remove(
     // keeps authenticating as a now-nonexistent principal until it expires.
     crate::routes::auth::revoke_all_user_sessions(&state, id).await;
 
-    sqlx::query("DELETE FROM users WHERE id = $1")
-        .bind(id)
-        .execute(&state.db)
+    // ⚠ THE MACHINE MUST CHANGE HANDS BEFORE THE ACCOUNT GOES, OR EVERY SITE ON IT
+    // GOES WITH IT.
+    //
+    // `servers.user_id` is `NOT NULL REFERENCES users(id) ON DELETE CASCADE`
+    // (20260312800000_saas_auth.sql:29) and `sites.server_id` is
+    // `REFERENCES servers(id) ON DELETE CASCADE` (20260319000000_multi_server.sql:8).
+    // Those two edges compose: deleting the account that happens to hold a machine
+    // deleted the `servers` row, which deleted EVERY `sites` row on it — every
+    // owner's, not just this account's — and with them everything keyed on `site_id`
+    // (backups, crons, databases, schedules, deploy configs and logs, wp scans).
+    // The handler returned `{"ok": true}` and the files kept serving from disk, so
+    // the panel simply forgot an entire server's inventory with no error anywhere.
+    //
+    // It is not an exotic state. The local row is owned by the FIRST admin by
+    // `created_at` (`services/agent.rs:1250`) and every fleet member by whoever
+    // registered it (`routes/servers.rs:92`), so retiring the founding
+    // administrator — the ordinary reason an operator opens this screen — was the
+    // trigger.
+    //
+    // RE-POINT rather than REFUSE, deliberately. Refusing would be safe for the
+    // data and would make that account permanently undeletable: nothing in the
+    // panel can re-assign a server today, so the operator would have no way to
+    // satisfy the refusal. The caller is an administrator by `AdminUser`, so
+    // handing them the machine keeps every site, keeps every `WHERE user_id = $1`
+    // read answering, and invents no owner. It is reported in the response and in
+    // the activity log rather than done silently.
+    let mut tx = state
+        .db
+        .begin()
         .await
         .map_err(|e| internal_error("remove users", e))?;
+
+    let reassigned: Vec<(String,)> =
+        sqlx::query_as("SELECT name FROM servers WHERE user_id = $1 ORDER BY is_local DESC, name")
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| internal_error("remove users", e))?;
+
+    if !reassigned.is_empty() {
+        sqlx::query("UPDATE servers SET user_id = $1 WHERE user_id = $2")
+            .bind(claims.sub)
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| internal_error("remove users", e))?;
+    }
+
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| internal_error("remove users", e))?;
+
+    tx.commit()
+        .await
+        .map_err(|e| internal_error("remove users", e))?;
+
+    let reassigned: Vec<String> = reassigned.into_iter().map(|(n,)| n).collect();
 
     // Scrub the on-call references no foreign key can reach: rota membership is
     // a UUID[] and escalation routes are opaque strings inside a JSONB blob.
@@ -442,13 +496,35 @@ pub async fn remove(
     crate::routes::on_call::scrub_deleted_user(&state.db, id).await;
 
     tracing::info!("User deleted by {}: {}", claims.email, user.email);
+    if !reassigned.is_empty() {
+        tracing::info!(
+            "Reassigned {} server(s) from {} to {}: {}",
+            reassigned.len(),
+            user.email,
+            claims.email,
+            reassigned.join(", ")
+        );
+    }
     let ip = crate::routes::client_ip(&headers);
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "user.delete",
-        Some("user"), Some(&user.email), None, ip.as_deref(),
+        Some("user"), Some(&user.email),
+        // The `details` slot, so the reassignment is in the audit trail rather
+        // than only in the response the operator may never read.
+        if reassigned.is_empty() {
+            None
+        } else {
+            Some(format!("reassigned servers: {}", reassigned.join(", ")))
+        }
+        .as_deref(),
+        ip.as_deref(),
     ).await;
 
-    Ok(Json(serde_json::json!({ "ok": true, "email": user.email })))
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "email": user.email,
+        "reassigned_servers": reassigned,
+    })))
 }
 
 #[cfg(test)]

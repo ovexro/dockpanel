@@ -1401,7 +1401,31 @@ pub async fn twofa_status(
         .await
         .map_err(|e| internal_error("2FA status", e))?;
 
-    Ok(Json(serde_json::json!({ "enabled": row.0 })))
+    // `enforced` rides along here because this is the only 2FA read a NON-ADMIN can
+    // make. The layout's "Two-factor authentication is required" banner asked
+    // `GET /api/settings` for it — an `AdminUser` route — and swallowed the 403 in
+    // an empty catch, so `twoFaEnforced` stayed at its `useState(false)` for every
+    // non-admin and the banner could only ever render for the one role that does
+    // not need telling. The operator flipped "Require 2FA for all users" and the
+    // people it was aimed at were the only ones never shown it.
+    //
+    // Whether the panel should also REFUSE the login is a separate decision and is
+    // deliberately not taken here: 2FA enrollment currently lives only on
+    // `/settings`, which is `adminOnly` in the nav registry, so blocking a
+    // non-admin at the door before that page has a non-admin entrance would be a
+    // lockout with no way out. Telling them is the half that is safe today.
+    // `settings.value` is `TEXT NOT NULL`, so the row is either present or absent —
+    // an absent key means the operator never turned it on.
+    let enforced: Option<(String,)> =
+        sqlx::query_as("SELECT value FROM settings WHERE key = 'enforce_2fa'")
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| internal_error("2FA status", e))?;
+
+    Ok(Json(serde_json::json!({
+        "enabled": row.0,
+        "enforced": enforced.map(|(v,)| v == "true").unwrap_or(false),
+    })))
 }
 
 // ─── Password Change & Session Revocation ───────────────────────────────

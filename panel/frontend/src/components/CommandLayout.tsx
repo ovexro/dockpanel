@@ -276,8 +276,12 @@ export default function CommandLayout() {
             </div>
             <div className="flex items-center justify-between px-3 mt-2">
               <div className="flex items-center gap-2">
-                <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${state.apiHealthy === null ? "bg-dark-400" : state.apiHealthy ? "bg-rust-500" : "bg-danger-500 animate-pulse"}`} />
-                <span className="text-[10px] text-dark-400">{state.apiHealthy === null ? "Checking..." : state.apiHealthy ? "Connected" : "Disconnected"}</span>
+                {state.canSeeHealth && (
+                  <>
+                    <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${state.apiHealthy === null ? "bg-dark-400" : state.apiHealthy ? "bg-rust-500" : "bg-danger-500 animate-pulse"}`} />
+                    <span className="text-[10px] text-dark-400">{state.apiHealthy === null ? "Checking..." : state.apiHealthy ? "Connected" : "Disconnected"}</span>
+                  </>
+                )}
               </div>
               <div className="flex items-center gap-1">
                 <Link to="/notifications" className="relative p-1.5 text-dark-400 hover:text-dark-200 transition-colors rounded" title="Notifications" aria-label="Notifications">
@@ -307,7 +311,7 @@ export default function CommandLayout() {
         )}
 
         {/* Minimal sidebar footer when header is shown */}
-        {showHeader && (
+        {showHeader && state.canSeeHealth && (
           <div className="px-4 py-3 border-t border-dark-600/50">
             <div className="flex items-center gap-2">
               <div className={`w-2 h-2 rounded-full shrink-0 ${state.apiHealthy === null ? "bg-dark-400" : state.apiHealthy ? "bg-rust-500" : "bg-danger-500 animate-pulse"}`} />
