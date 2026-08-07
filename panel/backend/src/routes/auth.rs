@@ -1009,16 +1009,96 @@ struct TwoFaClaims {
     exp: usize,
 }
 
-/// Generate 10 recovery codes (8 chars each, hex).
+/// Generate 10 recovery codes (16 chars each, hex).
+///
+/// ⚠ These were 4 bytes — **32 bits** — and they are stored as an UNSALTED
+/// SHA-256 (`hash_token`), which is a fast hash. A 32-bit preimage space under a
+/// fast hash is exhaustible on ordinary hardware in seconds, so anyone holding a
+/// copy of the `users` table (a leaked backup, a read on a restored snapshot)
+/// could recover the plaintext codes. That is precisely the situation 2FA exists
+/// to survive: the recovery code is the factor that is supposed to still mean
+/// something after the password hash has leaked.
+///
+/// Widened to 8 bytes / 64 bits, which makes the stored hash a real preimage
+/// problem again. The hash is deliberately NOT changed to Argon2: matching is
+/// by hash, so every code already issued would keep working under one scheme and
+/// not the other, and a migration cannot re-hash values it cannot read. Length is
+/// the lever that works without invalidating anybody's set.
+///
+/// Older 8-character codes keep working — `try_recovery_code` compares hashes and
+/// never looks at length — and the field that accepts them takes both widths.
 fn generate_recovery_codes() -> Vec<String> {
     use rand::Rng;
     let mut rng = rand::rng();
     (0..10)
         .map(|_| {
-            let bytes: [u8; 4] = rng.random();
+            let bytes: [u8; 8] = rng.random();
             hex::encode(bytes)
         })
         .collect()
+}
+
+/// The 2FA challenge limiter — 5 attempts per 5 minutes, keyed on the user.
+///
+/// This lived inline inside `twofa_verify` and nowhere else, so it guarded the
+/// login door and only the login door. `twofa_disable` checks the SAME 6-digit
+/// code against the SAME secret in order to make the change that switches the
+/// factor OFF, and it could be guessed without limit: `check_current` runs with
+/// a skew of 1, so 3 codes out of 10^6 are live at any instant, and nothing sits
+/// above the handler either — the router layers only CORS, timeout and tracing
+/// (`main.rs`), and the `/api/` block `setup.sh` writes for the panel vhost
+/// carries no `limit_req`. The door that mints a session was rate-limited
+/// because a 6-digit code is guessable; the door that removes the requirement
+/// for one was not, and since v2.83.0 it also accepts recovery codes.
+///
+/// Kept as three small functions rather than one guard object because the
+/// success path has to CLEAR the counter, and that only happens once the
+/// handler knows the code was good.
+fn twofa_rate_limit_check(state: &AppState, user_id: uuid::Uuid) -> Result<(), ApiError> {
+    let attempts = state.twofa_attempts.lock().unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    if let Some((count, window_start)) = attempts.get(&user_id) {
+        if now.duration_since(*window_start).as_secs() < 300 && *count >= 5 {
+            let remaining = 300 - now.duration_since(*window_start).as_secs();
+            let mins = (remaining + 59) / 60;
+            return Err(err(
+                StatusCode::TOO_MANY_REQUESTS,
+                &format!("Too many attempts. Try again in {mins} minutes."),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Record one failed 2FA attempt, rolling the window if it has expired.
+fn twofa_rate_limit_record(state: &AppState, user_id: uuid::Uuid) {
+    let mut attempts = state.twofa_attempts.lock().unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    let entry = attempts.entry(user_id).or_insert((0, now));
+    if now.duration_since(entry.1).as_secs() >= 300 {
+        *entry = (1, now);
+    } else {
+        entry.0 += 1;
+    }
+}
+
+/// Clear the counter after a code has been accepted.
+fn twofa_rate_limit_clear(state: &AppState, user_id: uuid::Uuid) {
+    let mut attempts = state.twofa_attempts.lock().unwrap_or_else(|e| e.into_inner());
+    attempts.remove(&user_id);
+}
+
+/// How many unused recovery codes an account is holding.
+///
+/// Returns 0 for both "never enrolled" and "corrupted JSON", because this feeds
+/// a warning and a warning that fails closed is the safe direction: the account
+/// is told it has none left, which is the state it must act on.
+fn recovery_codes_remaining(stored: &Option<String>) -> usize {
+    stored
+        .as_deref()
+        .and_then(|c| serde_json::from_str::<Vec<String>>(c).ok())
+        .map(|v| v.len())
+        .unwrap_or(0)
 }
 
 /// POST /api/auth/2fa/setup — Generate TOTP secret and return QR code.
@@ -1180,20 +1260,7 @@ pub async fn twofa_verify(
     let user_id = token_data.claims.sub;
 
     // Rate limit: max 5 failed 2FA attempts per 5 minutes
-    {
-        let attempts = state.twofa_attempts.lock().unwrap_or_else(|e| e.into_inner());
-        let now = Instant::now();
-        if let Some((count, window_start)) = attempts.get(&user_id) {
-            if now.duration_since(*window_start).as_secs() < 300 && *count >= 5 {
-                let remaining = 300 - now.duration_since(*window_start).as_secs();
-                let mins = (remaining + 59) / 60;
-                return Err(err(
-                    StatusCode::TOO_MANY_REQUESTS,
-                    &format!("Too many attempts. Try again in {mins} minutes."),
-                ));
-            }
-        }
-    }
+    twofa_rate_limit_check(&state, user_id)?;
 
     let user: User = sqlx::query_as("SELECT * FROM users WHERE id = $1")
         .bind(user_id)
@@ -1216,8 +1283,16 @@ pub async fn twofa_verify(
         return Err(err(StatusCode::SERVICE_UNAVAILABLE, "System is in lockdown mode"));
     }
 
+    // No secret here does NOT mean the server is broken: an administrator can now
+    // reset this account's 2FA (`users::reset_2fa`), and the temp token issued by
+    // the first step stays valid for five minutes after it. Somebody holding one
+    // when that happens used to get a 500 telling them nothing. They no longer
+    // need a second factor at all, so the honest answer is "start again".
     let secret_b32_enc = user.totp_secret.as_ref().ok_or_else(|| {
-        err(StatusCode::INTERNAL_SERVER_ERROR, "2FA secret missing")
+        err(
+            StatusCode::UNAUTHORIZED,
+            "Two-factor authentication is no longer set up on this account. Sign in again.",
+        )
     })?;
 
     // Decrypt TOTP secret (with legacy plaintext fallback)
@@ -1237,27 +1312,13 @@ pub async fn twofa_verify(
         // Try recovery codes
         let used_recovery = try_recovery_code(&state.db, &user, &body.code).await?;
         if !used_recovery {
-            // Record failed attempt
-            {
-                let mut attempts = state.twofa_attempts.lock().unwrap_or_else(|e| e.into_inner());
-                let now = Instant::now();
-                let entry = attempts.entry(user_id).or_insert((0, now));
-                if now.duration_since(entry.1).as_secs() >= 300 {
-                    // Window expired, reset
-                    *entry = (1, now);
-                } else {
-                    entry.0 += 1;
-                }
-            }
+            twofa_rate_limit_record(&state, user_id);
             return Err(err(StatusCode::UNAUTHORIZED, "Invalid 2FA code"));
         }
     }
 
     // Successful verification — clear rate limit
-    {
-        let mut attempts = state.twofa_attempts.lock().unwrap_or_else(|e| e.into_inner());
-        attempts.remove(&user_id);
-    }
+    twofa_rate_limit_clear(&state, user_id);
 
     let (_token, cookie, jti) = issue_session(&state, &user, &headers)?;
 
@@ -1357,6 +1418,12 @@ pub async fn twofa_disable(
         return Err(err(StatusCode::BAD_REQUEST, "2FA is not enabled"));
     }
 
+    // Same limiter as the login door. This route verifies the same 6-digit code
+    // against the same secret, and what it does on success is REMOVE the factor,
+    // so it is the more attractive of the two to guess at — see
+    // `twofa_rate_limit_check`.
+    twofa_rate_limit_check(&state, claims.sub)?;
+
     let secret_b32_enc = user.totp_secret.as_ref().ok_or_else(|| {
         err(StatusCode::INTERNAL_SERVER_ERROR, "2FA secret missing")
     })?;
@@ -1386,11 +1453,13 @@ pub async fn twofa_disable(
         .check_current(&body.code)
         .map_err(|e| internal_error("2FA disable", e))?;
     if !code_valid && !try_recovery_code(&state.db, &user, &body.code).await? {
+        twofa_rate_limit_record(&state, claims.sub);
         return Err(err(
             StatusCode::UNAUTHORIZED,
             "Invalid 2FA code. Enter a code from your authenticator app, or one of your recovery codes.",
         ));
     }
+    twofa_rate_limit_clear(&state, claims.sub);
 
     sqlx::query(
         "UPDATE users SET totp_enabled = FALSE, totp_secret = NULL, recovery_codes = NULL, updated_at = NOW() WHERE id = $1",
@@ -1408,16 +1477,113 @@ pub async fn twofa_disable(
     Ok(Json(serde_json::json!({ "ok": true, "message": "2FA has been disabled" })))
 }
 
+#[derive(Deserialize)]
+pub struct TwoFaRegenerateRequest {
+    pub code: String,
+}
+
+/// POST /api/auth/2fa/recovery-codes — Issue a fresh set of recovery codes.
+///
+/// Recovery codes were written exactly once, at enrolment, and consumed one at a
+/// time: after ten recovery logins the fallback was silently gone, and there was
+/// no way to mint more short of disabling 2FA and enrolling again. Worse, every
+/// account that enrolled before v2.83.0 holds ten codes it was NEVER SHOWN — the
+/// block that draws them sat inside the branch the enable handler cleared in the
+/// same breath — so those accounts have a fallback on paper and none in fact.
+/// This is the door that repairs them WITHOUT losing the enrolment, and it is
+/// why the route accepts a live TOTP code: someone who still has their
+/// authenticator can fix themselves, today, with no administrator involved.
+///
+/// A recovery code is accepted too, for the same reason `twofa_disable` accepts
+/// one — it is the same authority, and this is the gentler of the two things it
+/// already permits. Rate-limited on the shared 2FA limiter.
+pub async fn twofa_regenerate_recovery_codes(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Json(body): Json<TwoFaRegenerateRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user: User = sqlx::query_as("SELECT * FROM users WHERE id = $1")
+        .bind(claims.sub)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| internal_error("2FA recovery codes", e))?;
+
+    if !user.totp_enabled {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "2FA is not enabled — recovery codes are issued when you enrol",
+        ));
+    }
+
+    twofa_rate_limit_check(&state, claims.sub)?;
+
+    let secret_b32_enc = user.totp_secret.as_ref().ok_or_else(|| {
+        err(StatusCode::INTERNAL_SERVER_ERROR, "2FA secret missing")
+    })?;
+    let secret_b32 = crate::services::secrets_crypto::decrypt_credential_or_legacy(
+        secret_b32_enc,
+        &state.config.jwt_secret,
+    );
+    let secret = Secret::Encoded(secret_b32)
+        .to_bytes()
+        .map_err(|e| internal_error("2FA recovery codes", e))?;
+    let totp = TOTP::new(Algorithm::SHA1, 6, 1, 30, secret, Some("DockPanel".to_string()), user.email.clone())
+        .map_err(|e| internal_error("2FA recovery codes", e))?;
+
+    let code_valid = totp
+        .check_current(&body.code)
+        .map_err(|e| internal_error("2FA recovery codes", e))?;
+    if !code_valid && !try_recovery_code(&state.db, &user, &body.code).await? {
+        twofa_rate_limit_record(&state, claims.sub);
+        return Err(err(
+            StatusCode::UNAUTHORIZED,
+            "Invalid 2FA code. Enter a code from your authenticator app, or one of your recovery codes.",
+        ));
+    }
+    twofa_rate_limit_clear(&state, claims.sub);
+
+    // Replaces the whole set, so any code still outstanding — including one just
+    // spent getting in here — stops working. That is the point: the old set is
+    // the one the user could not read.
+    let codes = generate_recovery_codes();
+    let hashed_codes: Vec<String> = codes.iter().map(|c| hash_token(c)).collect();
+    let hashed_json = serde_json::to_string(&hashed_codes)
+        .map_err(|e| internal_error("2FA recovery codes", e))?;
+
+    sqlx::query("UPDATE users SET recovery_codes = $1, updated_at = NOW() WHERE id = $2")
+        .bind(&hashed_json)
+        .bind(claims.sub)
+        .execute(&state.db)
+        .await
+        .map_err(|e| internal_error("2FA recovery codes", e))?;
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "auth.2fa_recovery_codes_regenerated",
+        None, None, None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "recovery_codes": codes,
+        "message": "New recovery codes issued. The previous set no longer works.",
+    })))
+}
+
 /// GET /api/auth/2fa/status — Check if 2FA is enabled for the current user.
 pub async fn twofa_status(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let row: (bool,) = sqlx::query_as("SELECT totp_enabled FROM users WHERE id = $1")
-        .bind(claims.sub)
-        .fetch_one(&state.db)
-        .await
-        .map_err(|e| internal_error("2FA status", e))?;
+    // `recovery_codes` rides along so the page can say how many are LEFT. They are
+    // consumed one per recovery login and were never counted anywhere the user
+    // could see, so an account could arrive at zero — no fallback at all — while
+    // its 2FA card still read "2FA is enabled" and nothing else.
+    let row: (bool, Option<String>) =
+        sqlx::query_as("SELECT totp_enabled, recovery_codes FROM users WHERE id = $1")
+            .bind(claims.sub)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|e| internal_error("2FA status", e))?;
 
     // `enforced` rides along here because this is the only 2FA read a NON-ADMIN can
     // make. The layout's "Two-factor authentication is required" banner asked
@@ -1428,10 +1594,16 @@ pub async fn twofa_status(
     // people it was aimed at were the only ones never shown it.
     //
     // Whether the panel should also REFUSE the login is a separate decision and is
-    // deliberately not taken here: 2FA enrollment currently lives only on
-    // `/settings`, which is `adminOnly` in the nav registry, so blocking a
-    // non-admin at the door before that page has a non-admin entrance would be a
-    // lockout with no way out. Telling them is the half that is safe today.
+    // deliberately still not taken here. ⚠ The reason has CHANGED and the old one
+    // is gone: enrolment used to live only on `/settings`, which is `adminOnly` in
+    // the nav registry, so refusing a non-admin would have been a lockout with no
+    // way out. v2.83.0 built `/account`, which every role carries, so that
+    // objection no longer holds. What holds now is the hazard list nobody has
+    // costed: OAuth-provisioned accounts that have no password to fall back on,
+    // the bootstrap admin, and callers that are not browsers. Enforcement is a
+    // product decision, not a missing line — and until it is taken, `enforce_2fa`
+    // does not refuse anything (`login` sets a `twofa_required` flag on the
+    // response body and issues the session cookie regardless).
     // `settings.value` is `TEXT NOT NULL`, so the row is either present or absent —
     // an absent key means the operator never turned it on.
     let enforced: Option<(String,)> =
@@ -1443,6 +1615,7 @@ pub async fn twofa_status(
     Ok(Json(serde_json::json!({
         "enabled": row.0,
         "enforced": enforced.map(|(v,)| v == "true").unwrap_or(false),
+        "recovery_codes_remaining": recovery_codes_remaining(&row.1),
     })))
 }
 

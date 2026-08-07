@@ -236,12 +236,29 @@ else
   bad "E2 twofa_verify lost its recovery branch — or fnbody is broken"
 fi
 
-# The UI half: the disable field must admit an 8-character hex recovery code.
-DISABLE_FIELD=$(flat "$(grep -A3 'disableCode' <<< "$CARDS_C")")
-if has "$DISABLE_FIELD" 'slice\(0, 8\)' && ! has "$DISABLE_FIELD" 'replace\(/.D/g'; then
-  ok "E3 the disable field admits an 8-char recovery code"
+# The UI half: the code field must admit an 8-character hex recovery code.
+#
+# ⚠ Re-anchored at s326. This read `grep -A3` on the STATE NAME, and the field is
+# no longer named for disabling — it now serves the regenerate button as well, and
+# a name is spelled at the declaration, at every use site, and in any comment that
+# mentions it, so the slice it opened was never guaranteed to be the input. The
+# property this arm is about lives on exactly one line: the sanitiser in the
+# field's own onChange. Anchor there.
+FIELD_SANITISER=$(flat "$(grep -F 'e.target.value.replace(/[^0-9a-fA-F]/g' <<< "$CARDS_C")")
+# ⚠ `grep -oE '[0-9]+' | head -1` returns the ZERO in `slice(0, …` — the first
+# draft of this line read a cap of 0 and reported a correct field as too narrow.
+E3_CAP=$(sed -nE 's/.*slice\(0, ([0-9]+)\).*/\1/p' <<< "$FIELD_SANITISER" | head -1)
+# ⚠ The literal width is deliberately NOT asserted here any more. s326 widened
+# recovery codes from 4 to 8 random bytes, so a `slice(0, 8)` assertion would now
+# be pinning the OLD width — an arm demanding the field be too narrow to type the
+# code the backend issues, which is the very defect this arm was written against.
+# What belongs here is the property s325 fixed: hex is not stripped and the cap
+# clears a recovery code. Keeping the cap in step with the GENERATOR is a
+# different claim, is cross-tree, and is pinned in `twofa-recovery-pin-e2e.sh`.
+if [ -n "$E3_CAP" ] && [ "$E3_CAP" -ge 8 ] && ! has "$FIELD_SANITISER" 'replace\(/.D/g'; then
+  ok "E3 the code field admits a hex recovery code (cap $E3_CAP)"
 else
-  bad "E3 the disable field still strips non-digits or caps at 6 — the code cannot be typed"
+  bad "E3 the code field still strips non-digits or caps too narrow — the code cannot be typed"
 fi
 
 # The recovery codes must render where the user can still SEE them. At v2.82.0

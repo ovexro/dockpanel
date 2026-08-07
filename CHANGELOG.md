@@ -6,6 +6,88 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.84.0] - 2026-08-07
+
+### Security — every door that checks a 2FA code is now rate-limited
+
+Signing in with two-factor enabled was limited to five attempts per five minutes,
+because a six-digit code is guessable. Turning two-factor **off** was not limited
+at all — and it checks the same six-digit code, against the same secret, to make
+the change that removes the factor. The check runs with a one-step tolerance, so
+three codes in a million are live at any instant, and nothing sat above the
+handler either: the panel installs no rate-limiting middleware, and the `/api/`
+block written for the panel's own vhost carries no request limit.
+
+Anyone holding a hijacked session could therefore strip two-factor authentication
+off the account by guessing at it — which is precisely what the code prompt on
+that screen exists to prevent. v2.83.0 widened this by also accepting recovery
+codes there, and moving the screen to **My Account** put it in front of every
+role. The limiter has been lifted out of the login handler into one place and
+applied to all three doors that treat a 2FA code as a credential.
+
+### Added — an administrator can reset a user's two-factor authentication
+
+Until now the only statement in the panel that could clear a two-factor
+enrolment lived behind a code prompt, so an account that had lost its
+authenticator could only be repaired by someone who could still produce a code.
+For accounts enrolled before v2.83.0 there was no such person: they hold ten
+recovery codes that were generated, stored, and **never displayed**, because the
+block that draws them sat inside a branch the enable handler cleared in the same
+breath. Both factors were gone at once, and the only route back was editing the
+database by hand.
+
+**Users** now offers *Reset 2FA* on rows that have an enrolment. It erases the
+enrolment and any remaining recovery codes, signs out every session that user
+holds, and is recorded in the activity log as `user.reset_2fa`.
+
+It deliberately refuses to act on your own account — doing so would remove the
+factor with no code presented at all. Two limits are documented rather than
+papered over: an administrator who has lost their own authenticator needs a
+second administrator, and a **sole** administrator who has lost both their
+authenticator and their recovery codes still cannot be recovered through the
+panel. Registering a passkey, or keeping a second administrator, prevents that.
+
+### Added — recovery codes can be reissued, and the remaining count is shown
+
+Recovery codes were written once at enrolment and consumed one per use, with no
+way to mint more short of disabling two-factor entirely. After ten recovery
+logins the fallback was silently gone, and nothing ever reported how many were
+left.
+
+**My Account** now shows how many remain, says so plainly when the answer is
+none, and offers *New recovery codes* — confirmed with an authenticator code or
+one of the remaining recovery codes. This is the repair for every account that
+enrolled before v2.83.0: while you still have your authenticator, one click
+replaces a set you were never shown with one you can read.
+
+### Security — recovery codes are twice as wide
+
+Recovery codes were four random bytes — **32 bits** — stored as an unsalted
+SHA-256, which is a fast hash. A 32-bit space under a fast hash is exhaustible on
+ordinary hardware in seconds, so anyone holding a copy of the `users` table or an
+old backup could recover the plaintext codes. That is the situation two-factor
+authentication exists to survive: the recovery code is supposed to still mean
+something after a password hash has leaked. Since v2.83.0 a recovery code also
+*disables* 2FA, which raised what a recovered code is worth.
+
+New codes are eight bytes — 64 bits — and the field that accepts them takes both
+widths, so codes already issued keep working. Reissuing a set replaces short codes
+with long ones. The hash is deliberately unchanged: matching is by hash, and a
+migration cannot re-hash values it cannot read, so width is the lever that works
+without invalidating anybody's existing set.
+
+### Fixed — documentation that described protections the code does not apply
+
+The security guide stated that recovery codes are stored as Argon2 hashes. They
+are stored as SHA-256 hashes; the guide now says so, and distinguishes them from
+passwords, which are Argon2 with a per-user salt. It also claimed that enabling
+*Enforce 2FA* prompts users to set it up at their next login — no such prompt
+exists. The setting warns and does not refuse, for reasons the guide now gives.
+
+Finishing the second step of a login after an administrator reset that account's
+two-factor authentication returned a server error; it now says the enrolment is
+gone and to sign in again.
+
 ## [2.83.0] - 2026-08-07
 
 ### Added — an account of any role can reach its own security settings

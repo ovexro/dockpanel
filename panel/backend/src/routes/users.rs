@@ -37,6 +37,11 @@ pub struct UserResponse {
     pub reseller_id: Option<Uuid>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub site_count: i64,
+    /// Carried so the user table can offer "Reset 2FA" on the rows that have an
+    /// enrolment and stay quiet on the rows that do not. Without it the control
+    /// would be a button that refuses on most of the list — the shape this panel
+    /// keeps having to remove.
+    pub totp_enabled: bool,
 }
 
 /// GET /api/users — List all users (admin only).
@@ -47,7 +52,8 @@ pub async fn list(
 
     let users: Vec<UserResponse> = sqlx::query_as(
         "SELECT u.id, u.email, u.role, u.reseller_id, u.created_at, \
-         COALESCE((SELECT COUNT(*) FROM sites WHERE user_id = u.id), 0) as site_count \
+         COALESCE((SELECT COUNT(*) FROM sites WHERE user_id = u.id), 0) as site_count, \
+         u.totp_enabled \
          FROM users u ORDER BY u.created_at ASC",
     )
     .fetch_all(&state.db)
@@ -391,6 +397,82 @@ pub async fn reset_password(
     let ip = crate::routes::client_ip(&headers);
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "user.reset_password",
+        Some("user"), Some(&user.email), None, ip.as_deref(),
+    ).await;
+
+    Ok(Json(serde_json::json!({ "ok": true, "email": user.email })))
+}
+
+/// POST /api/users/{id}/reset-2fa — Clear a user's two-factor enrolment.
+///
+/// The door of last resort. `auth::twofa_disable` was, until this route existed,
+/// the ONLY statement in the panel that clears `totp_enabled`, and it can only be
+/// reached by someone who can still produce a code — either from the authenticator
+/// they have lost, or from the recovery codes. Which is the trap: every account
+/// that enrolled before v2.83.0 holds ten recovery codes it was never shown (the
+/// block that draws them sat inside a branch the enable handler cleared in the
+/// same breath), so for those accounts BOTH factors are gone at once and there was
+/// no panel path back at all — only direct database access. This is that path.
+///
+/// ⚠ It deliberately refuses to act on the CALLER. Resetting your own 2FA from
+/// here would strip the factor with no code presented at all, which is precisely
+/// what `twofa_disable` exists to prevent — a hijacked admin session would turn
+/// the safeguard off in one click. An administrator who has lost their own
+/// authenticator is the case this route cannot serve, and the security-hardening
+/// guide states that limit outright rather than papering over it.
+///
+/// ⚠ An administrator CAN reset another administrator's 2FA. That is not an
+/// escalation across a privilege boundary: `admin` is already the top role, it
+/// already has `reset_password` on every account, and the panel already grants it
+/// a root terminal on the box. Refusing here would only remove the recovery path
+/// from the accounts most likely to need it, while leaving the DB route open. It
+/// is logged as its own action so it is never silent.
+pub async fn reset_2fa(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if id == claims.sub {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "Use My Account to change your own 2FA — resetting it here would skip the code check",
+        ));
+    }
+
+    let user: User = sqlx::query_as("SELECT * FROM users WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| internal_error("reset_2fa", e))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
+
+    // A half-finished enrolment leaves `totp_secret` set with `totp_enabled` still
+    // false, and that also wants clearing — so the refusal is keyed on there being
+    // nothing at all to clear, not on the flag alone.
+    if !user.totp_enabled && user.totp_secret.is_none() {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "This user has no two-factor enrolment to reset",
+        ));
+    }
+
+    sqlx::query(
+        "UPDATE users SET totp_enabled = FALSE, totp_secret = NULL, recovery_codes = NULL, updated_at = NOW() WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| internal_error("reset_2fa", e))?;
+
+    // Same reasoning as `reset_password`: the account's authentication just
+    // changed, so anything already holding a session on it starts again.
+    crate::routes::auth::revoke_all_user_sessions(&state, id).await;
+
+    tracing::info!("2FA reset by admin {} for user {}", claims.email, user.email);
+    let ip = crate::routes::client_ip(&headers);
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "user.reset_2fa",
         Some("user"), Some(&user.email), None, ip.as_deref(),
     ).await;
 

@@ -104,15 +104,28 @@ export function TwoFactorCard() {
   const [enabled, setEnabled] = useState(false);
   const [setup, setSetup] = useState<{ secret: string; qr_svg: string } | null>(null);
   const [code, setCode] = useState("");
-  const [disableCode, setDisableCode] = useState("");
+  // One field for both actions below, because both take the same thing: a live
+  // TOTP code OR one of the recovery codes. It was named for disabling back when
+  // turning 2FA off was the only thing a code could do here.
+  const [authCode, setAuthCode] = useState("");
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
+  const [remaining, setRemaining] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<Msg>({ text: "", type: "" });
   const qrRef = useRef<HTMLDivElement>(null);
 
+  // 6 = a code from the authenticator. 16 = a recovery code. 8 = a recovery code
+  // issued before v2.84.0, when they were half this width; those are still valid
+  // and must still be typeable, because the people holding them are exactly the
+  // people this screen exists for.
+  const codeReady = authCode.length === 6 || authCode.length === 8 || authCode.length === 16;
+
   useEffect(() => {
-    api.get<{ enabled: boolean }>("/auth/2fa/status")
-      .then(d => setEnabled(d.enabled))
+    api.get<{ enabled: boolean; recovery_codes_remaining?: number }>("/auth/2fa/status")
+      .then(d => {
+        setEnabled(d.enabled);
+        setRemaining(d.recovery_codes_remaining ?? null);
+      })
       .catch(() => {});
   }, []);
 
@@ -140,37 +153,77 @@ export function TwoFactorCard() {
               <div className="w-3 h-3 rounded-full bg-rust-500" />
               <span className="text-sm text-rust-400 font-medium">2FA is enabled</span>
             </div>
+            {/* How many recovery codes are LEFT. They are spent one per recovery
+                login and nothing ever counted them, so an account could reach zero
+                — no fallback at all — while this card still said only "2FA is
+                enabled". Zero is called out in its own words because it is the
+                state that turns a lost phone into a lost account. */}
+            {remaining !== null && (
+              <p className={`text-xs ${remaining === 0 ? "text-danger-400" : remaining <= 2 ? "text-warn-400" : "text-dark-300"}`}>
+                {remaining === 0
+                  ? "No recovery codes left. If you lose your authenticator you will need an administrator to reset 2FA for you — issue a new set now."
+                  : `${remaining} recovery ${remaining === 1 ? "code" : "codes"} remaining.`}
+              </p>
+            )}
             <p className="text-xs text-dark-300">
               Lost your authenticator? Enter one of your recovery codes below to turn 2FA off, then enrol again.
             </p>
-            <div className="flex items-center gap-2">
-              {/* Accepts a 6-digit TOTP code OR an 8-character recovery code —
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Accepts a code from the authenticator OR a recovery code —
                   both are hex, and the backend tries the authenticator first
                   then the recovery codes. This stripped everything non-numeric
                   and required exactly 6, so a recovery code could not even be
                   TYPED here: losing the authenticator meant losing the account,
-                  because there is no admin-side 2FA reset either. */}
+                  because there was no admin-side 2FA reset either. The cap must
+                  stay at or above the widest code the backend issues, or that
+                  same defect comes back the moment the codes get longer. */}
               <input
                 type="text"
                 inputMode="text"
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
-                value={disableCode}
-                onChange={(e) => setDisableCode(e.target.value.replace(/[^0-9a-fA-F]/g, "").toLowerCase().slice(0, 8))}
+                value={authCode}
+                onChange={(e) => setAuthCode(e.target.value.replace(/[^0-9a-fA-F]/g, "").toLowerCase().slice(0, 16))}
                 placeholder="TOTP or recovery code"
-                aria-label="TOTP code or recovery code to disable 2FA"
+                aria-label="TOTP code or recovery code"
                 className="px-3 py-2 border border-dark-500 rounded-lg text-sm w-48 focus:ring-2 focus:ring-accent-500 outline-none font-mono"
               />
+              {/* Issues a fresh set WITHOUT losing the enrolment. This is the
+                  repair for every account that enrolled before the codes were
+                  drawn on screen: it holds ten codes it has never seen, so its
+                  fallback exists only in the database. */}
               <button
-                disabled={loading || (disableCode.length !== 6 && disableCode.length !== 8)}
+                disabled={loading || !codeReady}
                 onClick={async () => {
                   setLoading(true);
                   setMsg({ text: "", type: "" });
                   try {
-                    await api.post("/auth/2fa/disable", { code: disableCode });
+                    const res = await api.post<{ recovery_codes: string[] }>("/auth/2fa/recovery-codes", { code: authCode });
+                    setAuthCode("");
+                    setRecoveryCodes(res.recovery_codes);
+                    setRemaining(res.recovery_codes.length);
+                    setMsg({ text: "New recovery codes issued. The previous set no longer works.", type: "success" });
+                  } catch (e) {
+                    setMsg({ text: errText(e, "Failed"), type: "error" });
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+                className="px-4 py-2 bg-dark-700 text-dark-100 border border-dark-500 rounded-lg text-sm font-medium hover:border-dark-400 disabled:opacity-50"
+              >
+                New recovery codes
+              </button>
+              <button
+                disabled={loading || !codeReady}
+                onClick={async () => {
+                  setLoading(true);
+                  setMsg({ text: "", type: "" });
+                  try {
+                    await api.post("/auth/2fa/disable", { code: authCode });
                     setEnabled(false);
-                    setDisableCode("");
+                    setAuthCode("");
+                    setRemaining(null);
                     setMsg({ text: "2FA disabled", type: "success" });
                   } catch (e) {
                     setMsg({ text: errText(e, "Failed"), type: "error" });
@@ -213,6 +266,7 @@ export function TwoFactorCard() {
                     setSetup(null);
                     setCode("");
                     setRecoveryCodes(res.recovery_codes);
+                    setRemaining(res.recovery_codes.length);
                     setMsg({ text: "2FA enabled! Save your recovery codes.", type: "success" });
                   } catch (e) {
                     setMsg({ text: errText(e, "Invalid code"), type: "error" });

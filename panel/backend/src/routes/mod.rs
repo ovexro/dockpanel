@@ -740,6 +740,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/auth/2fa/enable", post(auth::twofa_enable))
         .route("/api/auth/2fa/verify", post(auth::twofa_verify))
         .route("/api/auth/2fa/disable", post(auth::twofa_disable))
+        .route("/api/auth/2fa/recovery-codes", post(auth::twofa_regenerate_recovery_codes))
         .route("/api/auth/2fa/status", get(auth::twofa_status))
         // Passkeys / WebAuthn
         .route("/api/auth/passkey/register/begin", post(passkeys::register_begin))
@@ -757,6 +758,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/users/{id}", put(users::update).delete(users::remove))
         .route("/api/users/{id}/toggle-suspend", post(users::toggle_suspend))
         .route("/api/users/{id}/reset-password", post(users::reset_password))
+        .route("/api/users/{id}/reset-2fa", post(users::reset_2fa))
         // Sites
         .route("/api/sites", get(sites::list).post(sites::create))
         // Read-only, admin-only, and the ONLY site read that looks past

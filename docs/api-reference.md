@@ -64,8 +64,9 @@ Get the authenticated user's profile.
 | POST | `/api/auth/revoke-all` | Revoke all sessions |
 | POST | `/api/auth/2fa/setup` | Get TOTP QR code |
 | POST | `/api/auth/2fa/enable` | Enable 2FA with verification code |
-| POST | `/api/auth/2fa/disable` | Disable 2FA |
-| GET | `/api/auth/2fa/status` | Check 2FA status |
+| POST | `/api/auth/2fa/disable` | Disable 2FA (TOTP or recovery code) |
+| POST | `/api/auth/2fa/recovery-codes` | Issue a fresh set of recovery codes |
+| GET | `/api/auth/2fa/status` | 2FA state, enforcement, recovery codes remaining |
 | GET | `/api/auth/oauth/{provider}` | Start OAuth flow (google/github/gitlab) |
 | GET | `/api/auth/oauth/{provider}/callback` | OAuth callback |
 
@@ -538,6 +539,9 @@ Create a webhook integration.
 | POST | `/api/users` | Create user |
 | PUT | `/api/users/{id}` | Update role |
 | DELETE | `/api/users/{id}` | Delete user |
+| POST | `/api/users/{id}/reset-password` | Set a new password for a user |
+| POST | `/api/users/{id}/toggle-suspend` | Suspend or restore a user |
+| POST | `/api/users/{id}/reset-2fa` | Clear a user's 2FA enrolment |
 
 ### Teams (7)
 

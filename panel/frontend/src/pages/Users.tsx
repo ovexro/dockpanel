@@ -9,6 +9,7 @@ interface User {
   role: string;
   created_at: string;
   site_count: number;
+  totp_enabled: boolean;
 }
 
 export default function Users() {
@@ -30,6 +31,8 @@ export default function Users() {
   const [resetPwTarget, setResetPwTarget] = useState<string | null>(null);
   const [resetPwValue, setResetPwValue] = useState("");
   const [resettingPw, setResettingPw] = useState(false);
+  const [reset2faTarget, setReset2faTarget] = useState<string | null>(null);
+  const [resetting2fa, setResetting2fa] = useState(false);
 
   const loadUsers = async () => {
     try {
@@ -136,6 +139,28 @@ export default function Users() {
       });
     } finally {
       setResettingPw(false);
+    }
+  };
+
+  // The door of last resort for an account whose authenticator is gone. Offered
+  // only on rows that actually have an enrolment (`totp_enabled`), and never on
+  // your own row — the API refuses that too, because resetting your own 2FA from
+  // here would turn the factor off with no code presented at all.
+  const handleReset2fa = async (id: string) => {
+    setResetting2fa(true);
+    setMessage({ text: "", type: "" });
+    try {
+      const data = await api.post<{ email: string }>(`/users/${id}/reset-2fa`);
+      setReset2faTarget(null);
+      setMessage({ text: `2FA reset for ${data.email}. They can sign in with their password and enrol again.`, type: "success" });
+      loadUsers();
+    } catch (e) {
+      setMessage({
+        text: e instanceof Error ? e.message : "Failed to reset 2FA",
+        type: "error",
+      });
+    } finally {
+      setResetting2fa(false);
     }
   };
 
@@ -332,6 +357,15 @@ export default function Users() {
                         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 0 1 3 3m3 0a6 6 0 0 1-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25Z" /></svg>
                       </button>
                     )}
+                    {!isSelf(user.id) && user.totp_enabled && (
+                      <button
+                        onClick={() => setReset2faTarget(user.id)}
+                        className="p-1.5 text-dark-300 hover:text-dark-50"
+                        title="Reset two-factor authentication"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" /></svg>
+                      </button>
+                    )}
                     {deleteTarget === user.id ? (
                       <div className="flex items-center gap-1">
                         <button onClick={() => handleDelete(user.id)} className="px-2 py-1 bg-danger-500 text-white rounded text-xs">Del</button>
@@ -497,6 +531,57 @@ export default function Users() {
               >
                 {resettingPw && <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
                 {resettingPw ? "Resetting..." : "Reset Password"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reset 2FA dialog */}
+      {reset2faTarget && (
+        <div
+          className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 dp-modal-overlay"
+          role="dialog"
+          aria-labelledby="reset-2fa-title"
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setReset2faTarget(null);
+          }}
+        >
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-[460px] dp-modal">
+            <h3 id="reset-2fa-title" className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-4">
+              Reset Two-Factor Authentication
+            </h3>
+            <p className="text-sm text-dark-200 mb-3">
+              Turn off 2FA for <span className="font-mono text-dark-50">{users.find(u => u.id === reset2faTarget)?.email}</span>.
+            </p>
+            <p className="text-xs text-dark-300 mb-1">
+              Their authenticator enrolment and any remaining recovery codes are erased, and every
+              session they hold is signed out. They will be able to sign in with their password
+              alone, and should enrol a new device straight away.
+            </p>
+            <p className="text-xs text-dark-300 mb-1">
+              Any passkeys they have registered are <span className="text-dark-100">not</span> removed —
+              a passkey is an independent factor and signs in on its own. This action repairs a
+              locked-out account; it is not a way to lock someone out.
+            </p>
+            <p className="text-xs text-warn-400 mb-4">
+              Do this only when you are satisfied the request came from the account holder — it
+              removes their second factor.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setReset2faTarget(null)}
+                className="px-4 py-2 text-sm text-dark-300 border border-dark-600 rounded-lg hover:text-dark-100 hover:border-dark-400 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleReset2fa(reset2faTarget)}
+                disabled={resetting2fa}
+                className="flex items-center gap-2 px-4 py-2 bg-danger-500 text-white rounded-lg text-sm font-medium hover:bg-danger-600 disabled:opacity-50"
+              >
+                {resetting2fa && <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+                {resetting2fa ? "Resetting..." : "Reset 2FA"}
               </button>
             </div>
           </div>

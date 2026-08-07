@@ -107,25 +107,50 @@ DockPanel supports TOTP-based 2FA using any authenticator app (Google Authentica
 
 ### Enable 2FA
 
-1. Go to **Settings** > **Security**
+1. Go to **My Account** (every role has it; administrators can also use **Settings** > **Account**)
 2. Click **Enable 2FA**
 3. Scan the QR code with your authenticator app
 4. Enter the 6-digit code from the app to confirm
-5. Save your **recovery codes** -- these are shown once and cannot be retrieved later
+5. Save your **recovery codes** -- they are shown once and cannot be retrieved later
 
-When 2FA is enabled, login requires your password followed by a TOTP code. The temporary token for the 2FA step expires after 5 minutes. Failed 2FA attempts are rate-limited to 5 per 5 minutes.
+When 2FA is enabled, login requires your password followed by a TOTP code. The temporary token for the 2FA step expires after 5 minutes. Failed 2FA attempts are rate-limited to 5 per 5 minutes, on every route that checks a 2FA code -- signing in, disabling 2FA, and issuing new recovery codes.
+
+> **Upgrading from a release before v2.84.0?** Two fixes in this area change what
+> you should do. Enrolments made before **v2.83.0** never displayed their recovery
+> codes (the panel generated them and stored them, but the block that draws them
+> was never reached), so if you enrolled before then, **you are holding ten codes
+> you have never seen**. Separately, codes issued before **v2.84.0** are half their
+> current width. Either way the repair is the same: open **My Account** and click
+> **New recovery codes** while you still have your authenticator. It does not
+> disturb your enrolment. Until v2.84.0 the disable route was also not rate-limited.
 
 ### Recovery Codes
 
-If you lose access to your authenticator app, use a recovery code to log in. Each code can only be used once. You receive 10 codes when enabling 2FA. Recovery codes are stored as Argon2 hashes -- they cannot be retrieved from the database.
+If you lose access to your authenticator app, use a recovery code -- to log in, and also to turn 2FA off or to issue a fresh set. Each code can only be used once, and you receive 10 when enabling 2FA.
+
+**How many are left** is shown on the 2FA card, and the panel warns you when the set runs low or reaches zero. Before v2.84.0 the count was never surfaced anywhere, so an account could spend its last code without knowing.
+
+**Issuing a new set.** Click **New recovery codes** on the 2FA card and confirm with a TOTP code or one of your remaining recovery codes. The previous set stops working immediately. Use this if you are running low, if you think a code has been seen by someone else, or if you enrolled before v2.83.0 and never received a readable set.
+
+**How they are stored.** Recovery codes are hashed with SHA-256 before being written, so the plaintext is not in the database. SHA-256 is a *fast* hash, which means the width of the code is what actually protects it: from v2.84.0 codes are 16 hex characters (64 bits), which is not searchable. Codes issued **before** v2.84.0 were 8 characters (32 bits) -- small enough that anyone holding a copy of the `users` table, or an old backup, could recover them by exhaustive search. Those codes still work, and that is the second reason to reissue a set: it replaces short codes with long ones. Note that this is not the protection applied to your password, which is Argon2 with a per-user salt.
 
 ### Enforce 2FA
 
-Admins can enforce 2FA for all users by enabling the `enforce_2fa` setting. Users without 2FA will be prompted to set it up on their next login.
+Admins can turn on the `enforce_2fa` setting. **This currently warns rather than refuses:** every user without 2FA sees a persistent banner asking them to enrol, and the login itself still succeeds. Refusing the login outright is deliberately not implemented, because several kinds of account have no second way in (OAuth-provisioned accounts with no password, the bootstrap administrator, non-browser callers), and a refusal they cannot satisfy is a lockout rather than a safeguard.
 
 ### Disable 2FA
 
-Go to **Settings** > **Security** > **Disable 2FA**. You must enter a valid TOTP code to confirm.
+Go to **My Account** > **Two-Factor Authentication** > **Disable 2FA**. Confirm with a TOTP code **or** one of your recovery codes -- accepting only a live TOTP code (the behaviour before v2.83.0) meant a lost authenticator could never be repaired by its owner.
+
+### If a user has lost everything
+
+An administrator can clear another user's 2FA from **Users** -- the shield icon on that user's row, which appears only for accounts that actually have an enrolment. It erases the enrolment and any remaining recovery codes, and signs out every session that user holds; they can then sign in with their password and enrol a new device. It is recorded in the activity log as `user.reset_2fa`.
+
+Two limits worth knowing before you rely on it:
+
+- **You cannot reset your own 2FA this way.** The route refuses it, because doing so would remove the factor without anyone presenting a code -- exactly what the disable flow exists to prevent. Use **My Account** with a TOTP or recovery code.
+- **It does not remove passkeys**, which sign in on their own without the 2FA step. It is a repair for a locked-out account, not an eviction tool: if you are responding to a compromise, review that account's passkeys and sessions as well.
+- **A sole administrator who has lost both their authenticator and their recovery codes cannot be recovered through the panel**, because there is no second administrator to perform the reset. Guard against this in advance: register a passkey (passkey sign-in does not require the 2FA step), keep a second administrator account, or keep your recovery codes somewhere you will still have them. Otherwise the only route back is clearing `totp_enabled`, `totp_secret` and `recovery_codes` for that row directly in PostgreSQL.
 
 ## IP Whitelist
 
@@ -217,8 +242,10 @@ See the [Session Management guide](sessions.md) for details on viewing, revoking
 | `POST` | `/api/auth/2fa/setup` | Generate TOTP secret and QR code |
 | `POST` | `/api/auth/2fa/enable` | Verify code and enable 2FA |
 | `POST` | `/api/auth/2fa/verify` | Complete login with TOTP code |
-| `POST` | `/api/auth/2fa/disable` | Disable 2FA |
-| `GET` | `/api/auth/2fa/status` | Check if 2FA is enabled |
+| `POST` | `/api/auth/2fa/disable` | Disable 2FA (TOTP or recovery code) |
+| `POST` | `/api/auth/2fa/recovery-codes` | Issue a fresh set of recovery codes |
+| `GET` | `/api/auth/2fa/status` | 2FA state, enforcement flag, recovery codes remaining |
+| `POST` | `/api/users/{id}/reset-2fa` | Admin: clear another user's 2FA enrolment |
 | `GET` | `/api/auth/export-my-data` | GDPR data export |
 | `POST` | `/api/security/ssh/disable-password` | Disable SSH password auth |
 | `POST` | `/api/security/ssh/enable-password` | Enable SSH password auth |
