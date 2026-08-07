@@ -5,12 +5,16 @@ import { LegalDoc, type LegalSection } from '../components/LegalDoc';
  * As with the privacy policy: the terms themselves are untouched and the date
  * stays where it was. Restyling a document is not amending it.
  *
- * The licence name, the 1.1, and the 2030-03-25 conversion date below are the
- * ones in the repository's own LICENSE file. If that file's Change Date ever
- * moves, this page is one of the surfaces that has to move with it.
+ * The licence named below is the one in the repository's own LICENSE file. If
+ * that file changes, this page is one of the surfaces that has to move with it.
+ *
+ * It did: DockPanel moved from the Business Source License 1.1 to the GNU AGPL
+ * v3 on 2026-08-07. That is an amendment and not a restyling, so unlike the
+ * changes above it, the date DOES move. There is no longer a conversion date to
+ * track — the AGPL does not convert into anything.
  */
 
-const UPDATED = 'March 13, 2026';
+const UPDATED = 'August 7, 2026';
 const LICENSE_URL = 'https://github.com/ovexro/dockpanel/blob/main/LICENSE';
 
 const SECTIONS: LegalSection[] = [
@@ -20,9 +24,12 @@ const SECTIONS: LegalSection[] = [
     title: 'License',
     body: (
       <p>
-        DockPanel is released under the Business Source License 1.1 (BSL 1.1). You are free to use,
-        copy, modify, and self-host the software for non-production or evaluation purposes. The license
-        converts to MIT on 2030-03-25. The full license text is available in the{' '}
+        DockPanel is released under the GNU Affero General Public License v3 (AGPL v3). You are free
+        to use, copy, modify, self-host and redistribute the software, on any number of servers,
+        including commercially. If you modify DockPanel and offer it to others as a service over a
+        network, the AGPL requires you to make your modified source available to those users;
+        running it — modified or not — for yourself or your own organisation carries no such
+        obligation. The full license text is available in the{' '}
         <a href={LICENSE_URL} className={docLink} target="_blank" rel="noopener noreferrer">
           GitHub repository
         </a>
@@ -133,9 +140,9 @@ export default function TermsOfService() {
         <>
           DockPanel is free, open-source software licensed under the{' '}
           <a href={LICENSE_URL} className={docLink} target="_blank" rel="noopener noreferrer">
-            Business Source License 1.1
-          </a>{' '}
-          (which converts to MIT on 2030-03-25). By using DockPanel, you agree to the following terms.
+            GNU Affero General Public License v3
+          </a>
+          . By using DockPanel, you agree to the following terms.
         </>
       }
       sections={SECTIONS}

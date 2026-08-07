@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://github.com/ovexro/dockpanel/releases"><img src="https://img.shields.io/github/v/release/ovexro/dockpanel" alt="Release"></a>
   <a href="https://github.com/ovexro/dockpanel/actions"><img src="https://img.shields.io/github/actions/workflow/status/ovexro/dockpanel/ci.yml?label=CI" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-BSL_1.1-blue.svg" alt="License: BSL 1.1"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL_v3-blue.svg" alt="License: AGPL v3"></a>
 </p>
 
 <p align="center">
@@ -304,4 +304,29 @@ sudo bash /opt/dockpanel/scripts/uninstall.sh   # Remove
 
 ## License
 
-Business Source License 1.1. Free to use on your own servers. See [LICENSE](LICENSE) for details.
+**GNU Affero General Public License v3.0.** DockPanel is free software — run it, read it,
+change it, and redistribute it, on as many servers as you like, commercially included.
+There is no premium tier and nothing is held back.
+
+The one obligation the AGPL adds over the GPL: if you modify DockPanel and offer it to
+other people *as a service over a network*, you have to make your modified source
+available to those users. Running an unmodified copy, or running a modified copy for
+yourself or your own company, obliges you nothing. See [LICENSE](LICENSE) for the full text.
+
+Copyright © 2026 DockPanel.
+
+## Supporting DockPanel
+
+DockPanel is built and maintained by one developer. It has no company behind it, no
+investors to answer to, no telemetry, and nothing gated — which is why the roadmap is
+decided by what actually helps people running servers rather than by what converts.
+
+If it saved you the cost of a control-panel licence, you can put some of that back:
+
+- **[GitHub Sponsors](https://github.com/sponsors/ovexro)** — recurring, and it shows up
+  on the repo
+- **[PayPal](https://www.paypal.com/paypalme/ovexro)** — one-off, no account needed
+
+What that funds, concretely: a wider fleet of test VPSes so releases are verified on more
+distributions before they ship, faster turnaround on security fixes, and time for the
+bigger features on the roadmap. Every version stays free either way.

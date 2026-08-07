@@ -4,6 +4,32 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Changed — DockPanel is now free software under the AGPL v3
+
+The licence moves from the Business Source License 1.1 to the **GNU Affero General
+Public License v3**. BSL was source-available, not open source: it carried a use
+restriction and a 2030 conversion date. That restriction and that date are both gone.
+
+You may now run, read, modify and redistribute DockPanel on any number of servers,
+commercially included, with no conversion date to wait for. The one obligation the
+AGPL adds over the GPL is the network clause: if you modify DockPanel and offer it
+to other people *as a service*, you must make your modified source available to
+those users. Running it — modified or not — for yourself or your own organisation
+obliges you nothing.
+
+`LICENSE` is now the verbatim AGPL-3.0 text. Package metadata across the agent,
+backend, CLI, panel frontend and website declares `AGPL-3.0-only` (the website had
+been declaring ISC, which was simply wrong).
+
+### Added — a way to support the project
+
+`.github/FUNDING.yml`, the README and the site's price section now point at GitHub
+Sponsors and PayPal. Nothing is gated behind them and nothing ever will be; the
+support note sits after the price figures and says what the money buys — test
+hardware, so releases are verified on more distributions before they ship.
+
 ## [2.79.0] - 2026-08-07
 
 ### Security — force-renew and revoke acted outside the administrator's boundary

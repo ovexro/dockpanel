@@ -260,7 +260,7 @@ const steps = [
 ];
 
 const faqs = [
-  { q: 'Is it really free?', a: 'Every feature, every server, no limits. Licensed under BSL 1.1, which converts to MIT in 2030. There is no premium tier.' },
+  { q: 'Is it really free?', a: 'Every feature, every server, no limits. Licensed under the AGPL v3 — free software, on as many servers as you like, commercially included. There is no premium tier.' },
   { q: 'System requirements?', a: '512 MB RAM, 1 CPU, 10 GB disk. Runs on Ubuntu, Debian, CentOS, Rocky, AlmaLinux, and Fedora. ARM64 works too.' },
   { q: 'How is this different from cPanel?', a: `cPanel uses ~${m.competitorRam.cPanel} MB of RAM, costs $15/month, and doesn't support Docker. DockPanel's two services take about ${m.ram.services} MB between them, or roughly ${m.ram.fullStack} MB counting the bundled PostgreSQL, cost nothing, and ship with ${m.templates} Docker templates, a WAF, passkey authentication, Git deploys, a CLI, and multi-server management.` },
   { q: 'What happens if DockPanel goes down?', a: 'Your sites keep running. Nginx and Docker are independent processes \u2014 the panel is just the management layer. It auto-restarts via systemd if it ever stops.' },
@@ -772,7 +772,7 @@ export default function Landing() {
                   ['per site', '$0'],
                   ['feature tiers', 'none'],
                   ['usage limits', 'none'],
-                  ['licence', 'BSL 1.1 → MIT in 2030'],
+                  ['licence', 'AGPL v3 — free software'],
                 ].map(([k, v]) => (
                   <div key={k} className="flex items-baseline justify-between gap-6 py-3 border-b border-[#1e1e22]">
                     <dt className="text-[#6b6b74]">{k}</dt>
@@ -791,6 +791,42 @@ export default function Landing() {
                 <p className="mono text-[11px] text-[#3f3f46] ml-auto">
                   stuck? <a href="mailto:hello@dockpanel.dev" className="text-[#6b6b74] hover:text-[#f4f4f5] underline underline-offset-4 decoration-[#3f3f46] transition-colors">hello@dockpanel.dev</a>
                 </p>
+              </div>
+
+              {/* ── Support ──────────────────────────────────────────────
+                  Deliberately AFTER the six zeroes and inside the same
+                  section. The reader has just been told the price six times;
+                  the honest next question is what pays for it, and the answer
+                  is nobody. So this states the arithmetic and stops — no
+                  "please", no progress bar, no guilt, and the word optional
+                  in the margin where the price figures were.
+
+                  ⚠ No monetary figure here on purpose. The competitor's price
+                  is already stated once, in the FAQ, and the register says a
+                  number lives in exactly one place. Repeating it here would
+                  make this the second surface that has to be corrected when
+                  it moves. */}
+              <div className="mt-14 max-w-2xl border-t border-[#1e1e22] pt-8">
+                <p className="text-[15px] text-[#a3a3ad] leading-relaxed">
+                  The panel this replaces bills every month, forever. This one has no company
+                  behind it, no investors to answer to, no telemetry, and no tier above the one
+                  you just read — which is why the roadmap is decided by what helps people
+                  running servers rather than by what converts.
+                </p>
+                <p className="mt-4 text-[15px] text-[#a3a3ad] leading-relaxed">
+                  Support buys test hardware. A wider fleet of throwaway servers means each
+                  release is verified on more distributions before it reaches yours, and a
+                  security fix ships the day it is written instead of the weekend after.
+                </p>
+                <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-3">
+                  <a href="https://github.com/sponsors/ovexro" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 text-sm font-medium text-[#f4f4f5] underline decoration-[#3f3f46] hover:decoration-[#f4f4f5] underline-offset-4 transition-colors">
+                    <Github className="w-3.5 h-3.5" /> GitHub Sponsors
+                  </a>
+                  <a href="https://www.paypal.com/paypalme/ovexro" target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-[#a3a3ad] hover:text-[#f4f4f5] transition-colors">
+                    PayPal
+                  </a>
+                  <p className="mono text-[11px] text-[#3f3f46] ml-auto">entirely optional</p>
+                </div>
               </div>
             </div>
           </div>
@@ -859,7 +895,7 @@ export default function Landing() {
           </div>
           <div className="mt-10 pt-6 border-t border-zinc-800/40 flex flex-col sm:flex-row items-center justify-between gap-2">
             <span className="text-[12px] text-zinc-700">&copy; 2026 DockPanel</span>
-            <span className="text-[11px] text-zinc-700">Solo-developed &middot; BSL 1.1</span>
+            <span className="text-[11px] text-zinc-700">Solo-developed &middot; AGPL v3</span>
           </div>
         </div>
       </footer>

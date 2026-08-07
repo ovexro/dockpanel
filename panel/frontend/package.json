@@ -2,6 +2,7 @@
   "name": "dockpanel-frontend",
   "private": true,
   "version": "2.79.0",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
     "dev": "vite",

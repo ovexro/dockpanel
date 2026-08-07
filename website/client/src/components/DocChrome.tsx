@@ -103,7 +103,7 @@ export function DocFooter() {
         </div>
         <div className="mt-8 flex flex-col items-start justify-between gap-2 border-t border-[#1e1e22] pt-6 sm:flex-row sm:items-center">
           <span className="text-[12px] text-zinc-700">&copy; 2026 DockPanel</span>
-          <span className="text-[11px] text-zinc-700">Solo-developed &middot; BSL 1.1</span>
+          <span className="text-[11px] text-zinc-700">Solo-developed &middot; AGPL v3</span>
         </div>
       </div>
     </footer>
