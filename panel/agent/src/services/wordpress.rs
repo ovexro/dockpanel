@@ -398,15 +398,17 @@ pub async fn set_auto_update(domain: &str, enabled: bool) -> Result<(), String> 
          {marker}"
     );
 
-    // Get current crontab
-    let current = safe_command("crontab")
-        .args(["-l", "-u", "root"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-        .unwrap_or_default();
+    // Get current crontab, FAIL-CLOSED.
+    //
+    // This used to be `.output().await.map(|o| …stdout…).unwrap_or_default()`,
+    // which collapsed two different things into the same empty string: a spawn
+    // failure (swallowed by `unwrap_or_default`) and a non-zero exit (the `map`
+    // never looked at `o.status`). Either one produced `""`, and the twenty lines
+    // below then hand `""` straight back to `crontab -` as root's COMPLETE new
+    // content — so a transient failure here rewrote root's entire crontab, every
+    // tenant's jobs and every system entry, down to at most this one WordPress
+    // line. Reached from an ordinary authenticated request naming ONE site.
+    let current = crate::services::crontab::read_crontab().await?;
 
     // Remove existing auto-update line for this domain — and ONLY this domain.
     let filtered: Vec<&str> = current
@@ -424,35 +426,7 @@ pub async fn set_auto_update(domain: &str, enabled: bool) -> Result<(), String> 
         new_crontab.push('\n');
     }
 
-    // Write crontab via stdin pipe
-    let mut child = safe_command("crontab")
-        .args(["-u", "root", "-"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("crontab spawn: {e}"))?;
-
-    if let Some(ref mut stdin) = child.stdin {
-        use tokio::io::AsyncWriteExt;
-        stdin
-            .write_all(new_crontab.as_bytes())
-            .await
-            .map_err(|e| format!("crontab write: {e}"))?;
-    }
-
-    let out = child
-        .wait_with_output()
-        .await
-        .map_err(|e| format!("crontab wait: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "crontab failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-
-    Ok(())
+    crate::services::crontab::write_crontab(&new_crontab).await
 }
 
 /// Check if auto-update cron is enabled for a domain.

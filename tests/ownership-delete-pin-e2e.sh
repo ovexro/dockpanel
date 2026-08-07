@@ -50,6 +50,12 @@ APP_PROC=panel/agent/src/services/app_process.rs
 NGINX_ROUTE=panel/agent/src/routes/nginx.rs
 SSL_ROUTE=panel/agent/src/routes/ssl.rs
 CRONS_AGENT=panel/agent/src/routes/crons.rs
+# s323: read_crontab/write_crontab moved OUT of routes/crons.rs into a shared
+# service, because the WordPress auto-update twin needed them and private
+# helpers cannot be shared. Extracting a helper moves the subject of every pin
+# that measured it — D2 below went red for exactly that reason, not for a
+# regression, and repointing it is the fix rather than relaxing it.
+CRONTAB_SVC=panel/agent/src/services/crontab.rs
 CRONS_BE=panel/backend/src/routes/crons.rs
 SITES_BE=panel/backend/src/routes/sites.rs
 WP=panel/agent/src/services/wordpress.rs
@@ -406,7 +412,7 @@ else
   bad "D1 sync_crons strips every '# dockpanel:' line — every other tenant's jobs with it"
 fi
 
-RC=$(fnbody "$CA" "read_crontab")
+RC=$(fnbody "$(subj "$CRONTAB_SVC")" "read_crontab")
 # `Err(` appears in the MATCH ARMS too (`Ok(Err(e))`), so the first draft passed
 # even after both failure arms were flipped to `Ok(String::new())`. The property
 # is: an empty crontab may be returned for exactly ONE reason, and that reason

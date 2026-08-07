@@ -19,7 +19,7 @@ use crate::services::activity;
 /// security directives. `build_nginx_body` is the same canonical builder every
 /// other config-rebuild path uses. Best-effort: a failure leaves the site on the
 /// agent's (functional, SSL-enabled) subset config and is logged.
-async fn rebuild_vhost_after_ssl(
+pub(crate) async fn rebuild_vhost_after_ssl(
     state: &AppState,
     agent: &crate::services::agent::AgentHandle,
     site_id: Uuid,

@@ -60,7 +60,7 @@ impl SiteDatabases {
 ///
 /// The agent has no access to the `databases` table, so this is the only place
 /// that can answer "what does backing up this site actually involve?".
-async fn site_databases(state: &AppState, site_id: Uuid) -> SiteDatabases {
+pub(crate) async fn site_databases(state: &AppState, site_id: Uuid) -> SiteDatabases {
     site_database_specs(&state.db, &state.config.jwt_secret, site_id).await
 }
 

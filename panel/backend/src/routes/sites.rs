@@ -1830,6 +1830,41 @@ pub async fn remove(
     let agent =
         crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
+    // Pre-delete backup: snapshot the site BEFORE anything destructive runs.
+    //
+    // This used to sit forty lines further down, AFTER `DELETE /nginx/sites/{domain}`
+    // — whose agent handler does `remove_dir_all("/var/www/{domain}")` — and after the
+    // database containers were destroyed. `create_backup` opens with
+    // `if !site_root.exists() { return Err(...) }`, so by the time it ran the site root
+    // was always gone: the call returned an error 100% of the time, and `let _ =`
+    // discarded it. The "backup before permanent deletion" had never written a byte on
+    // this path, and the comment above it said it had.
+    //
+    // It is still best-effort — a failed snapshot must not strand a site the operator
+    // asked to delete — but a failure is now LOGGED rather than swallowed, and the
+    // databases are included, since they are still alive at this point.
+    let predelete_dbs = crate::routes::backups::site_databases(&state, id).await;
+    match agent
+        .post(
+            &format!("/backups/{}/create", site.domain),
+            Some(serde_json::json!({
+                "reason": "pre-delete",
+                "databases": predelete_dbs.specs,
+            })),
+        )
+        .await
+    {
+        Ok(info) => tracing::info!(
+            "Pre-delete backup for {} created: {}",
+            site.domain,
+            info.get("filename").and_then(|v| v.as_str()).unwrap_or("(unnamed)")
+        ),
+        Err(e) => tracing::warn!(
+            "Pre-delete backup for {} FAILED — continuing with deletion: {e}",
+            site.domain
+        ),
+    }
+
     // Remove database containers before CASCADE deletes the records
     let databases: Vec<(String,)> = sqlx::query_as(
         "SELECT container_id FROM databases WHERE site_id = $1 AND container_id IS NOT NULL AND container_id != ''",
@@ -1914,11 +1949,8 @@ pub async fn remove(
         .await
         .ok();
 
-    // Pre-delete backup: snapshot site files before permanent deletion (best-effort)
-    let _ = agent.post(
-        &format!("/backups/{}/create", site.domain),
-        Some(serde_json::json!({"reason": "pre-delete"})),
-    ).await;
+    // (The pre-delete backup used to be here — see the note above the version that
+    // now runs before the destructive steps.)
 
     // Delete from DB (CASCADE removes databases, backups, crons, etc.)
     sqlx::query("DELETE FROM sites WHERE id = $1")
@@ -2741,6 +2773,24 @@ pub async fn upload_ssl(
         .bind(id).execute(&state.db).await {
         tracing::warn!("Failed to update ssl_enabled for site {id}: {e}");
     }
+
+    // Re-render the FULL vhost from the site's DB config — the same compensation
+    // every other SSL path already performs.
+    //
+    // The agent's `/ssl/upload` handler receives only {domain, certificate,
+    // private_key} and has to invent the other nineteen fields of the SiteConfig it
+    // renders, so it writes a vhost with WAF off, bot-protection off, no CSP, no
+    // Permissions-Policy, no custom_nginx, default rate limits — and, because it
+    // cannot know the site's PHP version, an unversioned `php-fpm.sock` that exists
+    // on no modern Debian or Ubuntu. So uploading a certificate did not merely strip
+    // a hardened site's security directives (with the panel's own toggles still
+    // reading ON, since the DB row is untouched): on a PHP site it took the site
+    // OFF THE AIR with a 502.
+    //
+    // v2.18.0 introduced this compensation for exactly this reason and applied it to
+    // provision, renew and force-renew. Upload is the fourth sibling and was missed —
+    // a fix to one instance of a pattern owes a grep for the pattern.
+    crate::routes::ssl::rebuild_vhost_after_ssl(&state, &agent, id).await;
 
     activity::log_activity(&state.db, claims.sub, &claims.email, "ssl.upload",
         Some("site"), Some(&domain), None, None).await;

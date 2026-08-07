@@ -3480,20 +3480,6 @@ pub async fn get_app_env(container_id: &str) -> Result<Vec<(String, String)>, St
     Ok(env_list)
 }
 
-/// Get the domain label from a container, if set.
-pub async fn get_app_domain(container_id: &str) -> Option<String> {
-    let docker = Docker::connect_with_local_defaults().ok()?;
-    let info = docker.inspect_container(container_id, None).await.ok()?;
-    info.config?.labels?.get("dockpanel.app.domain").cloned()
-}
-
-/// Get the app name label from a container, if set.
-pub async fn get_app_name(container_id: &str) -> Option<String> {
-    let docker = Docker::connect_with_local_defaults().ok()?;
-    let info = docker.inspect_container(container_id, None).await.ok()?;
-    info.config?.labels?.get("dockpanel.app.name").cloned()
-}
-
 /// What a removal needs to know about a container *before* it is removed, so
 /// the cleanup that follows can prove it owns each thing it deletes.
 ///

@@ -963,17 +963,20 @@ pub async fn reset_password(
         get_db_info(&state, id, claims.sub).await?;
 
     // The host MUST come from the site's row here, and this is the handler where taking
-    // it from the request header did the most damage. The agent's mysql/mariadb branch
-    // resets the account with `docker exec <container> mariadb -u root --skip-password
-    // -e "ALTER USER …"` — it never checks the `old_password` this body sends, so
-    // possession of the container name is the whole authorization. Container names are
+    // it from the request header did the most damage. Container names are
     // `dockpanel-db-{name}` and are unique only per host, so a request dispatched to the
-    // wrong machine rewrites the password of ANY same-named container living there, for
-    // a tenant who has nothing to do with the caller. `ServerScope` made that the DEFAULT
-    // rather than the edge case: a non-admin owns no `servers` row, so their scope always
-    // fell back to the local agent even when their database lives on a fleet member.
-    // The panel row is then updated with the new password regardless, so the real
-    // database is left with a credential the panel no longer knows.
+    // wrong machine acts on ANY same-named container living there, for a tenant who has
+    // nothing to do with the caller. `ServerScope` made that the DEFAULT rather than the
+    // edge case: a non-admin owns no `servers` row, so their scope always fell back to
+    // the local agent even when their database lives on a fleet member. The panel row is
+    // then updated with the new password regardless, so the real database is left with a
+    // credential the panel no longer knows.
+    //
+    // The agent's mysql/mariadb branch used to reach the account as container-root and
+    // ignore the `old_password` this body sends. That never worked — the branch could not
+    // authenticate at all — and it now authenticates AS THE TENANT with this password, so
+    // the value below is load-bearing rather than decorative. See the note on
+    // `services::database::reset_password` in the agent crate for the measurement.
     let agent = crate::helpers::agent_for_site_server(&state, site_server_id, &name).await?;
 
     // Generate a new random password (same pattern as create())

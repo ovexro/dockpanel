@@ -6,6 +6,86 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.81.0] - 2026-08-07
+
+### Fixed — resetting a MariaDB database password has never worked
+
+The MariaDB branch of the agent's password reset connected as the container's
+root account with no credential, on the stated premise that root can
+authenticate over the unix socket inside the container. That premise was never
+true of a container DockPanel itself creates: the database container is started
+with a random root password, which gives `root@localhost` a random
+`mysql_native_password` and does not enable socket authentication. Every reset
+therefore failed with `ERROR 1045 … Access denied for user 'root'@'localhost'`
+and surfaced as a 500. Measured on `mariadb:11` with exactly the environment
+DockPanel sets; the PostgreSQL branch was unaffected.
+
+The reset now authenticates **as the tenant** using the current password the
+panel already sends, and asks the server to change its own account — the same
+connection shape the SQL console has used in production all along. Two
+consequences: the feature works, and the `old_password` in the request is now
+load-bearing rather than transmitted and discarded. A rejected login is reported
+as what it is — the panel's stored credential and the database's real one have
+diverged — instead of a bare "access denied".
+
+### Security — a WordPress auto-update toggle could erase root's entire crontab
+
+`crontab` has no partial-update verb, so every writer reads the whole file and
+writes the whole file back. `set_auto_update` read it with
+`.output().await.map(|o| …stdout…).unwrap_or_default()`, which turns **both** a
+spawn failure and a non-zero exit into an empty string, then piped that back as
+root's complete new crontab. A single transient failure would have deleted every
+scheduled job on the box — every tenant's, and every system entry — leaving at
+most one WordPress line. Reachable from an ordinary authenticated request naming
+a single site.
+
+The cron routes had already grown a fail-closed reader for exactly this reason,
+and its doc comment said so. It was a private helper, so the WordPress twin
+never got it. There is now one shared reader and one shared writer.
+
+### Fixed — uploading a certificate stripped a site's security config, and 502'd PHP sites
+
+The agent's SSL routes receive `{domain, certificate, private_key}` and have to
+invent the rest of the vhost, so they render one with WAF off, bot protection
+off, no CSP or Permissions-Policy, no custom nginx, default rate limits — and,
+because they cannot know the site's PHP version, an unversioned `php-fpm.sock`
+that exists on no modern Debian or Ubuntu. v2.18.0 added a compensating full
+re-render for provision, renew and force-renew. Certificate **upload** is the
+fourth sibling and never got it, so uploading a custom certificate silently
+disarmed a hardened site — with the panel's own toggles still reading ON, since
+the database row is untouched — and took a PHP site off the air outright.
+
+### Fixed — the backup taken before deleting a site had never captured a byte
+
+The pre-delete snapshot ran **after** the call whose agent handler removes the
+site's webroot, and `create_backup` refuses when the site root is missing. So it
+returned an error every single time, and `let _ =` discarded it. It now runs
+before anything destructive, includes the site's databases (which are still
+alive at that point), and logs a failure instead of swallowing it.
+
+### Fixed — a regression census could be satisfied by the next function's name
+
+The wrong-host census carved function bodies with a window that ended at the
+**successor's** position rather than at its declaration, so every body carried
+the next function's `fn name(` line. Membership and compliance are both tested
+against alternations of function names, so a handler inherited both from
+whatever happened to be declared below it: the census reported 48 members where
+there are 31, and two handlers were marked compliant on their neighbour's
+resolver. Fixed in all three censuses that share the idiom. Handlers that
+receive an already-resolved agent handle are now excluded explicitly, anchored
+to the signature so a route handler cannot claim the exemption.
+
+`databases.rs` is guarded by a new arm: it dispatches on container names rather
+than domains, so it contributed nothing to that census — the module holding both
+this release's fix and the previous one's was covered by no arm at all.
+
+### Added
+
+- `db-credential-auth-pin-e2e.sh` (15 assertions) and
+  `sibling-parity-pin-e2e.sh` (13) — every arm mutation-tested by planting the
+  defect and confirming the suite's summary line and exit code both go non-zero.
+
+
 ## [2.80.0] - 2026-08-07
 
 ### Security — an unattended loop let certificates expire on every fleet member

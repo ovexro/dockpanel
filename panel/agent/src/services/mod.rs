@@ -6,6 +6,7 @@ pub mod backup_drill;
 pub mod backup_verify;
 pub mod cms;
 pub mod compose;
+pub mod crontab;
 pub mod cpu_sampler;
 pub mod database;
 pub mod database_backup;

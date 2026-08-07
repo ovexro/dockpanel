@@ -10,6 +10,10 @@ use std::time::Duration;
 
 use super::AppState;
 use crate::services::command_filter;
+// ONE fail-closed reader and ONE writer for the whole crate. These lived here
+// as private helpers, which is why the WordPress auto-update twin never got
+// them — see services/crontab.rs.
+use crate::services::crontab::{read_crontab, write_crontab};
 
 type ApiErr = (StatusCode, Json<serde_json::Value>);
 
@@ -269,76 +273,6 @@ fn marker_id(line: &str) -> Option<&str> {
     let rest = line.split(CRONTAB_MARKER).nth(1)?;
     let id = rest.split_whitespace().next()?;
     (!id.is_empty()).then_some(id)
-}
-
-/// Read the current root crontab.
-///
-/// `Ok("")` means root genuinely has no crontab. Anything that merely *looks*
-/// like an empty crontab — a timeout, a spawn failure, a non-zero exit that is
-/// not the "no crontab for ..." message — is an `Err`, because every caller
-/// feeds this straight back into `write_crontab` as the complete new content.
-/// Collapsing the two used to mean a slow `crontab -l` destroyed every operator
-/// and system entry on the box.
-async fn read_crontab() -> Result<String, String> {
-    let output = tokio::time::timeout(
-        Duration::from_secs(15),
-        safe_command("crontab")
-            .arg("-l")
-            .output(),
-    )
-    .await;
-
-    match output {
-        Ok(Ok(o)) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).to_string()),
-        Ok(Ok(o)) => {
-            let stderr = String::from_utf8_lossy(&o.stderr).to_lowercase();
-            if stderr.contains("no crontab for") {
-                Ok(String::new())
-            } else {
-                Err(format!(
-                    "Refusing to rewrite the crontab: `crontab -l` exited {} ({}). \
-                     Treating that as an empty crontab would delete every existing entry.",
-                    o.status.code().unwrap_or(-1),
-                    stderr.trim()
-                ))
-            }
-        }
-        Ok(Err(e)) => Err(format!("Refusing to rewrite the crontab: `crontab -l` failed to run: {e}")),
-        Err(_) => Err("Refusing to rewrite the crontab: `crontab -l` timed out after 15s".to_string()),
-    }
-}
-
-/// Write a new crontab for root.
-async fn write_crontab(content: &str) -> Result<(), String> {
-    use tokio::io::AsyncWriteExt;
-
-    let mut child = safe_command("crontab")
-        .arg("-")
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn crontab: {e}"))?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(content.as_bytes()).await
-            .map_err(|e| format!("Failed to write crontab: {e}"))?;
-        stdin.write_all(b"\n").await
-            .map_err(|e| format!("Failed to write crontab newline: {e}"))?;
-    }
-
-    match tokio::time::timeout(Duration::from_secs(10), child.wait()).await {
-        Ok(Ok(status)) => {
-            if status.success() {
-                Ok(())
-            } else {
-                Err("crontab command failed".into())
-            }
-        }
-        Ok(Err(e)) => Err(format!("crontab failed: {e}")),
-        Err(_) => {
-            let _ = child.kill().await;
-            Err("crontab timed out after 10s".to_string())
-        }
-    }
 }
 
 /// Basic cron schedule validation (5 fields).

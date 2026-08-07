@@ -229,10 +229,10 @@ CENSUS=$(for f in panel/backend/src/routes/*.rs; do
     my $src = $_;
     $src =~ s{^\s*///.*$}{}gm; $src =~ s{^\s*//.*$}{}gm;
     my @at;
-    while ($src =~ /(?:pub )?async fn ([a-z_0-9]+)\s*\(/g) { push @at, [pos($src), $1]; }
+    while ($src =~ /(?:pub )?async fn ([a-z_0-9]+)\s*\(/g) { push @at, [pos($src), $1, $-[0]]; }
     for my $i (0 .. $#at) {
       my ($start, $name) = @{$at[$i]};
-      my $end  = ($i < $#at) ? $at[$i+1][0] : length($src);
+      my $end  = ($i < $#at) ? $at[$i+1][2] : length($src);
       my $body = substr($src, $start, $end - $start);
       # The FIXED form counts as a member too. Keying membership only on the
       # unfixed spellings would shrink the denominator as handlers are converted,
@@ -386,10 +386,10 @@ dispatch_census() {
       my $src = $_;
       $src =~ s{^\s*///.*$}{}gm; $src =~ s{^\s*//.*$}{}gm;
       my @f;
-      while ($src =~ /(?:pub )?(?:async )?fn ([a-z_0-9]+)\s*\(/g) { push @f, [pos($src), $1]; }
+      while ($src =~ /(?:pub )?(?:async )?fn ([a-z_0-9]+)\s*\(/g) { push @f, [pos($src), $1, $-[0]]; }
       my (%engages, %reader);
       for my $j (0 .. $#f) {
-        my $e = ($j < $#f) ? $f[$j+1][0] : length($src);
+        my $e = ($j < $#f) ? $f[$j+1][2] : length($src);
         my $b = substr($src, $f[$j][0], $e - $f[$j][0]);
         $engages{$f[$j][1]} = 1 if $b =~ /agent_for_site_server\(|site_agent_for_caller\(|\bfor_server\(/;
         # A local helper only pulls its CALLERS into the census if it actually
@@ -405,7 +405,7 @@ dispatch_census() {
       my $RD  = join("|", map { quotemeta } keys %reader)  || "\0NEVER\0";
 
       for my $i (0 .. $#f) {
-        my $end = ($i < $#f) ? $f[$i+1][0] : length($src);
+        my $end = ($i < $#f) ? $f[$i+1][2] : length($src);
         my $body = substr($src, $f[$i][0], $end - $f[$i][0]);
         my $name = $f[$i][1];
 
@@ -435,6 +435,15 @@ dispatch_census() {
         next unless $body =~ /agent[\s\S]{0,400}?\bdomain\b/;
         next unless ($body =~ /(?:^|[^_a-z])agent\s*\n?\s*\./m || $body =~ /&agent\b/
                      || $body =~ /state\.agent\b/ || $body =~ /agents\.for_server/);
+
+        # A function HANDED an already-resolved handle has no host to resolve --
+        # its CALLER did, and the caller is judged on its own row. Anchored to the
+        # SIGNATURE (window start to the first close-paren before -> or {), never
+        # to the body: an axum handler takes extractors, so it cannot declare this
+        # parameter, and an exemption that matched anywhere in the body would be a
+        # hole any handler could climb through by naming the type in a comment.
+        my ($sig) = $body =~ /^(.*?\)\s*(?:->|\{))/s;
+        next if defined $sig && $sig =~ /AgentHandle/;
 
         # COMPLIANT: it has an opinion about WHICH host.
         # `\bserver_id\b` deliberately does not match `_server_id` — an underscore
@@ -493,7 +502,18 @@ CE_N=$(printf '%s\n' "$CENSUS_E" | grep -c . || true)
 CE_V=$(printf '%s\n' "$CENSUS_E" | grep ':VIOL$' || true)
 CE_VN=$(printf '%s\n' "$CE_V" | grep -c . || true)
 
-if [ "${CE_N:-0}" -lt 40 ]; then
+# FLOOR RE-DERIVED s323, and the number moved for a reason worth recording: the
+# window that carves each function body ended at the SUCCESSOR\047S pos() -- after
+# the next `fn name(` -- so every body carried the next function\047s declaration.
+# $RD and $ENG are alternations of function NAMES, so a handler inherited both
+# MEMBERSHIP and COMPLIANCE from whatever happened to be declared below it. That
+# inflated the census 31 -> 48 with 14 phantoms, and granted a free pass to the two
+# real subjects whose successors resolved correctly. Windows now end at the
+# successor\047s declaration START. Floor set below the measured 31 with headroom,
+# not at it: this arm exists to catch an extractor that COLLAPSED, and a floor
+# pinned to the exact count would go red every time a handler is legitimately added
+# or removed.
+if [ "${CE_N:-0}" -lt 25 ]; then
   bad "E2 censused only ${CE_N:-0} handlers that read a host-bearing row and dispatch — the extractor is broken, not the tree"
 else
   ok "E2 censused $CE_N such handlers across every route module"
@@ -524,9 +544,9 @@ SVC_BAD=$(for f in panel/backend/src/services/*.rs; do
   perl -0777 -ne '
     BEGIN { $T = $ENV{DP_TABLES}; }
     my $src=$_; $src =~ s{^\s*///.*$}{}gm; $src =~ s{^\s*//.*$}{}gm;
-    my @f; while ($src =~ /(?:pub )?(?:async )?fn ([a-z_0-9]+)\s*\(/g) { push @f, [pos($src), $1]; }
+    my @f; while ($src =~ /(?:pub )?(?:async )?fn ([a-z_0-9]+)\s*\(/g) { push @f, [pos($src), $1, $-[0]]; }
     for my $i (0 .. $#f) {
-      my $e = ($i < $#f) ? $f[$i+1][0] : length($src);
+      my $e = ($i < $#f) ? $f[$i+1][2] : length($src);
       my $b = substr($src, $f[$i][0], $e - $f[$i][0]);
       next unless $b =~ /\b(?:FROM|JOIN)\s+(?:$T)\b/i;
       my ($sig) = $b =~ /^(.*?\)\s*(?:->|\{))/s;

@@ -495,11 +495,45 @@ fn parse_csv(output: &str) -> (Vec<String>, Vec<Vec<String>>) {
     (columns, records)
 }
 
+/// Escape a value for use inside a single-quoted SQL string literal, MariaDB rules.
+///
+/// The two engines need DIFFERENT escaping, which is why this is not one shared
+/// helper: MariaDB treats `\` as an escape character inside string literals, so a
+/// literal backslash must be doubled. Doing the same to PostgreSQL would STORE two
+/// backslashes, because it runs with `standard_conforming_strings = on` (the default
+/// since 9.1) and `\` there is an ordinary character. Backslashes are doubled first
+/// so the `''` produced by the quote pass is never re-escaped.
+fn mysql_string_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\'', "''")
+}
+
+/// Escape a value for use inside a single-quoted SQL string literal, PostgreSQL rules.
+/// See [`mysql_string_escape`] for why the backslash is deliberately left alone.
+fn pg_string_escape(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
 /// Reset the password for a database user inside a running container.
 ///
-/// For MariaDB/MySQL: connects as root via the unix socket (no password needed
-/// inside the container) and runs ALTER USER.
-/// For PostgreSQL: connects with the old password and runs ALTER USER.
+/// Both engines authenticate AS THE TENANT and let the server change its own
+/// account, so `old_password` is the thing that decides whether the reset is
+/// allowed to happen at all.
+///
+/// ⚠ The MariaDB arm used to connect as the container's root account with no
+/// credential, on the stated premise that root can authenticate over the unix
+/// socket inside the container. That premise was never true of a container THIS
+/// FILE creates: `create_database` asks the image for a random root password,
+/// which gives `root@localhost` a random `mysql_native_password` and does NOT
+/// enable the `unix_socket` plugin. Every MariaDB/MySQL password reset therefore
+/// died on `ERROR 1045 … Access denied for user 'root'@'localhost'` and surfaced
+/// to the operator as a 500. Measured on `mariadb:11` with exactly the env
+/// `create_database` sets. `SET PASSWORD` needs no privilege beyond being the
+/// account, and this is the same connection shape `execute_query` already uses in
+/// production.
+///
+/// The exact flag and env spellings are deliberately NOT written here:
+/// `db-credential-auth-pin-e2e.sh` §B greps this tree for them, and a pin that
+/// matches the comment narrating it is no pin at all.
 pub async fn reset_password(
     container: &str,
     engine: &str,
@@ -509,21 +543,24 @@ pub async fn reset_password(
 ) -> Result<(), String> {
     let output = match engine {
         "mysql" | "mariadb" => {
-            // MariaDB root can auth via unix socket inside the container.
+            // `SET PASSWORD` with no FOR clause targets CURRENT_USER(), which is the
+            // account we authenticated as — the same `'{user}'@'%'` row the old
+            // ALTER USER named. Verified: a socket connection reports `user@localhost`
+            // for USER() while CURRENT_USER() resolves to `user@%`.
             let sql = format!(
-                "ALTER USER '{}'@'%' IDENTIFIED BY '{}';",
-                user.replace('\'', "''").replace('\\', "\\\\"),
-                new_password.replace('\'', "''").replace('\\', "\\\\"),
+                "SET PASSWORD = PASSWORD('{}');",
+                mysql_string_escape(new_password),
             );
             tokio::time::timeout(
                 std::time::Duration::from_secs(QUERY_TIMEOUT_SECS),
                 safe_command("docker")
                     .arg("exec")
+                    .arg("-e")
+                    .arg(format!("MYSQL_PWD={old_password}"))
                     .arg(container)
                     .arg("mariadb")
                     .arg("-u")
-                    .arg("root")
-                    .arg("--skip-password")
+                    .arg(user)
                     .arg("-e")
                     .arg(&sql)
                     .output(),
@@ -531,11 +568,24 @@ pub async fn reset_password(
             .await
         }
         _ => {
-            // PostgreSQL: connect with old password, then ALTER USER.
+            // PostgreSQL: connect as the tenant and ALTER its own role.
+            //
+            // ⚠ Honest scope limit, measured rather than assumed: the official
+            // `postgres:16-alpine` image ships a pg_hba.conf whose `local`, `127.0.0.1/32`
+            // and `::1/128` lines are all `trust` — only non-loopback hosts reach the
+            // `scram-sha-256` line. Since this runs INSIDE the container, PGPASSWORD is
+            // accepted but never checked. So `old_password` is real authority on the
+            // MariaDB arm and decorative on this one. It is deliberately NOT "fixed" by
+            // forcing a non-loopback connection: the tenant boundary for this route is
+            // the panel's ownership check in `databases::reset_password`, and making the
+            // agent enforce it here would turn a working feature into one that breaks
+            // permanently the moment a tenant changes their own password through the SQL
+            // console (the panel has no recovery path — the bootstrap superuser password
+            // is random and discarded by `create_database`).
             let sql = format!(
                 "ALTER USER \"{}\" WITH PASSWORD '{}';",
-                user.replace('"', "\\\""),
-                new_password.replace('\'', "''"),
+                user.replace('"', "\"\""),
+                pg_string_escape(new_password),
             );
             tokio::time::timeout(
                 std::time::Duration::from_secs(QUERY_TIMEOUT_SECS),
@@ -565,7 +615,20 @@ pub async fn reset_password(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Password reset failed: {}", stderr.trim()));
+        let stderr = stderr.trim();
+        // Name the one failure an operator cannot otherwise diagnose. The reset now
+        // authenticates as the tenant, so a rejected login means the panel's stored
+        // credential is no longer the database's real one — which a tenant can cause
+        // themselves by running SET PASSWORD/ALTER USER in the SQL console. The generic
+        // "Access denied" gives no hint that the panel, not the request, is the stale party.
+        if stderr.contains("Access denied") || stderr.contains("password authentication failed") {
+            return Err(format!(
+                "Password reset failed: the database rejected the current password stored by \
+                 the panel, so the two are out of sync (this happens if the password was \
+                 changed outside the panel, e.g. via the SQL console). Original error: {stderr}"
+            ));
+        }
+        return Err(format!("Password reset failed: {stderr}"));
     }
 
     tracing::info!("Database password reset for user '{user}' in container '{container}'");
