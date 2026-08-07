@@ -12,13 +12,25 @@ use crate::services::agent::AgentHandle;
 use crate::services::domain_claim::{self, Holder};
 use crate::AppState;
 
-const STACK_SELECT: &str = "SELECT id, user_id, name, yaml, service_count, domain, ssl_email, \
-                            created_at, updated_at FROM docker_stacks";
+const STACK_SELECT: &str = "SELECT id, user_id, server_id, name, yaml, service_count, domain, \
+                            ssl_email, created_at, updated_at FROM docker_stacks";
 
 #[derive(serde::Serialize, sqlx::FromRow)]
 pub struct Stack {
     pub id: Uuid,
     pub user_id: Uuid,
+    /// The host this stack's containers actually run on.
+    ///
+    /// Carried on the row because every agent call about a stack has to be aimed by it. A
+    /// caller's `ServerScope` is a UI selection plus a local-agent fallback; it says which
+    /// machine the operator is looking at, never which machine the stack is on.
+    ///
+    /// `NOT NULL` in the schema — `20260319000000_multi_server.sql` backfills every row and
+    /// only then sets the constraint — so unlike `sites.server_id`, which predates the fleet
+    /// work and stayed optional, this is a plain `Uuid`. It gets wrapped in `Some` at the one
+    /// place it meets the shared helper, rather than the type carrying a state the column
+    /// cannot hold.
+    pub server_id: Uuid,
     pub name: String,
     pub yaml: String,
     pub service_count: i32,
@@ -77,8 +89,6 @@ fn deployed_service_states(deploy_result: &serde_json::Value) -> (usize, usize, 
 /// Normalise + claim a stack's domain, or clear it.
 async fn claim_stack_domain(
     state: &AppState,
-    agent: &AgentHandle,
-    server_id: Uuid,
     headers: &HeaderMap,
     domain: Option<&str>,
     holder: Holder,
@@ -88,7 +98,7 @@ async fn claim_stack_domain(
         return Ok(None);
     };
     let claimed =
-        domain_claim::ensure_claimable(&state.db, agent, server_id, raw, headers, holder, claimant_role)
+        domain_claim::ensure_claimable(&state.db, &state.agents, raw, headers, holder, claimant_role)
             .await?;
     Ok(Some(claimed))
 }
@@ -154,10 +164,12 @@ pub async fn list(
 }
 
 /// GET /api/stacks/{id} — Get stack details with live service status.
+///
+/// Takes no `ServerScope`. Unlike `list`, which is a per-server inventory and is meant to be
+/// scoped by the caller, this reads one known row and must follow that row to its host.
 pub async fn get_one(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -169,6 +181,19 @@ pub async fn get_one(
     .await
     .map_err(|e| internal_error("get_one stacks", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Stack not found"))?;
+
+    // `/apps` is one machine's container inventory, and the filter below matches on the
+    // `stack_id` label, which only exists on the host that deployed it. Asked of any other
+    // host the list comes back with no match at all — and because a missing container is
+    // indistinguishable here from a stopped one, the endpoint answered `running: 0,
+    // services: []` for a stack that was up. That is the shape of an outage, arrived at
+    // without one, and an operator who acts on it stops or removes a healthy stack.
+    let agent = crate::helpers::agent_for_site_server(
+        &state,
+        Some(stack.server_id),
+        stack.domain.as_deref().unwrap_or(&stack.name),
+    )
+    .await?;
 
     let apps = agent
         .get("/apps")
@@ -231,8 +256,6 @@ pub async fn create(
 
     let domain = claim_stack_domain(
         &state,
-        &agent,
-        server_id,
         &headers,
         body.domain.as_deref(),
         Holder::New,
@@ -258,7 +281,8 @@ pub async fn create(
     let stack: Stack = sqlx::query_as(
         "INSERT INTO docker_stacks (user_id, server_id, name, yaml, service_count, domain, ssl_email) \
          VALUES ($1, $2, $3, $4, $5, $6, $7) \
-         RETURNING id, user_id, name, yaml, service_count, domain, ssl_email, created_at, updated_at",
+         RETURNING id, user_id, server_id, name, yaml, service_count, domain, ssl_email, \
+         created_at, updated_at",
     )
     .bind(claims.sub)
     .bind(server_id)
@@ -341,33 +365,33 @@ pub async fn create(
 }
 
 /// POST /api/stacks/{id}/start — Start all services in a stack.
+///
+/// No `ServerScope` on any of the three verbs below: `stack_action` resolves the host from
+/// the row it authorises, so there is nothing left for the caller's selection to decide.
 pub async fn start(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    stack_action(&state, &claims, &agent, id, "start").await
+    stack_action(&state, &claims, id, "start").await
 }
 
 /// POST /api/stacks/{id}/stop — Stop all services in a stack.
 pub async fn stop(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    stack_action(&state, &claims, &agent, id, "stop").await
+    stack_action(&state, &claims, id, "stop").await
 }
 
 /// POST /api/stacks/{id}/restart — Restart all services in a stack.
 pub async fn restart(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    stack_action(&state, &claims, &agent, id, "restart").await
+    stack_action(&state, &claims, id, "restart").await
 }
 
 /// DELETE /api/stacks/{id} — Remove all services and delete the stack.
@@ -453,7 +477,6 @@ pub async fn remove(
 pub async fn update(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
     Json(body): Json<UpdateStackRequest>,
@@ -465,9 +488,11 @@ pub async fn update(
     }
     super::validate_compose_yaml(&body.yaml).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
 
-    // Keep what we are about to replace.
-    let previous: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT yaml, domain, ssl_email FROM docker_stacks WHERE id = $1 AND user_id = $2",
+    // Keep what we are about to replace — and read the host off the same row while we are
+    // here. `name` comes along only so a refusal below can say which stack it refused.
+    let previous: Option<(String, Option<String>, Option<String>, String, Uuid)> = sqlx::query_as(
+        "SELECT yaml, domain, ssl_email, name, server_id FROM docker_stacks \
+         WHERE id = $1 AND user_id = $2",
     )
     .bind(id)
     .bind(claims.sub)
@@ -475,15 +500,37 @@ pub async fn update(
     .await
     .map_err(|e| internal_error("update stacks", e))?;
 
-    let (previous_yaml, previous_domain, previous_ssl_email) =
+    let (previous_yaml, previous_domain, previous_ssl_email, name, stack_server_id) =
         previous.ok_or_else(|| err(StatusCode::NOT_FOUND, "Stack not found"))?;
+
+    // Everything from here down — the claim, the parse, the teardown, the redeploy and the
+    // restore-on-failure — is one machine's work, and the row says which machine. Taking it
+    // from the caller's request instead let an edit tear the stack down on one host and
+    // stand it up on another.
+    //
+    // That is worse than a misdirected action, because it desynchronises the record from the
+    // thing it describes and nothing afterwards notices. The row keeps naming the old host
+    // while the containers, vhost and certificate now live on the new one. `remove` resolves
+    // correctly from the row, so the next delete goes to the old host, finds nothing, reports
+    // success, and drops the record — leaving the real containers running on a machine no
+    // handler can reach any more, holding a domain and a certificate nothing will renew.
+    let agent = crate::helpers::agent_for_site_server(
+        &state,
+        Some(stack_server_id),
+        previous_domain.as_deref().unwrap_or(&name),
+    )
+    .await?;
 
     // `Holder::Stack(id)` so a stack keeps its own domain across an edit;
     // anything else already holding it is still a conflict.
+    //
+    // The server id passed here is the stack's, not the caller's, and that matters
+    // independently of which agent runs the deploy: `ensure_claimable` asks a specific host
+    // whether the name is free *there*, and domains are unique per server. Asking the caller's
+    // host answered a question about a different box — waving through a name already serving
+    // on the real one, or refusing a name that was free.
     let domain = claim_stack_domain(
         &state,
-        &agent,
-        server_id,
         &headers,
         body.domain.as_deref(),
         Holder::Stack(id),
@@ -613,27 +660,46 @@ async fn restore_previous(
 }
 
 /// Internal helper for start/stop/restart stack actions.
+///
+/// Takes no agent, deliberately. This is the shared seam for all three verbs, and the
+/// ownership check it already performs is the same lookup that names the host — so asking
+/// the row one more column makes the guard and the resolver a single query, and no caller
+/// can supply a handle that disagrees with what was just authorised. Patching the three
+/// call sites instead would have left the next action verb free to reintroduce the bug.
+///
+/// What it was: the ownership check reads `id` and `user_id` and nothing else, so it proved
+/// the caller may act on the stack and said nothing about where the stack is. The action
+/// then went to the header-named host. `/apps/stack/action` matches containers by the
+/// `stack_id` label, which exists only on the host that deployed them, so on the wrong host
+/// a stop or restart matched nothing and returned a perfectly successful 200 — the operator
+/// sees the verb succeed while the containers keep running untouched somewhere else.
 async fn stack_action(
     state: &AppState,
     claims: &Claims,
-    agent: &AgentHandle,
     id: Uuid,
     action: &str,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
 
-    // Verify ownership
-    let exists: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM docker_stacks WHERE id = $1 AND user_id = $2")
-            .bind(id)
-            .bind(claims.sub)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| internal_error("update stacks", e))?;
+    // Verify ownership, and take the host from the same row that grants it.
+    let owned: Option<(String, Option<String>, Uuid)> = sqlx::query_as(
+        "SELECT name, domain, server_id FROM docker_stacks WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("stack action", e))?;
 
-    if exists.is_none() {
-        return Err(err(StatusCode::NOT_FOUND, "Stack not found"));
-    }
+    let (name, domain, server_id) =
+        owned.ok_or_else(|| err(StatusCode::NOT_FOUND, "Stack not found"))?;
+
+    let agent = crate::helpers::agent_for_site_server(
+        state,
+        Some(server_id),
+        domain.as_deref().unwrap_or(&name),
+    )
+    .await?;
 
     let result = agent
         .post(

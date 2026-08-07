@@ -158,13 +158,27 @@ if S=$(subj "$CLAIM"); then
   else
     bad "a Docker app is no longer reported as an occupant"
   fi
-  # FAILS CLOSED. `unwrap_or_default()` here would turn an unreachable agent into
-  # "no apps own this domain" — a guard that cannot see is the whole bug.
-  if has "$O" 'get\("/apps"\)[^;]*\.await[^;]*\n?[[:space:]]*\.map_err' \
-     || derives "$O" 'map_err\(\|e\| agent_error'; then
-    ok "an unreachable agent fails the claim rather than allowing it"
+  # FLEET-WIDE. This arm used to pin the opposite property — that ONE agent was
+  # asked and that an unreachable one failed the claim closed. Both halves were
+  # correct for a single handle and both were replaced at s322, so the arm was
+  # rewritten rather than deleted: the three SQL legs above are fleet-wide, an
+  # app's domain is invisible to SQL, and asking only the caller's host meant a
+  # domain held by an app on host B passed a claim made on host A.
+  if derives "$O" 'online_fleet\('; then
+    ok "the Docker-app leg asks every online member, like the SQL legs above it"
   else
-    bad "the Docker-app leg no longer fails closed"
+    bad "the Docker-app leg is back to asking a single host — a domain held by an app on another member passes"
+  fi
+  # A member that will not answer is REPORTED, never silently skipped. Failing
+  # closed across a whole fleet would let one sick box block every domain claim
+  # everywhere, so the trade is deliberate — but it must be audible, because
+  # failing open in silence is what produced the bug in the first place.
+  # Flattened: `has` is line-based grep, and the match spans the `Err(e) => {`
+  # newline. An arm that can never match is an arm that reports on nothing.
+  if has "$(tr '\n' ' ' <<< "$O")" 'Err\(e\)[^}]*tracing::warn!'; then
+    ok "a member that cannot be asked is logged by name rather than treated as free"
+  else
+    bad "the Docker-app leg skips an unreachable member without saying so — that is failing open in silence"
   fi
   if has "$O" 'get\("/apps"\).*unwrap_or'; then
     bad "the Docker-app leg swallows agent errors (fails OPEN)"

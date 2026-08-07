@@ -173,7 +173,7 @@ pub async fn deploy(
             memory_mb: body.memory_mb,
         };
         let specs = template_env_specs(&agent, &body.template_id).await;
-        let facts = gather_app_facts(&state.db, &agent, body.port).await;
+        let facts = gather_app_facts(&state.db, &agent, server_id, body.port).await;
 
         let results = evaluate(&intent, &specs, &facts);
         if let Some(blocker) = crate::services::prerequisites::first_blocker(&results) {
@@ -209,6 +209,11 @@ pub async fn deploy(
     let agent = agent.clone();
     let db = state.db.clone();
     let user_id = claims.sub;
+    // The host this app is being deployed to. A Docker app is genuinely
+    // server-level — it runs on whichever machine the operator selected — but the
+    // A record published for it below must name THAT machine, and it named the
+    // panel instead. See `helpers::public_ip_for_server`.
+    let dns_server_id = server_id;
     let email = claims.email.clone();
     let app_name = body.name.clone();
     let template = body.template_id.clone();
@@ -226,8 +231,7 @@ pub async fn deploy(
         Some(d) => Some(
             crate::services::domain_claim::ensure_claimable(
                 &state.db,
-                &agent,
-                server_id,
+                &state.agents,
                 &d,
                 &headers,
                 crate::services::domain_claim::Holder::New,
@@ -324,7 +328,14 @@ pub async fn deploy(
             .flatten();
 
             if let Some((_zone_id, provider, cf_zone_id, cf_api_token, cf_api_email)) = zone {
-                let server_ip = crate::helpers::detect_public_ip().await;
+                let Some(server_ip) =
+                    crate::helpers::public_ip_for_server(&db, Some(dns_server_id)).await
+                else {
+                    // No record beats a record naming the wrong machine: that one
+                    // resolves, and answers with someone else's app.
+                    emit("dns", "Creating DNS record", "failed", Some("could not determine this server's public address".to_string()));
+                    return;
+                };
 
                 if provider == "cloudflare" {
                     if let (Some(zone_id), Some(token)) = (cf_zone_id, cf_api_token) {
@@ -544,6 +555,7 @@ pub struct AppPreflightQuery {
 async fn gather_app_facts(
     db: &sqlx::PgPool,
     agent: &crate::services::agent::AgentHandle,
+    server_id: uuid::Uuid,
     port: u16,
 ) -> crate::services::prerequisites::apps::HostFacts {
     use crate::services::prerequisites::apps::{HostFacts, PortHolder};
@@ -575,10 +587,15 @@ async fn gather_app_facts(
         }
     }
 
-    // Sites that proxy to a local port hold one too.
+    // Sites that proxy to a local port hold one too — but only on the host these
+    // facts describe. The read was fleet-wide, so a port occupied by a site on
+    // another machine was reported as taken here: the preflight refused a free
+    // port, and did so more often the larger the fleet grew. "Which ports are in
+    // use" is a question about ONE box.
     let site_ports: Vec<(Option<i32>, String)> = sqlx::query_as(
-        "SELECT proxy_port, domain FROM sites WHERE proxy_port IS NOT NULL",
+        "SELECT proxy_port, domain FROM sites WHERE proxy_port IS NOT NULL AND server_id = $1",
     )
+    .bind(server_id)
     .fetch_all(db)
     .await
     .unwrap_or_default();
@@ -681,14 +698,14 @@ fn intent_from_query(q: &AppPreflightQuery) -> crate::services::prerequisites::a
 pub async fn preflight(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     axum::extract::Query(q): axum::extract::Query<AppPreflightQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
 
     let intent = intent_from_query(&q);
     let specs = template_env_specs(&agent, &q.template_id).await;
-    let facts = gather_app_facts(&state.db, &agent, q.port).await;
+    let facts = gather_app_facts(&state.db, &agent, server_id, q.port).await;
 
     let results = crate::services::prerequisites::apps::evaluate(&intent, &specs, &facts);
     let blocked = crate::services::prerequisites::first_blocker(&results).is_some();
@@ -1419,7 +1436,7 @@ pub async fn compose_deploy(
 pub async fn remove_app(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Path(container_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -1439,6 +1456,12 @@ pub async fn remove_app(
         let dns_domain = domain_removed.to_string();
         let dns_db = state.db.clone();
         let dns_user = claims.sub;
+        // The host the app was removed FROM. The cleanup below deletes a record
+        // only where its content matches this address, so reading the panel's
+        // address meant a member's record never matched and outlived the app it
+        // pointed at — a dangling A record, which is a takeover surface rather
+        // than clutter.
+        let dns_server_id = server_id;
         tokio::spawn(async move {
             // Extract parent domain
             let parts: Vec<&str> = dns_domain.splitn(3, '.').collect();
@@ -1459,7 +1482,12 @@ pub async fn remove_app(
             };
 
             if let Some((provider, cf_zone_id, cf_api_token, cf_api_email)) = zone {
-                let server_ip = crate::helpers::detect_public_ip().await;
+                let Some(server_ip) =
+                    crate::helpers::public_ip_for_server(&dns_db, Some(dns_server_id)).await
+                else {
+                    tracing::warn!("Auto-DNS cleanup: could not resolve the public address of the server {dns_domain} was removed from — leaving the record in place rather than deleting one that may belong to another host");
+                    return;
+                };
 
                 if provider == "cloudflare" {
                     if let (Some(zid), Some(tok)) = (cf_zone_id, cf_api_token) {
@@ -1760,7 +1788,9 @@ pub async fn policy_usage(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(user_id): Path<Uuid>,
-    ServerScope(_server_id, agent): ServerScope,
+    // The extractor stays for the ownership check it performs on the way in; the
+    // handle it yields is unused now that the count spans the fleet.
+    ServerScope(_server_id, _agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if claims.sub != user_id {
         require_admin(&claims.role)?;
@@ -1774,11 +1804,32 @@ pub async fn policy_usage(
     .await
     .map_err(|e| internal_error("policy usage", e))?;
 
-    // Count containers via agent (best-effort display; unlike deploy, fail-open to 0 is acceptable here)
-    let container_count = match agent.get("/apps").await {
-        Ok(apps_json) => apps_json.as_array().map(|a| a.len()).unwrap_or(0),
-        Err(_) => 0,
-    };
+    // Count containers across the FLEET, because the quota is per USER and a user
+    // is not confined to one machine. Asking only the selected server let the same
+    // account run `max_containers` on every host and still read as within quota on
+    // each — the limit was enforced per box while being presented per person.
+    //
+    // Still best-effort per host, and deliberately so: unlike deploy, this is a
+    // display figure, and a member that will not answer must not blank the number.
+    // But an under-count is now visible rather than silent — `servers_unreachable`
+    // says the total is a floor.
+    let mut container_count = 0usize;
+    let mut unreachable = 0usize;
+    let fleet = state.agents.online_fleet().await;
+    for member in &fleet {
+        match member.agent.get("/apps").await {
+            Ok(apps_json) => {
+                container_count += apps_json.as_array().map(|a| a.len()).unwrap_or(0);
+            }
+            Err(e) => {
+                unreachable += 1;
+                tracing::warn!(
+                    "Container quota: {} did not answer ({e}) — the usage figure is a floor",
+                    member.name
+                );
+            }
+        }
+    }
 
     match policy {
         Some((max_c, max_m, max_cpu)) => {
@@ -1787,12 +1838,16 @@ pub async fn policy_usage(
                 "memory_mb": { "max": max_m },
                 "cpu_percent": { "max": max_cpu },
                 "has_policy": true,
+                "servers_counted": fleet.len() - unreachable,
+                "servers_unreachable": unreachable,
             })))
         }
         None => {
             Ok(Json(serde_json::json!({
                 "containers": { "used": container_count, "max": null },
                 "has_policy": false,
+                "servers_counted": fleet.len() - unreachable,
+                "servers_unreachable": unreachable,
             })))
         }
     }
@@ -1850,7 +1905,7 @@ pub async fn get_sleep_config(
 pub async fn update_sleep_config(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Path(container_id): Path<String>,
     Json(body): Json<SleepConfigRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -1877,17 +1932,28 @@ pub async fn update_sleep_config(
         }
     }
 
+    // `server_id` is bound because the sleeper reads it to decide which host to
+    // ask about idleness and which host to stop the container on. This is the
+    // half that is easy to miss and expensive to miss: the migration that added
+    // the column backfilled every existing row, so omitting the bind here would
+    // not look broken — it would look FIXED, right up until the first container
+    // configured after the upgrade, whose row would carry NULL and be skipped by
+    // a sleeper that (correctly) refuses to guess a host. That is exactly how
+    // `mail_domains.server_id` came to be NULL on every panel-created row for
+    // five months: the column was added and backfilled, and the INSERT that
+    // writes new rows was never taught to name it.
     sqlx::query(
-        "INSERT INTO container_sleep_config (container_id, container_name, domain, auto_sleep_enabled, sleep_after_minutes, last_activity_at) \
-         VALUES ($1, $2, $3, $4, $5, NOW()) \
+        "INSERT INTO container_sleep_config (container_id, container_name, domain, auto_sleep_enabled, sleep_after_minutes, last_activity_at, server_id) \
+         VALUES ($1, $2, $3, $4, $5, NOW(), $6) \
          ON CONFLICT (container_id) DO UPDATE SET \
-         auto_sleep_enabled = $4, sleep_after_minutes = $5, container_name = $2, domain = $3, updated_at = NOW()"
+         auto_sleep_enabled = $4, sleep_after_minutes = $5, container_name = $2, domain = $3, server_id = $6, updated_at = NOW()"
     )
     .bind(&container_id)
     .bind(&container_name)
     .bind(&domain)
     .bind(enabled)
     .bind(minutes)
+    .bind(server_id)
     .execute(&state.db)
     .await
     .map_err(|e| internal_error("update sleep config", e))?;

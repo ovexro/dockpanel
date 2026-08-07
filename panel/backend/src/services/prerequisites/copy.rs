@@ -680,9 +680,11 @@ pub static MAIL_DNS_NO_PUBLIC_IP: Outcome = Outcome {
     severity: PrereqSeverity::Info,
     title: "Couldn't determine this server's public address",
     title_plural: "",
-    detail: "DockPanel could not detect its own public IP, so it can't tell you which records \
-             this domain needs.",
-    fix: "Nothing to do at the registrar. Confirm the server can reach the internet.",
+    detail: "DockPanel could not determine the public address of the server this domain is on, \
+             so it can't tell you which records the domain needs.",
+    fix: "Nothing to do at the registrar. If the domain is on this server, confirm it can reach \
+          the internet; if it is on another server in the fleet, confirm that server's agent is \
+          online — its address is recorded when the agent checks in.",
     vars: &[],
 };
 

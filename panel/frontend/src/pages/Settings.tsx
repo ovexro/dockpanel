@@ -43,6 +43,28 @@ interface CleanupResult {
   cleaned?: string[];
 }
 
+/**
+ * `PUT /settings` when SMTP keys were among them.
+ *
+ * The setting is panel-global, so the push is fleet-wide: `smtp` says where the
+ * config actually landed, host by host, and `warning` is the API's own sentence
+ * for the partial case. Everything below `ok` is absent when the save touched no
+ * SMTP key or when no host was configured — hence every field optional.
+ */
+interface SmtpSaveResult {
+  ok: boolean;
+  /** Present only on a partial push. Complete sentence, safe to render as-is. */
+  warning?: string;
+  smtp?: {
+    /** Hosts that took the configuration. */
+    configured: string[];
+    /** Hosts that were asked and refused. */
+    failed: { server: string; error: string }[];
+    /** Registered hosts no agent could be resolved for — never asked at all. */
+    not_asked: { server: string; status: string }[];
+  };
+}
+
 /** WebAuthn PublicKeyCredentialCreationOptions as returned by the server (base64url-encoded) */
 interface WebAuthnPublicKeyOptions {
   challenge: string | ArrayBuffer;
@@ -406,7 +428,13 @@ export default function Settings() {
     setSaving("smtp");
     setMessage({ text: "", type: "" });
     try {
-      await api.put("/settings", {
+      // Saving SMTP pushes the config at EVERY member of the fleet, and the
+      // write to `settings` succeeding says nothing about whether it landed.
+      // `warning` is a complete sentence from the API naming the hosts that
+      // rejected it and the hosts that were never asked — the ones whose mail
+      // will keep using stale credentials until SMTP is saved again. Same
+      // response shape and same handling as BackupOrchestrator's deleteDest.
+      const res = await api.put<SmtpSaveResult>("/settings", {
         smtp_host: smtpHost,
         smtp_port: smtpPort,
         smtp_username: smtpUser,
@@ -415,7 +443,19 @@ export default function Settings() {
         smtp_from_name: smtpFromName,
         smtp_encryption: smtpEncryption,
       });
-      setMessage({ text: "SMTP settings saved", type: "success" });
+      const configured = res?.smtp?.configured ?? [];
+      setMessage(
+        res?.warning
+          ? { text: res.warning, type: "warning" }
+          : {
+              // Name the hosts on the way through: "saved" on its own is the
+              // claim that let one box's success stand for the fleet's.
+              text: configured.length > 1
+                ? `SMTP settings saved and pushed to all ${configured.length} servers (${configured.join(", ")})`
+                : "SMTP settings saved",
+              type: "success",
+            },
+      );
     } catch (e) {
       setMessage({
         text: e instanceof Error ? e.message : "Failed to save SMTP settings",
@@ -510,7 +550,11 @@ export default function Settings() {
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
             message.type === "success"
               ? "bg-rust-500/10 text-rust-400 border-rust-500/20"
-              : "bg-danger-500/10 text-danger-400 border-danger-500/20"
+              : message.type === "warning"
+                // A fleet operation that partly landed is neither. Red would say
+                // the save failed; green would say every host has the new config.
+                ? "bg-warn-500/10 text-warn-400 border-warn-500/20"
+                : "bg-danger-500/10 text-danger-400 border-danger-500/20"
           }`}
         >
           {message.text}

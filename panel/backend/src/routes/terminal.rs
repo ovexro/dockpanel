@@ -19,6 +19,60 @@ pub struct TerminalQuery {
 /// with a site's name.
 pub const SERVER_SHELL_SCOPE: &str = "@server";
 
+/// The lockdown row's terminal switch, as `(lockdown_active, terminals_disabled)`.
+///
+/// A sibling of `security_hardening::is_locked_down`, and it would live beside it
+/// if it were only about lockdown. It is not: it is the terminal subsystem's own
+/// question, and the two columns only mean something when they are read together.
+///
+/// **Both columns, never one of them.** `activate_lockdown` writes
+/// `terminals_disabled = TRUE` in the same statement that sets `active = TRUE`,
+/// but `deactivate_lockdown` clears only `active` — nothing in the codebase ever
+/// writes the terminal column back to FALSE. The migration compounds this: it
+/// declares the column `DEFAULT TRUE` while seeding the singleton row with
+/// `active = FALSE`, so on a panel that has never once been locked down the
+/// column already reads TRUE. A gate keyed on `terminals_disabled` alone would
+/// therefore refuse every shell on a fresh install, and would keep refusing them
+/// for ever after the first unlock — a kill switch with no off position, wearing
+/// the name of an emergency measure. `active` is what makes the flag mean
+/// anything at a given moment; the flag is what says whether THIS lockdown was
+/// one that reaches terminals. `is_locked_down` answers neither question: it
+/// reads `active` and stops, which is right for the login and site-creation doors
+/// and would be wrong here.
+pub async fn lockdown_terminal_state(pool: &sqlx::PgPool) -> (bool, bool) {
+    let row: Option<(bool, Option<bool>)> =
+        sqlx::query_as("SELECT active, terminals_disabled FROM lockdown_state WHERE id = 1")
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+
+    match row {
+        // A NULL column underneath an ACTIVE lockdown is not evidence that
+        // terminals were meant to stay open, so it is not read as permission.
+        // Underneath an inactive lockdown it decides nothing either way.
+        Some((active, disabled)) => (active, disabled.unwrap_or(true)),
+        // No singleton row at all — the migration has not run, or somebody
+        // deleted it. `is_locked_down` answers the same shape of question with
+        // `false`, and disagreeing here would mean a panel mid-migration has no
+        // terminals rather than no lockdown.
+        None => (false, false),
+    }
+}
+
+/// Whether a shell may be opened right now: a lockdown is active AND it is one
+/// that disabled terminals.
+///
+/// The doors this closes are the two that CREATE something — the ticket mint and
+/// the share writer — plus the unauthenticated viewer that serves what the share
+/// writer stored. `revoke_share` and `list_shares` are deliberately left open:
+/// they are how an operator sees a live share and closes it, and refusing them
+/// during a lockdown would withdraw the remedy at the same moment as the risk.
+pub async fn terminals_locked_down(pool: &sqlx::PgPool) -> bool {
+    let (active, disabled) = lockdown_terminal_state(pool).await;
+    active && disabled
+}
+
 #[derive(serde::Serialize)]
 struct TerminalTicket {
     sub: String,
@@ -49,6 +103,41 @@ pub async fn ws_token(
     ServerScope(server_id, agent): ServerScope,
     Query(q): Query<TerminalQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Feature 9/11: the lockdown's terminal switch, finally read by somebody.
+    //
+    // This is THE door into a shell. The browser dials the agent's WebSocket
+    // directly — the panel deliberately does not proxy it — so this handler is
+    // not one gate among several on the way to a terminal, it is the only one
+    // the panel ever gets to apply. Nothing downstream can refuse: the ticket it
+    // returns is signed with the agent's own token, and an agent that verifies
+    // the signature opens the shell.
+    //
+    // `activate_lockdown` has written `terminals_disabled = TRUE` since the
+    // column existed and nothing anywhere has ever read it. Meanwhile the panic
+    // button revokes every session on purpose and the design lets an admin log
+    // straight back in — that concession is correct, it is how an operator keeps
+    // control of a panel under attack. What made it dangerous was that logging
+    // back in also restored the ability to mint a fresh root shell, seconds
+    // after the button whose entire promise was that root shells had been
+    // stopped. The panic response counted the shells it killed and said nothing
+    // about the next one, because there was nothing to say: no code path
+    // consulted the column that claimed to prevent it.
+    //
+    // Placed above every other check in this handler, including the role gate
+    // and the per-site branch, because `terminals_disabled` does not mean "no
+    // server shell". The sweep it belongs to kills SITE shells too — `killed` is
+    // the total and `server_terminals_killed` is only the root subset — so a
+    // site owner's shell is exactly as much a live session on the host as an
+    // admin's, and refusing one while minting the other would leave the flag
+    // half-honoured in the direction that helps an intruder.
+    if terminals_locked_down(&state.db).await {
+        return Err(err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "System is in lockdown mode. Terminal access is disabled until an \
+             administrator unlocks the panel (Security → Lockdown).",
+        ));
+    }
+
     // Answer here rather than minting a ticket the receiving agent must reject.
     crate::helpers::require_local_agent_scope(&state, server_id, "The web terminal").await?;
 
@@ -193,6 +282,20 @@ pub async fn share_output(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
 
+    // A share is an UNAUTHENTICATED public URL holding up to 500KB of root
+    // terminal output, and the panic button deletes every existing one for
+    // exactly that reason. Deleting handles what already exists; nothing handled
+    // what arrives next, so the sweep lasted precisely until the following POST
+    // and the operator was told "all sessions revoked" either way. The two
+    // halves only add up to a closed door together.
+    if terminals_locked_down(&state.db).await {
+        return Err(err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "System is in lockdown mode. Terminal output cannot be shared while \
+             the panel is locked down.",
+        ));
+    }
+
     let content = body
         .get("content")
         .and_then(|v| v.as_str())
@@ -301,6 +404,22 @@ pub async fn view_shared(
     // This route takes no authentication, so the id is the only credential and
     // it gets the same shape check the revoke path applies.
     if !valid_share_id(&id) {
+        return Err(err(StatusCode::NOT_FOUND, "Share expired or not found"));
+    }
+
+    // The panic button deletes every share, so on that path there is nothing
+    // here to serve. A manually activated lockdown does not delete them, and
+    // this route carries no authentication at all — during a declared emergency
+    // an anonymous URL still handing out root terminal output is the exact thing
+    // the lockdown was declared about.
+    //
+    // Answered with the same status and the same sentence an expired or unknown
+    // id gets, so the property that response established still holds: the reply
+    // cannot be used to tell those two apart, and now it also does not announce
+    // the panel's emergency state to an anonymous caller. The lockdown is a
+    // panel-wide fact, not a per-id one, so answering uniformly leaks nothing
+    // about which ids exist.
+    if terminals_locked_down(&state.db).await {
         return Err(err(StatusCode::NOT_FOUND, "Share expired or not found"));
     }
 

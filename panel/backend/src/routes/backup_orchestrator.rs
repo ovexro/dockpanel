@@ -876,7 +876,6 @@ pub struct CreateDbBackupRequest {
 pub async fn create_db_backup(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Json(req): Json<CreateDbBackupRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     // Fetch database details (join with sites for user ownership and server_id)
@@ -891,6 +890,30 @@ pub async fn create_db_backup(
 
     let (db_id, db_name, engine, user, password_enc, server_id) =
         row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Database not found"))?;
+
+    // Dump on the host the SITE lives on. This handler already held the answer: the
+    // join above reads `s.server_id` and the INSERT below stamps the new row with it,
+    // while the dump itself went to whatever agent the caller's server switcher named
+    // (an HTTP header with a local-agent fallback). So the archive was written on host
+    // A and the row claimed host B — a guaranteed lie the moment the two disagree, and
+    // three consumers read that column to decide where to act: the verifier
+    // (`services/backup_verifier.rs`) looks for the file on the named host, the drill
+    // scheduler (`services/drill_scheduler.rs`) restores from it there, and the
+    // retention pruner in `services/auto_healer.rs` only unlinks a path on the host the
+    // row names — so a mislabelled archive is never verified, never drilled, and never
+    // pruned, and it grows on a machine nothing is watching.
+    //
+    // The credential is the sharper half: the body below carries this database's
+    // DECRYPTED password, so a stale server selection decided which machine received a
+    // secret it has no business holding. Resolving before the decrypt keeps a refusal
+    // from ever unwrapping it.
+    //
+    // `backup_policy_executor` runs this exact dump from the same join and has always
+    // resolved `agents.for_server(s.server_id)` for it. The scheduled path was right and
+    // the operator-pressed button never adopted it — that asymmetry is the whole defect.
+    let agent = crate::helpers::agent_for_site_server(
+        &state, server_id, &format!("database {db_name}"),
+    ).await?;
 
     // Decrypt the database password (handles both encrypted and legacy plaintext)
     let password = crate::services::secrets_crypto::decrypt_credential_or_legacy(&password_enc, &state.config.jwt_secret);
@@ -981,7 +1004,6 @@ pub async fn list_db_backups(
 pub async fn delete_db_backup(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let backup: Option<DatabaseBackup> = sqlx::query_as(
@@ -1000,6 +1022,19 @@ pub async fn delete_db_backup(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid backup filename"));
     }
 
+    // Unlink the archive on the host that HOLDS it, which is the host its own row
+    // names — not the one the caller's server switcher happened to be pointing at.
+    // The `SELECT db.*` above already loaded `server_id`; only the dispatch ignored it.
+    // Deleting through the caller's scope asked some other machine to unlink a path it
+    // never had, and the DELETE below then ran regardless: the real archive survived
+    // with its only record destroyed, invisible to the retention pruner that would
+    // eventually have reclaimed it. Where the same dump name exists on both hosts —
+    // policy-driven dumps are named per database, so it does — the wrong machine's
+    // backup was destroyed instead.
+    let agent = crate::helpers::agent_for_site_server(
+        &state, backup.server_id, &format!("database {}", backup.db_name),
+    ).await?;
+
     // Delete from agent
     let agent_path = format!("/db-backups/{}/{}", backup.db_name, backup.filename);
     agent.delete(&agent_path).await
@@ -1016,7 +1051,6 @@ pub async fn delete_db_backup(
 pub async fn restore_db_backup(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Look up the backup record, verify ownership
@@ -1030,6 +1064,21 @@ pub async fn restore_db_backup(
     .map_err(|e| internal_error("restore db backup", e))?;
 
     let backup = backup.ok_or_else(|| err(StatusCode::NOT_FOUND, "Backup not found"))?;
+
+    // One host governs BOTH directions here, and it is the archive's: the agent reads
+    // the dump off its own disk and pipes it into its own `dockpanel-db-{name}`
+    // container, so source and destination are the same machine by construction. That
+    // is precisely why taking it from the caller's scope was destructive rather than
+    // merely wrong — a container of that name answers on every host that runs this
+    // database, and the name is unique only per site. The caller's machine would find
+    // a container, find a dump beside it, and overwrite a live database the operator
+    // was not even looking at, then report success. Pinning to `backup.server_id`
+    // instead means a restore either lands on the machine the dump came from or is
+    // refused; if that host has since stopped running the container, the agent fails
+    // loudly, which is the direction that can be recovered from.
+    let agent = crate::helpers::agent_for_site_server(
+        &state, backup.server_id, &format!("database {}", backup.db_name),
+    ).await?;
 
     // Fetch database credentials (join with sites for user/password)
     let creds: Option<(String, String, String)> = sqlx::query_as(
@@ -1185,7 +1234,6 @@ pub async fn list_volume_backups(
 pub async fn restore_volume_backup(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Look up the volume backup record
@@ -1197,6 +1245,21 @@ pub async fn restore_volume_backup(
     .map_err(|e| internal_error("restore volume backup", e))?;
 
     let backup = backup.ok_or_else(|| err(StatusCode::NOT_FOUND, "Volume backup not found"))?;
+
+    // Source and destination are the same host for a volume restore: the agent unpacks
+    // a tar from its own disk straight over its own Docker volume. So `server_id`
+    // governs both ends, and `create_volume_backup` above deliberately records the host
+    // that actually wrote the archive for exactly this reader. Restoring through the
+    // caller's scope did NOT merely fail to find the file — policy-driven volume
+    // archives are named per container and volume, so an identically-named tar sits on
+    // every host running that container, and the caller's machine would happily unpack
+    // ITS OWN archive over ITS OWN live volume: a restore nobody requested, on a server
+    // the operator was not viewing, reported as the success of a different one. A NULL
+    // here is a row written before the fleet backfill; refusing it is correct, because
+    // there is no safe guess about which machine's volume to overwrite.
+    let agent = crate::helpers::agent_for_site_server(
+        &state, backup.server_id, &format!("volume {}", backup.volume_name),
+    ).await?;
 
     // Call agent to restore volume
     let agent_path = format!("/volume-backups/{}/restore/{}", backup.container_name, backup.filename);
@@ -1218,6 +1281,52 @@ pub async fn restore_volume_backup(
 
 // ── Verification ────────────────────────────────────────────────────────────
 
+/// Resolve the host a stored backup actually lives on, from the backup's own row.
+///
+/// Verify and drill are the two endpoints that take nothing but `(backup_type,
+/// backup_id)` — no site, no database, no container — so there was nothing in the
+/// request to pin a host to and both simply used whatever agent `ServerScope` handed
+/// over. That reads one machine's disk looking for another machine's archive. For a
+/// verification the result is a `failed` row that says more about the caller's server
+/// switcher than about the backup, which then feeds the SLA and stale-backup panels as
+/// though the archive were bad. For a drill it is worse: a drill RESTORES.
+///
+/// The lookup is a deliberate extra round-trip taken BEFORE the tracking row is
+/// inserted — the same ordering `services/backup_verifier.rs::verify_one` spells out and
+/// for the same reason: a row written `running` against a host we then decline to reach
+/// is a permanent record of work that never happened, and the sweeper's driving queries
+/// skip any backup that already has one.
+///
+/// Returns the server id beside the handle so the caller can stamp its own row with the
+/// host that did the work. It stays `Option` because these columns are nullable for rows
+/// predating the fleet backfill; by the time this returns, `agent_for_site_server` has
+/// already refused the `None` case, so what gets bound is always `Some`.
+async fn agent_for_backup(
+    state: &AppState,
+    backup_type: &str,
+    backup_id: Uuid,
+) -> Result<(Option<Uuid>, crate::services::agent::AgentHandle), ApiError> {
+    // `backups` carries no server_id of its own — a site backup reaches its host through
+    // the site, the same hop the unified list and the SLA queries above already make.
+    let sql = match backup_type {
+        "site" => "SELECT s.server_id FROM backups b JOIN sites s ON s.id = b.site_id WHERE b.id = $1",
+        "database" => "SELECT server_id FROM database_backups WHERE id = $1",
+        "volume" => "SELECT server_id FROM volume_backups WHERE id = $1",
+        _ => return Err(err(StatusCode::BAD_REQUEST, "Invalid backup type")),
+    };
+
+    let server_id: Option<Uuid> = sqlx::query_scalar::<_, Option<Uuid>>(sql)
+        .bind(backup_id)
+        .fetch_optional(&state.db).await
+        .map_err(|e| internal_error("resolve backup host", e))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Backup not found"))?;
+
+    let agent = crate::helpers::agent_for_site_server(
+        state, server_id, &format!("{backup_type} backup {backup_id}"),
+    ).await?;
+    Ok((server_id, agent))
+}
+
 #[derive(serde::Deserialize)]
 pub struct VerifyRequest {
     pub backup_type: String, // site, database, volume
@@ -1228,19 +1337,29 @@ pub struct VerifyRequest {
 pub async fn trigger_verify(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
-    ServerScope(scope_server_id, agent): ServerScope,
     Json(req): Json<VerifyRequest>,
 ) -> Result<(StatusCode, Json<BackupVerification>), ApiError> {
+    // Read the archive on the host that holds it, resolved from the backup's own row.
+    // The agent used to come from `ServerScope` — and the row below was then stamped
+    // with that same scope, so the record and the work agreed with each other while
+    // both pointed at a machine chosen by a request header. `backup_verifier.rs`, the
+    // scheduled half of this very feature, has always resolved `for_server(server_id)`
+    // from the row; only the operator-pressed button kept reading the switcher.
+    //
+    // This also moves the unsupported-type rejection to a synchronous 400. It used to
+    // be an `Invalid backup type` string produced inside the spawned task, i.e. a 202
+    // followed by a `failed` verification row for a request that was never valid.
+    let (server_id, agent) = agent_for_backup(&state, &req.backup_type, req.backup_id).await?;
+
     // Create pending verification record. `server_id` is bound rather than left
-    // NULL: the verification ran against the agent `ServerScope` resolved, so the
-    // row can say which host actually read the archive. Leaving it NULL is what
+    // NULL: it names the host that actually read the archive. Leaving it NULL is what
     // made this column dead in every writer while the UI still rendered a Server
     // field for it.
     let verification: BackupVerification = sqlx::query_as(
         "INSERT INTO backup_verifications (backup_type, backup_id, server_id, status, started_at) \
          VALUES ($1, $2, $3, 'running', NOW()) RETURNING *"
     )
-    .bind(&req.backup_type).bind(req.backup_id).bind(scope_server_id)
+    .bind(&req.backup_type).bind(req.backup_id).bind(server_id)
     .fetch_one(&state.db).await
     .map_err(|e| internal_error("trigger verify", e))?;
 
@@ -1403,19 +1522,35 @@ pub struct DrillRequest {
 pub async fn trigger_drill(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
     Json(req): Json<DrillRequest>,
 ) -> Result<(StatusCode, Json<BackupDrill>), ApiError> {
     if req.backup_type != "site" && req.backup_type != "database" && req.backup_type != "volume" {
         return Err(err(StatusCode::BAD_REQUEST, "Unsupported backup_type"));
     }
 
-    // Insert pending drill record so the UI gets immediate feedback.
+    // A drill is a real restore, so the host must come from the backup's row and
+    // nowhere else. Driven by `ServerScope` this reached for one machine's archive on
+    // another: with site backups it merely failed, but policy-driven database and volume
+    // archives are named deterministically per resource, so an identically-named file
+    // sits on every host running that resource — and the caller's machine would find it,
+    // restore ITS OWN archive over ITS OWN live data, and report the result under the
+    // server the operator had selected. `drill_scheduler.rs::dispatch_policy_drills`
+    // resolves `for_server(row.server_id)` and refuses rather than substituting, with the
+    // comment that "a drill that runs elsewhere certifies disaster recovery for a machine
+    // it never tested". The scheduled path had it right; this button never adopted it.
+    let (server_id, agent) = agent_for_backup(&state, &req.backup_type, req.backup_id).await?;
+
+    // Insert pending drill record so the UI gets immediate feedback. `server_id` is
+    // bound now that one is known: `drill_scheduler`'s concurrency guard counts running
+    // drills BY SERVER, and a NULL from this handler was invisible to it — an
+    // operator-pressed drill could not hold off the scheduled one, so two restores could
+    // land on the same host at once. It also fills the Server column the drills table
+    // renders, which was blank for every manually triggered row.
     let drill: BackupDrill = sqlx::query_as(
-        "INSERT INTO backup_drills (backup_type, backup_id, triggered_by, status, started_at) \
-         VALUES ($1, $2, $3, 'running', NOW()) RETURNING *"
+        "INSERT INTO backup_drills (backup_type, backup_id, server_id, triggered_by, status, started_at) \
+         VALUES ($1, $2, $3, $4, 'running', NOW()) RETURNING *"
     )
-    .bind(&req.backup_type).bind(req.backup_id).bind(claims.sub)
+    .bind(&req.backup_type).bind(req.backup_id).bind(server_id).bind(claims.sub)
     .fetch_one(&state.db).await
     .map_err(|e| internal_error("trigger drill", e))?;
 

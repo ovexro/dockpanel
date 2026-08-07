@@ -5,7 +5,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::{AdminUser, ServerScope};
+use crate::auth::{AdminUser, Claims, ServerScope};
 use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
@@ -227,15 +227,41 @@ pub async fn mail_uninstall(
 
 // ── Domain routes ───────────────────────────────────────────────────────
 
-/// GET /api/mail/domains
+/// GET /api/mail/domains — the mail domains on the server in scope.
+///
+/// This read had no server term and no ownership term of any kind: it returned
+/// every mail domain in the installation to every administrator, including those
+/// on a fleet member somebody else registered. The page therefore listed rows the
+/// handlers behind it now refuse — [`MAIL_DOMAIN_CALLER_PREDICATE`] draws that
+/// line for every per-domain route, and the list that feeds them drew none.
+///
+/// The filter is the row's own `server_id` rather than that predicate, because a
+/// list has no `{id}` to bind `$1` to. `ServerScope` has already proved the caller
+/// owns the server it names (`SELECT id FROM servers WHERE id = $1 AND user_id = $2`),
+/// so here the server term IS the authorisation — the same shape
+/// `sites::list_for_admin` uses for the equivalent fleet-wide read.
+///
+/// ⚠ `server_id IS NULL` stays visible, deliberately, for the same reason the
+/// predicate admits it. `20260807000000_sleep_and_destination_server_scope.sql`
+/// backfills those rows, so on a migrated install there are none; but its final
+/// `NOT NULL` is guarded and skipped when an install has no local server row to
+/// backfill from, so the column can still hold one. A row that names no server is
+/// not a row belonging to another operator — it belongs to nobody, there is
+/// nothing here to test it against, and hiding it would remove it from the only
+/// screen that can see it while `sync_mail_config` keeps refusing every rebuild in
+/// the installation because it exists. Listed, it reaches the handlers, which
+/// answer 409 naming the problem instead of 404 naming nothing.
 pub async fn list_domains(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(server_id, _agent): ServerScope,
 ) -> Result<Json<Vec<MailDomain>>, ApiError> {
     let domains: Vec<MailDomain> = sqlx::query_as(
         "SELECT id, domain, dkim_selector, dkim_public_key, catch_all, enabled, created_at \
-         FROM mail_domains ORDER BY domain LIMIT 500",
+         FROM mail_domains WHERE server_id = $1 OR server_id IS NULL \
+         ORDER BY domain LIMIT 500",
     )
+    .bind(server_id)
     .fetch_all(&state.db)
     .await
     .map_err(|e| internal_error("list domains", e))?;
@@ -247,7 +273,7 @@ pub async fn list_domains(
 pub async fn create_domain(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Json(body): Json<CreateDomainRequest>,
 ) -> Result<(StatusCode, Json<MailDomain>), ApiError> {
     let domain = body.domain.trim().to_lowercase();
@@ -279,13 +305,26 @@ pub async fn create_domain(
         None
     };
 
+    // ⚠ `server_id` is written HERE and nowhere else, and this is the only handler
+    // in the module where the caller's selection is the right authority: creation
+    // is the moment the operator CHOOSES a host, and until this row exists there is
+    // no row to derive one from. Every sibling handler derives it from the row.
+    //
+    // The column was never bound before. `mail_domains.server_id` has no DEFAULT
+    // and is nullable, so every mail domain created through the panel since the
+    // multi-server migration was stored naming no server at all — which left the
+    // server switcher as the only thing deciding where a domain's mailboxes went,
+    // and left `idx_mail_domains_domain_server` unable to reject a duplicate
+    // (Postgres treats NULLs as distinct, and the old global UNIQUE on `domain` was
+    // dropped by that same migration, so the CONFLICT arm below could not fire).
     let mail_domain: MailDomain = sqlx::query_as(
-        "INSERT INTO mail_domains (domain, dkim_private_key, dkim_public_key) \
-         VALUES ($1, $2, $3) RETURNING id, domain, dkim_selector, dkim_public_key, catch_all, enabled, created_at",
+        "INSERT INTO mail_domains (domain, dkim_private_key, dkim_public_key, server_id) \
+         VALUES ($1, $2, $3, $4) RETURNING id, domain, dkim_selector, dkim_public_key, catch_all, enabled, created_at",
     )
     .bind(&domain)
     .bind(&encrypted_private_key)
     .bind(&public_key)
+    .bind(server_id)
     .fetch_one(&state.db)
     .await
     .map_err(|e| {
@@ -302,16 +341,23 @@ pub async fn create_domain(
         .await;
 
     // ── Auto-DNS: create MX, A, SPF, DMARC, DKIM records ─────────────────
+    //
+    // `server_id` travels with the domain into the background task. It is the
+    // value that was just written onto the row above, so the records describe the
+    // machine the mailboxes were actually created on — not whichever box this
+    // process happens to run on, which is what `detect_public_ip` answered and
+    // what published a member's A record pointing at the panel.
     let dns_domain = domain.clone();
     let dns_dkim_pub = public_key.clone();
     let dns_db = state.db.clone();
     let dns_agent = agent.clone();
     let dns_user = claims.sub;
     let dns_email = claims.email.clone();
+    let dns_server = server_id;
     tokio::spawn(async move {
         if let Err(e) = auto_create_mail_dns(
             &dns_db, &dns_agent, dns_user, &dns_email,
-            &dns_domain, dns_dkim_pub.as_deref(),
+            &dns_domain, dns_server, dns_dkim_pub.as_deref(),
         ).await {
             tracing::warn!("Auto-DNS for mail domain {dns_domain} failed: {e}");
         }
@@ -329,17 +375,15 @@ pub async fn create_domain(
 pub async fn update_domain(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateDomainRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain: Option<(String,)> = sqlx::query_as("SELECT domain FROM mail_domains WHERE id = $1")
-        .bind(id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| internal_error("update domain", e))?;
-
-    let domain = domain.ok_or_else(|| err(StatusCode::NOT_FOUND, "Domain not found"))?;
+    // WHICH DOMAIN and WHICH HOST both come from the row now. The read also grew an
+    // authorisation term it never had: `SELECT domain FROM mail_domains WHERE id = $1`
+    // asked nothing about who was calling, so `ServerScope`'s header check was the
+    // entire boundary. Resolving before any write means an un-scoped or unreachable
+    // host is refused with nothing half-applied behind it.
+    let (domain, server_id, agent) = mail_domain_agent_for_caller(&state, id, &claims).await?;
 
     if let Some(catch_all) = &body.catch_all {
         if !catch_all.is_empty() && (!catch_all.contains('@') || !is_valid_mail_address(catch_all, "/")) {
@@ -364,11 +408,11 @@ pub async fn update_domain(
 
     // Push the catch_all/enabled change into Postfix/Dovecot — previously written to the DB only,
     // so disabling a domain or setting a catch-all had no effect until an unrelated account change.
-    let _ = sync_mail_config(&state, &agent).await;
+    sync_mail_config(&state, server_id, &agent).await?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "mail.domain.update",
-        Some("mail"), Some(&domain.0), None, None,
+        Some("mail"), Some(&domain), None, None,
     ).await;
 
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -378,16 +422,13 @@ pub async fn update_domain(
 pub async fn delete_domain(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain: Option<(String,)> = sqlx::query_as("SELECT domain FROM mail_domains WHERE id = $1")
-        .bind(id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| internal_error("delete domain", e))?;
-
-    let domain = domain.ok_or_else(|| err(StatusCode::NOT_FOUND, "Domain not found"))?;
+    // Resolved before the row is gone, because the row is the only thing that knows
+    // which host to strip the domain from. Sending `/mail/domains/remove` to the
+    // switcher's host instead deleted a DKIM key on a machine that never had one and
+    // left the real host still accepting the domain's mail.
+    let (domain, server_id, agent) = mail_domain_agent_for_caller(&state, id, &claims).await?;
 
     // Fetch DKIM selector before deletion (needed for DNS cleanup)
     let dkim_info: Option<(String,)> = sqlx::query_as(
@@ -402,7 +443,7 @@ pub async fn delete_domain(
 
     // Remove from Postfix/Dovecot via agent
     let _ = agent
-        .post("/mail/domains/remove", Some(serde_json::json!({ "domain": domain.0 })))
+        .post("/mail/domains/remove", Some(serde_json::json!({ "domain": domain })))
         .await;
 
     sqlx::query("DELETE FROM mail_domains WHERE id = $1")
@@ -414,10 +455,11 @@ pub async fn delete_domain(
     // Rebuild Postfix/Dovecot maps from the remaining rows so the deleted domain's mailboxes
     // stop authenticating and receiving immediately — the agent's /mail/domains/remove only drops
     // the DKIM key and defers map cleanup to this sync, which delete_domain previously never called.
-    let _ = sync_mail_config(&state, &agent).await;
+    // `server_id` was captured above: the row it came from no longer exists.
+    sync_mail_config(&state, server_id, &agent).await?;
 
     // ── Auto-DNS cleanup: delete MX, A, SPF, DMARC, DKIM records ─────────
-    let dns_domain = domain.0.clone();
+    let dns_domain = domain.clone();
     let dns_db = state.db.clone();
     let dns_user = claims.sub;
     tokio::spawn(async move {
@@ -430,7 +472,7 @@ pub async fn delete_domain(
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "mail.domain.delete",
-        Some("mail"), Some(&domain.0), None, None,
+        Some("mail"), Some(&domain), None, None,
     ).await;
 
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -439,33 +481,37 @@ pub async fn delete_domain(
 /// GET /api/mail/domains/{id}/dns — Required DNS records for email
 pub async fn domain_dns(
     State(state): State<AppState>,
-    AdminUser(_claims): AdminUser,
+    AdminUser(claims): AdminUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain: Option<(String, String, Option<String>)> = sqlx::query_as(
-        "SELECT domain, dkim_selector, dkim_public_key FROM mail_domains WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| internal_error("domain dns", e))?;
+    // The same read the two DNS-verification endpoints use, so the tab that tells
+    // you what to create and the checks that tell you whether you created it can
+    // never describe two different domains. It also asks the question this handler
+    // never asked: whether this caller may see the domain at all. Its own inline
+    // `WHERE id = $1` answered only that the row exists.
+    let (domain, selector, dkim_pub, server_id) =
+        mail_domain_identity(&state.db, id, &claims).await?;
 
-    let (domain, selector, dkim_pub) = domain.ok_or_else(|| err(StatusCode::NOT_FOUND, "Domain not found"))?;
-
-    // The server's PUBLIC IP — not the agent's hostname.
+    // The MAIL DOMAIN'S HOST's public address — not this process's, and not the
+    // agent's hostname.
     //
     // This endpoint used to read `/system/info`'s `hostname` field into a variable
     // called `server_ip` and publish it as an address, so it told operators to
     // create `A mail.example.com → my-server` and the invalid SPF value
-    // `v=spf1 a mx ip4:my-server ~all`. The auto-DNS path a few hundred lines below
-    // has always used `detect_public_ip`; the two spellings had simply drifted.
-    // Both now derive from `prerequisites::mail::mail_records`.
-    let server_ip = crate::helpers::detect_public_ip_cached().await;
-    let server_ip = if server_ip.is_empty() {
-        "your-server-ip".to_string()
-    } else {
-        server_ip
-    };
+    // `v=spf1 a mx ip4:my-server ~all`. Fixing that to `detect_public_ip` made the
+    // value an address but still the WRONG one for a domain on a fleet member: it
+    // is the panel's, so the tab instructed the operator to point their mail
+    // domain at a machine that does not run their mail.
+    //
+    // A `None` here is not a write, so it does not have to refuse — but it must not
+    // substitute this box either, because an operator following the instruction
+    // would create the wrong record by hand and it would resolve and answer. Fall
+    // back to the placeholder the endpoint already used when it could not detect an
+    // address: it says "put an address here" and names no machine at all.
+    let server_ip = crate::helpers::public_ip_for_server(&state.db, server_id)
+        .await
+        .filter(|ip| !ip.is_empty())
+        .unwrap_or_else(|| "your-server-ip".to_string());
 
     let records: Vec<serde_json::Value> = crate::services::prerequisites::mail::mail_records(
         &domain,
@@ -493,11 +539,26 @@ pub async fn domain_dns(
 // ── Account routes ──────────────────────────────────────────────────────
 
 /// GET /api/mail/domains/{id}/accounts
+///
+/// The mailboxes are listed only after the DOMAIN has been resolved through
+/// [`MAIL_DOMAIN_CALLER_PREDICATE`]. `mail_accounts` has no server column and no
+/// owner column — it reaches both only through `domain_id` — so the domain is the
+/// only place this question can be asked, and the bare `WHERE domain_id = $1` here
+/// asked it nowhere: any administrator could enumerate the mailboxes of any
+/// domain on any machine in the fleet by id.
+///
+/// Resolving first rather than joining the predicate into the list query is
+/// deliberate. A joined query would answer an unauthorised caller with an empty
+/// list, which reads as "this domain has no mailboxes" — the failure that looks
+/// like success. This way an invisible domain 404s, exactly as the mutating
+/// handlers already do.
 pub async fn list_accounts(
     State(state): State<AppState>,
-    AdminUser(_claims): AdminUser,
+    AdminUser(claims): AdminUser,
     Path(domain_id): Path<Uuid>,
 ) -> Result<Json<Vec<MailAccount>>, ApiError> {
+    mail_domain_identity(&state.db, domain_id, &claims).await?;
+
     let accounts: Vec<MailAccount> = sqlx::query_as(
         "SELECT id, domain_id, email, display_name, quota_mb, enabled, forward_to, \
          autoresponder_enabled, autoresponder_subject, autoresponder_body, created_at \
@@ -515,21 +576,20 @@ pub async fn list_accounts(
 pub async fn create_account(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(domain_id): Path<Uuid>,
     Json(body): Json<CreateAccountRequest>,
 ) -> Result<(StatusCode, Json<MailAccount>), ApiError> {
-    // Verify domain exists
-    let domain: Option<(String,)> = sqlx::query_as("SELECT domain FROM mail_domains WHERE id = $1")
-        .bind(domain_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| internal_error("create account", e))?;
-    let domain = domain.ok_or_else(|| err(StatusCode::NOT_FOUND, "Domain not found"))?;
+    // The domain's own row decides both whether this caller may add a mailbox to it
+    // and which host the mailbox is created on. The existence check that used to
+    // stand here answered neither: it asked only `WHERE id = $1`, so any
+    // administrator could create a mailbox under any other administrator's domain,
+    // and the credential was then written to whichever host the switcher named.
+    let (domain, server_id, agent) =
+        mail_domain_agent_for_caller(&state, domain_id, &claims).await?;
 
     let email = body.email.trim().to_lowercase();
-    if !email.ends_with(&format!("@{}", domain.0)) {
-        return Err(err(StatusCode::BAD_REQUEST, &format!("Email must end with @{}", domain.0)));
+    if !email.ends_with(&format!("@{domain}")) {
+        return Err(err(StatusCode::BAD_REQUEST, &format!("Email must end with @{domain}")));
     }
     if email.matches('@').count() != 1 || !is_valid_mail_address(&email, "") {
         return Err(err(StatusCode::BAD_REQUEST, "Email address contains invalid characters"));
@@ -542,7 +602,9 @@ pub async fn create_account(
     // Hash in a scheme THIS server's Dovecot can verify — Argon2id where it is
     // built in, bcrypt where it is not. Hashing in a scheme the verifier does
     // not know produces an account that is created successfully and can never
-    // be opened.
+    // be opened. "THIS server" now means the domain's host: asking the switcher's
+    // agent could read Argon2id support off a Debian box and write the credential
+    // to a Rocky one that cannot verify it.
     let schemes = agent_password_schemes(&agent).await;
     let password_hash = dovecot_password_hash_for(&body.password, &schemes)
         .map_err(|e| internal_error("hash mail password", e))?;
@@ -573,7 +635,7 @@ pub async fn create_account(
     })?;
 
     // Sync with Postfix/Dovecot via agent
-    let _ = sync_mail_config(&state, &agent).await;
+    sync_mail_config(&state, server_id, &agent).await?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "mail.account.create",
@@ -587,20 +649,15 @@ pub async fn create_account(
 pub async fn update_account(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path((domain_id, account_id)): Path<(Uuid, Uuid)>,
     Json(body): Json<UpdateAccountRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let account: Option<(String,)> = sqlx::query_as(
-        "SELECT email FROM mail_accounts WHERE id = $1 AND domain_id = $2",
-    )
-    .bind(account_id)
-    .bind(domain_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| internal_error("update account", e))?;
-
-    let account = account.ok_or_else(|| err(StatusCode::NOT_FOUND, "Account not found"))?;
+    // The mailbox reaches its host through the domain that owns it. This is the
+    // sharpest of the account handlers: it can REPLACE a password hash, and the
+    // rebuild that follows used to carry every mailbox in the installation to
+    // whichever box the browser had selected.
+    let (email, server_id, agent) =
+        mail_account_agent_for_caller(&state, domain_id, account_id, &claims).await?;
 
     if let Some(password) = &body.password {
         if password.len() < 8 {
@@ -687,11 +744,11 @@ pub async fn update_account(
             .map_err(|e| internal_error("update account", e))?;
     }
 
-    let _ = sync_mail_config(&state, &agent).await;
+    sync_mail_config(&state, server_id, &agent).await?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "mail.account.update",
-        Some("mail"), Some(&account.0), None, None,
+        Some("mail"), Some(&email), None, None,
     ).await;
 
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -701,19 +758,13 @@ pub async fn update_account(
 pub async fn delete_account(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path((domain_id, account_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let account: Option<(String,)> = sqlx::query_as(
-        "SELECT email FROM mail_accounts WHERE id = $1 AND domain_id = $2",
-    )
-    .bind(account_id)
-    .bind(domain_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| internal_error("delete account", e))?;
-
-    let account = account.ok_or_else(|| err(StatusCode::NOT_FOUND, "Account not found"))?;
+    // Resolved before the DELETE, so the host is taken from the row while the row
+    // still exists — and so a mailbox on a machine this administrator does not
+    // operate is refused rather than removed.
+    let (email, server_id, agent) =
+        mail_account_agent_for_caller(&state, domain_id, account_id, &claims).await?;
 
     sqlx::query("DELETE FROM mail_accounts WHERE id = $1")
         .bind(account_id)
@@ -721,11 +772,11 @@ pub async fn delete_account(
         .await
         .map_err(|e| internal_error("delete account", e))?;
 
-    let _ = sync_mail_config(&state, &agent).await;
+    sync_mail_config(&state, server_id, &agent).await?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "mail.account.delete",
-        Some("mail"), Some(&account.0), None, None,
+        Some("mail"), Some(&email), None, None,
     ).await;
 
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -734,11 +785,18 @@ pub async fn delete_account(
 // ── Alias routes ────────────────────────────────────────────────────────
 
 /// GET /api/mail/domains/{id}/aliases
+///
+/// Same reasoning as [`list_accounts`], against `mail_aliases`: resolve the domain
+/// through the shared predicate first so an invisible domain 404s, then list. An
+/// alias row exposes a forwarding destination, which is a real mailbox address
+/// belonging to whoever runs that domain.
 pub async fn list_aliases(
     State(state): State<AppState>,
-    AdminUser(_claims): AdminUser,
+    AdminUser(claims): AdminUser,
     Path(domain_id): Path<Uuid>,
 ) -> Result<Json<Vec<MailAlias>>, ApiError> {
+    mail_domain_identity(&state.db, domain_id, &claims).await?;
+
     let aliases: Vec<MailAlias> = sqlx::query_as(
         "SELECT id, domain_id, source_email, destination_email, created_at \
          FROM mail_aliases WHERE domain_id = $1 ORDER BY source_email",
@@ -755,12 +813,38 @@ pub async fn list_aliases(
 pub async fn create_alias(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(domain_id): Path<Uuid>,
     Json(body): Json<CreateAliasRequest>,
 ) -> Result<(StatusCode, Json<MailAlias>), ApiError> {
+    // This handler previously read no row at all — it INSERTed straight against the
+    // `{id}` path segment and let the foreign key decide whether the domain existed.
+    // So it asked neither whether the caller may write to that domain nor which host
+    // the resulting alias map belongs on. Resolving the domain answers both.
+    let (domain, server_id, agent) =
+        mail_domain_agent_for_caller(&state, domain_id, &claims).await?;
+
     let source = body.source_email.trim().to_lowercase();
     let destination = body.destination_email.trim().to_lowercase();
+
+    // The alias source must belong to the domain it is being filed under.
+    //
+    // Nothing checked this. `create_account` has always required `@{domain}` on the
+    // address it creates; the alias path took `source_email` verbatim from the body
+    // and stored it against whatever `{id}` was in the path. `mail_sync_payload`
+    // then emits it into that server's Postfix virtual-alias map keyed on the
+    // ADDRESS, and Postfix applies an alias to any address it accepts — so an alias
+    // filed under a domain the caller may write to could redirect mail addressed to
+    // a DIFFERENT domain on the same host, to any destination. The row's own
+    // `domain_id` said one thing and the map said another, and the map is what runs.
+    //
+    // Rejected at the door for the same reason `is_valid_mail_address` is: the
+    // agent's sync is all-or-nothing, and the callers discard its result.
+    if !source.ends_with(&format!("@{domain}")) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            &format!("Alias source must end with @{domain}"),
+        ));
+    }
     if source.matches('@').count() != 1 || !is_valid_mail_address(&source, "") {
         return Err(err(StatusCode::BAD_REQUEST, "Alias source contains invalid characters"));
     }
@@ -786,7 +870,7 @@ pub async fn create_alias(
         }
     })?;
 
-    let _ = sync_mail_config(&state, &agent).await;
+    sync_mail_config(&state, server_id, &agent).await?;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "mail.alias.create",
@@ -800,22 +884,14 @@ pub async fn create_alias(
 pub async fn delete_alias(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path((domain_id, alias_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // Scope the alias to the {domain_id} path segment — otherwise a mismatched (domain, alias)
-    // pair would delete an alias belonging to a different domain (matches delete_account/update_account).
-    let alias: Option<(String,)> = sqlx::query_as(
-        "SELECT source_email FROM mail_aliases WHERE id = $1 AND domain_id = $2",
-    )
-        .bind(alias_id)
-        .bind(domain_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| internal_error("delete alias", e))?;
-    if alias.is_none() {
-        return Err(err(StatusCode::NOT_FOUND, "Alias not found"));
-    }
+    // Scoping the alias to the {domain_id} path segment — otherwise a mismatched (domain, alias)
+    // pair would delete an alias belonging to a different domain — is now carried by the shared
+    // resolver's `md.id = $1` term over the join, alongside the authorisation and host questions
+    // the previous read did not ask at all.
+    let (source, server_id, agent) =
+        mail_alias_agent_for_caller(&state, domain_id, alias_id, &claims).await?;
 
     sqlx::query("DELETE FROM mail_aliases WHERE id = $1 AND domain_id = $2")
         .bind(alias_id)
@@ -824,14 +900,12 @@ pub async fn delete_alias(
         .await
         .map_err(|e| internal_error("delete alias", e))?;
 
-    let _ = sync_mail_config(&state, &agent).await;
+    sync_mail_config(&state, server_id, &agent).await?;
 
-    if let Some(alias) = alias {
-        activity::log_activity(
-            &state.db, claims.sub, &claims.email, "mail.alias.delete",
-            Some("mail"), Some(&alias.0), None, None,
-        ).await;
-    }
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "mail.alias.delete",
+        Some("mail"), Some(&source), None, None,
+    ).await;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -905,10 +979,14 @@ fn extract_parent_domain(domain: &str) -> String {
     }
 }
 
-/// Detect the server's public IPv4 address.
-async fn detect_public_ip() -> String {
-    crate::helpers::detect_public_ip().await
-}
+// A local `detect_public_ip()` used to sit here, forwarding verbatim to
+// `crate::helpers::detect_public_ip`. It is gone rather than re-signatured: its
+// only effect was to make a call site read "the server's IP" when the function
+// underneath answers "THIS PROCESS's IP", and that ambiguity is precisely the
+// defect — every mail path that wanted a host's address got the panel's. A name
+// that has to be looked up to know which machine it means is worse than no name,
+// so the one caller now spells `helpers::public_ip_for_server` in full, and the
+// server it is asking about is visible in the argument.
 
 /// Build Cloudflare API headers from credentials.
 fn cf_headers(token: &str, email: Option<&str>) -> reqwest::header::HeaderMap {
@@ -917,12 +995,19 @@ fn cf_headers(token: &str, email: Option<&str>) -> reqwest::header::HeaderMap {
 
 /// Auto-create DNS records (MX, A, SPF, DMARC, DKIM) for a new mail domain.
 /// Runs in a background task — errors are logged, not returned to the user.
+///
+/// `server_id` is the host the domain was created on, carried in from
+/// `create_domain` where the operator chose it. It is what the A record and the
+/// SPF `ip4:` term resolve to; without it this function published the PANEL's
+/// address for a domain on a fleet member, which is a record that resolves,
+/// answers, and points mail at a machine that never sees it.
 async fn auto_create_mail_dns(
     db: &sqlx::PgPool,
     agent: &AgentHandle,
     user_id: uuid::Uuid,
     user_email: &str,
     domain: &str,
+    server_id: uuid::Uuid,
     dkim_public_key: Option<&str>,
 ) -> Result<(), String> {
     let parent = extract_parent_domain(domain);
@@ -945,10 +1030,29 @@ async fn auto_create_mail_dns(
         }
     };
 
-    let server_ip = detect_public_ip().await;
-    if server_ip.is_empty() {
-        return Err("Could not detect server public IP".into());
-    }
+    // A WRITE, so a host we cannot resolve stops it. Every record below is derived
+    // from this one value: the A record IS it, and the SPF `ip4:` term authorises
+    // it to send. Substituting this process's address would not fail — it would
+    // publish a record that resolves and answers on the wrong machine, so mail for
+    // the domain is delivered nowhere and SPF authorises a host that never sends
+    // it. That is strictly worse than the domain having no records at all, which
+    // is a visible, fixable state the DNS tab already reports.
+    let server_ip = match crate::helpers::public_ip_for_server(db, Some(server_id)).await {
+        Some(ip) if !ip.is_empty() => ip,
+        _ => {
+            // The whole set is refused, not just the two records that carry the
+            // address. MX names the apex and DKIM/DMARC only mean anything once
+            // mail can reach it, and the auto-SSL step below issues over HTTP-01
+            // against that same apex A record — a partial publish would leave a
+            // domain advertising a mail host that resolves to nothing, plus a
+            // certificate failure, which is harder to read than nothing at all.
+            return Err(format!(
+                "no public address is recorded for server {server_id} (it may not have checked \
+                 in yet), so NO DNS records were published for {domain} — create them by hand \
+                 from the domain's DNS tab once the server reports an address"
+            ));
+        }
+    };
 
     // THE record set — the same one the DNS tab shows and the prerequisite check
     // verifies.
@@ -1308,20 +1412,43 @@ pub async fn relay_remove(
 
 // ── DNS Verification ─────────────────────────────────────────────────────
 
-/// Load a mail domain's identity for the DNS paths.
+/// Load a mail domain's identity for the read paths, and decide in the same query
+/// whether this caller may see it.
+///
+/// Two questions, one row, because they have the same answer source. The identity
+/// half (name, DKIM selector, public key) is what the DNS tab and the two
+/// verification endpoints describe. The authorisation half is
+/// [`MAIL_DOMAIN_CALLER_PREDICATE`], the same predicate every mutating handler in
+/// this module resolves through — these reads were the ones that never did, so a
+/// domain an administrator could not touch was still one they could read the full
+/// configuration of, by id.
+///
+/// It also returns the domain's HOST, which is the value the DNS paths were
+/// missing entirely: they described the panel's address for a domain that may live
+/// anywhere in the fleet. `Option<Uuid>` and not `Uuid` — the predicate admits a
+/// row that names no server (see its comment), and a read must not turn that into
+/// a 404 for a domain that plainly exists. Each caller decides what an unknown
+/// host means for what it is reporting.
+///
+/// Unlike [`mail_domain_agent_for_caller`] this resolves NO agent, and that is the
+/// point: a read must not fail because the host is unreachable. Reporting a
+/// domain's DNS while its server is down is exactly when an operator needs it.
 async fn mail_domain_identity(
     db: &sqlx::PgPool,
     id: Uuid,
-) -> Result<(String, String, Option<String>), ApiError> {
-    let row: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT domain, dkim_selector, dkim_public_key FROM mail_domains WHERE id = $1",
-    )
+    claims: &Claims,
+) -> Result<(String, String, Option<String>, Option<Uuid>), ApiError> {
+    let row: Option<(String, Option<String>, Option<String>, Option<Uuid>)> = sqlx::query_as(&format!(
+        "SELECT md.domain, md.dkim_selector, md.dkim_public_key, md.server_id \
+         FROM mail_domains md WHERE {MAIL_DOMAIN_CALLER_PREDICATE}"
+    ))
     .bind(id)
+    .bind(claims.sub)
     .fetch_optional(db)
     .await
     .map_err(|e| internal_error("mail domain", e))?;
 
-    let (domain, selector, dkim_pub) =
+    let (domain, selector, dkim_pub, server_id) =
         row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Domain not found"))?;
     Ok((
         domain,
@@ -1329,6 +1456,7 @@ async fn mail_domain_identity(
             crate::services::prerequisites::mail::DEFAULT_DKIM_SELECTOR.to_string()
         }),
         dkim_pub,
+        server_id,
     ))
 }
 
@@ -1351,11 +1479,31 @@ async fn mail_domain_identity(
 /// Mail DNS tab keeps working.
 pub async fn dns_check(
     State(state): State<AppState>,
-    AdminUser(_claims): AdminUser,
+    AdminUser(claims): AdminUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let (domain, selector, dkim_pub) = mail_domain_identity(&state.db, id).await?;
-    let server_ip = crate::helpers::detect_public_ip_cached().await;
+    let (domain, selector, dkim_pub, server_id) =
+        mail_domain_identity(&state.db, id, &claims).await?;
+
+    // Compare against the address of the machine this domain's mail RUNS ON.
+    //
+    // With `detect_public_ip_cached` this compared every domain against the
+    // PANEL's address, so a correctly configured domain on a fleet member — A
+    // record and SPF both naming its own host, exactly what that host needs —
+    // failed both checks and was reported as broken. The endpoint's whole purpose
+    // is to stop certifying a state that does not match reality, and it was
+    // certifying the reverse for every domain not on this box.
+    //
+    // An unresolvable host degrades to the empty string ON PURPOSE rather than
+    // erroring: `check_mail_dns_published` already treats that as "we could not
+    // determine the expected address" and returns Unknown/Info, which the
+    // projection below renders as `unknown` on every record. A single-box install
+    // is unaffected — the helper detects the local address outbound, exactly as
+    // this line used to — and a member with no recorded address gets an honest
+    // "we can't tell" instead of a confident, wrong "misconfigured".
+    let server_ip = crate::helpers::public_ip_for_server(&state.db, server_id)
+        .await
+        .unwrap_or_default();
 
     let verdict = crate::services::prerequisites::mail::check_mail_dns_published(
         &domain,
@@ -1431,13 +1579,20 @@ fn label_for(r: &crate::services::prerequisites::DnsRecordHint) -> &'static str 
 }
 
 /// GET /api/mail/domains/{id}/preflight — The mail domain's prerequisites.
+///
+/// Same host, same `None` handling and same reasoning as [`dns_check`] — this is
+/// the structured face of the identical evaluation, and the two must not disagree
+/// about which machine the domain is expected to point at.
 pub async fn preflight(
     State(state): State<AppState>,
-    AdminUser(_claims): AdminUser,
+    AdminUser(claims): AdminUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let (domain, selector, dkim_pub) = mail_domain_identity(&state.db, id).await?;
-    let server_ip = crate::helpers::detect_public_ip_cached().await;
+    let (domain, selector, dkim_pub, server_id) =
+        mail_domain_identity(&state.db, id, &claims).await?;
+    let server_ip = crate::helpers::public_ip_for_server(&state.db, server_id)
+        .await
+        .unwrap_or_default();
 
     let checks = crate::services::prerequisites::mail::evaluate(
         &domain,
@@ -1476,16 +1631,41 @@ pub async fn mail_storage(
 
 // ── Blacklist / Reputation Check ────────────────────────────────────────
 
-/// GET /api/mail/blacklist-check — Check server IP against email blacklists.
+/// GET /api/mail/blacklist-check — Check a server's IP against email blacklists.
+///
+/// Reputation belongs to the ADDRESS THAT SENDS THE MAIL, so this asks about the
+/// server in scope — the one whose mail queue, logs and storage the rest of this
+/// page is showing — not about the process answering the request. On the panel's
+/// own box those are the same address, which is why the difference never showed;
+/// on a fleet member they never are, and the widget was reporting this box's
+/// listings under a member's mail page. A member with a genuinely blacklisted IP
+/// read as clean, which is the direction that costs deliverability silently.
+///
+/// `ServerScope` supplies the host and, with it, the ownership check this handler
+/// had none of: it verifies the caller owns the server named in `X-Server-Id`, and
+/// resolves to the local box when no header is sent.
 pub async fn blacklist_check(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
+    ServerScope(server_id, _agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // Get server IP
-    let ip = crate::helpers::detect_public_ip().await;
-    if ip.is_empty() {
-        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, "IP lookup failed: could not detect public IP"));
-    }
+    // No address, no check. There is nothing to substitute here — a DNSBL answer
+    // about a DIFFERENT machine is not a weaker answer, it is an answer to a
+    // question nobody asked, and it would be rendered as this server's reputation.
+    // Refusing is also not a regression on a single-box install: the helper detects
+    // the local address outbound exactly as this line used to, so the only new
+    // failure is a member that has not reported an address yet, which previously
+    // produced a confidently wrong "clean".
+    let Some(ip) = crate::helpers::public_ip_for_server(&state.db, Some(server_id))
+        .await
+        .filter(|ip| !ip.is_empty())
+    else {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "No public address is recorded for this server yet, so its blacklist status \
+             cannot be checked. It is reported by the agent at check-in.",
+        ));
+    };
 
     // Reverse the IP for DNSBL lookup
     let reversed: String = ip.split('.').rev().collect::<Vec<_>>().join(".");
@@ -1640,31 +1820,201 @@ pub async fn tls_enforce(
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-/// Sync all mail config to agent (rebuild Postfix/Dovecot maps)
-async fn sync_mail_config(state: &AppState, agent: &AgentHandle) -> Result<(), String> {
-    // Gather all domains, accounts, and aliases
-    let domains: Vec<(String, bool, Option<String>)> = sqlx::query_as(
-        "SELECT domain, enabled, catch_all FROM mail_domains ORDER BY domain",
-    )
-    .fetch_all(&state.db)
+/// The one predicate that decides whether a caller may act on a mail domain.
+///
+/// Binds `$1` = the mail domain id, `$2` = the caller's own id — the same two
+/// parameters, in the same order, as [`crate::helpers::SITE_CALLER_PREDICATE`],
+/// so a query that joins another table onto `mail_domains` can add its own bind
+/// as `$3` and drop this in unchanged.
+///
+/// ⚠ There is no owner arm, and that is not an oversight: `mail_domains` has no
+/// `user_id` column at all (`migrations/20260315200000_mail_management.sql`). A
+/// mail domain belongs to a SERVER and to nothing else, so the server is the only
+/// boundary there is to draw. `is_local` is this box; `sv.user_id` is a member
+/// this same administrator registered. An administrator therefore reaches every
+/// mail domain on the hardware they operate, and no mail domain on a machine
+/// somebody else added — the same line `SITE_CALLER_PREDICATE`'s admin arm draws.
+///
+/// Before this, the mail handlers drew no line whatsoever. Each loaded its row
+/// with a bare `WHERE id = $1` and the only thing standing between an
+/// administrator and another administrator's fleet member was `ServerScope`'s
+/// check on the `X-Server-Id` request header. Removing that extractor without
+/// putting this in its place would have WIDENED the surface while appearing to
+/// narrow it.
+///
+/// ⚠ `md.server_id IS NULL` is admitted DELIBERATELY, and it is not a hole. A row
+/// that names no server names no owner either, so there is nothing here to test;
+/// admitting it hands the row to [`crate::helpers::agent_for_site_server`], which
+/// refuses it by name with a 409 that says what is wrong. Excluding it here would
+/// instead collapse it into "Domain not found" — a 404 for a domain that plainly
+/// exists, which is the failure that gets read as "already cleaned up".
+///
+/// ⚠ The role is read from `users.role` in the DATABASE, not from `claims.role`
+/// in the token, for the reason spelled out on `SITE_CALLER_PREDICATE`: a JWT
+/// keeps asserting whatever role it was minted with until it expires, so a
+/// demoted account would keep administering mail for the rest of its session.
+const MAIL_DOMAIN_CALLER_PREDICATE: &str = "md.id = $1 AND (md.server_id IS NULL OR EXISTS (\
+    SELECT 1 FROM users u, servers sv WHERE u.id = $2 AND u.role = 'admin' \
+    AND sv.id = md.server_id AND (sv.is_local OR sv.user_id = u.id)))";
+
+/// Resolve a mail domain the caller may act on, AND the agent for the host it is
+/// actually configured on.
+///
+/// "Which server did the browser have selected" and "which server is this mail
+/// domain on" are different questions. Every mutating handler in this module used
+/// to answer the first, because `ServerScope` was sitting in its argument list and
+/// the row's own `server_id` was never read. The row is the authority.
+///
+/// Returns the domain name, the server it names, and a handle to that server. A
+/// host that will not resolve is REFUSED rather than quietly replaced with this
+/// one — see [`crate::helpers::agent_for_site_server`], the single choke point
+/// every mail dispatch now funnels through.
+async fn mail_domain_agent_for_caller(
+    state: &AppState,
+    domain_id: Uuid,
+    claims: &Claims,
+) -> Result<(String, Uuid, AgentHandle), ApiError> {
+    let row: Option<(String, Option<Uuid>)> = sqlx::query_as(&format!(
+        "SELECT md.domain, md.server_id FROM mail_domains md WHERE {MAIL_DOMAIN_CALLER_PREDICATE}"
+    ))
+    .bind(domain_id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| internal_error("resolve mail domain for caller", e))?;
+
+    let (domain, server_id) =
+        row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Domain not found"))?;
+
+    let agent = crate::helpers::agent_for_site_server(state, server_id, &domain).await?;
+    let Some(server_id) = server_id else {
+        // Unreachable today — `agent_for_site_server` refuses a `None` server_id
+        // above. Written as a branch rather than an `unwrap` so that if that
+        // refusal is ever softened, this becomes a 409 instead of a panic.
+        return Err(err(
+            StatusCode::CONFLICT,
+            "This mail domain is not associated with a server",
+        ));
+    };
+    Ok((domain, server_id, agent))
+}
+
+/// Resolve a mailbox the caller may act on, and the host of the domain it belongs to.
+///
+/// `mail_accounts` carries no server of its own; it reaches one only through
+/// `mail_accounts.domain_id → mail_domains.server_id`, which is what the join is
+/// for. Keeping `md.id = $1` from the shared predicate against the `{domain_id}`
+/// path segment also preserves the pairing check the previous
+/// `WHERE id = $1 AND domain_id = $2` queries made: a mismatched
+/// (domain, account) pair still resolves to nothing and still 404s.
+///
+/// Returns the mailbox address, the server, and its agent.
+async fn mail_account_agent_for_caller(
+    state: &AppState,
+    domain_id: Uuid,
+    account_id: Uuid,
+    claims: &Claims,
+) -> Result<(String, Uuid, AgentHandle), ApiError> {
+    let row: Option<(String, String, Option<Uuid>)> = sqlx::query_as(&format!(
+        "SELECT a.email, md.domain, md.server_id FROM mail_accounts a \
+         JOIN mail_domains md ON md.id = a.domain_id \
+         WHERE a.id = $3 AND {MAIL_DOMAIN_CALLER_PREDICATE}"
+    ))
+    .bind(domain_id)
+    .bind(claims.sub)
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("resolve mail account for caller", e))?;
+
+    let (email, domain, server_id) =
+        row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Account not found"))?;
+
+    let agent = crate::helpers::agent_for_site_server(state, server_id, &domain).await?;
+    let Some(server_id) = server_id else {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "This mail domain is not associated with a server",
+        ));
+    };
+    Ok((email, server_id, agent))
+}
+
+/// Resolve an alias the caller may act on, and the host of the domain it belongs to.
+/// Same shape and same reasoning as [`mail_account_agent_for_caller`], against
+/// `mail_aliases`. Returns the alias source address, the server, and its agent.
+async fn mail_alias_agent_for_caller(
+    state: &AppState,
+    domain_id: Uuid,
+    alias_id: Uuid,
+    claims: &Claims,
+) -> Result<(String, Uuid, AgentHandle), ApiError> {
+    let row: Option<(String, String, Option<Uuid>)> = sqlx::query_as(&format!(
+        "SELECT al.source_email, md.domain, md.server_id FROM mail_aliases al \
+         JOIN mail_domains md ON md.id = al.domain_id \
+         WHERE al.id = $3 AND {MAIL_DOMAIN_CALLER_PREDICATE}"
+    ))
+    .bind(domain_id)
+    .bind(claims.sub)
+    .bind(alias_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("resolve mail alias for caller", e))?;
+
+    let (source, domain, server_id) =
+        row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Alias not found"))?;
+
+    let agent = crate::helpers::agent_for_site_server(state, server_id, &domain).await?;
+    let Some(server_id) = server_id else {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "This mail domain is not associated with a server",
+        ));
+    };
+    Ok((source, server_id, agent))
+}
+
+/// Collect the mail configuration THAT ONE SERVER hosts, in the shape
+/// `/mail/sync` consumes.
+///
+/// The three reads used to have no `WHERE` clause of any kind. `mail_accounts`
+/// and `mail_aliases` still have no server column of their own, so they reach one
+/// the only way they can — through `mail_domains.server_id` on the domain that
+/// owns them.
+///
+/// Separated from [`sync_mail_config`] so that a database failure while gathering
+/// stays distinguishable from the safety precondition, which must never be
+/// swallowed. Only the precondition is fatal to the request.
+async fn mail_sync_payload(
+    state: &AppState,
+    server_id: Uuid,
+) -> Result<serde_json::Value, sqlx::Error> {
+    let domains: Vec<(String, bool, Option<String>)> = sqlx::query_as(
+        "SELECT domain, enabled, catch_all FROM mail_domains WHERE server_id = $1 ORDER BY domain",
+    )
+    .bind(server_id)
+    .fetch_all(&state.db)
+    .await?;
 
     let accounts: Vec<(String, String, i32, bool, Option<String>)> = sqlx::query_as(
-        "SELECT email, password_hash, quota_mb, enabled, forward_to FROM mail_accounts ORDER BY email",
+        "SELECT a.email, a.password_hash, a.quota_mb, a.enabled, a.forward_to \
+         FROM mail_accounts a JOIN mail_domains md ON md.id = a.domain_id \
+         WHERE md.server_id = $1 ORDER BY a.email",
     )
+    .bind(server_id)
     .fetch_all(&state.db)
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     let aliases: Vec<(String, String)> = sqlx::query_as(
-        "SELECT source_email, destination_email FROM mail_aliases ORDER BY source_email",
+        "SELECT al.source_email, al.destination_email \
+         FROM mail_aliases al JOIN mail_domains md ON md.id = al.domain_id \
+         WHERE md.server_id = $1 ORDER BY al.source_email",
     )
+    .bind(server_id)
     .fetch_all(&state.db)
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
-    let payload = serde_json::json!({
+    Ok(serde_json::json!({
         "domains": domains.iter().map(|(d, e, c)| serde_json::json!({
             "domain": d, "enabled": e, "catch_all": c
         })).collect::<Vec<_>>(),
@@ -1674,12 +2024,90 @@ async fn sync_mail_config(state: &AppState, agent: &AgentHandle) -> Result<(), S
         "aliases": aliases.iter().map(|(src, dst)| serde_json::json!({
             "source": src, "destination": dst
         })).collect::<Vec<_>>(),
-    });
+    }))
+}
 
-    agent
-        .post("/mail/sync", Some(payload))
-        .await
-        .map_err(|e| e.to_string())?;
+/// Rebuild ONE server's Postfix/Dovecot maps from the rows that name that server.
+///
+/// # What it used to send, and to whom
+///
+/// This took only an agent handle and read every mail row in the installation —
+/// `SELECT domain, enabled, catch_all FROM mail_domains` with no `WHERE`, and the
+/// same for `mail_accounts` and `mail_aliases`. Two defects compounded. The
+/// payload was fleet-wide, so every mailbox's `password_hash` and `forward_to`
+/// and every alias in the whole panel were written into one host's maps. And the
+/// destination was the caller's `X-Server-Id` header, so an edit made with member
+/// B showing in the server switcher published member A's tenants' mailbox
+/// credentials onto B, and made B authenticate those mailboxes and accept mail for
+/// domains it does not host. A credential disclosure onto a machine that must
+/// never hold it, plus a mail-interception primitive, from a dropdown.
+///
+/// The server id now comes from the row being edited, and the rows now come from
+/// that same server.
+///
+/// # Why an un-scoped domain stops the whole rebuild
+///
+/// `mail_domains.server_id` is NULLABLE — the multi-server migration set
+/// `NOT NULL` on `sites`, `docker_stacks` and `git_deploys` and left this column
+/// alone — and its one-time backfill only ever touched rows that existed when the
+/// migration ran.
+///
+/// `/mail/sync` REBUILDS the maps; it does not merge into them. So a filtered
+/// payload that omits an un-scoped domain does not merely fail to update that
+/// domain — if the domain happens to live on the target box, the rebuild DELETES
+/// its mailboxes from Postfix and Dovecot. And nothing here can tell whether it
+/// does: a `NULL` server_id is not evidence of the local box, it is the absence of
+/// evidence, and guessing a host is exactly what this whole change exists to stop.
+///
+/// So the rebuild refuses while any such row exists, loudly, rather than shipping
+/// a subset that silently prunes live mailboxes. That is a precondition on the
+/// DATA, not on the request, which is why it is fatal where an unreachable agent
+/// is not: the caller can fix it (assign the domains), and until they do there is
+/// no safe payload to send to any host in the fleet.
+async fn sync_mail_config(
+    state: &AppState,
+    server_id: Uuid,
+    agent: &AgentHandle,
+) -> Result<(), ApiError> {
+    let unscoped: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM mail_domains WHERE server_id IS NULL")
+            .fetch_one(&state.db)
+            .await
+            .map_err(|e| internal_error("count unscoped mail domains", e))?;
+
+    if unscoped > 0 {
+        tracing::error!(
+            "Refusing to rebuild mail maps on server {server_id}: {unscoped} mail domain(s) \
+             name no server. A rebuild that omits them would delete their mailboxes from \
+             whichever box actually hosts them, and nothing here can tell which box that is. \
+             Backfill mail_domains.server_id."
+        );
+        return Err(err(
+            StatusCode::CONFLICT,
+            &format!(
+                "{unscoped} mail domain(s) are not assigned to a server, so mail configuration \
+                 cannot be applied to any server without risking the removal of live mailboxes. \
+                 The change was saved. Assign every mail domain to a server, then retry."
+            ),
+        ));
+    }
+
+    // Everything past the precondition stays best-effort, exactly as it was when
+    // every call site spelled `let _ = sync_mail_config(…)`. A transient database
+    // blip or an agent that is down must not turn a saved change into a 500 — it
+    // never did, and widening that here would be a behaviour change hiding inside
+    // a security fix.
+    let payload = match mail_sync_payload(state, server_id).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("Mail sync for server {server_id}: gathering configuration failed: {e}");
+            return Ok(());
+        }
+    };
+
+    if let Err(e) = agent.post("/mail/sync", Some(payload)).await {
+        tracing::warn!("Mail sync for server {server_id}: agent rejected the rebuild: {e}");
+    }
 
     Ok(())
 }

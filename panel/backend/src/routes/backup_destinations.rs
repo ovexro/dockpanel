@@ -24,6 +24,19 @@ pub struct CreateDestinationRequest {
     pub name: String,
     pub dtype: String,
     pub config: serde_json::Value,
+    /// Which server this destination belongs to, or `None` for one shared by the
+    /// whole fleet.
+    ///
+    /// The column has been nullable since the multi-server migration, on the
+    /// stated grounds that a destination "can be shared" — but nothing ever wrote
+    /// it, so NULL was the default for every row rather than a declaration, and a
+    /// reader could not tell "shared" from "never answered". That ambiguity is
+    /// what left `test_connection` with no way to know which host to ask.
+    ///
+    /// Making it an explicit request field is the whole fix: absent still means
+    /// shared, but now because the caller said so.
+    #[serde(default)]
+    pub server_id: Option<uuid::Uuid>,
 }
 
 #[derive(serde::Deserialize)]
@@ -60,7 +73,7 @@ pub async fn list(
 /// POST /api/backup-destinations — Create a new backup destination.
 pub async fn create(
     State(state): State<AppState>,
-    AdminUser(_claims): AdminUser,
+    AdminUser(claims): AdminUser,
     Json(body): Json<CreateDestinationRequest>,
 ) -> Result<(StatusCode, Json<BackupDestination>), ApiError> {
 
@@ -77,12 +90,29 @@ pub async fn create(
     // Encrypt sensitive fields in config before storing
     let encrypted_config = encrypt_config_secrets(&body.config, &state.config.jwt_secret)?;
 
+    // Refuse a server the caller does not operate, rather than storing an id that
+    // silently widens where this destination's credentials get sent.
+    if let Some(sid) = body.server_id {
+        let owned: Option<(uuid::Uuid,)> = sqlx::query_as(
+            "SELECT id FROM servers WHERE id = $1 AND (is_local OR user_id = $2)",
+        )
+        .bind(sid)
+        .bind(claims.sub)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| internal_error("resolve destination server", e))?;
+        if owned.is_none() {
+            return Err(err(StatusCode::NOT_FOUND, "Server not found or access denied"));
+        }
+    }
+
     let mut dest: BackupDestination = sqlx::query_as(
-        "INSERT INTO backup_destinations (name, dtype, config) VALUES ($1, $2, $3) RETURNING *",
+        "INSERT INTO backup_destinations (name, dtype, config, server_id) VALUES ($1, $2, $3, $4) RETURNING *",
     )
     .bind(body.name.trim())
     .bind(&body.dtype)
     .bind(&encrypted_config)
+    .bind(body.server_id)
     .fetch_one(&state.db)
     .await
     .map_err(|e| internal_error("create backup_destinations", e))?;
@@ -215,7 +245,27 @@ pub async fn remove(
     Ok(Json(resp))
 }
 
-/// POST /api/backup-destinations/{id}/test — Test connection.
+/// POST /api/backup-destinations/{id}/test — Test connection FROM the host that
+/// will actually use this destination.
+///
+/// This handler is where an operator's confidence in a destination comes from,
+/// and it asked the wrong machine. It posted through `state.agent` — the panel's
+/// own local `AgentClient`, unconditionally, with no header and no row consulted
+/// — so two things were true at once: the DECRYPTED credential (the S3 secret
+/// key, the SFTP password) was handed to the PANEL host for a destination a
+/// fleet member was going to use, and the green "connection OK" was a statement
+/// about the panel's egress rather than the member's. A member behind a
+/// different firewall, or with no route to the bucket at all, still lit the
+/// button green and then failed every night.
+///
+/// The SCHEDULED path never had this defect: `backup_policy_executor` resolves
+/// `agents.for_server(...)` per row for sites (:328), databases (:450) and
+/// volumes (:568) alike, and refuses rather than falling back to local. That
+/// asymmetry is the thing to notice — the button an operator PRESSES is the
+/// surface that never adopted the rule the background loop was already
+/// following, and it stayed hidden because this handler contains no `ServerScope`
+/// token for a census of header-derived dispatch to match on. It was not using
+/// the wrong scope; it had no scope at all.
 pub async fn test_connection(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
@@ -223,33 +273,183 @@ pub async fn test_connection(
 ) -> Result<Json<serde_json::Value>, ApiError> {
 
 
-    let dest: BackupDestination = sqlx::query_as(
-        "SELECT * FROM backup_destinations WHERE id = $1",
+    // Columns rather than `SELECT *` into `BackupDestination`: the struct is the
+    // API's response shape and has no `server_id`, and the payload builder takes
+    // `dtype` + `config` precisely so a caller holding loose columns need not
+    // rebuild a row to use it.
+    let row: Option<(String, String, serde_json::Value, Option<Uuid>)> = sqlx::query_as(
+        "SELECT name, dtype, config, server_id FROM backup_destinations WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| internal_error("test connection", e))?
-    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Destination not found"))?;
+    .map_err(|e| internal_error("test connection", e))?;
+
+    let (name, dtype, config, server_id) =
+        row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Destination not found"))?;
 
     // Build agent request
     let agent_body = serde_json::json!({
-        "destination": build_agent_destination(&dest),
+        "destination": agent_destination_payload(&dtype, &config),
     });
 
-    let result = state
-        .agent
+    // A NULL `server_id` means "no host has claimed this destination". It does
+    // NOT mean "the panel owns it". `20260807000000_sleep_and_destination_server_scope`
+    // backfilled every pre-existing row to the local server, so a NULL row today
+    // is one created since — and `create` above still does not set the column, so
+    // NULL is the DEFAULT for every new destination rather than a deliberate
+    // declaration that it is shared. Reading it as "test from the panel" would
+    // re-spell, for the majority of rows, the exact defect this handler is fixing.
+    //
+    // So an unclaimed destination is tested from every online member instead. For
+    // one that really is shared that is the honest reading of the question — can
+    // the hosts that will upload to it reach it — and the panel's own box is in
+    // that fleet like any other member, so nothing is lost for a single-server
+    // install, where the fleet is exactly one host and the answer is identical to
+    // the old one.
+    let Some(server_id) = server_id else {
+        return test_from_whole_fleet(&state, &name, agent_body).await;
+    };
+
+    // Refuse rather than substitute — the rule `helpers::agent_for_site_server`
+    // states for sites. Answering with a different host's reachability is how a
+    // destination gets green-lit for a machine nobody asked about.
+    let agent = state.agents.for_server(server_id).await.map_err(|e| {
+        tracing::warn!(
+            "Refusing to test destination {name}: its server {server_id} is unreachable ({e}) — \
+             testing from another host would answer a question nobody asked"
+        );
+        err(
+            StatusCode::BAD_GATEWAY,
+            "The server this destination belongs to is unreachable",
+        )
+    })?;
+
+    let server_name: Option<(String,)> = sqlx::query_as("SELECT name FROM servers WHERE id = $1")
+        .bind(server_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+
+    let mut result = agent
         .post("/backups/test-destination", Some(agent_body))
         .await
         .map_err(|e| agent_error("Backup destination test", e))?;
 
+    // The agent's own `{"success": …, "message": …}` is passed through unchanged
+    // and the host is added beside it. An unattributed "connection successful" is
+    // what let a panel-egress result be read as a fact about the fleet.
+    if let Some(obj) = result.as_object_mut() {
+        obj.insert("ok".to_string(), serde_json::json!(true));
+        obj.insert(
+            "server".to_string(),
+            serde_json::json!(server_name.map(|(n,)| n)),
+        );
+    }
+
     Ok(Json(result))
 }
 
-/// Build the agent destination config from a DB record.
-/// Decrypts sensitive fields before sending to the agent.
-pub fn build_agent_destination(dest: &BackupDestination) -> serde_json::Value {
-    agent_destination_payload(&dest.dtype, &dest.config)
+/// Test an unclaimed destination from every online member, reporting per host.
+///
+/// Partial stays partial. One member that cannot reach the bucket is a real
+/// problem — its backups will fail nightly — but it does not make the destination
+/// broken for the hosts that can reach it, and turning the whole button red would
+/// be as false a summary as the panel-only green it replaces. So the request
+/// fails only when NOTHING reached the destination, which preserves what the old
+/// handler got right: a test that cannot connect must not answer 200. Anything
+/// else is a 200 carrying the names, in the same `warning` field `remove` above
+/// already uses to say a delete left schedules unassigned.
+async fn test_from_whole_fleet(
+    state: &AppState,
+    dest_name: &str,
+    agent_body: serde_json::Value,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let fleet = state.agents.online_fleet().await;
+    if fleet.is_empty() {
+        return Err(err(
+            StatusCode::BAD_GATEWAY,
+            "No server is online to test this destination from",
+        ));
+    }
+
+    let mut reachable: Vec<String> = Vec::new();
+    let mut failed: Vec<(String, String)> = Vec::new();
+    for member in &fleet {
+        match member
+            .agent
+            .post("/backups/test-destination", Some(agent_body.clone()))
+            .await
+        {
+            Ok(_) => reachable.push(member.name.clone()),
+            Err(e) => {
+                tracing::warn!("Destination {dest_name}: {} could not reach it: {e}", member.name);
+                failed.push((member.name.clone(), e.to_string()));
+            }
+        }
+    }
+
+    if reachable.is_empty() {
+        let detail = failed
+            .iter()
+            .map(|(server, e)| format!("{server}: {e}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(err(
+            StatusCode::BAD_GATEWAY,
+            &format!("No server could reach \"{dest_name}\" — {detail}"),
+        ));
+    }
+
+    // Counted by difference from the hosts actually asked, so there is no second
+    // predicate to drift away from `online_fleet`'s. A registered server that was
+    // never asked is not a pass: it is the one host whose answer is still unknown.
+    let asked: Vec<Uuid> = fleet.iter().map(|m| m.id).collect();
+    let not_asked: Vec<(String, String)> = sqlx::query_as(
+        "SELECT name, status FROM servers WHERE NOT (id = ANY($1)) ORDER BY name",
+    )
+    .bind(asked.as_slice())
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let listed = |v: &[(String, String)]| {
+        v.iter()
+            .map(|(server, why)| format!("{server} ({why})"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut parts = Vec::new();
+    if !failed.is_empty() {
+        parts.push(format!("could not reach it: {}", listed(&failed)));
+    }
+    if !not_asked.is_empty() {
+        parts.push(format!("not tested: {}", listed(&not_asked)));
+    }
+
+    let mut resp = serde_json::json!({
+        "ok": parts.is_empty(),
+        "shared": true,
+        "reachable": reachable,
+        "failed": failed.iter()
+            .map(|(server, error)| serde_json::json!({ "server": server, "error": error }))
+            .collect::<Vec<_>>(),
+        "not_asked": not_asked.iter()
+            .map(|(server, status)| serde_json::json!({ "server": server, "status": status }))
+            .collect::<Vec<_>>(),
+    });
+
+    if !parts.is_empty() {
+        resp["warning"] = serde_json::json!(format!(
+            "Reached from {} of {} servers — {}.",
+            reachable.len(),
+            reachable.len() + failed.len() + not_asked.len(),
+            parts.join("; "),
+        ));
+    }
+
+    Ok(Json(resp))
 }
 
 /// The `destination` object the agent's `/backups/*` handlers expect: the stored
@@ -263,8 +463,11 @@ pub fn build_agent_destination(dest: &BackupDestination) -> serde_json::Value {
 /// shaped to survive review: Test Connection uses the decrypting path and
 /// reports success, so a destination verifies green and then every actual upload
 /// authenticates with an encrypted blob. Taking `dtype` and `config` rather than
-/// a `BackupDestination` is deliberate — both callers hold the two columns from a
-/// joined query and would otherwise have kept hand-rolling this.
+/// a `BackupDestination` is deliberate — every caller holds the two columns from
+/// a query of its own and would otherwise have kept hand-rolling this. That now
+/// includes `test_connection`, which dropped its `build_agent_destination`
+/// wrapper when it started selecting `server_id` alongside them: reassembling a
+/// response struct to reach a payload builder was the only thing that wrapper did.
 pub fn agent_destination_payload(dtype: &str, config: &serde_json::Value) -> serde_json::Value {
     let mut d = decrypt_config_secrets(config);
     if let Some(obj) = d.as_object_mut() {

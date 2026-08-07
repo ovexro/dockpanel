@@ -1,4 +1,5 @@
 import { useAuth } from "../context/AuthContext";
+import { useServer } from "../context/ServerContext";
 import { Navigate } from "react-router-dom";
 import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
 import { api } from "../api";
@@ -339,7 +340,31 @@ const statusColors: Record<string, string> = {
 
 export default function Apps() {
   const { user } = useAuth();
+  const { activeServer } = useServer();
   if (!user || user.role !== "admin") return <Navigate to="/" replace />;
+
+  // Where a port-only app can actually be reached.
+  //
+  // An app with a domain links to that domain. One published on a bare port has
+  // no name to link to, so the host has to come from the machine the container
+  // runs on — and that is `ServerContext`'s active server, because this page's
+  // list is fetched under `X-Server-Id` and is therefore already scoped to it.
+  // NOT `window.location`: on a fleet the panel and the container are different
+  // machines, and substituting the panel's own host is precisely how a link ends
+  // up pointing at the wrong box. That is the defect the backend spent v2.79.0
+  // removing from 71 handlers; re-introducing it in the UI would be the same bug
+  // with a nicer font.
+  //
+  // The local server is the one case where the panel's own hostname IS the right
+  // answer — the panel is served from that box — and it is also the case where
+  // `ip_address` is legitimately null, so it is resolved first rather than
+  // treated as a missing address. A REMOTE server with no recorded address gets
+  // no link at all, mirroring `agent_for_site_server`'s rule on the server side:
+  // refuse rather than substitute, because a link to a guessed host is worse
+  // than no link.
+  const appHost = !activeServer || activeServer.is_local
+    ? window.location.hostname
+    : activeServer.ip_address;
   const [templates, setTemplates] = useState<AppTemplate[]>([]);
   const [apps, setApps] = useState<DeployedApp[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1572,7 +1597,32 @@ volumes:
                         <span className="text-dark-300">{"\u2014"}</span>
                       )}
                     </td>
-                    <td className="px-5 py-4 text-sm text-dark-200 font-mono hidden sm:table-cell">{app.port || "\u2014"}</td>
+                    {/*
+                      A published port is reachable, so make it reachable. Only
+                      when the app has no domain \u2014 one that does already links
+                      from the column before this, and two links to the same app
+                      is noise. Always plain http: `app.ssl` describes whether
+                      the SERVER terminates TLS for that domain's vhost, which
+                      says nothing about a container's raw published port, so
+                      reusing it here would produce an https:// link to a socket
+                      that speaks http.
+                    */}
+                    <td className="px-5 py-4 text-sm text-dark-200 font-mono hidden sm:table-cell">
+                      {app.port && !app.domain && appHost ? (
+                        <a
+                          href={`http://${appHost}:${app.port}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={e => e.stopPropagation()}
+                          className="text-rust-400 hover:underline"
+                          title={`Open http://${appHost}:${app.port} in a new tab`}
+                        >
+                          {app.port}
+                        </a>
+                      ) : (
+                        app.port || "\u2014"
+                      )}
+                    </td>
                     <td className="px-5 py-4 hidden lg:table-cell">
                       {app.health ? (
                         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${

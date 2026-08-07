@@ -325,11 +325,17 @@ pub async fn remove(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
-    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // Verify ownership through site
-    let db: Option<(Uuid, String, Option<String>)> = sqlx::query_as(
-        "SELECT d.id, d.name, d.container_id FROM databases d \
+    // Verify ownership through site — and take the host from the same row while we
+    // are here. The join to `sites` was already carrying the ownership term; the
+    // host it also knows about was thrown away, and the agent came from the request
+    // header instead. That is a destructive mismatch in both directions: the panel
+    // row is deleted whether or not the container was, so dispatching to the wrong
+    // machine either destroys a same-named `dockpanel-db-{name}` container that
+    // belongs to somebody else's tenant, or fails to find one while the real
+    // container is orphaned on its own host with its row already gone.
+    let db: Option<(Uuid, String, Option<String>, Option<Uuid>, String)> = sqlx::query_as(
+        "SELECT d.id, d.name, d.container_id, s.server_id, s.domain FROM databases d \
          JOIN sites s ON d.site_id = s.id \
          WHERE d.id = $1 AND s.user_id = $2",
     )
@@ -339,7 +345,11 @@ pub async fn remove(
     .await
     .map_err(|e| internal_error("remove databases", e))?;
 
-    let (_, name, container_id) = db.ok_or_else(|| err(StatusCode::NOT_FOUND, "Database not found"))?;
+    let (_, name, container_id, site_server_id, site_domain) =
+        db.ok_or_else(|| err(StatusCode::NOT_FOUND, "Database not found"))?;
+
+    let agent =
+        crate::helpers::agent_for_site_server(&state, site_server_id, &site_domain).await?;
 
     // Remove container via agent (must succeed before DB deletion)
     if let Some(cid) = &container_id {
@@ -366,14 +376,40 @@ pub async fn remove(
     Ok(Json(serde_json::json!({ "ok": true, "name": name })))
 }
 
-/// Helper: fetch database info (name, engine, password) with ownership check.
+/// Helper: fetch database info (name, engine, password, port) — and the id of the server
+/// the owning site actually runs on — with an ownership check.
+///
+/// The join to `sites` was here all along for the ownership term, and `sites` is where the
+/// authoritative `server_id` lives; the column simply was not selected. So every caller
+/// below answered WHICH DATABASE from this row and then took WHICH HOST from `ServerScope`
+/// — an `X-Server-Id` request header that falls back to the LOCAL agent whenever the caller
+/// owns no `servers` row. No non-admin ever owns one (the only INSERT is admin-gated), so
+/// for a tenant whose database lives on a fleet member that fallback was always the wrong
+/// machine, and nothing in the response said so.
+///
+/// What that leaked matters as much as where it dispatched: this helper returns the
+/// DECRYPTED database password, and every caller forwards it to the agent it chose, which
+/// spends it on a `docker exec -e MYSQL_PWD=…` child process. A misdispatch therefore
+/// handed one tenant's live credential to a host their database does not run on, in the
+/// argv/environment of a process on that host — a disclosure that happened on ordinary
+/// read-only calls like listing tables, with no error for anyone to notice.
+///
+/// The row is the authority for the host exactly as it is for the ownership check, so the
+/// server id now comes back in the same tuple and each caller resolves its handle from it
+/// via `agent_for_site_server`, which REFUSES rather than substituting a reachable host.
+/// That helper's third argument only labels its refusal log line; no domain is loaded on
+/// these paths, so callers identify the target by database name.
+///
+/// `Option<Uuid>` because the column is `NOT NULL` in the schema but optional in the
+/// structs that predate the fleet work — a `None` means a row older than the backfill, and
+/// guessing a host for it is the thing that must not happen.
 async fn get_db_info(
     state: &AppState,
     id: Uuid,
     user_id: Uuid,
-) -> Result<(String, String, String, i32), ApiError> {
-    let row: Option<(String, String, String, Option<i32>, Option<String>)> = sqlx::query_as(
-        "SELECT d.name, d.engine, d.db_password_enc, d.port, d.container_id \
+) -> Result<(String, String, String, i32, Option<Uuid>), ApiError> {
+    let row: Option<(String, String, String, Option<i32>, Option<String>, Option<Uuid>)> = sqlx::query_as(
+        "SELECT d.name, d.engine, d.db_password_enc, d.port, d.container_id, s.server_id \
          FROM databases d JOIN sites s ON d.site_id = s.id \
          WHERE d.id = $1 AND s.user_id = $2",
     )
@@ -383,7 +419,7 @@ async fn get_db_info(
     .await
     .map_err(|e| internal_error("remove databases", e))?;
 
-    let (name, engine, password_enc, port, container_id) =
+    let (name, engine, password_enc, port, container_id, site_server_id) =
         row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Database not found"))?;
     // Security (H1, v2.19.0): every exec/reset path resolves the target container by
     // the (per-site, NON-unique) name `dockpanel-db-{name}`. create() inserts the row
@@ -399,7 +435,7 @@ async fn get_db_info(
     let port = port.unwrap_or(5432);
     // Decrypt password for agent use (with legacy plaintext fallback)
     let password = crate::services::secrets_crypto::decrypt_credential_or_legacy(&password_enc, &state.config.jwt_secret);
-    Ok((name, engine, password, port))
+    Ok((name, engine, password, port, site_server_id))
 }
 
 /// GET /api/databases/{id}/tables — List tables in the database.
@@ -407,9 +443,10 @@ pub async fn tables(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
-    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let (name, engine, password, _port) = get_db_info(&state, id, claims.sub).await?;
+    let (name, engine, password, _port, site_server_id) =
+        get_db_info(&state, id, claims.sub).await?;
+    let agent = crate::helpers::agent_for_site_server(&state, site_server_id, &name).await?;
 
     let sql = match engine.as_str() {
         "mysql" | "mariadb" => {
@@ -450,7 +487,6 @@ pub async fn table_schema(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path((id, table)): Path<(Uuid, String)>,
-    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Validate table name to prevent injection
     if table.is_empty()
@@ -462,7 +498,9 @@ pub async fn table_schema(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid table name"));
     }
 
-    let (name, engine, password, _port) = get_db_info(&state, id, claims.sub).await?;
+    let (name, engine, password, _port, site_server_id) =
+        get_db_info(&state, id, claims.sub).await?;
+    let agent = crate::helpers::agent_for_site_server(&state, site_server_id, &name).await?;
 
     let (sql, params) = match engine.as_str() {
         "mysql" | "mariadb" => (
@@ -511,7 +549,6 @@ pub async fn query(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
-    ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<SqlQueryRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if body.sql.trim().is_empty() {
@@ -524,7 +561,15 @@ pub async fn query(
         ));
     }
 
-    let (name, engine, password, _port) = get_db_info(&state, id, claims.sub).await?;
+    let (name, engine, password, _port, site_server_id) =
+        get_db_info(&state, id, claims.sub).await?;
+    // The host comes from the site's row, never from the caller's server switcher. This
+    // request body carries the tenant's DECRYPTED database password to the agent, which
+    // puts it in a `docker exec -e MYSQL_PWD=…` child process; sent to a machine the
+    // database does not run on, the credential is disclosed to that host — and the query
+    // either runs against a same-named container belonging to someone else or fails with a
+    // "not found" that reads like an ordinary error.
+    let agent = crate::helpers::agent_for_site_server(&state, site_server_id, &name).await?;
 
     let container = format!("dockpanel-db-{name}");
     let agent_body = serde_json::json!({
@@ -548,13 +593,14 @@ pub async fn table_indexes(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path((id, table)): Path<(Uuid, String)>,
-    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if table.is_empty() || table.len() > 128 || !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid table name"));
     }
 
-    let (name, engine, password, _port) = get_db_info(&state, id, claims.sub).await?;
+    let (name, engine, password, _port, site_server_id) =
+        get_db_info(&state, id, claims.sub).await?;
+    let agent = crate::helpers::agent_for_site_server(&state, site_server_id, &name).await?;
 
     let sql = match engine.as_str() {
         "mysql" | "mariadb" => format!(
@@ -591,9 +637,10 @@ pub async fn foreign_keys(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
-    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let (name, engine, password, _port) = get_db_info(&state, id, claims.sub).await?;
+    let (name, engine, password, _port, site_server_id) =
+        get_db_info(&state, id, claims.sub).await?;
+    let agent = crate::helpers::agent_for_site_server(&state, site_server_id, &name).await?;
 
     let sql = match engine.as_str() {
         "mysql" | "mariadb" =>
@@ -640,9 +687,13 @@ pub async fn schema_overview(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
-    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let (name, engine, password, _port) = get_db_info(&state, id, claims.sub).await?;
+    let (name, engine, password, _port, site_server_id) =
+        get_db_info(&state, id, claims.sub).await?;
+    // Both halves of the join below go through this one handle, so it has to be the
+    // site's own host — otherwise the two concurrent queries carry the decrypted
+    // password to a foreign machine twice over.
+    let agent = crate::helpers::agent_for_site_server(&state, site_server_id, &name).await?;
     let container = format!("dockpanel-db-{name}");
 
     // Execute all queries concurrently
@@ -837,7 +888,10 @@ pub async fn update_pitr_config(
     Json(body): Json<PitrConfigRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Ownership + container-readiness check (get_db_info also enforces the H1 guard).
-    let (name, _engine, _password, _port) = get_db_info(&state, id, claims.sub).await?;
+    // No agent call on this path — the handler only persists the intent flag (see the
+    // note below), so the server id this now returns has nothing to dispatch.
+    let (name, _engine, _password, _port, _site_server_id) =
+        get_db_info(&state, id, claims.sub).await?;
     let enabled = body.pitr_enabled.unwrap_or(false);
     let hours = body.retention_hours.unwrap_or(24).max(1).min(720);
 
@@ -903,10 +957,24 @@ pub async fn reset_password(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
-    ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Fetch current db info with ownership check (returns decrypted old password)
-    let (name, engine, old_password, _port) = get_db_info(&state, id, claims.sub).await?;
+    let (name, engine, old_password, _port, site_server_id) =
+        get_db_info(&state, id, claims.sub).await?;
+
+    // The host MUST come from the site's row here, and this is the handler where taking
+    // it from the request header did the most damage. The agent's mysql/mariadb branch
+    // resets the account with `docker exec <container> mariadb -u root --skip-password
+    // -e "ALTER USER …"` — it never checks the `old_password` this body sends, so
+    // possession of the container name is the whole authorization. Container names are
+    // `dockpanel-db-{name}` and are unique only per host, so a request dispatched to the
+    // wrong machine rewrites the password of ANY same-named container living there, for
+    // a tenant who has nothing to do with the caller. `ServerScope` made that the DEFAULT
+    // rather than the edge case: a non-admin owns no `servers` row, so their scope always
+    // fell back to the local agent even when their database lives on a fleet member.
+    // The panel row is then updated with the new password regardless, so the real
+    // database is left with a credential the panel no longer knows.
+    let agent = crate::helpers::agent_for_site_server(&state, site_server_id, &name).await?;
 
     // Generate a new random password (same pattern as create())
     let new_password = uuid::Uuid::new_v4().to_string().replace('-', "");

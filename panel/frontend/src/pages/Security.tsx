@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Navigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
+import PanicReport, { serverList, unreachableNames, type PanicResult, type UnreachableServer } from "../components/PanicReport";
 import DiagnosticsContent from "./Diagnostics";
 
 interface SecurityOverview {
@@ -72,6 +73,55 @@ interface SshLoginEntry {
   ip: string;
   method: string;
   success: boolean;
+  // Which machine's auth.log this row came from. The SSH half is now the
+  // concatenation of every host in the fleet, and `time` is a year-less syslog
+  // stamp ("Mar 18 12:34:56") — so the origin is the only thing that tells two
+  // identical-looking failed logins apart. Optional so a panel whose backend
+  // predates the fan-out still type-checks.
+  server_id?: string;
+  server_name?: string;
+  is_local?: boolean;
+}
+
+/**
+ * Per-host coverage for the SSH half. Present for the hosts that answered AND
+ * the hosts that did not: `entries` is null exactly when `reached` is false,
+ * because nobody read that machine's auth.log and its absence from the table is
+ * therefore not evidence of anything.
+ */
+interface SshServerCoverage {
+  server_id: string;
+  server_name: string;
+  is_local: boolean;
+  reached: boolean;
+  entries: number | null;
+  error?: string;
+}
+
+/**
+ * GET /security/login-audit.
+ *
+ * `panel` and `ssh` are the legacy pair; everything else says how much of the
+ * fleet the SSH half actually covers and whether the panel half was readable at
+ * all. Both degraded states are silent by default — an un-asked host and a
+ * failed database query each render as an empty table, which is the single most
+ * reassuring thing this page can show. The flags are what stops "we could not
+ * ask" from reading as "nothing happened".
+ */
+interface LoginAudit {
+  panel: PanelLoginEntry[];
+  ssh: SshLoginEntry[];
+  /** True whenever at least one machine's auth.log went unread. Do not ignore. */
+  ssh_partial?: boolean;
+  ssh_servers?: SshServerCoverage[];
+  ssh_servers_total?: number;
+  ssh_servers_reached?: number;
+  ssh_servers_unreachable?: number;
+  /** Same shape as the panic button's un-swept list, and the same meaning. */
+  ssh_unreachable_servers?: UnreachableServer[];
+  ssh_unreachable_names?: string[];
+  /** The panel half cannot be partial by host — it can only fail outright. */
+  panel_query_failed?: boolean;
 }
 
 interface PanelLoginEntry {
@@ -111,6 +161,86 @@ interface LockdownStatus {
   triggered_by?: string;
   triggered_at?: string;
   reason?: string;
+  /**
+   * The stored column. NOT the answer to "are terminals blocked": it is
+   * `DEFAULT TRUE` in the migration and `deactivate_lockdown` never clears it,
+   * so on a panel that has never been locked down it already reads TRUE.
+   * Rendering this one would tell an operator that shells are blocked on a
+   * system that is wide open. Kept for completeness; never displayed.
+   */
+  terminals_disabled?: boolean;
+  /**
+   * `active && terminals_disabled`, computed by the same function the terminal
+   * ticket mint gates on — so the page and the gate cannot drift apart. This is
+   * the field that answers "can anyone open a shell right now". Render this one.
+   */
+  terminals_blocked?: boolean;
+}
+
+/** The agent returns up to 50 rows per host; a ten-host fleet is 500 rows. */
+const SSH_ROWS_PER_SERVER = 10;
+
+/**
+ * A degraded-coverage banner: something an operator is looking at is missing or
+ * unreadable, and the surface it is missing from would otherwise look calm.
+ *
+ * Same grammar as <PanicReport/> — icon, one-line headline that names the
+ * machines, detail underneath, then the per-host reasons — because it reports
+ * the same class of fact: a host nobody reached. Used as a band inside a card
+ * header (the default `className`) and as a standalone box on the lockdown tab.
+ */
+function WarningStrip({
+  tone = "warn",
+  title,
+  detail,
+  servers,
+  className = "px-5 py-3 border-b",
+}: {
+  tone?: "warn" | "danger";
+  title: string;
+  detail: string;
+  servers?: UnreachableServer[];
+  className?: string;
+}) {
+  // Full literal class strings — Tailwind scans source text, so these cannot be
+  // assembled from a token fragment.
+  const t =
+    tone === "danger"
+      ? { border: "border-danger-500/30", bg: "bg-danger-500/10", accent: "text-danger-400" }
+      : { border: "border-warn-500/30", bg: "bg-warn-500/10", accent: "text-warn-400" };
+
+  return (
+    <div role="alert" className={`${className} ${t.border} ${t.bg} flex items-start gap-3`}>
+      <svg
+        className={`w-5 h-5 shrink-0 mt-0.5 ${t.accent}`}
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor"
+        strokeWidth={2}
+        aria-hidden="true"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"
+        />
+      </svg>
+      <div className="min-w-0">
+        <p className={`text-xs font-bold uppercase font-mono tracking-widest ${t.accent}`}>{title}</p>
+        <p className="text-xs text-dark-200 font-mono mt-1">{detail}</p>
+        {servers && servers.length > 0 && (
+          <ul className="mt-2 space-y-1">
+            {servers.map((s) => (
+              <li key={s.server_id} className="flex flex-col sm:flex-row sm:items-baseline gap-0.5 sm:gap-4">
+                <span className={`text-xs font-bold font-mono shrink-0 sm:w-48 ${t.accent}`}>{s.server_name}</span>
+                <span className="text-xs text-dark-200 font-mono break-all">{s.reason}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export default function Security() {
@@ -142,7 +272,15 @@ export default function Security() {
     setTab(resolveSecTab(searchParams.get("tab")));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
-  const [loginAudit, setLoginAudit] = useState<{ panel: PanelLoginEntry[]; ssh: SshLoginEntry[] }>({ panel: [], ssh: [] });
+  const [loginAudit, setLoginAudit] = useState<LoginAudit>({ panel: [], ssh: [] });
+  const [auditLoading, setAuditLoading] = useState(false);
+  // A failed fetch left the two tables empty and said nothing — the same
+  // "empty reads as clean" fault the coverage flags exist to prevent, one level
+  // up. Kept next to the tables rather than in `message` because it explains
+  // what is (not) on screen right there.
+  const [loginAuditError, setLoginAuditError] = useState<string | null>(null);
+  // Per-server row expansion for the SSH table. Keyed by server id.
+  const [sshExpanded, setSshExpanded] = useState<Record<string, boolean>>({});
 
   // Security Hardening state (consolidated from SecurityHardening.tsx)
   const [lockdown, setLockdown] = useState<LockdownStatus | null>(null);
@@ -157,6 +295,9 @@ export default function Security() {
   const [pendingConfirm, setPendingConfirm] = useState<{ type: string; label: string; data?: Record<string, unknown> } | null>(null);
   const [showPortInput, setShowPortInput] = useState(false);
   const [portValue, setPortValue] = useState("");
+  // The panic button's per-host result. Kept out of `message` because the hosts
+  // it could not sweep need a block, not a line — see components/PanicReport.
+  const [panicResult, setPanicResult] = useState<PanicResult | null>(null);
 
   const loadData = async () => {
     try {
@@ -192,10 +333,20 @@ export default function Security() {
   };
 
   const loadLoginAudit = async () => {
+    setAuditLoading(true);
     try {
-      const data = await api.get<{ panel: PanelLoginEntry[]; ssh: SshLoginEntry[] }>("/security/login-audit");
+      const data = await api.get<LoginAudit>("/security/login-audit");
       setLoginAudit(data);
-    } catch {}
+      setLoginAuditError(null);
+    } catch (e) {
+      // Clear the tables AND say why. Leaving the old rows up would present
+      // stale data as current; leaving them empty silently would present a
+      // failed request as a quiet fleet.
+      setLoginAudit({ panel: [], ssh: [] });
+      setLoginAuditError(e instanceof Error ? e.message : "Request failed");
+    } finally {
+      setAuditLoading(false);
+    }
   };
 
   const executeConfirm = async () => {
@@ -262,7 +413,7 @@ export default function Security() {
           break;
         }
         case "panic": {
-          const r = await api.post<{ agent_reached: boolean; terminals_killed: number | null; server_terminals_killed: number | null; sessions_revoked: boolean; shares_revoked: number }>("/security/panic", {});
+          const r = await api.post<PanicResult>("/security/panic", {});
           // Report what the server actually did. `sessions_revoked` was already
           // being computed honestly and thrown away here, while this string said
           // "all sessions revoked" unconditionally — the same shape as the
@@ -270,12 +421,23 @@ export default function Security() {
           // to the left.
           const sess = r.sessions_revoked ? "all sessions revoked" : "SESSION REVOCATION FAILED";
           const shares = r.shares_revoked > 0 ? `, ${r.shares_revoked} terminal share${r.shares_revoked === 1 ? "" : "s"} revoked` : "";
+          // The panic now fans out, so the un-swept members are named here and
+          // listed in full by <PanicReport/> below. `agent_reached` is false
+          // whenever ANY member was left unswept.
+          setPanicResult(r);
+          const missed = unreachableNames(r);
+          const n = r.terminals_killed ?? 0;
+          const root = r.server_terminals_killed ?? 0;
+          const killed = `${n} terminal${n === 1 ? "" : "s"} killed${root > 0 ? ` (${root} server/root)` : ""}`;
           if (!r.agent_reached) {
-            setMessage({ text: `Panic: locked down and ${sess}, but the agent was unreachable — terminals may still be running${shares}`, type: "error" });
+            const where = missed.length > 0
+              ? `terminals may still be running on ${serverList(missed)}`
+              : "terminals may still be running";
+            const swept = r.servers_total ? ` (${r.servers_reached ?? 0}/${r.servers_total} servers swept, ${killed})` : "";
+            setMessage({ text: `Panic: locked down and ${sess}, but ${where}${swept}${shares}`, type: "error" });
           } else {
-            const n = r.terminals_killed ?? 0;
-            const root = r.server_terminals_killed ?? 0;
-            setMessage({ text: `Panic mode activated — ${n} terminal${n === 1 ? "" : "s"} killed${root > 0 ? ` (${root} server/root)` : ""}, ${sess}${shares}`, type: r.sessions_revoked ? "success" : "error" });
+            const fleet = r.servers_total && r.servers_total > 1 ? ` across all ${r.servers_total} servers` : "";
+            setMessage({ text: `Panic mode activated — ${killed}${fleet}, ${sess}${shares}`, type: r.sessions_revoked ? "success" : "error" });
           }
           // Panic revokes THIS admin's session too (correct — they cannot know
           // their own is not the stolen one). So do NOT call loadData(): its
@@ -284,7 +446,15 @@ export default function Security() {
           // the "terminals may still be running" warning, the single most
           // important sentence here. Mirrors the existing self-revocation
           // handling in Settings.tsx ("Revoke all sessions").
-          setTimeout(() => { window.location.href = "/login"; }, 6000);
+          //
+          // When hosts were left unswept, don't redirect at all: the list of
+          // machines to go and check by hand cannot be re-fetched afterwards
+          // (the session is gone and the detail lives only in the audit log),
+          // and six seconds is not long enough to read, let alone write down,
+          // a list of hostnames. <PanicReport/> carries its own way out.
+          if (missed.length === 0) {
+            setTimeout(() => { window.location.href = "/login"; }, 6000);
+          }
           break;
         }
       }
@@ -307,6 +477,15 @@ export default function Security() {
   useEffect(() => {
     loadData();
   }, []);
+
+  // Fetch when the audit tab becomes visible, including on a deep link
+  // (/security?tab=audit). The fetch used to hang off the tab BUTTON only, so
+  // arriving by URL showed two empty tables with nothing saying that nothing
+  // had been asked for — the same fault as an un-asked host, one layer out.
+  useEffect(() => {
+    if (tab === "audit") loadLoginAudit();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
 
   if (user?.role !== "admin") return <Navigate to="/" replace />;
 
@@ -425,6 +604,25 @@ export default function Security() {
     }
   };
 
+  // ── SSH login audit: per-host grouping and coverage ──────────────────────
+  //
+  // The rows arrive as one contiguous block per host and are deliberately NOT
+  // sorted globally: the agent's `time` is a year-less syslog stamp, so a
+  // cross-host chronological merge would be a fiction with a timestamp on it.
+  // Run-length grouping therefore preserves exactly the order the backend sent
+  // — each host's own ordering, hosts in `online_fleet` order — and gives the
+  // volume somewhere to be capped.
+  const sshGroups: { key: string; name: string; isLocal: boolean; rows: SshLoginEntry[] }[] = [];
+  for (const e of loginAudit.ssh) {
+    const key = e.server_id ?? e.server_name ?? "unknown";
+    const last = sshGroups[sshGroups.length - 1];
+    if (last && last.key === key) last.rows.push(e);
+    else sshGroups.push({ key, name: e.server_name ?? "Unknown server", isLocal: e.is_local ?? false, rows: [e] });
+  }
+  const sshUnreached = loginAudit.ssh_unreachable_servers ?? [];
+  const sshTotal = loginAudit.ssh_servers_total;
+  const sshReached = loginAudit.ssh_servers_reached ?? 0;
+
   if (loading) {
     return (
       <div className="p-6 lg:p-8 animate-fade-up">
@@ -473,6 +671,11 @@ export default function Security() {
       </div>
 
       <div className="p-6 lg:p-8">
+      {/* The machines the panic button did NOT sweep. Renders nothing when the
+          whole fleet was covered. Above the banner because it outranks it. */}
+      {panicResult && (
+        <PanicReport result={panicResult} onDismiss={() => { window.location.href = "/login"; }} />
+      )}
       {message.text && (
         <div
           className={`mb-4 px-4 py-3 rounded-lg text-sm border ${
@@ -531,7 +734,7 @@ export default function Security() {
           Diagnostics
         </button>
         <button
-          onClick={() => { setTab("audit"); loadLoginAudit(); }}
+          onClick={() => setTab("audit")}
           className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
             tab === "audit" ? "bg-dark-800 text-dark-50 shadow-sm" : "text-dark-200 hover:text-dark-100"
           }`}
@@ -1122,37 +1325,114 @@ export default function Security() {
 
       {tab === "audit" && (
         <div className="space-y-6">
-          {/* SSH Logins */}
+          {/* SSH Logins — every server in the fleet, not just the selected one */}
           <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
-            <div className="px-5 py-3 border-b border-dark-600">
-              <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">SSH Login Attempts</h3>
+            <div className="px-5 py-3 border-b border-dark-600 flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">SSH Login Attempts</h3>
+                <p className="text-xs text-dark-200 font-mono mt-0.5">
+                  {sshTotal !== undefined
+                    ? `${sshReached} of ${sshTotal} server${sshTotal === 1 ? "" : "s"} answered · ${loginAudit.ssh.length} attempt${loginAudit.ssh.length === 1 ? "" : "s"}`
+                    : `${loginAudit.ssh.length} attempt${loginAudit.ssh.length === 1 ? "" : "s"}`}
+                </p>
+              </div>
+              <button
+                onClick={loadLoginAudit}
+                disabled={auditLoading}
+                className="px-3 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 shrink-0"
+              >
+                {auditLoading ? "Asking servers…" : "Re-check"}
+              </button>
             </div>
+
+            {/* The request itself failed: BOTH tables below are empty because
+                nothing was fetched. */}
+            {loginAuditError && (
+              <WarningStrip
+                tone="danger"
+                title="Login audit could not be loaded"
+                detail={`Both tables below are empty because the request failed, not because there were no logins — ${loginAuditError}. Use Re-check once the panel is reachable.`}
+              />
+            )}
+
+            {/* Hosts nobody could ask. Without this, an empty table reads as
+                "no SSH logins" when the truth is "we could not look". */}
+            {loginAudit.ssh_partial && sshUnreached.length > 0 && (
+              <WarningStrip
+                title={`SSH logins are missing from ${serverList(sshUnreached.map((s) => s.server_name))}`}
+                detail={`${sshReached} of ${sshTotal ?? sshUnreached.length} servers answered. Nobody read auth.log on the ${sshUnreached.length === 1 ? "server" : `${sshUnreached.length} servers`} below, so the absence of a row from ${sshUnreached.length === 1 ? "it" : "them"} is not evidence that nothing happened there.`}
+                servers={sshUnreached}
+              />
+            )}
+
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead><tr className="bg-dark-900">
+                  <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Server</th>
                   <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Time</th>
                   <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">User</th>
                   <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">IP</th>
                   <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Method</th>
                   <th className="text-left text-xs font-medium text-dark-200 uppercase font-mono tracking-widest px-5 py-2">Status</th>
                 </tr></thead>
-                <tbody className="divide-y divide-dark-600">
-                  {loginAudit.ssh.map((e, i) => (
-                    <tr key={i} className="table-row-hover">
-                      <td className="px-5 py-2 text-xs text-dark-200 font-mono">{e.time}</td>
-                      <td className="px-5 py-2 text-sm text-dark-50 font-mono">{e.user}</td>
-                      <td className="px-5 py-2 text-sm text-dark-100 font-mono">{e.ip}</td>
-                      <td className="px-5 py-2 text-xs text-dark-300">{e.method}</td>
-                      <td className="px-5 py-2">
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${e.success ? "bg-rust-500/15 text-rust-400" : "bg-danger-500/15 text-danger-400"}`}>
-                          {e.success ? "Success" : "Failed"}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
+                {sshGroups.map((g) => {
+                  // Capped per host rather than paginated: 50 rows per server is
+                  // 500 on a ten-host fleet, and the newest rows are the ones
+                  // worth seeing first. Nothing is hidden without a count.
+                  const expanded = sshExpanded[g.key] ?? false;
+                  const rows = expanded ? g.rows : g.rows.slice(0, SSH_ROWS_PER_SERVER);
+                  return (
+                    <tbody key={g.key} className="divide-y divide-dark-600 border-t border-dark-600">
+                      {sshGroups.length > 1 && (
+                        <tr className="bg-dark-900/60">
+                          <td colSpan={6} className="px-5 py-1.5 text-xs font-mono text-dark-200">
+                            <span className="text-dark-50 font-medium">{g.name}</span>
+                            {g.isLocal && <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] bg-dark-700 text-dark-200 align-middle">this panel</span>}
+                            <span className="ml-2 text-dark-300">
+                              {g.rows.length} attempt{g.rows.length === 1 ? "" : "s"}
+                            </span>
+                          </td>
+                        </tr>
+                      )}
+                      {rows.map((e, i) => (
+                        <tr key={`${g.key}-${i}`} className="table-row-hover">
+                          <td className="px-5 py-2 text-xs text-dark-200 font-mono">{e.server_name ?? "—"}</td>
+                          <td className="px-5 py-2 text-xs text-dark-200 font-mono">{e.time}</td>
+                          <td className="px-5 py-2 text-sm text-dark-50 font-mono">{e.user}</td>
+                          <td className="px-5 py-2 text-sm text-dark-100 font-mono">{e.ip}</td>
+                          <td className="px-5 py-2 text-xs text-dark-300">{e.method}</td>
+                          <td className="px-5 py-2">
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${e.success ? "bg-rust-500/15 text-rust-400" : "bg-danger-500/15 text-danger-400"}`}>
+                              {e.success ? "Success" : "Failed"}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                      {g.rows.length > SSH_ROWS_PER_SERVER && (
+                        <tr>
+                          <td colSpan={6} className="px-5 py-2">
+                            <button
+                              onClick={() => setSshExpanded((s) => ({ ...s, [g.key]: !expanded }))}
+                              className="text-xs font-mono text-rust-400 hover:text-rust-500 transition-colors"
+                            >
+                              {expanded
+                                ? `Show fewer from ${g.name}`
+                                : `Show all ${g.rows.length} attempts from ${g.name}`}
+                            </button>
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  );
+                })}
               </table>
-              {loginAudit.ssh.length === 0 && <p className="px-5 py-4 text-sm text-dark-300">No SSH login attempts found</p>}
+              {loginAudit.ssh.length === 0 && !loginAuditError && (
+                <p className="px-5 py-4 text-sm text-dark-300">
+                  {loginAudit.ssh_partial
+                    ? `No SSH login attempts from the ${sshReached} server${sshReached === 1 ? "" : "s"} that answered — the ${sshUnreached.length === 1 ? "server" : `${sshUnreached.length} servers`} named above ${sshUnreached.length === 1 ? "was" : "were"} not asked at all.`
+                    : "No SSH login attempts found"}
+                </p>
+              )}
             </div>
           </div>
 
@@ -1161,6 +1441,19 @@ export default function Security() {
             <div className="px-5 py-3 border-b border-dark-600">
               <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Panel Login Activity</h3>
             </div>
+
+            {/* The activity_logs query failed. The backend degrades to an empty
+                list so a broken panel query does not also cost the SSH half —
+                which means without this strip a database error renders as "no
+                panel logins", the most calming thing this page can say. */}
+            {loginAudit.panel_query_failed && (
+              <WarningStrip
+                tone="danger"
+                title="Panel login history could not be read"
+                detail="The query against activity_logs failed, so this table is empty because of a database error — NOT because nobody signed in. Check the panel logs before drawing any conclusion from it."
+              />
+            )}
+
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead><tr className="bg-dark-900">
@@ -1197,7 +1490,9 @@ export default function Security() {
                   ))}
                 </tbody>
               </table>
-              {loginAudit.panel.length === 0 && <p className="px-5 py-4 text-sm text-dark-300">No panel login activity found</p>}
+              {loginAudit.panel.length === 0 && !loginAudit.panel_query_failed && !loginAuditError && (
+                <p className="px-5 py-4 text-sm text-dark-300">No panel login activity found</p>
+              )}
             </div>
           </div>
         </div>
@@ -1336,6 +1631,32 @@ export default function Security() {
                   className="px-3 py-2 text-sm font-mono bg-dark-700 hover:bg-dark-600 text-dark-200 rounded-lg border border-dark-500">Forensic Snapshot</button>
               </div>
             </div>
+
+            {/* What this lockdown is actually DOING to terminals.
+                Rendered from `terminals_blocked` — the computed answer — and
+                never from the stored `terminals_disabled` column: that column is
+                DEFAULT TRUE in the migration and `deactivate_lockdown` never
+                clears it, so it reads TRUE on a panel that has never been locked
+                down. Only the computed field answers "can anyone open a shell
+                right now", and it is computed by the same function the ticket
+                mint gates on, so this cannot drift from the gate.
+                Until now nothing on the panel said terminals were blocked and
+                the terminal simply returned SERVICE_UNAVAILABLE. */}
+            {lockdown?.terminals_blocked && (
+              <WarningStrip
+                title="Terminals are blocked while lockdown is active"
+                detail="Opening a shell or creating a terminal share is refused panel-wide (the terminal returns SERVICE_UNAVAILABLE). Unlock the system to restore terminal access. Existing shares can still be revoked."
+                className="mb-4 px-4 py-3 rounded-lg border"
+              />
+            )}
+            {/* Active, but this lockdown left terminals open — the one case
+                where a shell is still available during an incident. */}
+            {lockdown?.active && lockdown.terminals_blocked === false && (
+              <p className="mb-4 text-xs font-mono text-dark-300">
+                This lockdown did not disable terminals — shells can still be opened.
+              </p>
+            )}
+
             <div className="text-xs text-dark-500 space-y-1">
               <p>When locked: terminals disabled, registration blocked, non-admin logins blocked.</p>
               <p>Auto-expires after 24 hours. Panic button also activates lockdown.</p>

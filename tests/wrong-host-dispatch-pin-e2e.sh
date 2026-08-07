@@ -55,6 +55,14 @@ PASS=0; FAIL=0; SKIP=0
 ok()   { PASS=$((PASS+1)); printf '  \033[32m✓\033[0m %s\n' "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf '  \033[31m✗\033[0m %s\n' "$1"; }
 
+# ⚠ NEVER call `bad` inside `cmd | while read`. A pipeline puts the loop in a
+# SUBSHELL, so `FAIL=$((FAIL+1))` increments a copy that dies with it: the arm
+# prints its ✗ marks, the summary still reads FAIL 0, and the suite exits 0.
+# Found s322, in this file, on the §C4 violation loop — the one arm whose entire
+# job is reporting violations had been unable to fail the build since it was
+# written. Use `while read; do …; done < <(printf …)` so the loop runs in THIS
+# shell. Any future arm that enumerates subjects must do the same.
+
 # Strip comments before matching. Without this every arm below could be satisfied
 # by the prose that NARRATES it — the trap that has produced false greens here
 # before, and the reason no comment in the fixed files spells these tokens.
@@ -268,10 +276,10 @@ else
   if [ "$VIOL_N" -eq 0 ]; then
     ok "C4 none of them takes its agent from the caller's server selection"
   else
-    printf '%s\n' "$VIOL" | while IFS=: read -r file fn _; do
+    while IFS=: read -r file fn _; do
       [ -n "$fn" ] || continue
       bad "C4 $(basename "$file")::$fn resolves the site from the row and the host from the caller — the two questions are collapsed again"
-    done
+    done < <(printf '%s\n' "$VIOL")
   fi
 fi
 
@@ -312,6 +320,255 @@ if grep -qE 's\.server_id *=' <<< "$PRED"; then
 else
   ok "D3 the ownership predicate still does not filter by server"
 fi
+
+echo
+echo "-- E: the population comes from the SCHEMA, not from a spelling ------------"
+
+# §C4 above censuses the site-resolving family, and it is real — but its
+# membership test names six correct-form SPELLINGS, so a handler only enters the
+# census once it already uses one of them. At s321 that left `mail.rs`,
+# `git_deploys.rs`, `backup_orchestrator.rs` and `docker_apps.rs` contributing
+# ZERO members between them while the tree held two dozen live defects in exactly
+# those files, and C4 printed green over all of it. Worse, deleting a fixed
+# handler's resolver call REMOVES it from the census — deletion reads as
+# compliance, the failure mode §J5 next door was rewritten to close.
+#
+# So this section asks the question from the other end. A table that carries a
+# `server_id` column is a table whose rows NAME A HOST. Any handler that reads
+# such a row and then acts through an agent must take the host from the row. The
+# population is derived from `migrations/*.sql`, so a table added tomorrow joins
+# the census the day it lands, and no spelling can leave it.
+
+# E1 — the table list is derived, and asserted non-empty before anything is judged.
+export DP_TABLES=$(perl -0777 -ne '
+  while (/ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(\w+)\s+ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?server_id\b/gis) { print "$1\n"; }
+  while (/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s*\((.*?)\n\);/gis) {
+    my ($t,$b)=($1,$2); print "$t\n" if $b =~ /^\s*server_id\s/mi;
+  }
+' panel/backend/migrations/*.sql | sort -u | grep -v '^migrations$' | paste -sd'|')
+TABLE_N=$(printf '%s' "$DP_TABLES" | tr '|' '\n' | grep -c . || true)
+
+# A HOSTED resource: a table whose server_id is NOT NULL. The schema says these
+# rows cannot exist without naming a machine, which is precisely the property
+# that makes "which host" a question the ROW answers and the caller must not.
+# Tables with a nullable server_id are a mix -- telemetry, shared destinations,
+# metadata -- where the id may legitimately be absent, so an unpinned read there
+# is not on its own evidence of a misdispatch. E3 judges the NOT NULL set; the
+# wider $DP_TABLES set still drives E1/E4.
+export DP_HOSTED=$(perl -0777 -ne '
+  while (/ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(\w+)\s+ALTER\s+COLUMN\s+server_id\s+SET\s+NOT\s+NULL/gis) { print "$1\n"; }
+  while (/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s*\((.*?)\n\);/gis) {
+    my ($t,$b)=($1,$2); print "$t\n" if $b =~ /^\s*server_id\s+UUID[^,]*NOT\s+NULL/mi;
+  }
+' panel/backend/migrations/*.sql | sort -u | paste -sd"|")
+HOSTED_N=$(printf '%s' "$DP_HOSTED" | tr '|' '\n' | grep -c . || true)
+if [ "${HOSTED_N:-0}" -lt 3 ]; then
+  bad "E1b derived only ${HOSTED_N:-0} tables whose server_id is NOT NULL — the extractor is broken"
+else
+  ok "E1b derived $HOSTED_N tables whose rows cannot exist without naming a host"
+fi
+
+if [ "${TABLE_N:-0}" -lt 10 ]; then
+  bad "E1 derived only ${TABLE_N:-0} host-bearing tables from the schema — the extractor is broken, not the schema"
+else
+  ok "E1 derived $TABLE_N host-bearing tables from migrations/*.sql"
+fi
+
+# The census. Membership and compliance are BOTH transitive through file-local
+# helpers: the shape that hid at s321 was a handler whose row read lived one call
+# away (`get_db_info`), and an arm that only followed direct reads would miss it
+# while an arm that followed reads but not resolutions would cry wolf at every
+# delegator until nobody believed it.
+dispatch_census() {
+  for f in panel/backend/src/routes/*.rs; do
+    perl -0777 -ne '
+      BEGIN { $T = $ENV{DP_TABLES}; $H = $ENV{DP_HOSTED}; }
+      my $src = $_;
+      $src =~ s{^\s*///.*$}{}gm; $src =~ s{^\s*//.*$}{}gm;
+      my @f;
+      while ($src =~ /(?:pub )?(?:async )?fn ([a-z_0-9]+)\s*\(/g) { push @f, [pos($src), $1]; }
+      my (%engages, %reader);
+      for my $j (0 .. $#f) {
+        my $e = ($j < $#f) ? $f[$j+1][0] : length($src);
+        my $b = substr($src, $f[$j][0], $e - $f[$j][0]);
+        $engages{$f[$j][1]} = 1 if $b =~ /agent_for_site_server\(|site_agent_for_caller\(|\bfor_server\(/;
+        # A local helper only pulls its CALLERS into the census if it actually
+        # surfaces the host — i.e. it reads a host-bearing row AND hands back a
+        # server_id. `get_db_info` does, which is how `databases::query` (whose
+        # own body contains no SQL at all) becomes a member; the shape that hid
+        # at s321. A helper that reads such a table for some other purpose --
+        # port holders, template lists -- answers a question about the box in
+        # front of the caller and does not.
+        $reader{$f[$j][1]}  = 1 if $b =~ /\b(?:FROM|JOIN)\s+(?:$T)\b/i && $b =~ /\bserver_id\b/;
+      }
+      my $ENG = join("|", map { quotemeta } keys %engages) || "\0NEVER\0";
+      my $RD  = join("|", map { quotemeta } keys %reader)  || "\0NEVER\0";
+
+      for my $i (0 .. $#f) {
+        my $end = ($i < $#f) ? $f[$i+1][0] : length($src);
+        my $body = substr($src, $f[$i][0], $end - $f[$i][0]);
+        my $name = $f[$i][1];
+
+        # MEMBER: reads a host-bearing row (directly or one call away) and then
+        # acts through an agent. A READ, not a write — a handler that only
+        # INSERTs into such a table never had a host to resolve.
+        # ...and the read is keyed on the RESOURCE own id. That is what makes the
+        # row an independent answer to which host: `WHERE id = $1` returns a row
+        # that may name any machine, so the handler has to consult it. A read
+        # keyed some other way (all images on the box, this server row itself) is
+        # a question about the box in front of the caller, and the scope IS the
+        # correct identity for it. This distinction is why the arm can be strict
+        # about resolution without indicting every server-level handler.
+        next unless ($body =~ /\b(?:FROM|JOIN)\s+(?:$H)\b/i || $body =~ /\b(?:$RD)\s*\(/);
+        next unless ($body =~ /WHERE\s+[a-z_.]*\bid\s*=\s*\$\d/i || $body =~ /\b(?:$RD)\s*\(/);
+        # ...and the row it reads yields the resource IDENTITY the agent is then
+        # asked about -- a domain, or a helper that surfaced the host. Reading
+        # `sites` to count something, or to build a template list, is not
+        # resolving a resource whose host the row knows; those handlers act on the
+        # box in front of the caller and the scope is their correct identity.
+        # ...and the AGENT CALL ITSELF names that identity. This is the whole
+        # concept in one line: the row answered WHICH resource, the scope
+        # answered WHICH host, and the request carries the first to the second.
+        # A handler that reads a host-bearing row and then asks its agent about a
+        # container id or an image never carried a row-derived identity across,
+        # so the scope is not the wrong answer to anything.
+        next unless $body =~ /agent[\s\S]{0,400}?\bdomain\b/;
+        next unless ($body =~ /(?:^|[^_a-z])agent\s*\n?\s*\./m || $body =~ /&agent\b/
+                     || $body =~ /state\.agent\b/ || $body =~ /agents\.for_server/);
+
+        # COMPLIANT: it has an opinion about WHICH host.
+        # `\bserver_id\b` deliberately does not match `_server_id` — an underscore
+        # is a statement about the compiler, not about the code, and every defect
+        # this arm was built from spelled its scope `_server_id` and then
+        # dispatched through the caller anyway.
+        # COMPLIANCE IS ABOUT WHERE THE HANDLE CAME FROM, NOT ABOUT MENTIONING
+        # A NAME. An earlier draft accepted any body containing server_id, and
+        # mutation-testing killed it: reverting databases::query to the handle
+        # supplied by the request left the binding from get_db_info in place, so
+        # the arm printed GREEN over the exact defect it was written for. Merely
+        # holding a row server id is the same non-evidence as spelling it
+        # _server_id. The handle has to be RESOLVED from it.
+        #
+        # (No apostrophes in this block on purpose: the enclosing perl program is
+        # single-quoted inside the shell, and one apostrophe ends it.)
+        my $ok = 0;
+        # `\bfor_server\(` rather than `agents\.for_server\(`: rustfmt wraps a
+        # method chain, so the receiver and the call land on different lines and
+        # a regex spanning the dot matched nothing. `servers::rotate_token`
+        # resolves correctly and was reported as a violation for that reason
+        # alone -- a false RED, which costs an arm its credibility as surely as a
+        # false green costs it its purpose.
+        $ok = 1 if $body =~ /agent_for_site_server\(|site_agent_for_caller\(|\bfor_server\(|for_server_or_local\(/;
+        $ok = 1 if $body =~ /\b(?:$ENG)\s*\(/;
+        # The read is PINNED to the server in scope, so the row and the handle
+        # cannot disagree: a resource on another host simply is not found, which
+        # is a correct answer rather than a misdispatch. This is what separates a
+        # genuinely server-scoped resource (an image on this box, a scan of this
+        # box) from a row that independently names a host.
+        $ok = 1 if $body =~ /server_id = \$\d/;
+        # Choosing a destination for a resource that does not exist yet. Two
+        # spellings because two kinds of resource: one that becomes a row and
+        # records the host it chose, and one that never becomes a row at all -- a
+        # Docker app lives only as a labelled container, which is why
+        # `docker_apps::deploy` needs the second clause. Claiming a domain as
+        # `Holder::New` IS the statement that nothing held it anywhere in the
+        # fleet, so there is no prior host to take the answer from.
+        $ok = 1 if $body =~ /INSERT INTO \w+\s*\([^)]*\bserver_id\b/s;
+        $ok = 1 if $body =~ /Holder::New/;
+        # The host was decided by the CALLER and passed in. `sync_mail_config`
+        # is the case: it takes `server_id: Uuid` and rebuilds that server maps.
+        my ($sig) = $body =~ /^(.*?\)\s*(?:->|\{))/s;
+        $ok = 1 if defined $sig && $sig =~ /\bserver_id\s*:/;
+        $ok = 1 if $body =~ /require_local_agent_scope\(/;
+        $ok = 1 if $body =~ /online_fleet\(/;
+
+        print "$ARGV:$name:", ($ok ? "OK" : "VIOL"), "\n";
+      }
+    ' "$f"
+  done | sort
+}
+
+CENSUS_E=$(dispatch_census)
+CE_N=$(printf '%s\n' "$CENSUS_E" | grep -c . || true)
+CE_V=$(printf '%s\n' "$CENSUS_E" | grep ':VIOL$' || true)
+CE_VN=$(printf '%s\n' "$CE_V" | grep -c . || true)
+
+if [ "${CE_N:-0}" -lt 40 ]; then
+  bad "E2 censused only ${CE_N:-0} handlers that read a host-bearing row and dispatch — the extractor is broken, not the tree"
+else
+  ok "E2 censused $CE_N such handlers across every route module"
+  # WHAT E3 DOES NOT COVER, stated because an arm that lets a reader assume it is
+  # exhaustive defends the gap (s321 #268). Membership requires the agent call to
+  # carry a row-derived DOMAIN. Handlers that carry a different identity across --
+  # `databases::query` sends a db NAME, `image_scans` an image -- are outside it,
+  # and were fixed this session by hand rather than by this arm. Extending E3 to
+  # identities other than a domain is real work and is not done.
+  if [ "${CE_VN:-0}" -eq 0 ]; then
+    ok "E3 every one of them takes its host from the row it read"
+  else
+    while IFS=: read -r file fn _; do
+      [ -n "$fn" ] || continue
+      bad "E3 $(basename "$file")::$fn reads a row that names a host, then acts through whatever host the CALLER named"
+    done < <(printf '%s\n' "$CE_V")
+  fi
+fi
+
+# E4 — the population extends past routes/. An unattended service has no caller,
+# so nothing downstream can catch it: at s321 `auto_healer::auto_renew_ssl` walked
+# every site in the fleet holding the PANEL's own AgentClient and asked this box to
+# renew certificates for domains it does not serve. HTTP-01 could not validate, so
+# the certificate simply expired on live customer sites — and a local success wrote
+# the wrong expiry back, pushing the site out of the renewal window so the loop
+# stopped trying. No route-scoped arm can see that shape.
+SVC_BAD=$(for f in panel/backend/src/services/*.rs; do
+  perl -0777 -ne '
+    BEGIN { $T = $ENV{DP_TABLES}; }
+    my $src=$_; $src =~ s{^\s*///.*$}{}gm; $src =~ s{^\s*//.*$}{}gm;
+    my @f; while ($src =~ /(?:pub )?(?:async )?fn ([a-z_0-9]+)\s*\(/g) { push @f, [pos($src), $1]; }
+    for my $i (0 .. $#f) {
+      my $e = ($i < $#f) ? $f[$i+1][0] : length($src);
+      my $b = substr($src, $f[$i][0], $e - $f[$i][0]);
+      next unless $b =~ /\b(?:FROM|JOIN)\s+(?:$T)\b/i;
+      my ($sig) = $b =~ /^(.*?\)\s*(?:->|\{))/s;
+      next unless defined $sig;
+      print "$ARGV:$f[$i][1]\n" if $sig =~ /:\s*&?AgentClient\b/;
+    }
+  ' "$f"
+done | sort)
+SVC_N=$(printf '%s\n' "$SVC_BAD" | grep -c . || true)
+if [ "${SVC_N:-0}" -eq 0 ]; then
+  ok "E4 no background service that walks a host-bearing table holds the panel's local AgentClient"
+else
+  while IFS=: read -r file fn; do
+    [ -n "$fn" ] || continue
+    bad "E4 $(basename "$file")::$fn walks a host-bearing table with the LOCAL AgentClient — unattended, so nothing downstream can catch it"
+  done < <(printf '%s\n' "$SVC_BAD")
+fi
+
+# E5 — the AGENTLESS shape. Publishing DNS reaches the wrong host with no agent
+# anywhere in the call, so every arm above is blind to it by construction: a site
+# created on a fleet member got an A record pointing at the PANEL, and the delete
+# path only removes a record whose content matches, so a member's record outlived
+# its site as a dangling A record. `helpers::public_ip_for_server` is the form
+# that asks which host the resource is actually on.
+# Through `code()`, because the arms in this suite match SOURCE and not the prose
+# that narrates them. The fix commit's own comments explain what
+# `detect_public_ip` used to do and where it moved, and a raw grep read every one
+# of those sentences as a live call site — the false-RED twin of the false-GREEN
+# trap this helper exists for.
+DNS_BAD=$(for f in panel/backend/src/routes/*.rs; do
+  code "$f" | grep -n 'detect_public_ip' | sed "s|^|$f:|"
+done || true)
+DNS_N=$(printf '%s\n' "$DNS_BAD" | grep -c . || true)
+if [ "${DNS_N:-0}" -eq 0 ]; then
+  ok "E5 no route publishes the PANEL's own address for a resource that may live elsewhere"
+else
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    bad "E5 ${line%%:*} still reads the panel's own public IP — use helpers::public_ip_for_server"
+  done < <(printf '%s\n' "$DNS_BAD")
+fi
+
 
 echo
 echo "----------------------------------------------"

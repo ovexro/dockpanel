@@ -377,7 +377,11 @@ pub async fn list(
 pub async fn create(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(server_id, agent): ServerScope,
+    // The extractor stays even though the handle is unused: extracting it IS the
+    // check that the caller owns the server they named, and `server_id` is what
+    // the new row records as its host. Only the agent handle became redundant,
+    // when the domain claim moved from asking this one host to asking the fleet.
+    ServerScope(server_id, _agent): ServerScope,
     headers: axum::http::HeaderMap,
     Json(body): Json<CreateRequest>,
 ) -> Result<(StatusCode, Json<GitDeploy>), ApiError> {
@@ -466,8 +470,7 @@ pub async fn create(
         Some(d) => Some(
             domain_claim::ensure_claimable(
                 &state.db,
-                &agent,
-                server_id,
+                &state.agents,
                 d,
                 &headers,
                 domain_claim::Holder::New,
@@ -575,12 +578,14 @@ pub async fn update(
     // deploy already on a reserved zone, or a stored 6-field cron — so an
     // unrelated field edit that re-sends the unchanged value isn't rejected).
     //
-    // `server_id` is fetched too: the conflict check is per-server and this
-    // handler has no ServerScope. Reading it from the ROW rather than from the
-    // caller's X-Server-Id header means the guard consults the server the deploy
-    // actually lives on, which is the one whose nginx it will overwrite.
-    let existing: Option<(Option<String>, Option<String>, Uuid)> = sqlx::query_as(
-        "SELECT domain, deploy_cron, server_id FROM git_deploys WHERE id = $1 AND user_id = $2",
+    // `server_id` is no longer fetched. It used to be, so the per-server conflict
+    // check consulted the deploy's own host rather than the caller's header — a
+    // real fix at the time. The claim is now fleet-wide on every leg (a domain
+    // may exist once across the whole installation, and a Docker app holding it
+    // is invisible to SQL on any host), so there is no per-server question left
+    // for this handler to answer and nothing here would use the value.
+    let existing: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT domain, deploy_cron FROM git_deploys WHERE id = $1 AND user_id = $2",
     )
     .bind(id)
     .bind(claims.sub)
@@ -588,7 +593,7 @@ pub async fn update(
     .await
     .map_err(|e| internal_error("update git_deploys", e))?;
 
-    let (cur_domain, cur_cron, server_id) = match existing {
+    let (cur_domain, cur_cron) = match existing {
         Some(row) => row,
         None => return Err(err(StatusCode::NOT_FOUND, "Git deploy not found")),
     };
@@ -600,16 +605,14 @@ pub async fn update(
     // proxy vhost over the file the victim owned.
     let domain = match body.domain.as_deref() {
         Some(d) if !d.is_empty() && Some(d) != cur_domain.as_deref() => {
-            let agent = state
-                .agents
-                .for_server(server_id)
-                .await
-                .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
+            // No agent is resolved here any more. The claim used to need one
+            // because its Docker-app leg asked a single host; it now asks the
+            // registry, which means a rename no longer 502s merely because the
+            // target box is mid-reboot.
             Some(
                 domain_claim::ensure_claimable(
                     &state.db,
-                    &agent,
-                    server_id,
+                    &state.agents,
                     d,
                     &headers,
                     domain_claim::Holder::GitDeploy(id),
@@ -700,13 +703,12 @@ pub async fn update(
 pub async fn remove(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
 
-    let deploy: Option<(String, Option<String>)> = sqlx::query_as(
-        "SELECT name, domain FROM git_deploys WHERE id = $1 AND user_id = $2",
+    let deploy: Option<(String, Option<String>, Uuid)> = sqlx::query_as(
+        "SELECT name, domain, server_id FROM git_deploys WHERE id = $1 AND user_id = $2",
     )
     .bind(id)
     .bind(claims.sub)
@@ -714,7 +716,35 @@ pub async fn remove(
     .await
     .map_err(|e| internal_error("remove git_deploys", e))?;
 
-    let (name, _domain) = deploy.ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
+    let (name, domain, server_id) =
+        deploy.ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
+
+    // WHICH deployment came from the row, so WHICH HOST has to come from the row
+    // as well. It used to come from `ServerScope`: the caller's `X-Server-Id`
+    // header, falling back to the local agent when there is no header at all. The
+    // two agree on a one-box install and whenever the operator happens to have the
+    // right server selected in the switcher, and disagree silently the rest of the
+    // time.
+    //
+    // `trigger_deploy_task` already documents what that costs from the scheduler
+    // side: `idx_git_deploys_name_server` makes `name` unique only PER SERVER while
+    // the agent's checkout path is `/var/lib/dockpanel/git/{name}`, keyed by name
+    // alone — so addressing the wrong box does not error, it finds the same-named
+    // neighbour and acts on THAT. Removal is the sharpest form of it. `/git/cleanup`
+    // stops the container and deletes its image, vhost, certificate and checkout,
+    // and the calls below are fire-and-forget (`.ok()`), so a teardown aimed at the
+    // wrong machine destroys another tenant's deployment and reports success.
+    //
+    // `server_id` is NOT NULL on this table, hence the bare `Some(...)`; the only
+    // arm of the helper that can fire here is the unreachable-host one, and it
+    // REFUSES rather than falling back to this box. Refusing is the correct answer:
+    // the fallback was the defect.
+    let agent = crate::helpers::agent_for_site_server(
+        &state,
+        Some(server_id),
+        domain.as_deref().unwrap_or(&name),
+    )
+    .await?;
 
     // Every preview of this deployment is a container, a bound port, a vhost and
     // a checkout of its own, and the `git_previews` rows are about to be removed
@@ -771,7 +801,6 @@ pub async fn remove(
 pub async fn deploy(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     require_admin(&claims.role)?;
@@ -820,6 +849,25 @@ pub async fn deploy(
             "message": "Deploy requires approval from another admin",
         }))));
     }
+
+    // Resolve the agent for the server this deployment LIVES ON — see `remove()`
+    // for why the caller's `ServerScope` is the wrong authority. Deployed to the
+    // wrong host this is not a stray teardown but a stray BUILD: the neighbour's
+    // checkout of the same name is overwritten with this repository and restarted
+    // under its own port and vhost.
+    //
+    // Resolved HERE, deliberately, and not earlier: an unreachable host must not
+    // stop a protected deploy from being QUEUED for approval (the branch above
+    // talks to no agent at all), and it must not happen after the lock below,
+    // which would strand `status = 'building'` for the 30-minute self-heal window
+    // on a deploy that never started. `trigger_deploy_task` orders itself the same
+    // way and says so.
+    let agent = crate::helpers::agent_for_site_server(
+        &state,
+        Some(config.server_id),
+        config.domain.as_deref().unwrap_or(&config.name),
+    )
+    .await?;
 
     // Deploy lock (atomic): flip status to 'building' iff not already building.
     // The old guard queried git_deploy_history for a 'building'/'deploying'
@@ -944,7 +992,6 @@ pub async fn history(
 pub async fn rollback(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path((id, history_id)): Path<(Uuid, Uuid)>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     require_admin(&claims.role)?;
@@ -968,6 +1015,20 @@ pub async fn rollback(
     .await
     .map_err(|e| internal_error("rollback", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "History entry not found"))?;
+
+    // The host comes from the row, not from the caller's server switcher — see
+    // `remove()`. Rollback carries its own edge: `hist.image_tag` names an image
+    // built on THIS deployment's server and present in that daemon's local store,
+    // so pointed at another box `/git/deploy` either fails on a missing image or,
+    // worse, finds a same-tagged image the neighbour built and starts it under the
+    // neighbour's name. Resolved before the status write below so an unreachable
+    // host cannot strand `status = 'building'`.
+    let agent = crate::helpers::agent_for_site_server(
+        &state,
+        Some(config.server_id),
+        config.domain.as_deref().unwrap_or(&config.name),
+    )
+    .await?;
 
     // Update status to building
     if let Err(e) = sqlx::query("UPDATE git_deploys SET status = 'building', updated_at = NOW() WHERE id = $1")
@@ -1130,13 +1191,12 @@ pub async fn rollback(
 pub async fn keygen(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
 
-    let deploy: Option<(String,)> = sqlx::query_as(
-        "SELECT name FROM git_deploys WHERE id = $1 AND user_id = $2",
+    let deploy: Option<(String, Option<String>, Uuid)> = sqlx::query_as(
+        "SELECT name, domain, server_id FROM git_deploys WHERE id = $1 AND user_id = $2",
     )
     .bind(id)
     .bind(claims.sub)
@@ -1144,7 +1204,22 @@ pub async fn keygen(
     .await
     .map_err(|e| internal_error("keygen", e))?;
 
-    let (name,) = deploy.ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
+    let (name, domain, server_id) =
+        deploy.ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
+
+    // The key has to be minted on the machine that will USE it — see `remove()`
+    // for why the host comes from the row. A keypair generated on the panel host
+    // is written to that box's `key_path`, and the path is then stored against a
+    // deployment whose clones run somewhere else: the public half gets added to
+    // the GitHub repo, the private half never reaches the server that needs it,
+    // and every subsequent clone fails authentication for a key the panel says
+    // exists. Worse on collision — it can overwrite the same-named neighbour's key.
+    let agent = crate::helpers::agent_for_site_server(
+        &state,
+        Some(server_id),
+        domain.as_deref().unwrap_or(&name),
+    )
+    .await?;
 
     let result = agent
         .post("/git/keygen", Some(serde_json::json!({ "name": name })))
@@ -1173,7 +1248,6 @@ pub async fn keygen(
 pub async fn stop(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -1181,6 +1255,17 @@ pub async fn stop(
         .bind(id).bind(claims.sub).fetch_optional(&state.db).await
         .map_err(|e| internal_error("stop", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
+    // Host from the row, not from the switcher — see `remove()`. The lifecycle
+    // trio addresses the container purely by `config.name`, which is unique only
+    // per server, so the caller's scope deciding the host means a stop aimed at a
+    // fleet member takes down the panel host's same-named container instead — and
+    // then writes 'stopped' onto the row of the one still running.
+    let agent = crate::helpers::agent_for_site_server(
+        &state,
+        Some(config.server_id),
+        config.domain.as_deref().unwrap_or(&config.name),
+    )
+    .await?;
     agent.post("/git/stop", Some(serde_json::json!({ "name": config.name }))).await
         .map_err(|e| agent_error("Stop container", e))?;
     if let Err(e) = sqlx::query("UPDATE git_deploys SET status = 'stopped', updated_at = NOW() WHERE id = $1")
@@ -1195,7 +1280,6 @@ pub async fn stop(
 pub async fn start(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -1203,6 +1287,13 @@ pub async fn start(
         .bind(id).bind(claims.sub).fetch_optional(&state.db).await
         .map_err(|e| internal_error("start", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
+    // Host from the row — see `stop()`.
+    let agent = crate::helpers::agent_for_site_server(
+        &state,
+        Some(config.server_id),
+        config.domain.as_deref().unwrap_or(&config.name),
+    )
+    .await?;
     agent.post("/git/start", Some(serde_json::json!({ "name": config.name }))).await
         .map_err(|e| agent_error("Start container", e))?;
     if let Err(e) = sqlx::query("UPDATE git_deploys SET status = 'running', updated_at = NOW() WHERE id = $1")
@@ -1217,7 +1308,6 @@ pub async fn start(
 pub async fn restart(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -1225,6 +1315,13 @@ pub async fn restart(
         .bind(id).bind(claims.sub).fetch_optional(&state.db).await
         .map_err(|e| internal_error("restart", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
+    // Host from the row — see `stop()`.
+    let agent = crate::helpers::agent_for_site_server(
+        &state,
+        Some(config.server_id),
+        config.domain.as_deref().unwrap_or(&config.name),
+    )
+    .await?;
     agent.post("/git/restart", Some(serde_json::json!({ "name": config.name }))).await
         .map_err(|e| agent_error("Restart container", e))?;
     if let Err(e) = sqlx::query("UPDATE git_deploys SET status = 'running', updated_at = NOW() WHERE id = $1")
@@ -1239,7 +1336,6 @@ pub async fn restart(
 pub async fn container_logs(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -1247,6 +1343,16 @@ pub async fn container_logs(
         .bind(id).bind(claims.sub).fetch_optional(&state.db).await
         .map_err(|e| internal_error("container logs", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
+    // Host from the row — see `stop()`. Read-only, but it fails in the direction
+    // nobody checks: asked of the wrong box it returns the same-named neighbour's
+    // stdout as if it were this deployment's, so an operator debugging an incident
+    // reads another tenant's logs and believes them.
+    let agent = crate::helpers::agent_for_site_server(
+        &state,
+        Some(config.server_id),
+        config.domain.as_deref().unwrap_or(&config.name),
+    )
+    .await?;
     let result = agent.post("/git/logs", Some(serde_json::json!({ "name": config.name }))).await
         .map_err(|e| agent_error("Container logs", e))?;
     Ok(Json(result))
@@ -2680,8 +2786,7 @@ async fn handle_preview_deploy(state: &AppState, agent: &AgentHandle, config: &G
         } else {
             crate::services::domain_claim::find_occupant(
                 &state.db,
-                agent,
-                config.server_id,
+                &state.agents,
                 candidate,
                 crate::services::domain_claim::Holder::GitDeploy(config.id),
             )
@@ -2843,15 +2948,31 @@ pub async fn list_previews(
 pub async fn delete_preview(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path((id, preview_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let preview: GitPreview = sqlx::query_as(
-        "SELECT p.* FROM git_previews p JOIN git_deploys g ON p.git_deploy_id = g.id WHERE p.id = $1 AND g.id = $2 AND g.user_id = $3"
+    // `g.server_id` is joined in for the same reason `remove()` selects it: the
+    // preview runs on the server its PARENT deployment lives on — that is the box
+    // `handle_preview_deploy` built it on — and the caller's `ServerScope` was
+    // deciding which agent got the teardown. A preview's container name is derived
+    // from deploy name + branch, so two servers running the same repository produce
+    // byte-identical preview names: aimed at the wrong host, `/git/cleanup` finds
+    // the neighbour's live preview and destroys it, then deletes the row for the
+    // one still running. The cleanup is fire-and-forget, so nothing reports it.
+    let row: Option<(String, Option<String>, i32, Uuid)> = sqlx::query_as(
+        "SELECT p.container_name, p.domain, p.host_port, g.server_id FROM git_previews p JOIN git_deploys g ON p.git_deploy_id = g.id WHERE p.id = $1 AND g.id = $2 AND g.user_id = $3"
     ).bind(preview_id).bind(id).bind(claims.sub).fetch_optional(&state.db).await
-        .map_err(|e| internal_error("delete preview", e))?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Preview not found"))?;
+        .map_err(|e| internal_error("delete preview", e))?;
+
+    let (container_name, preview_domain, host_port, server_id) =
+        row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Preview not found"))?;
+
+    let agent = crate::helpers::agent_for_site_server(
+        &state,
+        Some(server_id),
+        preview_domain.as_deref().unwrap_or(&container_name),
+    )
+    .await?;
 
     // Clean up container — the stored name carries both the `dockpanel-git-`
     // prefix the agent re-adds and, for rows written from v2.55.0 on, the
@@ -2860,9 +2981,9 @@ pub async fn delete_preview(
         .post(
             "/git/cleanup",
             Some(preview_cleanup_body(
-                &preview.container_name,
-                preview.domain.as_deref(),
-                Some(preview.host_port),
+                &container_name,
+                preview_domain.as_deref(),
+                Some(host_port),
             )),
         )
         .await
@@ -2971,13 +3092,38 @@ pub async fn list_approvals(
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
     require_admin(&claims.role)?;
 
+    // Scoped to the machines this administrator operates. `require_admin` alone is
+    // not a boundary — every sibling read in this file also carries `user_id =
+    // $claims.sub`, and this list carried nothing, so every pending approval in the
+    // installation was legible to any admin account regardless of whose fleet the
+    // deployment ran on. It leaks the deploy name and the requester's id, and it
+    // feeds `approve_deploy` the ids to act on.
+    //
+    // The predicate cannot be the sibling one. `deploy()` is the only writer of
+    // these rows and it fetches its config with `user_id = $2`, so `requested_by`
+    // is ALWAYS the deployment's owner — and approving your own request is refused
+    // two lines into `approve_deploy`. `g.user_id = $claims.sub` would therefore
+    // make every approval unapprovable by construction: it would read as a tighter
+    // guard while quietly deleting the feature.
+    //
+    // So the boundary is the one `SITE_CALLER_PREDICATE`'s admin arm already draws
+    // for sites: an operator may act on the box in front of them — this machine, or
+    // a server they registered themselves — and does not reach a machine somebody
+    // else added. That keeps the two-person rule intact and still stops a second
+    // tenant's admin from signing off on a deploy to hardware they do not run.
+    // `u.role` is read from the DATABASE, not from `claims.role`, for the reason
+    // stated there: a JWT keeps asserting the role it was minted with until it
+    // expires, so a demoted account would otherwise keep approving all session.
     let rows: Vec<(Uuid, Uuid, Uuid, String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         "SELECT da.id, da.deploy_id, da.requested_by, da.status, g.name, da.created_at \
          FROM deploy_approvals da \
          JOIN git_deploys g ON g.id = da.deploy_id \
-         WHERE da.status = 'pending' \
+         WHERE da.status = 'pending' AND EXISTS (\
+             SELECT 1 FROM users u, servers sv WHERE u.id = $1 AND u.role = 'admin' \
+             AND sv.id = g.server_id AND (sv.is_local OR sv.user_id = u.id)) \
          ORDER BY da.created_at DESC"
     )
+    .bind(claims.sub)
     .fetch_all(&state.db).await
     .map_err(|e| internal_error("list approvals", e))?;
 
@@ -2999,17 +3145,26 @@ pub async fn list_approvals(
 pub async fn approve_deploy(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(approval_id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     require_admin(&claims.role)?;
 
-    // Fetch the pending approval
+    // Fetch the pending approval, scoped to the machines this administrator
+    // operates — the same predicate `list_approvals` now applies, and the reason it
+    // cannot simply be `g.user_id = $claims.sub` is written out in full there.
+    // Unscoped, this handler let any admin account sign off on a protected deploy
+    // belonging to a different tenant on hardware they do not run, which is exactly
+    // the review the `deploy_protected` flag exists to force.
     let row: Option<(Uuid, Uuid, String)> = sqlx::query_as(
         "SELECT da.deploy_id, da.requested_by, da.status \
-         FROM deploy_approvals da WHERE da.id = $1"
+         FROM deploy_approvals da \
+         JOIN git_deploys g ON g.id = da.deploy_id \
+         WHERE da.id = $1 AND EXISTS (\
+             SELECT 1 FROM users u, servers sv WHERE u.id = $2 AND u.role = 'admin' \
+             AND sv.id = g.server_id AND (sv.is_local OR sv.user_id = u.id))"
     )
     .bind(approval_id)
+    .bind(claims.sub)
     .fetch_optional(&state.db).await
     .map_err(|e| internal_error("approve deploy", e))?;
 
@@ -3025,6 +3180,40 @@ pub async fn approve_deploy(
         return Err(err(StatusCode::FORBIDDEN, "Cannot approve your own deploy request"));
     }
 
+    // Load config and resolve the host BEFORE consuming the approval.
+    //
+    // The order matters and it changed with this fix. The agent used to arrive as
+    // an extractor, so an unreachable host was answered by `ServerScope` with a 502
+    // before the handler body ran and the approval stayed pending, retryable.
+    // Resolving it here — correctly, from the row — moves that failure INSIDE the
+    // body, and marking the approval first would burn it: `status` is no longer
+    // 'pending', so the retry is refused with 409 and a protected deploy needs a
+    // fresh request and a second admin all over again because a box was rebooting.
+    //
+    // The config load is pinned to `requested_by`, which is the owner `deploy()`
+    // verified when it wrote the approval row. If the deployment changed hands in
+    // between, this fails closed rather than deploying on the strength of a request
+    // its current owner never made.
+    let config: GitDeploy = sqlx::query_as(
+        "SELECT * FROM git_deploys WHERE id = $1 AND user_id = $2"
+    )
+    .bind(deploy_id)
+    .bind(requested_by)
+    .fetch_optional(&state.db).await
+    .map_err(|e| internal_error("approve deploy", e))?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
+
+    // The build runs on the server the deployment lives on — see `deploy()`, of
+    // which this is the deferred half. It carried the sharper version of the bug:
+    // the requester and the approver are different people, so the approver's server
+    // switcher decided where somebody else's deploy landed.
+    let agent = crate::helpers::agent_for_site_server(
+        &state,
+        Some(config.server_id),
+        config.domain.as_deref().unwrap_or(&config.name),
+    )
+    .await?;
+
     // Mark as approved
     sqlx::query(
         "UPDATE deploy_approvals SET status = 'approved', approved_by = $1, resolved_at = NOW() WHERE id = $2"
@@ -3032,15 +3221,6 @@ pub async fn approve_deploy(
     .bind(claims.sub).bind(approval_id)
     .execute(&state.db).await
     .map_err(|e| internal_error("approve deploy", e))?;
-
-    // Load config and trigger the actual deploy
-    let config: GitDeploy = sqlx::query_as(
-        "SELECT * FROM git_deploys WHERE id = $1"
-    )
-    .bind(deploy_id)
-    .fetch_optional(&state.db).await
-    .map_err(|e| internal_error("approve deploy", e))?
-    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
 
     // Update status to building
     if let Err(e) = sqlx::query("UPDATE git_deploys SET status = 'building', updated_at = NOW() WHERE id = $1")
@@ -3090,10 +3270,21 @@ pub async fn reject_deploy(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
 
+    // Same boundary as `list_approvals` and `approve_deploy`, for the same reason:
+    // an approval this administrator cannot see must not be one they can resolve.
+    // Rejection has no agent and so no wrong-host half, but unscoped it is the
+    // denial-of-service twin of approve — a second tenant's admin could kill any
+    // protected deploy in the installation, and rejection is terminal (the check
+    // below refuses anything not 'pending', so the requester must start over).
     let row: Option<(String,)> = sqlx::query_as(
-        "SELECT status FROM deploy_approvals WHERE id = $1"
+        "SELECT da.status FROM deploy_approvals da \
+         JOIN git_deploys g ON g.id = da.deploy_id \
+         WHERE da.id = $1 AND EXISTS (\
+             SELECT 1 FROM users u, servers sv WHERE u.id = $2 AND u.role = 'admin' \
+             AND sv.id = g.server_id AND (sv.is_local OR sv.user_id = u.id))"
     )
     .bind(approval_id)
+    .bind(claims.sub)
     .fetch_optional(&state.db).await
     .map_err(|e| internal_error("reject deploy", e))?;
 

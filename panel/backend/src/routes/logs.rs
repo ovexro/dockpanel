@@ -247,17 +247,60 @@ pub async fn stream_token(
     })))
 }
 
-/// GET /api/logs/stats — Log aggregation stats (admin only).
+/// GET /api/logs/stats — Log aggregation stats for the server in scope (admin only).
+///
+/// With no `?domain=` this is the host-wide question its siblings on this page ask,
+/// and the answer belongs to the server the operator has selected.
+///
+/// With one, it used to be neither authorised nor resolved: the parameter went
+/// straight into the agent path, so no row was ever read and there was nothing to
+/// check the caller against — the browser named the subject and the panel asked it.
+/// Being admin-only did not cover that. An administrator here is not a superuser;
+/// the shared predicate lets one reach the sites on the machines they operate, and
+/// stops at a server somebody else registered. A parameter is now a lookup key and
+/// nothing else, and the domain that reaches the agent is the one read back off the
+/// row.
+///
+/// The row read is deliberately pinned to the server in scope, which is what makes
+/// this different from the per-site readers above. Two things force it. A domain is
+/// only unique PER SERVER — the constraint is `(domain, server_id)` — so a
+/// domain-keyed read with no server term is ambiguous the moment the same name is
+/// hosted twice, and picking either row would be a guess. And the question itself is
+/// host-shaped: these stats are computed by grepping one machine's nginx logs, so a
+/// site that lives elsewhere has no answer here to give. It is refused rather than
+/// answered with the zeroes a quiet site would produce, and the operator moves the
+/// server picker — the same picker every other control on this page already obeys.
+/// Pinning also makes a misdispatch impossible by construction: the host that
+/// answers and the host the row names cannot come apart.
 pub async fn log_stats(
-    State(_state): State<AppState>,
-    AdminUser(_claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    ServerScope(server_id, agent): ServerScope,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let domain = params
-        .get("domain")
-        .map(|d| format!("?domain={d}"))
-        .unwrap_or_default();
+    let domain = match params.get("domain") {
+        Some(requested) => {
+            let row: Option<(uuid::Uuid,)> =
+                sqlx::query_as("SELECT id FROM sites WHERE domain = $1 AND server_id = $2")
+                    .bind(requested.as_str())
+                    .bind(server_id)
+                    .fetch_optional(&state.db)
+                    .await
+                    .map_err(|e| internal_error("log stats", e))?;
+
+            // Identity first, then permission — and the permission half is the one
+            // shared decision, not a copy of it living here. The name that goes on
+            // the wire is the one it hands back.
+            let site_id = row
+                .map(|(id,)| id)
+                .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+            let resolved =
+                crate::helpers::site_domain_for_caller(&state, site_id, &claims).await?;
+            format!("?domain={resolved}")
+        }
+        None => String::new(),
+    };
+
     let result = agent
         .get(&format!("/logs/stats{domain}"))
         .await

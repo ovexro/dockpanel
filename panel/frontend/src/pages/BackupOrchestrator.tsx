@@ -126,6 +126,29 @@ interface Destination {
   config: Record<string, string | number | undefined>;
 }
 
+/**
+ * `POST /backup-destinations/{id}/test`, in either of its two shapes.
+ *
+ * Server-owned destination: `{ ok, success, message, server }` — one host was
+ * asked and `server` names it (null only if its row could not be read back).
+ * Unclaimed destination: `{ ok, shared, reachable, failed, not_asked, warning }`
+ * — every online member was asked, `ok` is FALSE on a partial even though the
+ * status is 200, and `warning` is the API's own sentence naming who missed.
+ * Nothing reached it at all is a 502, which `api.ts` throws.
+ */
+interface DestTestResult {
+  ok: boolean;
+  /** Single-host shape: the host that ran the test. */
+  server?: string | null;
+  message?: string;
+  /** Fleet shape: present (possibly empty) only when every member was asked. */
+  shared?: boolean;
+  reachable?: string[];
+  failed?: { server: string; error: string }[];
+  not_asked?: { server: string; status: string }[];
+  warning?: string;
+}
+
 // One editable destination. Both transports are held in the same object so that
 // switching Type in the form does not discard what was typed under the other.
 interface DestForm {
@@ -502,8 +525,33 @@ export default function BackupOrchestrator() {
     setTestingDestId(d.id);
     setMessage({ text: "", type: "" });
     try {
-      await api.post(`/backup-destinations/${d.id}/test`);
-      setMessage({ text: `Connection to "${d.name}" succeeded`, type: "success" });
+      // Two shapes, because two different questions were asked. A destination
+      // that belongs to one server is tested from that server and the answer
+      // names it. An unclaimed destination is tested from EVERY online member,
+      // and then a 2xx does not mean "it works" — it means at least one host
+      // reached it. The hosts that could not, and the ones that were never
+      // asked, arrive in `warning`; a 502 (thrown) means nothing reached it.
+      const res = await api.post<DestTestResult>(`/backup-destinations/${d.id}/test`);
+      if (res?.warning) {
+        const reached = res.reachable ?? [];
+        setMessage({
+          text: `"${d.name}" — ${res.warning}${reached.length > 0 ? ` Succeeded from: ${reached.join(", ")}.` : ""}`,
+          type: "warning",
+        });
+      } else if (res?.reachable) {
+        setMessage({
+          text: `Connection to "${d.name}" succeeded from all ${res.reachable.length} server${res.reachable.length === 1 ? "" : "s"} (${res.reachable.join(", ")})`,
+          type: "success",
+        });
+      } else {
+        // Single-server destination. Say WHICH host answered — an unattributed
+        // "connection succeeded" is how one box's result came to stand for the
+        // whole fleet's.
+        setMessage({
+          text: `Connection to "${d.name}" succeeded from ${res?.server ?? "its server"}`,
+          type: "success",
+        });
+      }
     } catch (e) {
       setMessage({ text: e instanceof Error ? e.message : "Connection failed", type: "error" });
     } finally {
@@ -596,7 +644,11 @@ export default function BackupOrchestrator() {
       {/* Message */}
       {message.text && (
         <div className={`mb-4 px-4 py-3 rounded-lg text-sm border font-mono ${
-          message.type === "success" ? "bg-rust-500/10 text-rust-400 border-rust-500/20" : "bg-danger-500/10 text-danger-400 border-danger-500/20"
+          message.type === "success" ? "bg-rust-500/10 text-rust-400 border-rust-500/20"
+          // A fleet operation that partly landed is neither a success nor a
+          // failure, and the page already speaks warn/danger (see `tone` below).
+          : message.type === "warning" ? "bg-warn-500/10 text-warn-400 border-warn-500/20"
+          : "bg-danger-500/10 text-danger-400 border-danger-500/20"
         }`} role="alert">{message.text}</div>
       )}
 

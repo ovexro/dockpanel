@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
+import PanicReport, { serverList, unreachableNames, type PanicResult } from "../components/PanicReport";
 
 interface AuditEntry {
   id: string;
@@ -48,6 +49,10 @@ export default function SecurityHardening() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState({ type: "", text: "" });
   const [pendingConfirm, setPendingConfirm] = useState<{ type: string; label: string } | null>(null);
+  // The panic button's per-host result. Deliberately NOT routed through
+  // `showMsg`, which clears itself after 5s — the list of machines nobody swept
+  // must stay on screen. See components/PanicReport.
+  const [panicResult, setPanicResult] = useState<PanicResult | null>(null);
 
   if (!user || user.role !== "admin") return <Navigate to="/" replace />;
 
@@ -102,22 +107,37 @@ export default function SecurityHardening() {
         await api.post("/security/lockdown/activate", { reason: "Manual admin lockdown" });
         showMsg("success", "Lockdown activated");
       } else if (type === "panic") {
-        const r = await api.post<{ agent_reached: boolean; terminals_killed: number | null; server_terminals_killed: number | null; sessions_revoked: boolean; shares_revoked: number }>("/security/panic", {});
+        const r = await api.post<PanicResult>("/security/panic", {});
         // Say what the server reported, not what we hope it did — see the
         // matching comment in Security.tsx.
         const sess = r.sessions_revoked ? "all sessions revoked" : "SESSION REVOCATION FAILED";
         const shares = r.shares_revoked > 0 ? `, ${r.shares_revoked} terminal share${r.shares_revoked === 1 ? "" : "s"} revoked` : "";
+        // The panic fans out across the fleet: name the members it missed here,
+        // list them in full below. `agent_reached` is false if ANY was missed.
+        setPanicResult(r);
+        const missed = unreachableNames(r);
+        const n = r.terminals_killed ?? 0;
+        const root = r.server_terminals_killed ?? 0;
+        const killed = `${n} terminal${n === 1 ? "" : "s"} killed${root > 0 ? ` (${root} server/root)` : ""}`;
         if (!r.agent_reached) {
-          showMsg("error", `Panic: system locked and ${sess}${shares}, but the agent could not be reached — TERMINALS MAY STILL BE RUNNING. Check the server.`);
+          const where = missed.length > 0
+            ? `TERMINALS MAY STILL BE RUNNING ON ${serverList(missed).toUpperCase()}. Check ${missed.length === 1 ? "that server" : "those servers"} by hand.`
+            : "TERMINALS MAY STILL BE RUNNING. Check the server.";
+          const swept = r.servers_total ? ` (${r.servers_reached ?? 0}/${r.servers_total} servers swept, ${killed})` : "";
+          showMsg("error", `Panic: system locked and ${sess}${shares}, but ${where}${swept}`);
         } else {
-          const n = r.terminals_killed ?? 0;
-          const root = r.server_terminals_killed ?? 0;
-          showMsg(r.sessions_revoked ? "success" : "error", `Panic mode activated — ${n} terminal${n === 1 ? "" : "s"} killed${root > 0 ? ` (${root} server/root)` : ""}, ${sess}${shares}, system locked`);
+          const fleet = r.servers_total && r.servers_total > 1 ? ` across all ${r.servers_total} servers` : "";
+          showMsg(r.sessions_revoked ? "success" : "error", `Panic mode activated — ${killed}${fleet}, ${sess}${shares}, system locked`);
         }
         // Panic revoked this admin's own session; loadData() would 401 and
         // hard-navigate to /login, destroying the report. Redirect on our own
-        // terms instead, after the operator has had time to read it.
-        setTimeout(() => { window.location.href = "/login"; }, 6000);
+        // terms instead, after the operator has had time to read it — and not
+        // at all when hosts were left unswept, because their names cannot be
+        // re-fetched once the session is gone and six seconds is not enough to
+        // write down a list of hostnames. <PanicReport/> carries its own way out.
+        if (missed.length === 0) {
+          setTimeout(() => { window.location.href = "/login"; }, 6000);
+        }
         return;
       }
       loadData();
@@ -168,6 +188,12 @@ export default function SecurityHardening() {
           </button>
         </div>
       </div>
+
+      {/* The machines the panic button did NOT sweep. Renders nothing when the
+          whole fleet was covered, and unlike the banner below it never expires. */}
+      {panicResult && (
+        <PanicReport result={panicResult} onDismiss={() => { window.location.href = "/login"; }} />
+      )}
 
       {message.text && (
         <div className={`mb-4 px-4 py-3 rounded-lg text-sm border ${message.type === "success" ? "bg-rust-500/10 text-rust-400 border-rust-500/20" : "bg-danger-500/10 text-danger-400 border-danger-500/20"}`}>

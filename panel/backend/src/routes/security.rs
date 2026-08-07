@@ -5,6 +5,8 @@ use axum::{
     Json,
 };
 
+use std::time::Duration;
+
 use crate::auth::{AdminUser, ServerScope};
 use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::services::{activity, security_hardening};
@@ -227,7 +229,7 @@ pub async fn fail2ban_banned(
 pub async fn login_audit(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Panel logins from activity_logs.
     //
@@ -237,21 +239,35 @@ pub async fn login_audit(
     // NULL on every row ever written. The account is in `user_email` and the
     // origin is in `ip_address` — the two facts an operator looking at a failed
     // login actually needs, and neither was leaving the database.
-    let panel_logins: Vec<(
-        String,
-        String,
-        String,
-        Option<String>,
-        chrono::DateTime<chrono::Utc>,
-    )> = sqlx::query_as(
+    let panel_logins: Result<
+        Vec<(
+            String,
+            String,
+            String,
+            Option<String>,
+            chrono::DateTime<chrono::Utc>,
+        )>,
+        sqlx::Error,
+    > = sqlx::query_as(
         "SELECT action, COALESCE(details, ''), user_email, ip_address, created_at \
              FROM activity_logs \
              WHERE action IN ('auth.login', 'auth.login_failed', 'auth.2fa_verify') \
              ORDER BY created_at DESC LIMIT 50",
     )
     .fetch_all(&state.db)
-    .await
-    .unwrap_or_default();
+    .await;
+
+    // Distinguish "no panel logins" from "we could not read the table". The same
+    // reassuring-direction fault the SSH half had, one query up: an
+    // `unwrap_or_default()` here turns a database error into an empty list, and
+    // an empty login-attempt list is the single most calming thing this endpoint
+    // can display. Reported as a flag rather than a hard failure so a broken
+    // panel query does not also cost the operator the SSH half.
+    let panel_query_failed = panel_logins.is_err();
+    if let Err(e) = &panel_logins {
+        tracing::warn!("login audit: panel login query failed — showing SSH half only: {e}");
+    }
+    let panel_logins = panel_logins.unwrap_or_default();
 
     let panel: Vec<serde_json::Value> = panel_logins
         .iter()
@@ -272,18 +288,186 @@ pub async fn login_audit(
         })
         .collect();
 
-    // SSH logins from agent (parse auth.log)
-    let ssh = match agent.get("/security/login-audit").await {
-        Ok(result) => result
-            .get("entries")
-            .cloned()
-            .unwrap_or(serde_json::json!([])),
-        Err(_) => serde_json::json!([]),
-    };
+    // SSH logins, from every member of the fleet rather than from whichever one
+    // the caller happens to have selected in the server picker.
+    //
+    // The two halves of this response are rendered as siblings — one table
+    // headed "panel logins", one headed "SSH logins" — and until now they were
+    // not comparable at all. The panel half is a query over `activity_logs`,
+    // which is a single panel-wide table, so it has always meant every login to
+    // this panel. The SSH half came from ONE agent. On a fleet that made "SSH
+    // logins" silently mean "SSH logins on the server currently selected", and a
+    // brute-force campaign against a member's sshd was invisible unless the
+    // operator happened to have that member picked. Nothing on the page said so.
+    //
+    // The subject list is the one `panic_button` below settled on for the same
+    // reason: `online_fleet()` — the list the security scanner, the image
+    // scanner, the alert engine and the auto-healer all sweep — plus the
+    // caller-selected server even when it is not currently `online`, because
+    // that host is the one this endpoint has always answered for and must not
+    // silently stop answering for.
+    //
+    // What "not asked" means here is narrower than it does on the panic button
+    // but it is still a fact the operator needs: nobody read that machine's
+    // auth.log, so its absence from the table is not evidence of anything. That
+    // covers a member whose request failed, a member marked `offline`, and a
+    // member whose agent will not resolve (which is what `online_fleet` skips).
+    // The last two are deliberately not dialled — a dead host costs a full
+    // request timeout — but they are named in the response rather than omitted
+    // from it, which is precisely what the old `Err(_) => json!([])` refused to
+    // do: it folded a host that could not be asked into a host with nothing to
+    // report, and those read identically on screen while meaning opposite things.
+    let census: Vec<(uuid::Uuid, String, String, bool)> = sqlx::query_as(
+        "SELECT id, name, status, is_local FROM servers WHERE status != 'pending' \
+         ORDER BY is_local DESC, name ASC",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let mut targets: Vec<(uuid::Uuid, String, bool, crate::services::agent::AgentHandle)> = state
+        .agents
+        .online_fleet()
+        .await
+        .into_iter()
+        .map(|m| (m.id, m.name, m.is_local, m.agent))
+        .collect();
+    if !targets.iter().any(|(id, ..)| *id == server_id) {
+        let (name, is_local) = census
+            .iter()
+            .find(|(id, ..)| *id == server_id)
+            .map(|(_, name, _, is_local)| (name.clone(), *is_local))
+            .unwrap_or_else(|| ("selected server".to_string(), false));
+        targets.push((server_id, name, is_local, agent));
+    }
+
+    // Concurrently, so a fleet of N hosts costs one round trip rather than N.
+    // The agent route is a GET (`/security/login-audit` is registered with
+    // `get`), so this cannot borrow the panic button's `post_long` verb — but it
+    // takes the bound that call was given for the same reason. `AgentHandle::get`
+    // is capped at 60s, which is a defensible ceiling for one deliberate action
+    // and an indefensible one for a table that loads with a page: a single
+    // wedged member would hold the whole security view for a minute and then
+    // show it. Fifteen seconds is far more than tailing 500 lines of auth.log
+    // needs, and a host named as unasked is more useful than a host reported
+    // accurately a minute late.
+    let results: Vec<Result<serde_json::Value, String>> =
+        futures::future::join_all(targets.iter().map(|(_, _, _, agent)| {
+            tokio::time::timeout(Duration::from_secs(15), agent.get("/security/login-audit"))
+        }))
+        .await
+        .into_iter()
+        .map(|r| match r {
+            Ok(answer) => answer.map_err(|e| e.to_string()),
+            Err(_) => Err("agent did not answer within 15s".to_string()),
+        })
+        .collect();
+
+    let mut ssh: Vec<serde_json::Value> = Vec::new();
+    let mut ssh_servers: Vec<serde_json::Value> = Vec::with_capacity(census.len().max(targets.len()));
+    let mut unreachable: Vec<serde_json::Value> = Vec::new();
+    let mut unreachable_names: Vec<String> = Vec::new();
+    let mut reached: usize = 0;
+
+    for ((id, name, is_local, _), res) in targets.iter().zip(results.into_iter()) {
+        match res {
+            Ok(v) => {
+                let entries = v
+                    .get("entries")
+                    .and_then(|e| e.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                let count = entries.len();
+                for mut entry in entries {
+                    // Stamp the host onto every row. `time` is a syslog stamp
+                    // with no year in it, so rows from different machines cannot
+                    // be merged into one trustworthy chronology — which makes
+                    // the origin the only thing that lets a reader tell two
+                    // identical-looking failed logins apart. Rows keep their
+                    // per-host order and the hosts keep `online_fleet`'s order.
+                    if let Some(obj) = entry.as_object_mut() {
+                        obj.insert("server_id".to_string(), serde_json::json!(id));
+                        obj.insert("server_name".to_string(), serde_json::json!(name));
+                        obj.insert("is_local".to_string(), serde_json::json!(is_local));
+                    }
+                    ssh.push(entry);
+                }
+                reached += 1;
+                ssh_servers.push(serde_json::json!({
+                    "server_id": id,
+                    "server_name": name,
+                    "is_local": is_local,
+                    "reached": true,
+                    "entries": count,
+                }));
+            }
+            Err(why) => {
+                tracing::warn!("login audit: {name} ({id}) did not answer — its SSH logins are missing from this view: {why}");
+                ssh_servers.push(serde_json::json!({
+                    "server_id": id,
+                    "server_name": name,
+                    "is_local": is_local,
+                    "reached": false,
+                    "entries": null,
+                    "error": why,
+                }));
+                unreachable.push(serde_json::json!({
+                    "server_id": id, "server_name": name, "reason": why,
+                }));
+                unreachable_names.push(name.clone());
+            }
+        }
+    }
+
+    // The members that were never dialled at all. They belong in the same list
+    // as the ones that failed, because from the reader's side the fact is
+    // identical: that machine's auth.log was not read.
+    for (id, name, status, is_local) in &census {
+        if targets.iter().any(|(tid, ..)| tid == id) {
+            continue;
+        }
+        let why = if status.as_str() == "online" {
+            "no reachable agent configured for this server"
+        } else {
+            "server is not online — not asked"
+        };
+        ssh_servers.push(serde_json::json!({
+            "server_id": id,
+            "server_name": name,
+            "is_local": is_local,
+            "reached": false,
+            "entries": null,
+            "error": why,
+        }));
+        unreachable.push(serde_json::json!({
+            "server_id": id, "server_name": name, "reason": why,
+        }));
+        unreachable_names.push(name.clone());
+    }
+
+    let ssh_servers_total = ssh_servers.len();
+    let ssh_servers_unreachable = unreachable.len();
 
     Ok(Json(serde_json::json!({
+        // Legacy pair — same names, same types. `ssh` is now the concatenation
+        // of every host that answered, with each row carrying its origin, so a
+        // client that only understands the old shape gets strictly more of the
+        // data it was already rendering rather than a different kind of data.
         "panel": panel,
         "ssh": ssh,
+        // Coverage. `ssh_partial` is the one field a client must not ignore: it
+        // is true whenever at least one machine's auth.log went unread, which is
+        // the difference between "no SSH logins" and "we could not ask".
+        "ssh_partial": ssh_servers_unreachable > 0,
+        "ssh_servers": ssh_servers,
+        "ssh_servers_total": ssh_servers_total,
+        "ssh_servers_reached": reached,
+        "ssh_servers_unreachable": ssh_servers_unreachable,
+        "ssh_unreachable_servers": unreachable,
+        "ssh_unreachable_names": unreachable_names,
+        // The panel half is a single panel-wide table and cannot be partial by
+        // host; it can only fail outright, and this says whether it did.
+        "panel_query_failed": panel_query_failed,
     })))
 }
 
@@ -475,7 +659,35 @@ pub async fn lockdown_status(
     State(state): State<AppState>,
     AdminUser(_claims): AdminUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let lockdown = security_hardening::get_lockdown_state(&state.db).await;
+    let mut lockdown = security_hardening::get_lockdown_state(&state.db).await;
+
+    // `get_lockdown_state` returns whether a lockdown is on, who started it, when
+    // and why — and none of the three columns that say what it actually DOES.
+    // `terminals_disabled` is the one an operator has a live reason to ask about:
+    // the panic button sets it, the terminal ticket mint now refuses on it, and
+    // between those two facts there was no surface anywhere that would show the
+    // state the emergency control claims to have set.
+    //
+    // Two fields, because they answer two different questions and conflating them
+    // is the trap the column itself is built on. `terminals_disabled` is the
+    // stored value: it reads TRUE on a panel that has never been locked down
+    // (the migration's DEFAULT) and stays TRUE after an unlock (nothing clears
+    // it), so on its own it is not the answer to "can anyone open a shell right
+    // now". `terminals_blocked` is that answer, and it is computed by the same
+    // function the mint calls, so the page and the gate cannot drift apart.
+    if let Some(obj) = lockdown.as_object_mut() {
+        let (active, terminals_disabled) =
+            crate::routes::terminal::lockdown_terminal_state(&state.db).await;
+        obj.insert(
+            "terminals_disabled".to_string(),
+            serde_json::json!(terminals_disabled),
+        );
+        obj.insert(
+            "terminals_blocked".to_string(),
+            serde_json::json!(active && terminals_disabled),
+        );
+    }
+
     Ok(Json(lockdown))
 }
 
@@ -516,31 +728,164 @@ pub async fn lockdown_deactivate(
 pub async fn panic_button(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let reason = "PANIC BUTTON pressed by admin";
 
     // Activate lockdown
     security_hardening::activate_lockdown(&state.db, "panic", reason).await;
 
-    // Tell agent to kill all terminal sessions. The Result used to be discarded
-    // and the response then claimed `terminals_killed: true` unconditionally —
-    // so an agent that was unreachable, or that killed nothing, produced exactly
-    // the same reassurance as one that worked. What the agent reports is what
-    // gets reported.
-    let kill = agent
-        .post("/security/kill-terminals", Some(serde_json::json!({})))
-        .await;
-    let (terminals_killed, server_terminals_killed, agent_reached) = match &kill {
-        Ok(v) => (
-            v.get("killed").and_then(|k| k.as_u64()),
-            v.get("server_terminals_killed").and_then(|k| k.as_u64()),
-            true,
-        ),
-        Err(e) => {
-            tracing::error!("PANIC: agent did not kill terminals: {e}");
-            (None, None, false)
+    // Kill terminal sessions on EVERY member of the fleet, not just the one the
+    // caller happens to have selected in the server picker.
+    //
+    // Every other leg of this handler is panel-global: `activate_lockdown`
+    // writes the single `lockdown_state` row, `sessions_revoked_at` invalidates
+    // every token the panel has ever minted, and the share sweep deletes every
+    // `terminal_share_%` key there is. The kill was the one leg still scoped to
+    // a single host, so on a fleet the panic button returned `lockdown_active:
+    // true` and a terminal count while live root shells kept running on every
+    // other member. The response was honest about the host it asked and silent
+    // about the hosts it did not, which on an emergency control reads as a
+    // complete result and is worse than no result at all.
+    //
+    // The subject list is `online_fleet()` — the same list the security scanner,
+    // the image scanner, the alert engine and the auto-healer sweep — plus the
+    // caller-selected server even when it is not currently `online`, because
+    // that host was already being killed before this change and must not
+    // silently stop being killed.
+    //
+    // What "unreachable" means here, and it means only one thing: NOBODY KILLED
+    // ANYTHING ON THAT MACHINE, so any root shell an intruder is holding there
+    // is still holding. That covers a member whose kill request failed, a member
+    // marked `offline`, and a member whose agent will not resolve (which is
+    // precisely what `online_fleet` skips). Those last two are deliberately not
+    // dialled — a dead host costs a full request timeout each and this is the
+    // button an operator presses in a hurry — but they are named in the
+    // response rather than omitted from it. One unreachable member is enough to
+    // make the legacy `agent_reached` field false for the whole call, so a
+    // client that only understands the old single-host shape still shows its
+    // "terminals may still be running" warning instead of a reassuring count.
+    let census: Vec<(uuid::Uuid, String, String, bool)> = sqlx::query_as(
+        "SELECT id, name, status, is_local FROM servers WHERE status != 'pending' \
+         ORDER BY is_local DESC, name ASC",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let mut targets: Vec<(uuid::Uuid, String, bool, crate::services::agent::AgentHandle)> = state
+        .agents
+        .online_fleet()
+        .await
+        .into_iter()
+        .map(|m| (m.id, m.name, m.is_local, m.agent))
+        .collect();
+    if !targets.iter().any(|(id, ..)| *id == server_id) {
+        let (name, is_local) = census
+            .iter()
+            .find(|(id, ..)| *id == server_id)
+            .map(|(_, name, _, is_local)| (name.clone(), *is_local))
+            .unwrap_or_else(|| ("selected server".to_string(), false));
+        targets.push((server_id, name, is_local, agent));
+    }
+
+    // Concurrently, like the metrics collector: a fleet of N hosts must not cost
+    // N round trips while an intruder holds a shell, and one wedged member must
+    // not delay the kill on the others. The 15s bound is far more than a SIGKILL
+    // sweep of a PID registry needs and far less than the client's 120s default;
+    // during a panic an unconfirmed host reported NOW beats a confirmation two
+    // minutes from now, and the error it produces points the operator at a
+    // machine to go and check by hand rather than away from one.
+    let results = futures::future::join_all(targets.iter().map(|(_, _, _, agent)| {
+        agent.post_long("/security/kill-terminals", Some(serde_json::json!({})), 15)
+    }))
+    .await;
+
+    let mut terminals_total: u64 = 0;
+    let mut root_total: u64 = 0;
+    let mut reached: usize = 0;
+    let mut server_results: Vec<serde_json::Value> = Vec::with_capacity(census.len().max(targets.len()));
+    let mut unreachable: Vec<serde_json::Value> = Vec::new();
+    let mut unreachable_names: Vec<String> = Vec::new();
+
+    for ((id, name, is_local, _), res) in targets.iter().zip(results.into_iter()) {
+        match res {
+            Ok(v) => {
+                let killed = v.get("killed").and_then(|k| k.as_u64());
+                let root = v.get("server_terminals_killed").and_then(|k| k.as_u64());
+                terminals_total += killed.unwrap_or(0);
+                root_total += root.unwrap_or(0);
+                reached += 1;
+                server_results.push(serde_json::json!({
+                    "server_id": id,
+                    "server_name": name,
+                    "is_local": is_local,
+                    "reached": true,
+                    "terminals_killed": killed,
+                    "server_terminals_killed": root,
+                    "registered": v.get("registered").and_then(|k| k.as_u64()),
+                }));
+            }
+            Err(e) => {
+                let why = e.to_string();
+                tracing::error!(
+                    "PANIC: {name} ({id}) did not kill terminals — root shells may still be live there: {why}"
+                );
+                server_results.push(serde_json::json!({
+                    "server_id": id,
+                    "server_name": name,
+                    "is_local": is_local,
+                    "reached": false,
+                    "terminals_killed": null,
+                    "server_terminals_killed": null,
+                    "error": why,
+                }));
+                unreachable.push(serde_json::json!({
+                    "server_id": id, "server_name": name, "reason": why,
+                }));
+                unreachable_names.push(name.clone());
+            }
         }
+    }
+
+    // The members that were never dialled at all. They belong in the same list
+    // as the ones that failed, because from the operator's side the fact is
+    // identical: that machine was not swept.
+    for (id, name, status, is_local) in &census {
+        if targets.iter().any(|(tid, ..)| tid == id) {
+            continue;
+        }
+        let why = if status.as_str() == "online" {
+            "no reachable agent configured for this server"
+        } else {
+            "server is not online — not dialled"
+        };
+        tracing::error!("PANIC: {name} ({id}) not swept ({why}) — root shells may still be live there");
+        server_results.push(serde_json::json!({
+            "server_id": id,
+            "server_name": name,
+            "is_local": is_local,
+            "reached": false,
+            "terminals_killed": null,
+            "server_terminals_killed": null,
+            "error": why,
+        }));
+        unreachable.push(serde_json::json!({
+            "server_id": id, "server_name": name, "reason": why,
+        }));
+        unreachable_names.push(name.clone());
+    }
+
+    let servers_total = server_results.len();
+    let servers_unreachable = unreachable.len();
+    // Legacy field, now fleet-wide: true only if NOTHING was left unswept.
+    let agent_reached = servers_unreachable == 0 && reached > 0;
+    // Legacy fields, now fleet totals. Still `null` when not a single host
+    // answered, which is the case the old frontend already renders as a warning.
+    let (terminals_killed, server_terminals_killed) = if reached > 0 {
+        (Some(terminals_total), Some(root_total))
+    } else {
+        (None, None)
     };
 
     // Revoke every issued session. Lockdown is enforced at the doors — login,
@@ -580,18 +925,43 @@ pub async fn panic_button(
         .map(|r| r.rows_affected())
         .unwrap_or(0);
 
-    // Audit + alert
+    // Audit + alert. Both carry the un-swept host list, not just the bare
+    // reason. The response below is the most detailed account of this event that
+    // will ever exist and it is also the shortest-lived — the session revocation
+    // above logs the pressing admin out, so the browser has one render in which
+    // to show it and then the page is gone. The immutable audit row and the
+    // out-of-band admin notification are the two places the answer to "which
+    // machines did we fail to cover" survives long enough for the incident
+    // review to read it.
+    let outcome = if unreachable_names.is_empty() {
+        format!(
+            "{reason} — all {servers_total} server(s) swept, {terminals_total} terminal(s) killed ({root_total} server/root)"
+        )
+    } else {
+        format!(
+            "{reason} — {reached}/{servers_total} server(s) swept, {terminals_total} terminal(s) killed ({root_total} server/root). NOT SWEPT, root shells may still be live: {}",
+            unreachable_names.join(", ")
+        )
+    };
     security_hardening::audit_log(
         &state.db, "panic", Some(&claims.email), None,
-        Some("system"), None, Some(reason), None, "critical",
+        Some("system"), None, Some(outcome.as_str()), None, "critical",
     ).await;
-    security_hardening::alert_lockdown(&state.db, reason, &format!("panic:{}", claims.email)).await;
+    security_hardening::alert_lockdown(&state.db, &outcome, &format!("panic:{}", claims.email)).await;
 
     Ok(Json(serde_json::json!({
         "status": "panic_activated",
+        // Legacy trio — same names, same types, now fleet-wide in meaning.
         "agent_reached": agent_reached,
         "terminals_killed": terminals_killed,
         "server_terminals_killed": server_terminals_killed,
+        // Fleet detail. `unreachable_servers` is the operational payload: each
+        // entry is a machine on which root terminals may still be running.
+        "servers_total": servers_total,
+        "servers_reached": reached,
+        "servers_unreachable": servers_unreachable,
+        "server_results": server_results,
+        "unreachable_servers": unreachable,
         "sessions_revoked": revoked,
         "shares_revoked": shares_revoked,
         "registration_disabled": true,

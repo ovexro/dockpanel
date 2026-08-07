@@ -28,9 +28,8 @@
 use axum::http::{HeaderMap, StatusCode};
 use uuid::Uuid;
 
-use crate::error::{agent_error, err, internal_error, ApiError};
+use crate::error::{err, internal_error, ApiError};
 use crate::routes::{is_reserved_domain_for, is_valid_domain};
-use crate::services::agent::AgentHandle;
 
 /// A claim that already exists and must not conflict with itself.
 ///
@@ -73,13 +72,12 @@ impl Occupant {
             Occupant::Site => "Domain already in use by a site",
             Occupant::GitDeploy => "Domain already in use by a git deployment",
             Occupant::DockerApp => {
-                "Domain already in use by a Docker app on this server. Rename or \
-                 remove the app first — deploying over it would replace its nginx \
-                 configuration."
+                "Domain already in use by a Docker app. Rename or remove the app \
+                 first — deploying over it would replace its nginx configuration."
             }
             Occupant::Stack => {
-                "Domain already in use by a Compose stack on this server. Change \
-                 that stack's domain or remove it first."
+                "Domain already in use by a Compose stack. Change that stack's \
+                 domain or remove it first."
             }
         }
     }
@@ -124,21 +122,27 @@ pub fn normalise(domain: &str) -> String {
     domain.trim().trim_end_matches('.').to_ascii_lowercase()
 }
 
-/// Assert that `domain` may be claimed on `server_id`, and return the normalised
-/// form to store.
+/// Assert that `domain` may be claimed anywhere in the fleet, and return the
+/// normalised form to store.
 ///
 /// Order matters: format, then reserved, then ownership — a malformed domain
 /// should be reported as malformed rather than as available.
 ///
-/// **Fails closed.** The Docker-app leg needs the agent, and if the agent cannot
-/// answer this returns the agent's own 502 rather than allowing the claim. That
-/// is not a new fragility: every one of these callers goes on to ask the same
-/// agent to write the vhost, so an unreachable agent already failed the request —
-/// it just used to fail it *after* taking the domain.
+/// **Fleet-wide, on every leg.** It takes the registry rather than one agent
+/// because the Docker-app leg used to ask only the caller's host while the three
+/// SQL legs were fleet-wide — and an app's domain is invisible to SQL, so that
+/// leg was the only thing that could ever catch it.
+///
+/// **Reachability:** an online member that will not answer is logged by name and
+/// skipped, not treated as a refusal. This is a deliberate change from the
+/// previous fail-closed note, which was true when one agent was consulted: with
+/// the whole fleet in scope, failing closed would let a single sick box block
+/// every domain claim everywhere. The collision that leniency could miss requires
+/// the unreachable host and the claim's target to be the SAME host, and in that
+/// case the vhost write immediately after this fails on its own.
 pub async fn ensure_claimable(
     db: &sqlx::PgPool,
-    agent: &AgentHandle,
-    server_id: Uuid,
+    agents: &crate::services::agent::AgentRegistry,
     domain: &str,
     headers: &HeaderMap,
     holder: Holder,
@@ -164,7 +168,7 @@ pub async fn ensure_claimable(
         ));
     }
 
-    if let Some(occupant) = find_occupant(db, agent, server_id, &domain, holder).await? {
+    if let Some(occupant) = find_occupant(db, agents, &domain, holder).await? {
         return Err(err(StatusCode::CONFLICT, occupant.message()));
     }
 
@@ -176,8 +180,7 @@ pub async fn ensure_claimable(
 /// ask the same question and get the same answer.
 pub async fn find_occupant(
     db: &sqlx::PgPool,
-    agent: &AgentHandle,
-    server_id: Uuid,
+    agents: &crate::services::agent::AgentRegistry,
     domain: &str,
     holder: Holder,
 ) -> Result<Option<Occupant>, ApiError> {
@@ -240,11 +243,34 @@ pub async fn find_occupant(
     // reads `dockpanel.app.domain` off each managed container and already returns
     // it from `GET /apps` — a single `docker.list_containers`, on the 20-permit
     // quick lane, not the long one. The panel simply never asked.
-    let apps = agent
-        .get("/apps")
-        .await
-        .map_err(|e| agent_error("Domain availability check", e))?;
-    if let Some(list) = apps.as_array() {
+    //
+    // ⚠ It asked exactly ONE host until v2.80.0 — the caller's — while all three
+    // SQL legs above are deliberately fleet-wide, and the comment justifying that
+    // ("the agent handle is already scoped to this server") described the code
+    // accurately while missing that scoping was the defect. A domain held by an
+    // app on host B therefore passed a claim made on host A, and since a Docker
+    // app's domain is invisible to every SQL guard, this leg was the only thing
+    // that could ever have caught it.
+    //
+    // A member we cannot reach is reported and skipped rather than treated as a
+    // refusal. Failing closed would make one offline box block every domain
+    // claim in the fleet, and the collision it would prevent needs the SAME host
+    // to be both the unreachable one and the claim's target — in which case the
+    // vhost write that follows fails on its own. Failing open silently is what
+    // produced this bug, so it does not fail open silently.
+    for member in agents.online_fleet().await {
+        let apps = match member.agent.get("/apps").await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    "Domain availability: could not ask {} about Docker-app domains ({e}) — \
+                     '{domain}' is being treated as free there",
+                    member.name
+                );
+                continue;
+            }
+        };
+        let Some(list) = apps.as_array() else { continue };
         for app in list {
             let Some(app_domain) = app.get("domain").and_then(|v| v.as_str()) else {
                 continue;
@@ -255,7 +281,6 @@ pub async fn find_occupant(
             return Ok(Some(Occupant::DockerApp));
         }
     }
-    let _ = server_id; // the agent handle is already scoped to this server
 
     Ok(None)
 }

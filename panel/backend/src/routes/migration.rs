@@ -343,10 +343,25 @@ pub async fn list(
 // ──────────────────────────────────────────────────────────────
 
 /// Start importing selected sites and databases from an analyzed migration.
+///
+/// **The destination is the row's, not the picker's.** Everything below is a
+/// write against one specific machine: it publishes an nginx vhost for a live
+/// customer domain, claims that domain, inserts a `sites` row that names its host
+/// permanently, and creates database containers. The archive those writes are fed
+/// from was unpacked and staged by the analyse step, on the host that step ran
+/// against — which is why `analyze` records the server on the migration row in the
+/// first place. Reading the destination back off the caller's server selection
+/// therefore asked a question the row had already answered, and answered it
+/// differently the moment an operator switched servers between analysing and
+/// importing: vhosts for somebody's live domains published on a machine that must
+/// not serve them, the domain claim registered against that machine, `sites` rows
+/// bound to it for good, database containers built there — and then not one file
+/// copied, because the staged archive was still sitting on the other host. Half a
+/// migration on the wrong box, and the half that landed is the half that answers
+/// DNS.
 pub async fn import(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     headers: axum::http::HeaderMap,
     Json(body): Json<ImportRequest>,
@@ -369,6 +384,31 @@ pub async fn import(
             &format!("Migration is '{}', expected 'analyzed'", migration.status),
         ));
     }
+
+    // Both halves of the destination come from the row: the id, because it is
+    // written into the `sites` rows and passed to the domain claim, and the handle,
+    // because it is what actually creates the vhosts and the database containers.
+    // Resolved BEFORE the status moves to 'importing' — a migration refused here has
+    // not started, and marking it started would leave the operator a row they have
+    // to reason about for a run that never happened.
+    //
+    // A row that names no server is refused rather than guessed at. The column is
+    // filled by `analyze` and has been for every migration since the fleet work, so
+    // the `None` arm means a row older than that — and the one thing that must never
+    // happen to an older row is having a host chosen for it by whoever opened the
+    // page. `agent_for_site_server` refuses an unreachable host on the same
+    // principle: not importing is recoverable, importing onto the wrong machine is
+    // not.
+    let server_id = migration.server_id.ok_or_else(|| {
+        tracing::warn!("Refusing to import migration {id}: its row names no server");
+        err(
+            StatusCode::CONFLICT,
+            "This migration is not associated with a server",
+        )
+    })?;
+    let agent =
+        crate::helpers::agent_for_site_server(&state, Some(server_id), &migration.backup_path)
+            .await?;
 
     let sites = body.sites.unwrap_or_default();
     let databases = body.databases.unwrap_or_default();
@@ -436,6 +476,10 @@ pub async fn import(
     // it is passed so that the choke point sees a real role from every caller
     // rather than a placeholder some later refactor would have to remember.
     let claim_role = claims.role.clone();
+    // The claim asks every online member whether a Docker app already holds the
+    // domain — an app's domain lives only in a container label, so no SQL leg can
+    // see it. That needs the registry rather than this task's single handle.
+    let claim_agents = state.agents.clone();
 
     tokio::spawn(async move {
         let mut results = serde_json::json!({
@@ -471,8 +515,7 @@ pub async fn import(
             // this is already on disk by the time the INSERT could reject it.
             let claimed = crate::services::domain_claim::ensure_claimable(
                 &db,
-                &agent,
-                server_id,
+                &claim_agents,
                 domain,
                 &claim_headers,
                 crate::services::domain_claim::Holder::New,
@@ -521,6 +564,13 @@ pub async fn import(
             }
 
             // 2. Insert site record into DB
+            //
+            // `server_id` is the migration row's, so the vhost written above, the
+            // claim recorded above it, this permanent binding and the file copy
+            // below all name one machine. A site row outlives the request that made
+            // it and is what every later handler reads to decide which host to talk
+            // to, so a wrong value here is not a failed import — it is a site that
+            // is quietly asked about on the wrong machine for the rest of its life.
             let site_result = sqlx::query_as::<_, (Uuid,)>(
                 "INSERT INTO sites (user_id, server_id, domain, runtime, status) \
                  VALUES ($1, $2, $3, $4, 'active') RETURNING id",
@@ -839,10 +889,17 @@ pub async fn progress(
 // ──────────────────────────────────────────────────────────────
 
 /// Delete a migration record and clean up temp files.
+///
+/// The staging directory this cleans up is on the host that unpacked the archive,
+/// which the row names — so that is where the cleanup goes, rather than wherever
+/// the server picker happens to be pointing. Sent to any other machine the call
+/// succeeds and does nothing: no staging directory exists there under this id, so
+/// the agent has nothing to delete and says so cheerfully, while the real
+/// extracted copy — a whole cPanel account's files — stays on disk with the panel
+/// record that could have found it now deleted.
 pub async fn remove(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -866,11 +923,26 @@ pub async fn remove(
     let cleanup_body = serde_json::json!({
         "migration_id": agent_migration_id,
     });
-    if let Err(e) = agent
-        .post("/migration/cleanup", Some(cleanup_body))
+
+    // An unresolvable host is not fatal here, and that is the one place this
+    // differs from the import. The record is panel state: it has to stay deletable
+    // after the machine that staged it has been decommissioned, or a fleet
+    // shrinking by one server leaves rows nobody can ever clear. So the cleanup is
+    // skipped and said out loud — the files are named as still being there — rather
+    // than aimed at a host that never had them, which is the outcome that looks
+    // like success and is not one.
+    match crate::helpers::agent_for_site_server(&state, migration.server_id, &migration.backup_path)
         .await
     {
-        tracing::warn!("Migration cleanup agent call failed for {id}: {e}");
+        Ok(agent) => {
+            if let Err(e) = agent.post("/migration/cleanup", Some(cleanup_body)).await {
+                tracing::warn!("Migration cleanup agent call failed for {id}: {e}");
+            }
+        }
+        Err(_) => tracing::warn!(
+            "Migration {id}: deleting the record without cleaning up — the server it was \
+             staged on could not be resolved, so the extracted files remain on that host"
+        ),
     }
 
     // Delete from DB

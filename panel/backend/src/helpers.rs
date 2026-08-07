@@ -682,6 +682,68 @@ pub async fn detect_public_ip_cached() -> String {
     ip
 }
 
+/// The public address to PUBLISH IN DNS for a resource that lives on `server_id`.
+///
+/// [`detect_public_ip`] answers "what is *this process's* public address", which is
+/// the panel's. That is the right answer only when the resource in question is on
+/// the panel's own box, and every auto-DNS path used it unconditionally: creating a
+/// site on a fleet member published an A record pointing at the PANEL, so the site
+/// was unreachable at the name it was just given. The delete path was worse in the
+/// quieter direction — it removes the record only when `content == server_ip`, so a
+/// member's record never matched and survived the site's deletion as a dangling A
+/// record aimed at a host that no longer serves it, which is a stale-DNS and
+/// subdomain-takeover surface rather than a cosmetic leftover.
+///
+/// `servers.ip_address` is the authoritative answer and was already being kept
+/// current — `agent_checkin` refreshes it on every check-in — but nothing consulted
+/// it when publishing. It was read only to draw dashboards.
+///
+/// Returns `None` rather than falling back to the panel's address when the host
+/// cannot be resolved. Publishing DNS is exactly the operation where substituting a
+/// different machine's address produces a confidently wrong, externally-visible
+/// result, so the callers skip the record and say so instead — the same
+/// refuse-rather-than-substitute rule [`agent_for_site_server`] applies to agents.
+pub async fn public_ip_for_server(
+    db: &sqlx::PgPool,
+    server_id: Option<uuid::Uuid>,
+) -> Option<String> {
+    let Some(server_id) = server_id else {
+        tracing::warn!("Auto-DNS: no server recorded for this resource — refusing to publish a record rather than guessing a host");
+        return None;
+    };
+
+    let row: Option<(Option<String>, bool)> =
+        sqlx::query_as("SELECT ip_address, is_local FROM servers WHERE id = $1")
+            .bind(server_id)
+            .fetch_optional(db)
+            .await
+            .ok()
+            .flatten();
+
+    match row {
+        // The local box: detect it outbound exactly as before. The `servers` row for
+        // the local agent often carries a LAN address (it is whatever the agent saw
+        // of itself), so the stored column is the wrong source here even though it
+        // is the right one for every other member.
+        Some((_, true)) => {
+            let ip = detect_public_ip_cached().await;
+            if ip.is_empty() { None } else { Some(ip) }
+        }
+        Some((Some(ip), false)) if !ip.trim().is_empty() => Some(ip.trim().to_string()),
+        Some((_, false)) => {
+            tracing::warn!(
+                "Auto-DNS: server {server_id} has no recorded ip_address — refusing to publish \
+                 a record. The panel's own address would point this name at the wrong machine."
+            );
+            None
+        }
+        None => {
+            tracing::warn!("Auto-DNS: server {server_id} no longer exists — refusing to publish a record");
+            None
+        }
+    }
+}
+
 /// Parse the certificate expiry string the agent returns for SSL
 /// provision / renew / DNS-01 responses.
 ///

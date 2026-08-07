@@ -1042,20 +1042,23 @@ else
   skip "H4 — metrics_collector.rs not extractable"
 fi
 
-# H5 — THE CLASS ARM. Exactly one spawn may still hold the legacy single-agent
-# handle, and it must be the healer (whose SSL and auto-sleep legs are a recorded
-# remainder). Any other service on that handle acts on this box no matter which
-# host its rows belong to.
+# H5 — THE CLASS ARM. NO spawn may hold the legacy single-agent handle.
+#
+# This arm used to allow exactly one, and named it: the healer, "whose SSL and
+# auto-sleep legs are a recorded remainder". That remainder was the defect. Held
+# on the panel own handle, `auto_renew_ssl` walked every site in the FLEET and
+# asked this box to renew certificates for domains it does not serve — so on a
+# member the validation could not succeed and the certificate expired on a live
+# site, unattended, every two minutes, needing no attacker. Both legs now take
+# the registry and resolve per row, so the allow-list is retired rather than
+# decremented: an allow-list that outlives its reason is how the next service
+# quietly joins it.
 if [ -n "$MN_S" ]; then
   LEGACY=$(count "$MN_S" 'state\.agent\.clone\(\)')
-  if [ "$LEGACY" -eq 1 ]; then
-    if has "$(flat "$(grep -B 2 -A 2 -E 'state\.agent\.clone\(\)' <<< "$MN_S" || true)")" 'auto_healer'; then
-      ok "H5 exactly one background service still holds the legacy local agent handle, and it is auto_healer"
-    else
-      bad "H5 the one legacy-handle spawn is NOT auto_healer — a different service is acting on this box regardless of host"
-    fi
+  if [ "$LEGACY" -eq 0 ]; then
+    ok "H5 no background service holds the legacy local agent handle — every spawn resolves per row"
   else
-    bad "H5 $LEGACY spawns hold the legacy local agent handle (allow-list is exactly 1: auto_healer)"
+    bad "H5 $LEGACY spawn(s) hold the legacy local agent handle — that service acts on THIS box no matter which host its rows name"
   fi
 else
   skip "H5 — main.rs not extractable"

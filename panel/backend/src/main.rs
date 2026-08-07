@@ -408,11 +408,14 @@ async fn main() {
     let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
     spawn_supervised("alert_engine", &shutdown_tx, move |rx| services::alert_engine::run(s_db.clone(), s_agents.clone(), rx));
 
-    // The healer gets the REGISTRY as well as the legacy local client: its disk
-    // heal acts on whichever server's alert is firing, which is not necessarily
-    // this one. See `auto_clean_disk`.
-    let (s_db, s_agent, s_agents) = (state.db.clone(), state.agent.clone(), state.agents.clone());
-    spawn_supervised("auto_healer", &shutdown_tx, move |rx| services::auto_healer::run(s_db.clone(), s_agent.clone(), s_agents.clone(), rx));
+    // The healer gets the REGISTRY and nothing else. Every one of its legs reads
+    // rows that name a host and then writes through an agent, so it has no use
+    // for a handle to this box in particular. It used to be handed the legacy
+    // local client too, and the two legs that took it — SSL renewal and
+    // container auto-sleep — were exactly the two that acted on the wrong
+    // machine. Not passing it is what stops that from coming back.
+    let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
+    spawn_supervised("auto_healer", &shutdown_tx, move |rx| services::auto_healer::run(s_db.clone(), s_agents.clone(), rx));
 
     // Reads every online server through its OWN agent: `metrics_history` is what
     // the trend alerts, the uptime sparkline, the Prometheus scrape and the fleet

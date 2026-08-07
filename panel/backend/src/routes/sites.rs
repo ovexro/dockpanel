@@ -342,8 +342,7 @@ pub async fn create(
     // normalised form is what gets stored and sent to the agent.
     let domain = domain_claim::ensure_claimable(
         &state.db,
-        &agent,
-        server_id,
+        &state.agents,
         &body.domain,
         &headers,
         domain_claim::Holder::New,
@@ -708,6 +707,13 @@ pub async fn create(
                 let dns_db = state.db.clone();
                 let dns_logs = logs.clone();
                 let dns_user_id = claims.sub;
+                // The host this site is being created ON. Auto-DNS must publish
+                // THIS machine's address, not the panel's — see
+                // `helpers::public_ip_for_server`. Here the two agree only on a
+                // single-box install; on a fleet the record used to point every
+                // member's site at the panel, which made the site unreachable at
+                // the very name the form had just claimed for it.
+                let dns_server_id = server_id;
                 tokio::spawn(async move {
                     // Extract parent domain
                     let parts: Vec<&str> = dns_domain.splitn(3, '.').collect();
@@ -728,7 +734,15 @@ pub async fn create(
                     };
 
                     if let Some((provider, cf_zone_id, cf_api_token, cf_api_email)) = zone {
-                        let server_ip = crate::helpers::detect_public_ip().await;
+                        let Some(server_ip) =
+                            crate::helpers::public_ip_for_server(&dns_db, Some(dns_server_id)).await
+                        else {
+                            // Refusing is the whole point: an A record naming the
+                            // wrong machine is worse than no record, because it
+                            // resolves and answers.
+                            emit_step(&dns_logs, site_id, "dns", "Creating DNS record", "failed", Some("could not determine this server's public address".to_string()));
+                            return;
+                        };
 
                         if provider == "cloudflare" {
                             if let (Some(zid), Some(tok)) = (cf_zone_id, cf_api_token) {
@@ -1938,6 +1952,13 @@ pub async fn remove(
         let dns_domain = site.domain.clone();
         let dns_db = state.db.clone();
         let dns_user = claims.sub;
+        // The host this site actually ran on. The cleanup below deletes a record
+        // only when its content matches this address, so reading the PANEL's
+        // address here meant a fleet member's record never matched and outlived
+        // the site — a dangling A record still resolving to a machine that no
+        // longer serves the name, which is a subdomain-takeover surface and not
+        // merely untidy.
+        let dns_server_id = site.server_id;
         tokio::spawn(async move {
             // Extract parent domain
             let parts: Vec<&str> = dns_domain.splitn(3, '.').collect();
@@ -1958,7 +1979,12 @@ pub async fn remove(
             };
 
             if let Some((provider, cf_zone_id, cf_api_token, cf_api_email)) = zone {
-                let server_ip = crate::helpers::detect_public_ip().await;
+                let Some(server_ip) =
+                    crate::helpers::public_ip_for_server(&dns_db, dns_server_id).await
+                else {
+                    tracing::warn!("Auto-DNS cleanup: could not resolve the public address of the server {dns_domain} lived on — leaving the record in place rather than deleting one that may belong to another host");
+                    return;
+                };
 
                 if provider == "cloudflare" {
                     if let (Some(zid), Some(tok)) = (cf_zone_id, cf_api_token) {
@@ -2224,15 +2250,12 @@ pub async fn add_alias(
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
     let agent = crate::helpers::agent_for_site_server(&state, site_server_id, &domain).await?;
-    let host = site_server_id
-        .ok_or_else(|| err(StatusCode::CONFLICT, "This site is not associated with a server"))?;
-
     // An alias becomes an nginx `server_name` on the caller's own vhost. Without
     // this guard any tenant could attach ANOTHER tenant's (or the panel's own)
     // live domain as an alias and hijack its traffic / intercept its ACME
     // HTTP-01 challenge. Reject reserved domains and any domain already served
     // by a site or git deployment on this server.
-    let alias = ensure_domain_available(&state, &agent, &body.alias, host, &headers, &claims.role).await?;
+    let alias = ensure_domain_available(&state, &body.alias, &headers, &claims.role).await?;
 
     let result = agent
         .post(
@@ -2507,6 +2530,27 @@ pub async fn clone_site(
         .map_err(|e| internal_error("clone site", e))?;
     let source = source.ok_or_else(|| err(StatusCode::NOT_FOUND, "Source site not found"))?;
 
+    // A clone is ONE agent operation: `/nginx/clone-site` reads the source
+    // docroot and writes the target docroot on the same box. So unlike the other
+    // handlers in this family the fix is not "dispatch from the row" — the target
+    // is genuinely a new site on the selected server, and the source is genuinely
+    // wherever it already lives. When those differ there is no host that can do
+    // the job, and the old code asked the SELECTED one, which has no such
+    // docroot. Everything expensive is already committed by the time the agent
+    // says so: the reseller quota slot is reserved and the `sites` row inserted
+    // before the call, so the caller was left owning a registered,
+    // quota-consuming site whose files never arrived.
+    //
+    // Refuse up front instead. Copying a docroot between machines is a feature
+    // (it needs a transfer), not something to fake by pointing at the wrong disk.
+    if source.server_id != Some(server_id) {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "This site lives on a different server. Select that server to clone it — \
+             cloning across servers is not supported yet.",
+        ));
+    }
+
     // clone_site creates a brand-new site and must enforce the SAME admission
     // controls create() does — otherwise it is a create() with none of the
     // guards: it bypassed lockdown, the per-hour rate limit, the reseller quota,
@@ -2530,7 +2574,7 @@ pub async fn clone_site(
                 &format!("Site creation rate limit: max {max_sites} sites per hour")));
         }
     }
-    let target_domain = &ensure_domain_available(&state, &agent, target_domain, server_id, &headers, &claims.role).await?;
+    let target_domain = &ensure_domain_available(&state, target_domain, &headers, &claims.role).await?;
     // Atomically reserve the reseller site-quota slot AFTER the (fallible) domain checks
     // so a rejected clone cannot leak a quota slot; this mirrors create(), where the
     // reserve is the last pre-check before the mutation. Release it if the INSERT fails;
@@ -2791,10 +2835,6 @@ pub async fn rename_domain(
     // the check and the write have to name the host the row does.
     let agent =
         crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
-    let host = site
-        .server_id
-        .ok_or_else(|| err(StatusCode::CONFLICT, "This site is not associated with a server"))?;
-
     let requested = body.get("new_domain")
         .and_then(|v| v.as_str())
         .unwrap_or("")
@@ -2807,8 +2847,7 @@ pub async fn rename_domain(
     // that the DESTINATION is free).
     let new_domain = domain_claim::ensure_claimable(
         &state.db,
-        &agent,
-        host,
+        &state.agents,
         &requested,
         &headers,
         domain_claim::Holder::Site(id),
@@ -3363,16 +3402,13 @@ fn is_safe_proxy_port(port: i32) -> bool {
 /// and this is the thin adapter for the two callers that pass a `&AppState`.
 async fn ensure_domain_available(
     state: &AppState,
-    agent: &crate::services::agent::AgentHandle,
     domain: &str,
-    server_id: Uuid,
     headers: &HeaderMap,
     claimant_role: &str,
 ) -> Result<String, ApiError> {
     domain_claim::ensure_claimable(
         &state.db,
-        agent,
-        server_id,
+        &state.agents,
         domain,
         headers,
         domain_claim::Holder::New,

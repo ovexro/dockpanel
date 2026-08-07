@@ -6,6 +6,144 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.80.0] - 2026-08-07
+
+### Security — an unattended loop let certificates expire on every fleet member
+
+`auto_renew_ssl` selected every site in the installation and renewed through the
+**panel's own agent**. On a single box those are the same machine, which is why
+this survived; on a fleet the panel was asked to renew a certificate for a domain
+it does not serve, HTTP-01 could not validate, and the certificate simply expired
+on a live customer site — unattended, on a 120-second tick, needing no attacker.
+The inverse was worse: where the local box could satisfy the challenge, the
+renewal succeeded and wrote the LOCAL certificate's expiry onto the remote site's
+row, pushing it out of the 45-day window so the loop stopped trying. A guaranteed
+outage behind a green panel.
+
+`auto_sleep_idle_containers` was the same shape: it asked the local nginx how
+recently a member's domain was served (always "unknown", so real traffic never
+counted), listed the local host's containers, and posted the stop locally.
+Auto-sleep was quietly inoperative for every fleet member.
+
+Both now resolve per row, and the auto-healer no longer receives a local-agent
+handle at all — the parameter is gone, so it cannot be reached for again.
+
+### Security — mail configuration was written to one host, for the whole fleet
+
+`sync_mail_config` ran three SELECTs with **no WHERE clause of any kind** and
+posted the result to whichever host the caller's `X-Server-Id` header named. Every
+mail domain, every mailbox's `password_hash` and `forward_to`, and every alias in
+the installation were written into one host's Postfix and Dovecot maps: a
+credential disclosure onto a machine that should never hold them, plus a
+mail-interception primitive, since that host would then accept mail for — and
+authenticate mailboxes of — domains it does not host.
+
+There was also **no caller predicate on mail at all**. `mail_domains` has no
+`user_id` column, so the scope extractor's check on a request header was the
+entire boundary between one administrator and another administrator's server.
+Removing the extractor without adding a predicate would have widened access, so
+both landed together as `MAIL_DOMAIN_CALLER_PREDICATE`.
+
+`create_domain` never bound `server_id`, so every mail domain created through the
+panel since the multi-server migration carried a NULL host. Because `/mail/sync`
+**rebuilds** the maps rather than merging them, filtering by server without
+repairing those rows would have deleted mailboxes from the host actually serving
+them. A migration backfills them (matching against `sites.domain` first, so a
+domain provisioned onto a member returns to the right host), and the rebuild
+refuses outright while any NULL row remains.
+
+`create_alias` never checked that the address belongs to the domain it is filed
+under. Postfix applies a virtual alias by address, so an alias filed under a
+domain you may write to could redirect mail for a different domain on the same
+host — the row said one thing and the map did another, and the map is what runs.
+
+### Security — a panic button that swept one machine
+
+The emergency lockdown wrote panel-global state — `lockdown_state`,
+`sessions_revoked_at`, registration, every terminal share — but killed terminals
+on a **single caller-selected agent**, then reported `terminals_killed` and
+`lockdown_active: true`. On a fleet it left live root shells on every other
+member while reading as complete. It now fans out, and names the hosts it could
+not sweep; an unreachable member during a panic is the loudest thing on the page.
+
+`lockdown_state.terminals_disabled` was **write-only** — set by `activate_lockdown`
+and read by nothing, anywhere. After a panic, an admin who signed back in could
+immediately open a fresh root terminal on any host while lockdown was active. The
+ticket mint, terminal sharing and shared-output views now honour it. (Revoking and
+listing shares deliberately stay open: they are the remedy, not the risk.)
+
+### Security — the wrong-host dispatch family, finished
+
+`v2.79.0` fixed 71 handlers that resolved a resource from its row and then acted
+through whichever host the browser named. This release closes the rest — roughly
+sixty more across git deploys, databases, backup orchestration, staging, stacks,
+mail, migration, logs and Docker apps — plus three shapes no census could see:
+
+- **`backup_destinations::test_connection`** contained no scope token at all. It
+  used the panel's own local client unconditionally, sending the **decrypted** S3
+  or SFTP credential to the panel for a destination a member will actually use,
+  and returned a green that described the panel's egress rather than the backup
+  host's.
+- **`databases::reset_password` and `query`** sent decrypted database passwords to
+  a machine the database does not run on. The agent's reset never verifies the old
+  password, so knowing a container name was the entire authorisation.
+- **`git_deploys::deploy`, `rollback` and `approve_deploy`** cloned, built and
+  deployed on the wrong host, injecting the deployment's full environment there.
+  `approve_deploy` additionally had no ownership term: one admin could approve
+  another's protected deploy.
+
+`migration::import` wrote vhosts, claimed domains and created database containers
+on the caller's selected host rather than the one holding the staged archive.
+`logs::log_stats` took a domain straight from a query parameter and never resolved
+a row at all.
+
+### Fixed — DNS records named the panel instead of the host
+
+Auto-DNS published the **panel's** public address for resources on any machine, so
+a site created on a member got an A record pointing at the wrong box and was
+unreachable at the name it had just been given. The delete path only removes a
+record whose content matches, so a member's record outlived its site as a dangling
+A record — a takeover surface rather than clutter. `servers.ip_address` was already
+being kept current by agent check-in and had simply never been consulted when
+publishing.
+
+### Fixed — domain claims asked one host about Docker apps
+
+Three of the claim's four legs were fleet-wide. The fourth — the only one that can
+see a Docker app, whose domain exists solely as a container label — asked the
+caller's host, so a domain held by an app on another member passed the check and
+the deploy replaced that app's nginx configuration.
+
+### Fixed — smaller consequences of the same mistake
+
+- Container quotas are per user but were counted on one host, so an account could
+  run its full limit on every server and read as within quota on each.
+- The port-availability preflight counted ports held by sites **fleet-wide**, so a
+  port free on this box was refused because another machine used it.
+- SMTP settings reached one host; the rest silently kept whatever they last had.
+- The SSH half of the login audit came from one server while the panel half was
+  fleet-wide, and the two were presented as siblings — a brute-force campaign
+  against a member's sshd was invisible unless that member happened to be selected.
+- Cloning a site across servers created the row and consumed the quota slot before
+  discovering the source docroot is on another machine. It is now refused up front.
+
+### Changed — the regression pin that was policing this class could not fail
+
+The suite's violation loops ran inside a pipeline, so the `FAIL` counter they
+incremented belonged to a subshell that then exited: the arm printed its ✗ marks
+and the suite still reported `FAIL 0` and exited 0. The one arm whose entire job
+is reporting violations had been unable to fail a build since it was written.
+
+The census itself is rebuilt. It used to require a handler to already use one of
+six correct-form spellings before it would be judged, which meant whole modules
+contributed zero members while holding live defects — and deleting a fixed
+handler's resolver call removed it from the census entirely, so deletion read as
+compliance. Membership now comes from the **schema**: any table carrying a
+`server_id` names a host, and a handler that reads such a row and then acts
+through an agent must take the host from the row. Two new arms cover what no
+route-scoped census can see — background services holding the local handle, and
+the agentless DNS shape.
+
 ### Changed — DockPanel is now free software under the AGPL v3
 
 The licence moves from the Business Source License 1.1 to the **GNU Affero General

@@ -5,7 +5,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::{AuthUser, ServerScope};
+use crate::auth::AuthUser;
 use crate::auth::Claims;
 use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::models::Site;
@@ -32,6 +32,45 @@ async fn get_site(state: &AppState, id: Uuid, claims: &Claims) -> Result<Site, A
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))
 }
 
+/// Resolve the one agent that can move files between a site and its staging environment.
+///
+/// `/staging/sync` is an rsync from `/var/www/{source}` into `/var/www/{target}` on whichever
+/// host is asked, so the operation only exists on a machine that holds both paths. Each row
+/// names its own host, and the pair has to agree.
+///
+/// `create` now inherits the parent's `server_id`, so nothing here makes a mismatched pair any
+/// more — but it made them for as long as it stamped the row with the caller's scope, and
+/// those rows are still in every database that ran that version. This is the guard that
+/// catches them, and it stays after the source is fixed: an invariant nothing enforces at
+/// write time is an invariant that comes back.
+///
+/// When the two disagree there is nothing to choose between — one of the paths is not there.
+/// Refusing says so; substituting either host would rsync one machine's document root into a
+/// directory belonging to a site that is not the one being copied. The mismatch is reported as
+/// a conflict rather than a not-found because the data is inconsistent, not absent.
+async fn same_host_agent(
+    state: &AppState,
+    parent: &Site,
+    staging: &Site,
+) -> Result<crate::services::agent::AgentHandle, ApiError> {
+    if parent.server_id != staging.server_id {
+        tracing::warn!(
+            "Refusing to move files between {} and {}: their rows name different servers \
+             ({:?} vs {:?})",
+            parent.domain,
+            staging.domain,
+            parent.server_id,
+            staging.server_id
+        );
+        return Err(err(
+            StatusCode::CONFLICT,
+            "This site and its staging environment are on different servers",
+        ));
+    }
+
+    crate::helpers::agent_for_site_server(state, staging.server_id, &staging.domain).await
+}
+
 /// POST /api/sites/{id}/staging — Create a staging environment.
 ///
 /// 1. Validate parent site (must be active, not already a staging site)
@@ -39,10 +78,22 @@ async fn get_site(state: &AppState, id: Uuid, claims: &Claims) -> Result<Site, A
 /// 3. Create site record with parent_site_id
 /// 4. Create nginx config via agent
 /// 5. Clone files from production
+///
+/// Takes no `ServerScope`, and that is NOT the usual exception for a handler that creates a
+/// row. `sites::create` and `stacks::create` legitimately read the host from the caller,
+/// because a brand-new site or stack has a free choice of machine and the caller's selection
+/// is the only thing that expresses it. A staging environment has no such choice: it exists
+/// to be rsynced to and from its parent's document root, and an rsync is one machine's work.
+/// Its host is therefore a property of the parent, not a decision this request gets to make —
+/// so it is inherited, not read from the header.
+///
+/// This is where the divergence `same_host_agent` refuses used to be manufactured: the row
+/// was stamped with the caller's scope, so creating staging for a site on host B while
+/// scoped to host A recorded a staging environment on A, cloned production's files onto A,
+/// and left every later sync and push with two rows naming two machines.
 pub async fn create(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
     headers: axum::http::HeaderMap,
     Json(body): Json<CreateStagingRequest>,
@@ -74,6 +125,24 @@ pub async fn create(
         ));
     }
 
+    // The parent's host, for the rest of this handler: the claim below, the vhost, the file
+    // clone and the `server_id` written on the new row all have to be the same machine, and
+    // that machine is the one production is already on. `server_id` is `Option` on the struct
+    // and `NOT NULL` in the schema, so a row predating the backfill would otherwise be bound
+    // as NULL and fail on the INSERT — refuse it here, with the reason, instead.
+    let server_id = parent.server_id.ok_or_else(|| {
+        tracing::warn!(
+            "Refusing to create staging for {}: its row names no server",
+            parent.domain
+        );
+        err(
+            StatusCode::CONFLICT,
+            "This site is not associated with a server",
+        )
+    })?;
+    let agent =
+        crate::helpers::agent_for_site_server(&state, Some(server_id), &parent.domain).await?;
+
     // Determine staging domain. `body.domain` is arbitrary — it is NOT required to
     // be a subdomain of the parent — so this is a full domain claim by an ordinary
     // tenant, and it must pass the same guard as every other one. Until now it
@@ -86,8 +155,7 @@ pub async fn create(
     };
     let staging_domain = crate::services::domain_claim::ensure_claimable(
         &state.db,
-        &agent,
-        server_id,
+        &state.agents,
         &requested,
         &headers,
         crate::services::domain_claim::Holder::New,
@@ -187,10 +255,12 @@ pub async fn create(
 }
 
 /// GET /api/sites/{id}/staging — Get staging site for a production site.
+///
+/// Takes no `ServerScope`: the staging row names its own host, and that is the only
+/// host whose disk this may be measured on.
 pub async fn get_staging(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Verify parent site ownership
@@ -205,6 +275,14 @@ pub async fn get_staging(
 
     match staging {
         Some(s) => {
+            // A disk-usage figure is a measurement of one specific machine. Read through
+            // the caller's handle it measured whichever host the request happened to be
+            // scoped to — on a fleet, some other box's `/var/www/{domain}`, reported as
+            // this environment's size with nothing in the answer to say otherwise. A wrong
+            // number here is worse than no number, because a wrong number is believed.
+            let agent =
+                crate::helpers::agent_for_site_server(&state, s.server_id, &s.domain).await?;
+
             // Get disk usage
             let usage = agent
                 .post(
@@ -227,10 +305,12 @@ pub async fn get_staging(
 }
 
 /// POST /api/sites/{id}/staging/sync — Sync production files → staging.
+///
+/// Takes no `ServerScope`: both directories in this copy are named by rows, and the rows
+/// decide which machine holds them.
 pub async fn sync_to_staging(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let parent = get_site(&state, id, &claims).await?;
@@ -242,6 +322,10 @@ pub async fn sync_to_staging(
             .await
             .map_err(|e| internal_error("sync to staging", e))?
             .ok_or_else(|| err(StatusCode::NOT_FOUND, "No staging environment found"))?;
+
+    // Production is the source and staging is the target, and both paths have to exist on
+    // the host that does the copying.
+    let agent = same_host_agent(&state, &parent, &staging).await?;
 
     agent
         .post(
@@ -278,10 +362,12 @@ pub async fn sync_to_staging(
 }
 
 /// POST /api/sites/{id}/staging/push — Push staging files → production.
+///
+/// Takes no `ServerScope`: the rows decide the host, and this direction writes over a live
+/// production document root, so the host had better be the right one.
 pub async fn push_to_prod(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let parent = get_site(&state, id, &claims).await?;
@@ -293,6 +379,9 @@ pub async fn push_to_prod(
             .await
             .map_err(|e| internal_error("push to prod", e))?
             .ok_or_else(|| err(StatusCode::NOT_FOUND, "No staging environment found"))?;
+
+    // Same pairing as the sync above, reversed: staging is the source, production the target.
+    let agent = same_host_agent(&state, &parent, &staging).await?;
 
     agent
         .post(
@@ -322,10 +411,13 @@ pub async fn push_to_prod(
 }
 
 /// DELETE /api/sites/{id}/staging — Delete the staging environment.
+///
+/// Takes no `ServerScope`. The caller's selection had no business here at all: `get_site`
+/// authorises the PARENT, and the row this then deletes is a different one that carries its
+/// own `server_id`.
 pub async fn destroy(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let _parent = get_site(&state, id, &claims).await?;
@@ -337,6 +429,17 @@ pub async fn destroy(
             .await
             .map_err(|e| internal_error("destroy", e))?
             .ok_or_else(|| err(StatusCode::NOT_FOUND, "No staging environment found"))?;
+
+    // The two calls below are a vhost removal and `/staging/delete-files`, which on the agent
+    // is `remove_dir_all("/var/www/{domain}")` with no ownership check of its own — the agent
+    // deletes the path it is handed, on the host it is asked. That makes the panel the only
+    // thing that decides which machine loses a document root, and it was deciding from the
+    // caller's request header while the authority sat unread in the row it had just loaded.
+    // On a fleet, a delete of a staging environment reached whichever box the operator's
+    // scope pointed at, and reported success either way: the DB row goes regardless, so the
+    // record of what should have been deleted disappears along with the wrong directory.
+    let agent =
+        crate::helpers::agent_for_site_server(&state, staging.server_id, &staging.domain).await?;
 
     // Remove nginx config
     let agent_path = format!("/nginx/sites/{}", staging.domain);

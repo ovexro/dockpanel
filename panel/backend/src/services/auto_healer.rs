@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::services::activity;
-use crate::services::agent::{AgentClient, AgentRegistry};
+use crate::services::agent::AgentRegistry;
 use crate::services::notifications;
 
 /// Cumulative count of auto-healer SSL renewal attempts that succeeded.
@@ -19,9 +19,15 @@ pub static SSL_RENEWALS_FAILURE: AtomicU64 = AtomicU64::new(0);
 
 /// Background task: auto-heals common issues when detected.
 /// Runs every 120 seconds (offset from alert engine to spread load).
+/// Takes the fleet registry and NOT the panel's local `AgentClient`, deliberately.
+/// Every leg of this loop reads rows that name a host and then writes through an
+/// agent, so there is no legitimate reason for it to hold a handle to this box in
+/// particular. Until v2.80.0 it held both and split them four lines apart — the
+/// two legs given the local client (`auto_renew_ssl`, `auto_sleep_idle_containers`)
+/// were the two that acted on the wrong machine. Removing the parameter is what
+/// keeps that from being re-introduced by an author who sees one in scope.
 pub async fn run(
     pool: PgPool,
-    agent: AgentClient,
     agents: AgentRegistry,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
 ) {
@@ -60,8 +66,8 @@ pub async fn run(
         if is_enabled(&pool).await {
             auto_restart_services(&pool, &agents).await;
             auto_clean_disk(&pool, &agents).await;
-            auto_renew_ssl(&pool, &agent).await;
-            auto_sleep_idle_containers(&pool, &agent).await;
+            auto_renew_ssl(&pool, &agents).await;
+            auto_sleep_idle_containers(&pool, &agents).await;
         }
 
         // Security hardening tasks share the healer's 2-minute tick but NOT its
@@ -727,14 +733,22 @@ async fn ssl_renewal_blocked(
     .await;
 }
 
-async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
+async fn auto_renew_ssl(pool: &PgPool, agents: &AgentRegistry) {
     // Widen the window to 45 days so we pick up short-lived (6-day) and
     // 45-day-profile certs with enough lead time. ARI trims this further.
-    // `s.server_id` is selected but the renewal itself still runs against the
-    // panel's own agent — see the note on this function's remaining fleet leg.
-    // It is read here for the two things that must name a host whatever the
-    // renewal does: the cooldown row and the failure alert. Both used to launder
-    // that identity, the alert through `ORDER BY created_at ASC LIMIT 1` below.
+    //
+    // `s.server_id` names the host that actually serves this site, and the
+    // renewal now runs against THAT host's agent. It did not until v2.80.0:
+    // this loop took the panel's own `AgentClient` while the query above it was
+    // fleet-wide, so for every site on a fleet member the panel asked its own
+    // box to renew a certificate for a domain that box does not serve. HTTP-01
+    // cannot validate from there, so the certificate simply expired on a live
+    // customer site — unattended, every two minutes, needing no attacker. The
+    // inverse was worse: a local success (DNS-01, or a same-named vhost on the
+    // panel) wrote the LOCAL certificate's expiry onto the remote site's row,
+    // pushing it out of the 45-day window so the loop stopped trying, leaving a
+    // guaranteed outage behind a green panel.
+    //
     // The column is NOT NULL since the multi-server migration, so this needs no
     // migration and cannot widen the result set.
     let sites: Vec<(
@@ -765,6 +779,25 @@ async fn auto_renew_ssl(pool: &PgPool, agent: &AgentClient) {
         let (site_id, domain, user_id, runtime, proxy_port, php_version, root_path,
              ssl_expiry, ssl_renewal_at_initial, ssl_renewal_checked_at, ssl_profile,
              server_id) = row;
+
+        // Resolve the host from the ROW before doing anything else. Every leg
+        // below writes: ARI state, the certificate itself, `ssl_expiry`, and a
+        // full vhost re-render. Aiming any of them at a host the site does not
+        // run on is a cross-host write, so an unreachable server is a reason to
+        // retry on the next tick and never a reason to act somewhere else —
+        // the same rule `preview_cleanup` and `backup_policy_executor` follow.
+        let agent = match agents.for_server(*server_id).await {
+            Ok(a) => a,
+            Err(e) => {
+                tracing::warn!(
+                    "Auto-heal: site {domain} lives on server {server_id}, which is \
+                     unreachable ({e}) — skipping SSL renewal this cycle. Refusing to \
+                     renew a certificate through a different host."
+                );
+                continue;
+            }
+        };
+
         let mut ssl_renewal_at = *ssl_renewal_at_initial;
         let owner_email: String = match sqlx::query_scalar(
             "SELECT email FROM users WHERE id = $1",
@@ -1749,10 +1782,19 @@ async fn security_check_lockdown_expiry(pool: &PgPool) {
 }
 
 /// Auto-sleep: stop containers that have been idle beyond their configured threshold.
-async fn auto_sleep_idle_containers(pool: &PgPool, agent: &AgentClient) {
-    // Fetch all containers with auto-sleep enabled and not already sleeping
-    let configs: Vec<(String, String, Option<String>, i32)> = sqlx::query_as(
-        "SELECT container_id, container_name, domain, sleep_after_minutes \
+async fn auto_sleep_idle_containers(pool: &PgPool, agents: &AgentRegistry) {
+    // Fetch all containers with auto-sleep enabled and not already sleeping.
+    //
+    // `server_id` was added to this table in v2.80.0 and is what makes the loop
+    // fleet-correct. Before it existed there was no row to resolve a host from,
+    // so every leg below ran against the panel's own agent: the last-activity
+    // question went to the LOCAL nginx (which has never heard of a member's
+    // domain, so it answered "unknown" and real traffic never counted), the
+    // running-check listed the LOCAL host's containers, and the stop was posted
+    // to the LOCAL agent. Auto-sleep was quietly inoperative for every fleet
+    // member — the failure looked exactly like "nothing was idle".
+    let configs: Vec<(String, String, Option<String>, i32, Option<uuid::Uuid>)> = sqlx::query_as(
+        "SELECT container_id, container_name, domain, sleep_after_minutes, server_id \
          FROM container_sleep_config \
          WHERE auto_sleep_enabled = true AND is_sleeping = false"
     )
@@ -1766,7 +1808,31 @@ async fn auto_sleep_idle_containers(pool: &PgPool, agent: &AgentClient) {
 
     let now = chrono::Utc::now();
 
-    for (container_id, container_name, domain, threshold_minutes) in &configs {
+    for (container_id, container_name, domain, threshold_minutes, server_id) in &configs {
+        // Resolve the host from the row. The backfill gave every existing row a
+        // server, so a NULL here means a row written by something that does not
+        // set the column yet — refuse rather than falling back to this box,
+        // which is the behaviour that made the bug invisible in the first place.
+        let agent = match server_id {
+            Some(sid) => match agents.for_server(*sid).await {
+                Ok(a) => a,
+                Err(e) => {
+                    tracing::warn!(
+                        "Auto-sleep: {container_name} lives on server {sid}, which is \
+                         unreachable ({e}) — skipping this cycle rather than acting on \
+                         a different host."
+                    );
+                    continue;
+                }
+            },
+            None => {
+                tracing::warn!(
+                    "Auto-sleep: {container_name} has no server recorded — skipping. \
+                     Guessing a host here would stop a container on the wrong machine."
+                );
+                continue;
+            }
+        };
         // Real traffic counts as activity, and it is the only thing that should.
         //
         // Nothing else writes `last_activity_at` from visitors: the column moves
