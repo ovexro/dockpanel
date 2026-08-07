@@ -6,6 +6,58 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.85.0] - 2026-08-07
+
+### Security — adding a passkey now requires you to confirm who you are
+
+A passkey is the only credential DockPanel mints that survives every reset it
+offers. Clearing a user's 2FA, resetting their password and signing out all of
+their sessions all leave an enrolled passkey working, and passkey sign-in
+deliberately does not take the 2FA step. Enrolment, meanwhile, required nothing
+but a session. So anyone who reached an open session — a shared machine, a
+stolen cookie, a script on the page — could enrol their own passkey and convert
+that moment into permanent, 2FA-free access that no administrator action could
+revoke. Deleting the account was the only remedy.
+
+`POST /api/auth/passkey/register/begin` now requires proof: the current
+password, a code from the authenticator, or a recovery code. **Any one of them
+is enough, deliberately.** An administrator who has lost their authenticator
+still knows their password, and the security-hardening guide tells exactly that
+person to register a passkey as their way back — a door that demanded a TOTP
+code would refuse them at the moment they need it, which is the same correction
+`2fa/disable` already had to be given in v2.83.0.
+
+An account that signs in only through an identity provider has no password by
+construction and may hold no authenticator. Rather than barring it from passkeys
+permanently, it falls back to session freshness: it is asked to sign in again
+with its provider if its session is more than five minutes old. This is a weaker
+check than a credential and is documented as such — it bounds a session replayed
+from another machine, not a script running on the panel's own origin.
+
+The refusal is a **403 with a `reauth_required` code**, never a 401: the frontend
+intercepts every 401 globally and navigates to `/login` before the body is read,
+so a 401 here would have logged people out of the page they were standing on the
+first time they mistyped a password.
+
+Two supporting changes: a new passkey now raises a notification **to the account
+that owns it**, and passkeys appear in **Export my data** — the panel was
+exporting the credential class that can be revoked while omitting the one that
+cannot.
+
+⚠ **Accepted cost, named rather than discovered:** the enrolment door reuses the
+2FA attempt limiter, which is keyed on user id alone. Five wrong passwords here
+also lock that user out of `/auth/2fa/disable` and `/auth/2fa/recovery-codes`
+for five minutes.
+
+### Not changed, deliberately
+
+`DELETE /api/auth/passkeys/{id}` still deletes unconditionally. A "last remaining
+factor" guard was considered and rejected: the attack adds a credential and never
+removes one, the route needs a live session so lost hardware cannot reach it, and
+no account can reach zero doors by deleting a passkey. Refusing would only take
+the recovery path away from the people most likely to need it. The Remove button
+did gain a confirmation step.
+
 ### Security — the react-router advisory waiver has been retired
 
 `GHSA-qwww-vcr4-c8h2` was waived on the written grounds that it needs the React

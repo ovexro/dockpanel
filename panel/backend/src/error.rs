@@ -12,6 +12,18 @@ pub type ApiError = (StatusCode, Json<serde_json::Value>);
 /// operator their agent is offline.
 pub const CODE_AGENT_UNREACHABLE: &str = "agent_unreachable";
 
+/// Stable machine-readable marker for "re-present a credential before this
+/// account may enrol a new authenticator".
+///
+/// The status carried alongside it is deliberately **403, never 401**. The
+/// frontend intercepts every 401 globally, navigates to `/login` and throws a
+/// fixed "Unauthorized" before the response body is ever parsed, so a 401 here
+/// would log a user out of the page they are standing on the first time they
+/// mistyped a password — and the challenge describing what to present would be
+/// destroyed on the way. The session is still valid; only this one action is
+/// refused, which is what 403 means.
+pub const CODE_REAUTH_REQUIRED: &str = "reauth_required";
+
 /// Longest agent-authored message passed through to a client.
 const MAX_AGENT_MSG: usize = 400;
 

@@ -15,9 +15,21 @@ const PUBLIC_AUTH_PATHS = new Set([
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /// Stable marker the backend sends alongside the status, for the cases where
+  /// the status alone cannot say what happened. Undefined on a 401, which is
+  /// intercepted below before the body is ever read.
+  code?: string;
+  body?: Record<string, unknown>;
+  constructor(
+    status: number,
+    message: string,
+    code?: string,
+    body?: Record<string, unknown>
+  ) {
     super(message);
     this.status = status;
+    this.code = code;
+    this.body = body;
   }
 }
 
@@ -59,7 +71,12 @@ async function request<T = unknown>(
     if ((data as { code?: string }).code === "agent_unreachable") {
       message = "Agent offline — the DockPanel agent is not responding.";
     }
-    throw new ApiError(res.status, message);
+    throw new ApiError(
+      res.status,
+      message,
+      (data as { code?: string }).code,
+      data as Record<string, unknown>
+    );
   }
 
   return data as T;

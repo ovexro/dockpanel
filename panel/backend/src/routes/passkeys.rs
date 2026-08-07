@@ -13,6 +13,8 @@ use std::time::Instant;
 
 use crate::auth::AuthUser;
 use crate::error::{internal_error, err, ApiError};
+use crate::models::User;
+use crate::routes::auth::{require_enrolment_proof, EnrolmentProof};
 use crate::AppState;
 
 // ─── Challenge State ───────────────────────────────────────────
@@ -302,12 +304,50 @@ fn parse_cose_p256_key(cbor_bytes: &[u8]) -> Result<VerifyingKey, String> {
 // ─── Registration Endpoints ────────────────────────────────────
 
 /// POST /api/auth/passkey/register/begin — Start passkey registration ceremony.
+///
+/// Guarded by [`require_enrolment_proof`]: a session alone is not enough to
+/// plant a credential that outlives every reset this panel offers. The proof is
+/// checked HERE rather than at `register_complete` because this is the only
+/// place a registration challenge is ever constructed, and asking again after
+/// the browser's own WebAuthn dialog would prompt the user twice for one act.
+///
+/// The body is optional by design — the first request carries no proof, and the
+/// refusal it earns is what tells the card which fields to collect. A bare
+/// `Json<T>` would reject a request with no `Content-Type` with a 415 raised
+/// before this handler runs, carrying no code the client could branch on.
 pub async fn register_begin(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     AuthUser(claims): AuthUser,
+    body: Option<Json<EnrolmentProof>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     purge_expired(&state.passkey_challenges);
+
+    let user: User = sqlx::query_as("SELECT * FROM users WHERE id = $1")
+        .bind(claims.sub)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| internal_error("passkey register", e))?;
+
+    let proof = body.map(|Json(p)| p).unwrap_or_default();
+
+    if let Err(e) = require_enrolment_proof(&state, &claims, &user, &proof).await {
+        // A rejected proof is worth a trail; a bare challenge is not an event.
+        if proof.code.is_some() || proof.current_password.is_some() {
+            crate::services::activity::log_activity(
+                &state.db,
+                claims.sub,
+                &claims.email,
+                "passkey.reauth_failed",
+                Some("passkey"),
+                None,
+                None,
+                None,
+            )
+            .await;
+        }
+        return Err(e);
+    }
 
     let rp_id = get_rp_id_from_headers(&headers, &state);
 
@@ -503,6 +543,24 @@ pub async fn register_complete(
         &state.db, claims.sub, &claims.email, "passkey.registered",
         Some("passkey"), Some(name), None, None,
     ).await;
+
+    // Tell the OWNER, not the admins. A planted credential is durable mainly
+    // because it is silent: the activity log is not a surface anyone watches,
+    // and no reset removes the row once it exists. `None` here would notify
+    // every administrator — that is, everyone except the person affected.
+    crate::services::notifications::notify_panel(
+        &state.db,
+        Some(claims.sub),
+        "New passkey added",
+        &format!(
+            "A passkey named \"{name}\" was added to your account. If this wasn't you, \
+             remove it in My Account and change your password."
+        ),
+        "warning",
+        "security",
+        Some("/account"),
+    )
+    .await;
 
     tracing::info!("Passkey registered for user {} ({})", claims.email, cred_id_b64);
 

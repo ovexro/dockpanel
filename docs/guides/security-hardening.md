@@ -152,6 +152,19 @@ Two limits worth knowing before you rely on it:
 - **It does not remove passkeys**, which sign in on their own without the 2FA step. It is a repair for a locked-out account, not an eviction tool: if you are responding to a compromise, review that account's passkeys and sessions as well.
 - **A sole administrator who has lost both their authenticator and their recovery codes cannot be recovered through the panel**, because there is no second administrator to perform the reset. Guard against this in advance: register a passkey (passkey sign-in does not require the 2FA step), keep a second administrator account, or keep your recovery codes somewhere you will still have them. Otherwise the only route back is clearing `totp_enabled`, `totp_secret` and `recovery_codes` for that row directly in PostgreSQL.
 
+### Adding a passkey asks you to confirm who you are
+
+Since v2.85.0, adding a passkey requires you to re-present a credential you already hold — your current password, a code from your authenticator, or one of your recovery codes. **Any one of them is enough**, deliberately: an administrator who has lost their authenticator still knows their password, and the bullet above tells that person to register a passkey. A door that demanded a TOTP code would refuse them at exactly the moment they need it.
+
+The reason for the prompt is that a passkey is the only credential this panel mints that **survives every reset it offers**. Clearing a user's 2FA, resetting their password and signing out all of their sessions leave an enrolled passkey working, and passkey sign-in does not take the 2FA step. So if someone reaches an open session — a shared machine, a stolen cookie — enrolling a passkey would convert that moment into permanent access. Confirming a credential closes that, because a session hijacker holds the session and nothing else.
+
+Two consequences worth knowing:
+
+- **An account that signs in only through an identity provider** (Google, GitHub) has no password to confirm and may have no authenticator. It is asked to sign in again with its provider if its session is more than five minutes old, and is not prompted at all if it has just signed in. This is a weaker check than a password and is not equivalent to one; it bounds a session replayed from another machine, not a script running on the panel's own origin.
+- **You are notified when a passkey is added to your account**, in the panel's notification centre, and passkeys now appear in **Export my data**. If a passkey you do not recognise appears, remove it in **My Account** and change your password.
+
+Removing a passkey is not guarded, and deliberately so: the person who has lost the authenticator holding it is exactly the person who needs to remove it, and a passkey is never an account's only way in — the password and identity-provider doors remain.
+
 ## IP Whitelist
 
 Restrict panel access to specific IP addresses. When configured, login attempts from non-whitelisted IPs are rejected before password validation.

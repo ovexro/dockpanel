@@ -1088,6 +1088,175 @@ fn twofa_rate_limit_clear(state: &AppState, user_id: uuid::Uuid) {
     attempts.remove(&user_id);
 }
 
+/// How stale a session may be before an account that can present *nothing* is
+/// asked to sign in again.
+///
+/// Deliberately far shorter than the session cookie's own `Max-Age` (7200s, in
+/// `issue_session_pub` below). A window at or above the cookie lifetime is
+/// satisfied by every live session by construction: the check would compile,
+/// run, and guard nothing.
+const REAUTH_MAX_SESSION_AGE_SECS: i64 = 300;
+
+/// Proof presented when enrolling a new authenticator. Both fields are optional
+/// because the *first* request carries neither — that request IS the challenge,
+/// and the refusal it earns is what tells the client which fields to collect.
+#[derive(Deserialize, Default)]
+pub struct EnrolmentProof {
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub current_password: Option<String>,
+}
+
+/// The refusal that asks a caller to re-present a credential.
+///
+/// `methods` is a LIST, never a single chosen value: an account holding both a
+/// password and an authenticator must be offered both, for the reason spelled
+/// out in [`require_enrolment_proof`].
+fn reauth_required(msg: &str, methods: &[&str], provider: Option<&str>) -> ApiError {
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({
+            "error": msg,
+            "code": crate::error::CODE_REAUTH_REQUIRED,
+            "methods": methods,
+            "provider": provider,
+        })),
+    )
+}
+
+/// Require proof of identity before this account may enrol a new authenticator.
+///
+/// **Why enrolment and not removal.** A passkey is the only credential this
+/// panel mints that survives every remediation it offers: resetting the
+/// password, clearing 2FA and revoking every session all leave the row in
+/// `passkeys` intact and immediately usable, and passkey sign-in does not take
+/// the 2FA step. So a session hijacker who enrols one converts a transient
+/// compromise into a permanent, 2FA-free door. The door to guard is the one
+/// that PLANTS the credential.
+///
+/// **Why any one factor, and not the strongest.** The branches below are
+/// non-exclusive on purpose. The security-hardening guide tells a sole
+/// administrator who has lost both authenticator and recovery codes to register
+/// a passkey — that is the documented way back. Demanding a TOTP code here
+/// would refuse exactly those accounts at exactly the door that repairs them,
+/// which is the mistake `twofa_disable` above already had to be corrected for.
+/// Against the threat actually being closed — a hijacker holding a session
+/// cookie and neither the password nor the authenticator — a password is just
+/// as unanswerable as a code.
+///
+/// **Why a freshness fallback rather than a refusal.** An account created
+/// through an identity provider has an empty password hash by construction and
+/// may hold no authenticator, so it can present nothing at all. Refusing it
+/// would bar those accounts from passkeys permanently — a subtraction wearing a
+/// safeguard's clothes. It falls back to session age instead, which is a real
+/// but weaker bound: it stops a cookie replayed from another machine and buys
+/// little against script injection on the panel's own origin. Stated plainly so
+/// the next reader does not mistake it for equivalence.
+pub async fn require_enrolment_proof(
+    state: &AppState,
+    claims: &Claims,
+    user: &User,
+    proof: &EnrolmentProof,
+) -> Result<(), ApiError> {
+    let has_password = !user.password_hash.is_empty();
+    let has_totp = user.totp_enabled;
+
+    // Nothing to present. Fall back to how recently this session authenticated.
+    // `iat` is authentication time here: it is stamped once when the session is
+    // minted and there is no refresh route that would re-stamp it.
+    if !has_password && !has_totp {
+        let age = chrono::Utc::now().timestamp() - claims.iat as i64;
+        if age <= REAUTH_MAX_SESSION_AGE_SECS {
+            return Ok(());
+        }
+        let provider = user.oauth_provider.as_deref();
+        let label = provider.unwrap_or("your identity provider");
+        return Err(reauth_required(
+            &format!("For security, sign in again with {label} before adding a passkey."),
+            &["oauth"],
+            provider,
+        ));
+    }
+
+    // Checked before any verification so a locked-out caller is refused without
+    // spending an Argon2 hash on them.
+    twofa_rate_limit_check(state, user.id)?;
+
+    let mut passed = false;
+
+    if has_password {
+        if let Some(candidate) = proof.current_password.as_deref().filter(|c| !c.is_empty()) {
+            // Unreachable on an empty hash, so unlike `login` this cannot parse
+            // an empty string and fail internally.
+            if let Ok(parsed) = PasswordHash::new(&user.password_hash) {
+                passed = Argon2::default()
+                    .verify_password(candidate.as_bytes(), &parsed)
+                    .is_ok();
+            }
+        }
+    }
+
+    if !passed && has_totp {
+        if let Some(candidate) = proof.code.as_deref().filter(|c| !c.is_empty()) {
+            if let Some(secret_b32_enc) = user.totp_secret.as_ref() {
+                let secret_b32 = crate::services::secrets_crypto::decrypt_credential_or_legacy(
+                    secret_b32_enc,
+                    &state.config.jwt_secret,
+                );
+                if let Ok(secret) = Secret::Encoded(secret_b32).to_bytes() {
+                    if let Ok(totp) = TOTP::new(
+                        Algorithm::SHA1,
+                        6,
+                        1,
+                        30,
+                        secret,
+                        Some("DockPanel".to_string()),
+                        user.email.clone(),
+                    ) {
+                        passed = totp.check_current(candidate).unwrap_or(false);
+                    }
+                }
+            }
+            // The recovery codes are the fallback for a lost authenticator, and
+            // this is one of the doors that repairs the account.
+            if !passed {
+                passed = try_recovery_code(&state.db, user, candidate).await?;
+            }
+        }
+    }
+
+    if passed {
+        twofa_rate_limit_clear(state, user.id);
+        return Ok(());
+    }
+
+    // Only an ATTEMPT counts against the limiter. The bare challenge request
+    // carries no proof, and five visits to the account page must not lock the
+    // user out of `/auth/2fa/disable` and the recovery-code reissue route,
+    // which share this counter keyed on user id alone.
+    let attempted = proof.code.is_some() || proof.current_password.is_some();
+    if attempted {
+        twofa_rate_limit_record(state, user.id);
+    }
+
+    let mut methods: Vec<&str> = Vec::new();
+    if has_password {
+        methods.push("password");
+    }
+    if has_totp {
+        methods.push("totp");
+    }
+
+    let msg = match (has_password, has_totp) {
+        (true, true) => "Confirm your password, or enter a code from your authenticator app or a recovery code, to add a passkey.",
+        (true, false) => "Confirm your password to add a passkey.",
+        _ => "Enter a code from your authenticator app, or one of your recovery codes, to add a passkey.",
+    };
+
+    Err(reauth_required(msg, &methods, None))
+}
+
 /// How many unused recovery codes an account is holding.
 ///
 /// Returns 0 for both "never enrolled" and "corrupted JSON", because this feeds
@@ -1836,11 +2005,21 @@ pub async fn export_my_data(
         "SELECT ip_address, user_agent, created_at FROM user_sessions WHERE user_id = $1"
     ).bind(claims.sub).fetch_all(&state.db).await.unwrap_or_default();
 
+    // Passkeys belong here for the same reason sessions do, and more urgently:
+    // a session can be revoked, a passkey survives every reset the panel
+    // offers. Exporting the revocable credential while omitting the permanent
+    // one would leave this the only self-service surface that cannot show a
+    // user what signs in as them.
+    let passkeys: Vec<(String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT name, created_at FROM passkeys WHERE user_id = $1"
+    ).bind(claims.sub).fetch_all(&state.db).await.unwrap_or_default();
+
     Ok(Json(serde_json::json!({
         "user": { "email": user.0, "role": user.1, "oauth_provider": user.2, "2fa_enabled": user.3, "created_at": user.4 },
         "sites": sites.iter().map(|(d,r)| serde_json::json!({"domain": d, "runtime": r})).collect::<Vec<_>>(),
         "recent_activity": activity.iter().map(|(a,t,c)| serde_json::json!({"action": a, "target": t, "at": c})).collect::<Vec<_>>(),
         "sessions": sessions.iter().map(|(ip,ua,c)| serde_json::json!({"ip": ip, "user_agent": ua, "at": c})).collect::<Vec<_>>(),
+        "passkeys": passkeys.iter().map(|(n,c)| serde_json::json!({"name": n, "at": c})).collect::<Vec<_>>(),
         "exported_at": chrono::Utc::now(),
     })))
 }

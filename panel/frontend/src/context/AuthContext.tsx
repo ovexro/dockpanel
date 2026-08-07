@@ -31,6 +31,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data) setUser(data);
+        // An account with no password and no authenticator re-authenticates by
+        // signing in again with its identity provider. That callback redirects
+        // to "/", so the way back to the page the user was actually on has to
+        // be carried client-side.
+        if (data && sessionStorage.getItem("dp:passkey-return")) {
+          sessionStorage.removeItem("dp:passkey-return");
+          window.location.replace("/account");
+        }
       })
       .catch(() => { /* not logged in */ })
       .finally(() => setLoading(false));

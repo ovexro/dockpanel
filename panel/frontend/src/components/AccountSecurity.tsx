@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type ReactNode } from "react";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 
 /**
  * The self-service half of an account: the things a person changes about
@@ -98,6 +98,15 @@ function Confirm({ label, onConfirm, onCancel }: { label: string; onConfirm: () 
 
 const errText = (e: unknown, fallback: string) => (e instanceof Error ? e.message : fallback);
 
+// Which lengths count as a complete code. Six is a code from the authenticator;
+// sixteen is a recovery code; eight is a recovery code issued before v2.84.0,
+// when they were half this width. Those older codes are still valid, and the
+// people holding them are exactly the people these screens exist for.
+//
+// Defined ONCE, at module scope, because two cards now gate a button on it and
+// a second copy is how one of them silently stops accepting a width.
+const codeReady = (v: string) => v.length === 6 || v.length === 8 || v.length === 16;
+
 // ── Two-Factor Authentication ────────────────────────────────────────────
 
 export function TwoFactorCard() {
@@ -114,11 +123,7 @@ export function TwoFactorCard() {
   const [msg, setMsg] = useState<Msg>({ text: "", type: "" });
   const qrRef = useRef<HTMLDivElement>(null);
 
-  // 6 = a code from the authenticator. 16 = a recovery code. 8 = a recovery code
-  // issued before v2.84.0, when they were half this width; those are still valid
-  // and must still be typeable, because the people holding them are exactly the
-  // people this screen exists for.
-  const codeReady = authCode.length === 6 || authCode.length === 8 || authCode.length === 16;
+  const codeOk = codeReady(authCode);
 
   useEffect(() => {
     api.get<{ enabled: boolean; recovery_codes_remaining?: number }>("/auth/2fa/status")
@@ -194,7 +199,7 @@ export function TwoFactorCard() {
                   drawn on screen: it holds ten codes it has never seen, so its
                   fallback exists only in the database. */}
               <button
-                disabled={loading || !codeReady}
+                disabled={loading || !codeOk}
                 onClick={async () => {
                   setLoading(true);
                   setMsg({ text: "", type: "" });
@@ -215,7 +220,7 @@ export function TwoFactorCard() {
                 New recovery codes
               </button>
               <button
-                disabled={loading || !codeReady}
+                disabled={loading || !codeOk}
                 onClick={async () => {
                   setLoading(true);
                   setMsg({ text: "", type: "" });
@@ -338,6 +343,12 @@ export function PasskeysCard() {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [msg, setMsg] = useState<Msg>({ text: "", type: "" });
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  // The re-auth challenge the backend answers with on the first click. Null
+  // means nothing has been asked for yet.
+  const [reauth, setReauth] = useState<{ methods: string[]; provider?: string; message: string } | null>(null);
+  const [proofPw, setProofPw] = useState("");
+  const [proofCode, setProofCode] = useState("");
 
   const load = () => {
     api.get<{ passkeys: Passkey[] }>("/auth/passkeys")
@@ -367,7 +378,8 @@ export function PasskeysCard() {
             {passkeys.length > 0 && (
               <div className="space-y-2">
                 {passkeys.map((pk) => (
-                  <div key={pk.id} className="flex items-center justify-between px-3 py-2 bg-dark-700 rounded-lg border border-dark-600">
+                  <div key={pk.id} className="space-y-2">
+                  <div className="flex items-center justify-between px-3 py-2 bg-dark-700 rounded-lg border border-dark-600">
                     <div className="flex items-center gap-3">
                       <svg className="w-4 h-4 text-rust-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M2 18v3c0 .6.4 1 1 1h4v-3h3v-3h2l1.4-1.4a6.5 6.5 0 1 0-4-4Z" />
@@ -403,21 +415,86 @@ export function PasskeysCard() {
                           Rename
                         </button>
                       )}
+                      {/* Confirmed, like the Sessions and API-key cards below.
+                          Removing a passkey is not recoverable from this screen
+                          — the credential has to be re-enrolled from the
+                          authenticator that holds it. */}
                       <button
-                        onClick={async () => {
-                          try {
-                            await api.delete(`/auth/passkeys/${pk.id}`);
-                            setPasskeys(prev => prev.filter(p => p.id !== pk.id));
-                            setMsg({ text: "Passkey removed", type: "success" });
-                          } catch (e) { setMsg({ text: errText(e, "Failed"), type: "error" }); }
-                        }}
+                        onClick={() => setConfirmRemove(pk.id)}
                         className="text-xs text-danger-400 hover:text-danger-300"
                       >
                         Remove
                       </button>
                     </div>
                   </div>
+                  {confirmRemove === pk.id && (
+                    <Confirm
+                      label={`Remove passkey "${pk.name}"?`}
+                      onConfirm={async () => {
+                        setConfirmRemove(null);
+                        try {
+                          await api.delete(`/auth/passkeys/${pk.id}`);
+                          setPasskeys(prev => prev.filter(p => p.id !== pk.id));
+                          setMsg({ text: "Passkey removed", type: "success" });
+                        } catch (e) { setMsg({ text: errText(e, "Failed"), type: "error" }); }
+                      }}
+                      onCancel={() => setConfirmRemove(null)}
+                    />
+                  )}
+                  </div>
                 ))}
+              </div>
+            )}
+
+            {/* The re-auth challenge. Rendered ABOVE the enrolment block rather
+                than inside it, so it is still visible at the ten-key cap. A
+                passkey outlives every reset this panel offers, so a session
+                alone is not enough to add one. */}
+            {reauth && (
+              <div className="space-y-3 px-4 py-3 rounded-lg border border-warn-500/30 bg-warn-500/5">
+                <p className="text-xs text-warn-400">{reauth.message}</p>
+                {reauth.methods.includes("password") && (
+                  <input
+                    type="password"
+                    autoComplete="current-password"
+                    value={proofPw}
+                    onChange={e => setProofPw(e.target.value)}
+                    placeholder="Current password"
+                    aria-label="Current password"
+                    className="w-full px-3 py-2 text-sm border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+                  />
+                )}
+                {reauth.methods.includes("totp") && (
+                  <input
+                    type="text"
+                    inputMode="text"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    value={proofCode}
+                    onChange={e => setProofCode(e.target.value.replace(/[^0-9a-fA-F]/g, "").toLowerCase().slice(0, 16))}
+                    placeholder="TOTP or recovery code"
+                    aria-label="TOTP code or recovery code"
+                    className="w-full px-3 py-2 text-sm border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none font-mono"
+                  />
+                )}
+                {reauth.methods.includes("oauth") && (
+                  <button
+                    onClick={() => {
+                      sessionStorage.setItem("dp:passkey-return", "1");
+                      window.location.href = `/api/auth/oauth/${reauth.provider ?? ""}`;
+                    }}
+                    className="px-4 py-2 bg-dark-700 text-dark-100 border border-dark-500 rounded-lg text-sm font-medium hover:border-dark-400"
+                  >
+                    Sign in again{reauth.provider ? ` with ${reauth.provider}` : ""}
+                  </button>
+                )}
+                <button
+                  onClick={() => { setReauth(null); setProofPw(""); setProofCode(""); }}
+                  className="text-xs text-dark-300 hover:text-dark-100"
+                >
+                  Cancel
+                </button>
               </div>
             )}
 
@@ -438,7 +515,10 @@ export function PasskeysCard() {
                   onClick={async () => {
                     setLoading(true);
                     try {
-                      const beginData = await api.post<{ publicKey: WebAuthnPublicKeyOptions }>("/auth/passkey/register/begin", {});
+                      const beginData = await api.post<{ publicKey: WebAuthnPublicKeyOptions }>("/auth/passkey/register/begin", {
+                        current_password: proofPw || undefined,
+                        code: proofCode || undefined,
+                      });
                       const publicKey = beginData.publicKey;
 
                       const b64toBuf = (b64: string) => {
@@ -482,10 +562,23 @@ export function PasskeysCard() {
 
                       setMsg({ text: "Passkey registered!", type: "success" });
                       setName("My Passkey");
+                      setReauth(null);
+                      setProofPw("");
+                      setProofCode("");
                       load();
                     } catch (e) {
                       if (e instanceof DOMException && e.name === "NotAllowedError") {
                         // User cancelled — ignore
+                      } else if (e instanceof ApiError && e.code === "reauth_required") {
+                        // Not a failure — the backend is telling us which
+                        // credential this account can present. Collect it and
+                        // the same button re-submits, now carrying proof.
+                        const b = (e.body ?? {}) as { methods?: string[]; provider?: string };
+                        setReauth({
+                          methods: b.methods ?? [],
+                          provider: b.provider ?? undefined,
+                          message: e.message,
+                        });
                       } else {
                         setMsg({ text: errText(e, "Failed to register passkey"), type: "error" });
                       }
