@@ -663,17 +663,36 @@ jobs:
           shopt -s nullglob
           failed=0
           ran=0
+          # Collect the NAMES of the suites that fail, and their exit codes.
+          #
+          # This job reported a bare `exit 1` for at least two tags (b429edf and
+          # fef8177) while every suite in its own log printed `FAIL 0`, because
+          # `bash "$s" || failed=1` throws away which `$s` it was. A suite can
+          # exit non-zero without printing a single ✗ — a `set -u` on an unbound
+          # variable, a missing tool on the runner, a stray non-zero at end of
+          # file — and none of that is visible in a wall of green summaries.
+          # A red that cannot name its cause is a red nobody can act on, which
+          # is how this one survived two ships.
+          declare -a broke=()
           for s in tests/*-pin-e2e.sh; do
             case "$(basename "$s")" in
               nginx-headers-pin-e2e.sh|update-rollback-pin-e2e.sh) continue ;;
             esac
             echo "── $s"
-            bash "$s" || failed=1
+            if bash "$s"; then :; else
+              rc=$?
+              failed=1
+              broke+=("$(basename "$s") (exit $rc)")
+              echo "::warning::$(basename "$s") exited $rc"
+            fi
             ran=$((ran + 1))
           done
           echo "ran $ran source-only pin suites"
           if [ "$ran" -lt 30 ]; then
             echo "::error::only $ran suites ran — the enumeration is wrong, so a green here proves nothing"
             exit 1
+          fi
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::${#broke[@]} suite(s) exited non-zero: ${broke[*]}"
           fi
           exit $failed
