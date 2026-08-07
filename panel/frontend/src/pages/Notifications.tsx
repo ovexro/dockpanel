@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 import { timeAgo } from "../utils/format";
 
@@ -41,6 +42,7 @@ function severityDot(s: string) {
 }
 
 export default function Notifications() {
+  const { user } = useAuth();
   const [notifs, setNotifs] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -102,9 +104,19 @@ export default function Notifications() {
               ? `${unreadCount} unread notification${unreadCount !== 1 ? "s" : ""}`
               : "All caught up"}
           </p>
-          <Link to="/settings" className="text-xs text-accent-400 hover:text-accent-300 mt-1 inline-block">
-            Configure alert channels &rarr;
-          </Link>
+          {/* This page is visible to every role, and the link was not — it sent
+              a client to `/settings`, which is `adminOnly` in the nav registry
+              and answers `GET /api/settings` with a 403. The alert RULES behind
+              it are `AuthUser` and per-user (`routes/alerts.rs:267`, `:321`), so
+              a client's own alert destinations are real per-user data still
+              parked behind an admin door — that surface has not moved yet, so
+              the honest thing is to stop promising it rather than to keep
+              offering a door that refuses. See the s325 carry. */}
+          {user?.role === "admin" && (
+            <Link to="/settings" className="text-xs text-accent-400 hover:text-accent-300 mt-1 inline-block">
+              Configure alert channels &rarr;
+            </Link>
+          )}
         </div>
         {unreadCount > 0 && (
           <button

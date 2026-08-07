@@ -406,15 +406,15 @@ export default function GlassLayout() {
                 />
               </svg>
               <span className="text-sm text-warn-400 font-medium">
-                Two-factor authentication is required. Please enable 2FA in Settings &rarr; Security.
+                Two-factor authentication is required. Enable it from My Account.
               </span>
             </div>
-            <a
-              href="/settings"
+            <Link
+              to="/account"
               className="px-3 py-1.5 bg-warn-500 text-dark-900 rounded text-xs font-bold hover:bg-warn-400 transition-colors"
             >
               Set Up 2FA
-            </a>
+            </Link>
           </div>
         )}
 

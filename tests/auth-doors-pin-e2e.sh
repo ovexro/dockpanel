@@ -318,9 +318,15 @@ for ep in "auth/sessions" "export-my-data"; do
   # APPENDS a second zero and `[ "0\n0" -ge 1 ]` dies with a bash error. The arm
   # then goes red for a reason that has nothing to do with the defect, which is
   # a false negative wearing a false positive's clothes. Count, don't fall back.
-  n=$(grep -c "$ep" panel/frontend/src/pages/Settings.tsx 2>/dev/null | head -1)
+  #
+  # ⚠ This counted `pages/Settings.tsx` ALONE until v2.83.0, which pinned the
+  # SUBJECT AT AN ADDRESS: extracting these controls into
+  # `components/AccountSecurity.tsx` — so a non-admin could finally reach them —
+  # made the arm go red over a tree where the screen had just become MORE built.
+  # The property is "the shipped bundle calls it", so count the tree.
+  n=$(grep -rc "$ep" panel/frontend/src --include=*.tsx 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')
   if [ "${n:-0}" -ge 1 ]; then
-    ok "Settings calls $ep — the guide's screen exists"
+    ok "the panel calls $ep — the guide's screen exists"
   else
     bad "$ep still has no caller; the guide documents a screen that is not built"
   fi

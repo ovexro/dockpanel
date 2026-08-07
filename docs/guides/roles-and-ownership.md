@@ -141,6 +141,36 @@ returned (v2.82.0):
 Still administrator-only, and correctly so: mail, containers, DNS, CDN, the server
 shell, and everything under the Admin group.
 
+## Every account owns its own security (v2.83.0)
+
+**My Account** is the one navigation entry every role carries. It holds
+two-factor enrolment, passkeys, password change, the list of devices signed in to
+the account, API keys, and an export of everything the panel stores about you.
+
+Until v2.83.0 all of it lived on the Settings page, which is administrator-only,
+so a `client`, `user` or `reseller` had no entrance to any of it — while the
+banner across the top of every page told them two-factor authentication was
+required and linked them to that same page. None of it was ever a permissions
+question: each of those endpoints was already restricted to the caller's own
+rows. The screens simply had no door. The Settings tab administrators already
+know renders the same components, so there is one implementation rather than two.
+
+A non-administrator could always reset a password through the public *Forgot
+password* form, which needs working SMTP and being signed out. Everything else
+listed above was unreachable.
+
+**If you lose your authenticator app**, sign in with one of the recovery codes
+saved when you enrolled, then enter another recovery code in the *Disable 2FA*
+field on My Account and enrol again. Before v2.83.0 that field took only a live
+code from the app, so a lost device could sign in and never repair itself — there
+is no administrator-side two-factor reset. Recovery codes are single use, and the
+panel does not yet offer a way to generate a fresh set without disabling and
+re-enrolling.
+
+Alert channels are the one piece of per-account configuration still behind the
+administrator door; the Notifications page no longer offers a link to it that a
+client cannot follow.
+
 ## Suspending and restoring
 
 Suspend is a separate action, not a role you assign. It records the account's

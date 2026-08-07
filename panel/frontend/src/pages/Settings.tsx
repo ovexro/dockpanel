@@ -4,6 +4,14 @@ import { api } from "../api";
 import ProvisionLog from "../components/ProvisionLog";
 import UpdatesContent from "./Updates";
 import { timeAgo } from "../utils/format";
+import {
+  TwoFactorCard,
+  PasskeysCard,
+  ChangePasswordCard,
+  SessionsCard,
+  ApiKeysCard,
+  ExportMyDataCard,
+} from "../components/AccountSecurity";
 
 interface HealthStatus {
   db: string;
@@ -11,27 +19,6 @@ interface HealthStatus {
   uptime: string;
   database: boolean; // computed
   agentOk: boolean;  // computed
-}
-
-interface Passkey {
-  id: string;
-  name: string;
-  created_at: string;
-}
-
-interface ApiKey {
-  id: string;
-  name: string;
-  created_at: string;
-}
-
-interface Session {
-  id: string;
-  ip_address: string | null;
-  user_agent: string | null;
-  created_at: string;
-  last_seen_at: string;
-  is_current: boolean;
 }
 
 interface ExportConfig {
@@ -66,15 +53,6 @@ interface SmtpSaveResult {
 }
 
 /** WebAuthn PublicKeyCredentialCreationOptions as returned by the server (base64url-encoded) */
-interface WebAuthnPublicKeyOptions {
-  challenge: string | ArrayBuffer;
-  user: { id: string | ArrayBuffer; name: string; displayName: string };
-  rp: { name: string; id?: string };
-  pubKeyCredParams: { type: string; alg: number }[];
-  excludeCredentials?: { id: string | ArrayBuffer; type: string }[];
-  [key: string]: unknown;
-}
-
 type ServiceStatus = Record<string, { installed?: boolean; running?: boolean; active?: boolean; version?: string | null }>;
 
 interface OAuthRedirects {
@@ -122,7 +100,6 @@ export default function Settings() {
   // matter what the toggle says. Empty on a single-server install.
   const [recordingLagging, setRecordingLagging] = useState<{ name: string; agent_version: string }[]>([]);
   const healthTimer = useRef<ReturnType<typeof setInterval>>(undefined);
-  const qrRef = useRef<HTMLDivElement>(null);
 
   // Form state
   const [panelName, setPanelName] = useState("");
@@ -139,22 +116,6 @@ export default function Settings() {
 
   // Update count for tab badge
   const [updateCount, setUpdateCount] = useState(0);
-
-  // 2FA state
-  const [twoFaEnabled, setTwoFaEnabled] = useState(false);
-  const [twoFaSetup, setTwoFaSetup] = useState<{ secret: string; qr_svg: string } | null>(null);
-  const [twoFaCode, setTwoFaCode] = useState("");
-  const [twoFaDisableCode, setTwoFaDisableCode] = useState("");
-  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
-  const [twoFaLoading, setTwoFaLoading] = useState(false);
-
-  // Passkeys
-  const [passkeys, setPasskeys] = useState<Passkey[]>([]);
-  const [passkeyLoading, setPasskeyLoading] = useState(false);
-  const [passkeyName, setPasskeyName] = useState("My Passkey");
-  const [passkeySupported] = useState(() => !!window.PublicKeyCredential);
-  const [renamingPasskey, setRenamingPasskey] = useState<string | null>(null);
-  const [passkeyRenameValue, setPasskeyRenameValue] = useState("");
 
   // Auto-healing
   const [autoHealEnabled, setAutoHealEnabled] = useState(false);
@@ -183,18 +144,6 @@ export default function Settings() {
   const [gpuUtilDuration, setGpuUtilDuration] = useState(5);
   const [gpuTempThreshold, setGpuTempThreshold] = useState(85);
   const [gpuVramThreshold, setGpuVramThreshold] = useState(95);
-
-  // Password change
-  const [currentPass, setCurrentPass] = useState("");
-  const [newPass, setNewPass] = useState("");
-  const [confirmPass, setConfirmPass] = useState("");
-
-  // API Keys
-  const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [showNewKey, setShowNewKey] = useState(false);
-  const [newKeyName, setNewKeyName] = useState("");
-  const [newKeyResult, setNewKeyResult] = useState<string | null>(null);
 
   // Hostname
   const [hostname, setHostname] = useState("");
@@ -311,39 +260,11 @@ export default function Settings() {
           setTimeout(() => { window.location.href = "/login"; }, 2000);
           break;
         }
-        case "revoke_session": {
-          if (!data) break;
-          await api.delete(`/auth/sessions/${data.id}`);
-          setSessions(sessions.filter((s) => s.id !== data.id));
-          setMessage({ text: "Session revoked", type: "success" });
-          break;
-        }
-        case "revoke_key": {
-          if (!data) break;
-          await api.delete(`/api-keys/${data.id}`);
-          setApiKeys(apiKeys.filter((a) => a.id !== data.id));
-          setMessage({ text: "API key revoked", type: "success" });
-          break;
-        }
       }
     } catch (e) {
       setMessage({ text: e instanceof Error ? e.message : "Action failed", type: "error" });
       if (type === "traefik_uninstall") setTraefikInstalling(false);
     }
-  };
-
-  const load2faStatus = async () => {
-    try {
-      const data = await api.get<{ enabled: boolean }>("/auth/2fa/status");
-      setTwoFaEnabled(data.enabled);
-    } catch { /* ignore */ }
-  };
-
-  const loadPasskeys = async () => {
-    try {
-      const data = await api.get<{ passkeys: Passkey[] }>("/auth/passkeys");
-      setPasskeys(data.passkeys || []);
-    } catch { /* ignore */ }
   };
 
   const loadNotifyChannels = async () => {
@@ -370,14 +291,10 @@ export default function Settings() {
   useEffect(() => {
     loadSettings();
     loadHealth();
-    load2faStatus();
-    loadPasskeys();
     loadNotifyChannels();
     api.get<{ count: number }>("/system/updates/count")
       .then((d) => setUpdateCount(d.count))
       .catch(() => {});
-    api.get<ApiKey[]>("/api-keys").then(setApiKeys).catch(() => {});
-    api.get<{ sessions: Session[] }>("/auth/sessions").then((r) => setSessions(r.sessions)).catch(() => {});
     api.get<{ lagging: { name: string; agent_version: string }[] }>("/settings/recording-coverage")
       .then((d) => setRecordingLagging(d.lagging || []))
       .catch(() => {});
@@ -393,20 +310,6 @@ export default function Settings() {
     healthTimer.current = setInterval(loadHealth, 30000);
     return () => clearInterval(healthTimer.current);
   }, []);
-
-  // Render QR SVG safely as a data URI image (sandboxes any embedded scripts)
-  useEffect(() => {
-    if (qrRef.current && twoFaSetup?.qr_svg) {
-      const encoded = btoa(unescape(encodeURIComponent(twoFaSetup.qr_svg)));
-      qrRef.current.innerHTML = "";
-      const img = document.createElement("img");
-      img.src = `data:image/svg+xml;base64,${encoded}`;
-      img.alt = "2FA QR Code";
-      img.width = 200;
-      img.height = 200;
-      qrRef.current.appendChild(img);
-    }
-  }, [twoFaSetup?.qr_svg]);
 
   const saveGeneral = async () => {
     setSaving("general");
@@ -564,9 +467,9 @@ export default function Settings() {
       {/* Inline confirmation bar */}
       {pendingConfirm && (
         <div className={`mb-4 px-4 py-3 rounded-lg border flex items-center justify-between ${
-          ["revoke_sessions", "revoke_session", "revoke_key"].includes(pendingConfirm.type) ? "border-danger-500/30 bg-danger-500/5" : "border-warn-500/30 bg-warn-500/5"
+          pendingConfirm.type === "revoke_sessions" ? "border-danger-500/30 bg-danger-500/5" : "border-warn-500/30 bg-warn-500/5"
         }`}>
-          <span className={`text-xs font-mono ${["revoke_sessions", "revoke_session", "revoke_key"].includes(pendingConfirm.type) ? "text-danger-400" : "text-warn-400"}`}>
+          <span className={`text-xs font-mono ${pendingConfirm.type === "revoke_sessions" ? "text-danger-400" : "text-warn-400"}`}>
             {pendingConfirm.label}
           </span>
           <div className="flex items-center gap-2 shrink-0 ml-4">
@@ -1362,141 +1265,18 @@ export default function Settings() {
 
         )}
 
-        {/* Two-Factor Authentication */}
+        {/* The self-service cards below are SHARED with `pages/Account.tsx`, the
+            non-adminOnly door every role can reach. One implementation, two
+            callers — a copy here would drift the moment either side changed. */}
         {tab === "account" && (<>
-        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
-          <div className="px-5 py-3 border-b border-dark-600">
-            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Two-Factor Authentication</h3>
-            <p className="text-xs text-dark-200 mt-0.5">Add an extra layer of security to your account</p>
-          </div>
-          <div className="p-5">
-            {twoFaEnabled ? (
-              <div className="space-y-4">
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full bg-rust-500" />
-                  <span className="text-sm text-rust-400 font-medium">2FA is enabled</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    value={twoFaDisableCode}
-                    onChange={(e) => setTwoFaDisableCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                    placeholder="Enter TOTP code to disable"
-                    aria-label="TOTP code to disable 2FA"
-                    className="px-3 py-2 border border-dark-500 rounded-lg text-sm w-48 focus:ring-2 focus:ring-accent-500 outline-none font-mono"
-                  />
-                  <button
-                    disabled={twoFaLoading || twoFaDisableCode.length < 6}
-                    onClick={async () => {
-                      setTwoFaLoading(true);
-                      setMessage({ text: "", type: "" });
-                      try {
-                        await api.post("/auth/2fa/disable", { code: twoFaDisableCode });
-                        setTwoFaEnabled(false);
-                        setTwoFaDisableCode("");
-                        setMessage({ text: "2FA disabled", type: "success" });
-                      } catch (e) {
-                        setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
-                      } finally {
-                        setTwoFaLoading(false);
-                      }
-                    }}
-                    className="px-4 py-2 bg-danger-500/20 text-danger-400 rounded-lg text-sm font-medium hover:bg-danger-500/30 disabled:opacity-50"
-                  >
-                    Disable 2FA
-                  </button>
-                </div>
-              </div>
-            ) : twoFaSetup ? (
-              <div className="space-y-4">
-                <p className="text-sm text-dark-100">Scan this QR code with your authenticator app:</p>
-                <div ref={qrRef} className="flex justify-center bg-white rounded-lg p-4 w-fit mx-auto" />
-                <p className="text-xs text-dark-300 text-center font-mono break-all">
-                  Manual entry: {twoFaSetup.secret}
-                </p>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    value={twoFaCode}
-                    onChange={(e) => setTwoFaCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                    placeholder="Enter 6-digit code"
-                    aria-label="TOTP verification code"
-                    className="px-3 py-2 border border-dark-500 rounded-lg text-sm w-48 focus:ring-2 focus:ring-accent-500 outline-none font-mono"
-                    autoFocus
-                  />
-                  <button
-                    disabled={twoFaLoading || twoFaCode.length < 6}
-                    onClick={async () => {
-                      setTwoFaLoading(true);
-                      setMessage({ text: "", type: "" });
-                      try {
-                        const res = await api.post<{ recovery_codes: string[] }>("/auth/2fa/enable", { code: twoFaCode });
-                        setTwoFaEnabled(true);
-                        setTwoFaSetup(null);
-                        setTwoFaCode("");
-                        setRecoveryCodes(res.recovery_codes);
-                        setMessage({ text: "2FA enabled! Save your recovery codes.", type: "success" });
-                      } catch (e) {
-                        setMessage({ text: e instanceof Error ? e.message : "Invalid code", type: "error" });
-                      } finally {
-                        setTwoFaLoading(false);
-                      }
-                    }}
-                    className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
-                  >
-                    Verify & Enable
-                  </button>
-                  <button
-                    onClick={() => { setTwoFaSetup(null); setTwoFaCode(""); }}
-                    className="px-4 py-2 text-dark-300 border border-dark-600 rounded-lg text-sm font-medium hover:text-dark-100 hover:border-dark-400"
-                  >
-                    Cancel
-                  </button>
-                </div>
-                {recoveryCodes.length > 0 && (
-                  <div className="mt-4 p-4 bg-warn-500/10 rounded-lg border border-warn-500/20">
-                    <p className="text-sm font-medium text-warn-400 mb-2">Recovery Codes (save these!)</p>
-                    <div className="grid grid-cols-2 gap-1">
-                      {recoveryCodes.map((code, i) => (
-                        <code key={i} className="text-xs text-dark-100 font-mono bg-dark-900 px-2 py-1 rounded">{code}</code>
-                      ))}
-                    </div>
-                    <p className="text-xs text-dark-300 mt-2">Each code can only be used once. Store them securely.</p>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <p className="text-sm text-dark-200">
-                  Protect your account with time-based one-time passwords (TOTP).
-                  Works with Google Authenticator, Authy, 1Password, etc.
-                </p>
-                <button
-                  disabled={twoFaLoading}
-                  onClick={async () => {
-                    setTwoFaLoading(true);
-                    setMessage({ text: "", type: "" });
-                    try {
-                      const res = await api.post<{ secret: string; qr_svg: string }>("/auth/2fa/setup");
-                      setTwoFaSetup(res);
-                    } catch (e) {
-                      setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
-                    } finally {
-                      setTwoFaLoading(false);
-                    }
-                  }}
-                  className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
-                >
-                  {twoFaLoading ? "Setting up..." : "Enable 2FA"}
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
+        <TwoFactorCard />
 
-        {/* 2FA Enforcement (admin only) */}
+        {/* 2FA Enforcement. The "(admin only)" in this comment was the ONLY
+            thing asserting it — no role check existed, so the toggle rendered
+            for every account that reached /settings by URL. `PUT /api/settings`
+            is `AdminUser`, so it always refused; a control that refuses is a
+            broken promise rather than a leak, which is why it survived. */}
+        {user?.role === "admin" && (
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-4">
           <div className="px-5 py-3 border-b border-dark-600">
             <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">2FA Enforcement</h3>
@@ -1521,186 +1301,9 @@ export default function Settings() {
             </button>
           </div>
         </div>
+        )}
 
-        {/* Passkeys / WebAuthn */}
-        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-4">
-          <div className="px-5 py-3 border-b border-dark-600">
-            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Passkeys</h3>
-            <p className="text-xs text-dark-200 mt-0.5">Passwordless sign-in with biometrics or security keys</p>
-          </div>
-          <div className="p-5">
-            {!passkeySupported ? (
-              <p className="text-sm text-dark-300">Your browser does not support WebAuthn/Passkeys.</p>
-            ) : (
-              <div className="space-y-4">
-                {/* Existing passkeys list */}
-                {passkeys.length > 0 && (
-                  <div className="space-y-2">
-                    {passkeys.map((pk) => (
-                      <div key={pk.id} className="flex items-center justify-between px-3 py-2 bg-dark-700 rounded-lg border border-dark-600">
-                        <div className="flex items-center gap-3">
-                          <svg className="w-4 h-4 text-rust-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M2 18v3c0 .6.4 1 1 1h4v-3h3v-3h2l1.4-1.4a6.5 6.5 0 1 0-4-4Z" />
-                            <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
-                          </svg>
-                          <div>
-                            <p className="text-sm text-dark-100">{pk.name}</p>
-                            <p className="text-xs text-dark-400">Added {new Date(pk.created_at).toLocaleDateString()}</p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          {renamingPasskey === pk.id ? (
-                            <span className="inline-flex items-center gap-1">
-                              <input
-                                type="text"
-                                value={passkeyRenameValue}
-                                onChange={(e) => setPasskeyRenameValue(e.target.value)}
-                                onKeyDown={async (e) => {
-                                  if (e.key === "Enter" && passkeyRenameValue && passkeyRenameValue !== pk.name) {
-                                    try {
-                                      await api.put(`/auth/passkeys/${pk.id}`, { name: passkeyRenameValue });
-                                      setPasskeys(prev => prev.map(p => p.id === pk.id ? { ...p, name: passkeyRenameValue } : p));
-                                      setMessage({ text: "Passkey renamed", type: "success" });
-                                    } catch (err) { setMessage({ text: err instanceof Error ? err.message : "Failed", type: "error" }); }
-                                    setRenamingPasskey(null);
-                                  }
-                                  if (e.key === "Escape") setRenamingPasskey(null);
-                                }}
-                                autoFocus
-                                className="w-28 px-2 py-0.5 bg-dark-900 border border-dark-500 rounded text-xs text-dark-100"
-                              />
-                              <button
-                                onClick={async () => {
-                                  if (!passkeyRenameValue || passkeyRenameValue === pk.name) { setRenamingPasskey(null); return; }
-                                  try {
-                                    await api.put(`/auth/passkeys/${pk.id}`, { name: passkeyRenameValue });
-                                    setPasskeys(prev => prev.map(p => p.id === pk.id ? { ...p, name: passkeyRenameValue } : p));
-                                    setMessage({ text: "Passkey renamed", type: "success" });
-                                  } catch (err) { setMessage({ text: err instanceof Error ? err.message : "Failed", type: "error" }); }
-                                  setRenamingPasskey(null);
-                                }}
-                                className="px-1.5 py-0.5 bg-rust-500 text-white rounded text-[10px] font-medium"
-                              >Save</button>
-                              <button onClick={() => setRenamingPasskey(null)} className="px-1.5 py-0.5 bg-dark-600 text-dark-200 rounded text-[10px]">Cancel</button>
-                            </span>
-                          ) : (
-                            <button
-                              onClick={() => { setRenamingPasskey(pk.id); setPasskeyRenameValue(pk.name); }}
-                              className="text-xs text-accent-400 hover:text-accent-300"
-                            >
-                              Rename
-                          </button>
-                          )}
-                          <button
-                            onClick={async () => {
-                              try {
-                                await api.delete(`/auth/passkeys/${pk.id}`);
-                                setPasskeys(prev => prev.filter(p => p.id !== pk.id));
-                                setMessage({ text: "Passkey removed", type: "success" });
-                              } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-                            }}
-                            className="text-xs text-danger-400 hover:text-danger-300"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Add new passkey */}
-                {passkeys.length < 10 && (
-                  <div className="flex items-end gap-3">
-                    <div className="flex-1">
-                      <label className="block text-xs text-dark-300 mb-1">Passkey name</label>
-                      <input
-                        type="text"
-                        value={passkeyName}
-                        onChange={e => setPasskeyName(e.target.value)}
-                        className="w-full px-3 py-2 text-sm border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
-                        placeholder="My Passkey"
-                      />
-                    </div>
-                    <button
-                      disabled={passkeyLoading}
-                      onClick={async () => {
-                        setPasskeyLoading(true);
-                        try {
-                          // 1. Begin registration
-                          const beginData = await api.post<{ publicKey: WebAuthnPublicKeyOptions }>("/auth/passkey/register/begin", {});
-                          const publicKey = beginData.publicKey;
-
-                          // 2. Convert base64url to ArrayBuffer
-                          const b64toBuf = (b64: string) => {
-                            const pad = b64.length % 4 === 0 ? "" : "=".repeat(4 - (b64.length % 4));
-                            const raw = atob((b64 + pad).replace(/-/g, "+").replace(/_/g, "/"));
-                            const arr = new Uint8Array(raw.length);
-                            for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
-                            return arr.buffer;
-                          };
-                          const bufTo64 = (buf: ArrayBuffer) => {
-                            const arr = new Uint8Array(buf);
-                            let bin = "";
-                            for (let i = 0; i < arr.length; i++) bin += String.fromCharCode(arr[i]);
-                            return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-                          };
-
-                          publicKey.challenge = b64toBuf(publicKey.challenge as string);
-                          publicKey.user.id = b64toBuf(publicKey.user.id as string);
-                          if (publicKey.excludeCredentials) {
-                            publicKey.excludeCredentials = (publicKey.excludeCredentials as { id: string; type: string }[]).map((c) => ({
-                              ...c, id: b64toBuf(c.id),
-                            }));
-                          }
-
-                          // 3. Create credential via browser
-                          const credential = await navigator.credentials.create({ publicKey: publicKey as unknown as PublicKeyCredentialCreationOptions }) as PublicKeyCredential;
-                          const attestation = credential.response as AuthenticatorAttestationResponse;
-
-                          // 4. Get transports
-                          const transports = "getTransports" in attestation && typeof (attestation as AuthenticatorAttestationResponse & { getTransports?: () => string[] }).getTransports === "function"
-                            ? (attestation as AuthenticatorAttestationResponse & { getTransports: () => string[] }).getTransports() : undefined;
-
-                          // 5. Complete registration
-                          await api.post("/auth/passkey/register/complete", {
-                            id: credential.id,
-                            rawId: bufTo64(credential.rawId),
-                            response: {
-                              attestationObject: bufTo64(attestation.attestationObject),
-                              clientDataJson: bufTo64(attestation.clientDataJSON),
-                            },
-                            name: passkeyName || "My Passkey",
-                            transports,
-                          });
-
-                          setMessage({ text: "Passkey registered!", type: "success" });
-                          setPasskeyName("My Passkey");
-                          loadPasskeys();
-                        } catch (e) {
-                          if (e instanceof DOMException && e.name === "NotAllowedError") {
-                            // User cancelled — ignore
-                          } else {
-                            setMessage({ text: e instanceof Error ? e.message : "Failed to register passkey", type: "error" });
-                          }
-                        } finally {
-                          setPasskeyLoading(false);
-                        }
-                      }}
-                      className="px-4 py-2 text-sm bg-rust-500 text-white rounded-lg hover:bg-rust-600 disabled:opacity-50 transition-colors whitespace-nowrap"
-                    >
-                      {passkeyLoading ? "Registering..." : "Add Passkey"}
-                    </button>
-                  </div>
-                )}
-
-                {passkeys.length === 0 && (
-                  <p className="text-xs text-dark-400">No passkeys registered. Add one to enable passwordless login.</p>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
+        <PasskeysCard />
 
         {/* SSH Keys — Security tab */}
         <SSHKeys />
@@ -1711,162 +1314,37 @@ export default function Settings() {
         {/* IP Whitelist — Security tab */}
         <IPWhitelist />
 
-        {/* Feature #6: Password Change */}
-        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-4">
-          <div className="px-5 py-3 border-b border-dark-600">
-            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Change Password</h3>
-          </div>
-          <div className="p-5 space-y-3">
-            <input type="password" value={currentPass} onChange={e => setCurrentPass(e.target.value)} placeholder="Current password"
-              className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
-            <input type="password" value={newPass} onChange={e => setNewPass(e.target.value)} placeholder="New password (min 8 chars)"
-              className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
-            <input type="password" value={confirmPass} onChange={e => setConfirmPass(e.target.value)} placeholder="Confirm new password"
-              className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
-            <button disabled={!currentPass || !newPass || newPass !== confirmPass || newPass.length < 8} onClick={async () => {
-              try {
-                await api.post("/auth/change-password", { current_password: currentPass, new_password: newPass });
-                setMessage({ text: "Password changed successfully", type: "success" });
-                setCurrentPass(""); setNewPass(""); setConfirmPass("");
-              } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-            }} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50">
-              Change Password
-            </button>
-          </div>
-        </div>
+        <ChangePasswordCard />
 
-        {/* Feature #3: Session Management */}
-        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-4">
+        <SessionsCard />
+
+        {/* Revoke every session PANEL-WIDE. Its own copy said "Admin only." and
+            nothing enforced it: the row rendered for anyone who reached
+            /settings, and only `POST /api/auth/revoke-all` (an `AdminUser`
+            route writing a global `sessions_revoked_at`) refused them. A client
+            revoking their OWN sessions is `SessionsCard` above; this is the
+            different, panel-wide capability, so it stays here and is gated. */}
+        {user?.role === "admin" && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-600">
-            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Sessions</h3>
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Panel-Wide Sessions</h3>
           </div>
-          <div className="divide-y divide-dark-600">
-            {sessions.length === 0 && (
-              <div className="px-5 py-4 text-xs text-dark-400">No active sessions recorded.</div>
-            )}
-            {sessions.map((s) => (
-              <div key={s.id} className="px-5 py-3 flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                  <p className="text-sm text-dark-100 flex items-center gap-2">
-                    <span className="font-mono">{s.ip_address || "unknown"}</span>
-                    {s.is_current && (
-                      <span className="px-1.5 py-0.5 bg-ok-500/10 text-ok-400 rounded text-[10px] font-medium uppercase tracking-wider">
-                        This device
-                      </span>
-                    )}
-                  </p>
-                  <p className="text-xs text-dark-300 mt-0.5 truncate" title={s.user_agent || ""}>
-                    {s.user_agent || "unknown client"}
-                  </p>
-                  <p className="text-[11px] text-dark-400 mt-0.5 font-mono">
-                    last seen {new Date(s.last_seen_at).toLocaleString()}
-                  </p>
-                </div>
-                {!s.is_current && (
-                  <button
-                    onClick={() => setPendingConfirm({ type: "revoke_session", label: `Revoke the session from ${s.ip_address || "unknown"}?`, data: { id: s.id } })}
-                    className="shrink-0 px-3 py-1.5 bg-danger-500/10 text-danger-400 rounded text-xs font-medium hover:bg-danger-500/20"
-                  >
-                    Revoke
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-          <div className="p-5 border-t border-dark-600 flex items-center justify-between gap-4">
+          <div className="p-5 flex items-center justify-between gap-4">
             <div>
               <p className="text-sm text-dark-100">Revoke every session, panel-wide</p>
               <p className="text-xs text-dark-300 mt-0.5">
-                Logs out <span className="text-warn-400">every user of this panel</span>, not just you. Admin only.
+                Logs out <span className="text-warn-400">every user of this panel</span>, not just you.
               </p>
             </div>
             <button onClick={() => setPendingConfirm({ type: "revoke_sessions", label: "Revoke all sessions? All users (including you) will be logged out." })}
               className="shrink-0 px-3 py-1.5 bg-danger-500/10 text-danger-400 rounded text-xs font-medium hover:bg-danger-500/20">Revoke All Sessions</button>
           </div>
-          <div className="p-5 border-t border-dark-600 flex items-center justify-between gap-4">
-            <div>
-              <p className="text-sm text-dark-100">Export my data</p>
-              <p className="text-xs text-dark-300 mt-0.5">Everything this panel holds about your account, as JSON.</p>
-            </div>
-            <button
-              onClick={async () => {
-                try {
-                  const d = await api.get<Record<string, unknown>>("/auth/export-my-data");
-                  const url = URL.createObjectURL(new Blob([JSON.stringify(d, null, 2)], { type: "application/json" }));
-                  const a = document.createElement("a");
-                  a.href = url;
-                  a.download = "dockpanel-my-data.json";
-                  a.click();
-                  URL.revokeObjectURL(url);
-                } catch (e) {
-                  setMessage({ text: e instanceof Error ? e.message : "Export failed", type: "error" });
-                }
-              }}
-              className="shrink-0 px-3 py-1.5 bg-dark-600 text-dark-100 rounded text-xs font-medium hover:bg-dark-500"
-            >
-              Export My Data
-            </button>
-          </div>
         </div>
+        )}
 
-        {/* Feature #4: API Key Management */}
-        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-4">
-          <div className="px-5 py-3 border-b border-dark-600 flex justify-between items-center">
-            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">API Keys</h3>
-            <button onClick={() => setShowNewKey(!showNewKey)} className="text-xs text-rust-400 hover:text-rust-300">
-              {showNewKey ? "Cancel" : "+ Create Key"}
-            </button>
-          </div>
-          {showNewKey && (
-            <div className="px-5 py-3 border-b border-dark-600 flex gap-2">
-              <input value={newKeyName} onChange={e => setNewKeyName(e.target.value)} placeholder="Key name"
-                className="flex-1 px-3 py-1.5 border border-dark-500 rounded text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
-              <button onClick={async () => {
-                try {
-                  const result = await api.post<{ key: string }>("/api-keys", { name: newKeyName || "API Key" });
-                  setNewKeyResult(result.key);
-                  setNewKeyName("");
-                  setShowNewKey(false);
-                  api.get<ApiKey[]>("/api-keys").then(setApiKeys).catch(() => {});
-                } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-              }} className="px-3 py-1.5 bg-rust-500 text-white rounded text-xs font-medium hover:bg-rust-600">Create</button>
-            </div>
-          )}
-          {newKeyResult && (
-            <div className="px-5 py-3 border-b border-dark-600 bg-rust-500/5">
-              <p className="text-xs text-rust-400 mb-1">Copy this key now — it won't be shown again. Note: API keys do not yet authenticate requests; use your session or a JWT.</p>
-              <div className="flex gap-2">
-                <code className="flex-1 px-2 py-1 bg-dark-900 rounded text-xs font-mono text-dark-100 break-all">{newKeyResult}</code>
-                <button onClick={() => { navigator.clipboard.writeText(newKeyResult); setNewKeyResult(null); }} className="px-2 py-1 bg-dark-700 rounded text-xs text-dark-200 shrink-0">Copy</button>
-              </div>
-            </div>
-          )}
-          <div className="divide-y divide-dark-600">
-            {apiKeys.map((k) => (
-              <div key={k.id} className="px-5 py-2.5 flex items-center justify-between text-xs">
-                <div>
-                  <span className="text-dark-100">{k.name}</span>
-                  <span className="text-dark-400 ml-2">Created {new Date(k.created_at).toLocaleDateString()}</span>
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={async () => {
-                    try {
-                      const r = await api.post<{ key: string }>(`/api-keys/${k.id}/rotate`);
-                      setNewKeyResult(r.key);
-                      api.get<ApiKey[]>("/api-keys").then(setApiKeys).catch(() => {});
-                    } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-                  }} className="text-dark-300 hover:text-dark-100">Rotate</button>
-                  <button onClick={() => setPendingConfirm({
-                    type: "revoke_key",
-                    label: "Revoke this API key?",
-                    data: { id: k.id }
-                  })} className="text-danger-400 hover:text-danger-300">Revoke</button>
-                </div>
-              </div>
-            ))}
-            {apiKeys.length === 0 && <p className="px-5 py-3 text-xs text-dark-300">No API keys created</p>}
-          </div>
-        </div>
+        <ExportMyDataCard />
+
+        <ApiKeysCard />
 
         {/* Security Hardening Settings (admin only) */}
         {user?.role === "admin" && (

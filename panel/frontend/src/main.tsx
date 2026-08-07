@@ -93,6 +93,7 @@ const Apps = lazyRetry(() => import("./pages/Apps"));
 const Extensions = lazyRetry(() => import("./pages/Extensions"));
 const Security = lazyRetry(() => import("./pages/Security"));
 const Settings = lazyRetry(() => import("./pages/Settings"));
+const Account = lazyRetry(() => import("./pages/Account"));
 const Mail = lazyRetry(() => import("./pages/Mail"));
 const Servers = lazyRetry(() => import("./pages/Servers"));
 const ResellerDashboard = lazyRetry(() => import("./pages/ResellerDashboard"));
@@ -144,6 +145,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/security" element={<Security />} />
               <Route path="/diagnostics" element={<Navigate to="/security" replace />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/account" element={<Account />} />
               <Route path="/updates" element={<Navigate to="/system" replace />} />
               <Route path="/activity" element={<Navigate to="/logs" replace />} />
               <Route path="/system-logs" element={<Navigate to="/logs" replace />} />

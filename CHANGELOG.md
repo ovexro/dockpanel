@@ -6,6 +6,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.83.0] - 2026-08-07
+
+### Added — an account of any role can reach its own security settings
+
+Two-factor enrolment, passkeys, password change, active sessions, API keys and
+the personal data export all lived on the Settings page, whose navigation entry
+is administrator-only. Every account that was not an administrator — `user`,
+`client`, `reseller` — therefore had no entrance to any of them.
+
+None of this was a permissions problem. Every endpoint behind those screens was
+already authenticated-user-scoped and already restricted to the caller's own
+rows; the capability had shipped long ago with no way in. A new **My Account**
+page carries all six, visible to every role, and the Settings tab now renders the
+same components rather than a second copy of them.
+
+The one thing a non-administrator could already do was reset a password through
+the public *Forgot password* form, which requires working SMTP and being logged
+out. Everything else was unreachable.
+
+### Fixed — a lost authenticator was a dead end
+
+Recovery codes let you log in and nothing else. Turning two-factor off accepted
+only a live code from the authenticator app, so an account whose device was lost
+could sign in with a recovery code and then never disable, re-enrol, or repair
+itself — and the panel has no administrator-side two-factor reset either. The
+browser form made it unreachable a second way, discarding every non-digit and
+demanding exactly six characters, while a recovery code is eight characters of
+hex and could not be typed into the field at all.
+
+Disabling now accepts a current authenticator code **or** a recovery code, using
+the same check the login screen already performed, and the field admits both.
+This mattered more after the change above: the button that refuses is now on
+every account's own page rather than in an administrator-only corner.
+
+### Fixed — the two-factor banner pointed at a page the warned account cannot open
+
+All four layouts told a non-administrator "Two-factor authentication is required"
+and offered a **Set Up 2FA** button linking to Settings — the one page their
+navigation does not carry. The banner now links to My Account. Three of the four
+buttons were also plain anchors, so following one reloaded the whole application
+instead of navigating.
+
+### Fixed — controls that only an administrator can use were shown to everyone
+
+Inside the account tab, "Require 2FA for all users" and "Revoke every session,
+panel-wide" each asserted they were administrator-only — one in a source comment,
+one in its own on-screen text — with nothing enforcing it. Both call
+administrator-only endpoints and so always refused, which is why neither leaked
+anything and why both survived; a control that refuses is a broken promise rather
+than a disclosure. Both are now behind the role check their text claimed.
+
+The Notifications page, which every role can open, linked everyone to Settings to
+configure alert channels. Alert rules are per-user data, but the screen that edits
+them has not moved yet, so the link is shown only to administrators rather than
+continuing to offer a door that answers with a refusal.
+
 ## [2.82.0] - 2026-08-07
 
 ### Fixed — deleting an administrator could delete every site on the server

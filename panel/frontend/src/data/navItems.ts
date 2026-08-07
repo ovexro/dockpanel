@@ -101,4 +101,16 @@ export const navGroups: NavGroup[] = [
       { to: "/settings", label: "Settings", iconName: "settings", adminOnly: true },
     ],
   },
+  {
+    key: "account",
+    label: "Account",
+    items: [
+      // The ONLY entry every role can see, and the reason it exists: password
+      // change, 2FA enrolment, passkeys, sessions and API keys all used to live
+      // behind the `adminOnly` /settings row above, so a client had no door to
+      // its own account at all. Never mark this `adminOnly` — the 2FA banner in
+      // all four layouts points here, and a non-admin is exactly who it warns.
+      { to: "/account", label: "My Account", iconName: "settings" },
+    ],
+  },
 ];

@@ -1340,7 +1340,8 @@ pub struct TwoFaDisableRequest {
     pub code: String,
 }
 
-/// POST /api/auth/2fa/disable — Disable 2FA (requires current TOTP code).
+/// POST /api/auth/2fa/disable — Disable 2FA (requires a current TOTP code OR a
+/// recovery code; the latter is the only route back for a lost authenticator).
 pub async fn twofa_disable(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
@@ -1370,8 +1371,25 @@ pub async fn twofa_disable(
     let totp = TOTP::new(Algorithm::SHA1, 6, 1, 30, secret, Some("DockPanel".to_string()), user.email.clone())
         .map_err(|e| internal_error("2FA disable", e))?;
 
-    if !totp.check_current(&body.code).map_err(|e| internal_error("2FA disable", e))? {
-        return Err(err(StatusCode::UNAUTHORIZED, "Invalid 2FA code"));
+    // A current TOTP code OR one of the recovery codes, exactly like the login
+    // path at `twofa_verify`.
+    //
+    // Accepting only `check_current` made losing the authenticator app a dead
+    // end: the recovery codes let you IN (`try_recovery_code` below is the same
+    // helper the login flow calls), and then nothing you held could ever turn
+    // 2FA off or re-enrol a new device — while the panel offers no admin-side
+    // 2FA reset either. The codes exist to be the fallback; refusing them at the
+    // one door that repairs the account is a lockout wearing a safeguard's
+    // clothes. This became urgent when enrolment moved to `/account`, where
+    // every role now sees the button that used to refuse them.
+    let code_valid = totp
+        .check_current(&body.code)
+        .map_err(|e| internal_error("2FA disable", e))?;
+    if !code_valid && !try_recovery_code(&state.db, &user, &body.code).await? {
+        return Err(err(
+            StatusCode::UNAUTHORIZED,
+            "Invalid 2FA code. Enter a code from your authenticator app, or one of your recovery codes.",
+        ));
     }
 
     sqlx::query(
