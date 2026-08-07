@@ -289,31 +289,39 @@ else
 fi
 
 echo
-echo "── 4. Class B — the react-router waiver's own re-check condition ──"
+echo "── 4. Class B — we are still on the version that fixed GHSA-qwww-vcr4-c8h2 ──"
 
-# scripts/npm-audit-gate.mjs waives GHSA-qwww-vcr4-c8h2 with a written reason:
-# the advisory needs RSC mode with server actions, both frontends import only
-# BrowserRouter and ship as static assets, and npm's only offered "fix" is a
-# DOWNGRADE out of the 7.x line. The waiver ends with "re-check when react-router
-# ships a fix inside ^7" — and for five ships nothing checked that, which is
-# textbook class B: the waiver was correct when written and no commit here will
-# ever tell us it stopped being.
+# This section used to ask upstream "has a fix landed inside ^7 yet?", because
+# scripts/npm-audit-gate.mjs waived the advisory on the stated grounds that no
+# in-range fix existed. On 2026-08-07 it fired: 7.18.2 carries the fix, both
+# frontends were bumped, and the waiver was retired.
+#
+# ⚠ The section is REPOINTED, not deleted. A check written to police a waiver
+# outlives the waiver, and if it is simply removed the day the waiver goes, the
+# surface it watched goes dark exactly when it starts mattering — we are now
+# relying on a VERSION rather than on an argument, and a version can be
+# downgraded by a lockfile churn nobody reads. So it now asks the question that
+# is live today: is what we ship still at or above the fix?
 ADVISORY=GHSA-qwww-vcr4-c8h2
 if adv=$("${GH_API[@]}" "https://api.github.com/advisories/$ADVISORY" 2>/dev/null); then
   patched=$(grep -o '"first_patched_version":[^,}]*' <<<"$adv" | head -1 | grep -oE '"[0-9][^"]*"' | tr -d '"')
   if [ -z "$patched" ]; then
-    ok "$ADVISORY still has no patched version — the waiver's condition has not been met"
-  elif [[ "$patched" == 7.* ]]; then
-    bad "$ADVISORY now has a fix inside ^7 ($patched) — the waiver in scripts/npm-audit-gate.mjs said to re-check when this happened. Bump and drop the waiver."
+    bad "$ADVISORY reports no patched version, but we retired its waiver on the grounds that 7.18.2 fixed it — re-read the advisory"
   else
-    ok "$ADVISORY's first patched version is $patched, outside ^7 — the waiver still stands"
-    note "the waiver is conditioned on a fix INSIDE ^7; a major-version fix is a migration, not a bump"
+    ok "$ADVISORY's first patched version is $patched"
+    for lock in panel/frontend/package-lock.json website/client/package-lock.json; do
+      have=$(node -e "try{process.stdout.write(require('./$lock').packages['node_modules/react-router'].version)}catch(e){}" 2>/dev/null)
+      if [ -n "$have" ] && [ "$(printf '%s\n%s\n' "$have" "$patched" | sort -V | head -1)" = "$patched" ]; then
+        ok "$lock locks react-router $have (>= $patched)"
+      else
+        bad "$lock locks react-router ${have:-nothing}, below the fix $patched — and the waiver that used to cover this is gone"
+      fi
+    done
   fi
 else
-  bad "could not reach the GitHub advisory API for $ADVISORY — the waiver went unchecked this run"
+  bad "could not reach the GitHub advisory API for $ADVISORY — the version floor went unchecked this run"
 fi
 
-echo
 echo "── 5. Class B — the published release still matches the register ──"
 
 # Binary sizes are the one register row that is neither derivable from source

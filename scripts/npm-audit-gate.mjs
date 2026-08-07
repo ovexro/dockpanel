@@ -26,27 +26,23 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
 const ALLOWLIST = [
-  {
-    id: 'GHSA-qwww-vcr4-c8h2',
-    package: 'react-router',
-    reviewed: '2026-07-27',
-    reason:
-      'RSC-mode CSRF bypass. Requires the React Router server runtime — a request ' +
-      'handler executing server actions. Both of our frontends are Vite SPAs that ' +
-      'import BrowserRouter from react-router-dom and ship as static assets: no ' +
-      '@react-router/node|serve|dev, no createRequestHandler, no ssr config, no ' +
-      'server actions. The only fix npm offers is a downgrade to 7.11.0, which is ' +
-      'a breaking change to buy protection against a mode we do not run. ' +
-      'Upstream first_patched_version is 8.3.0 — a MAJOR, so no in-range bump ' +
-      'exists and clearing this advisory means migrating both frontends to v8. ' +
-      'Re-derived independently 2026-07-27 and the premises still hold. ' +
-      'BOTH halves of this waiver are now checked rather than trusted: the ' +
-      'upstream half daily by live-surfaces-check.sh section 4 (fails the moment a ' +
-      '7.x fix lands), and the half that is a fact about US — no server runtime ' +
-      'here — by ssl-correctness-pin-e2e.sh section A, which fails if any frontend ' +
-      'gains @react-router/*, a react-router.config.*, or a request handler. ' +
-      'Re-check when react-router ships a fix inside the ^7 range.',
-  },
+  // Empty on purpose, and that is the interesting state: nothing is currently
+  // being excused.
+  //
+  // It held GHSA-qwww-vcr4-c8h2 (react-router RSC-mode CSRF bypass) from
+  // 2026-07-27. The waiver's reason ended "re-check when react-router ships a fix
+  // inside the ^7 range", and `live-surfaces-check.sh` was given the job of
+  // watching for exactly that rather than trusting it. On 2026-08-07 it fired:
+  // 7.18.2 carries the fix. Both frontends were already on `^7.18.1`, so the fix
+  // was one `npm install` inside the range the waiver said would need a major
+  // migration — the waiver was accurate when written and stopped being accurate
+  // without any commit here changing.
+  //
+  // ⚠ Retiring a waiver is not just deleting the entry: two checks existed to
+  // police THIS waiver and both had to be re-pointed, or they would have gone on
+  // asserting that a waiver exists. See `ssl-correctness-pin-e2e.sh` §A and
+  // `live-surfaces-check.sh` §4, which now assert the opposite — that the
+  // advisory is NOT waived, and that the version we ship is at or above the fix.
 ];
 
 const RANK = { info: 0, low: 1, moderate: 2, high: 3, critical: 4 };

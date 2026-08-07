@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Security — the react-router advisory waiver has been retired
+
+`GHSA-qwww-vcr4-c8h2` was waived on the written grounds that it needs the React
+Router server runtime (which neither frontend ships) and that the only fix
+available was a downgrade out of the 7.x line. The waiver ended with "re-check
+when react-router ships a fix inside the ^7 range", and the daily live-surfaces
+check was given that job rather than being trusted to remember it. It fired:
+7.18.2 carries the fix, inside a range both frontends already allowed.
+
+Both are on 7.18.2 and the waiver is gone, leaving nothing currently excused. The
+two checks that existed to police the waiver were re-pointed rather than deleted
+— they now assert that the advisory is *not* waived and that the version actually
+locked is at or above the fix, because the argument that used to protect us has
+been replaced by a version number, and a version number can be lost to a lockfile
+churn nobody reads.
+
 ## [2.84.0] - 2026-08-07
 
 ### Security — every door that checks a 2FA code is now rate-limited

@@ -60,11 +60,28 @@ run_gate() { node "$GATE" --input "$TMP/report.json" >"$TMP/out" 2>&1; echo $?; 
 
 echo "── A: the npm audit gate waives what was reviewed and blocks what was not ──"
 
+# ⚠ RETIRED at s326, and the arm INVERTED rather than deleted. This advisory was
+# waived from 2026-07-27; `live-surfaces-check.sh` §4 watched for the condition
+# the waiver named, fired when react-router 7.18.2 landed, and both frontends were
+# bumped. What must now be true is the OPPOSITE of what this arm used to assert:
+# the advisory is no longer excused, so it blocks like any other.
+#
+# Deleting the arm was the tempting move and the wrong one — a retired waiver
+# needs the same evidence a live one does, or nothing distinguishes "we fixed it"
+# from "we stopped looking".
 mkreport "GHSA-qwww-vcr4-c8h2" "high" "react-router"
-check "reviewed advisory passes"                "$(run_gate)" "0"
-grep -q "waived" "$TMP/out" \
-  && ok "…and says out loud that it was waived, with the reason" \
-  || bad "waiver is silent — a waiver nobody can see is indistinguishable from a missing check"
+check "the retired react-router waiver no longer excuses it" "$(run_gate)" "1"
+
+# ...and the reason it no longer needs excusing: we ship the fixed version. Read
+# from the LOCKFILES, which are what actually gets installed, in BOTH frontends.
+for lock in panel/frontend/package-lock.json website/client/package-lock.json; do
+  v=$(node -e "try{process.stdout.write(require('$REPO/$lock').packages['node_modules/react-router'].version)}catch(e){}" 2>/dev/null)
+  if [ -n "$v" ] && [ "$(printf '%s\n7.18.2\n' "$v" | sort -V | head -1)" = "7.18.2" ]; then
+    ok "$(basename "$(dirname "$lock")") locks react-router $v (>= 7.18.2, the fix)"
+  else
+    bad "$(basename "$(dirname "$lock")") locks react-router ${v:-nothing} — below the fix, and the waiver that covered it is gone"
+  fi
+done
 
 # The point of the whole exercise: it must still be able to fail.
 mkreport "GHSA-0000-0000-0001" "high" "some-lib"
@@ -79,9 +96,19 @@ check "moderate advisory does not fail at --level high" "$(run_gate)" "0"
 
 echo '{"vulnerabilities":{},"metadata":{"vulnerabilities":{"total":0}}}' > "$TMP/report.json"
 check "a clean report passes" "$(run_gate)" "0"
-grep -q "stale" "$TMP/out" \
-  && ok "…and flags the now-unmatched allowlist entry instead of keeping it forever" \
-  || bad "an allowlist entry matching nothing is reported by nothing"
+
+# The stale-entry report cannot be EXERCISED while the allowlist is empty, so what
+# is pinned is that the machinery is still there for the next waiver, and that
+# there is no waiver today. An allowlist nobody is watching is how one entry
+# becomes a blanket.
+grep -q 'stale ' "$GATE" \
+  && ok "the gate still reports an allowlist entry that matches nothing" \
+  || bad "the stale-entry report was removed along with the entry it was written for"
+if [ "$(node -e "const s=require('fs').readFileSync('$GATE','utf8');const m=s.match(/const ALLOWLIST = \\[([\\s\\S]*?)\\n\\];/);process.stdout.write(String((m[1].match(/^\\s*\\{/gm)||[]).length))")" = "0" ]; then
+  ok "nothing is currently waived — the allowlist is empty"
+else
+  printf '  \033[0;33m•\033[0m %s\n' "an advisory is currently waived; check its reason is still true"
+fi
 
 # A gate that cannot parse its input must not report success.
 echo 'not json at all' > "$TMP/report.json"
