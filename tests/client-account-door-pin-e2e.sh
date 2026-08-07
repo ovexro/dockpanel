@@ -244,6 +244,23 @@ else
   bad "E3 the disable field still strips non-digits or caps at 6 — the code cannot be typed"
 fi
 
+# The recovery codes must render where the user can still SEE them. At v2.82.0
+# the block sat INSIDE the `twoFaSetup ?` branch while the enable handler ran
+# `setTwoFaSetup(null)` in the same breath — so the branch went false and the
+# codes were never drawn, under a toast reading "2FA enabled! Save your recovery
+# codes." Nobody enrolling ever received the one thing that gets them back in.
+# Structural, not textual: assert the block is NOT inside the enabled/setup
+# ternary. Indentation would be a weaker test; this reads the region.
+TERNARY=$(awk '
+  index($0, "{enabled ? (") { s=1 }
+  s { print; if ($0 ~ /^[[:space:]]{8}\)\}[[:space:]]*$/) exit }
+' <<< "$CARDS_C")
+if has "$CARDS_C" 'recoveryCodes.length > 0' && ! has "$TERNARY" 'recoveryCodes.length > 0'; then
+  ok "E4 the recovery codes render outside the setup branch — enrolling shows them"
+else
+  bad "E4 the recovery codes are nested in a branch that is false by the time they exist"
+fi
+
 # ── §F controls a role cannot use are not shown to it ────────────────────────
 echo
 echo "── §F no control is offered to a role that cannot use it ──"

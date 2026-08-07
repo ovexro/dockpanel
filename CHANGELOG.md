@@ -40,6 +40,17 @@ the same check the login screen already performed, and the field admits both.
 This mattered more after the change above: the button that refuses is now on
 every account's own page rather than in an administrator-only corner.
 
+### Fixed — enrolling in two-factor never showed the recovery codes
+
+The codes were rendered inside the branch that draws the QR screen, and the
+handler that receives them leaves that branch in the same breath — it sets the
+account to enabled and clears the setup state, so the condition was false by the
+time there was anything to show. The success message read "2FA enabled! Save your
+recovery codes." and no codes were ever drawn. Every account that enrolled has
+none, which matters more now that a recovery code is also what turns two-factor
+off. They are now shown after enrolling; an account that enrolled earlier can
+disable and re-enrol to receive a set.
+
 ### Fixed — the two-factor banner pointed at a page the warned account cannot open
 
 All four layouts told a non-administrator "Two-factor authentication is required"
