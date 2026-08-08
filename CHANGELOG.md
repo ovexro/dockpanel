@@ -73,6 +73,17 @@ against a threshold that file met exactly — so it sat at its own floor, and th
 passkey door, which mints a session without touching that file, was invisible to
 it. It is now a membership test over all four surfaces that can mint a session.
 
+### Dependencies
+
+`nanoid` 3.3.16 → 3.3.18 in both the panel and the marketing site, closing a
+high-severity advisory, and `dompurify` 3.4.12 → 3.4.13 in the panel, closing a
+moderate cross-site-scripting one. **Neither was exploitable in DockPanel.**
+`nanoid` is never imported by this project — it arrives under PostCSS inside
+Vite and runs only at build time — and the DOMPurify issue requires a removed
+`IN_PLACE` hook, where DockPanel registers no hooks at all and calls
+`sanitize()` directly. Patched because a dependency that has a fix should carry
+it, not because anything here was at risk.
+
 ### Not fixed, deliberately
 
 User verification is still not required. A passkey remains proof of possession
