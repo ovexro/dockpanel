@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.87.0.** The version stamp, the template count and every
+> **Reflects v2.88.0.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -372,7 +372,7 @@ found things from coming back.
 
 **On every commit** (`ci.yml`, `codeql.yml`):
 
-- **484 unit tests** across the crates — 334 in the backend, 150 in the agent.
+- **493 unit tests** across the crates — 334 in the backend, 159 in the agent.
   (The CLI crate carries none of its own today.) Re-derive rather than trust
   this line: `for c in agent backend cli; do (cd panel/$c && cargo test
   --release); done` and sum the `test result:` lines. Nothing recomputes this
@@ -395,7 +395,7 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. Forty-six suites, **1454 assertions**, all green at the current commit:
+survivable. Forty-seven suites, **1474 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
@@ -433,12 +433,13 @@ survivable. Forty-six suites, **1454 assertions**, all green at the current comm
 | `site-transfer-visibility-pin-e2e.sh` | 21 |
 | `suspend-restore-pin-e2e.sh` | 18 |
 | `site-disabled-stays-offline-pin-e2e.sh` | 19 |
-| `terminal-scope-signed-pin-e2e.sh` | 9 |
+| `terminal-scope-signed-pin-e2e.sh` | 10 |
 | `logs-scope-signed-pin-e2e.sh` | 10 |
 | `client-role-honesty-pin-e2e.sh` | 28 |
 | `wrong-host-dispatch-pin-e2e.sh` | 23 |
 | `db-credential-auth-pin-e2e.sh` | 15 |
-| `client-role-and-server-ownership-pin-e2e.sh` | 31 |
+| `client-role-and-server-ownership-pin-e2e.sh` | 32 |
+| `agent-security-signals-pin-e2e.sh` | 18 |
 | `sibling-parity-pin-e2e.sh` | 13 |
 | `client-account-door-pin-e2e.sh` | 32 |
 | `twofa-recovery-pin-e2e.sh` | 37 |

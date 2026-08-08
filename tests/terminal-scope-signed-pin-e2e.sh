@@ -201,6 +201,36 @@ else
   bad "C3 the privilege drop for a site shell is gone"
 fi
 
+# C4 — and the drop must be VERIFIED, not merely attempted.
+#
+# ⚠ WHY C3 IS NOT ENOUGH, written down because C3 reads as though it were.
+# C3 asserts two tokens that merely COEXIST in the file: `site_domain.is_some()`
+# and `setuid`. Both survive a tree in which `setuid` FAILS and the child falls
+# through to `execv` anyway — which is exactly what this code did until v2.88.0,
+# where all three of setgid/initgroups/setuid had their results discarded. So C3
+# would have certified "a site-scoped shell still drops to the site's user" on a
+# tree that hands the SITE'S OWNER a root shell in their own webroot. That is the
+# project's #321 shape — a context arm must name the PROPERTY whose change would
+# invalidate the decision it guards, never two tokens a rewrite keeps.
+#
+# The property: a failed privilege drop must not reach `execv`. `getuid`/`geteuid`
+# are the half that cannot be fooled by a return code nobody read.
+if [ -z "$AG_S" ]; then
+  bad "C4 SKIPPED: $AG did not yield source"
+else
+  DROP=$(fn_body 'fn open_pty_shell' "$AG_S")
+  DROP_FLAT=$(tr '\n' ' ' <<< "$DROP" | tr -s ' ')
+  if [ -z "$DROP" ]; then
+    bad "C4 SKIPPED: could not bound open_pty_shell"
+  elif has "$DROP_FLAT" 'libc::setgid\(gid\) != 0 \|\| libc::initgroups\(username, gid\) != 0 \|\| libc::setuid\(uid\) != 0' \
+    && has "$DROP_FLAT" 'libc::getuid\(\) != uid \|\| libc::geteuid\(\) != uid' \
+    && has "$DROP_FLAT" '_exit\(1\)'; then
+    ok "C4 a FAILED privilege drop exits instead of reaching execv, and the result is re-read from the kernel"
+  else
+    bad "C4 the privilege drop's syscalls are unchecked — a failed setuid would exec a ROOT shell for the site's owner"
+  fi
+fi
+
 echo
 echo "PASS $PASS / FAIL $FAIL"
 [ "$FAIL" -eq 0 ]

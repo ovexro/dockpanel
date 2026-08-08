@@ -1872,8 +1872,14 @@ setup_db_backup() {
 # halfway was written out as the day's backup, the retention sweep below then
 # deleted a good older one to make room, and nothing anywhere said a word.
 set -o pipefail
+# umask is load-bearing for the same reason pipefail is: `>` creates the file
+# 0666 & ~umask, so without this the day's dump — the whole panel database,
+# including `servers.agent_token` in cleartext — lands 0644 on a box that also
+# runs other people's PHP as www-data.
+umask 077
 BACKUP_DIR="/var/backups/dockpanel/db"
 mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR" /var/backups/dockpanel 2>/dev/null || true
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 OUT="$BACKUP_DIR/dockpanel_$TIMESTAMP.sql.gz"
 if ! docker exec dockpanel-postgres pg_dump -U dockpanel -d dockpanel | gzip > "$OUT"; then

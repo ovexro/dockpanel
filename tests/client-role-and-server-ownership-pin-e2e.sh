@@ -284,23 +284,45 @@ fi
 # administrator's server shell loses `cd ..`, which is a real regression in the
 # opposite direction.
 TERM_RS=panel/agent/src/routes/terminal.rs
-N_CALLS=$(grep -c 'is_safe_terminal_command' "$TERM_RS")
 # ⚠ NOT a count of `is_site_terminal` mentions anywhere in the file. That was the
 # first draft and a mutation SURVIVED it: replacing one call site's `is_site_terminal`
 # with `true` dropped the file-wide count 3 -> 2, which still satisfied
 # `N_GATED >= N_CALLS` and printed green over an ungated server shell. Counting two
 # populations and comparing the totals is not the same as checking each member.
 #
-# Each CALL SITE must have the gate in its own preceding slice. The 8-line window is
-# not a guess: the two real call sites sit 1 and 5 lines below their gate, so 8 is
-# slack over the measured maximum — and an empty extraction fails rather than passes.
-N_GATED=$(grep -B 8 'is_safe_terminal_command' "$TERM_RS" | grep -c 'is_site_terminal')
-if [ "$N_CALLS" -lt 2 ]; then
-  bad "D3 found only $N_CALLS is_safe_terminal_command call sites — the reader is broken, not the tree"
-elif [ "$N_GATED" -ge "$N_CALLS" ]; then
-  ok "D3 each of the $N_CALLS is_safe_terminal_command call sites carries is_site_terminal in its own guard ($N_GATED gated)"
+# ⚠ REPOINTED s330. This arm used to count CALL SITES and required at least two,
+# because the reconstruct-and-classify loop was written out twice — once per
+# WebSocket frame shape. v2.88.0 collapsed both copies into `observe_input`, so
+# the subject moved and this arm went red on correct code: the s296 lesson,
+# "extracting a helper moves the subject of every pin that measured it". The arm
+# follows the code, and D3b below is the companion that lesson demands — the one
+# that proves the ORIGINAL callers still REACH the helper, so the gate cannot be
+# quietly reintroduced per-branch.
+N_CALLS=$(grep -c 'is_safe_terminal_command' "$TERM_RS")
+# The block check must live in ONE place and be gated on the SAME line, so there
+# is no window between the gate and the check for a later edit to slip into.
+if [ "$N_CALLS" -ne 1 ]; then
+  bad "D3 expected exactly 1 is_safe_terminal_command call site, found $N_CALLS — the reader or the shape changed"
+elif grep -qE 'is_site_terminal && !command_filter::is_safe_terminal_command' "$TERM_RS"; then
+  ok "D3 the single is_safe_terminal_command call is gated on is_site_terminal in the same condition"
 else
-  bad "D3 only $N_GATED of $N_CALLS is_safe_terminal_command call sites are gated on is_site_terminal — an administrator's SERVER shell would lose 'cd ..'"
+  bad "D3 the block check is no longer gated on is_site_terminal — an administrator's SERVER shell would lose 'cd ..'"
+fi
+
+# D3b — BOTH input arms must go through the one classifier. This is the arm that
+# would have caught the defect v2.88.0 fixed: the JSON arm classified and the raw
+# arm did not, so the ONE input path with no detection was the one the product's
+# own UI never uses and only a scripted client takes. A unit test cannot see this
+# — it calls `observe_input` directly and would stay green with a branch reverted.
+N_OBSERVE=$(grep -c 'observe_input(' "$TERM_RS")
+# 1 declaration + 2 call sites (+ the test helpers, which live in the same file).
+N_OBSERVE_CALLS=$(grep -cE '= observe_input\(&?(data|text),' "$TERM_RS")
+if [ "$N_OBSERVE" -lt 2 ]; then
+  bad "D3b observe_input is not present in $TERM_RS — the reader is broken, not the tree"
+elif [ "$N_OBSERVE_CALLS" -eq 2 ]; then
+  ok "D3b both input arms (JSON frame and raw text) reach the single observe_input path"
+else
+  bad "D3b $N_OBSERVE_CALLS of 2 input arms reach observe_input — a frame shape is being classified differently again"
 fi
 
 # ── §E  a gate must not refuse a caller their own rows ────────────────────────

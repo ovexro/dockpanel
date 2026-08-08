@@ -320,6 +320,10 @@ async fn db_backup() -> Result<Json<serde_json::Value>, ApiErr> {
 
     let backup_dir = "/var/backups/dockpanel";
     let _ = std::fs::create_dir_all(backup_dir);
+    // This dump is the panel's entire database — users, sessions, api_keys and
+    // `servers.agent_token` in cleartext. It must not be readable by anything
+    // but root; `create_dir_all` leaves 0755 behind.
+    let _ = std::fs::set_permissions(backup_dir, std::fs::Permissions::from_mode(0o700));
 
     let ts = chrono::Utc::now().format("%Y%m%d_%H%M%S");
     let filename = format!("{backup_dir}/dockpanel-db-{ts}.sql.gz");
@@ -359,8 +363,23 @@ async fn db_backup() -> Result<Json<serde_json::Value>, ApiErr> {
         return Err(err(StatusCode::INTERNAL_SERVER_ERROR, "gzip compression failed"));
     }
 
-    tokio::fs::write(&filename, &gzip_output.stdout).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("write backup: {e}")))?;
+    // Created 0600 BEFORE a byte is written. `tokio::fs::write` would create it
+    // 0666 & ~umask = 0644 and there would be a window — however short — in
+    // which a full panel database dump sat world-readable on a box that also
+    // serves other people's PHP.
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&filename)
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("write backup: {e}")))?;
+        f.write_all(&gzip_output.stdout)
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("write backup: {e}")))?;
+    }
 
     // Cleanup old backups (keep last 7 days)
     if let Ok(entries) = std::fs::read_dir(backup_dir) {

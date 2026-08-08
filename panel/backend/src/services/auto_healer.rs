@@ -1553,9 +1553,13 @@ async fn run_retention_cleanup(pool: &PgPool) {
             "/var/backups/dockpanel/dockpanel-db-{}.sql.gz",
             chrono::Utc::now().format("%Y%m%d_%H%M%S")
         );
+        // `umask 077` is load-bearing and is NOT tidiness: the `>` redirect
+        // creates the file 0666 & ~umask, so without it this dump — the whole
+        // panel database, `servers.agent_token` in cleartext included — lands
+        // 0644 on a host that also runs other people's PHP as www-data.
         match safe_command("bash")
             .args(["-c", &format!(
-                "set -o pipefail; docker exec dockpanel-postgres pg_dump -U dockpanel dockpanel | gzip > {backup_file}"
+                "set -o pipefail; umask 077; docker exec dockpanel-postgres pg_dump -U dockpanel dockpanel | gzip > {backup_file}"
             )])
             .output().await
         {
@@ -1638,10 +1642,27 @@ async fn security_ingest_suspicious_events(pool: &PgPool) {
 
             let details = format!("domain={}, command={}", domain, command.unwrap_or("-"));
 
-            // Record suspicious event (may trigger auto-lockdown)
-            let locked = super::security_hardening::record_suspicious_event_at(
-                pool, event_type, actor_email, None, Some(&details), occurred_at,
-            ).await;
+            // A REFUSED command is audited but does NOT count toward auto-lockdown.
+            //
+            // `record_suspicious_event_at` counts EVERY row in `suspicious_events`
+            // inside the window against `security_lockdown_threshold` (5 in 10
+            // minutes by default), and tripping it blocks every non-admin for 24
+            // hours. `terminal.blocked_command` is emitted by the agent's site
+            // blocklist, whose `TERMINAL_BLOCKED_PATTERNS` contains a bare `".."`
+            // SUBSTRING — its own comment admits `echo "done..."` is refused — so
+            // an ordinary tenant produces refusals by accident. Counting those
+            // would turn a deliberately blunt blocklist into a self-inflicted
+            // outage, which is a worse defect than the silence it replaced.
+            // The operator still sees every one of them: `audit_log` below writes
+            // `security_audit_log`, which is what `SecurityHardening.tsx` renders.
+            let counts_toward_lockdown = event_type != "terminal.blocked_command";
+            let locked = if counts_toward_lockdown {
+                super::security_hardening::record_suspicious_event_at(
+                    pool, event_type, actor_email, None, Some(&details), occurred_at,
+                ).await
+            } else {
+                false
+            };
 
             // Audit log
             super::security_hardening::audit_log(

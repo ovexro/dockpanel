@@ -5,7 +5,7 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
-use crate::safe_cmd::{safe_command, safe_command_unsandboxed};
+use crate::safe_cmd::safe_command_unsandboxed;
 
 use super::AppState;
 use base64::Engine as _;
@@ -109,9 +109,105 @@ async fn file_upload(
 
 // ── SSH Key Management ──────────────────────────────────────────────────
 
+/// The file these three handlers manage. sshd reads root's keys from here and
+/// nowhere else, so — unlike `known_hosts` in `services/remote_backup.rs` — it
+/// cannot be relocated out of the sandbox's way.
+const AUTHORIZED_KEYS: &str = "/root/.ssh/authorized_keys";
+
+/// Read root's `authorized_keys` from OUTSIDE the agent's sandbox.
+///
+/// ⚠ THIS FEATURE HAS NEVER WORKED, ON ANY INSTALL. The agent unit sets
+/// `ProtectHome=yes`, which binds an inaccessible read-only directory over
+/// `/root` inside the agent's mount namespace, so an in-process `read_to_string`
+/// answers ENOENT for a file that exists. `ProtectHome=yes` landed 2026-03-13
+/// and these handlers landed 2026-03-15 — born broken, the next commit but one.
+///
+/// It failed in the worst possible direction: the read discarded its error into
+/// a default, so a failure became an empty string and the endpoint answered
+/// **200 with an empty list**. (Spelled in prose rather than in code on purpose:
+/// `agent-security-signals-pin-e2e.sh` §E greps this file for that call shape,
+/// and a pin that matches the comment describing it cannot fail.) Measured
+/// on the demo box at v2.87.0: three live ed25519 keys on disk, `GET /ssh-keys`
+/// → `{"keys":[]}`. The panel's only view of "who can SSH in as root" has shown
+/// nothing, always, on every install — a false all-clear on the most
+/// consequential access list a server has. Add and Remove returned 500.
+///
+/// ⚠ `ReadWritePaths=/root/.ssh` and `BindPaths=/root/.ssh` do NOT override
+/// `ProtectHome=yes` — both were measured in a transient unit and both still
+/// hide the file. Either fix loosens `ProtectHome` itself, which is the exact
+/// direction `agent_unit.rs`'s `compiled_unit_is_the_hardened_one` exists to
+/// prevent, or it does what this does: run the handful of file operations
+/// unsandboxed, the precedent `services/wordpress.rs` already sets.
+///
+/// `Ok(None)` means the file genuinely does not exist, which is a legitimate
+/// empty list. An unreadable file is an `Err` — the whole point of the fix.
+async fn read_authorized_keys() -> Result<Option<String>, String> {
+    // `test -e` first so "absent" and "unreadable" are DIFFERENT answers rather
+    // than being told apart by matching a locale-dependent error string.
+    let exists = safe_command_unsandboxed("test", &[])
+        .args(["-e", AUTHORIZED_KEYS])
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !exists {
+        return Ok(None);
+    }
+    let out = safe_command_unsandboxed("cat", &[])
+        .arg(AUTHORIZED_KEYS)
+        .output()
+        .await
+        .map_err(|e| format!("could not read {AUTHORIZED_KEYS}: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "could not read {AUTHORIZED_KEYS}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
+}
+
+/// Replace root's `authorized_keys` atomically, from outside the sandbox.
+///
+/// Staged inside `/var/lib/dockpanel` (which IS in the unit's `ReadWritePaths`)
+/// and then moved into place by `install`, which creates `/root/.ssh`, sets the
+/// mode and copies in one call that runs outside the namespace.
+async fn write_authorized_keys(content: &str) -> Result<(), String> {
+    let staging = format!("/var/lib/dockpanel/.authorized_keys.{}", uuid::Uuid::new_v4());
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&staging)
+            .map_err(|e| format!("could not stage the new key file: {e}"))?;
+        f.write_all(content.as_bytes())
+            .map_err(|e| format!("could not stage the new key file: {e}"))?;
+    }
+    let out = safe_command_unsandboxed("install", &[])
+        .args(["-D", "-m", "600", "-o", "root", "-g", "root", &staging, AUTHORIZED_KEYS])
+        .output()
+        .await;
+    let _ = std::fs::remove_file(&staging);
+    let out = out.map_err(|e| format!("could not install {AUTHORIZED_KEYS}: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "could not install {AUTHORIZED_KEYS}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
 async fn list_ssh_keys() -> Result<Json<serde_json::Value>, ApiErr> {
-    let path = "/root/.ssh/authorized_keys";
-    let content = tokio::fs::read_to_string(path).await.unwrap_or_default();
+    // An empty list must mean "root has no keys", never "I could not look".
+    let content = read_authorized_keys()
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?
+        .unwrap_or_default();
 
     let keys: Vec<serde_json::Value> = content
         .lines()
@@ -172,10 +268,12 @@ async fn add_ssh_key(
         return Err(err(StatusCode::BAD_REQUEST, "SSH key options not allowed"));
     }
 
-    let path = "/root/.ssh/authorized_keys";
-    tokio::fs::create_dir_all("/root/.ssh").await.ok();
-
-    let mut content = tokio::fs::read_to_string(path).await.unwrap_or_default();
+    // A read that FAILED must not be mistaken for an empty key file — that is
+    // how an append would silently become a replace.
+    let mut content = read_authorized_keys()
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?
+        .unwrap_or_default();
     if content.contains(key) {
         return Err(err(StatusCode::CONFLICT, "Key already exists"));
     }
@@ -186,9 +284,9 @@ async fn add_ssh_key(
     content.push_str(key);
     content.push('\n');
 
-    tokio::fs::write(path, &content).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write: {e}")))?;
-    let _ = safe_command("chmod").args(["600", path]).output().await;
+    write_authorized_keys(&content)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
 
     tracing::info!("SSH key added");
     Ok(ok("SSH key added"))
@@ -197,8 +295,18 @@ async fn add_ssh_key(
 async fn remove_ssh_key(
     Path(fingerprint): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
-    let path = "/root/.ssh/authorized_keys";
-    let content = tokio::fs::read_to_string(path).await.unwrap_or_default();
+    // ⚠ THE ORDER OF THESE TWO FIXES MATTERS, and getting only one of them
+    // would have been worse than shipping neither. This read was also
+    // `unwrap_or_default()`: on a failed read `content` is empty, every line is
+    // filtered out of nothing, and the write below stores `"\n"` — i.e. it
+    // DELETES EVERY ROOT SSH KEY ON THE BOX. Today that is inert only because
+    // the write fails too, under the same sandbox. Repairing the sandbox alone
+    // would have converted a dead feature into a destructive one on the first
+    // transient read error.
+    let content = read_authorized_keys()
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "root has no authorized_keys file"))?;
 
     let new_content: String = content
         .lines()
@@ -219,8 +327,9 @@ async fn remove_ssh_key(
         .collect::<Vec<_>>()
         .join("\n");
 
-    tokio::fs::write(path, format!("{new_content}\n")).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write: {e}")))?;
+    write_authorized_keys(&format!("{new_content}\n"))
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
 
     tracing::info!("SSH key removed: {fingerprint}");
     Ok(ok("SSH key removed"))

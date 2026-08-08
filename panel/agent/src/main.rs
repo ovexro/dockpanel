@@ -73,6 +73,14 @@ async fn main() {
     std::fs::create_dir_all("/var/backups/dockpanel").ok();
     std::fs::create_dir_all("/var/backups/dockpanel/databases").ok();
     std::fs::create_dir_all("/var/backups/dockpanel/volumes").ok();
+
+    // The backup tree is root-only, and this repairs what is already on disk.
+    // `create_dir_all` above made these 0755 and every writer's redirect made
+    // the files 0644, so on a panel host that also serves sites the panel's own
+    // database dump — agent tokens in cleartext — was readable by www-data, the
+    // uid every hosted site's PHP runs as. Both panel services run as root, so
+    // nothing legitimate loses access. See the function's own docs.
+    services::backups::secure_backup_tree();
     std::fs::create_dir_all("/var/www/acme/.well-known/acme-challenge").ok();
 
     // One-shot migration, idempotent: give static vhosts already on disk the denies

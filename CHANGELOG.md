@@ -6,6 +6,99 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.88.0] - 2026-08-08
+
+### Fixed — a hosted site could read the panel's database backup
+
+`/var/backups/dockpanel` was created world-traversable and every writer used a
+plain shell redirect or an unmoded write, so the dumps landed `0644`. Both panel
+services run as root and neither ever needed those bits — but on a panel host
+that also serves websites, `www-data` is the uid **every** hosted site's PHP runs
+as. Measured on our own demo box before the fix: **17 of 17 files readable as
+`www-data`**, the newest a complete `pg_dump` of the panel database.
+
+That dump contains `users`, `user_sessions`, `api_keys` and — in cleartext —
+`servers.agent_token`. That token is the Bearer credential for every
+authenticated agent endpoint *and* the key the agent verifies its own root-shell
+tickets with. So a single PHP file dropped on any site the panel hosts was a
+path to root on the panel host and on every server it manages.
+
+All four writers now create these files root-only: the agent's own
+`/security/db-backup`, the panel's automatic backup, the daily cron `setup.sh`
+installs, and the pre-upgrade dump in `update.sh`. **Fixing the writers is not
+enough on a box that already has backups**, so the agent also re-secures the
+whole tree at every start — `0700` on directories, `0600` on files, never
+following a symlink out of it. Upgrading repairs an install that has been
+exposed since its first backup.
+
+### Fixed — the terminal reported intruders only if they used the browser
+
+Terminal input was reconstructed and judged inside the `{"type":"input"}`
+WebSocket envelope the panel's own UI sends. Input that arrived as a plain text
+frame reached the shell unexamined: no `terminal.suspicious_command` event, and
+on a **root** shell no bookkeeping at all. Since the panel's terminal page sends
+the JSON envelope at every one of its senders, the one input path with no
+detection was the one only a *scripted* client takes — which is exactly the
+client someone with a stolen admin session uses. Measured before the fix, same
+account and same command: JSON frame → one event recorded; raw frame → none.
+
+There is now one path that every byte reaching the shell passes through,
+whichever frame shape carried it, and it observes root shells as well as site
+shells. **Refusals are reported too**: a command the site blocklist turned away
+used to produce a line in the agent's own journal and nothing else — the
+strongest signal the product can observe was the one nobody could see. It is now
+in the security audit log.
+
+Deliberately, a refusal does **not** count toward the auto-lockdown threshold.
+The site blocklist is intentionally blunt (it refuses any command containing
+`..`, which catches `echo "done..."`), so counting accidental refusals would let
+an ordinary tenant lock every non-admin out of the panel for 24 hours.
+
+**Honest bound:** the command line is reconstructed from keystrokes, so anything
+that moves the cursor still makes what is observed differ from what the shell
+runs. This release removes the dependence on the client's choice of frame shape;
+it does not make the reconstruction unevadable, and nothing here should be read
+as claiming otherwise.
+
+### Fixed — root terminals ran with a broken environment
+
+The child process set `HOME`, `USER` and `PATH` with `putenv`, which stores the
+pointer it is given rather than copying it. Every one of those strings was freed
+before the shell was executed, and the memory was reused in between. All 17
+session recordings on our demo box open with the prompt that means `HOME` is
+unset. A `--login` shell therefore never read root's own profile, and a bare
+`cd` failed. The environment is now set with `setenv`, which copies.
+
+The same routine dropped privileges for a site terminal without checking whether
+the drop succeeded. A failed `setuid` — which the kernel can return when the
+target user is at its process limit, and `www-data` also runs every PHP worker —
+would have continued into the shell as root. All three calls are now checked,
+and the child re-reads its own uid from the kernel before executing anything.
+
+### Fixed — the SSH key list said "none" without looking
+
+The panel's list of who can log in as root over SSH read
+`/root/.ssh/authorized_keys` from inside the agent's sandbox, which makes `/root`
+an inaccessible directory. The error was discarded, so the endpoint answered
+**200 with an empty list** — on a box with three live keys. Adding or removing a
+key returned 500. This has been true on every install since the feature shipped,
+one day after the sandbox setting that breaks it.
+
+Reads and writes now run outside the sandbox, and an unreadable file is an error
+rather than an empty list — "no keys" means the agent looked and found none. The
+removal path was repaired in the same change: it also treated a failed read as
+an empty file, and would have rewritten `authorized_keys` with nothing in it, so
+repairing only the sandbox would have turned a dead feature into a destructive
+one on the first transient error.
+
+### Tests
+
+New `agent-security-signals-pin-e2e.sh` (18 assertions), 20 of which are red at
+v2.87.0. Nine new unit tests. `terminal-scope-signed-pin-e2e.sh` gains an arm:
+its existing check that "a site shell still drops privilege" was satisfied by two
+tokens that merely coexist, and would have passed on a tree where the drop
+silently fails.
+
 ## [2.87.0] - 2026-08-08
 
 ### Fixed — a 401 now says which of two different things it means

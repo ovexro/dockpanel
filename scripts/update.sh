@@ -249,6 +249,14 @@ fi
 _dockpanel_stage="db-backup"
 BACKUP_DIR="/var/backups/dockpanel/db"
 mkdir -p "$BACKUP_DIR"
+# `>` creates 0666 & ~umask. This dump carries `servers.agent_token` in
+# cleartext — the Bearer credential for every agent endpoint and the key the
+# agent signs its own root-shell tickets with — so it is root-only. The two
+# chmods repair a tree an older installer already left 0755/0644; the agent
+# does the same at startup, but update.sh runs on panel boxes that may not
+# restart the agent for hours.
+umask 077
+chmod 700 "$BACKUP_DIR" /var/backups/dockpanel 2>/dev/null || true
 log "Backing up database..."
 if docker exec dockpanel-postgres pg_dump -U dockpanel dockpanel | gzip > "$BACKUP_DIR/pre-upgrade-$(date +%Y%m%d%H%M%S).sql.gz"; then
     log "Database backup saved to $BACKUP_DIR/"
