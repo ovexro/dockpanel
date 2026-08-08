@@ -47,7 +47,15 @@ export default function Login() {
     try {
       // 1. Get challenge from server
       const beginRes = await fetch("/api/auth/passkey/auth/begin", { method: "POST" });
-      if (!beginRes.ok) throw new Error("Failed to start passkey authentication");
+      if (!beginRes.ok) {
+        // Read the body, exactly as the `complete` half below does. The two
+        // halves of one ceremony disagreed: this one discarded the server's
+        // sentence and printed a fixed string, so a visitor refused by the
+        // panel's IP allowlist — or told the panel has no passkeys enrolled —
+        // was informed only that starting had failed.
+        const data = await beginRes.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to start passkey authentication");
+      }
       const { publicKey } = await beginRes.json();
 
       // 2. Convert base64url fields to ArrayBuffer

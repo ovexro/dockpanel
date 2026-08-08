@@ -17,6 +17,16 @@ use totp_rs::{Algorithm, TOTP, Secret};
 
 use crate::auth::{AuthUser, Claims};
 use crate::error::{internal_error, err, ApiError};
+
+/// A real Argon2 PHC string verified against on the paths where there is no
+/// stored hash to verify against, so that "no such account" and "this account
+/// signs in with an identity provider" cost what a real verification costs.
+///
+/// Module-level rather than a local so a test can assert it actually parses —
+/// the branches that use it call `.expect()`, and the whole point of those
+/// branches is that they must not be the ones that fail.
+const DUMMY_PASSWORD_HASH: &str =
+    "$argon2id$v=19$m=19456,t=2,p=1$ZHVtbXlzYWx0MTIzNA$K1PqGlDJpiBFSguVJXKDBIuXQ5baiAOXSgWAGkuJYxk";
 use crate::models::User;
 use crate::services::{activity, email, notifications, security_hardening};
 use crate::AppState;
@@ -174,23 +184,48 @@ pub async fn login(
         .map_err(|e| internal_error("login", e))?;
 
     // Constant-time: always run Argon2 verify, even for non-existent users (prevents timing attack)
-    let dummy_hash = "$argon2id$v=19$m=19456,t=2,p=1$ZHVtbXlzYWx0MTIzNA$K1PqGlDJpiBFSguVJXKDBIuXQ5baiAOXSgWAGkuJYxk";
+    let dummy_hash = DUMMY_PASSWORD_HASH;
     let user = match user_opt {
         Some(u) => {
-            let parsed = PasswordHash::new(&u.password_hash)
-                .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Password hash error"))?;
-            match Argon2::default().verify_password(body.password.as_bytes(), &parsed) {
-                Ok(()) => u,
-                Err(_) => {
-                    record_login_attempt(&state.login_attempts, &ip);
-                    // Log failed login attempt (never log password)
-                    activity::log_activity(
-                        &state.db, u.id, &u.email, "auth.login_failed",
-                        None, None, None, Some(&ip),
-                    ).await;
-                    return Err(err(StatusCode::UNAUTHORIZED, "Invalid credentials"));
-                }
+            // An account created through an identity provider has no password
+            // at all — `oauth.rs` stores the empty string — and an empty string
+            // is not a PHC string, so parsing it fails. Answering that with a
+            // 500 made this door an oracle: a non-existent address and a
+            // password account both answered 401, and the ONE class that
+            // answered anything else was "this address exists and signs in with
+            // SSO". Worse, the `?` returned above the two lines below it, so
+            // the probe was neither counted against the rate limit nor written
+            // to the activity log the login-audit surface reads — an
+            // unauthenticated, unthrottled, unlogged enumeration channel.
+            //
+            // Having no password is failing to present one, so it is answered
+            // exactly like a wrong password, and at the same cost: the dummy
+            // verify runs first, or the branch would return in microseconds
+            // where every other outcome takes an Argon2 hash, and the status
+            // oracle would simply become a timing oracle.
+            let verified = if u.password_hash.is_empty() {
+                let dummy = PasswordHash::new(dummy_hash)
+                    .expect("the compiled-in dummy hash is a valid PHC string");
+                let _ = Argon2::default().verify_password(body.password.as_bytes(), &dummy);
+                false
+            } else {
+                let parsed = PasswordHash::new(&u.password_hash)
+                    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Password hash error"))?;
+                Argon2::default()
+                    .verify_password(body.password.as_bytes(), &parsed)
+                    .is_ok()
+            };
+
+            if !verified {
+                record_login_attempt(&state.login_attempts, &ip);
+                // Log failed login attempt (never log password)
+                activity::log_activity(
+                    &state.db, u.id, &u.email, "auth.login_failed",
+                    None, None, None, Some(&ip),
+                ).await;
+                return Err(err(StatusCode::UNAUTHORIZED, "Invalid credentials"));
             }
+            u
         }
         None => {
             // Run dummy verify to equalize timing, then fail
@@ -2022,4 +2057,42 @@ pub async fn export_my_data(
         "passkeys": passkeys.iter().map(|(n,c)| serde_json::json!({"name": n, "at": c})).collect::<Vec<_>>(),
         "exported_at": chrono::Utc::now(),
     })))
+}
+
+#[cfg(test)]
+mod login_credential_tests {
+    use super::*;
+
+    /// The mechanism behind the OAuth-only 500. `oauth.rs` creates accounts
+    /// with an empty `password_hash`, and an empty string is not a PHC string,
+    /// so the login handler's parse fails — which it used to answer with a 500,
+    /// making the door an enumeration oracle for identity-provider accounts.
+    #[test]
+    fn an_empty_password_hash_cannot_be_parsed() {
+        assert!(
+            PasswordHash::new("").is_err(),
+            "if this ever parses, the empty-hash branch in `login` is dead code \
+             and the reason for it has changed"
+        );
+    }
+
+    /// Control: the assertion above is about the EMPTY string specifically, not
+    /// about `PasswordHash::new` rejecting everything.
+    #[test]
+    fn a_real_hash_still_parses() {
+        assert!(PasswordHash::new(DUMMY_PASSWORD_HASH).is_ok());
+    }
+
+    /// The empty-hash branch calls `.expect()` on this. A dummy hash that did
+    /// not parse would turn an enumeration fix into a panic on the same input.
+    #[test]
+    fn the_dummy_hash_is_verifiable_not_merely_parseable() {
+        let parsed = PasswordHash::new(DUMMY_PASSWORD_HASH)
+            .expect("the compiled-in dummy hash must parse");
+        // Wrong password against the dummy: the call must COMPLETE (spending
+        // the Argon2 time that equalises this branch), and must not match.
+        assert!(Argon2::default()
+            .verify_password(b"whatever-the-caller-typed", &parsed)
+            .is_err());
+    }
 }

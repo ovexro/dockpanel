@@ -64,6 +64,7 @@ export default function PublicStatusPage() {
   const [error, setError] = useState("");
   const [email, setEmail] = useState("");
   const [subscribed, setSubscribed] = useState(false);
+  const [subscribeError, setSubscribeError] = useState("");
 
   useEffect(() => {
     fetch("/api/status-page/public")
@@ -74,14 +75,31 @@ export default function PublicStatusPage() {
   }, []);
 
   const subscribe = async () => {
+    // The response status is what says whether anyone was subscribed. Setting
+    // the confirmation unconditionally reported "Subscribed!" for a refusal —
+    // a disabled status page, a rejected address — and the visitor then waited
+    // for incident mail that was never going to arrive, while the operator had
+    // nothing to notice, because the client had declared success.
+    //
+    // `subscribeError` is deliberately its own state: `error` drives the
+    // whole-page failure screen below, so reusing it would replace the status
+    // page with an error card over a mistyped address.
+    setSubscribeError("");
     try {
-      await fetch("/api/status-page/subscribe", {
+      const res = await fetch("/api/status-page/subscribe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setSubscribeError(body.error || "Could not subscribe. Please try again.");
+        return;
+      }
       setSubscribed(true);
-    } catch {}
+    } catch {
+      setSubscribeError("Could not reach the server. Please try again.");
+    }
   };
 
   if (loading) {
@@ -245,6 +263,9 @@ export default function PublicStatusPage() {
                     Subscribe
                   </button>
                 </div>
+                {subscribeError && (
+                  <p className="text-sm text-red-400 font-mono mt-3" role="alert">{subscribeError}</p>
+                )}
               </>
             )}
           </div>

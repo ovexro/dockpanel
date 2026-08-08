@@ -15,14 +15,34 @@ pub const CODE_AGENT_UNREACHABLE: &str = "agent_unreachable";
 /// Stable machine-readable marker for "re-present a credential before this
 /// account may enrol a new authenticator".
 ///
-/// The status carried alongside it is deliberately **403, never 401**. The
-/// frontend intercepts every 401 globally, navigates to `/login` and throws a
-/// fixed "Unauthorized" before the response body is ever parsed, so a 401 here
-/// would log a user out of the page they are standing on the first time they
-/// mistyped a password — and the challenge describing what to present would be
-/// destroyed on the way. The session is still valid; only this one action is
-/// refused, which is what 403 means.
+/// The status carried alongside it is deliberately **403, never 401**, and it
+/// stays 403 now that [`CODE_SESSION_INVALID`] has made 401 survivable. The
+/// session is still valid; only this one action is refused, which is what 403
+/// means. Choosing it is no longer a way around the client — it is the correct
+/// status — so do not "restore" this to 401 on the grounds that bodies now
+/// survive.
 pub const CODE_REAUTH_REQUIRED: &str = "reauth_required";
+
+/// Stable machine-readable marker for "the caller has no usable session".
+///
+/// This is the ONLY thing that entitles the frontend to navigate someone to
+/// `/login`, and it is emitted from exactly one place: the [`AuthUser`]
+/// extractor and its `ServerScope` sibling in `crate::auth`. The rule behind
+/// that is structural rather than a matter of taste — **if a handler returned
+/// 401, the session was valid**, because the extractor had already let the
+/// request through. A handler's 401 means the credential presented *inside* an
+/// authenticated request was refused: a wrong password, a wrong TOTP code, a
+/// signature that did not verify. Logging someone out for that is answering a
+/// question nobody asked.
+///
+/// Until v2.87.0 the client could not tell the two apart, so it assumed the
+/// worst about all of them: it navigated to `/login` and threw a fixed
+/// "Unauthorized" *before the response body was ever parsed*. Every sentence
+/// written at a 401 site in this codebase — including the one telling a user
+/// their administrator had reset their 2FA — was discarded unread.
+///
+/// [`AuthUser`]: crate::auth::AuthUser
+pub const CODE_SESSION_INVALID: &str = "session_invalid";
 
 /// Longest agent-authored message passed through to a client.
 const MAX_AGENT_MSG: usize = 400;
@@ -266,6 +286,37 @@ mod tests {
         let e = agent_error("Anything", AgentError::Status(400, long));
         let msg = body_of(&e)["error"].as_str().unwrap().to_string();
         assert!(msg.chars().count() <= MAX_AGENT_MSG + 1);
+    }
+
+    #[test]
+    fn the_three_markers_are_distinct_strings() {
+        // They mean three different things to the client — "your agent is
+        // down", "re-present a credential", "log in again" — and a collision
+        // would silently give one the other's behaviour.
+        assert_ne!(CODE_SESSION_INVALID, CODE_REAUTH_REQUIRED);
+        assert_ne!(CODE_SESSION_INVALID, CODE_AGENT_UNREACHABLE);
+        assert_ne!(CODE_REAUTH_REQUIRED, CODE_AGENT_UNREACHABLE);
+    }
+
+    #[test]
+    fn err_coded_keeps_the_sentence_beside_the_marker() {
+        let e = err_coded(
+            StatusCode::UNAUTHORIZED,
+            "Session revoked. Please log in again.",
+            CODE_SESSION_INVALID,
+        );
+        assert_eq!(e.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(body_of(&e)["code"], CODE_SESSION_INVALID);
+        assert_eq!(body_of(&e)["error"], "Session revoked. Please log in again.");
+    }
+
+    #[test]
+    fn a_bare_err_carries_no_marker() {
+        // Every credential refusal in the codebase is minted with `err`. If
+        // this ever grew a default code, every one of them would start
+        // logging users out again.
+        let e = err(StatusCode::UNAUTHORIZED, "Current password is incorrect");
+        assert!(body_of(&e).get("code").is_none());
     }
 
     #[test]

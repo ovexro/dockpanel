@@ -6,6 +6,70 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.87.0] - 2026-08-08
+
+### Fixed — a 401 now says which of two different things it means
+
+Every error the panel returns with a 401 was replaced, in the browser, by the
+single word "Unauthorized" — and the user was logged out. The response body was
+never read. On the login form of every install, mistyping your password reported
+"Unauthorized" rather than "Invalid credentials", and on the account card,
+mistyping your password or your 2FA code logged you out of the page you were
+standing on with no message at all.
+
+A 401 means one of two unrelated things: *your session is gone*, or *the
+credential you just typed was wrong*. The client could not tell them apart, so
+it assumed the worst about all of them. The rule it now follows is structural
+rather than a matter of taste: **if a handler returned 401, the session was
+valid**, because the authentication extractor had already let the request
+through. Session death is therefore minted in exactly one place and carries a
+marker, and only that marker sends anyone back to the login page.
+
+Sentences that had never reached a user before this release include "Current
+password is incorrect", "Invalid credentials", and "Two-factor authentication is
+no longer set up on this account. Sign in again." — the last of which exists
+precisely to tell an administrator whose 2FA was reset by a colleague what to do
+next, and which arrived as "Unauthorized".
+
+**The public status page was closed to the public.** The server-list provider
+mounts above the router, so it runs on every route including `/status`, took a
+401 there and navigated the visitor to a login form before the page could
+render. Anyone following a status-page link during an outage — the one moment
+the page exists for — reached a login form instead. `/status` is now a public
+path, which is what the set it was missing from already claimed to contain.
+
+**A login attempt against an account that signs in with an identity provider
+returned 500.** Those accounts have no stored password, and the empty string is
+not a valid hash, so parsing it failed. A non-existent address answered 401 and a
+password account answered 401; the one class that answered anything else was
+"this address exists and uses SSO" — an enumeration oracle at an unauthenticated
+door. It was also returned above the two lines that record the attempt, so the
+probe was neither counted against the rate limit nor written to the log
+`GET /api/security/login-audit` reads: unthrottled and invisible. Having no
+password is now answered exactly like presenting the wrong one, and at the same
+cost — the dummy verification still runs, or the status oracle would simply have
+become a timing oracle.
+
+Two smaller repairs of the same shape, where a sentence written for a user was
+discarded by the layer in front of them: the status page's subscribe button
+reported "Subscribed!" for a refusal it never checked for, so a visitor could
+subscribe to outage notices that would never arrive and no operator would hear
+about it; and the two halves of the passkey login ceremony disagreed, the first
+discarding the server's explanation and printing a fixed string where the second
+showed it.
+
+**Honest bound, stated rather than hidden:** the redirect now depends on a marker
+the backend sends. A client paired with an older backend — in practice only a
+`scripts/update.sh` rollback, which restores the three binaries and keeps the
+newer frontend — will show the message instead of bouncing a genuinely dead
+session. Nothing is exposed by that; the session is dead server-side and every
+request still fails. Any full page load re-checks the session and lands the user
+at the login form.
+
+New regression suite `auth-401-meaning-pin-e2e.sh` (20 assertions, every
+non-context arm red at v2.86.0) plus 9 unit tests, including an executed proof
+that an empty password hash cannot be parsed — the mechanism behind the 500.
+
 ## [2.86.0] - 2026-08-08
 
 ### Security — the passkey ceremony's own checks now mean what they say

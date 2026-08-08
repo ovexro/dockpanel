@@ -6,9 +6,25 @@ use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::error::{err, ApiError};
+use crate::error::{err, err_coded, ApiError, CODE_SESSION_INVALID};
 use crate::services::agent::AgentHandle;
 use crate::AppState;
+
+/// The caller has no usable session — the only refusal in this codebase that
+/// entitles the frontend to navigate someone to `/login`.
+///
+/// Every such refusal is minted here rather than inline, so that "which 401s
+/// mean *log in again*" is a question with one answer in one place instead of a
+/// property to be re-derived from seven call sites. A handler's own 401 must
+/// never use this: by the time a handler runs, this extractor has already
+/// accepted the session, so the thing being refused there is a credential the
+/// caller just presented, not the session itself.
+///
+/// The agent-token refusals at the bottom of this file are deliberately NOT
+/// minted here — an agent is not a browser and has no session to lose.
+fn session_invalid(msg: &str) -> ApiError {
+    err_coded(StatusCode::UNAUTHORIZED, msg, CODE_SESSION_INVALID)
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
@@ -52,7 +68,7 @@ impl FromRequestParts<AppState> for AuthUser {
                             .find_map(|s| s.trim().strip_prefix("token=").map(|v| v.to_string()))
                     })
             })
-            .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "Authentication required"))?;
+            .ok_or_else(|| session_invalid("Authentication required"))?;
 
         // CSRF protection: cookie-based auth on mutating methods requires X-Requested-With header.
         // Bearer token auth (API keys) is exempt since it cannot be sent by cross-origin forms.
@@ -78,14 +94,14 @@ impl FromRequestParts<AppState> for AuthUser {
             &DecodingKey::from_secret(state.config.jwt_secret.as_bytes()),
             &validation,
         )
-        .map_err(|_| err(StatusCode::UNAUTHORIZED, "Invalid or expired token"))?
+        .map_err(|_| session_invalid("Invalid or expired token"))?
         .claims;
 
         // Check token blacklist (revoked JTIs)
         if let Some(ref jti) = claims.jti {
             let blacklist = state.token_blacklist.read().await;
             if blacklist.contains(jti) {
-                return Err(err(StatusCode::UNAUTHORIZED, "Token has been revoked"));
+                return Err(session_invalid("Token has been revoked"));
             }
         }
 
@@ -94,7 +110,7 @@ impl FromRequestParts<AppState> for AuthUser {
             let revoked_at = state.sessions_revoked_at.read().await;
             if let Some(ts) = *revoked_at {
                 if (claims.iat as i64) < ts {
-                    return Err(err(StatusCode::UNAUTHORIZED, "Session revoked. Please log in again."));
+                    return Err(session_invalid("Session revoked. Please log in again."));
                 }
             }
         }
@@ -218,7 +234,7 @@ impl FromRequestParts<AppState> for ServerScope {
             Some(sid) => {
                 // Verify server belongs to the authenticated user
                 let uid = user_id.ok_or_else(|| {
-                    err(StatusCode::UNAUTHORIZED, "Authentication required when X-Server-Id is provided")
+                    session_invalid("Authentication required when X-Server-Id is provided")
                 })?;
 
                 let owns: Option<(Uuid,)> = sqlx::query_as(
@@ -326,4 +342,38 @@ pub fn agent_rate_limit(state: &AppState, server_id: Uuid) -> Result<(), ApiErro
         return Err(err(StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod session_marker_tests {
+    use super::*;
+
+    fn body(e: &ApiError) -> serde_json::Value {
+        e.1 .0.clone()
+    }
+
+    #[test]
+    fn session_invalid_is_a_401_carrying_the_marker() {
+        let e = session_invalid("Invalid or expired token");
+        assert_eq!(e.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(body(&e)["code"], CODE_SESSION_INVALID);
+        assert_eq!(body(&e)["error"], "Invalid or expired token");
+    }
+
+    /// The sentence must survive alongside the marker. The whole defect being
+    /// repaired is a client that had the status and threw the sentence away.
+    #[test]
+    fn the_sentence_is_not_replaced_by_the_marker() {
+        let e = session_invalid("Session revoked. Please log in again.");
+        assert_eq!(body(&e)["error"], "Session revoked. Please log in again.");
+    }
+
+    /// An agent presenting a bad token is not a browser losing a session, and
+    /// must not be able to make the client navigate a human to /login.
+    #[test]
+    fn a_plain_401_carries_no_marker() {
+        let e = err(StatusCode::UNAUTHORIZED, "Invalid token");
+        assert_eq!(e.0, StatusCode::UNAUTHORIZED);
+        assert!(body(&e).get("code").is_none());
+    }
 }

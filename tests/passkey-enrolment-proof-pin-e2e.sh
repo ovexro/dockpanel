@@ -218,7 +218,7 @@ fi
 if has "$REFUSAL_BODY" 'StatusCode::FORBIDDEN' && ! has "$REFUSAL_BODY" 'StatusCode::UNAUTHORIZED'; then
   ok "B3 the refusal is FORBIDDEN, never UNAUTHORIZED"
 else
-  bad "B3 the refusal uses UNAUTHORIZED (or no FORBIDDEN) — api.ts intercepts every 401, discards the body and navigates to /login"
+  bad "B3 the refusal uses UNAUTHORIZED (or no FORBIDDEN) — the session is still valid here and only this one ACTION is refused, which is what 403 means (until v2.87.0 there was a second reason: api.ts discarded every 401 body and navigated to /login; that is fixed, and 403 is now correct on the merits alone)"
 fi
 
 if hasf "$CARDS_C" 'reauth_required'; then
@@ -324,11 +324,20 @@ else
   bad "E1 ApiError drops the code — the card cannot tell this refusal from any other failure"
 fi
 
-# CONTEXT arm: green at both tags. Its mutation is removing the redirect.
-if has "$APITS_C" 'res\.status === 401' && hasf "$APITS_C" 'window.location.href = "/login"'; then
-  ok "E2 (context) the global 401 interceptor was not quietly changed by this ship"
+# ⚠ REWRITTEN s329. This arm read `res.status === 401` AND `window.location.href
+# = "/login"` — two literals that v2.87.0's rewrite of the interceptor KEPT, so
+# it would have reported "not quietly changed" on the very tree that changed it.
+# A context arm whose subject can be rewritten underneath it is measuring the
+# spelling, not the property.
+#
+# What §B actually depends on is no longer "a 401 always logs you out" — it is
+# that a 401 logs you out ONLY when the backend says the session is gone. That
+# is what makes the 403 above a decision on the merits rather than a way around
+# this module, so that is what is pinned.
+if has "$APITS_C" 'res\.status === 401' && hasf "$APITS_C" 'CODE_SESSION_INVALID'; then
+  ok "E2 the 401 interceptor still gates its redirect on the session marker"
 else
-  bad "E2 the global 401 interceptor moved — §B's whole reason for using 403 needs re-deriving"
+  bad "E2 the 401 interceptor no longer distinguishes a dead session from a refused credential — §B's 403 stops being a merits choice and becomes load-bearing again"
 fi
 
 # PLACE, not count: "at least one call in the cards file" is satisfied by a tree
