@@ -6,6 +6,84 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.86.0] - 2026-08-08
+
+### Security — the passkey ceremony's own checks now mean what they say
+
+v2.85.0 guarded the door that *plants* a passkey. This release audits what the
+two ceremonies actually verify once a credential exists, and fixes four places
+where a check was present but arranged so that it could not do its job.
+
+**The clone check ran before the signature was verified.** DockPanel has
+detected cloned authenticators since passkeys shipped: an assertion whose
+signature counter has not advanced is refused with "Credential may be cloned".
+But that test ran *twenty lines above* the signature verification, and WebAuthn
+puts it after for a concrete reason. Everything needed to reach it was public —
+the challenge endpoint is unauthenticated, the RP ID hash is a SHA-256 of a name
+in the URL bar, the user-present bit is a constant — so the one refusal in the
+file that says "clone" fired on forged authenticator data carrying a garbage
+signature. It also returned without recording a login attempt, unlike every
+other credential refusal beside it, which made it a free retry. The check now
+runs after the signature, where reaching it costs the attacker the private key,
+and a detected clone both counts against the rate limit and writes a row to the
+security audit log. That ordering is why the detector had stayed silent: an
+alert wired to a branch a stranger can trigger is a fabricated-alert writer, so
+the reorder had to come first and the alert second.
+
+**A live counter presented with zero was exempt.** The rule tested that *both*
+the stored and the presented counter were non-zero before comparing them, where
+the specification applies the comparison when *either* is. That exempted the
+cheapest forgery available — send zero, match nothing — and an accepted
+assertion then wrote the zero back. Authenticators that genuinely have no
+counter, which includes most synced passkeys, report zero on both sides and are
+still correctly never flagged. The counter write is now also conditional, so two
+assertions in flight cannot let the lower one land last and rewind the stored
+value into the state the check exists to notice.
+
+**A 32-byte payload crashed the registration handler.** Authenticator data is a
+32-byte hash, one byte of flags and a four-byte counter. The registration door
+required 32 bytes and then read the flags byte at offset 32, so a buffer of
+exactly the hash passed the guard and indexed out of bounds. The login door had
+always required the full 37; the asymmetry between the two doors was the bug.
+Reachable only by the account owner, and it dropped a single connection rather
+than the process, but it is gone.
+
+**The login door now checks which ceremony issued its challenge.** The
+registration door has always rejected a challenge minted for the other ceremony;
+the login door accepted whatever the store held. No attack is known through it —
+that door identifies the account from the credential, never from the challenge's
+own binding — and it is fixed for symmetry, so a third ceremony added later is
+not accepted by default.
+
+### Tests — the ceremony had none at all
+
+`passkeys.rs` carried no unit tests and no regression-pin assertion of any kind:
+origin, RP ID hash, user presence, the counter and the signature were five live
+checks with zero coverage anywhere in the repository. This release adds 16 unit
+tests over the parts that are pure functions — the counter rule's full truth
+table, the authenticator-data length ladder including the byte count that used
+to panic, and the COSE key parser's rejection paths — plus
+`passkey-ceremony-pin-e2e.sh`, 21 assertions covering the arrangement facts a
+unit test cannot reach, such as the order of the counter check relative to the
+signature.
+
+A regression pin in `suspend-restore-pin-e2e.sh` was also repaired. It asserted
+that a suspended account is refused at every door, counting matches in one file
+against a threshold that file met exactly — so it sat at its own floor, and the
+passkey door, which mints a session without touching that file, was invisible to
+it. It is now a membership test over all four surfaces that can mint a session.
+
+### Not fixed, deliberately
+
+User verification is still not required. A passkey remains proof of possession
+only, while passkey sign-in deliberately skips the 2FA step. This is not a
+one-line change: user verification is a property of each ceremony rather than of
+the credential, so requiring it at enrolment protects nothing, and requiring it
+at sign-in is retroactive — every already-enrolled credential on a security key
+without a PIN would stop working, with nothing recorded at registration to
+grandfather from. It needs a column, a migration and a way to prove the change
+end to end. The pin suite records the gap so it is not mistaken for an oversight.
+
 ## [2.85.0] - 2026-08-07
 
 ### Security — adding a passkey now requires you to confirm who you are

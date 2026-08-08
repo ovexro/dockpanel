@@ -312,15 +312,41 @@ echo "§D  the password-reset doors refuse a suspended account, silently"
 # D1/D2 — both doors. `forgot_password` was the ONLY entry point in the whole
 # auth surface with no role test: login, the JWT middleware, 2FA, passkeys and
 # OAuth all refuse a suspended account explicitly.
-if [ -z "$AUTH_S" ]; then
-  bad "D1 could not read $AUTH"
-else
-  N=$(count "$AUTH_S" 'role == "suspended"')
-  if [ "$N" -ge 4 ]; then
-    ok "D1 the auth surface refuses a suspended account at ${N} distinct doors"
+# ⚠ WIDENED AT s328, because this arm was SEVERED from most of what it claimed.
+# It counted `role == "suspended"` in auth.rs ALONE, against a `-ge 4` threshold
+# — and auth.rs holds exactly 4, so the arm sat precisely at its own floor. Every
+# door OUTSIDE auth.rs could be deleted with D1 still green, including the two
+# named in the comment above it. The passkey door matters most of the four: it
+# mints a full session without touching auth.rs at all, so nothing here saw it.
+#
+# A MEMBERSHIP test over the session-minting surfaces, not a count over one file
+# (#303: a count is satisfied by the defect). Each is stripped of comments first,
+# so the prose naming a door cannot stand in for the door.
+MINTERS="auth.rs routes/auth.rs routes/oauth.rs routes/passkeys.rs"
+MISSING=""; SEEN=0
+for f in $MINTERS; do
+  s=$(subj "panel/backend/src/$f" || true)
+  if [ -z "$s" ]; then
+    MISSING="$MISSING $f(unreadable)"
+  elif has "$s" 'role == "suspended"'; then
+    SEEN=$((SEEN+1))
   else
-    bad "D1 only ${N} doors in auth.rs test for a suspended role — the reset flow is the one that historically had none"
+    MISSING="$MISSING $f"
   fi
+done
+
+# The enumeration guard: if the loop examined nothing, the membership test below
+# is vacuous no matter what it prints (#143).
+if [ "$SEEN" -ge 1 ]; then
+  ok "D1a examined $SEEN of 4 session-minting surfaces for a suspended-role test"
+else
+  bad "D1a examined ZERO surfaces — the paths are wrong and D1b is vacuous"
+fi
+
+if [ "$SEEN" -ge 1 ] && [ -z "$MISSING" ]; then
+  ok "D1b every door that can mint a session refuses a suspended account: the JWT middleware, the password door, OAuth and passkeys"
+else
+  bad "D1b session-minting door(s) do not refuse a suspended account:$MISSING — a suspended user gets a working session through whichever one is missing"
 fi
 
 # D2 — THE ARMING ARM, and the most important one in this file. The obvious way

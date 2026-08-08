@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.85.0.** The version stamp, the template count and every
+> **Reflects v2.86.0.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -372,7 +372,7 @@ found things from coming back.
 
 **On every commit** (`ci.yml`, `codeql.yml`):
 
-- **459 unit tests** across the crates — 309 in the backend, 150 in the agent.
+- **475 unit tests** across the crates — 325 in the backend, 150 in the agent.
   (The CLI crate carries none of its own today.) Re-derive rather than trust
   this line: `for c in agent backend cli; do (cd panel/$c && cargo test
   --release); done` and sum the `test result:` lines. Nothing recomputes this
@@ -395,7 +395,7 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. Forty-four suites, **1412 assertions**, all green at the current commit:
+survivable. Forty-five suites, **1434 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
@@ -431,7 +431,7 @@ survivable. Forty-four suites, **1412 assertions**, all green at the current com
 | `unattended-host-scope-pin-e2e.sh` | 114 |
 | `status-page-gate-pin-e2e.sh` | 17 |
 | `site-transfer-visibility-pin-e2e.sh` | 21 |
-| `suspend-restore-pin-e2e.sh` | 17 |
+| `suspend-restore-pin-e2e.sh` | 18 |
 | `site-disabled-stays-offline-pin-e2e.sh` | 19 |
 | `terminal-scope-signed-pin-e2e.sh` | 9 |
 | `logs-scope-signed-pin-e2e.sh` | 10 |
@@ -443,6 +443,7 @@ survivable. Forty-four suites, **1412 assertions**, all green at the current com
 | `client-account-door-pin-e2e.sh` | 32 |
 | `twofa-recovery-pin-e2e.sh` | 37 |
 | `passkey-enrolment-proof-pin-e2e.sh` | 27 |
+| `passkey-ceremony-pin-e2e.sh` | 21 |
 
 **On a schedule, from outside** (`live-surfaces.yml`, daily). Every layer above
 runs because something changed, which is exactly why none of them could catch the
