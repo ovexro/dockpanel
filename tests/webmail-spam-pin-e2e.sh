@@ -176,13 +176,13 @@ echo "── 4. W3: the shell mirror is GONE, not merely updated ──"
 
 # The mirror is the drift source. Correcting it would only reset the clock;
 # deleting it is what closes the class (#96e — derivation, not correction).
-if shcode "$UPDATE" | grep -qE '^[[:space:]]*location /webmail/'; then
+if shcode "$UPDATE" | grep -cE '^[[:space:]]*location /webmail/' >/dev/null; then
   bad "update.sh spells out the /webmail/ fragment again — a second copy that will rot"
 else
   ok "update.sh contains no copy of the fragment"
 fi
 
-if shcode "$UPDATE" | grep -qE 'sub_filter|proxy_redirect / /webmail/'; then
+if shcode "$UPDATE" | grep -cE 'sub_filter|proxy_redirect / /webmail/' >/dev/null; then
   bad "update.sh still carries fragment internals — the mirror is back"
 else
   ok "update.sh carries no fragment internals"

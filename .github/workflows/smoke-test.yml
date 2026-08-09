@@ -189,7 +189,7 @@ jobs:
           set -eux
           for b in agent api cli; do
             file "dockpanel-${b}"
-            if ! file "dockpanel-${b}" | grep -q "statically linked"; then
+            if ! file "dockpanel-${b}" | grep -c "statically linked" >/dev/null; then
               echo "FAIL: dockpanel-${b} is NOT statically linked on ${{ matrix.distro }} — would reintroduce the #70 glibc break."
               exit 1
             fi
@@ -213,14 +213,14 @@ jobs:
             out="$(timeout 6 ./dockpanel-$b --version 2>&1)"; rc=$?
             echo "--- dockpanel-$b (rc=$rc) ---"
             printf '%s\n' "$out" | head -4
-            if printf '%s' "$out" | grep -qiE "GLIBC_|not a dynamic executable|cannot execute binary|Exec format error"; then
+            if printf '%s' "$out" | grep -ciE "GLIBC_|not a dynamic executable|cannot execute binary|Exec format error" >/dev/null; then
               echo "FAIL: loader/ABI error for dockpanel-$b on ${{ matrix.distro }} — the #70 break."
               fail=1
             fi
           done
           # Positive proof that at least one binary reaches main() on this distro:
           # the CLI has a real --version path that prints and exits 0.
-          if ! ./dockpanel-cli --version | grep -qi dockpanel; then
+          if ! timeout 6 ./dockpanel-cli --version | grep -ci dockpanel >/dev/null; then
             echo "FAIL: dockpanel-cli --version did not print a version on ${{ matrix.distro }}"
             fail=1
           fi
@@ -258,7 +258,7 @@ jobs:
           set -eux
           for b in agent api cli; do
             file "dockpanel-${b}"
-            if ! file "dockpanel-${b}" | grep -q "statically linked"; then
+            if ! file "dockpanel-${b}" | grep -c "statically linked" >/dev/null; then
               echo "FAIL: dockpanel-${b} (arm64) is NOT statically linked — would reintroduce the #70 glibc break."
               exit 1
             fi
@@ -279,13 +279,13 @@ jobs:
             out="$(run_arm64 timeout 30 ./dockpanel-$b --version 2>&1)"; rc=$?
             echo "--- dockpanel-$b (arm64, rc=$rc) ---"
             printf '%s\n' "$out" | head -4
-            if printf '%s' "$out" | grep -qiE "GLIBC_|not a dynamic executable|cannot execute binary|Exec format error"; then
+            if printf '%s' "$out" | grep -ciE "GLIBC_|not a dynamic executable|cannot execute binary|Exec format error" >/dev/null; then
               echo "FAIL: loader/ABI error for dockpanel-$b (arm64) — the #70 break."
               fail=1
             fi
           done
           # Positive proof the arm64 CLI reaches main(): --version prints and exits 0.
-          if ! run_arm64 ./dockpanel-cli --version | grep -qi dockpanel; then
+          if ! run_arm64 timeout 30 ./dockpanel-cli --version | grep -ci dockpanel >/dev/null; then
             echo "FAIL: dockpanel-cli --version (arm64) did not print a version"
             fail=1
           fi

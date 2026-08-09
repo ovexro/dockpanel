@@ -152,7 +152,7 @@ fi
 # section that stayed green while the defect it names was present.
 if [ -z "$AGENT_FIELD" ] || [ -z "$PANEL_KEY" ]; then
   bad "cannot compare spellings: agent field='$AGENT_FIELD' panel key='$PANEL_KEY' — one side was not discovered, which is not a pass"
-elif printf '%s\n%s\n' "$AGENT_FIELD" "$AGENT_ALIASES" | grep -qx -- "$PANEL_KEY"; then
+elif printf '%s\n%s\n' "$AGENT_FIELD" "$AGENT_ALIASES" | grep -cx -- "$PANEL_KEY" >/dev/null; then
   ok "'$PANEL_KEY' is a spelling the agent accepts"
 else
   bad "the panel sends '$PANEL_KEY' and the agent accepts only: $(printf '%s %s' "$AGENT_FIELD" "$AGENT_ALIASES") — this is #94 exactly"

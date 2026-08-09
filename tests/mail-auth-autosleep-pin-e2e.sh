@@ -56,7 +56,7 @@ has  "the group is handed to dovecot" \
 # published with permissions that lock auth out.
 if awk '/async fn write_dovecot_users/,/^}/' "$MAIL" \
    | grep -n 'root:dovecot\|rename' | head -2 | paste -sd' ' - \
-   | grep -q 'root:dovecot.*rename'; then
+   | grep -c 'root:dovecot.*rename' >/dev/null; then
   ok "ownership is set BEFORE the atomic rename"
 else
   bad "ownership is set BEFORE the atomic rename"

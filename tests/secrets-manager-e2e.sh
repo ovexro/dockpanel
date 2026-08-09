@@ -57,7 +57,7 @@ if [ -n "$VAULT_ID" ]; then
     # List secrets (masked)
     SECRETS_MASKED=$(api_get "/secrets/vaults/$VAULT_ID/secrets")
     FIRST_VAL=$(echo "$SECRETS_MASKED" | python3 -c "import sys,json; s=json.load(sys.stdin); print(s[0].get('value',''))" 2>/dev/null)
-    if echo "$FIRST_VAL" | grep -q "••••" 2>/dev/null; then
+    if echo "$FIRST_VAL" | grep -c "••••" 2>/dev/null >/dev/null; then
         ok "Values masked by default: ${FIRST_VAL:0:20}"
     else
         fail "Values not masked: $FIRST_VAL"

@@ -29,7 +29,7 @@ test_contains() {
     else
         body=$(curl -s -X "$method" "$API$path" -H "$AUTH" -H "Content-Type: application/json" -d "${5:-{}}" 2>/dev/null)
     fi
-    if echo "$body" | grep -q "$pattern"; then green "$label"; else red "$label (missing: $pattern)"; fi
+    if echo "$body" | grep -c "$pattern" >/dev/null; then green "$label"; else red "$label (missing: $pattern)"; fi
 }
 
 echo "═══════════════════════════════════════════════"
@@ -52,7 +52,7 @@ test_api GET /api/auth/sessions "List sessions"
 test_contains GET /api/auth/me "User has admin role" '"role":"admin"'
 # Registration: test via direct curl (special case — body needed)
 REG_RESP=$(curl -s -X POST "$API/api/auth/register" -H "$AUTH" -H "Content-Type: application/json" -d '{"email":"test@test.com","password":"testtest123"}' 2>/dev/null)
-echo "$REG_RESP" | grep -q "disabled\|Disabled\|forbidden\|lockdown" && green "Registration blocked" || red "Registration NOT blocked: $REG_RESP"
+echo "$REG_RESP" | grep -c "disabled\|Disabled\|forbidden\|lockdown" >/dev/null && green "Registration blocked" || red "Registration NOT blocked: $REG_RESP"
 
 echo ""
 echo "── Dashboard ──"
@@ -142,14 +142,14 @@ LOCK_STATUS=$(echo "$LOCK_RESP" | tail -1)
 [ "$LOCK_STATUS" = "200" ] && green "Activate lockdown (200)" || red "Activate lockdown ($LOCK_STATUS)"
 
 LOCK_CHECK=$(curl -s "$API/api/security/lockdown" -H "$AUTH" 2>/dev/null)
-echo "$LOCK_CHECK" | grep -q '"active":true' && green "Lockdown is active" || red "Lockdown not active: $LOCK_CHECK"
+echo "$LOCK_CHECK" | grep -c '"active":true' >/dev/null && green "Lockdown is active" || red "Lockdown not active: $LOCK_CHECK"
 
 UNLOCK_RESP=$(curl -s -X POST "$API/api/security/lockdown/deactivate" -H "$AUTH" -H "X-Requested-With: XMLHttpRequest" -H "Content-Type: application/json" -d '{}' -w "\n%{http_code}" 2>/dev/null)
 UNLOCK_STATUS=$(echo "$UNLOCK_RESP" | tail -1)
 [ "$UNLOCK_STATUS" = "200" ] && green "Deactivate lockdown (200)" || red "Deactivate lockdown ($UNLOCK_STATUS)"
 
 UNLOCK_CHECK=$(curl -s "$API/api/security/lockdown" -H "$AUTH" 2>/dev/null)
-echo "$UNLOCK_CHECK" | grep -q '"active":false' && green "Lockdown is inactive" || red "Lockdown still active"
+echo "$UNLOCK_CHECK" | grep -c '"active":false' >/dev/null && green "Lockdown is inactive" || red "Lockdown still active"
 
 echo ""
 echo "── Secrets Manager ──"
@@ -234,7 +234,7 @@ elif ls /var/lib/dockpanel/audit/audit-*.log >/dev/null 2>&1; then
 else
   red "Audit file log missing — no audit-*.log in /var/lib/dockpanel/audit/"
 fi
-if lsattr -d /var/lib/dockpanel/audit/ 2>/dev/null | cut -d' ' -f1 | grep -q "a"; then
+if lsattr -d /var/lib/dockpanel/audit/ 2>/dev/null | cut -d' ' -f1 | grep -c "a" >/dev/null; then
   # Deliberately NOT green()/red(): it is neither a pass nor a failure, it is an
   # operator choice with a consequence they should know about. Using a counting
   # helper here would also move this suite's assertion total, which docs/testing.md

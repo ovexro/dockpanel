@@ -141,7 +141,7 @@ check_duration_above_200ms() {
   local name="$1" line ms
   line=$(code "$SAMPLER" | grep -F "$name" | grep -F "Duration::from_" | head -1)
   if [ -z "$line" ]; then bad "$name is not a Duration literal — cannot verify it clears sysinfo's 200 ms threshold"; return; fi
-  if printf '%s' "$line" | grep -qF "from_secs"; then
+  if printf '%s' "$line" | grep -cF "from_secs" >/dev/null; then
     ms=$(printf '%s' "$line" | sed -n 's/.*from_secs(\([0-9]*\)).*/\1/p'); ms=$((ms * 1000))
   else
     ms=$(printf '%s' "$line" | sed -n 's/.*from_millis(\([0-9]*\)).*/\1/p')

@@ -268,7 +268,7 @@ PHP=panel/agent/src/routes/php.rs
 # challenge unfetchable, no certificate. Giving this button a dnf path would
 # make that outage reachable by one click.
 UFW_BODY=$(fn_body "$SI" install_ufw)
-if printf '%s' "$UFW_BODY" | grep -q 'ufw_refusal_reason'; then
+if printf '%s' "$UFW_BODY" | grep -c 'ufw_refusal_reason' >/dev/null; then
   ok "install_ufw still asks whether UFW is the right firewall for this box"
 else
   bad "install_ufw no longer calls ufw_refusal_reason — on the RHEL family this reinstates the s265 two-firewalls outage, with the panel unreachable and no certificate"
@@ -286,7 +286,7 @@ else
 fi
 
 # The refusal must be driven by what is RUNNING, not by the package database.
-if fn_body "$PKG" ufw_refusal_reason | grep -q 'firewall::detect'; then
+if fn_body "$PKG" ufw_refusal_reason | grep -c 'firewall::detect' >/dev/null; then
   ok "the UFW refusal is decided by the firewall actually running, not by the distro name"
 else
   bad "ufw_refusal_reason no longer consults firewall::detect — it is guessing from the package manager instead of from what holds the rules"
@@ -303,7 +303,7 @@ total=0 routed=0 unrouted=''
 for f in $INSTALLERS; do
   total=$((total+1))
   body=$(fn_body "$SI" "$f")
-  if printf '%s' "$body" | grep -qE 'pkg::(install|install_available|add_repo)'; then
+  if printf '%s' "$body" | grep -cE 'pkg::(install|install_available|add_repo)' >/dev/null; then
     routed=$((routed+1))
   else
     unrouted="$unrouted $f"
@@ -332,8 +332,8 @@ fi
 # coincide on Debian. Translating one and not the other installs the right
 # package and then enables a unit that is not there.
 REDIS_BODY=$(fn_body "$SI" install_redis)
-if printf '%s' "$REDIS_BODY" | grep -q 'service_name' && \
-   ! printf '%s' "$REDIS_BODY" | grep -qE '"(enable|start)", *"redis-server"'; then
+if printf '%s' "$REDIS_BODY" | grep -c 'service_name' >/dev/null && \
+   ! printf '%s' "$REDIS_BODY" | grep -cE '"(enable|start)", *"redis-server"' >/dev/null; then
   ok "install_redis enables the translated unit name, not the hardcoded Debian one"
 else
   bad "install_redis enables a hardcoded redis-server unit — that unit does not exist on the RHEL family, so Redis installs and never starts"
@@ -341,7 +341,7 @@ fi
 
 # php.rs was the surface s265's refusal layer never reached: no family guard at
 # all, so every handler failed with a raw "Failed to find executable apt-get".
-if fn_body "$PHP" install_version | grep -q 'php_streams'; then
+if fn_body "$PHP" install_version | grep -c 'php_streams' >/dev/null; then
   ok "php.rs install_version branches on the package family before reaching apt machinery"
 else
   bad "php.rs install_version has no family guard — on the RHEL family it falls through to apt-cache/ppa:ondrej and fails with 'Failed to find executable apt-get'"
@@ -358,7 +358,7 @@ fi
 # A missing file that SKIPS is worse than one that fails: the PowerDNS schema
 # path is distro-specific, and both old branches were [ -f ]-guarded, so a miss
 # left an empty database behind a successful install.
-if fn_body "$SI" install_powerdns | grep -q 'schema not found'; then
+if fn_body "$SI" install_powerdns | grep -c 'schema not found' >/dev/null; then
   ok "the PowerDNS SQLite schema load fails loudly when no known schema path matches"
 else
   bad "the PowerDNS schema load can silently skip — the install reports success, pdns starts, and the DNS server answers nothing"
@@ -380,7 +380,7 @@ MAPS=$( { fn_body "$PKG" rpm_name; fn_body "$PKG" php_rpm_name; } | grep -v '^\s
 map_missing=''
 while IFS='|' read -r from to; do
   [ -z "$from" ] && continue
-  printf '%s' "$MAPS" | grep -qE "\"$from\"[^=]*=>[^,]*\"$to\"" || map_missing="$map_missing $from"
+  printf '%s' "$MAPS" | grep -cE "\"$from\"[^=]*=>[^,]*\"$to\"" >/dev/null || map_missing="$map_missing $from"
 done <<'ARROWS'
 pdns-backend-pgsql|pdns-backend-postgresql
 pdns-backend-sqlite3|pdns-backend-sqlite
@@ -397,8 +397,8 @@ fi
 # NodeSource and Cloudflare both publish per-family repos. The agent used to
 # fetch the deb script on every distro while setup.sh already branched.
 ADDREPO=$(fn_body "$PKG" add_repo)
-if printf '%s' "$ADDREPO" | grep -q 'rpm.nodesource.com' && \
-   printf '%s' "$ADDREPO" | grep -q 'deb.nodesource.com' && \
+if printf '%s' "$ADDREPO" | grep -c 'rpm.nodesource.com' >/dev/null && \
+   printf '%s' "$ADDREPO" | grep -c 'deb.nodesource.com' >/dev/null && \
    ! grep -q 'deb.nodesource.com' "$SI"; then
   ok "the NodeSource repo is chosen per family, and no installer hardcodes the deb one"
 else
@@ -427,20 +427,20 @@ SAFE=panel/agent/src/safe_cmd.rs
 # guard would convict itself. (Rust's own tests cover that region.)
 code_only() { sed '/#\[cfg(test)\]/q' "$1" | grep -vE '^[[:space:]]*(///|//!|//|\*)'; }
 
-if code_only "$SAFE" | grep -q -- '--pipe'; then
+if code_only "$SAFE" | grep -c -- '--pipe' >/dev/null; then
   bad "$SAFE passes --pipe to systemd-run again — that is THE WALL, and it makes every package operation fail on every SELinux box"
 else
   ok "the escape hatch passes no file descriptors (no --pipe in code)"
 fi
 
-if code_only "$SAFE" | grep -q -- '--wait'; then
+if code_only "$SAFE" | grep -c -- '--wait' >/dev/null; then
   ok "the escape hatch still waits, so the inner command's exit status is what callers see"
 else
   bad "--wait is gone from $SAFE: systemd-run would return as soon as PID1 accepted the job and every caller's success check would become meaningless"
 fi
 
-if code_only "$SAFE" | grep -q 'StandardOutput=file:' && \
-   code_only "$SAFE" | grep -q 'StandardError=file:'; then
+if code_only "$SAFE" | grep -c 'StandardOutput=file:' >/dev/null && \
+   code_only "$SAFE" | grep -c 'StandardError=file:' >/dev/null; then
   ok "output is captured via files PID1 opens itself, keeping stdout and stderr separate"
 else
   bad "the StandardOutput/StandardError capture properties are gone — without them the ~10 call sites that parse stdout get nothing back"
@@ -451,9 +451,9 @@ fi
 CAPDIR=$(code_only "$SAFE" | sed -n 's/^const CAPTURE_DIR: &str = "\([^"]*\)".*/\1/p')
 if [ -z "$CAPDIR" ]; then
   bad "CAPTURE_DIR is gone from $SAFE, so this check cannot see where captured output lands"
-elif printf '%s' "$CAPDIR" | grep -qE '^/(tmp|var/tmp)(/|$)'; then
+elif printf '%s' "$CAPDIR" | grep -cE '^/(tmp|var/tmp)(/|$)' >/dev/null; then
   bad "capture files live in $CAPDIR — PID1 (init_t) may not write tmp_t, so every unsandboxed command loses its output on RHEL"
-elif grep -m1 '^ReadWritePaths=' "$UNIT" | tr ' ' '\n' | sed 's/^-//' | grep -qxF "$(printf '%s' "$CAPDIR" | sed 's#\(/var/lib/[^/]*\).*#\1#')"; then
+elif grep -m1 '^ReadWritePaths=' "$UNIT" | tr ' ' '\n' | sed 's/^-//' | grep -cxF "$(printf '%s' "$CAPDIR" | sed 's#\(/var/lib/[^/]*\).*#\1#')" >/dev/null; then
   ok "capture files live under $CAPDIR, which the agent unit may read back and PID1 may write"
 else
   bad "$CAPDIR is outside the agent unit's ReadWritePaths — PID1 would write the output and the agent could not read it"

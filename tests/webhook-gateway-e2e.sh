@@ -83,7 +83,7 @@ if [ -n "$EP_TOKEN" ]; then
     # Check delivery details
     if [ "$D_COUNT" -ge 1 ] 2>/dev/null; then
         FIRST_BODY=$(echo "$DELIVERIES" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0].get('body','')[:30])" 2>/dev/null)
-        echo "$FIRST_BODY" | grep -q "push" && ok "Delivery body contains webhook payload" || fail "Body empty or wrong"
+        echo "$FIRST_BODY" | grep -c "push" >/dev/null && ok "Delivery body contains webhook payload" || fail "Body empty or wrong"
     fi
 
     # Replay

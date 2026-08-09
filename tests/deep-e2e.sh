@@ -136,7 +136,7 @@ if [ -n "$BK_SITE_ID" ]; then
 
     # Verify file exists
     MARKER=$(api_get "/sites/${BK_SITE_ID}/files/read?path=marker.txt")
-    if echo "$MARKER" | grep -q "BACKUP_TEST_MARKER_12345" 2>/dev/null; then
+    if echo "$MARKER" | grep -c "BACKUP_TEST_MARKER_12345" 2>/dev/null >/dev/null; then
         ok "Marker file written for backup test"
     else
         fail "Marker file write/read failed"
@@ -164,7 +164,7 @@ if [ -n "$BK_SITE_ID" ]; then
 
         # Verify file is gone (may still read as 200 with empty/error, or 404)
         GONE_CHECK=$(api_get "/sites/${BK_SITE_ID}/files/read?path=marker.txt" 2>&1)
-        if ! echo "$GONE_CHECK" | grep -q "BACKUP_TEST_MARKER_12345" 2>/dev/null; then
+        if ! echo "$GONE_CHECK" | grep -c "BACKUP_TEST_MARKER_12345" 2>/dev/null >/dev/null; then
             ok "Marker file deleted before restore"
         else
             fail "Marker file still exists after delete"
@@ -178,7 +178,7 @@ if [ -n "$BK_SITE_ID" ]; then
 
             # Verify marker file is back
             RESTORED=$(api_get "/sites/${BK_SITE_ID}/files/read?path=marker.txt")
-            if echo "$RESTORED" | grep -q "BACKUP_TEST_MARKER_12345" 2>/dev/null; then
+            if echo "$RESTORED" | grep -c "BACKUP_TEST_MARKER_12345" 2>/dev/null >/dev/null; then
                 ok "Marker file restored from backup"
             else
                 fail "Marker file NOT restored after backup restore"
@@ -371,7 +371,7 @@ if [ -n "$BK_SITE_ID" ]; then
     # Write file inside directory
     api_put "/sites/${BK_SITE_ID}/files/write" '{"path":"testdir/nested.txt","content":"nested content"}' > /dev/null
     NESTED=$(api_get "/sites/${BK_SITE_ID}/files/read?path=testdir/nested.txt")
-    if echo "$NESTED" | grep -q "nested" 2>/dev/null; then
+    if echo "$NESTED" | grep -c "nested" 2>/dev/null >/dev/null; then
         ok "Nested file write/read"
     else
         fail "Nested file write/read failed"

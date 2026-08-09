@@ -778,9 +778,9 @@ generate_secrets() {
 setup_database() {
     header "PostgreSQL Database"
 
-    if docker ps --format '{{.Names}}' | grep -q "^${DB_CONTAINER}$"; then
+    if docker ps --format '{{.Names}}' | grep -c "^${DB_CONTAINER}$" >/dev/null; then
         log "PostgreSQL container already running"
-    elif docker ps -a --format '{{.Names}}' | grep -q "^${DB_CONTAINER}$"; then
+    elif docker ps -a --format '{{.Names}}' | grep -c "^${DB_CONTAINER}$" >/dev/null; then
         log "Starting existing PostgreSQL container..."
         docker start "$DB_CONTAINER" > /dev/null 2>&1
     else
@@ -957,13 +957,13 @@ cargo_build_with_progress() {
     start_time=$(date +%s)
 
     (cd "$src_dir" && $CARGO_CMD build --release 2>&1) | while IFS= read -r line; do
-        if echo "$line" | grep -qE '^\s*Compiling '; then
+        if echo "$line" | grep -cE '^\s*Compiling ' >/dev/null; then
             count=$((count + 1))
             local crate_name
             crate_name=$(echo "$line" | sed 's/.*Compiling \([^ ]*\).*/\1/')
             local elapsed=$(( $(date +%s) - start_time ))
             printf "\r    ${DIM}%s: %d crates (%ds) → %s${NC}                    " "$label" "$count" "$elapsed" "$crate_name" >&2
-        elif echo "$line" | grep -qE '^\s*Finished '; then
+        elif echo "$line" | grep -cE '^\s*Finished ' >/dev/null; then
             local elapsed=$(( $(date +%s) - start_time ))
             printf "\r    ${DIM}%s: %d crates compiled in %ds${NC}                              \n" "$label" "$count" "$elapsed" >&2
         fi
@@ -1723,7 +1723,7 @@ normalize_panel_listen() {
     systemctl restart nginx > /dev/null 2>&1 || true
 
     # Trust the socket, not the restart's exit code.
-    if command -v ss > /dev/null 2>&1 && ! ss -ltn "( sport = :443 )" 2>/dev/null | grep -q "${bind_ip}:443"; then
+    if command -v ss > /dev/null 2>&1 && ! ss -ltn "( sport = :443 )" 2>/dev/null | grep -c "${bind_ip}:443" >/dev/null; then
         warn "panel is not listening on ${bind_ip}:443 — a site vhost may shadow it"
     fi
 }
@@ -1889,7 +1889,7 @@ if ! docker exec dockpanel-postgres pg_dump -U dockpanel -d dockpanel | gzip > "
 fi
 # A zero exit is not the success condition — a whole dump is. pg_dump emits this
 # marker near the end; its absence means the file is short whatever exited 0.
-if ! gunzip -c "$OUT" | tail -20 | grep -q 'PostgreSQL database dump complete'; then
+if ! gunzip -c "$OUT" | tail -20 | grep -c 'PostgreSQL database dump complete' >/dev/null; then
     echo "dockpanel db-backup: $OUT is incomplete, discarding" >&2
     rm -f "$OUT"
     exit 1

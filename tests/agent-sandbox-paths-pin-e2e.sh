@@ -115,7 +115,7 @@ echo
 echo "§3 the three that already shipped broken stay listed"
 
 for p in /etc/apt /var/spool/cron /etc/ssh; do
-  if printf '%s\n' "$RWP" | grep -qx -- "$p"; then
+  if printf '%s\n' "$RWP" | grep -cx -- "$p" >/dev/null; then
     ok "$p"
   else
     bad "$p is gone from ReadWritePaths — this exact removal has already shipped as a bug once"

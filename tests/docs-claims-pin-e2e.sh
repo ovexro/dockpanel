@@ -599,7 +599,7 @@ for phrase in "${!SUPERSEDED[@]}"; do
     stale_checked=$((stale_checked+1))
     # FEATURES.md explains the correction in prose, so it is allowed to name the
     # old figure inside a line that also says what replaced it.
-    if grep -nF -- "$phrase" "$f" 2>/dev/null | grep -qv 'against a real reading\|had been published at'; then
+    if grep -nF -- "$phrase" "$f" 2>/dev/null | grep -cv 'against a real reading\|had been published at' >/dev/null; then
       bad "$f has gone back to publishing '$phrase' — $(printf '%s' "${SUPERSEDED[$phrase]}")"
       stale_hits=$((stale_hits+1))
     fi

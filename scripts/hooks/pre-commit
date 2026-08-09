@@ -21,20 +21,20 @@ fi
 DIFF=$(git diff --cached -- $STAGED)
 
 # Real server IPs
-if echo "$DIFF" | grep -qE '95\.179\.144\.140|45\.32\.232\.132|136\.244\.102\.195|78\.141\.211\.78'; then
+if echo "$DIFF" | grep -cE '95\.179\.144\.140|45\.32\.232\.132|136\.244\.102\.195|78\.141\.211\.78' >/dev/null; then
   echo -e "${RED}BLOCKED: Real server IP found in staged changes${NC}"
   echo "$DIFF" | grep -nE '95\.179\.144\.140|45\.32\.232\.132|136\.244\.102\.195|78\.141\.211\.78' | head -5
   FOUND=1
 fi
 
 # Home server IP
-if echo "$DIFF" | grep -qE '192\.168\.1\.186'; then
+if echo "$DIFF" | grep -cE '192\.168\.1\.186' >/dev/null; then
   echo -e "${RED}BLOCKED: Home server IP found in staged changes${NC}"
   FOUND=1
 fi
 
 # Internal hostnames
-if echo "$DIFF" | grep -qE 'test\.dockpanel\.dev|demo\.dockpanel\.dev'; then
+if echo "$DIFF" | grep -cE 'test\.dockpanel\.dev|demo\.dockpanel\.dev' >/dev/null; then
   # Allow in memory files and docs that reference these as examples
   REAL_HITS=$(echo "$DIFF" | grep -E 'test\.dockpanel\.dev|demo\.dockpanel\.dev' | grep -v '^[+-].*#\|^[+-].*//\|^[+-].*<!--' | grep -v 'memory/' | head -3)
   if [ -n "$REAL_HITS" ]; then
@@ -45,7 +45,7 @@ if echo "$DIFF" | grep -qE 'test\.dockpanel\.dev|demo\.dockpanel\.dev'; then
 fi
 
 # Passwords and tokens
-if echo "$DIFF" | grep -qiE 'PTHEsBzagJBWE8NuJjA|dockpanel2026|github_pat_'; then
+if echo "$DIFF" | grep -ciE 'PTHEsBzagJBWE8NuJjA|dockpanel2026|github_pat_' >/dev/null; then
   echo -e "${RED}BLOCKED: Password or token found in staged changes${NC}"
   echo "$DIFF" | grep -niE 'PTHEsBzagJBWE8NuJjA|dockpanel2026|github_pat_' | head -5
   FOUND=1

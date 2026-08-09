@@ -290,8 +290,8 @@ fi
 #
 # Prepending the umask is deliberately the whole fix: it needs no new file, it
 # preserves whatever schedule the operator chose, and it is safe to run twice.
-if crontab -l 2>/dev/null | grep -q 'pg_dump -U dockpanel.*/var/backups/dockpanel/db' \
-   && ! crontab -l 2>/dev/null | grep 'pg_dump -U dockpanel' | grep -q 'umask 077'; then
+if crontab -l 2>/dev/null | grep -c 'pg_dump -U dockpanel.*/var/backups/dockpanel/db' >/dev/null \
+   && ! crontab -l 2>/dev/null | grep 'pg_dump -U dockpanel' | grep -c 'umask 077' >/dev/null; then
     if crontab -l 2>/dev/null \
         | sed '\#/var/backups/dockpanel/db# s#docker exec dockpanel-postgres pg_dump#umask 077; docker exec dockpanel-postgres pg_dump#' \
         | crontab -; then
@@ -543,7 +543,7 @@ fi
 
 if command -v getenforce &> /dev/null && [ "$(getenforce 2>/dev/null)" = "Enforcing" ] \
    && command -v getsebool &> /dev/null; then
-    if getsebool httpd_can_network_connect 2>/dev/null | grep -q -- "--> off"; then
+    if getsebool httpd_can_network_connect 2>/dev/null | grep -c -- "--> off" >/dev/null; then
         if setsebool -P httpd_can_network_connect on 2>/dev/null; then
             log "SELinux: allowed nginx to reach the API (the panel was answering 502)"
         else
@@ -895,7 +895,7 @@ for conf in /etc/nginx/sites-enabled/dockpanel-panel.conf /etc/nginx/conf.d/dock
     ' "$conf" "$conf" > "$conf.new" && [ -s "$conf.new" ] \
         && grep -q 'max-age=31536000, immutable' "$conf.new" \
         && ! awk '/^    location \/assets\/ \{/ {f=1} f {print} f && /^    \}/ {exit}' \
-             "$conf.new" | grep -q 'expires '; then
+             "$conf.new" | grep -c 'expires ' >/dev/null; then
         mv "$conf.new" "$conf"
         log "Repeated the security headers on /assets/ in $conf"
         NGINX_NEEDS_RELOAD=1
@@ -911,7 +911,7 @@ if [ "$NGINX_NEEDS_RELOAD" = "1" ] || [ "$NGINX_NEEDS_RESTART" = "1" ]; then
             systemctl restart nginx > /dev/null 2>&1 && log "Nginx restarted after panel :443 listen migration"
             # Verify the socket actually moved — the whole point of restarting.
             if command -v ss > /dev/null 2>&1 && [ -n "${PANEL_BIND_IP:-}" ] \
-               && ! ss -ltn "( sport = :443 )" 2>/dev/null | grep -q "${PANEL_BIND_IP}:443"; then
+               && ! ss -ltn "( sport = :443 )" 2>/dev/null | grep -c "${PANEL_BIND_IP}:443" >/dev/null; then
                 log "WARN: panel is still not listening on ${PANEL_BIND_IP}:443 — a site vhost may shadow it"
             fi
         else

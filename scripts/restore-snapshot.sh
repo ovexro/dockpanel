@@ -271,7 +271,7 @@ if [ -f "$DUMP_GZ" ]; then
     # It stays a tail window rather than a whole-file grep on purpose: this panel
     # stores operator-authored text, so the marker string can legitimately appear
     # inside the data and a whole-file grep could not tell that from a real end.
-    if ! tail -20 "$DUMP_SQL" | grep -q 'PostgreSQL database dump complete'; then
+    if ! tail -20 "$DUMP_SQL" | grep -c 'PostgreSQL database dump complete' >/dev/null; then
         fail "database dump is truncated (completion marker absent) — refusing to apply it"
     fi
     EXPECT_TABLES="$(grep -c '^CREATE TABLE' "$DUMP_SQL" || true)"

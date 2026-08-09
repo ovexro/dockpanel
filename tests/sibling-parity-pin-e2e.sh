@@ -85,7 +85,7 @@ echo "§A  one fail-closed crontab reader"
 CRON_FILES=""
 while read -r f; do
   [ -n "$f" ] || continue
-  code "$f" | grep -q 'safe_command\(_sync\)\?("crontab")' && CRON_FILES="${CRON_FILES}${f}"$'\n'
+  code "$f" | grep -c 'safe_command\(_sync\)\?("crontab")' >/dev/null && CRON_FILES="${CRON_FILES}${f}"$'\n'
 done < <(grep -rl 'safe_command\(_sync\)\?("crontab")' panel/agent/src --include='*.rs' 2>/dev/null)
 
 CRON_N=$(grep -c . <<< "$CRON_FILES" || true)
@@ -100,8 +100,8 @@ fi
 WRITERS=""
 while read -r f; do
   [ -n "$f" ] || continue
-  if code "$f" | grep -qE '"crontab"\)[^;]*"-"[^;]*\)' \
-     || code "$f" | tr '\n' ' ' | grep -qE 'safe_command\("crontab"\)[^;]{0,200}args\(\["-u", "root", "-"\]\)'; then
+  if code "$f" | grep -cE '"crontab"\)[^;]*"-"[^;]*\)' >/dev/null \
+     || code "$f" | tr '\n' ' ' | grep -cE 'safe_command\("crontab"\)[^;]{0,200}args\(\["-u", "root", "-"\]\)' >/dev/null; then
     WRITERS="${WRITERS}${f}"$'\n'
   fi
 done < <(printf '%s' "$CRON_FILES")

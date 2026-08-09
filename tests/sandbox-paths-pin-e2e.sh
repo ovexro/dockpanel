@@ -89,7 +89,7 @@ done
 # Under `set -euo pipefail` a grep that matches nothing kills the script, and
 # these run at install time where the failure is worst.
 for f in "$SETUP" "$UPDATE"; do
-  if grep -A 6 'agent_rwp_dirs()' "$f" | grep -qF '|| true'; then
+  if grep -A 6 'agent_rwp_dirs()' "$f" | grep -cF '|| true' >/dev/null; then
     ok "$f's helper tolerates a no-match under pipefail"
   else
     bad "$f's helper can abort the installer when the grep matches nothing (set -euo pipefail)"
@@ -119,7 +119,7 @@ fi
 
 # The '-' prefix must be STRIPPED, not carried through — `mkdir -p -/etc/php`
 # would be read as a flag and the directory would never be created.
-if printf '%s\n' "$DERIVED" | grep -q '^-'; then
+if printf '%s\n' "$DERIVED" | grep -c '^-' >/dev/null; then
   bad "derived paths still carry the '-' prefix; mkdir would treat it as an option"
 else
   ok "the '-' prefix is stripped from every derived path"
@@ -131,14 +131,14 @@ echo "── 4. the specific drift that started this, and the ordering that make
 # /var/spool/cron is the path that drifted. Pinning it by name keeps the actual
 # regression down even if the derivation is rewritten later.
 for f in "$SETUP" "$UPDATE"; do
-  if printf '%s\n' "$DERIVED" | grep -qx '/var/spool/cron'; then
+  if printf '%s\n' "$DERIVED" | grep -cx '/var/spool/cron' >/dev/null; then
     ok "$f covers /var/spool/cron (via the derivation)"
   else
     bad "$f does not cover /var/spool/cron — the s268 cron fix stops landing on upgraded boxes"
   fi
 done
 
-if printf '%s\n' "$ALL" | grep -qx '/var/spool/cron'; then
+if printf '%s\n' "$ALL" | grep -cx '/var/spool/cron' >/dev/null; then
   ok "the unit still grants the cron spool, so crontabs remain writable"
 else
   bad "/var/spool/cron left the unit — the agent cannot write crontabs at all"
@@ -209,7 +209,7 @@ fi
 
 # 5c. And REFUSES rather than falling back. A fallback here is what the whole
 # defect was: a locally-invented unit that nobody compared to the real one.
-if grep -A 8 -- '--print-unit' "$INSTALL_AGENT" | grep -qE '^[[:space:]]*exit 1'; then
+if grep -A 8 -- '--print-unit' "$INSTALL_AGENT" | grep -cE '^[[:space:]]*exit 1' >/dev/null; then
   ok "$INSTALL_AGENT exits non-zero when the binary cannot emit a unit"
 else
   bad "$INSTALL_AGENT does not fail when --print-unit fails — an absent unit must be an error, never a guess"
@@ -331,7 +331,7 @@ fi
 # `grep -qF UNIT_BACKUP` matched UNIT_BACKUP_UNUSED and stayed green with the
 # rollback gutted — the same substring trap as s270's `const RSPAMD_MILTER`.
 # Anchored on the variable as DEREFERENCED, closing quote included.
-if grep -A 30 'stage="rollback"' "$SELF_UPDATE" | grep -qF '"$UNIT_BACKUP"'; then
+if grep -A 30 'stage="rollback"' "$SELF_UPDATE" | grep -cF '"$UNIT_BACKUP"' >/dev/null; then
   ok "$SELF_UPDATE restores the previous unit on rollback"
 else
   bad "$SELF_UPDATE rolls back the binary but not the unit — the old binary would start under the same bad unit"

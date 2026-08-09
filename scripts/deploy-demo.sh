@@ -71,7 +71,7 @@ done
 # this refusal is why a hand deploy — not this script — is what put a stale
 # glibc agent on the demo at s271.
 file "$TMP/dockpanel-api-linux-amd64" | cut -c1-100
-if readelf -d "$TMP/dockpanel-api-linux-amd64" 2>/dev/null | grep -q NEEDED; then
+if readelf -d "$TMP/dockpanel-api-linux-amd64" 2>/dev/null | grep -c NEEDED >/dev/null; then
     echo "REFUSING: api asset is dynamically linked"; exit 1
 fi
 echo "  confirmed: no DT_NEEDED (static)"

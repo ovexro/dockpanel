@@ -57,8 +57,8 @@ strip_comments() {
         *)    sed -E 's|[[:space:]]*#.*$||'  "$1" ;;
     esac
 }
-code()   { strip_comments "$1" | grep -qE -- "$2" && ok "$3" || bad "$3"; }
-nocode() { strip_comments "$1" | grep -qE -- "$2" && bad "$3" || ok "$3"; }
+code()   { strip_comments "$1" | grep -cE -- "$2" >/dev/null && ok "$3" || bad "$3"; }
+nocode() { strip_comments "$1" | grep -cE -- "$2" >/dev/null && bad "$3" || ok "$3"; }
 
 echo
 echo "A. The agent can write what its build tools need"
@@ -139,13 +139,13 @@ if [ -n "$CLONE_DEST" ] && ! grep -qE '&site_dir\]' <<< "$CLONE_DEST"; then
 else
   bad "the fresh clone targets the populated site directory again — first deploy fails"
 fi
-printf '%s' "$CLONE_FN" | sed -E 's|[[:space:]]*//.*$||' | grep -qE 'deploy-staging' \
+printf '%s' "$CLONE_FN" | sed -E 's|[[:space:]]*//.*$||' | grep -cE 'deploy-staging' >/dev/null \
   && ok "it stages beside the site, where nginx cannot serve a half-finished checkout" \
   || bad "the staging directory is gone — a partial clone is reachable over HTTP"
-printf '%s' "$CLONE_FN" | sed -E 's|[[:space:]]*//.*$||' | grep -qE 'foreign_entries\(' \
+printf '%s' "$CLONE_FN" | sed -E 's|[[:space:]]*//.*$||' | grep -cE 'foreign_entries\(' >/dev/null \
   && ok "a destination holding files the panel did not write is refused" \
   || bad "nothing checks the destination — a real site can be destroyed by a deploy"
-printf '%s' "$CLONE_FN" | grep -qE 'Refusing to deploy into' \
+printf '%s' "$CLONE_FN" | grep -cE 'Refusing to deploy into' >/dev/null \
   && ok "and the refusal names what it found instead of failing blank" \
   || bad "the refusal no longer tells the operator which files blocked it"
 
@@ -159,14 +159,14 @@ if [ -n "$MERGE_FN" ]; then
 else
   bad "merge_into is gone — the entries the clone does not supply are unprotected"
 fi
-printf '%s' "$MERGE_FN" | sed -E 's|[[:space:]]*//.*$||' | grep -qE 'read_dir\(from\)' \
+printf '%s' "$MERGE_FN" | sed -E 's|[[:space:]]*//.*$||' | grep -cE 'read_dir\(from\)' >/dev/null \
   && ok "the merge walks the staged clone entry by entry" \
   || bad "the merge no longer iterates — an unreplaced document root is at risk"
 # An ABSENCE arm over a window that does not exist passes having examined
 # nothing, which reads exactly like a clean sweep. Assert the subject first.
 if [ -z "$MERGE_FN" ]; then
   bad "the whole-destination-wipe arm has no subject to read — it cannot report a catch"
-elif printf '%s' "$MERGE_FN" | sed -E 's|[[:space:]]*//.*$||' | grep -qE 'remove_dir_all\((&)?to\)'; then
+elif printf '%s' "$MERGE_FN" | sed -E 's|[[:space:]]*//.*$||' | grep -cE 'remove_dir_all\((&)?to\)' >/dev/null; then
   bad "the merge clears the whole destination — a repo without public/ loses its document root"
 else
   ok "the merge never clears the whole destination, so an unreplaced document root survives"

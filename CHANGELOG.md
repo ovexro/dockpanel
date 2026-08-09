@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.93.0] - 2026-08-09
+
+A test-and-tooling release. Nothing an operator uses changes; what changes is
+whether the checks that guard the rest of it can be believed.
+
+### Fixed — a successful match could be reported as a failure
+
+Throughout the test suites, the release scripts and the git hooks, a common shell
+idiom asked a yes/no question by piping output into a grep that stops at its first
+match. Under `set -o pipefail` that idiom can return the wrong answer. The grep
+exits as soon as it matches; the command upstream is still writing; it is killed by
+`SIGPIPE` and exits 141; and `pipefail` reports that as the status of the whole
+pipeline. **A match that succeeded is reported as no match.**
+
+This was recorded a release ago as a rare race — measured then at two occurrences in
+four hundred runs, which is why it first appeared as a test failure that would not
+reproduce. That characterisation was too kind. The race exists only while the
+upstream command's output fits the 64 KiB pipe buffer; above that it is still
+writing by definition, and the wrong answer becomes **certain**. Measured here: on a
+2.2 MB input in which every line matched, 400 of 400 runs reported no match.
+
+Which branch that wrong answer takes decides how much it costs. A check that fails
+when it *cannot* find something turns falsely red, and announces itself. A check
+that fails when it *does* find something turns falsely green — and a green check is
+what success looks like. The git hooks are in the second category: they scan the
+diff being pushed for credentials and internal addresses, and their input is the
+largest of any such pipeline in the repository.
+
+All 105 occurrences are converted to a form that reads its input to the end, so the
+upstream command is never signalled and the exit status still answers the same
+question. No check changes what it looks for.
+
+A new regression pin (`pipefail-sigpipe-pin-e2e.sh`) enumerates every shell script
+and workflow in the repository from the tree itself and fails if the idiom returns.
+It deliberately does not exempt files that lack `pipefail` today: two of the sites
+found were in files that would have been exempt, including the hooks above, and a
+rule that depends on a shell option somebody may add later reports "clean" right up
+until it matters.
+
+### Fixed — the arm64 and container CLI probes in the release smoke test had no timeout
+
+Two of the six per-distro probes invoked the CLI without the `timeout` wrapper their
+sibling probes use. Previously the pipeline killed a hung process as a side effect of
+the defect above; with that removed, the guard is now explicit.
+
 ## [2.92.0] - 2026-08-09
 
 Two features that were advertised and did not work: one that had never worked on any

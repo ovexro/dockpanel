@@ -89,13 +89,13 @@ INSTALL_TMP=$(mktemp)
 # the check itself. Comparing bytes means handling bytes.
 if "${CURL[@]}" -o "$INSTALL_TMP" "$INSTALL_URL" 2>/dev/null; then
   ok "$INSTALL_URL answers"
-  if head -1 "$INSTALL_TMP" | grep -q '^#!'; then
+  if head -1 "$INSTALL_TMP" | grep -c '^#!' >/dev/null; then
     ok "it begins with a shebang"
   else
     bad "$INSTALL_URL returned 200 but the body does not start with a shebang — the SPA fallback is answering, and the advertised one-liner pipes a web page into bash"
     note "first line: $(head -1 "$INSTALL_TMP" | cut -c1-80)"
   fi
-  if head -c 2000 "$INSTALL_TMP" | grep -qiE '<!doctype html|<html'; then
+  if head -c 2000 "$INSTALL_TMP" | grep -ciE '<!doctype html|<html' >/dev/null; then
     bad "$INSTALL_URL is serving HTML"
   else
     ok "it is not HTML"
@@ -160,14 +160,14 @@ else
   if "${CURL[@]}" -o "$PANEL_TMP" "$PANEL/install-agent.sh" 2>/dev/null; then
     ok "the panel's /install-agent.sh answers"
 
-    if head -1 "$PANEL_TMP" | grep -q '^#!'; then
+    if head -1 "$PANEL_TMP" | grep -c '^#!' >/dev/null; then
       ok "it begins with a shebang"
     else
       bad "the panel's /install-agent.sh returned 200 but does not start with a shebang — the SPA fallback is answering, and the Add-Server command pipes a web page into sudo bash"
       note "first line: $(head -1 "$PANEL_TMP" | cut -c1-80)"
     fi
 
-    if head -c 2000 "$PANEL_TMP" | grep -qiE '<!doctype html|<html'; then
+    if head -c 2000 "$PANEL_TMP" | grep -ciE '<!doctype html|<html' >/dev/null; then
       bad "the panel's /install-agent.sh is serving HTML — this is issue #56's shape and s274 reproduced it"
     else
       ok "it is not HTML"

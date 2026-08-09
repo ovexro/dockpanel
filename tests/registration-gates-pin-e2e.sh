@@ -54,7 +54,7 @@ else
   bad "$AUTH no longer consults self_registration_enabled — the toggle in Settings governs nothing"
 fi
 
-if grep -A 6 "key = 'self_registration_enabled'" "$AUTH" | grep -qF 'unwrap_or(false)'; then
+if grep -A 6 "key = 'self_registration_enabled'" "$AUTH" | grep -cF 'unwrap_or(false)' >/dev/null; then
   ok "an absent self_registration_enabled row means DISABLED"
 else
   bad "$AUTH no longer defaults self-registration closed — a fresh panel would accept public signups with nothing configured"
@@ -147,7 +147,7 @@ if [ -z "$UPDATE_FN" ]; then
   bad "could not isolate ALLOWED_KEYS in $SETTINGS — the allowlist arms below are reading nothing"
 else
   for key in self_registration_enabled oauth_auto_create; do
-    if printf '%s\n' "$UPDATE_FN" | grep -qF "\"$key\""; then
+    if printf '%s\n' "$UPDATE_FN" | grep -cF "\"$key\"" >/dev/null; then
       ok "$key is in the PUT /api/settings write allowlist"
     else
       bad "$key is not writable through PUT /api/settings — its toggle would fail with 'Unknown setting'"
@@ -184,13 +184,13 @@ echo "── 5. the first-admin door closes behind itself ──"
 # POST /api/auth/setup creates the initial admin and must refuse once ANY user
 # exists, or a stranger who finds the panel before its owner finishes installing
 # owns the box. Checked by the count, before the password is hashed.
-if grep -A 12 'pub async fn setup' "$AUTH" | grep -q 'SELECT COUNT(\*) FROM users'; then
+if grep -A 12 'pub async fn setup' "$AUTH" | grep -c 'SELECT COUNT(\*) FROM users' >/dev/null; then
   ok "setup counts existing users before doing anything"
 else
   bad "$AUTH's setup route no longer counts users first — the initial-admin endpoint may be re-callable"
 fi
 
-if grep -A 16 'pub async fn setup' "$AUTH" | grep -q 'Setup already completed'; then
+if grep -A 16 'pub async fn setup' "$AUTH" | grep -c 'Setup already completed' >/dev/null; then
   ok "setup refuses once a user exists"
 else
   bad "$AUTH's setup route no longer refuses after the first user — anyone reaching it could create another admin"

@@ -92,7 +92,7 @@ for f in panel/frontend/nginx.conf website/client/nginx.conf; do
     A=$(block '^    location /assets/ [{]' "$CONF")
     MISSING=0
     for h in $PARENT; do
-        printf '%s' "$A" | grep -q "add_header $h " || MISSING=$((MISSING+1))
+        printf '%s' "$A" | grep -c "add_header $h " >/dev/null || MISSING=$((MISSING+1))
     done
     check "$f: /assets/ repeats all $(printf '%s' "$PARENT" | wc -w) of its parent headers" "$MISSING" "0"
     check "$f: /assets/ sets exactly one Cache-Control" \

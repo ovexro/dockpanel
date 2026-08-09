@@ -30,14 +30,14 @@ while read LOCAL_REF LOCAL_SHA REMOTE_REF REMOTE_SHA; do
   fi
 
   # Secrets patterns
-  if echo "$DIFF" | grep -qiE 'PTHEsBzagJBWE8NuJjA|dockpanel2026|github_pat_|ARYXXLI'; then
+  if echo "$DIFF" | grep -ciE 'PTHEsBzagJBWE8NuJjA|dockpanel2026|github_pat_|ARYXXLI' >/dev/null; then
     echo -e "${RED}BLOCKED: Secret/token found in commits being pushed${NC}"
     echo "$DIFF" | grep -niE 'PTHEsBzagJBWE8NuJjA|dockpanel2026|github_pat_|ARYXXLI' | head -5
     FOUND=1
   fi
 
   # Password assignments in source code
-  if echo "$DIFF" | grep -E '^\+' | grep -qiE 'password\s*=\s*"[^"]{6,}"'; then
+  if echo "$DIFF" | grep -E '^\+' | grep -ciE 'password\s*=\s*"[^"]{6,}"' >/dev/null; then
     HITS=$(echo "$DIFF" | grep -E '^\+' | grep -iE 'password\s*=\s*"[^"]{6,}"' | grep -viE 'wp_password|nc_password|example|placeholder|changeme|default|_password"|PASSWORD_HASH')
     if [ -n "$HITS" ]; then
       echo -e "${YELLOW}WARNING: Possible hardcoded password in pushed code:${NC}"
@@ -47,7 +47,7 @@ while read LOCAL_REF LOCAL_SHA REMOTE_REF REMOTE_SHA; do
   fi
 
   # Real IPs
-  if echo "$DIFF" | grep -qE '95\.179\.144\.140|45\.32\.232\.132|136\.244\.102\.195|78\.141\.211\.78|192\.168\.1\.186'; then
+  if echo "$DIFF" | grep -cE '95\.179\.144\.140|45\.32\.232\.132|136\.244\.102\.195|78\.141\.211\.78|192\.168\.1\.186' >/dev/null; then
     echo -e "${RED}BLOCKED: Real infrastructure IP in commits being pushed${NC}"
     echo "$DIFF" | grep -nE '95\.179\.144\.140|45\.32\.232\.132|136\.244\.102\.195|78\.141\.211\.78|192\.168\.1\.186' | head -5
     FOUND=1
@@ -155,7 +155,7 @@ for DIR in panel/frontend website/client website/server; do
   OUT=$( (cd "$DIR" && node "$AUDIT_GATE") 2>&1 )
   case $? in
     0)
-      if echo "$OUT" | grep -q '^waived'; then
+      if echo "$OUT" | grep -c '^waived' >/dev/null; then
         echo -e "${YELLOW}npm audit: ${DIR} — advisories present, all individually reviewed${NC}"
         echo "$OUT" | grep '^waived'
       else
@@ -186,7 +186,7 @@ if command -v cargo-audit >/dev/null 2>&1; then
     OUT=$( (cd "$CRATE" && cargo audit $NOFETCH) 2>&1 )
     if [ $? -eq 0 ]; then
       echo -e "${GREEN}cargo audit clean: ${CRATE}${NC}"
-    elif echo "$OUT" | grep -qiE "couldn't fetch|failed to fetch|network|could not resolve"; then
+    elif echo "$OUT" | grep -ciE "couldn't fetch|failed to fetch|network|could not resolve" >/dev/null; then
       echo -e "${YELLOW}WARNING: cargo audit could not reach the advisory DB for ${CRATE} — not enforced${NC}"
     else
       echo -e "${RED}BLOCKED: cargo audit found vulnerabilities in ${CRATE}${NC}"
@@ -213,13 +213,13 @@ echo "=== Post-push gate reminders ==="
 
 # Check if website/ or docs/ changed — remind to deploy
 CHANGED_FILES=$(git diff --name-only "$RANGE" 2>/dev/null)
-if echo "$CHANGED_FILES" | grep -qE '^website/|^docs/'; then
+if echo "$CHANGED_FILES" | grep -cE '^website/|^docs/' >/dev/null; then
   echo -e "${YELLOW}REMINDER: website/ or docs/ changed — deploy live sites after push${NC}"
   echo -e "${YELLOW}  → dockpanel.dev and/or docs.dockpanel.dev need rebuild${NC}"
 fi
 
 # Check if panel/ source changed — remind about release binaries
-if echo "$CHANGED_FILES" | grep -qE '^panel/(agent|backend|cli)/src/'; then
+if echo "$CHANGED_FILES" | grep -cE '^panel/(agent|backend|cli)/src/' >/dev/null; then
   LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null)
   if [ -n "$LATEST_TAG" ]; then
     COMMITS_SINCE=$(git rev-list "$LATEST_TAG..HEAD" --count 2>/dev/null)

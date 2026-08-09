@@ -57,13 +57,13 @@ rm -f /usr/local/bin/dockpanel-api
 systemctl daemon-reload 2>/dev/null || true
 
 # Remove PostgreSQL container and volume
-if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^dockpanel-postgres$"; then
+if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -c "^dockpanel-postgres$" >/dev/null; then
     echo -e "${GREEN}[+]${NC} Removing PostgreSQL container..."
     docker stop dockpanel-postgres 2>/dev/null || true
     docker rm dockpanel-postgres 2>/dev/null || true
 fi
 
-if docker volume ls --format '{{.Name}}' 2>/dev/null | grep -q "^dockpanel-pgdata$"; then
+if docker volume ls --format '{{.Name}}' 2>/dev/null | grep -c "^dockpanel-pgdata$" >/dev/null; then
     echo -e "${GREEN}[+]${NC} Removing PostgreSQL data volume..."
     docker volume rm dockpanel-pgdata 2>/dev/null || true
 fi

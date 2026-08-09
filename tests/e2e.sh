@@ -258,7 +258,7 @@ if [ -n "$SITE_ID" ]; then
 
     # Read it back
     READ_RESP=$(api_get "/sites/${SITE_ID}/files/read?path=test.html")
-    if echo "$READ_RESP" | grep -q "E2E Test" 2>/dev/null; then
+    if echo "$READ_RESP" | grep -c "E2E Test" 2>/dev/null >/dev/null; then
         ok "File read: test.html content verified"
     else
         if echo "$READ_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); assert 'E2E Test' in d.get('content','')" 2>/dev/null; then
