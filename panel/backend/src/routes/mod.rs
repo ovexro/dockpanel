@@ -76,6 +76,17 @@ pub fn client_ip(headers: &HeaderMap) -> Option<String> {
         .map(|s| s.split(',').next().unwrap_or(s).trim().to_string())
 }
 
+/// Failed webhook-secret attempts tolerated per deploy id before the route
+/// starts refusing, inside the one-hour window both webhook handlers roll.
+///
+/// It lives here because it has THREE readers that must agree: the git-deploy
+/// webhook, the site-deploy webhook, and the cleanup task in `main.rs`, which
+/// sheds zero-count entries above its cap and therefore has to know what a
+/// count "at the limit" is. They disagreed once already — the janitor evicted
+/// on a five-minute window while both handlers promised an hour — and a literal
+/// repeated in three files is how that happens.
+pub const WEBHOOK_ATTEMPT_LIMIT: u32 = 10;
+
 /// Validate a domain name format.
 pub fn is_valid_domain(domain: &str) -> bool {
     if domain.is_empty() || domain.len() > 253 {

@@ -1900,8 +1900,17 @@ find "$BACKUP_DIR" -name "*.sql.gz" -mtime +7 -delete
 BKEOF
     chmod +x "$BACKUP_SCRIPT"
 
-    # Install cron job (daily at 3 AM)
-    (crontab -l 2>/dev/null | grep -v "$BACKUP_SCRIPT"; echo "0 3 * * * $BACKUP_SCRIPT") | crontab -
+    # Install cron job (daily at 3 AM).
+    #
+    # Both greps are load-bearing. The first drops a previous install of THIS
+    # script. The second drops the pre-v2.88.0 INLINE dump line, which never
+    # contains "$BACKUP_SCRIPT" — so without it, re-running setup on an older
+    # box kept the unhardened 0644 line AND added this one, giving two daily
+    # dumps of the same database, one of them world-readable in mode.
+    (crontab -l 2>/dev/null \
+        | grep -v "$BACKUP_SCRIPT" \
+        | grep -v 'pg_dump -U dockpanel.*/var/backups/dockpanel/db'; \
+     echo "0 3 * * * $BACKUP_SCRIPT") | crontab -
 
     log "Database backup script installed ($BACKUP_SCRIPT)"
     log "Cron job: daily at 3:00 AM, 7-day retention"

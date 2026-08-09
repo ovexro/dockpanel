@@ -147,11 +147,40 @@ fi
 # nineteen reds, where attention goes to the reds (s302). The window below is
 # anchored on the block's own BACKUP_DIR assignment, and an empty extraction
 # FAILS rather than passes.
+# ⚠ TWO correct spellings, and which one is correct depends on the file.
+#
+# In setup.sh the umask sits inside the `cat > "$BACKUP_SCRIPT" <<'BKEOF'`
+# heredoc — a standalone child script, where a bare top-level `umask 077` is
+# right and governs only that script.
+#
+# In update.sh a BARE umask is the REGRESSION, not the fix: v2.88.0 set it at
+# top-level scope in an 1100-line installer, so it governed every later `mkdir`
+# and redirect and would have created /opt/dockpanel/frontend and the ACME
+# challenge directory 0700. s331 scoped it into the subshell that performs the
+# dump redirect, which moved this arm's subject (lesson #150 — let the arm
+# follow the code). Both forms are accepted here because both protect the dump;
+# that a bare one in update.sh is separately FORBIDDEN is pinned by
+# upgrade-reach-pin-e2e.sh §A, which is the arm that owns that distinction.
+# ⚠ The window is bounded by the OPERATION, not by a line count. It used to be
+# `grep -B 6 -A 12` around the BACKUP_DIR assignment, and s331 pushed update.sh's
+# dump past +12 simply by documenting the fix above it — so the arm reported the
+# dump unprotected while it was protected on the very next line. A fixed -A n
+# window is not a block (lesson #172); it silently stops measuring its subject
+# the moment anyone writes a comment.
 umask_near_backup_block() {
   local f="$1" win
-  win=$(grep -B 6 -A 12 -- 'BACKUP_DIR="/var/backups/dockpanel/db"' "$f" || true)
+  # From the backup block's own start to the dump it performs, inclusive.
+  # Backward context stays a small fixed count — in setup.sh's generated script
+  # the umask is the line immediately BEFORE the assignment, and that adjacency
+  # is structural. Only the FORWARD span is operation-bounded, because that is
+  # the direction commentary grows in.
+  win=$( { grep -B 8 -- 'BACKUP_DIR="/var/backups/dockpanel/db"' "$f" 2>/dev/null || true
+           awk '/BACKUP_DIR="\/var\/backups\/dockpanel\/db"/{inside=1}
+                inside{print}
+                inside && /pg_dump/{exit}' "$f"; } )
   [ -n "$win" ] || return 2
-  grep -qE '^\s*umask 077\s*$' <<< "$win"
+  grep -qE 'pg_dump' <<< "$win" || return 2
+  grep -qE '^\s*umask 077\s*$|umask 077; docker exec' <<< "$win"
 }
 A4=0
 has "$(subj "$SEC_RS")" 'mode\(0o600\)' || { bad "A4a the agent's own /security/db-backup still creates the dump with the default mode"; A4=1; }

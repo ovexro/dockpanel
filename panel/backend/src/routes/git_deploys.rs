@@ -1382,7 +1382,7 @@ pub async fn webhook(
         if now.duration_since(entry.1).as_secs() >= 3600 {
             *entry = (0, now);
         }
-        if entry.0 >= 10 {
+        if entry.0 >= crate::routes::WEBHOOK_ATTEMPT_LIMIT {
             return Err(err(StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded. Try again later."));
         }
     }

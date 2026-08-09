@@ -1236,11 +1236,34 @@ pub async fn restore_volume_backup(
     AdminUser(claims): AdminUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // Look up the volume backup record
+    // Look up the volume backup record, scoped to the machines this operator runs.
+    //
+    // The scope has to land in the SAME commit as the body fix below, and that
+    // ordering is the whole point. Until now this route could not succeed at all —
+    // it sent no request body, so the agent's `Json` extractor answered 415 before
+    // any handler ran — and a route that always fails closed hides whatever else is
+    // wrong with it. Fixing only the body would have made an unscoped restore work
+    // for the first time: `volume_backups` has no owner column, only `server_id`,
+    // and the agent is resolved from that row, so any administrator could unpack a
+    // backup over a live volume on a server somebody else registered.
+    //
+    // The predicate is the one `SITE_CALLER_PREDICATE`'s admin arm draws and
+    // `approve_deploy` reuses — this machine, or a server this operator added — and
+    // `u.role` is read from the DATABASE, not from `claims.role`, because a JWT
+    // keeps asserting the role it was minted with until it expires.
+    //
+    // A NULL `server_id` (a row predating the fleet backfill) no longer reaches the
+    // 409 below: it cannot satisfy the scope, so it 404s here. Refusing it earlier
+    // is the same answer for the same reason — there is no safe guess about which
+    // machine's volume to overwrite — and it also stops the id of a backup on
+    // another operator's server from being distinguishable from one that does not.
     let backup: Option<VolumeBackup> = sqlx::query_as(
-        "SELECT * FROM volume_backups WHERE id = $1"
+        "SELECT * FROM volume_backups vb WHERE vb.id = $1 AND EXISTS (\
+             SELECT 1 FROM users u, servers sv WHERE u.id = $2 AND u.role = 'admin' \
+             AND sv.id = vb.server_id AND (sv.is_local OR sv.user_id = u.id))"
     )
     .bind(id)
+    .bind(claims.sub)
     .fetch_optional(&state.db).await
     .map_err(|e| internal_error("restore volume backup", e))?;
 
@@ -1261,9 +1284,26 @@ pub async fn restore_volume_backup(
         &state, backup.server_id, &format!("volume {}", backup.volume_name),
     ).await?;
 
-    // Call agent to restore volume
+    // Call agent to restore volume.
+    //
+    // The body is not optional and never was. `restore` on the agent side takes
+    // `Json<VolumeRestoreRequest>`, whose single field `volume_name` is what tells
+    // it which volume to unpack over; a required `Json` extractor rejects a request
+    // carrying no `content-type` with 415 before the handler runs, and neither
+    // agent transport sets that header when the body is `None`
+    // (`services/agent.rs` sets it only `if body.is_some()`, and the remote twin
+    // only calls `.json()` inside `if let Some(b)`). So every call this route has
+    // ever made was refused in the transport layer — the sibling `restore_db_backup`
+    // passes `Some(body)` and worked, which is the asymmetry that hid it.
+    //
+    // The volume drill cannot catch this: `services/backup_drill.rs` re-implements
+    // the restore rather than calling this path, so a green drill says nothing
+    // about whether the real restore runs.
     let agent_path = format!("/volume-backups/{}/restore/{}", backup.container_name, backup.filename);
-    let result = agent.post(&agent_path, None).await
+    let result = agent.post(
+        &agent_path,
+        Some(serde_json::json!({ "volume_name": backup.volume_name })),
+    ).await
         .map_err(|e| agent_error("Volume restore", e))?;
 
     activity::log_activity(

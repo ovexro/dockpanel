@@ -255,14 +255,50 @@ mkdir -p "$BACKUP_DIR"
 # chmods repair a tree an older installer already left 0755/0644; the agent
 # does the same at startup, but update.sh runs on panel boxes that may not
 # restart the agent for hours.
-umask 077
+#
+# ⚠ The umask MUST stay inside the subshell. v2.88.0 set it bare at this line,
+# which is top-level scope in a 1100-line script, so it governed every `mkdir`
+# and `>` for the rest of the upgrade — including `mkdir -p "$FE_DIR"` below
+# (nginx serves the SPA from there as www-data: 0700 makes every panel asset
+# 403) and `/var/www/acme/.well-known/acme-challenge` (0700 breaks HTTP-01, so
+# certificates stop renewing). Both are silent: `tar` restores its own archived
+# modes, so the extracted tree looks right and only the parent is wrong.
+# Scope it the way setup.sh already does at its three `$(umask 077; mktemp)`
+# sites — the redirect is the only thing that needs it.
 chmod 700 "$BACKUP_DIR" /var/backups/dockpanel 2>/dev/null || true
 log "Backing up database..."
-if docker exec dockpanel-postgres pg_dump -U dockpanel dockpanel | gzip > "$BACKUP_DIR/pre-upgrade-$(date +%Y%m%d%H%M%S).sql.gz"; then
+if ( umask 077; docker exec dockpanel-postgres pg_dump -U dockpanel dockpanel | gzip > "$BACKUP_DIR/pre-upgrade-$(date +%Y%m%d%H%M%S).sql.gz" ); then
     log "Database backup saved to $BACKUP_DIR/"
 else
     error "Database backup failed, aborting upgrade"
     exit 1
+fi
+
+# ── Harden a legacy inline backup cron ────────────────────────────────────
+# Installs predating v2.88.0 carry the daily dump as an INLINE crontab command
+# whose bare `>` creates the file 0666 & ~umask — so the whole panel database,
+# `servers.agent_token` in cleartext, lands 0644 on a box that also runs other
+# people's PHP as www-data.
+#
+# v2.88.0 hardened the writer setup.sh EMITS, but nothing rewrote an existing
+# install's crontab, and nothing could: setup.sh dedupes on the new script's
+# path, which a legacy inline line never contains, so re-running setup leaves
+# the old line in place and adds a SECOND daily dump. update.sh referenced
+# crontab nowhere at all. The agent's startup sweep is what makes older dumps
+# look correct — it repairs the tree once, at start, so the newest dump stays
+# 0644 from 03:30 until the next agent restart.
+#
+# Prepending the umask is deliberately the whole fix: it needs no new file, it
+# preserves whatever schedule the operator chose, and it is safe to run twice.
+if crontab -l 2>/dev/null | grep -q 'pg_dump -U dockpanel.*/var/backups/dockpanel/db' \
+   && ! crontab -l 2>/dev/null | grep 'pg_dump -U dockpanel' | grep -q 'umask 077'; then
+    if crontab -l 2>/dev/null \
+        | sed '\#/var/backups/dockpanel/db# s#docker exec dockpanel-postgres pg_dump#umask 077; docker exec dockpanel-postgres pg_dump#' \
+        | crontab -; then
+        log "Hardened legacy database-backup cron (umask 077)"
+    else
+        warn "Could not rewrite the legacy backup cron — dumps stay 0644 until it is fixed by hand"
+    fi
 fi
 
 # ── Build or download binaries ────────────────────────────────────────────

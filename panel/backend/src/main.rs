@@ -505,6 +505,7 @@ async fn main() {
             let now = Instant::now();
             let window_15m = Duration::from_secs(900);
             let window_5m = Duration::from_secs(300);
+            let window_1h = Duration::from_secs(3600);
             if let Ok(mut map) = login.lock() {
                 map.retain(|_, attempts| {
                     attempts.retain(|t| now.duration_since(*t) < window_15m);
@@ -514,8 +515,26 @@ async fn main() {
             if let Ok(mut map) = twofa.lock() {
                 map.retain(|_, (_, start)| now.duration_since(*start) < window_5m);
             }
+            // The webhook limiter's window is an HOUR, not five minutes. Both
+            // webhook handlers roll their own window at 3600s and both say "max 10
+            // attempts per hour" — but this janitor sat on the same line as the 2FA
+            // one and evicted the counter after 300s, so the entry was gone at the
+            // next tick and a caller simply got a fresh 10 every ~15 minutes. The
+            // 2FA sibling above is correct precisely because its handler window is
+            // also 300s; sharing the constant is what made this look right.
+            //
+            // Retaining for an hour costs memory on an UNAUTHENTICATED route — the
+            // pre-check inserts an entry keyed on a caller-supplied UUID before the
+            // row is known to exist — so the longer retention is paired with a cap.
+            // A flood of invented ids parks at count 0, because the counter is only
+            // incremented after a row is found and its secret mismatches, so
+            // dropping the zero-count entries above the cap sheds exactly the flood
+            // and keeps every counter that is actually near its limit.
             if let Ok(mut map) = webhook.lock() {
-                map.retain(|_, (_, start)| now.duration_since(*start) < window_5m);
+                map.retain(|_, (_, start)| now.duration_since(*start) < window_1h);
+                if map.len() > 10_000 {
+                    map.retain(|_, (count, _)| *count >= routes::WEBHOOK_ATTEMPT_LIMIT);
+                }
             }
             if let Ok(mut map) = agent_rl.lock() {
                 map.retain(|_, (_, start)| now.duration_since(*start) < Duration::from_secs(60));

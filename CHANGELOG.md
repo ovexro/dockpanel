@@ -6,6 +6,84 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.89.0] - 2026-08-09
+
+Four fixes with one shape: a fix from the previous release whose reach fell
+short of what it claimed.
+
+### Fixed — v2.88.0's own backup hardening could break the panel it upgraded
+
+To keep the pre-upgrade dump root-only, v2.88.0 set `umask 077` in `update.sh`.
+It set it at **top-level scope**, in an 1100-line script, so it governed every
+directory and file the rest of the upgrade created — roughly 840 lines of it.
+
+Two of those directories have a non-root reader. `/opt/dockpanel/frontend` is
+where nginx serves the panel's own interface from, as `www-data`; created `0700`
+it cannot be traversed, so **every panel asset returns 403**. And
+`/var/www/acme/.well-known/acme-challenge` is where HTTP-01 challenges are
+written, so **certificate renewal fails**. Both failures are quiet: `tar`
+restores the modes recorded in the archive, so the extracted tree looks correct
+and only its parent is wrong.
+
+This does not affect an install whose directories already exist — `mkdir -p`
+does not change an existing mode — which is why it was invisible on boxes that
+had simply been upgraded before. It fires where the upgrade creates them fresh,
+most notably the migration from the source layout to the release layout.
+
+The umask now applies to the dump's own subshell, matching the form `setup.sh`
+already uses. The dump is still written `0600`, verified in both directions.
+
+### Fixed — the daily backup cron was never repaired on an existing install
+
+v2.88.0 hardened the backup script `setup.sh` **writes**, but an install created
+before it keeps the dump as an *inline* crontab command whose bare `>` produces
+`0644`. Nothing rewrote it: `update.sh` did not reference `crontab` at all, and
+`setup.sh` de-duplicated on the new script's path, which an inline line never
+contains — so re-running setup left the old entry in place and added a second
+daily dump of the same database.
+
+Upgrading now rewrites that entry to run under `umask 077`, preserving whatever
+schedule the operator chose, and `setup.sh` recognises and replaces the inline
+form instead of duplicating it. Until this release, the newest dump on such a
+box was world-readable in mode from 03:30 until the agent next restarted and
+re-secured the tree.
+
+### Fixed — restoring a volume backup could not work, and fixing it alone was unsafe
+
+`POST /api/backup-orchestrator/volume-backups/{id}/restore` has never once
+succeeded. The panel sent no request body, and the agent's handler requires one,
+so the request was rejected with `415 Unsupported Media Type` before any handler
+code ran. The endpoint is published in the API reference and the backup guide,
+so the only signal an operator got was a failure at the moment they needed a
+restore. The volume *drill* could not reveal this either: it re-implements the
+restore rather than calling this path, so a passing drill said nothing about it.
+
+The body is now sent. That fix is shipped **together** with an ownership scope,
+deliberately: the backup row was fetched by id alone, and the agent is chosen
+from the row's own server, so repairing the body by itself would have turned a
+route that always failed closed into one where an administrator could unpack a
+backup over a live volume on a server somebody else registered. The row is now
+scoped to servers the caller operates — this machine, or one they added — with
+the role read from the database rather than from the token.
+
+### Fixed — the webhook rate limiter reset four times an hour
+
+Both webhook endpoints limit failed secret attempts to ten per hour, and both
+roll their own one-hour window. The periodic cleanup task evicted their counters
+on a **five-minute** window — the one belonging to the two-factor limiter, whose
+handler genuinely uses five minutes — so a counter was discarded at the next
+sweep and the allowance started again roughly every quarter of an hour.
+
+The counters are now retained for the hour their handlers promise. Because these
+entries are created by an unauthenticated route, keyed on a deploy id supplied by
+the caller, the longer retention is paired with a cap that sheds the entries a
+flood of invented ids would leave behind. The limit itself is now defined once
+and read by all three call sites, which is what stopped them agreeing before.
+
+No practical exposure: the two endpoints' secrets carry 256 and 122 bits of
+randomness respectively, so the limiter is defence in depth rather than the thing
+standing between a caller and a secret.
+
 ## [2.88.0] - 2026-08-08
 
 ### Fixed — a hosted site could read the panel's database backup
