@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed — a regression pin that a comment could satisfy
+
+`tests/sandbox-paths-pin-e2e.sh` is the suite holding all five install paths
+together. Sections 7 and 8 had read comment-stripped source since s275; sections
+1 to 6 did not. The strippers were defined at line 379, inside section 7, and
+every call site sat below the definition — so thirty-odd arms above it were
+greping raw files, and a comment carrying the text an arm searched for satisfied
+that arm while the code it named was gone.
+
+Measured by mutation rather than argued: **23 of the suite's 64 assertions could
+be satisfied by a comment, with the suite still reporting `passed: 64 failed: 0`.**
+Replaying the s271 defect in its exact shape — delete `install-agent.sh`'s
+`--print-unit` call, leave the explanatory comment, write a unit body with a
+tab-indented heredoc — kept all five guarding arms green, because four were
+reading the comment and the fifth was anchored at column 0. The three arms that
+compare `grep -n` line numbers failed worse still: moving update.sh's mkdir loop
+below the unit install kept the arm green *and* made it print the comment's line
+number as its evidence.
+
+The strippers now sit above section 1, dispatch on the subject's language rather
+than assuming `#`, and blank comment lines instead of deleting them, because
+deleting renumbers the file the ordering arms measure. Also closed: the
+`^\[Service\]` anchor an indented heredoc slid under, and a discovery floor of 4
+that had been left behind while five copies existed — one copy could leave the
+population and the suite reported `passed: 62 failed: 0`.
+
+Three new sections hold it: the strippers get hermetic fixtures, every pinned
+pattern is asserted to be live code and re-checked by commenting it out on each
+run, and a structural arm refuses any future arm that reads a subject raw. The
+suite goes from 64 assertions to 94; the published total moves 1572 → 1602.
+No production code changed.
+
 ## [2.94.0] - 2026-08-09
 
 A release about guards that were not guarding. Two of them decide what gets
