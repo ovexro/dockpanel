@@ -28,9 +28,11 @@
 # tests/install-integrity-pin-e2e.sh.
 
 RED='\033[0;31m'
+YELLOW='\033[1;33m'
 GREEN='\033[0;32m'
 NC='\033[0m'
 FOUND=0
+WARNED=0
 
 echo "=== Pre-commit: infrastructure leak scan ==="
 
@@ -81,9 +83,13 @@ if echo "$DIFF" | grep -E '^\+' | grep -cE "$HOST_PATTERN" >/dev/null; then
   # Allow in memory files and docs that reference these as examples
   REAL_HITS=$(echo "$DIFF" | grep -E '^\+' | grep -E "$HOST_PATTERN" | grep -v '^[+-].*#\|^[+-].*//\|^[+-].*<!--' | grep -v 'memory/' | head -3)
   if [ -n "$REAL_HITS" ]; then
-    echo -e "${RED}WARNING: Internal hostname found in staged changes${NC}"
+    # Deliberately non-blocking: these hostnames appear in docs and examples
+    # legitimately. But it is printed YELLOW, not RED, because a tolerated
+    # warning that looks exactly like the BLOCKED lines above it teaches the
+    # operator to read past both.
+    echo -e "${YELLOW}WARNING: Internal hostname found in staged changes${NC}"
     echo "$REAL_HITS"
-    # Warning only, not blocking — these appear in docs/comments legitimately
+    WARNED=1
   fi
 fi
 
@@ -99,5 +105,14 @@ if [ "$FOUND" -eq 1 ]; then
   exit 1
 fi
 
-echo -e "${GREEN}Clean — no infrastructure leaks detected.${NC}"
+# The summary must not contradict what the scan just printed. It said
+# "Clean — no infrastructure leaks detected." unconditionally, so a run that had
+# just reported a hostname hit still signed off as clean — and the green line is
+# the one an operator reads. Nothing is blocked that was not blocked before; the
+# verdict now describes the run it belongs to.
+if [ "$WARNED" -eq 1 ]; then
+  echo -e "${YELLOW}Not blocked — but the warning above was raised, so this is not a clean scan.${NC}"
+else
+  echo -e "${GREEN}Clean — no infrastructure leaks detected.${NC}"
+fi
 exit 0

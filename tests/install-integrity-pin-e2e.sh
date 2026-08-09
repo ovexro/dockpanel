@@ -236,7 +236,38 @@ else
     && ok "pre-commit does NOT block a commit that REMOVES a line holding a secret" \
     || bad "pre-commit blocks the removal of a secret — the scan is reading deleted lines"
 
-  ( cd "$H_TMP/r" && rm -f ok.rs && printf '%s\n' "$BLOCKED_TOKEN" > leak.pem \
+  # The hostname arm is deliberately NON-BLOCKING — these names appear in docs
+  # and examples legitimately. But the scan used to close with an unconditional
+  # "Clean — no infrastructure leaks detected.", so a run that had just printed a
+  # hostname hit still signed off as clean, and the green line is the one an
+  # operator reads. Derive the hostname from the hook's own bracket form; never
+  # spell an internal address in this file.
+  BLOCKED_HOST=$(grep -oE '[a-z]+\[\.\]dockpanel\[\.\]dev' "$PRECOMMIT" | head -1 | tr -d '[]')
+  hook_summary() { ( cd "$H_TMP/r" && bash .h/pre-commit 2>&1 ) | sed 's/\x1b\[[0-9;]*m//g'; }
+
+  if [ -z "$BLOCKED_HOST" ]; then
+    bad "could not read a hostname pattern out of $PRECOMMIT in bracket form"
+  else
+    stage leak.conf "server_name $BLOCKED_HOST;"
+    S=$(hook_summary)
+    if printf '%s' "$S" | grep -cE 'WARNING: Internal hostname' >/dev/null \
+       && ! printf '%s' "$S" | grep -cE 'Clean — no infrastructure leaks' >/dev/null; then
+      ok "pre-commit warns on an internal hostname WITHOUT then calling the scan clean"
+    else
+      bad "pre-commit's summary contradicts its own warning — it printed a hostname hit and still signed off as clean"
+    fi
+  fi
+
+  # MUST-NOT-FIRE for the arm above: a genuinely clean scan must still say so, or
+  # the check is satisfied by a hook that never claims cleanliness at all.
+  ( cd "$H_TMP/r" && rm -f leak.* carrier.txt && printf 'fn main(){}\n' > fine.rs && git add -A ) >/dev/null 2>&1
+  if printf '%s' "$(hook_summary)" | grep -cE 'Clean — no infrastructure leaks' >/dev/null; then
+    ok "pre-commit still reports a genuinely clean scan as clean"
+  else
+    bad "pre-commit no longer says anything positive on a clean scan — the verdict has been lost, not corrected"
+  fi
+
+  ( cd "$H_TMP/r" && rm -f ok.rs fine.rs && printf '%s\n' "$BLOCKED_TOKEN" > leak.pem \
       && git add -A && git commit -qm "lone pem" --no-verify ) >/dev/null 2>&1
   [ "$(hook_says_blocked prepush)" = BLOCK ] \
     && ok "pre-push blocks a commit whose only file is a .pem" \

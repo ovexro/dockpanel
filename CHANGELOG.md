@@ -35,8 +35,26 @@ population and the suite reported `passed: 62 failed: 0`.
 Three new sections hold it: the strippers get hermetic fixtures, every pinned
 pattern is asserted to be live code and re-checked by commenting it out on each
 run, and a structural arm refuses any future arm that reads a subject raw. The
-suite goes from 64 assertions to 94; the published total moves 1572 → 1602.
-No production code changed.
+suite goes from 64 assertions to 94.
+
+### Fixed — the leak scan's summary contradicted its own warning
+
+Committing the change above made `scripts/hooks/pre-commit` print
+`WARNING: Internal hostname found in staged changes` in red, and then
+`Clean — no infrastructure leaks detected.` in green, and exit 0. The hostname arm
+is deliberately non-blocking — these names appear in docs and examples
+legitimately — but the closing verdict was unconditional, so a run that had just
+reported a hit still signed off as clean, and the green line is the one an
+operator reads. The warning was also printed in the same red as a genuine BLOCK,
+which teaches you to read past both. It is now yellow, and the summary describes
+the run it belongs to. Nothing is blocked that was not blocked before.
+
+Two arms added to `install-integrity-pin-e2e.sh` (28 → 30), the second a
+must-not-fire: a genuinely clean scan must still say so, or the fix would be
+satisfied by a hook that never claims cleanliness at all.
+
+Published assertion total moves 1572 → 1604 across the three surfaces that carry
+it. No production code changed.
 
 ## [2.94.0] - 2026-08-09
 

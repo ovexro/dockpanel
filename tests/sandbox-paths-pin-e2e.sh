@@ -573,9 +573,9 @@ fi
 # is the thing that belongs outside the tree.
 #
 # Read from CODE since s337. This is a negative arm, so the failure it used to
-# have was the loud kind: appending the ordinary usage comment
-# `# DEMO_HOST=demo.dockpanel.dev scripts/deploy-demo.sh v2.94.0` turned it red on
-# a correct file. §11 plants a real hostname in code to prove it still fires.
+# have was the loud kind: appending an ordinary usage comment naming the demo
+# host turned it red on a correct file. §11 plants a matching hostname in code to
+# prove it still fires.
 if has_code scripts/deploy-demo.sh -E -e '/home/[a-z]|[a-z0-9-]+\.dockpanel\.dev'; then
   bad "scripts/deploy-demo.sh hardcodes a home directory or a panel hostname — those belong in the caller, not in the repo"
 else
@@ -904,8 +904,11 @@ else
   bad "§5's sandbox-directive arm no longer fires on a real NoNewPrivileges=no — the stripper is eating code"
 fi
 
+# A host that MATCHES the arm's pattern without being a real one. Spelling the
+# actual demo hostname here would put an internal address in the tree for no
+# gain, and the pre-commit leak scan is right to complain about it.
 cp scripts/deploy-demo.sh "$FIXDIR/dd.sh"
-printf '\nDEMO_HOST=demo.dockpanel.dev\n' >> "$FIXDIR/dd.sh"
+printf '\nDEMO_HOST=example.dockpanel.dev\n' >> "$FIXDIR/dd.sh"
 if has_code "$FIXDIR/dd.sh" -E -e '/home/[a-z]|[a-z0-9-]+\.dockpanel\.dev'; then
   ok "§7d's hardcoded-hostname arm still fires when a hostname is really in code"
 else
