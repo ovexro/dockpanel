@@ -31,12 +31,25 @@ const TIME_RANGES = [
   { label: "30d", value: "30d" },
 ];
 
+// Every source the backend writes, derived from the writers rather than from
+// memory: nine `system_log::log_event` call sites plus one direct INSERT in
+// `services/backup_policy_executor.rs`. This list previously held seven, and the
+// three it omitted included `backup_storage` — which is ~99.98% of the table, so
+// the one source an operator most needed to name was the one absent from the
+// menu built to name sources.
+//
+// `backup_storage` is a metric, not a log, and the default listing now hides it
+// (see METRIC_SOURCE in routes/system_logs.rs). It stays in this list because
+// selecting it explicitly is still the way to see those rows.
 const SOURCES = [
   "",
-  "api",
   "alert_engine",
+  "api",
   "auto_healer",
+  "backup_policy_executor",
   "backup_scheduler",
+  "backup_storage",
+  "cron",
   "metrics_collector",
   "security_scanner",
   "uptime",

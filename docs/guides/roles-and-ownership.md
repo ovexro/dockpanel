@@ -214,8 +214,17 @@ operator role to an account the panel had suspended.
 
 Both directions honour the **Auto-suspend** checkbox on Integrations → WHMCS.
 Previously only suspension checked it, and none of the three WHMCS flags had a
-control at all — the screen's own save omitted them, which silently reset them
-to their defaults on every use.
+control at all.
+
+⚠ **Before v2.92.0 none of this could be exercised, because the integration could
+not be configured at all.** The one statement that writes the WHMCS settings used
+a conflict target no constraint on the table matched, and PostgreSQL resolves that
+target when it parses the statement — so the save failed on the first attempt as
+well as on re-saves, and the settings row could never exist. Every rule described
+above was therefore unreachable on every install from 2026-03-28 until v2.92.0,
+which supplies the missing constraint. A note in an earlier revision of this guide
+described the flags being "reset to their defaults on every use"; that could not
+have happened, since no save ever succeeded.
 
 ## A note on what Teams is not
 

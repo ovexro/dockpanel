@@ -6,6 +6,81 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.92.0] - 2026-08-09
+
+Two features that were advertised and did not work: one that had never worked on any
+install since it shipped, and one that worked but buried its own output.
+
+### Fixed — the WHMCS integration could never be configured, on any install
+
+Saving the WHMCS settings answered *"Failed"* and always had. The single statement
+that writes the configuration is an upsert whose conflict target is a constant
+expression, and no unique constraint on the table ever matched it. PostgreSQL
+resolves that target when it *parses* the statement, not when a row conflicts — so
+the save failed on the very first attempt as well as on re-saves, and the table
+could never hold a row at all.
+
+Everything downstream was therefore unreachable rather than broken: the settings
+screen reported the integration unconfigured, and the webhook answered *"WHMCS not
+configured"* before it read a secret. The billing integration the manifest
+advertises has been inert since it was introduced on 2026-03-28.
+
+A migration adds the constraint the statement always assumed it had, which admits
+exactly one configuration row — the behaviour the code was written for.
+
+Three defects underneath it, none previously reachable to observe:
+
+- The webhook secret was **generated fresh on every save and never stored** by the
+  update path, so the panel would have shown a secret the database did not hold, and
+  each save would have invalidated the hook already configured in WHMCS. It is now
+  minted only when none exists and preserved thereafter.
+- The **hook URL the panel prints does not work**: it carries the secret as a query
+  parameter, and the handler read it only from the JSON body, so the address an
+  operator was told to paste into WHMCS answered 401. The handler now accepts
+  either, body first.
+- Reading the current settings **fell back to defaults when the database could not
+  be reached**, which would silently re-enable billing-driven suspension for an
+  operator who had turned it off. It now reports the failure.
+
+The webhook's authentication is unchanged: the secret is still compared in constant
+time and an unconfigured panel still refuses hooks.
+
+### Fixed — System Logs was 99.98% storage samples, and the filter omitted the cause
+
+A background task records total backup bytes once a minute by inserting a row into
+the system log. It is a metric with a real consumer — the 30-day storage series on
+the Backup Manager — but it is not an event anyone reads, and on this panel it
+outnumbered genuine entries **43,272 to 10**. At the page's 50-row window that put
+every real entry older than roughly fifty minutes below the fold, permanently.
+
+The source dropdown built to filter exactly this listed seven sources; ten are
+written. The three it omitted included the one responsible for almost the entire
+table, and there was no way to exclude a source — so the noise could be neither
+selected nor suppressed.
+
+The default listing now hides those metric rows and the tiles count the same
+population the list shows, while the source stays selectable, so nothing became
+unreachable. The dropdown now offers every source the backend actually writes.
+
+Three further defects on the same screen:
+
+- **An unrecognised level or time range returned the unfiltered list.** It did not
+  error and did not return an empty set, so a typo silently widened the answer while
+  looking like a filter that had matched a great many rows. Both are now refused.
+- **A database failure rendered as an empty log** — the one page an operator opens
+  to find out what went wrong could not distinguish *"nothing happened"* from *"we
+  could not read it"*. Both endpoints now report the failure.
+- **Two writers spelled the warning level in a form no reader accepts**, so those
+  entries were missing from the Warnings tile, unreachable through the level filter,
+  and rendered as an unknown level. The writers are corrected and a migration
+  normalises the rows they already wrote.
+
+### Changed
+
+- Documentation corrected: the mail module's administrator-only handler count was
+  published as "42 of 42", a figure obtained by counting occurrences of the
+  extractor rather than handlers. It has been 41 at every tag since 2.83.0.
+
 ## [2.91.0] - 2026-08-09
 
 The same lockout as 2.90.0, in the two account-creation doors that release did not

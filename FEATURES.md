@@ -1,6 +1,6 @@
 # DockPanel Feature Manifest
 
-> **Version**: v2.91.0 | **Total**: 60+ major features, ~285 capabilities
+> **Version**: v2.92.0 | **Total**: 60+ major features, ~285 capabilities
 >
 > This file is the single source of truth for what DockPanel offers.
 > Update it whenever features are added, changed, or removed.
@@ -192,7 +192,7 @@ deserves to find out what happened to it.
 | **API Keys** — "programmatic access tokens", "scoped API keys" | `README.md`, `FEATURES.md`, `docs/api-reference.md` | Keys in all three families (`dp_`, `dpiac_`, `dpx_`) are generated, hashed, stored and handed to the operator with "won't be shown again" — and **no code path ever reads a stored hash back to authenticate a request**. The sole bearer-token extractor does exactly one thing with the value: JWT decode. `last_used_at` has no writer. The keys are real strings that open nothing. | 2026-08-05 |
 | **App Migration** — "migrate containers between servers, progress tracking" | `README.md`, `FEATURES.md`, `Integrations.tsx` | The endpoint writes one row with `status='in_progress'` and there is **no `UPDATE app_migrations` anywhere in the repository** — no worker, no progress, no terminal state. The Integrations tab that reads the table is real, so an operator sees a migration that is permanently 0% and never completes. | 2026-08-05 |
 | **Auto-sleep "scale to zero"** | `README.md` | Containers scale *to* zero and do not come back on their own: the Start control never clears `is_sleeping`, and the only endpoint that does has no caller in the frontend. Wording corrected to "stop idle containers"; the wake path is a tracked defect, not a claim. | 2026-08-05 |
-| **`client` role manages "mail" and "containers"** | `docs/guides/roles-and-ownership.md`, `migrations/20260805000000_client_role.sql` | Both are administrator-only and always were. `routes/mail.rs` takes `AdminUser` on **42 of 42** handlers (`AuthUser`: none) and `Mail.tsx` redirects a non-admin before it renders, so a client cannot manage a mailbox on its own domain. Every handler in `routes/docker_apps.rs` calls `require_admin`, and the dashboard's "Deploy App" shortcut pointed a client at a page that bounces them. The other five items in that list — PHP version, settings, files, backups, SSL — are real and ownership-scoped via `SITE_CALLER_PREDICATE`. Reported by the operator the role was built for, on #51. **The claim also survives in the migration's own comment, which cannot be corrected**: `sqlx::migrate!` checksums applied migrations, so editing that file would break the upgrade on every deployed install. It is left in place deliberately and recorded here instead. | 2026-08-06 |
+| **`client` role manages "mail" and "containers"** | `docs/guides/roles-and-ownership.md`, `migrations/20260805000000_client_role.sql` | Both are administrator-only and always were. `routes/mail.rs` takes `AdminUser` on **41 of 41** handlers (`AuthUser`: none) and `Mail.tsx` redirects a non-admin before it renders, so a client cannot manage a mailbox on its own domain. Every handler in `routes/docker_apps.rs` calls `require_admin`, and the dashboard's "Deploy App" shortcut pointed a client at a page that bounces them. The other five items in that list — PHP version, settings, files, backups, SSL — are real and ownership-scoped via `SITE_CALLER_PREDICATE`. Reported by the operator the role was built for, on #51. **The claim also survives in the migration's own comment, which cannot be corrected**: `sqlx::migrate!` checksums applied migrations, so editing that file would break the upgrade on every deployed install. It is left in place deliberately and recorded here instead. ⚠ **The handler figure in this row was itself wrong until s334**: it read "42 of 42", a number obtained by counting `AdminUser` *occurrences* — which includes the `use` import — rather than counting handlers. `mail.rs` has had **41** `pub async fn` at every tag from v2.83.0 to v2.91.0, checked one by one. The v2.83.0 CHANGELOG entry still carries the old figure and is left as shipped, since a released changelog is a record of what was said. | 2026-08-06 |
 
 ## Verified Metrics
 
@@ -228,9 +228,9 @@ honest:
 | Full-stack RAM (with bundled PostgreSQL) | ~109 MB | measured | 2026-07-27 |
 | App templates | 153 | derived | every commit |
 | HTTP routes | 810 (530 backend + 280 agent) | derived | every commit |
-| Regression-pin assertions | 1514 (49 suites) | derived | every commit |
+| Regression-pin assertions | 1535 (51 suites) | derived | every commit |
 | Frontend pages | 52 | derived | every commit |
-| DB migrations | 106 | derived | every commit |
+| DB migrations | 108 | derived | every commit |
 | Supervised background services | 15 | derived | every commit |
 
 Five of these were wrong when the register was built (s272), some by a factor of

@@ -379,9 +379,14 @@ async fn execute_policy(db: &PgPool, agents: &AgentRegistry, policy: &PolicyRow,
                                     if let Some(msg) = resp.get("message").and_then(|v| v.as_str()) {
                                         if !remote_prune_warned {
                                             remote_prune_warned = true;
+                                            // "warning", not "warn" — the API filters and
+                                            // counts on the former, so a "warn" row was
+                                            // uncountable in the Warnings tile and grey in
+                                            // the list. Its sibling at backup_scheduler.rs
+                                            // already spelled it the long way twice.
                                             crate::services::system_log::log_event(
                                                 db,
-                                                "warn",
+                                                "warning",
                                                 "backup_policy_executor",
                                                 &format!("Policy '{}': remote retention was not enforced", policy.name),
                                                 Some(msg),

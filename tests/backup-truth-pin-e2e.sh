@@ -314,13 +314,26 @@ for f in "$EXEC" "$SCHED"; do
       ok "$(basename "$f"): the prune response is destructured and read"
     fi
     # The message must reach a durable operator surface, not just a journal.
-    MW=$(grep -A12 "emote retention was not enforced" <<< "$S" || true)
-    if [ -z "$MW" ]; then
+    #
+    # ⚠ This used to look for `log_event` inside a fixed `grep -A12` window taken
+    # FORWARD from the message, with a second forward window from the prune call
+    # as a fallback. But the call WRAPS the message — `log_event(db, level,
+    # source, &format!("…"))` — so the token being sought sits ABOVE the token
+    # being searched from, and both windows only ever found it by accident of
+    # spacing. At s334 a five-line comment added above the call pushed it out of
+    # the fallback window and this arm went red on correct code (#333, recurring:
+    # a fixed forward window is not a statement, and prose displaces it).
+    #
+    # Now bounded by the CALL itself: a `log_event(` whose argument list runs to
+    # the end of the statement and contains the message. Spacing and comments
+    # cannot move that relationship. Mutation-verified: severing the message from
+    # log_event turns this red while its sibling file stays green.
+    if [ "$(count "$S" 'emote retention was not enforced')" = "0" ]; then
       bad "$(basename "$f"): nothing records that retention was a no-op"
-    elif [ "$(count "$MW" 'log_event')" = "0" ] && [ "$(count "$W" 'log_event')" = "0" ]; then
-      bad "$(basename "$f"): the unenforced-retention message never reaches system_log"
-    else
+    elif perl -0777 -ne 'exit(!(/log_event\s*\([^;]*?emote retention was not enforced/s))' <<< "$S"; then
       ok "$(basename "$f"): an unenforceable retention reaches system_log"
+    else
+      bad "$(basename "$f"): the unenforced-retention message never reaches system_log"
     fi
   fi
 done

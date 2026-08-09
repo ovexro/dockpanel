@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -83,32 +83,55 @@ pub async fn update_config(
     let encrypted_secret = crate::services::secrets_crypto::encrypt_credential(&body.api_secret, &state.config.jwt_secret)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Encryption failed: {e}")))?;
 
-    // Generate webhook secret for incoming hooks
-    let webhook_secret = uuid::Uuid::new_v4().to_string().replace('-', "");
-
-    // An omitted flag means "leave it as it is", not "true".
+    // An omitted flag means "leave it as it is", not "true"; and the webhook
+    // secret an operator has already wired into WHMCS must survive a save.
     //
-    // The panel's own WHMCS form posts only the three API fields, so every save
-    // from the UI used to force all three flags back to their defaults — silently
-    // re-enabling billing-driven suspension for an operator who had turned it off
-    // through the API. A setting that will not stay set is worse than one that
-    // does not exist, and it made the `auto_suspend` gate on the webhook's
-    // suspend/unsuspend arms unreliable in exactly the case it was added for.
-    let current: Option<(bool, bool, bool)> = sqlx::query_as(
-        "SELECT auto_provision, auto_suspend, auto_terminate FROM whmcs_config LIMIT 1",
+    // The panel's own WHMCS form posts only the three API fields, so a save that
+    // defaulted the flags would silently re-enable billing-driven suspension for
+    // an operator who had turned it off through the API. A setting that will not
+    // stay set is worse than one that does not exist, and it would make the
+    // `auto_suspend` gate on the webhook's suspend/unsuspend arms unreliable in
+    // exactly the case it was added for.
+    //
+    // ⚠ Both halves of that reasoning were UNOBSERVABLE until now, and the note
+    // that used to stand here described the reset as something operators had
+    // seen. They had not: the statement below could never execute (no arbiter
+    // matched its ON CONFLICT target), so no save ever succeeded and no row ever
+    // existed. `20260809120000_whmcs_config_singleton.sql` supplies the missing
+    // constraint; this read is what makes the first real save preserve rather
+    // than clobber.
+    //
+    // The read is REQUIRED to succeed. Falling back to defaults when the
+    // database is merely unreachable would reintroduce the clobber it exists to
+    // prevent, at the one moment we cannot tell a fresh install from a blip.
+    let current: Option<(bool, bool, bool, Option<String>)> = sqlx::query_as(
+        "SELECT auto_provision, auto_suspend, auto_terminate, webhook_secret \
+         FROM whmcs_config LIMIT 1",
     )
     .fetch_optional(&state.db)
     .await
-    .ok()
-    .flatten();
-    let (cur_provision, cur_suspend, cur_terminate) = current.unwrap_or((true, true, false));
+    .map_err(|e| internal_error("read current whmcs config", e))?;
+
+    let (cur_provision, cur_suspend, cur_terminate, cur_secret) = match current {
+        Some((p, s, t, secret)) => (p, s, t, secret),
+        None => (true, true, false, None),
+    };
+
+    // Mint a webhook secret only when there is not one already. Regenerating it
+    // on every save would silently break the hook the operator had configured in
+    // WHMCS — and the old statement did exactly that in its VALUES list while
+    // omitting the column from its DO UPDATE SET, so it would have returned a
+    // secret it never stored.
+    let webhook_secret =
+        cur_secret.unwrap_or_else(|| uuid::Uuid::new_v4().to_string().replace('-', ""));
 
     sqlx::query(
         "INSERT INTO whmcs_config (id, api_url, api_identifier, api_secret_encrypted, auto_provision, auto_suspend, auto_terminate, webhook_secret) \
          VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7) \
          ON CONFLICT ((true)) DO UPDATE SET \
          api_url = $1, api_identifier = $2, api_secret_encrypted = $3, \
-         auto_provision = $4, auto_suspend = $5, auto_terminate = $6, updated_at = NOW()"
+         auto_provision = $4, auto_suspend = $5, auto_terminate = $6, \
+         webhook_secret = $7, updated_at = NOW()"
     )
     .bind(&body.api_url)
     .bind(&body.api_identifier)
@@ -158,9 +181,26 @@ pub struct WhmcsWebhookPayload {
     pub secret: Option<String>,
 }
 
+/// The secret may also arrive in the query string.
+///
+/// The panel has always PRINTED the hook URL with the secret as a query
+/// parameter (`Integrations.tsx`), but this handler only ever read it from the
+/// JSON body — so the address the operator was told to paste into WHMCS
+/// authenticated nothing and answered 401. Accepting both makes the advertised
+/// URL work without dropping the body form, which is what a caller that can
+/// shape its own payload should still prefer.
+#[derive(Deserialize)]
+pub struct WhmcsWebhookQuery {
+    pub secret: Option<String>,
+}
+
 /// POST /api/whmcs/webhook — Receive provisioning hooks from WHMCS.
+///
+/// ⚠ `Json` consumes the request body, so it must stay LAST in this argument
+/// list; `Query` has to precede it.
 pub async fn webhook(
     State(state): State<AppState>,
+    Query(q): Query<WhmcsWebhookQuery>,
     Json(body): Json<WhmcsWebhookPayload>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Verify webhook secret
@@ -176,7 +216,12 @@ pub async fn webhook(
 
     match secret {
         Some(ref expected) => {
-            let provided = body.secret.as_deref().unwrap_or("");
+            // Body first, query string second — see `WhmcsWebhookQuery`.
+            let provided = body
+                .secret
+                .as_deref()
+                .or(q.secret.as_deref())
+                .unwrap_or("");
             // Constant-time comparison to prevent timing attacks
             use subtle::ConstantTimeEq;
             if provided.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() != 1 {

@@ -346,9 +346,12 @@ async fn run_scheduled_backup(
         match agent.post("/backups/prune", Some(prune_body)).await {
             Ok(resp) => {
                 if let Some(msg) = resp.get("message").and_then(|v| v.as_str()) {
+                    // "warning", not "warn" — this file's two other warning writers
+                    // (:201, :248) already spell it the long way, and only that
+                    // spelling is filterable and countable.
                     crate::services::system_log::log_event(
                         db,
-                        "warn",
+                        "warning",
                         "backup_scheduler",
                         &format!("Remote retention was not enforced for {}", row.domain),
                         Some(msg),
