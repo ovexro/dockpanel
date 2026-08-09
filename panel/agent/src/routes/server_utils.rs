@@ -31,8 +31,6 @@ pub fn router() -> Router<AppState> {
         .route("/auto-updates/status", get(auto_updates_status))
         .route("/auto-updates/enable", post(enable_auto_updates))
         .route("/auto-updates/disable", post(disable_auto_updates))
-        // IP whitelist for panel
-        .route("/panel-whitelist", get(get_whitelist).post(set_whitelist))
 }
 
 // ── File Upload ─────────────────────────────────────────────────────────
@@ -378,49 +376,27 @@ async fn disable_auto_updates() -> Result<Json<serde_json::Value>, ApiErr> {
     Ok(ok("Automatic security updates disabled"))
 }
 
-// ── Panel IP Whitelist ──────────────────────────────────────────────────
-
-async fn get_whitelist() -> Result<Json<serde_json::Value>, ApiErr> {
-    let path = "/etc/dockpanel/panel-whitelist.conf";
-    let content = tokio::fs::read_to_string(path).await.unwrap_or_default();
-    let ips: Vec<String> = content
-        .lines()
-        .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
-        .map(|l| l.trim().to_string())
-        .collect();
-
-    Ok(Json(serde_json::json!({ "ips": ips, "enabled": !ips.is_empty() })))
-}
-
-#[derive(Deserialize)]
-pub struct WhitelistRequest {
-    pub ips: Vec<String>,
-}
-
-async fn set_whitelist(
-    Json(body): Json<WhitelistRequest>,
-) -> Result<Json<serde_json::Value>, ApiErr> {
-    let path = "/etc/dockpanel/panel-whitelist.conf";
-
-    // Validate IPs
-    for ip in &body.ips {
-        let trimmed = ip.trim();
-        if !trimmed.is_empty() && !trimmed.contains('.') && !trimmed.contains(':') {
-            return Err(err(StatusCode::BAD_REQUEST, &format!("Invalid IP: {trimmed}")));
-        }
-    }
-
-    let content: String = body.ips.iter()
-        .filter(|ip| !ip.trim().is_empty())
-        .map(|ip| ip.trim().to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    tokio::fs::write(path, format!("{content}\n")).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write: {e}")))?;
-
-    // Update nginx config to include allow/deny directives
-    // This would be picked up by the panel's nginx config
-    tracing::info!("Panel whitelist updated: {} IPs", body.ips.len());
-    Ok(ok(&format!("Whitelist updated with {} IPs", body.ips.iter().filter(|ip| !ip.trim().is_empty()).count())))
-}
+// The panel IP whitelist handlers that stood here were removed in v2.90.0.
+//
+// ⚠ Deliberately spelled around: an absence pin greps this tree for the endpoint's
+// literal name, and a tombstone that spells it turns that pin red on a correct fix.
+// The route was the panel-side whitelist endpoint; the file was its `.conf` under
+// `/etc/dockpanel/`.
+//
+// They wrote that file and read it back for display, and those two functions were
+// the ONLY references to the path in the entire repository:
+// no nginx include, no template, nothing compiled into either binary beyond the string
+// itself. Their own author had left the note "this WOULD be picked up by the panel's
+// nginx config" — it never was, from 2026-03-15 until removal. Meanwhile the panel
+// grew a real IP restriction one week later, enforced in the backend at every door
+// that mints a session, and the two controls sat on the same settings tab with the
+// inert one listed first.
+//
+// Deliberately NOT finished instead of deleted: the file holds bare addresses, not
+// `allow`/`deny` directives, and lands in a directory no nginx glob reaches, so
+// "include it" was never one step away. Anything that did enforce at the web-server
+// layer would also be unrecoverable from the panel itself, which the backend check —
+// clearable with one SQL statement, documented — is not.
+//
+// A stale copy of that file may still exist on an upgraded box. It is inert, it
+// always was, and nothing here reads or removes it.

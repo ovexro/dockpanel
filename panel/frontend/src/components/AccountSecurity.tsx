@@ -13,7 +13,7 @@ import { api, ApiError } from "../api";
  * an extraction and not a feature: the capability shipped long ago, unreachable.
  *
  * Each card is self-contained — its own state, its own fetch, its own inline
- * message — following `SSHKeys`/`AutoUpdates`/`IPWhitelist` in `Settings.tsx`.
+ * message — following `SSHKeys`/`AutoUpdates` in `Settings.tsx`.
  * That is what lets BOTH `pages/Account.tsx` and the Settings "Account" tab
  * render the same implementation instead of a copy that drifts.
  *

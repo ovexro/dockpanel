@@ -104,10 +104,25 @@ pub async fn setup(
         .map_err(|e| internal_error("initial setup", e))?
         .to_string();
 
-    // Atomic check-and-insert to prevent TOCTOU race
+    // Atomic check-and-insert to prevent TOCTOU race.
+    //
+    // `email_verified` is TRUE here, and that is the whole difference between this
+    // door and `register`. This is the bootstrap door: it runs once, only while the
+    // table is empty, for the person who already has the box. It issues no
+    // `email_token` and sends no mail — so unlike a registration, there is no
+    // ceremony to complete and nobody to complete it against.
+    //
+    // Leaving it FALSE made the first administrator of every install a latent
+    // lockout. `login` (:268) refuses an unverified account whenever `smtp_host` is
+    // merely NON-EMPTY, so the gate armed the moment the operator configured mail —
+    // against their own account — and BOTH exits needed the mail that was being
+    // configured. The token door (:833) matches `WHERE email_token = $1`, and this
+    // user has no token at all, so that door does not exist for them; the only other
+    // writer is `reset_password`, which needs the forgot-password message. Reported
+    // as #100 by an operator who reinstalled to get back in.
     let user: Option<User> = sqlx::query_as(
-        "INSERT INTO users (email, password_hash, role) \
-         SELECT $1, $2, 'admin' \
+        "INSERT INTO users (email, password_hash, role, email_verified) \
+         SELECT $1, $2, 'admin', TRUE \
          WHERE NOT EXISTS (SELECT 1 FROM users) \
          RETURNING *",
     )

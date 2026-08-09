@@ -1702,11 +1702,36 @@ async fn security_check_canary_files(pool: &PgPool) {
         "/var/www/.dockpanel-canary",
     ];
 
+    // How many canaries this tick could actually be examined. A tripwire with nothing
+    // on the wire reports "all clear" forever, which is the one answer an intrusion
+    // detector must never give by default — and the Settings toggle renders ON unless
+    // the operator has explicitly turned it off, so silence read as protection.
+    //
+    // Nothing in the tree plants these files: the writer is the agent's
+    // `/security/canary/setup`, which has no caller anywhere. Two of the four paths
+    // are additionally unreadable to this process on a stock install, because the
+    // unit runs under `ProtectHome=yes`. Both cases used to take the same silent
+    // `continue`, so "never armed" and "armed and quiet" were indistinguishable.
+    let mut examined = 0usize;
+
     for path in &canary_paths {
         let meta = match std::fs::metadata(path) {
             Ok(m) => m,
-            Err(_) => continue, // File doesn't exist (not set up yet)
+            Err(e) => {
+                // Distinguished deliberately: NotFound means nobody ever planted it;
+                // anything else (notably PermissionDenied under ProtectHome) means a
+                // canary may exist and we cannot see it — which is a blind spot, not
+                // an all-clear, and is worth saying out loud.
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(
+                        "Canary {path} exists or may exist but is unreadable ({e}); \
+                         it is NOT being monitored"
+                    );
+                }
+                continue;
+            }
         };
+        examined += 1;
 
         let atime = meta.atime();
         let _mtime = meta.mtime();
@@ -1777,6 +1802,22 @@ async fn security_check_canary_files(pool: &PgPool) {
             let _ = sqlx::query(
                 "UPDATE settings SET value = $1 WHERE key = $2"
             ).bind(atime.to_string()).bind(&key).execute(pool).await;
+        }
+    }
+
+    // Not armed at all: say so once per process rather than every two minutes, and say
+    // it at WARN so it is visible in the same journal an operator checks after a
+    // scare. Without this the feature's only observable behaviour on a stock install
+    // is silence, which is identical to the behaviour of a working tripwire.
+    if examined == 0 {
+        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            tracing::warn!(
+                "Canary file monitoring is enabled but NOT ARMED — none of the {} canary \
+                 paths could be examined, so nothing is being watched and no alert can \
+                 ever fire. Disable the setting or create the canary files.",
+                canary_paths.len()
+            );
         }
     }
 }

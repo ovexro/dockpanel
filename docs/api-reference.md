@@ -662,7 +662,6 @@ Create a webhook integration.
 | GET | `/api/dashboard/docker` | Docker summary |
 | GET/POST | `/api/ssh-keys` | SSH key management |
 | DELETE | `/api/ssh-keys/{fingerprint}` | Remove SSH key |
-| GET/POST | `/api/panel-whitelist` | IP whitelist |
 | GET/POST/POST | `/api/auto-updates/*` | Auto-update management |
 | GET/POST | `/api/backup-destinations` | Remote backup targets |
 | POST | `/api/traefik/install` | Install Traefik |

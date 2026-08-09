@@ -958,6 +958,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/security/recordings", get(security::recordings_list))
         .route("/api/security/pending-users", get(security::pending_users))
         .route("/api/security/users/{id}/approve", post(security::approve_user))
+        .route("/api/security/unverified-users", get(security::unverified_users))
+        .route("/api/security/users/{id}/verify-email", post(security::verify_user_email))
         // Security Scanning
         .route("/api/security/scan", post(security_scans::trigger_scan))
         .route("/api/security/scans", get(security_scans::list_scans))
@@ -1274,8 +1276,6 @@ pub fn router() -> Router<AppState> {
         .route("/api/auto-updates/status", get(system::auto_updates_status))
         .route("/api/auto-updates/enable", post(system::enable_auto_updates))
         .route("/api/auto-updates/disable", post(system::disable_auto_updates))
-        // Panel IP Whitelist
-        .route("/api/panel-whitelist", get(system::get_panel_whitelist).post(system::set_panel_whitelist))
         // Service installers
         .route("/api/services/install-status", get(system::install_status))
         .route("/api/services/install/php", post(system::install_php))

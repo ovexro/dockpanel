@@ -1097,3 +1097,72 @@ pub async fn pending_users(
 
     Ok(Json(result))
 }
+
+/// POST /api/security/users/{id}/verify-email — Mark an address verified without sending mail (#100).
+///
+/// The recovery door for a verification that can never complete. `login` refuses an
+/// unverified account whenever `smtp_host` is non-empty, and every self-service exit
+/// from that state needs working mail: the token door matches `WHERE email_token = $1`
+/// (an account created by `setup` has no token, so the door does not exist for it) and
+/// `reset_password` needs the forgot-password message. An operator whose SMTP is
+/// misconfigured therefore cannot mail their way out of a mail problem.
+///
+/// `email_verified` had five writers before this one and every one of them was
+/// self-service or machine (`auth.rs` register/verify/reset, `oauth.rs`, `whmcs.rs`) —
+/// no administrator could set it for somebody else, while the sibling gate on the same
+/// table, `approved`, has had exactly this override since Feature 8. This is that
+/// primitive, one column over.
+pub async fn verify_user_email(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Path(user_id): Path<uuid::Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Clearing the token alongside the flag keeps this consistent with the token and
+    // reset doors, which have always set the pair together: a redeemable link must not
+    // outlive the verification it would have performed.
+    let result = sqlx::query(
+        "UPDATE users SET email_verified = TRUE, email_token = NULL, updated_at = NOW() WHERE id = $1"
+    )
+    .bind(user_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| internal_error("verify user email", e))?;
+
+    if result.rows_affected() == 0 {
+        return Err(err(StatusCode::NOT_FOUND, "User not found"));
+    }
+
+    security_hardening::audit_log(
+        &state.db, "user.email_verify", Some(&claims.email), None,
+        Some("user"), Some(&user_id.to_string()), None, None, "info",
+    ).await;
+
+    Ok(Json(serde_json::json!({ "status": "verified" })))
+}
+
+/// GET /api/security/unverified-users — List accounts blocked by the email gate (#100).
+///
+/// `can_self_verify` is the discriminator that matters to an operator: FALSE means the
+/// account holds no token, so no verification link exists or can be resent, and this
+/// override is the ONLY way in short of a database edit.
+pub async fn unverified_users(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    let users: Vec<(uuid::Uuid, String, String, bool, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT id, email, role, (email_token IS NOT NULL) AS can_self_verify, created_at \
+         FROM users WHERE email_verified = FALSE ORDER BY created_at DESC LIMIT 500"
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| internal_error("unverified users", e))?;
+
+    let result: Vec<serde_json::Value> = users.iter().map(|(id, email, role, can_self_verify, created)| {
+        serde_json::json!({
+            "id": id, "email": email, "role": role,
+            "can_self_verify": can_self_verify, "created_at": created,
+        })
+    }).collect();
+
+    Ok(Json(result))
+}

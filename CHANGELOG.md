@@ -6,6 +6,79 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.90.0] - 2026-08-09
+
+Three security controls that reported a state they had never established, and one
+of them had already locked a real operator out of his own panel.
+
+### Fixed — configuring email could lock the first administrator out permanently
+
+Reported as #100. The initial setup screen created the first administrator with
+only an address, a password hash and a role, so the account was stored
+**unverified** — and because it never registered, it never held a verification
+token either.
+
+Sign-in refuses an unverified account whenever an SMTP host is set. The check is
+on that setting being **present**, not on the mail working. So the gate armed the
+moment the operator configured email, against their own account, and every exit
+required the mail being configured: the verification route matches on a token
+this account does not have, so the link could not be resent because it could not
+exist; and the password-reset route needs the forgot-password message. The
+reporter reinstalled to get back in.
+
+Four parts, because fixing the writer does not reach installs that already hold
+the broken row:
+
+- The setup screen now marks the administrator it creates as verified. It issues
+  no token and sends no mail, so there was never a ceremony to complete — the
+  registration door, which does send mail, has always set both columns.
+- A migration releases existing accounts that are unverified **and** hold no
+  token, which is exactly the set that can never verify. Accounts with a live
+  verification link outstanding are deliberately left alone.
+- **Security → Approvals** gains *Accounts blocked by email verification*, with a
+  **Mark verified** button. Rows are labelled `no link exists` or
+  `link outstanding` so an administrator can see which accounts are beyond
+  self-rescue. This is the button the reporter asked for.
+- The hardening guide now documents the symptom, the cause and two recoveries.
+  It previously documented neither this lockout nor the column.
+
+### Removed — a second IP whitelist that never restricted anything
+
+The **Panel IP Whitelist** card wrote a file on the agent host and read it back
+to display it. Those two functions were the only references to that path in the
+repository: no nginx include, no template, nothing compiled into either binary.
+It had been inert since 2026-03-15, while telling the operator "Whitelist saved
+(N IPs)" and writing an audit-log entry for a change that had no effect.
+
+DockPanel's real IP restriction arrived a week later and is unaffected: **Panel
+IP Allowlist**, in Settings → Account → Security Hardening, enforced at every
+door that mints a session, CIDR-aware, validated on save, and documented with a
+recovery path. It is now the only such control in the panel.
+
+The inert card sat *above* the working one on the same tab, so an operator
+restricting panel access could reasonably have used the wrong one. A stale
+`.conf` file may remain on upgraded systems; it is inert and always was.
+
+### Fixed — canary file monitoring reported "armed" while watching nothing
+
+The intrusion-detection tripwire is on by default, but nothing in the product
+ever creates the canary files, and the checker took the same silent path for "no
+canary was ever created" as for "a canary exists and cannot be read". A tripwire
+with nothing on the wire was indistinguishable from a quiet one.
+
+The check now separates the two, warns when a canary exists but is unreadable
+(two of the four paths are unreadable on a stock install because the service runs
+under `ProtectHome=yes`), and says once, at warning level, when nothing at all
+could be examined — instead of reporting silence as safety. Arming the tripwire
+automatically is not part of this release.
+
+### Added
+
+- `tests/access-recovery-pin-e2e.sh` — 12 assertions covering all three fixes.
+  Ten are red at v2.90.0's predecessor; the other two are controls asserting that
+  the verification gate was repaired rather than deleted, and that the surviving
+  IP allowlist still guards every session-minting door.
+
 ## [2.89.0] - 2026-08-09
 
 Four fixes with one shape: a fix from the previous release whose reach fell

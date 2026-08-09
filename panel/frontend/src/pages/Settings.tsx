@@ -1311,8 +1311,10 @@ export default function Settings() {
         {/* Auto-Updates — Security tab */}
         <AutoUpdates />
 
-        {/* IP Whitelist — Security tab */}
-        <IPWhitelist />
+        {/* The "Panel IP Whitelist" card that stood here was removed in v2.90.0: it
+            wrote a file on the agent host that nothing read, while telling the operator
+            "Whitelist saved (N IPs)". The control that actually restricts panel access
+            is Panel IP Allowlist, in Security Hardening further down this tab. */}
 
         <ChangePasswordCard />
 
@@ -2520,57 +2522,6 @@ function AutoUpdates() {
             <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${status?.enabled ? "translate-x-6" : "translate-x-1"}`} />
           </button>
         </div>
-      </div>
-    </div>
-  );
-}
-
-// ── IP Whitelist Component ──────────────────────────────────────────────
-
-function IPWhitelist() {
-  const [ips, setIps] = useState<string[]>([]);
-  const [newIp, setNewIp] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState({ text: "", type: "" });
-
-  useEffect(() => {
-    api.get<{ ips: string[] }>("/panel-whitelist").then(d => setIps(d.ips || [])).catch(() => {});
-  }, []);
-
-  const save = async (list: string[]) => {
-    setSaving(true); setMsg({ text: "", type: "" });
-    try {
-      await api.post("/panel-whitelist", { ips: list });
-      setIps(list);
-      setMsg({ text: list.length > 0 ? `Whitelist saved (${list.length} IPs)` : "Whitelist cleared", type: "success" });
-    } catch (e) { setMsg({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-    finally { setSaving(false); }
-  };
-
-  return (
-    <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
-      <div className="px-5 py-3 border-b border-dark-600">
-        <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Panel IP Whitelist</h3>
-        <p className="text-xs text-dark-200 mt-0.5">Restrict panel access to specific IPs</p>
-      </div>
-      <div className="p-5 space-y-3">
-        {msg.text && <div className={`px-3 py-2 rounded text-xs ${msg.type === "success" ? "bg-rust-500/10 text-rust-400" : "bg-danger-500/10 text-danger-400"}`}>{msg.text}</div>}
-        {ips.length === 0 && (
-          <p className="text-xs text-dark-400 text-center py-2">No IP whitelist — all IPs can access the panel</p>
-        )}
-        {ips.map((ip, i) => (
-          <div key={i} className="flex items-center justify-between bg-dark-900 border border-dark-500 px-3 py-1.5">
-            <span className="text-xs text-dark-50 font-mono">{ip}</span>
-            <button onClick={() => save(ips.filter((_, j) => j !== i))} className="text-dark-300 hover:text-danger-400">
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
-            </button>
-          </div>
-        ))}
-        <div className="flex gap-2">
-          <input type="text" value={newIp} onChange={(e) => setNewIp(e.target.value)} placeholder="e.g. 203.0.113.50" className="flex-1 px-3 py-2 border border-dark-500 rounded-lg text-xs font-mono focus:ring-2 focus:ring-accent-500 outline-none" />
-          <button disabled={!newIp || saving} onClick={() => { save([...ips, newIp.trim()]); setNewIp(""); }} className="px-3 py-2 bg-rust-500 text-white rounded-lg text-xs font-medium hover:bg-rust-600 disabled:opacity-50 shrink-0">Add IP</button>
-        </div>
-        {ips.length > 0 && <button onClick={() => save([])} className="text-xs text-dark-300 hover:text-dark-100">Clear whitelist (allow all)</button>}
       </div>
     </div>
   );

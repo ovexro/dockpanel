@@ -590,28 +590,12 @@ pub async fn disable_auto_updates(
     Ok(Json(result))
 }
 
-// ── Panel IP Whitelist ──────────────────────────────────────────────────
-
-pub async fn get_panel_whitelist(
-    State(_state): State<AppState>,
-    AdminUser(_claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = agent.get("/panel-whitelist").await.map_err(|e| agent_error("Whitelist", e))?;
-    Ok(Json(result))
-}
-
-pub async fn set_panel_whitelist(
-    State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
-    Json(body): Json<serde_json::Value>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = agent.post("/panel-whitelist", Some(body)).await.map_err(|e| agent_error("Set whitelist", e))?;
-    activity::log_activity(&state.db, claims.sub, &claims.email, "panel.whitelist.update", Some("system"), None, None, None).await;
-    Ok(Json(result))
-}
-
+// The "Panel IP Whitelist" proxy that stood here was removed in v2.90.0. It relayed a
+// list of addresses to the agent, which wrote them to a file on the agent host that
+// nothing on any install ever read — no nginx include, no enforcement, nowhere. The
+// panel's real IP restriction is a setting enforced at every session-minting door in
+// `auth.rs`, and it now owns the single operator control on the Account tab.
+//
 pub async fn install_powerdns(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,

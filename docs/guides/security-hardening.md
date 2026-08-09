@@ -179,6 +179,31 @@ The check reads the client address from the `X-Real-IP` header. **If your revers
 DELETE FROM settings WHERE key = 'allowed_panel_ips';
 ```
 
+## Locked out by "Email not verified"
+
+Sign-in is refused with **"Email not verified. Check your inbox."** when an account is
+unverified *and* an SMTP host is set in Settings. The check is on the setting being
+**present**, not on the mail actually working — so a half-finished or wrong SMTP
+configuration arms the gate just as effectively as a working one.
+
+Before v2.90.0 this could lock out the very first administrator. The account created by
+the initial setup screen was stored unverified and, because it never registered, it
+never held a verification token — so the verification link could not be resent, it could
+not be generated at all, and the password-reset route needed the same broken mail. From
+v2.90.0 the setup screen marks that account verified when it creates it, and upgrading
+also releases any existing account that is unverified and holds no token.
+
+To clear it on a running panel, as an administrator: **Security** > **Approvals**, find
+the account under *Accounts blocked by email verification*, and press **Mark verified**.
+Rows marked `no link exists` cannot verify themselves by any means; rows marked
+`link outstanding` still have a live link that a working SMTP would deliver.
+
+If no administrator can sign in at all, clear it directly in the database:
+
+```sql
+UPDATE users SET email_verified = TRUE WHERE email = 'you@example.com';
+```
+
 ## SSH Hardening
 
 From **Security**, you can apply SSH hardening with one click:
