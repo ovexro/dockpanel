@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.94.0.** The version stamp, the template count and every
+> **Reflects v2.95.0.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.

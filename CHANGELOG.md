@@ -6,6 +6,74 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.95.0] - 2026-08-09
+
+A release about the web terminal, and about a suite that was reading prose.
+
+### Fixed — the terminal's most-used colour was unreadable, and one was invisible
+
+The three palettes are faithful transcriptions of Catppuccin Mocha, Dracula and
+Atom One Light, and they are not the problem. The problem is what xterm was never
+told.
+
+`brightBlack` — git hashes, systemd timestamps, most secondary CLI output —
+measured **2.46:1** on mocha and **3.03:1** on dracula against their own
+backgrounds. Both fail AA; mocha fails even the 3:1 large-text floor, and SGR dim
+(`\e[2m`) halves each again to 1.54:1 and 1.74:1. Rather than edit three upstream
+palettes, the terminal now passes `minimumContrastRatio: 4.5` and xterm lifts any
+failing foreground at render time, for every theme at once.
+
+The light theme's `brightWhite` was `#fafafa` — byte-identical to its own
+background, so `\e[97m` text was invisible at exactly **1.00:1**. Eight of its
+sixteen slots failed AA, including the three colours this page writes itself: its
+own connection status, warnings and errors were below contrast in its own theme.
+
+`cursorAccent` was unset in all three, so the glyph under a block cursor fell back
+to `#000000` — a black character inside the light theme's blue cursor.
+`selectionInactiveBackground` was unset, so focused and unfocused selection looked
+identical, and the auto-derived scrollbar slider measured 1.42:1 on light.
+
+### Fixed — the terminal only noticed WINDOW resizes
+
+Resize handling was a bare `window` listener, which misses every way this
+terminal actually changes size. The sidebar expands **on hover** and stays in
+flow, so pointing at the nav swings the terminal's width by 160px with no window
+event; the same happens vertically whenever Snippets, SSH Info, either banner or
+the mobile toolbar appears. The PTY kept the stale `cols`/`rows`, so wrapped
+output tore and `top`, `tmux`, `nano` and `htop` stayed corrupt until the browser
+window itself was resized. Now a `ResizeObserver` on the container, coalesced per
+frame and guarded against fitting a collapsed box.
+
+### Fixed — smaller terminal defects, all of them options never passed
+
+- **Scrollback was xterm's default 1000 lines.** `journalctl -n 2000` silently
+  lost its top — and Copy Output and Share iterate that same buffer, so a shared
+  link was truncated without saying so. Now 10000.
+- **No focus indicator existed at all.** xterm sets `.xterm:focus{outline:none}`
+  and the element that takes focus is an off-screen textarea, so the panel's
+  global focus ring had nothing to land on and nothing signalled whether
+  keystrokes would reach the shell. The wrapper now carries a `focus-within` ring.
+- **Find had no decorations**, so a match was merely selected — in the same
+  low-alpha grey as any selection, about a 1.8:1 shift. Matches are now
+  highlighted in colours derived from the active theme.
+- The **notice banner** used stock `amber-*` instead of the panel's per-theme
+  `warn-*` tokens and measured **1.19:1** on the light panel themes — invisible,
+  and it is exactly what an owner with no site assigned sees.
+- The terminal's **font stack** had drifted from `--font-mono`, so a box without
+  the webfont rendered the terminal and its chrome in different faces; `fit()`
+  also ran before `document.fonts.ready`, which on a cold load could measure the
+  fallback face and produce a grid with the wrong column count.
+- The theme map was typed `Record<string, string>`, so a key xterm does not
+  recognise compiled clean and did nothing — which is how the missing keys above
+  went unnoticed. It is now `ITheme`.
+
+Not changed, deliberately: `selectionForeground` stays unset. Setting it would
+guarantee selection contrast but flatten all selected text to one colour, and
+that is a design decision rather than a defect. Three xterm addons that would
+help — WebGL (which also carries the programmatic box-drawing glyphs the DOM
+renderer lacks), web-links and unicode11 — are new dependencies and are not in
+this release.
+
 ### Fixed — a regression pin that a comment could satisfy
 
 `tests/sandbox-paths-pin-e2e.sh` is the suite holding all five install paths
