@@ -6,6 +6,91 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.91.0] - 2026-08-09
+
+The same lockout as 2.90.0, in the two account-creation doors that release did not
+reach — plus a third door that let new accounts past a gate an operator had switched
+on, and an audit-log promise the code never kept.
+
+### Fixed — accounts created by an administrator or a reseller could never sign in
+
+2.90.0 fixed this for the very first administrator (#100). It did not fix it for
+anyone created afterwards.
+
+**Users → Add User** and the reseller's **Create User** both wrote the account
+without marking it verified and without issuing a verification token. That is the
+same pair 2.90.0's own migration defines as *"can never verify"*: sign-in refuses an
+unverified account whenever an SMTP host is merely set, the verification route
+matches on a token these accounts do not have, and password reset needs the
+forgot-password message. Any panel with email configured therefore handed out
+accounts that could not be used and could not be repaired by the person holding
+them.
+
+The admin door closed the trap on itself — it sends a welcome message over the same
+SMTP whose presence arms the block, and that message says *"please log in"* while
+carrying no verification link. The reseller door was worse: it sends no mail at all,
+and the override added in 2.90.0 requires an administrator, so a reseller could not
+release the client they had just created.
+
+Both doors now mark the account verified, which is the trade the OAuth and WHMCS
+doors already make: the address is asserted by the person creating the account
+rather than proven by the person receiving it. Self-service registration is
+unchanged — it still issues a token and still requires the recipient to confirm.
+
+**Why 2.90.0 missed it:** the check that convinced us the other doors were fine
+searched for the column by name. That is blind to a statement which omits the
+column, and the two doors still broken were exactly the two files that never
+mentioned it. The regression suite now enumerates *every* statement that creates an
+account and asks each one, rather than trusting a name search.
+
+### Fixed — OAuth sign-ups ignored Registration Approval Mode
+
+With **Registration Approval Mode** on, a new account created through an OAuth
+provider was admitted immediately. The account was written without the approval
+column, so it fell to that column's default of approved, and it never appeared in
+**Security → Approvals** because that list shows only unapproved accounts. An
+operator who switched the setting on got it applied to password registration and
+nowhere else, with nothing to indicate the other way in was open.
+
+The OAuth sign-in path also never checked approval at all, unlike the password and
+passkey paths. Both are fixed. Accounts that predate the approval column continue to
+read as approved, so no one who could sign in yesterday is locked out today.
+
+### Fixed — the audit log promised on-disk tamper-proofing that nothing provided
+
+The hardening guide stated that security events are written to *"append-only files
+on disk"*. Nothing in DockPanel ever made them append-only: the only code that set
+the attribute lived in a route with no caller anywhere, and it set it on the audit
+**directory** rather than on the files.
+
+That placement does not do what it appears to. On a directory the attribute prevents
+deleting and renaming the logs while still allowing any of them to be opened and
+rewritten in place — so the tampering the guide claimed was prevented was not, and
+the protection it did add would have silently stopped the panel's own 365-day
+retention sweep, which cannot unlink under it even as root.
+
+- The uncalled route is removed. Every directory it created is already created on
+  demand by the code that needs it.
+- The retention sweep no longer discards the result of a failed delete; it names the
+  files it could not remove and the likely cause. It also falls back to modification
+  time on filesystems that do not record creation time, where it previously swept
+  nothing at all.
+- The guide now states what is actually enforced — the database trigger that rejects
+  UPDATE and DELETE — describes the on-disk copies as a convenience, and documents
+  how an operator can apply kernel-enforced protection to the **files** if they want
+  it, including the caveats.
+- The end-to-end suite no longer asserts the misplaced attribute. That assertion
+  could only ever pass on a machine where somebody had run `chattr` by hand.
+
+### Changed — canary monitoring reports partial coverage
+
+Two of the four canary paths are inside directories that the panel's own systemd
+sandbox replaces with an empty mount, so this process cannot observe them whatever
+is on disk — and they report as *absent* rather than as *unreadable*, which is why
+2.90.0's "absent versus unreadable" distinction never applied to them. Monitoring
+now says how many paths it is actually watching, names the ones it cannot watch, and
+no longer advises creating files that would still not be seen.
+
 ## [2.90.0] - 2026-08-09
 
 Three security controls that reported a state they had never established, and one

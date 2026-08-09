@@ -60,6 +60,21 @@ done
 # (#333 — my own 14-line explanation silently unhooked an arm at s331). Bodies are
 # sliced with perl -0777 to the construct's own terminator.
 
+# Strip comments before enumerating subjects. §D searches for a SQL statement by its
+# text, and prose that merely NARRATES the statement is not a statement — there is a
+# doc comment in services/activity.rs that spells `INSERT INTO users` while describing
+# it, and counting that as a door would fail the suite on a file that has no door in
+# it. This is the FIXED stripper (a `/*` inside a string literal once ate 485 lines of
+# a subject and made absence arms pass on code it had merely deleted — #136).
+code() {
+  [ -f "$1" ] || return 0
+  perl -0777 -pe '
+    s{^[ \t]*/\*.*?\*/[ \t]*$}{}gms;
+    s{^\s*//.*$}{}gm;
+    s{^\s*///.*$}{}gm;
+  ' "$1"
+}
+
 # Slice a Rust fn body by brace balance, from `fn <name>` to its matching close.
 fn_body() {
   perl -0777 -ne '
@@ -198,6 +213,135 @@ else
   else
     bad "C2 canary monitoring can be enabled, watch nothing, and say nothing — silence is its only output"
   fi
+fi
+
+echo "── §D s333: the OTHER doors that create an account, and the doors that admit one ──"
+
+# WHY §D EXISTS. §A above pinned ONE door — `auth::setup` — because that is the door
+# the reporter hit. The enumeration that convinced me the others were fine grepped for
+# the COLUMN NAME, and a name-grep is structurally blind to an INSERT that omits the
+# column: the two doors that were still broken (`users::create` and
+# `reseller_dashboard::create_user`) are exactly the two files that never spell it.
+# §A was green on both of them for a whole release. So D1 asks the question in the
+# only order that can work — find every writer FIRST, then ask each one about the
+# column (#341: an arm must ask whether EVERY member has the property, never pick a
+# member and test it).
+
+INSERTS=$(for f in $(grep -rl 'INSERT INTO users' "$BE" --include=*.rs 2>/dev/null); do
+  code "$f" | perl -0777 -ne '
+    while (/INSERT INTO users([^"]*)/gs) { my $s = $1; $s =~ s/\s+/ /g; print "'"$f"'\t$s\n" }'
+done)
+n_ins=$(printf '%s' "$INSERTS" | grep -c . || true)
+
+# D2 FIRST, because every other arm here is worthless if the enumeration is empty. An
+# arm that enumerates its own subjects must prove the list is real before reporting on
+# it (#143 — two absence arms once printed green having examined zero files).
+if [ "$n_ins" -ge 5 ]; then
+  ok "D2 the account-writer enumeration found $n_ins INSERT INTO users statements — non-vacuous"
+else
+  bad "D2 only $n_ins INSERT INTO users statements found (expected >= 5) — the extractor is broken and every §D arm below is meaningless"
+fi
+
+# D1. Each writer must either mark the account verified, or issue it a token so the
+# holder can verify themselves. Neither means an account that cannot sign in once SMTP
+# exists and cannot ever fix that — the #100 predicate, which HEAD's own migration
+# defines as `email_verified = FALSE AND email_token IS NULL`.
+offenders=$(printf '%s\n' "$INSERTS" | grep -v 'email_verified' | grep -v 'email_token' \
+            | cut -f1 | sort -u | tr '\n' ' ' | sed 's/ *$//')
+if [ "$n_ins" -ge 5 ] && [ -z "$offenders" ]; then
+  ok "D1 every door that creates an account either verifies it or issues it a verification token"
+else
+  bad "D1 these doors create accounts that can never verify and can never sign in once SMTP is set: ${offenders:-<enumeration failed>} (#100, in a door nobody reported)"
+fi
+
+# D5 CONTROL — green at both tags. D1 must not be satisfiable by making everything
+# verified: the self-service registration door is SUPPOSED to leave the account
+# unverified, and it earns that by issuing a token. If this ever goes red alongside a
+# green D1, someone "fixed" D1 by deleting the verification ceremony.
+REG_BODY=$(fn_body "$BE/routes/auth.rs" register)
+reg_ins=$(printf '%s' "$REG_BODY" | perl -0777 -ne 'print $1 if /(INSERT INTO users[^"]*)/s')
+if [ -n "$reg_ins" ] && [ "$(printf '%s' "$reg_ins" | grep -c 'email_token')" -gt 0 ]; then
+  ok "D5 (control) self-service registration still issues a verification token rather than self-approving"
+else
+  bad "D5 (control) the registration door no longer issues an email_token — the verification ceremony was removed, not repaired"
+fi
+
+# D3/D4/D6. THE DOORS THAT ADMIT A SESSION. Three of them exist and they did not agree:
+# the password and passkey doors refuse an unapproved account, the OAuth door did not
+# check at all, so Registration Approval Mode was enforced at two ways in out of three.
+# The same file's own comment claims parity with the other two — for SUSPENSION, which
+# it does have. Getting one of two parities right is the tell (#338: when two doors do
+# the same job, diff them; the asymmetry is the bug).
+for door in "routes/auth.rs:login" "routes/passkeys.rs:auth_complete" "routes/oauth.rs:callback"; do
+  df=${door%%:*}; dn=${door##*:}
+  BODY=$(fn_body "$BE/$df" "$dn")
+  if [ -z "$BODY" ]; then
+    bad "D3 could not slice $dn out of $df — the gate-parity arms would pass vacuously"
+    continue
+  fi
+  if [ "$(printf '%s' "$BODY" | grep -c 'COALESCE(approved')" -gt 0 ]; then
+    ok "D3 $df::$dn refuses an account pending admin approval"
+  else
+    bad "D3 $df::$dn admits a session without checking approval — Registration Approval Mode is bypassable through this door"
+  fi
+  # D6 CONTROL — green at both tags. Proves the extractor really is reading these three
+  # bodies, and that adding the approval gate did not disturb the suspension gate.
+  if [ "$(printf '%s' "$BODY" | grep -c '"suspended"')" -gt 0 ]; then
+    ok "D6 (control) $df::$dn still refuses a suspended account"
+  else
+    bad "D6 (control) $df::$dn no longer refuses suspended accounts"
+  fi
+done
+
+OAUTH_CB=$(fn_body "$BE/routes/oauth.rs" callback)
+if [ -z "$OAUTH_CB" ]; then
+  bad "D4 could not slice oauth::callback"
+elif [ "$(printf '%s' "$OAUTH_CB" | grep -c 'security_approval_required')" -gt 0 ]; then
+  ok "D4 an OAuth signup honours Registration Approval Mode instead of admitting itself"
+else
+  bad "D4 an OAuth signup ignores Registration Approval Mode: the column defaults TRUE, so the account is admitted at once and never appears in Approvals (that list selects approved = FALSE)"
+fi
+
+echo ""
+echo "── §E s333: the audit log claims only what it enforces ──"
+
+# E1. The uncalled one-shot initialiser is gone. Its only unique action set the
+# append-only attribute on the audit DIRECTORY, which permits rewriting the files in
+# place and denies the panel's own retention sweep. ⚠ The literal is deliberately NOT
+# spelled anywhere in the shipped agent source, including in the tombstone comment
+# there — that is what turned this exact arm red on a correct fix one session ago
+# (#340). Build it here instead so the arm and the prohibition live together.
+NEEDLE="/security/$(printf 'init')"
+if [ "$(code "$AG/routes/security.rs" | grep -cF -- "$NEEDLE")" -eq 0 ]; then
+  ok "E1 the uncalled security-hardening initialiser is gone from the agent's shipped routes"
+else
+  bad "E1 the agent still mounts the one-shot initialiser whose only unique action mis-places the append-only attribute"
+fi
+
+# E2. The retention sweep must not discard its delete result. Under the append-only
+# attribute unlink is refused even for root, so a discarded Result meant retention
+# could fail forever and report exactly what a successful sweep reports: nothing.
+RET=$(code "$BE/services/auto_healer.rs" | perl -0777 -ne 'print $1 if /(Clean old audit log files.*?^    \})/ms')
+if [ -z "$RET" ]; then
+  # The comment this slices on is inside the block it slices, so an empty result means
+  # the block moved or was renamed — not that the sweep is fine.
+  RET=$(code "$BE/services/auto_healer.rs" | perl -0777 -ne 'print $1 if /(audit_dir = "\/var\/lib\/dockpanel\/audit".{0,2000})/s')
+fi
+if [ -n "$RET" ] && [ "$(printf '%s' "$RET" | grep -c 'let _ = std::fs::remove_file')" -eq 0 ] \
+   && [ "$(printf '%s' "$RET" | grep -c 'audit_failed')" -gt 0 ]; then
+  ok "E2 the audit retention sweep reports a delete it could not perform instead of discarding it"
+else
+  bad "E2 the audit retention sweep discards its delete result — under an append-only directory it fails forever and says nothing"
+fi
+
+# E3. The guide must not promise on-disk tamper-proofing that nothing establishes.
+# The sentence claimed append-only FILES while the only code set the attribute on the
+# directory, which does not prevent rewriting them.
+if [ "$(grep -c 'append-only files on disk' docs/guides/security-hardening.md)" -eq 0 ] \
+   && [ "$(grep -c 'chattr +a' docs/guides/security-hardening.md)" -gt 0 ]; then
+  ok "E3 the hardening guide states what the audit log actually enforces, and how an operator can add the rest"
+else
+  bad "E3 the hardening guide still promises append-only files on disk, which no shipped code establishes"
 fi
 
 echo ""

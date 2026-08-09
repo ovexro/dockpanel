@@ -403,34 +403,28 @@ async fn db_backup() -> Result<Json<serde_json::Value>, ApiErr> {
     })))
 }
 
-/// POST /security/init — Initialize all security hardening features (called once after deploy).
-async fn security_init() -> Result<Json<serde_json::Value>, ApiErr> {
-    use crate::safe_cmd::safe_command;
-
-    let mut results = Vec::new();
-
-    // Set chattr +a on audit directory
-    let _ = std::fs::create_dir_all("/var/lib/dockpanel/audit");
-    let chattr = safe_command("chattr").args(["+a", "/var/lib/dockpanel/audit/"]).output().await;
-    results.push(serde_json::json!({
-        "action": "chattr +a /var/lib/dockpanel/audit/",
-        "success": chattr.map(|o| o.status.success()).unwrap_or(false),
-    }));
-
-    // Ensure recording directory exists
-    let _ = std::fs::create_dir_all("/var/lib/dockpanel/recordings");
-    results.push(serde_json::json!({ "action": "create recordings dir", "success": true }));
-
-    // Ensure forensics directory exists
-    let _ = std::fs::create_dir_all("/var/lib/dockpanel/forensics");
-    results.push(serde_json::json!({ "action": "create forensics dir", "success": true }));
-
-    // Ensure DB backup directory exists
-    let _ = std::fs::create_dir_all("/var/backups/dockpanel");
-    results.push(serde_json::json!({ "action": "create db backup dir", "success": true }));
-
-    Ok(Json(serde_json::json!({ "initialized": results })))
-}
+// REMOVED: the one-shot security-hardening initialiser that used to sit here.
+//
+// It had no caller anywhere in the repository, and every directory it created is
+// already created on demand by the code that needs it — the audit directory by the
+// panel's audit writer and by the terminal handler below, the recordings directory
+// by that same handler, the forensics directory by the snapshot route above (its
+// create_dir_all makes the parents), and the backup directory by this binary's own
+// startup and by the agent installer.
+//
+// The only thing it did that nothing else does was set the append-only attribute on
+// the audit DIRECTORY, and measurement showed that is the wrong placement and an
+// actively harmful one. On a directory the attribute denies unlink and rename but
+// still permits opening a file inside with O_TRUNC — so the logs stayed rewritable in
+// place, which is the exact tampering the guide claimed was prevented, while the
+// panel's 365-day audit retention sweep would have been silently denied forever
+// (unlink is refused even for root, and that sweep discarded its result until this
+// release). The attribute is also not inherited by new files, and the log rolls to a
+// new name daily, so a one-shot call could not have covered tomorrow's file anyway.
+//
+// ⚠ NEXT AUTHOR: a regression arm greps the shipped agent source for that route's
+// path and requires zero hits, so do not write the literal here even to explain the
+// removal — describing it, as above, is deliberate. See lesson #340.
 
 /// POST /security/canary/setup — Create canary files in sensitive directories (Feature 12).
 async fn canary_setup() -> Result<Json<serde_json::Value>, ApiErr> {
@@ -487,7 +481,6 @@ pub fn router() -> Router<AppState> {
         .route("/security/panel-jail/setup", post(setup_panel_jail))
         .route("/security/panel-jail/status", get(panel_jail_status))
         // Security Hardening (post-incident features)
-        .route("/security/init", post(security_init))
         .route("/security/kill-terminals", post(kill_terminals))
         .route("/security/forensic-snapshot", get(forensic_snapshot))
         .route("/security/db-backup", post(db_backup))

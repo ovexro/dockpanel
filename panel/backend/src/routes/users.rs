@@ -122,8 +122,25 @@ pub async fn create(
         .map_err(|e| internal_error("create users", e))?
         .to_string();
 
+    // `email_verified` is TRUE because this is an ADMIN-CREATED account, not a
+    // self-registration: the administrator types the address and the password, and
+    // no verification mail is ever sent from here. Omitting the column left it at
+    // its `NOT NULL DEFAULT FALSE` and issued no `email_token` either — which is
+    // exactly the pair `login` treats as "unverified" while the verify route can
+    // only match `WHERE email_token = $1`. Every account this door made was
+    // therefore unable to sign in the moment SMTP existed, and unable to fix it.
+    //
+    // Same defect as #100, in a different door, and the trap closed on itself: the
+    // welcome mail below goes out over the same SMTP whose presence arms the block,
+    // and it says "please log in" while carrying no verification link.
+    //
+    // The address is ASSERTED here, not proven — the same trade the two other
+    // non-self-service doors already make (`oauth`, `whmcs`). Proving it instead
+    // would mean issuing a token and sending mail from an admin action, which
+    // reintroduces the dependency on SMTP that caused the lockout.
     let user: User = sqlx::query_as(
-        "INSERT INTO users (email, password_hash, role) VALUES ($1, $2, $3) RETURNING *",
+        "INSERT INTO users (email, password_hash, role, email_verified) \
+         VALUES ($1, $2, $3, TRUE) RETURNING *",
     )
     .bind(&body.email)
     .bind(&hash)

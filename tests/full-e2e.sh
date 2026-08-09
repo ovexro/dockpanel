@@ -218,7 +218,29 @@ echo "── Filesystem ──"
 [ -d /var/lib/dockpanel/audit ] && green "Audit log directory exists" || red "Audit log directory missing"
 [ -d /var/lib/dockpanel/recordings ] && green "Recordings directory exists" || red "Recordings directory missing"
 [ -d /var/backups/dockpanel ] && green "DB backup directory exists" || red "DB backup directory missing"
-lsattr -d /var/lib/dockpanel/audit/ 2>/dev/null | grep -q "a" && green "Audit dir has append-only flag" || red "Audit dir missing append-only flag"
+# The append-only assertion that used to live here demanded the attribute on the audit
+# DIRECTORY. No shipped code has ever set it, so it could only pass on a box where a
+# human ran chattr by hand — and it did pass, for months, on exactly one such box while
+# the feature it claimed to test did not exist anywhere. It also asserted the wrong
+# thing: on a directory the attribute leaves the files inside rewritable in place, and
+# it blocks the panel's own audit retention sweep. The honest check is that the log is
+# being written at all; kernel-enforced protection is an operator choice, documented in
+# docs/guides/security-hardening.md, so a stock install must not be marked red for it.
+AUDIT_TODAY="/var/lib/dockpanel/audit/audit-$(date -u +%Y-%m-%d).log"
+if [ -s "$AUDIT_TODAY" ]; then
+  green "Audit file log is being written ($AUDIT_TODAY)"
+elif ls /var/lib/dockpanel/audit/audit-*.log >/dev/null 2>&1; then
+  green "Audit file log present (no events yet today)"
+else
+  red "Audit file log missing — no audit-*.log in /var/lib/dockpanel/audit/"
+fi
+if lsattr -d /var/lib/dockpanel/audit/ 2>/dev/null | cut -d' ' -f1 | grep -q "a"; then
+  # Deliberately NOT green()/red(): it is neither a pass nor a failure, it is an
+  # operator choice with a consequence they should know about. Using a counting
+  # helper here would also move this suite's assertion total, which docs/testing.md
+  # publishes and docs-claims-pin-e2e.sh re-derives.
+  echo -e "\e[33m  ! Audit DIRECTORY carries the append-only attribute — this does not protect the log contents and blocks the 365-day retention sweep; see docs/guides/security-hardening.md\e[0m"
+fi
 
 echo ""
 echo "── Tier 2 Cert Pin (sub-suite) ──"

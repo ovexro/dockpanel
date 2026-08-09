@@ -348,13 +348,29 @@ pub async fn callback(
                 return Err(err(StatusCode::FORBIDDEN, "OAuth auto-registration is disabled. Contact your administrator."));
             }
 
+            // A THIRD gate, and the same lesson as the two above: `register`
+            // (auth.rs:807) marks a new account unapproved when
+            // `security_approval_required` is on, and this door omitted the column
+            // entirely — so it fell to its `DEFAULT TRUE` and the account was admitted
+            // on the spot. It never surfaced in Security → Approvals either, because
+            // that list selects `WHERE approved = FALSE`. An operator who switched
+            // approval on got it applied to one of the two ways in, with no sign that
+            // the other was open.
+            //
+            // Written into the INSERT rather than a follow-up UPDATE so the row is
+            // never briefly approved, and bound rather than interpolated.
+            let approval_required = crate::services::security_hardening::get_setting_bool(
+                &state.db, "security_approval_required", false,
+            ).await;
+
             let new_user: crate::models::User = sqlx::query_as(
-                "INSERT INTO users (email, password_hash, role, email_verified, oauth_provider, oauth_id) \
-                 VALUES ($1, '', 'user', true, $2, $3) RETURNING *"
+                "INSERT INTO users (email, password_hash, role, email_verified, oauth_provider, oauth_id, approved) \
+                 VALUES ($1, '', 'user', true, $2, $3, $4) RETURNING *"
             )
             .bind(&email)
             .bind(&provider_name)
             .bind(&oauth_id)
+            .bind(!approval_required)
             .fetch_one(&state.db)
             .await
             .map_err(|e| {
@@ -374,6 +390,21 @@ pub async fn callback(
     // passkey login) — otherwise suspension is bypassable by logging in via OAuth.
     if user.role == "suspended" {
         return Err(err(StatusCode::FORBIDDEN, "Account suspended"));
+    }
+
+    // Feature 8, and the missing half of the parity the comment above claims: the
+    // password door refuses an unapproved account at auth.rs:305 and the passkey door
+    // at passkeys.rs:843, but this one did not check at all. Suspension parity was
+    // added here and approval parity was not, so of the three ways in, approval was
+    // enforced at two. COALESCE is copied from the other two deliberately — a row
+    // predating the column reads as approved, so repairing the gap cannot lock out an
+    // account that could sign in yesterday.
+    if let Ok(Some((approved,))) = sqlx::query_as::<_, (bool,)>(
+        "SELECT COALESCE(approved, TRUE) FROM users WHERE id = $1"
+    ).bind(user.id).fetch_optional(&state.db).await {
+        if !approved {
+            return Err(err(StatusCode::FORBIDDEN, "Account pending admin approval"));
+        }
     }
 
     // Lockdown, same rule and same admin escape hatch as the other two doors: an

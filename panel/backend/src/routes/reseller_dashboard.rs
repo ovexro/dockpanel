@@ -194,9 +194,17 @@ pub async fn create_user(
     // and increments in one statement; release it if the INSERT then fails.
     reserve_reseller_user_slot(&state, claims.sub).await?;
 
+    // `email_verified` is TRUE for the same reason as the admin-side door: the
+    // reseller types the address and the password, and this handler sends no mail at
+    // all. Omitting the column left it FALSE with no `email_token`, so the account
+    // could never sign in once SMTP was configured and could never verify — and this
+    // path was the worse of the two, because the release valve added for #100
+    // (`POST /api/security/users/{id}/verify-email`) takes `AdminUser`, so a reseller
+    // could not free the client they had just created. They would have had to ask the
+    // panel's administrator to repair every single one.
     let (user_id, user_email) = match sqlx::query_as::<_, (Uuid, String)>(
-        "INSERT INTO users (email, password_hash, role, reseller_id) \
-         VALUES ($1, $2, 'user', $3) RETURNING id, email",
+        "INSERT INTO users (email, password_hash, role, reseller_id, email_verified) \
+         VALUES ($1, $2, 'user', $3, TRUE) RETURNING id, email",
     )
     .bind(&body.email)
     .bind(&hash)

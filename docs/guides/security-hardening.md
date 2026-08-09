@@ -316,7 +316,17 @@ The panic button performs an emergency lockdown: kills all active terminal sessi
 
 ### Immutable Audit Log
 
-All security events are written to a tamper-proof audit log. The database uses a PostgreSQL trigger that prevents UPDATE and DELETE operations. Events are also written to append-only files on disk at `/var/lib/dockpanel/audit/`.
+All security events are written to the `security_audit_log` table, and a PostgreSQL trigger rejects `UPDATE` and `DELETE` on it. That trigger is the guarantee — it is what makes the record in the database immutable, and it is what the panel reads.
+
+Every event is **also** appended to a dated file on disk at `/var/lib/dockpanel/audit/`, as a convenience copy for host-level forensics and log shipping. **What this does not do, stated plainly:** those files are written in append mode, but nothing sets a kernel append-only attribute on them, so a process that can write the directory can still rewrite one in place. Treat the on-disk copies as a convenience, not as evidence — the database is the authoritative record. Nothing in DockPanel reads these files back; they are for you and your own tooling.
+
+If you want kernel-enforced protection on the on-disk copies, apply it to the **files**, not the directory:
+
+```bash
+chattr +a /var/lib/dockpanel/audit/*.log     # new files each day need it again
+```
+
+Setting it on the directory instead is a common mistake and does not do what it looks like: it blocks deleting and renaming the logs while still allowing any of them to be truncated and rewritten. It also blocks DockPanel's own 365-day retention sweep, which cannot unlink under that attribute even as root — the panel logs a warning naming the directory when that happens. Either attribute can be cleared by root (`chattr -a`), so neither defends against an attacker who already has it.
 
 View the log in **Security** > **Lockdown** tab (Audit Log section).
 

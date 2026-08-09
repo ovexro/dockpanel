@@ -1525,17 +1525,50 @@ async fn run_retention_cleanup(pool: &PgPool) {
     }
 
     // Clean old audit log files (>365 days)
+    //
+    // The result of the delete is no longer discarded, and that is the whole point of
+    // this block's shape. An operator who followed the hardening guide may have set
+    // the append-only attribute on this directory by hand; under it `unlink` is
+    // refused even for root, so every delete would fail forever while the sweep
+    // reported nothing at all. The first symptom would have been a disk alert a year
+    // after install, with no line anywhere naming the cause. Both sibling sweeps in
+    // this function (recordings above, and the artifact prune) already report their
+    // outcome — this one was the odd man out.
+    //
+    // `created()` is not implemented on every filesystem and returns Err there, which
+    // would have meant "never sweep anything" just as silently, so fall back to
+    // `modified()`. For a daily append-only log the two are equivalent for this
+    // purpose: the file is named for its day and is only ever appended to.
     let audit_dir = "/var/lib/dockpanel/audit";
     if let Ok(entries) = std::fs::read_dir(audit_dir) {
         let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(365 * 86400);
+        let mut audit_deleted = 0u64;
+        let mut audit_failed: Vec<String> = Vec::new();
         for entry in entries.flatten() {
             if let Ok(meta) = entry.metadata() {
-                if let Ok(created) = meta.created() {
-                    if created < cutoff {
-                        let _ = std::fs::remove_file(entry.path());
+                if let Ok(stamp) = meta.created().or_else(|_| meta.modified()) {
+                    if stamp < cutoff {
+                        match std::fs::remove_file(entry.path()) {
+                            Ok(()) => audit_deleted += 1,
+                            Err(e) => audit_failed
+                                .push(format!("{} ({e})", entry.path().display())),
+                        }
                     }
                 }
             }
+        }
+        if audit_deleted > 0 {
+            tracing::info!("Retention: deleted {audit_deleted} old audit log files (>365 days)");
+        }
+        if !audit_failed.is_empty() {
+            tracing::warn!(
+                "Retention: {} audit log file(s) older than 365 days could NOT be removed \
+                 [{}] — if {audit_dir} carries the append-only attribute, unlink is denied \
+                 even to root; clear it with `chattr -a {audit_dir}` and the next sweep \
+                 will succeed",
+                audit_failed.len(),
+                audit_failed.join(", ")
+            );
         }
     }
 
@@ -1712,17 +1745,42 @@ async fn security_check_canary_files(pool: &PgPool) {
     // are additionally unreadable to this process on a stock install, because the
     // unit runs under `ProtectHome=yes`. Both cases used to take the same silent
     // `continue`, so "never armed" and "armed and quiet" were indistinguishable.
+    // Paths this process can never observe, whatever is on disk, because our own unit
+    // masks them. `ProtectHome=yes` (scripts/setup.sh, and panel/agent/dockpanel-agent.service
+    // for the agent) replaces /home and /root with an empty, read-only mount for both
+    // daemons — measured on this box: a canary file present in the real /root is
+    // invisible to the api and the agent alike, and a write to either prefix fails EROFS.
+    //
+    // This list is why the Err arm below is not enough on its own. A masked path does
+    // NOT report PermissionDenied — the namespace simply has nothing there, so it
+    // reports NotFound, indistinguishable from "nobody planted it". The previous
+    // release added that Err arm specifically for the sandbox case and it could never
+    // fire for the sandbox case. Telling an operator to "create the canary files" for
+    // these two is advice that cannot work: they can create them, and this process
+    // still will not see them.
+    //
+    // Widening the sandbox is not the answer and was measured too: `ReadWritePaths=/root`
+    // under `ProtectHome=yes` still yields EROFS, so exposing these would mean weakening
+    // ProtectHome itself — a real loss of hardening bought for a tripwire.
+    const SANDBOX_MASKED_PREFIXES: [&str; 2] = ["/root/", "/home/"];
+
     let mut examined = 0usize;
+    let mut masked: Vec<&str> = Vec::new();
+    let mut absent: Vec<&str> = Vec::new();
 
     for path in &canary_paths {
         let meta = match std::fs::metadata(path) {
             Ok(m) => m,
             Err(e) => {
-                // Distinguished deliberately: NotFound means nobody ever planted it;
-                // anything else (notably PermissionDenied under ProtectHome) means a
-                // canary may exist and we cannot see it — which is a blind spot, not
-                // an all-clear, and is worth saying out loud.
-                if e.kind() != std::io::ErrorKind::NotFound {
+                // Three outcomes, not two. Masked: structurally unobservable here, and
+                // it looks exactly like absent. Absent: nobody ever planted it, and
+                // planting it would work. Unreadable: it may exist and we cannot see
+                // it — a blind spot rather than an all-clear, worth saying out loud.
+                if SANDBOX_MASKED_PREFIXES.iter().any(|p| path.starts_with(p)) {
+                    masked.push(path);
+                } else if e.kind() == std::io::ErrorKind::NotFound {
+                    absent.push(path);
+                } else {
                     tracing::warn!(
                         "Canary {path} exists or may exist but is unreadable ({e}); \
                          it is NOT being monitored"
@@ -1813,10 +1871,32 @@ async fn security_check_canary_files(pool: &PgPool) {
         static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
             tracing::warn!(
-                "Canary file monitoring is enabled but NOT ARMED — none of the {} canary \
-                 paths could be examined, so nothing is being watched and no alert can \
-                 ever fire. Disable the setting or create the canary files.",
-                canary_paths.len()
+                "Canary file monitoring is enabled but NOT ARMED — 0 of {} canary paths are \
+                 being watched, so no alert can ever fire. {} can be armed by creating the \
+                 file ({}); {} cannot be watched by this process at all under ProtectHome= \
+                 and planting them would not help ({}). Nothing in DockPanel plants these \
+                 files: create the armable ones by hand, or turn the setting off so the \
+                 panel stops implying a tripwire exists.",
+                canary_paths.len(),
+                absent.len(),
+                if absent.is_empty() { "-".to_string() } else { absent.join(", ") },
+                masked.len(),
+                if masked.is_empty() { "-".to_string() } else { masked.join(", ") },
+            );
+        }
+    } else if !masked.is_empty() {
+        // Partially armed is the state this box has been in for four months, and it
+        // used to look identical to fully armed: the two watched paths were quiet, and
+        // the two unwatchable ones were counted as "not planted" and never mentioned.
+        static PARTIAL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !PARTIAL.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            tracing::warn!(
+                "Canary monitoring is PARTIAL — watching {examined} of {} paths. {} cannot be \
+                 observed by this process under ProtectHome= ({}), so an intruder reading them \
+                 raises no alert.",
+                canary_paths.len(),
+                masked.len(),
+                masked.join(", "),
             );
         }
     }
