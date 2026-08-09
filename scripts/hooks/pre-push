@@ -10,35 +10,81 @@ FOUND=0
 
 echo "=== Pre-push: secrets scan ==="
 
-# Scan the diff being pushed (all commits not yet on remote)
+# THREE WAYS THIS SCAN USED TO WAVE A SECRET THROUGH, all fixed at s336. Read
+# them before editing the loop below, because each was invisible in normal use:
+#
+# 1. The diff was narrowed to nine source extensions, and an empty result hit a
+#    `continue` that abandoned the whole loop body — including the .env/.pem/.key
+#    filename check, which never needed that pathspec and sat below it. A push of
+#    exactly one .pem full of tokens printed "All pre-push checks passed" and
+#    landed on the remote; the same .pem with any .rs file riding along was
+#    blocked. The filename check now runs FIRST, and nothing narrows by extension.
+#
+# 2. The new-branch arm set RANGE to a bare sha, and `git diff <sha>` compares
+#    that commit with the WORKING TREE — empty on a clean tree. So the branch
+#    whose comment read "scan all commits" scanned nothing at all. It now asks
+#    for the commits themselves.
+#
+# 3. git's own stderr was discarded, so a range this repo cannot resolve produced
+#    an empty diff that was indistinguishable from a clean push. It now fails
+#    closed and says so.
+#
+# Patterns use the bracket idiom (a dot as [.], one character of each token in
+# brackets) so this file does not match its own patterns — which is what lets the
+# scan cover every file with no path exemption. Add must-fire AND must-not-fire
+# cases to tests/install-integrity-pin-e2e.sh for any pattern you add.
+
 REMOTE="$1"
 URL="$2"
+ZERO="0000000000000000000000000000000000000000"
+
+IP_PATTERN='95[.]179[.]144[.]140|45[.]32[.]232[.]132|136[.]244[.]102[.]195|78[.]141[.]211[.]78|192[.]168[.]1[.]186'
+TOKEN_PATTERN='PTHEsBzagJBWE8NuJj[A]|dockpanel202[6]|github_pat[_]|ARYXXL[I]'
 
 while read LOCAL_REF LOCAL_SHA REMOTE_REF REMOTE_SHA; do
-  if [ "$REMOTE_SHA" = "0000000000000000000000000000000000000000" ]; then
-    # New branch — scan all commits
-    RANGE="$LOCAL_SHA"
-  else
-    RANGE="$REMOTE_SHA..$LOCAL_SHA"
+  # A ref DELETION pushes an all-zero local sha and carries no content.
+  if [ "$LOCAL_SHA" = "$ZERO" ]; then
+    continue
   fi
 
-  # Get the full diff being pushed
-  DIFF=$(git diff "$RANGE" -- '*.rs' '*.ts' '*.tsx' '*.sql' '*.toml' '*.sh' '*.json' '*.yml' '*.yaml' 2>/dev/null)
+  if [ "$REMOTE_SHA" = "$ZERO" ]; then
+    # New branch: the commits that are not already on some remote.
+    RANGE="$LOCAL_SHA (new branch)"
+    PATCH=$(git log -p --no-color "$LOCAL_SHA" --not --remotes 2>/dev/null); RC=$?
+    NAMES=$(git log --name-only --pretty=format: "$LOCAL_SHA" --not --remotes 2>/dev/null)
+  else
+    RANGE="$REMOTE_SHA..$LOCAL_SHA"
+    PATCH=$(git diff --no-color "$RANGE" 2>/dev/null); RC=$?
+    NAMES=$(git diff --name-only "$RANGE" 2>/dev/null)
+  fi
 
-  if [ -z "$DIFF" ]; then
+  if [ "$RC" -ne 0 ]; then
+    echo -e "${RED}BLOCKED: git could not read the commits being pushed (${RANGE}) — refusing to push commits that were never scanned${NC}"
+    FOUND=1
+    continue
+  fi
+
+  # ── Filename check FIRST — it does not depend on the content scan ────────
+  SENSITIVE_FILES=$(echo "$NAMES" | grep -E '\.(env|pem|key)$' | grep -v '.sample' | sort -u)
+  if [ -n "$SENSITIVE_FILES" ]; then
+    echo -e "${RED}BLOCKED: Sensitive file in push: ${SENSITIVE_FILES}${NC}"
+    FOUND=1
+  fi
+
+  if [ -z "$PATCH" ]; then
     continue
   fi
 
   # Secrets patterns
-  if echo "$DIFF" | grep -ciE 'PTHEsBzagJBWE8NuJjA|dockpanel2026|github_pat_|ARYXXLI' >/dev/null; then
+  if echo "$PATCH" | grep -E '^\+' | grep -ciE "$TOKEN_PATTERN" >/dev/null; then
     echo -e "${RED}BLOCKED: Secret/token found in commits being pushed${NC}"
-    echo "$DIFF" | grep -niE 'PTHEsBzagJBWE8NuJjA|dockpanel2026|github_pat_|ARYXXLI' | head -5
+    echo "$PATCH" | grep -E '^\+' | grep -niE "$TOKEN_PATTERN" | head -5
     FOUND=1
   fi
 
   # Password assignments in source code
-  if echo "$DIFF" | grep -E '^\+' | grep -ciE 'password\s*=\s*"[^"]{6,}"' >/dev/null; then
-    HITS=$(echo "$DIFF" | grep -E '^\+' | grep -iE 'password\s*=\s*"[^"]{6,}"' | grep -viE 'wp_password|nc_password|example|placeholder|changeme|default|_password"|PASSWORD_HASH')
+  if echo "$PATCH" | grep -E '^\+' | grep -ciE 'password\s*=\s*"[^"]{6,}"' >/dev/null; then
+    HITS=$(echo "$PATCH" | grep -E '^\+' | grep -iE 'password\s*=\s*"[^"]{6,}"' | grep -viE 'wp_password|nc_password|example|placeholder|changeme|default|_password"|PASSWORD_HASH')
     if [ -n "$HITS" ]; then
       echo -e "${YELLOW}WARNING: Possible hardcoded password in pushed code:${NC}"
       echo "$HITS" | head -3
@@ -47,16 +93,9 @@ while read LOCAL_REF LOCAL_SHA REMOTE_REF REMOTE_SHA; do
   fi
 
   # Real IPs
-  if echo "$DIFF" | grep -cE '95\.179\.144\.140|45\.32\.232\.132|136\.244\.102\.195|78\.141\.211\.78|192\.168\.1\.186' >/dev/null; then
+  if echo "$PATCH" | grep -E '^\+' | grep -cE "$IP_PATTERN" >/dev/null; then
     echo -e "${RED}BLOCKED: Real infrastructure IP in commits being pushed${NC}"
-    echo "$DIFF" | grep -nE '95\.179\.144\.140|45\.32\.232\.132|136\.244\.102\.195|78\.141\.211\.78|192\.168\.1\.186' | head -5
-    FOUND=1
-  fi
-
-  # Check for .env/.pem/.key files in the push
-  SENSITIVE_FILES=$(git diff --name-only "$RANGE" 2>/dev/null | grep -E '\.(env|pem|key)$' | grep -v '.sample')
-  if [ -n "$SENSITIVE_FILES" ]; then
-    echo -e "${RED}BLOCKED: Sensitive file in push: ${SENSITIVE_FILES}${NC}"
+    echo "$PATCH" | grep -E '^\+' | grep -nE "$IP_PATTERN" | head -5
     FOUND=1
   fi
 done

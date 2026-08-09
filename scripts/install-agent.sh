@@ -204,14 +204,58 @@ ENVEOF
 chmod 600 /etc/dockpanel/agent.env
 
 # Download agent binary (naming matches GitHub release assets)
+#
+# Until s336 this was the ONE path that put a DockPanel binary on a machine
+# without checking it: no checksum, no signature, and the bytes went straight
+# onto /usr/local/bin/dockpanel-agent. Its three siblings all verify sha256
+# against the release's checksums.txt and all quarantine first — setup.sh's own
+# comment states the contract, "so the live executable path never holds
+# unverified bytes". This is the installer the Add-Server dialog tells an
+# operator to pipe into `sudo bash`, so it was the least verified path and the
+# most exposed one.
+#
+# Writing to the live path also meant that on a box where the agent is already
+# running the kernel refuses the open with ETXTBSY, curl reports a write failure,
+# and the branch below blamed the network. Quarantine + rename fixes that too:
+# rename over a running executable is allowed, writing to it is not.
+ASSET="dockpanel-agent-linux-${ARCH_LABEL}"
+BASE_URL="https://github.com/ovexro/dockpanel/releases/latest/download"
+DOWNLOAD_URL="$BASE_URL/$ASSET"
+AGENT_TMP="/usr/local/bin/.dockpanel-agent.dl.$$"
 echo "[5/7] Downloading agent binary..."
-DOWNLOAD_URL="https://github.com/ovexro/dockpanel/releases/latest/download/dockpanel-agent-linux-${ARCH_LABEL}"
-if ! curl -fsSL "$DOWNLOAD_URL" -o /usr/local/bin/dockpanel-agent; then
+if ! curl -fsSL "$DOWNLOAD_URL" -o "$AGENT_TMP"; then
+    rm -f "$AGENT_TMP"
     echo "Error: Could not download the agent binary from $DOWNLOAD_URL"
     echo "  Check connectivity to github.com and that a release asset exists for arch '${ARCH_LABEL}'."
     exit 1
 fi
-chmod +x /usr/local/bin/dockpanel-agent
+
+# Integrity: a MISMATCH is fatal, a missing manifest only warns. That is
+# setup.sh's policy for a fresh install rather than update.sh's fail-closed one,
+# and deliberately so — availability must not brick a first install, but a
+# corrupt or substituted binary must never be installed.
+if curl -fsSL "$BASE_URL/checksums.txt" -o "$AGENT_TMP.sums" 2>/dev/null; then
+    WANT=$(awk -v n="$ASSET" '$2 == n {print $1; exit}' "$AGENT_TMP.sums")
+    if [ -n "$WANT" ]; then
+        GOT=$(sha256sum "$AGENT_TMP" | awk '{print $1}')
+        if [ "$WANT" != "$GOT" ]; then
+            rm -f "$AGENT_TMP" "$AGENT_TMP.sums"
+            echo "Error: sha256 mismatch for $ASSET — refusing to install."
+            echo "  expected $WANT"
+            echo "  got      $GOT"
+            exit 1
+        fi
+        echo "  sha256 verified against the release checksums.txt"
+    else
+        echo "  WARNING: checksums.txt has no entry for $ASSET — installing unverified"
+    fi
+else
+    echo "  WARNING: could not fetch checksums.txt — installing unverified"
+fi
+rm -f "$AGENT_TMP.sums"
+
+chmod +x "$AGENT_TMP"
+mv -f "$AGENT_TMP" /usr/local/bin/dockpanel-agent
 
 # Generate self-signed TLS cert for agent HTTPS
 echo "[6/7] Generating TLS certificate..."

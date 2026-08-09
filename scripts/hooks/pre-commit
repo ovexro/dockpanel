@@ -1,6 +1,31 @@
 #!/bin/bash
 # DockPanel pre-commit hook: scan for infrastructure leaks
 # This catches real IPs, hostnames, passwords, and tokens before they enter the repo.
+#
+# TWO RULES THIS FILE LEARNED THE HARD WAY (s336):
+#
+# 1. THE FILENAME CHECK RUNS BEFORE THE "NOTHING TO SCAN" EXIT, NOT AFTER IT.
+#    Until s336 the staged list was narrowed to eleven source extensions, and an
+#    empty result printed a GREEN "No scannable files staged" and exited 0 — with
+#    the .env/.pem/.key check, which never needed that list, sitting below the
+#    exit. So a commit of exactly one .pem full of tokens was reported clean,
+#    while the same .pem with any .rs file riding along was blocked. That control
+#    is what proved it: same secret, opposite verdict, decided entirely by
+#    whether an unrelated file came along.
+#
+# 2. THE CONTENT SCAN NARROWS BY NOTHING. An extension allowlist is a census
+#    scoped by a precondition — it reports clean right up until the leak arrives
+#    in a file type nobody listed. The seven tracked .conf files (two of them
+#    this project's real production vhosts), the agent's systemd unit and four
+#    Dockerfiles were all outside the old list, and those are precisely the files
+#    an origin address leaks through.
+#
+# The patterns below are written with the bracket idiom — a dot as [.], and one
+# character of each token in brackets — so that THIS FILE does not match its own
+# patterns. That is what lets the scan cover every staged file with no path
+# exemption: the scanner gets no blind spot to hide in. If you add a pattern,
+# write it in that form and add BOTH a must-fire and a must-not-fire case to
+# tests/install-integrity-pin-e2e.sh.
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -9,34 +34,52 @@ FOUND=0
 
 echo "=== Pre-commit: infrastructure leak scan ==="
 
-# Get staged files only
-STAGED=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(rs|ts|tsx|sql|toml|sh|md|json|yml|yaml|env)$')
+IP_PATTERN='95[.]179[.]144[.]140|45[.]32[.]232[.]132|136[.]244[.]102[.]195|78[.]141[.]211[.]78'
+HOME_IP_PATTERN='192[.]168[.]1[.]186'
+HOST_PATTERN='test[.]dockpanel[.]dev|demo[.]dockpanel[.]dev'
+TOKEN_PATTERN='PTHEsBzagJBWE8NuJj[A]|dockpanel202[6]|github_pat[_]'
 
-if [ -z "$STAGED" ]; then
-  echo -e "${GREEN}No scannable files staged.${NC}"
+# ── 1. Filename check — independent of the content scan, so it runs first ──
+ENV_FILES=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(env|pem|key)$' | grep -v '.sample')
+if [ -n "$ENV_FILES" ]; then
+  echo -e "${RED}BLOCKED: Sensitive file type staged: ${ENV_FILES}${NC}"
+  FOUND=1
+fi
+
+# ── 2. Content scan — every staged file, no extension filter ───────────────
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
+
+if [ -z "$STAGED" ] && [ "$FOUND" -eq 0 ]; then
+  echo -e "${GREEN}Nothing staged.${NC}"
   exit 0
 fi
 
-# Scan staged content (not working directory) for secrets
-DIFF=$(git diff --cached -- $STAGED)
+# No pathspec: the old form passed the filtered list unquoted, so a path with a
+# space silently emptied the diff and every grep below then found nothing.
+DIFF=$(git diff --cached --diff-filter=ACMR)
 
+# Every content arm reads ADDED lines only. A deletion cannot introduce a leak,
+# and a secret sitting in unchanged CONTEXT is already committed — blocking on
+# either would mean the commit that REMOVES a bad pattern is the one thing this
+# hook refuses to let you make. Found the hard way: the s336 commit that took the
+# literal patterns out of these files was blocked by the deleted lines.
 # Real server IPs
-if echo "$DIFF" | grep -cE '95\.179\.144\.140|45\.32\.232\.132|136\.244\.102\.195|78\.141\.211\.78' >/dev/null; then
+if echo "$DIFF" | grep -E '^\+' | grep -cE "$IP_PATTERN" >/dev/null; then
   echo -e "${RED}BLOCKED: Real server IP found in staged changes${NC}"
-  echo "$DIFF" | grep -nE '95\.179\.144\.140|45\.32\.232\.132|136\.244\.102\.195|78\.141\.211\.78' | head -5
+  echo "$DIFF" | grep -E '^\+' | grep -nE "$IP_PATTERN" | head -5
   FOUND=1
 fi
 
 # Home server IP
-if echo "$DIFF" | grep -cE '192\.168\.1\.186' >/dev/null; then
+if echo "$DIFF" | grep -E '^\+' | grep -cE "$HOME_IP_PATTERN" >/dev/null; then
   echo -e "${RED}BLOCKED: Home server IP found in staged changes${NC}"
   FOUND=1
 fi
 
 # Internal hostnames
-if echo "$DIFF" | grep -cE 'test\.dockpanel\.dev|demo\.dockpanel\.dev' >/dev/null; then
+if echo "$DIFF" | grep -E '^\+' | grep -cE "$HOST_PATTERN" >/dev/null; then
   # Allow in memory files and docs that reference these as examples
-  REAL_HITS=$(echo "$DIFF" | grep -E 'test\.dockpanel\.dev|demo\.dockpanel\.dev' | grep -v '^[+-].*#\|^[+-].*//\|^[+-].*<!--' | grep -v 'memory/' | head -3)
+  REAL_HITS=$(echo "$DIFF" | grep -E '^\+' | grep -E "$HOST_PATTERN" | grep -v '^[+-].*#\|^[+-].*//\|^[+-].*<!--' | grep -v 'memory/' | head -3)
   if [ -n "$REAL_HITS" ]; then
     echo -e "${RED}WARNING: Internal hostname found in staged changes${NC}"
     echo "$REAL_HITS"
@@ -45,16 +88,9 @@ if echo "$DIFF" | grep -cE 'test\.dockpanel\.dev|demo\.dockpanel\.dev' >/dev/nul
 fi
 
 # Passwords and tokens
-if echo "$DIFF" | grep -ciE 'PTHEsBzagJBWE8NuJjA|dockpanel2026|github_pat_' >/dev/null; then
+if echo "$DIFF" | grep -E '^\+' | grep -ciE "$TOKEN_PATTERN" >/dev/null; then
   echo -e "${RED}BLOCKED: Password or token found in staged changes${NC}"
-  echo "$DIFF" | grep -niE 'PTHEsBzagJBWE8NuJjA|dockpanel2026|github_pat_' | head -5
-  FOUND=1
-fi
-
-# .env, .pem, .key files
-ENV_FILES=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(env|pem|key)$' | grep -v '.sample')
-if [ -n "$ENV_FILES" ]; then
-  echo -e "${RED}BLOCKED: Sensitive file type staged: ${ENV_FILES}${NC}"
+  echo "$DIFF" | grep -E '^\+' | grep -niE "$TOKEN_PATTERN" | head -5
   FOUND=1
 fi
 

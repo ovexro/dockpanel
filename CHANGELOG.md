@@ -6,6 +6,89 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.94.0] - 2026-08-09
+
+A release about guards that were not guarding. Two of them decide what gets
+installed on a machine; two decide what leaves this repository. All four reported
+success in the cases they existed to catch.
+
+### Fixed — a commit could carry a secret past both hooks by arriving alone
+
+`scripts/hooks/pre-commit` narrowed the staged file list to eleven source
+extensions before scanning anything. When a commit consisted only of other file
+types the list came back empty, and the hook printed a green *"No scannable files
+staged"* and exited 0 — while the `.env`/`.pem`/`.key` filename check, which never
+needed that list, sat **below** the exit. `scripts/hooks/pre-push` had the same
+inversion: an empty pathspec'd diff hit a `continue` that abandoned the rest of the
+loop, including its own filename check.
+
+The control is what makes it undeniable: a commit of one `.pem` holding a GitHub
+token plus an nginx `.conf` holding a real origin address **committed clean and
+pushed green**. The same `.pem` with any `.rs` file riding along was blocked. Same
+secret, opposite verdict, decided entirely by whether an unrelated file came along.
+
+Both filename checks now run first. The content scan no longer narrows by
+extension at all — an extension allowlist is a rule that reports clean right up
+until the leak arrives in a file type nobody listed, and the seven tracked `.conf`
+files (two of them production vhosts), the agent's systemd unit and four
+Dockerfiles were all outside it. Patterns are now written so the hooks do not match
+their own source, which is what lets the scan cover every file with no exemption.
+
+Two further holes closed in `pre-push`: its new-branch arm ran `git diff <sha>`,
+which compares that commit against the *working tree* and is empty on a clean tree,
+so the branch whose comment read "scan all commits" scanned nothing; and it
+discarded git's stderr, so a range it could not resolve was indistinguishable from
+a clean push. It now asks for the commits, and fails closed when it cannot.
+
+### Fixed — the demo deploy proved one binary of three was static, and believed a broken checker
+
+`scripts/deploy-demo.sh` refuses a dynamically-linked asset because a stale glibc
+build once reached the demo box. It ran that check on the **API** asset only, while
+installing the agent and the CLI unchecked — and the agent is the binary that
+incident was actually about.
+
+The same check also read any `readelf` failure as proof of static linkage. The
+mechanism generalises: the check ended in a grep, and under `pipefail` a pipeline
+keeps the *rightmost* non-zero status, so `readelf`'s 127 was overwritten by grep's
+no-match 1. Measured — a non-ELF file, a zero-byte download, and a genuinely
+dynamic binary with `readelf` absent all printed *"confirmed: no DT_NEEDED
+(static)"*.
+
+The assets are now named once and the download, checksum, linkage and swap steps
+all iterate that one list, so a fourth asset cannot be added and skip a check.
+
+### Added — the demo deploy verifies what it downloaded, and asserts what it deployed
+
+`deploy-demo.sh` was the only path consuming a published release that compared
+nothing to the release's `checksums.txt`; `setup.sh`, `update.sh` and
+`agent-self-update.sh` have always done so. It now verifies every asset and fails
+closed.
+
+Its AFTER block also only ever *reported*. The health loop fell out silently after
+40 seconds, the public curl had no `-f` so a 502 printed as an empty string, and
+nothing compared any version read to the tag being deployed — so a run that left
+the API dead still exited 0. Every probe is now asserted, including the agent's own
+socket, and a version mismatch fails the deploy.
+
+### Added — the remote agent installer verifies the binary before installing it
+
+`scripts/install-agent.sh` — the installer the Add-Server dialog tells an operator
+to pipe into `sudo bash` — had no integrity check of any kind, and wrote the
+downloaded bytes straight onto `/usr/local/bin/dockpanel-agent`. It now downloads
+to a quarantine path, verifies sha256 against the release's `checksums.txt`
+(mismatch fatal, missing manifest warns, matching `setup.sh`'s fresh-install
+policy), and only then renames onto the live path. That also fixes a re-run on a
+box where the agent is already running, which previously failed with a busy file
+and reported it as a network error.
+
+### Tests
+
+New `tests/install-integrity-pin-e2e.sh`, 27 assertions, red at v2.93.0 on 13 of
+them. It *executes* the guards rather than reading them: the linkage guard is run
+against a stubbed `readelf` through five cases, and the hooks are run against
+throwaway git repositories — including must-not-fire cases, because a gate that
+blocks everything is not a working gate.
+
 ## [2.93.0] - 2026-08-09
 
 A test-and-tooling release. Nothing an operator uses changes; what changes is
