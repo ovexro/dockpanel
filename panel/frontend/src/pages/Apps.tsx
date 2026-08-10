@@ -153,9 +153,6 @@ const appIcons: Record<string, ReactNode> = {
   ghost: (
     <svg className="w-6 h-6" viewBox="0 0 128 128"><path fill="#212121" d="M64 0C38.6 0 18 20.6 18 46v74c0 4.4 5.3 6.6 8.5 3.5 4-4 10.6-4 14.6 0 4 4 10.6 4 14.6 0 4-4 10.6-4 14.6 0 4 4 10.6 4 14.6 0 4-4 10.6-4 14.6 0 3.2 3.2 8.5.9 8.5-3.5V46C110 20.6 89.4 0 64 0z"/><circle fill="#fff" cx="48" cy="46" r="10"/><circle fill="#fff" cx="80" cy="46" r="10"/></svg>
   ),
-  strapi: (
-    <svg className="w-6 h-6" viewBox="0 0 128 128"><path fill="#4945ff" d="M43 2h83v83H85V44H43V2z"/><path fill="#4945ff" opacity=".4" d="M2 43h41v42h42v41H43c-22.6 0-41-18.4-41-41V43z"/><path fill="#4945ff" opacity=".7" d="M43 2v42h42l-42-42z"/></svg>
-  ),
   directus: (
     <svg className="w-6 h-6" viewBox="0 0 128 128"><path fill="#6644ff" d="M64 4c-2.8 0-5.2 1.6-6.4 4L6.4 100c-1.6 3.2.4 7 4 7h24c2.4 0 4.4-1.2 5.6-3.2L64 64l23.6 39.6c1.2 2 3.4 3.4 5.8 3.4h24.2c3.6 0 5.6-3.8 4-7L70.4 8c-1.2-2.4-3.6-4-6.4-4z"/><path fill="#6644ff" opacity=".5" d="M64 44L44.4 78h39.2L64 44z"/></svg>
   ),
@@ -284,9 +281,6 @@ const appIcons: Record<string, ReactNode> = {
   ),
   rocketchat: (
     <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#f5455c" width="128" height="128"/><path fill="#fff" d="M64 20c-26.5 0-48 16.6-48 37 0 11 5.8 20.9 15 27.8L28 104l18-10c5.8 2.2 12.2 3.4 18 3.4 26.5 0 48-16.6 48-37S90.5 20 64 20z" opacity=".9"/><circle fill="#f5455c" cx="48" cy="58" r="5"/><circle fill="#f5455c" cx="64" cy="58" r="5"/><circle fill="#f5455c" cx="80" cy="58" r="5"/></svg>
-  ),
-  discourse: (
-    <svg className="w-6 h-6" viewBox="0 0 128 128"><circle fill="#231f20" cx="64" cy="64" r="60"/><path fill="#fff" d="M64 24c-22 0-40 16.6-40 37s18 37 40 37l32 10-12-18c8-7 12-17 12-29 0-20.4-14.3-37-32-37z" opacity=".15"/><path fill="#87ceeb" d="M42 52h44v6H42z" opacity=".9"/><path fill="#f0c040" d="M42 64h36v6H42z" opacity=".9"/><path fill="#e45735" d="M42 76h28v6H42z" opacity=".9"/></svg>
   ),
   // ─── Media (additional) ───────────────────────────────────────
   immich: (

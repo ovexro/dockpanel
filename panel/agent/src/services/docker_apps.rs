@@ -282,10 +282,19 @@ static GPU_RECOMMENDED_TEMPLATES: &[&str] = &[
 /// (issue #101). `/data` is the path the template already mounts a volume at, so the
 /// served directory and the persisted directory are the same one; a `server` command
 /// pointed anywhere else would come up healthy and lose every object on restart.
-static TEMPLATE_CMD: &[(&str, &[&str])] = &[(
-    "minio",
-    &["server", "/data", "--console-address", ":9001"],
-)];
+static TEMPLATE_CMD: &[(&str, &[&str])] = &[
+    ("minio", &["server", "/data", "--console-address", ":9001"]),
+    // Each entry below was established by RUNNING the image and observing it
+    // both ways: with no command it exits, with this command it stays up and
+    // answers on its port. `cloudflared`'s own default Cmd is ["version"], so
+    // every deploy printed a version string and stopped; `tunnel run` reads
+    // TUNNEL_TOKEN from the environment the template already collects, so the
+    // token never has to reach the command line.
+    ("cloudflared", &["tunnel", "run"]),
+    ("ntfy", &["serve"]),
+    ("trivy", &["server", "--listen", "0.0.0.0:8080"]),
+    ("keycloak", &["start-dev"]),
+];
 
 /// The `Cmd` to give a template's container, if the catalogue overrides it.
 fn template_cmd(id: &str) -> Option<Vec<String>> {
@@ -405,7 +414,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Portainer",
         description: "Docker management UI for containers, images, volumes, and networks",
         category: "Tools",
-        image: "portainer/portainer-ce:2",
+        image: "portainer/portainer-ce:lts",
         default_port: 9443,
         container_port: "9443/tcp",
         env_vars: &[],
@@ -510,17 +519,6 @@ static TEMPLATES: &[AppTemplateDef] = &[
     },
     // ─── CMS & Content ──────────────────────────────────────────────
     AppTemplateDef {
-        id: "strapi",
-        name: "Strapi",
-        description: "Open-source headless CMS with a customizable API",
-        category: "CMS",
-        image: "strapi/strapi:4",
-        default_port: 1337,
-        container_port: "1337/tcp",
-        env_vars: &[],
-        volumes: &["/srv/app"],
-    },
-    AppTemplateDef {
         id: "directus",
         name: "Directus",
         description: "Open data platform — instant REST & GraphQL API for any SQL database",
@@ -555,7 +553,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Grafana",
         description: "Open-source observability platform for metrics, logs, and traces",
         category: "Monitoring",
-        image: "grafana/grafana:11",
+        image: "grafana/grafana:13.1",
         default_port: 3002,
         container_port: "3000/tcp",
         env_vars: &[
@@ -646,7 +644,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Vaultwarden",
         description: "Lightweight Bitwarden-compatible password manager server",
         category: "Security",
-        image: "vaultwarden/server:1",
+        image: "vaultwarden/server:1.37.1",
         default_port: 8084,
         container_port: "80/tcp",
         env_vars: &[
@@ -672,7 +670,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Metabase",
         description: "Business intelligence and analytics dashboard builder",
         category: "Analytics",
-        image: "metabase/metabase:v0.52",
+        image: "metabase/metabase:v0.58-lts",
         default_port: 3004,
         container_port: "3000/tcp",
         env_vars: &[],
@@ -717,7 +715,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "VS Code Server",
         description: "Run VS Code in the browser — full IDE accessible anywhere",
         category: "Development",
-        image: "codercom/code-server:4",
+        image: "codercom/code-server:4.131.0",
         default_port: 8443,
         container_port: "8080/tcp",
         env_vars: &[
@@ -756,7 +754,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Mailpit",
         description: "Email testing tool — catches outgoing emails for dev/testing",
         category: "Development",
-        image: "axllent/mailpit:v1",
+        image: "axllent/mailpit:v1.30",
         default_port: 8025,
         container_port: "8025/tcp",
         env_vars: &[],
@@ -822,7 +820,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Outline",
         description: "Team knowledge base and wiki with a fast, beautiful editor",
         category: "Tools",
-        image: "outlinewiki/outline:0.82",
+        image: "outlinewiki/outline:1.9",
         default_port: 3006,
         container_port: "3000/tcp",
         env_vars: &[
@@ -839,7 +837,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Mattermost",
         description: "Open-source Slack alternative for secure team collaboration",
         category: "Tools",
-        image: "mattermost/mattermost-team-edition:10",
+        image: "mattermost/mattermost-team-edition:release-11",
         default_port: 8065,
         container_port: "8065/tcp",
         env_vars: &[
@@ -852,7 +850,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Rocket.Chat",
         description: "Open-source team communication platform with channels, DMs, and video",
         category: "Tools",
-        image: "registry.rocket.chat/rocketchat/rocket.chat:7",
+        image: "rocketchat/rocket.chat:8.7.0",
         default_port: 3007,
         container_port: "3000/tcp",
         env_vars: &[
@@ -860,22 +858,6 @@ static TEMPLATES: &[AppTemplateDef] = &[
             EnvVarDef { name: "ROOT_URL", label: "Root URL", default: "", required: true, secret: false },
         ],
         volumes: &["/app/uploads"],
-    },
-    AppTemplateDef {
-        id: "discourse",
-        name: "Discourse",
-        description: "Modern forum and community discussion platform",
-        category: "Tools",
-        image: "bitnami/discourse:3",
-        default_port: 3008,
-        container_port: "3000/tcp",
-        env_vars: &[
-            EnvVarDef { name: "DISCOURSE_HOST", label: "Discourse Hostname", default: "", required: true, secret: false },
-            EnvVarDef { name: "DISCOURSE_DATABASE_HOST", label: "Database Host", default: "", required: true, secret: false },
-            EnvVarDef { name: "DISCOURSE_DATABASE_PASSWORD", label: "Database Password", default: "", required: true, secret: true },
-            EnvVarDef { name: "DISCOURSE_REDIS_HOST", label: "Redis Host", default: "redis", required: false, secret: false },
-        ],
-        volumes: &["/bitnami/discourse"],
     },
     // ─── Media ───────────────────────────────────────────────────
     AppTemplateDef {
@@ -931,7 +913,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Keycloak",
         description: "Open-source IAM with SSO, identity brokering, and social login. Requires 'start-dev' command override for dev mode.",
         category: "Security",
-        image: "quay.io/keycloak/keycloak:26",
+        image: "quay.io/keycloak/keycloak:26.7",
         default_port: 8180,
         container_port: "8080/tcp",
         env_vars: &[
@@ -948,7 +930,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Woodpecker CI",
         description: "Simple yet powerful CI/CD engine with great extensibility",
         category: "Development",
-        image: "woodpeckerci/woodpecker-server:2",
+        image: "woodpeckerci/woodpecker-server:v3",
         default_port: 8000,
         container_port: "8000/tcp",
         env_vars: &[
@@ -1018,7 +1000,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Cal.com",
         description: "Open-source scheduling infrastructure for appointments and meetings",
         category: "Tools",
-        image: "calcom/cal.com:v4",
+        image: "calcom/cal.com:v6.2.0",
         default_port: 3010,
         container_port: "3000/tcp",
         env_vars: &[
@@ -1034,7 +1016,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Chatwoot",
         description: "Open-source customer engagement platform with live chat and helpdesk",
         category: "Tools",
-        image: "chatwoot/chatwoot:v3",
+        image: "chatwoot/chatwoot:latest-ce",
         default_port: 3011,
         container_port: "3000/tcp",
         env_vars: &[
@@ -1699,19 +1681,6 @@ static TEMPLATES: &[AppTemplateDef] = &[
     },
     // ─── AI / Machine Learning (additional) ─────────────────────
     AppTemplateDef {
-        id: "stable-diffusion-webui",
-        name: "Stable Diffusion WebUI",
-        description: "Browser-based interface for Stable Diffusion image generation",
-        category: "AI",
-        image: "ghcr.io/abetlen/stable-diffusion-webui:latest",
-        default_port: 7860,
-        container_port: "7860/tcp",
-        env_vars: &[
-            EnvVarDef { name: "CLI_ARGS", label: "CLI Arguments", default: "--listen", required: false, secret: false },
-        ],
-        volumes: &["/app/models", "/app/outputs"],
-    },
-    AppTemplateDef {
         id: "text-generation-webui",
         name: "Text Generation WebUI",
         description: "Gradio web UI for running large language models (oobabooga)",
@@ -2083,19 +2052,6 @@ static TEMPLATES: &[AppTemplateDef] = &[
     },
     // ─── Monitoring (new) ───────────────────────────────────────
     AppTemplateDef {
-        id: "zabbix",
-        name: "Zabbix",
-        description: "Enterprise-class open-source monitoring for networks, servers, and applications",
-        category: "Monitoring",
-        image: "zabbix/zabbix-appliance:7.0-latest",
-        default_port: 8302,
-        container_port: "80/tcp",
-        env_vars: &[
-            EnvVarDef { name: "ZBX_SERVER_HOST", label: "Server Host", default: "localhost", required: false, secret: false },
-        ],
-        volumes: &["/var/lib/zabbix"],
-    },
-    AppTemplateDef {
         id: "checkmk",
         name: "Checkmk",
         description: "Infrastructure and application monitoring with auto-discovery and alerting",
@@ -2266,7 +2222,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Garage",
         description: "Lightweight S3-compatible distributed object storage for self-hosting",
         category: "Storage",
-        image: "dxflrs/garage:v1.0",
+        image: "dxflrs/garage:v2.3.0",
         default_port: 3900,
         container_port: "3900/tcp",
         env_vars: &[],

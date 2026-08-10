@@ -6,6 +6,90 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.96.0]
+
+### Fixed — eighteen app templates could not be deployed at all, because their image reference did not resolve
+
+Issue #103. A template is a static image reference, so nothing in a build or a
+test could see this: the failure happened at `docker pull`, on a stranger's
+machine, every time. Eighteen of the 153 catalogue entries never got that far.
+
+Fifteen pinned a **tag the publisher does not publish**, and the shape was always
+the same — a bare major-version shorthand (`:1`, `:2`, `:11`, `:26`) assumed to be
+a convention these publishers simply do not use. Grafana publishes `13.1` and
+never `11`; Keycloak publishes `26.7` and never `26`; Rocket.Chat has 7,814 tags
+and not one bare major among them. Two more pinned a **repository that no longer
+exists** (`strapi/strapi` was deleted outright; the ghcr package
+`abetlen/stable-diffusion-webui` is gone). One pinned a **product line
+discontinued in 2020**.
+
+Every reference was probed against its registry and classified by the error
+*message*, never by an exit code — `manifest unknown` means the tag is absent,
+while a Docker Hub `401` means the repository does not exist anonymously (proven
+against a fabricated control repository that returns the identical `401`), and a
+`429` rate-limit is inconclusive and was re-run rather than recorded as a
+negative. v2.95.2 reported five of these and listed eight more as "UNKNOWN — the
+sweep was rate-limited". Re-run authenticated, **all eight were dead**, plus two
+nobody had flagged.
+
+Fourteen now pin a reference proven to resolve: `mailpit v1.30`, `cal.com
+v6.2.0`, `chatwoot latest-ce`, `code-server 4.131.0`, `garage v2.3.0`,
+`grafana 13.1`, `mattermost release-11`, `metabase v0.58-lts`, `outline 1.9`,
+`portainer lts`, `vaultwarden 1.37.1`, `keycloak 26.7`, `woodpecker v3` and
+`rocket.chat 8.7.0`. Because the old references could never be pulled, no
+existing deployment can be disturbed by the change — there was nothing to disturb.
+
+**Four templates were withdrawn rather than repointed**: Discourse, Zabbix,
+Strapi and Stable Diffusion WebUI. For each, the only pullable candidate was a
+frozen vendor archive that no longer receives security patches, a personal
+account's rebuild, or an amd64-only image — and DockPanel publishes an arm64
+build. Shipping one of those as a one-click default is worse than not offering
+the app. The catalogue is now 149 templates, and every count claim on ten
+published surfaces was updated with it.
+
+### Fixed — four more templates started a container that immediately exited
+
+The #101 class: the image's own default command does not start a service, so the
+container printed something and stopped on every deploy. Each command below was
+established by **running the image** and observing both directions — without it
+the container exits, with it the container stays up and answers on its port —
+rather than copied from documentation:
+
+- **Cloudflare Tunnel** — the starkest case. Its default `Cmd` is literally
+  `["version"]`, so every deploy printed a version string and exited, while the
+  template collected a required tunnel token it had no way to use. It now runs
+  `tunnel run`, which reads `TUNNEL_TOKEN` from the environment the template
+  already collects; the token never has to reach the command line.
+- **ntfy** — `serve`. Verified serving with the empty volume mounts a real deploy
+  creates, not just bare.
+- **Trivy Server** — `server --listen 0.0.0.0:8080`, answering `/healthz` once its
+  vulnerability database finishes downloading.
+- **Keycloak** — `start-dev`, which the template's own description had asked for
+  since before the struct could express it.
+
+**Three templates were deliberately left without a command**, because adding one
+would be worse than the defect it appears to cure. Authentik needs PostgreSQL and
+Redis: given `server` it runs happily and retries the database for ever, turning
+today's loud failure into a container that reports healthy and never serves. vLLM
+takes its model as a command-line argument, which the override table cannot
+interpolate. SurrealDB needs a datastore path *and* a writable volume — it runs
+as `nonroot` while volume directories are created root-owned, so it cannot write
+`/data`, and without the path it silently keeps everything in memory and loses it
+on restart.
+
+### Added — a regression pin over the catalogue's image references
+
+`tests/app-template-images-pin-e2e.sh`, 13 assertions, red against the previous
+release. It pins the specific references measured dead so none can return by a
+revert or a copy-paste, and pins each replacement *positively* so a silent
+downgrade fails loudly too. It deliberately does **not** ban bare-major tags:
+`mongo:7`, `mysql:8` and `postgres:16-alpine` are bare-major pins that resolve
+perfectly well, and a screen that flags most of its population is a fact about
+the screen. Whether a tag still resolves *today* is a claim about the world rather
+than about a commit, so it belongs to the daily live-surfaces check instead.
+
+Assertions 1813 → 1826.
+
 ## [2.95.2]
 
 ### Fixed — v2.95.1 shipped with its own SFTP transport reverted, breaking every SFTP upload
