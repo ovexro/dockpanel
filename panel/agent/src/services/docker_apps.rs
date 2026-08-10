@@ -2022,20 +2022,21 @@ static TEMPLATES: &[AppTemplateDef] = &[
         ],
         volumes: &["/config", "/music", "/downloads"],
     },
-    AppTemplateDef {
-        id: "readarr",
-        name: "Readarr",
-        description: "Book and audiobook collection manager with automatic downloading",
-        category: "Media",
-        image: "lscr.io/linuxserver/readarr:develop",
-        default_port: 8787,
-        container_port: "8787/tcp",
-        env_vars: &[
-            EnvVarDef { name: "PUID", label: "User ID", default: "1000", required: false, secret: false },
-            EnvVarDef { name: "PGID", label: "Group ID", default: "1000", required: false, secret: false },
-        ],
-        volumes: &["/config", "/books", "/downloads"],
-    },
+    // The Readarr template was withdrawn s342. LinuxServer's image for it publishes
+    // an OCI index with ZERO manifests on both of its tags — `docker pull` exits 1
+    // with "no matching manifest for linux/amd64", while the Sonarr and Radarr
+    // controls return four manifests each. The upstream project is archived, last
+    // pushed 2025-06-27, so there is nothing to repoint to. Same call as the four
+    // withdrawn in v2.96.0.
+    //
+    // ⚠ This shape is invisible to a classifier that keys on the manifest's HTTP
+    // status: the request succeeds with 200 and a well-formed index that happens
+    // to be empty. v2.96.0's sweep classified by error MESSAGE and could not see
+    // it. Any future resolvability check has to assert the index is NON-EMPTY.
+    //
+    // The exact reference is deliberately not spelled here — this file is the
+    // subject of pins that grep raw source, and a name written in a comment
+    // silently satisfies the absence arm meant to keep it gone.
     AppTemplateDef {
         id: "tautulli",
         name: "Tautulli",
@@ -2465,6 +2466,248 @@ pub fn list_templates() -> Vec<AppTemplate> {
     TEMPLATES.iter().map(to_app_template).collect()
 }
 
+// ── Volume ownership ───────────────────────────────────────────────
+
+/// Who a template's volume directories have to belong to.
+///
+/// `deploy_app` creates each declared volume as a **root-owned** directory on the
+/// host and bind-mounts it. That is right for most images, which start as root and
+/// chown their own data directory in their entrypoint before dropping privileges —
+/// `postgres`, `mysql` and `mongo` all do exactly that.
+///
+/// It is wrong for an image that declares a non-root `Config.User`, because that
+/// process starts **already dropped** and can never chown its way out: it cannot
+/// write the directory the template just mounted for it. Both ways that shows up
+/// are bad, and the quiet one is worse — either the container exits with
+/// `Permission denied`, or it comes up healthy and silently persists nothing.
+///
+/// Measured over the catalogue by reading every image's config: 42 of 148 images
+/// run non-root, and 31 of those declare a volume.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VolumeOwner {
+    uid: u32,
+    /// `None` when no group could be resolved. The directory then keeps the group
+    /// it already has, which is enough — the owner can write either way.
+    gid: Option<u32>,
+    /// The literal `Config.User`, so the log names what it acted on.
+    spec: String,
+}
+
+/// Split a Docker `User` spec into its user and group halves.
+///
+/// Docker accepts `user`, `uid`, `user:group`, `uid:gid` and the mixed forms.
+fn split_user_spec(spec: &str) -> (&str, Option<&str>) {
+    match spec.split_once(':') {
+        Some((user, group)) => (user.trim(), Some(group.trim())),
+        None => (spec.trim(), None),
+    }
+}
+
+/// Does this `Config.User` mean root? An empty field does — it is simply unset,
+/// which is how the overwhelming majority of images ship.
+fn user_spec_is_root(spec: &str) -> bool {
+    matches!(split_user_spec(spec).0, "" | "root" | "0")
+}
+
+/// Pull one regular file's bytes out of a `docker cp` tar stream.
+///
+/// A dependency-free reader for the only shape this ever asks for: one small
+/// file. A ustar header is 512 bytes, the size sits at offset 124 as octal ASCII,
+/// and the payload is padded to the next 512-byte boundary.
+fn tar_extract_first_file(archive: &[u8]) -> Option<String> {
+    let mut offset = 0usize;
+    while offset + 512 <= archive.len() {
+        let header = &archive[offset..offset + 512];
+        // A zero block ends the archive.
+        if header.iter().all(|byte| *byte == 0) {
+            return None;
+        }
+        let size_field = std::str::from_utf8(&header[124..136]).ok()?;
+        let size = usize::from_str_radix(size_field.trim_matches(|c| c == '\0' || c == ' '), 8).ok()?;
+        let body = offset + 512;
+        // '0' and NUL both mean "regular file"; skip anything else.
+        if (header[156] == b'0' || header[156] == 0) && size > 0 {
+            let end = body.checked_add(size)?;
+            return String::from_utf8(archive.get(body..end)?.to_vec()).ok();
+        }
+        offset = body + size.div_ceil(512) * 512;
+    }
+    None
+}
+
+/// Read one file out of an already-pulled image **without running it**.
+///
+/// Creating a container is enough to give Docker's copy API a filesystem to read;
+/// nothing is ever started. This is the only way to resolve a login name, because
+/// a name like `nonroot` is defined by the image's own `/etc/passwd` and by
+/// nothing on the host.
+async fn read_file_from_image(docker: &Docker, image: &str, path: &str) -> Option<String> {
+    let probe_name = format!("dockpanel-userprobe-{}", uuid::Uuid::new_v4());
+    let created = docker
+        .create_container(
+            Some(CreateContainerOptions {
+                name: probe_name.as_str(),
+                platform: None,
+            }),
+            Config {
+                image: Some(image.to_string()),
+                // Never started, so this only has to satisfy `create` for an image
+                // that declares no command of its own.
+                cmd: Some(vec!["dockpanel-user-probe".to_string()]),
+                ..Default::default()
+            },
+        )
+        .await
+        .ok()?;
+
+    let mut stream = docker.download_from_container(
+        &created.id,
+        Some(bollard::container::DownloadFromContainerOptions { path }),
+    );
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(bytes) => buf.extend_from_slice(&bytes),
+            Err(_) => break,
+        }
+    }
+
+    let _ = docker
+        .remove_container(
+            &created.id,
+            Some(RemoveContainerOptions {
+                force: true,
+                ..Default::default()
+            }),
+        )
+        .await;
+
+    tar_extract_first_file(&buf)
+}
+
+/// Resolve a login name to `(uid, gid)` from an image's own `/etc/passwd`.
+fn passwd_lookup(passwd: &str, name: &str) -> Option<(u32, u32)> {
+    passwd.lines().find_map(|line| {
+        let mut fields = line.split(':');
+        if fields.next()? != name {
+            return None;
+        }
+        let _password = fields.next()?;
+        Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
+    })
+}
+
+/// Find the primary gid of a numeric uid in an image's own `/etc/passwd`.
+fn passwd_gid_for_uid(passwd: &str, uid: u32) -> Option<u32> {
+    passwd.lines().find_map(|line| {
+        let mut fields = line.split(':');
+        let _login = fields.next()?;
+        let _password = fields.next()?;
+        if fields.next()?.parse::<u32>().ok()? != uid {
+            return None;
+        }
+        fields.next()?.parse().ok()
+    })
+}
+
+/// Resolve a group name to a gid from an image's own `/etc/group`.
+fn group_lookup(group: &str, name: &str) -> Option<u32> {
+    group.lines().find_map(|line| {
+        let mut fields = line.split(':');
+        if fields.next()? != name {
+            return None;
+        }
+        let _password = fields.next()?;
+        fields.next()?.parse().ok()
+    })
+}
+
+/// Work out who a template's volume directories must belong to, or `None` when
+/// the image runs as root and today's behaviour is already correct.
+///
+/// ⚠ There is deliberately **no fallback**. Guessing a uid hands one tenant's data
+/// directory to a different account, and `0777` would put a world-writable
+/// directory on a host that runs other people's containers. When the spec cannot
+/// be resolved this returns `None` and says so out loud, leaving the directory
+/// root-owned — the same state as before, but no longer a silent one.
+async fn resolve_volume_owner(docker: &Docker, image: &str) -> Option<VolumeOwner> {
+    let spec = docker
+        .inspect_image(image)
+        .await
+        .ok()?
+        .config?
+        .user
+        .unwrap_or_default();
+    let spec = spec.trim();
+    if user_spec_is_root(spec) {
+        return None;
+    }
+    let (user_part, group_part) = split_user_spec(spec);
+    let numeric_uid = user_part.parse::<u32>().ok();
+
+    // `/etc/passwd` is needed to translate a login name, and to find the primary
+    // group of a bare numeric uid. A `uid:gid` pair needs nothing from the image.
+    let passwd = if numeric_uid.is_none() || group_part.is_none() {
+        read_file_from_image(docker, image, "/etc/passwd").await
+    } else {
+        None
+    };
+
+    let (uid, primary_gid) = match numeric_uid {
+        Some(uid) => (
+            uid,
+            passwd.as_deref().and_then(|p| passwd_gid_for_uid(p, uid)),
+        ),
+        None => match passwd.as_deref().and_then(|p| passwd_lookup(p, user_part)) {
+            Some((uid, gid)) => (uid, Some(gid)),
+            None => {
+                tracing::warn!(
+                    "Image {image} runs as non-root user {spec:?} which could not be \
+                     resolved from its own /etc/passwd; leaving volume directories \
+                     root-owned. The app may be unable to write its data directory."
+                );
+                return None;
+            }
+        },
+    };
+
+    let gid = match group_part {
+        Some(group) => match group.parse::<u32>() {
+            Ok(gid) => Some(gid),
+            Err(_) => read_file_from_image(docker, image, "/etc/group")
+                .await
+                .as_deref()
+                .and_then(|g| group_lookup(g, group)),
+        },
+        None => primary_gid,
+    };
+
+    Some(VolumeOwner {
+        uid,
+        gid,
+        spec: spec.to_string(),
+    })
+}
+
+/// `chown` a path, leaving the group alone when none was resolved.
+///
+/// Deliberately **not** recursive. The owner of the directory is what lets the
+/// image create its own files underneath; recursing would rewrite ownership of
+/// data a previous deployment wrote, which is a bigger and riskier operation than
+/// the defect calls for.
+fn chown_to(path: &str, owner: &VolumeOwner) -> std::io::Result<()> {
+    let c_path = std::ffi::CString::new(path)
+        .map_err(|_| std::io::Error::other("volume path contains a NUL byte"))?;
+    // `-1` means "leave this one as it is" — the same call shape `main.rs` uses to
+    // set only the group on the agent socket.
+    let gid = owner.gid.unwrap_or(u32::MAX);
+    if unsafe { libc::chown(c_path.as_ptr(), owner.uid, gid) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
 /// Deploy an app from a template: pull image, create container, start it.
 pub async fn deploy_app(
     template_id: &str,
@@ -2536,6 +2779,16 @@ pub async fn deploy_app(
         }]),
     );
 
+    // An image that runs as a non-root user starts already dropped and cannot chown
+    // the directory we are about to create for it, so resolve who it needs to be
+    // owned by before creating any. Root images resolve to `None` and are left
+    // exactly as they were.
+    let volume_owner = if template.volumes.is_empty() {
+        None
+    } else {
+        resolve_volume_owner(&docker, template.image).await
+    };
+
     // Volume binds — create dirs and canonicalize to prevent symlink TOCTOU
     let mut binds: Vec<String> = Vec::new();
     for vol in template.volumes {
@@ -2548,6 +2801,25 @@ pub async fn deploy_app(
         let resolved_str = resolved.to_string_lossy();
         if !resolved_str.starts_with(&format!("{APP_DATA_DIR}/")) {
             return Err(format!("Volume path {host_dir} escapes allowed prefix after canonicalization"));
+        }
+        // Chown AFTER the prefix check, never before — the check is what proves the
+        // path is one of ours, and a chown is exactly the operation a symlink escape
+        // would want to borrow.
+        if let Some(owner) = &volume_owner {
+            match chown_to(&resolved_str, owner) {
+                Ok(()) => tracing::info!(
+                    "Volume {resolved_str} chowned to {}:{} for image user {:?}",
+                    owner.uid,
+                    owner.gid.map_or("unchanged".to_string(), |g| g.to_string()),
+                    owner.spec
+                ),
+                Err(e) => tracing::warn!(
+                    "Could not chown volume {resolved_str} to {}: {e}. The app runs as \
+                     {:?} and may be unable to write its data directory.",
+                    owner.uid,
+                    owner.spec
+                ),
+            }
         }
         binds.push(format!("{resolved_str}:{vol}"));
     }
@@ -3820,5 +4092,146 @@ mod tests {
         // A name the catalogue has never heard of falls through to the
         // substring test rather than being exempted.
         assert!(!catalogue_non_secret_env("SOME_VENDOR_API_KEY"));
+    }
+
+    // ── Volume ownership ───────────────────────────────────────────
+
+    /// An empty `User` is how almost every image ships and it means root, which is
+    /// the case that must stay untouched: those images chown their own data
+    /// directory in their entrypoint.
+    #[test]
+    fn root_user_specs_are_recognised_in_every_spelling() {
+        for spec in ["", "root", "0", "0:0", "root:root", "  root  ", "0:1000"] {
+            assert!(user_spec_is_root(spec), "{spec:?} names root");
+        }
+        for spec in ["nobody", "472", "nonroot", "65532:65532", "node-red", "1000"] {
+            assert!(!user_spec_is_root(spec), "{spec:?} does not name root");
+        }
+    }
+
+    #[test]
+    fn user_specs_split_into_their_halves() {
+        assert_eq!(split_user_spec("nobody"), ("nobody", None));
+        assert_eq!(split_user_spec("65532:65532"), ("65532", Some("65532")));
+        assert_eq!(split_user_spec("node:node"), ("node", Some("node")));
+        assert_eq!(split_user_spec("1000:staff"), ("1000", Some("staff")));
+    }
+
+    /// The real `/etc/passwd` out of `prom/prometheus:v3`, whose `Config.User` is
+    /// the NAME `nobody` — resolvable only from inside the image.
+    #[test]
+    fn a_login_name_resolves_from_the_images_own_passwd() {
+        let passwd = "root:x:0:0:root:/root:/bin/ash\nnobody:x:65534:65534:nobody:/home:/bin/false\n";
+        assert_eq!(passwd_lookup(passwd, "nobody"), Some((65534, 65534)));
+        assert_eq!(passwd_lookup(passwd, "root"), Some((0, 0)));
+        // A name the image does not define must fail rather than guess.
+        assert_eq!(passwd_lookup(passwd, "grafana"), None);
+        // A bare numeric uid still wants its primary group.
+        assert_eq!(passwd_gid_for_uid(passwd, 65534), Some(65534));
+        assert_eq!(passwd_gid_for_uid(passwd, 472), None);
+    }
+
+    #[test]
+    fn a_group_name_resolves_from_the_images_own_group_file() {
+        let group = "root:x:0:\nnogroup:x:65534:\nnode-red:x:1000:\n";
+        assert_eq!(group_lookup(group, "nogroup"), Some(65534));
+        assert_eq!(group_lookup(group, "node-red"), Some(1000));
+        assert_eq!(group_lookup(group, "absent"), None);
+    }
+
+    /// The tar reader has to cope with what `docker cp` actually returns, and must
+    /// stop rather than guess when it is handed something else.
+    #[test]
+    fn the_tar_reader_extracts_a_file_and_refuses_junk() {
+        fn ustar(name: &str, body: &str) -> Vec<u8> {
+            let mut block = vec![0u8; 512];
+            block[..name.len()].copy_from_slice(name.as_bytes());
+            let size = format!("{:011o}\0", body.len());
+            block[124..124 + size.len()].copy_from_slice(size.as_bytes());
+            block[156] = b'0';
+            block.extend_from_slice(body.as_bytes());
+            block.resize(512 + body.len().div_ceil(512) * 512, 0);
+            block
+        }
+
+        let body = "nobody:x:65534:65534:nobody:/home:/bin/false\n";
+        assert_eq!(tar_extract_first_file(&ustar("passwd", body)).as_deref(), Some(body));
+
+        // An all-zero block is the end of an archive, not a file.
+        assert_eq!(tar_extract_first_file(&vec![0u8; 1024]), None);
+        // A truncated stream must not panic or return a partial read. The cut has
+        // to land INSIDE the body (header 512 + body 44 = 556), or the archive is
+        // merely missing its padding and still parses perfectly.
+        let mut truncated = ustar("passwd", body);
+        truncated.truncate(530);
+        assert_eq!(tar_extract_first_file(&truncated), None);
+        // Nothing at all.
+        assert_eq!(tar_extract_first_file(&[]), None);
+    }
+
+    /// Every template whose image runs non-root and declares a volume needed the
+    /// chown, so the catalogue must not quietly lose the volumes that make them
+    /// victims. Measured s342 by reading all 148 images' config blobs from the
+    /// registry: 42 run non-root, 31 of those declare a volume.
+    ///
+    /// ⚠ The cases are spelled `"id count"` rather than as `(id, count)` tuples on
+    /// purpose. `app-template-images-pin-e2e.sh` §6 proves `TEMPLATE_CMD` carries
+    /// no entry for the three templates a command cannot fix, by grepping this
+    /// file's whitespace-stripped source for a parenthesised template id followed
+    /// by a comma. A tuple here flattens to exactly that shape and turns another
+    /// suite red against correct code. Test DATA is raw source like anything else,
+    /// and so is this comment — that suite does not strip comments, so the shape
+    /// must not be spelled out here either. Do not "tidy" this back into tuples.
+    #[test]
+    fn the_measured_victims_still_declare_the_volumes_they_could_not_write() {
+        for case in [
+            "prometheus 1",
+            "grafana 1",
+            "jenkins 1",
+            "mattermost 3",
+            "sonarqube 3",
+            "node-red 1",
+            "surrealdb 1",
+        ] {
+            let (id, count) = case.split_once(' ').expect("each case is `id count`");
+            let count: usize = count.parse().expect("count parses");
+            let template = TEMPLATES
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap_or_else(|| panic!("{id} must exist in the catalogue"));
+            assert_eq!(
+                template.volumes.len(),
+                count,
+                "{id} declares {:?}",
+                template.volumes
+            );
+        }
+    }
+
+    /// Hits the local Docker daemon and the two images the fix was proven on, so
+    /// it is not part of the ordinary suite. Run with:
+    ///   cargo test -p dockpanel-agent volume_owner -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "requires a Docker daemon with the test images pulled"]
+    async fn volume_owner_resolves_real_images_both_ways() {
+        let docker = Docker::connect_with_unix_defaults().expect("docker");
+
+        // A NAME, resolvable only from inside the image.
+        let prometheus = resolve_volume_owner(&docker, "prom/prometheus:v3").await;
+        assert_eq!(
+            prometheus,
+            Some(VolumeOwner {
+                uid: 65534,
+                gid: Some(65534),
+                spec: "nobody".to_string()
+            })
+        );
+
+        // A bare numeric uid, whose primary group still comes from the image.
+        let grafana = resolve_volume_owner(&docker, "grafana/grafana:13.1").await;
+        assert_eq!(grafana.as_ref().map(|o| o.uid), Some(472));
+
+        // The control: a root image must resolve to None so nothing is chowned.
+        assert_eq!(resolve_volume_owner(&docker, "nginx:alpine").await, None);
     }
 }

@@ -6,6 +6,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.97.0]
+
+### Fixed — thirty-one one-click apps could not write the volume the panel mounted for them
+
+Deploying an app template creates each declared volume as a directory owned by
+`root`, mode 0755, and bind-mounts it into the container. Nothing chowned it.
+
+That is correct for most images. They start as root and chown their own data
+directory in their entrypoint before dropping privileges — `postgres`, `mysql`
+and `mongo` all do exactly that. It is wrong for an image that declares a
+non-root user of its own, because that process starts **already dropped** and can
+never chown its way out. It cannot write the directory it was just given.
+
+The scale was measured rather than estimated, by reading every catalogue image's
+configuration straight from its registry: **42 of 148 images run as a non-root
+user, and 31 of those declare a volume** — 21% of the catalogue could not persist
+a byte. Among them Grafana, Jenkins, Prometheus, Mattermost, Rocket.Chat,
+SonarQube, Nexus, Node-RED, Directus, Superset, code-server, pgAdmin, Graylog and
+Wiki.js.
+
+Both ways it failed were bad, and the quiet one was worse. Prometheus, given the
+directory the panel used to create, exited with
+`open /prometheus/queries.active: permission denied` and left **zero files**
+behind; given a writable one it starts and writes its write-ahead log and lock
+immediately. SurrealDB was the other shape — it answered HTTP perfectly well
+while writing nothing at all, so the data was gone on restart.
+
+The fix reads the image's own declared user after the pull and chowns each volume
+directory to it. That user is frequently a **name** rather than a number — 24 of
+the 31 name a user — and a name means nothing on the host: it is defined by the
+image's own `/etc/passwd`. So the agent reads that file out of the image itself,
+by creating a container and copying the file out without ever starting it.
+
+The two cheaper fixes were both refused deliberately. `0777` would put a
+world-writable data directory on a host that runs other people's containers, and
+guessing a uid hands one tenant's data to a different account. When the name
+cannot be resolved the directory is left as it was and the agent says so in the
+log — the same state as before, but no longer a silent one. The chown happens
+only after the existing path-canonicalisation check, never before it, and never
+recursively.
+
+### Fixed — a nineteenth template pinned an image that cannot be pulled
+
+Readarr has been withdrawn. Its image publishes an index containing **zero
+manifests** on both of its tags, so `docker pull` fails outright, and the upstream
+project has been archived since June 2025 — there is nothing to repoint it to.
+
+This one survived the v2.96.0 sweep for a structural reason worth recording: that
+sweep classified references by the error *message* the registry returned, and this
+failure returns no error at all. The request succeeds with `200` and a
+well-formed index that simply happens to be empty. Any future check has to assert
+the index is non-empty rather than that the request worked. The catalogue is now
+148 templates, updated across every published surface.
+
 ## [2.96.0]
 
 ### Fixed — eighteen app templates could not be deployed at all, because their image reference did not resolve

@@ -1,6 +1,6 @@
 # DockPanel Feature Manifest
 
-> **Version**: v2.96.0 | **Total**: 60+ major features, ~285 capabilities
+> **Version**: v2.97.0 | **Total**: 60+ major features, ~285 capabilities
 >
 > This file is the single source of truth for what DockPanel offers.
 > Update it whenever features are added, changed, or removed.
@@ -24,7 +24,7 @@
 | **Incident Management** | Incident lifecycle (investigating→resolved→postmortem), timeline updates, severity, affected components, postmortem | `routes/incidents.rs` | — | `IncidentManagement.tsx` | `managed_incidents`, `incident_updates`, `managed_incident_components` |
 | **Public Status Page** | Customizable status page with component groups, incident history, subscriber notifications, overall status | `routes/incidents.rs` | — | `PublicStatusPage.tsx` | `status_page_config`, `status_page_components`, `status_page_subscribers` |
 | **Cron Jobs** | Cron scheduling with manual execution and history | `routes/crons.rs` | `crons.rs` | `Crons.tsx` | (via agent crontab) |
-| **Docker Apps** | 149 templates across 14 categories, Compose stacks, container lifecycle, registry, image tag change, live resource limits, GPU passthrough | `routes/docker_apps.rs`, `stacks.rs` | `docker_apps.rs` | `Apps.tsx` | `docker_stacks` |
+| **Docker Apps** | 148 templates across 14 categories, Compose stacks, container lifecycle, registry, image tag change, live resource limits, GPU passthrough | `routes/docker_apps.rs`, `stacks.rs` | `docker_apps.rs` | `Apps.tsx` | `docker_stacks` |
 | **Git Deploy** | Push-to-deploy, blue-green, Nixpacks (30+ langs), preview envs, one-time scheduled deploys | `routes/git_deploys.rs` | `git_build.rs` | `GitDeploys.tsx` | `git_deploys`, `git_deploy_history`, `git_previews` |
 | **WordPress Toolkit** | Multi-site dashboard, vuln scanning (14 known), hardening (7 checks), bulk updates | `routes/wordpress.rs` | `wordpress.rs`, `wp_vulnerability.rs` | `WordPressToolkit.tsx`, `WordPress.tsx` | `wp_vuln_scans`, `wp_hardening` |
 | **Migration Wizard** | Import from cPanel/HestiaCP — sites, databases, mail. Plesk (beta) | `routes/migration.rs` | `migration.rs` | `Migration.tsx` | `migrations` |
@@ -226,9 +226,9 @@ honest:
 | Agent RAM (RSS) | ~35 MB | measured | 2026-07-27 |
 | Panel services RAM (agent + API) | ~49 MB | measured | 2026-07-27 |
 | Full-stack RAM (with bundled PostgreSQL) | ~109 MB | measured | 2026-07-27 |
-| App templates | 149 | derived | every commit |
+| App templates | 148 | derived | every commit |
 | HTTP routes | 810 (530 backend + 280 agent) | derived | every commit |
-| Regression-pin assertions | 1826 (55 suites) | derived | every commit |
+| Regression-pin assertions | 1850 (56 suites) | derived | every commit |
 | Frontend pages | 52 | derived | every commit |
 | DB migrations | 108 | derived | every commit |
 | Supervised background services | 15 | derived | every commit |
