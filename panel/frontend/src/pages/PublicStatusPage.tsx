@@ -157,7 +157,7 @@ export default function PublicStatusPage() {
               <div key={inc.id} className="bg-dark-900 rounded-lg border border-danger-500/20 p-4">
                 <div className="flex items-center gap-2 mb-2">
                   <span className={`text-xs font-mono uppercase font-medium ${incStatusColors[inc.status] || "text-dark-400"}`}>{inc.status}</span>
-                  <span className="text-xs text-dark-500 font-mono">{formatDate(inc.started_at)}</span>
+                  <span className="text-xs text-dark-400 font-mono">{formatDate(inc.started_at)}</span>
                 </div>
                 <h3 className="text-sm font-mono text-white font-medium mb-2">{inc.title}</h3>
                 {inc.updates.length > 0 && (
@@ -166,7 +166,7 @@ export default function PublicStatusPage() {
                       <div key={u.id}>
                         <div className="flex items-center gap-2">
                           <span className={`text-xs font-mono ${incStatusColors[u.status] || "text-dark-400"}`}>{u.status}</span>
-                          <span className="text-xs text-dark-500 font-mono">{formatDate(u.created_at)}</span>
+                          <span className="text-xs text-dark-400 font-mono">{formatDate(u.created_at)}</span>
                         </div>
                         <p className="text-xs text-dark-300 font-mono mt-0.5">{u.message}</p>
                       </div>
@@ -189,7 +189,7 @@ export default function PublicStatusPage() {
                     <div key={comp.id} className="px-4 py-3 flex items-center justify-between">
                       <div>
                         <span className="text-sm font-mono text-white">{comp.name}</span>
-                        {comp.description && <span className="text-xs text-dark-500 ml-2 font-mono">{comp.description}</span>}
+                        {comp.description && <span className="text-xs text-dark-400 ml-2 font-mono">{comp.description}</span>}
                       </div>
                       <div className="flex items-center gap-2">
                         <div className={`w-2.5 h-2.5 rounded-full ${statusDotColors[comp.status] || "bg-rust-500"}`} />
@@ -212,11 +212,11 @@ export default function PublicStatusPage() {
                 <div key={inc.id} className="bg-dark-900 rounded-lg border border-dark-700 p-4">
                   <div className="flex items-center justify-between mb-1">
                     <h3 className="text-sm font-mono text-white">{inc.title}</h3>
-                    <span className="text-xs text-dark-500 font-mono">{formatDate(inc.started_at)}</span>
+                    <span className="text-xs text-dark-400 font-mono">{formatDate(inc.started_at)}</span>
                   </div>
                   <span className={`text-xs font-mono ${incStatusColors[inc.status]}`}>{inc.status}</span>
                   {inc.resolved_at && (
-                    <span className="text-xs text-dark-500 font-mono ml-2">
+                    <span className="text-xs text-dark-400 font-mono ml-2">
                       Resolved {timeAgo(inc.resolved_at)}
                     </span>
                   )}
@@ -235,7 +235,7 @@ export default function PublicStatusPage() {
                 <div key={ai.id} className="bg-dark-900 rounded-lg border border-dark-700 px-4 py-3 flex items-center justify-between">
                   <div>
                     <span className="text-sm font-mono text-white">{ai.monitor_name}</span>
-                    {ai.cause && <span className="text-xs text-dark-500 font-mono ml-2">{ai.cause}</span>}
+                    {ai.cause && <span className="text-xs text-dark-400 font-mono ml-2">{ai.cause}</span>}
                   </div>
                   <div className="text-xs text-dark-400 font-mono">
                     {formatDate(ai.started_at)}
@@ -264,7 +264,7 @@ export default function PublicStatusPage() {
                   </button>
                 </div>
                 {subscribeError && (
-                  <p className="text-sm text-red-400 font-mono mt-3" role="alert">{subscribeError}</p>
+                  <p className="text-sm text-danger-400 font-mono mt-3" role="alert">{subscribeError}</p>
                 )}
               </>
             )}

@@ -801,7 +801,7 @@ export default function Dashboard() {
                 setActionMessage({ text: `Failed to ${action === "reboot" ? "reboot server" : `restart ${action === "nginx" ? "Nginx" : "PHP-FPM"}`}`, type: "error" });
                 setTimeout(() => setActionMessage(null), 3000);
               }
-            }} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">
+            }} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">
               Confirm
             </button>
             <button onClick={() => setConfirmAction(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">
@@ -855,7 +855,7 @@ export default function Dashboard() {
           // never mentioned. A live certificate is the proof: HTTPS cannot be
           // issued until the domain actually resolves to this server.
           { id: "dns", label: "Point your domain here", description: "HTTPS is issued once your domain resolves to this server", link: "/sites", check: () => (intel?.ssl_countdowns.length ?? 0) > 0 },
-          { id: "app", label: "Deploy a Docker app", description: "One-click deploy from 151 templates", link: "/apps", check: () => appCount > 0 },
+          { id: "app", label: "Deploy a Docker app", description: "One-click deploy from the app catalogue", link: "/apps", check: () => appCount > 0 },
           { id: "2fa", label: "Enable 2FA", description: "Protect your panel with two-factor authentication", link: "/settings", check: () => twoFaEnabled },
           { id: "backup", label: "Set up backups", description: "Schedule recurring backups or run one manually", link: "/backup-orchestrator", check: () => backupSetup.has_schedule || backupSetup.has_backup },
         ];
@@ -1178,7 +1178,7 @@ export default function Dashboard() {
                     <div
                       title={s.enabled === false ? "Disabled" : s.status}
                       className={`w-2 h-2 rounded-full shrink-0 ${
-                        s.enabled === false ? "bg-amber-500" : s.status === "active" ? "bg-rust-500" : "bg-dark-500"
+                        s.enabled === false ? "bg-warn-500" : s.status === "active" ? "bg-rust-500" : "bg-dark-500"
                       }`}
                     />
                     <span className="text-xs text-dark-100 truncate font-mono">{s.domain || s.id}</span>

@@ -137,7 +137,7 @@ const categoryColors: Record<string, string> = {
   Tools: "bg-dark-500/15",
   Development: "bg-accent-400/15",
   Analytics: "bg-accent-600/15",
-  Storage: "bg-sky-500/15",
+  Storage: "bg-accent-500/15",
   Security: "bg-danger-500/15",
   Media: "bg-accent-600/15",
   Networking: "bg-rust-500/15",
@@ -598,7 +598,7 @@ export default function Apps() {
     if (!f) return "bg-dark-700 text-dark-300";
     if (f.critical_count > 0) return "bg-danger-500/15 text-danger-400";
     if (f.high_count > 0) return "bg-warn-500/15 text-warn-400";
-    if (f.medium_count > 0) return "bg-warn-500/10 text-warn-300";
+    if (f.medium_count > 0) return "bg-warn-500/10 text-warn-500";
     if (f.low_count + f.unknown_count > 0) return "bg-accent-500/10 text-accent-400";
     return "bg-rust-500/15 text-rust-400";
   };
@@ -2014,7 +2014,7 @@ volumes:
             <button
               key={tmpl.id}
               onClick={() => openDeploy(tmpl)}
-              className="bg-dark-800 rounded-lg border border-dark-500 p-5 text-left hover:border-indigo-300 hover:shadow-sm transition-all group card-interactive hover-lift"
+              className="bg-dark-800 rounded-lg border border-dark-500 p-5 text-left hover:border-accent-500 hover:shadow-sm transition-all group card-interactive hover-lift"
             >
               <div className="flex items-center gap-3 mb-3">
                 <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${categoryColors[tmpl.category] || "bg-dark-700"}`}>
@@ -2028,7 +2028,7 @@ volumes:
                     {tmpl.gpu_recommended && (
                       <span
                         title="GPU recommended — passthrough will be auto-enabled on deploy"
-                        className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
+                        className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-rust-500/15 text-rust-400 border border-rust-500/30"
                       >
                         GPU
                       </span>
@@ -2172,7 +2172,7 @@ volumes:
                   />
                   Enable GPU passthrough
                   {selected?.gpu_recommended && (
-                    <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                    <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-rust-500/15 text-rust-400 border border-rust-500/30">
                       Recommended
                     </span>
                   )}
@@ -2435,7 +2435,7 @@ volumes:
                         type="text"
                         value={envEditValues[ev.key] || ""}
                         onChange={(e) => setEnvEditValues({ ...envEditValues, [ev.key]: e.target.value })}
-                        className="w-full text-xs font-mono text-dark-100 bg-dark-900 rounded px-2 py-1.5 mt-0.5 border border-dark-600 focus:ring-1 focus:ring-purple-500 focus:border-purple-500"
+                        className="w-full text-xs font-mono text-dark-100 bg-dark-900 rounded px-2 py-1.5 mt-0.5 border border-dark-600 focus:ring-1 focus:ring-accent-500 focus:border-accent-500"
                       />
                     </div>
                   </div>
@@ -3064,8 +3064,8 @@ volumes:
                       <div className="text-[10px] uppercase font-mono text-warn-400 tracking-widest">High</div>
                     </div>
                     <div className="bg-warn-500/5 rounded p-3 text-center">
-                      <div className="text-2xl font-bold text-warn-300">{finding.medium_count}</div>
-                      <div className="text-[10px] uppercase font-mono text-warn-300 tracking-widest">Medium</div>
+                      <div className="text-2xl font-bold text-warn-500">{finding.medium_count}</div>
+                      <div className="text-[10px] uppercase font-mono text-warn-500 tracking-widest">Medium</div>
                     </div>
                     <div className="bg-accent-500/10 rounded p-3 text-center">
                       <div className="text-2xl font-bold text-accent-400">{finding.low_count}</div>
@@ -3119,7 +3119,7 @@ volumes:
                             const sevClass =
                               sev === "critical" ? "bg-danger-500/15 text-danger-400" :
                               sev === "high" ? "bg-warn-500/15 text-warn-400" :
-                              sev === "medium" ? "bg-warn-500/10 text-warn-300" :
+                              sev === "medium" ? "bg-warn-500/10 text-warn-500" :
                               sev === "low" ? "bg-accent-500/10 text-accent-400" :
                               "bg-dark-700 text-dark-300";
                             const isCveId = /^CVE-\d{4}-\d{4,}$/i.test(v.cve);
@@ -3279,7 +3279,7 @@ function OllamaModels({ containerId, onClose }: { containerId: string; onClose: 
           </div>
 
           {pullResult.msg && (
-            <div className={`mb-4 px-3 py-2 rounded text-xs ${pullResult.type === "success" ? "bg-emerald-500/10 text-emerald-400" : "bg-danger-500/10 text-danger-400"}`}>
+            <div className={`mb-4 px-3 py-2 rounded text-xs ${pullResult.type === "success" ? "bg-rust-500/10 text-rust-400" : "bg-danger-500/10 text-danger-400"}`}>
               {pullResult.msg}
             </div>
           )}
@@ -3366,7 +3366,7 @@ function OllamaModels({ containerId, onClose }: { containerId: string; onClose: 
                       <p className="text-xs text-dark-400">{m.desc} \u00b7 {m.size}</p>
                     </div>
                     {installed ? (
-                      <span className="text-xs text-emerald-400 font-medium">Installed</span>
+                      <span className="text-xs text-rust-400 font-medium">Installed</span>
                     ) : (
                       <button
                         onClick={() => pullModel(m.name)}

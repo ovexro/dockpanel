@@ -141,7 +141,7 @@ function HealthContent() {
       label: "API Status",
       value: health.status === "ok" ? "Healthy" : "Degraded",
       sub: health.service,
-      color: health.status === "ok" ? "text-emerald-400" : "text-warn-400",
+      color: health.status === "ok" ? "text-rust-400" : "text-warn-400",
     });
     cards.push({
       label: "Version",
@@ -150,7 +150,7 @@ function HealthContent() {
     cards.push({
       label: "Database",
       value: health.db === "unreachable" ? "Unreachable" : "Connected",
-      color: health.db === "unreachable" ? "text-danger-400" : "text-emerald-400",
+      color: health.db === "unreachable" ? "text-danger-400" : "text-rust-400",
     });
   }
 
@@ -168,19 +168,19 @@ function HealthContent() {
       label: "CPU",
       value: `${sysInfo.cpu_usage.toFixed(1)}%`,
       sub: `${sysInfo.cpu_count} cores \u00b7 load ${sysInfo.load_avg_1.toFixed(2)}`,
-      color: sysInfo.cpu_usage > 90 ? "text-danger-400" : sysInfo.cpu_usage > 70 ? "text-warn-400" : "text-emerald-400",
+      color: sysInfo.cpu_usage > 90 ? "text-danger-400" : sysInfo.cpu_usage > 70 ? "text-warn-400" : "text-rust-400",
     });
     cards.push({
       label: "Memory",
       value: `${sysInfo.mem_usage_pct.toFixed(1)}%`,
       sub: `${sysInfo.mem_used_mb.toLocaleString()} / ${sysInfo.mem_total_mb.toLocaleString()} MB`,
-      color: sysInfo.mem_usage_pct > 90 ? "text-danger-400" : sysInfo.mem_usage_pct > 70 ? "text-warn-400" : "text-emerald-400",
+      color: sysInfo.mem_usage_pct > 90 ? "text-danger-400" : sysInfo.mem_usage_pct > 70 ? "text-warn-400" : "text-rust-400",
     });
     cards.push({
       label: "Disk",
       value: `${sysInfo.disk_usage_pct.toFixed(1)}%`,
       sub: `${sysInfo.disk_used_gb.toFixed(1)} / ${sysInfo.disk_total_gb.toFixed(1)} GB`,
-      color: sysInfo.disk_usage_pct > 90 ? "text-danger-400" : sysInfo.disk_usage_pct > 80 ? "text-warn-400" : "text-emerald-400",
+      color: sysInfo.disk_usage_pct > 90 ? "text-danger-400" : sysInfo.disk_usage_pct > 80 ? "text-warn-400" : "text-rust-400",
     });
     cards.push({
       label: "Processes",
@@ -300,14 +300,14 @@ function GpuMonitor({ gpuInfo }: { gpuInfo: GpuInfoData }) {
   const vramColor = (used: number, total: number) => {
     if (total === 0) return "text-dark-300";
     const pct = (used / total) * 100;
-    return pct > 90 ? "text-danger-400" : pct > 70 ? "text-warn-400" : "text-emerald-400";
+    return pct > 90 ? "text-danger-400" : pct > 70 ? "text-warn-400" : "text-rust-400";
   };
   const tempColor = (t: number | null) => {
     if (t === null) return "text-dark-300";
-    return t > 85 ? "text-danger-400" : t > 70 ? "text-warn-400" : "text-emerald-400";
+    return t > 85 ? "text-danger-400" : t > 70 ? "text-warn-400" : "text-rust-400";
   };
   const utilColor = (pct: number) => {
-    return pct > 90 ? "text-danger-400" : pct > 70 ? "text-warn-400" : "text-emerald-400";
+    return pct > 90 ? "text-danger-400" : pct > 70 ? "text-warn-400" : "text-rust-400";
   };
 
   return (
@@ -360,7 +360,7 @@ function GpuMonitor({ gpuInfo }: { gpuInfo: GpuInfoData }) {
             {/* VRAM usage bar */}
             <div className="h-2 bg-dark-700 rounded-full overflow-hidden">
               <div
-                className={`h-full rounded-full transition-all ${vramPct > 90 ? "bg-danger-500" : vramPct > 70 ? "bg-warn-500" : "bg-emerald-500"}`}
+                className={`h-full rounded-full transition-all ${vramPct > 90 ? "bg-danger-500" : vramPct > 70 ? "bg-warn-500" : "bg-rust-500"}`}
                 style={{ width: `${Math.min(vramPct, 100)}%` }}
               />
             </div>

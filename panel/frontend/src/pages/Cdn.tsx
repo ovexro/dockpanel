@@ -249,7 +249,7 @@ export default function Cdn() {
         <div className="border border-danger-500/30 bg-danger-500/5 rounded-lg px-4 py-3 flex items-center justify-between">
           <span className="text-xs text-danger-400 font-mono">Remove CDN zone for {selectedZone.domain}?</span>
           <div className="flex items-center gap-2 shrink-0 ml-4">
-            <button onClick={executeDelete} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">Confirm</button>
+            <button onClick={executeDelete} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">Confirm</button>
             <button onClick={() => setPendingDelete(false)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
           </div>
         </div>
@@ -380,12 +380,12 @@ export default function Cdn() {
                     <div className="flex items-center gap-2 mt-1">
                       <span className={`inline-flex px-1.5 py-0.5 rounded text-xs font-medium ${
                         zone.provider === "bunnycdn"
-                          ? "bg-amber-500/15 text-amber-400"
-                          : "bg-orange-500/15 text-orange-400"
+                          ? "bg-warn-500/15 text-warn-400"
+                          : "bg-accent-500/15 text-accent-400"
                       }`}>
                         {zone.provider === "bunnycdn" ? "Bunny" : "CF"}
                       </span>
-                      <span className={`w-1.5 h-1.5 rounded-full ${zone.enabled ? "bg-green-400" : "bg-dark-400"}`} />
+                      <span className={`w-1.5 h-1.5 rounded-full ${zone.enabled ? "bg-rust-500" : "bg-dark-400"}`} />
                     </div>
                   </button>
                 ))}
@@ -506,7 +506,7 @@ export default function Cdn() {
                         onChange={(e) => setEditEnabled(e.target.checked)}
                         className="sr-only peer"
                       />
-                      <div className="w-11 h-6 bg-dark-600 peer-focus:ring-2 peer-focus:ring-accent-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rust-500" />
+                      <div className="w-11 h-6 bg-dark-600 peer-focus:ring-2 peer-focus:ring-accent-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-dark-500 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rust-500" />
                     </label>
                   </div>
                   <div>

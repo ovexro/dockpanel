@@ -280,7 +280,7 @@ export default function AtlasLayout() {
               <span key={crumb.to} className="flex items-center gap-2">
                 {i > 0 && (
                   <svg
-                    className="w-3 h-3 text-dark-500"
+                    className="w-3 h-3 text-dark-400"
                     fill="none"
                     viewBox="0 0 24 24"
                     stroke="currentColor"

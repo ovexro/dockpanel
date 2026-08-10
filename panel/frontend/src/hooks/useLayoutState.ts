@@ -5,6 +5,40 @@ import { navGroups, isNavVisible, type NavGroup } from "../data/navItems";
 
 const themeOrder = ["terminal", "midnight", "ember", "arctic", "clean", "clean-dark"] as const;
 
+/** Fired after any user-initiated theme change so every mounted reader re-seeds.
+ *  Distinct from `dp-layout-change` on purpose — reusing that name would make
+ *  LayoutShell re-read `dp-layout` on every theme click. */
+export const THEME_CHANGE_EVENT = "dp-theme-change";
+
+/** Resolves the stored theme WITHOUT writing anything back. The legacy ids are
+ *  migrated on read, so an old value keeps working while a never-set value stays
+ *  detectably absent. Mirrored (unavoidably) in public/theme-init.js, which is a
+ *  classic render-blocking script and cannot import this module. */
+export function readStoredTheme(): string {
+  const stored = localStorage.getItem("dp-theme");
+  if (!stored || stored === "dark") return "midnight";
+  if (stored === "light") return "arctic";
+  if (stored === "nexus") return "clean";
+  if (stored === "nexus-dark") return "clean-dark";
+  return stored;
+}
+
+/** THE writer for a user-initiated theme change: persists, stamps both root
+ *  attributes, and announces. Every theme setter in the app must go through
+ *  here — a caller that writes the DOM itself leaves `theme` below stale, which
+ *  is what made the header cycle button look dead for one click.
+ *
+ *  `data-color-scheme` is load-bearing: index.css reads it to hand the native
+ *  scrollbars and form controls the right scheme, so it must stay "light" for
+ *  arctic and clean and "dark" for the other four. */
+export function applyTheme(t: string): void {
+  localStorage.setItem("dp-theme", t);
+  const root = document.documentElement;
+  root.setAttribute("data-theme", t);
+  root.setAttribute("data-color-scheme", (t === "clean" || t === "arctic") ? "light" : "dark");
+  window.dispatchEvent(new Event(THEME_CHANGE_EVENT));
+}
+
 export interface LayoutState {
   user: { email: string; role: string };
   logout: () => void;
@@ -39,22 +73,13 @@ export function useLayoutState(): LayoutState {
   const [twoFaEnforced, setTwoFaEnforced] = useState(false);
   const [twoFaEnabled, setTwoFaEnabled] = useState(true);
 
-  const [theme, setThemeRaw] = useState(() => {
-    const stored = localStorage.getItem("dp-theme");
-    if (!stored || stored === "dark") return "midnight";
-    if (stored === "light") return "arctic";
-    if (stored === "nexus") return "clean";
-    if (stored === "nexus-dark") return "clean-dark";
-    return stored;
-  });
+  const [theme, setThemeRaw] = useState(readStoredTheme);
 
   const layout = localStorage.getItem("dp-layout") || "command";
 
   const setTheme = (t: string) => {
     setThemeRaw(t);
-    localStorage.setItem("dp-theme", t);
-    document.documentElement.setAttribute("data-theme", t);
-    document.documentElement.setAttribute("data-color-scheme", (t === "clean" || t === "arctic") ? "light" : "dark");
+    applyTheme(t);
   };
 
   const cycleTheme = () => {
@@ -63,11 +88,23 @@ export function useLayoutState(): LayoutState {
     setTheme(next);
   };
 
-  // Sync theme to DOM
+  // Re-seed after any OTHER writer (the Settings theme picker) changes the theme.
+  //
+  // This replaces a `useEffect(..., [theme])` that stamped both the DOM attribute
+  // and `dp-theme` into localStorage. A dep-array effect RUNS ON MOUNT, so that
+  // one persisted "midnight" on the first authenticated render of a user who had
+  // never picked a theme — the same defect as the old main.tsx write, and fixing
+  // only main.tsx would have left this one live.
+  //
+  // Nothing needs to re-assert the DOM here: theme-init.js sets it before first
+  // paint and applyTheme() sets it on every user-initiated change. This effect
+  // only keeps `theme` — the value cycleTheme steps from — in step, so the first
+  // click after a Settings pick advances from what is actually on screen.
   useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-    localStorage.setItem("dp-theme", theme);
-  }, [theme]);
+    const onThemeChange = () => setThemeRaw(readStoredTheme());
+    window.addEventListener(THEME_CHANGE_EVENT, onThemeChange);
+    return () => window.removeEventListener(THEME_CHANGE_EVENT, onThemeChange);
+  }, []);
 
   // Alert count + notification count polling (fallback, 60s since SSE handles real-time)
   const alertTimer = useRef<ReturnType<typeof setInterval>>(undefined);

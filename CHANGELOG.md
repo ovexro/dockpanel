@@ -6,6 +6,84 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.98.0]
+
+### Fixed — the two light themes could not carry their own text
+
+The panel ships six chrome themes. The two light ones are a retrofit: the
+neutral ramp was inverted so a single card class works in all six, but the brand
+and interactive ramps were left running light-to-dark. On a white ground that
+made the dominant ink unreadable. `text-rust-400` measured **1.86:1** across 319
+call sites and `text-accent-400` **2.14:1** across 111 — against a 4.5:1 floor.
+
+It survived for months because only one of the two light themes had been given a
+second pass, and that pass was ~100 substring `!important` overrides repainting
+broken markup rather than fixing the tokens underneath. Reviewing new UI on that
+theme was a false pass; the other one was the honest test and nobody used it.
+
+Both ramps are now inks. The 300 step is deliberately **darker** than the 400 in
+the light themes: 42 of its 50 uses are the hover partner of the 400 step, and on
+a light ground a hover must darken. Every hover now moves by 1.21–1.35:1 instead
+of the 1.15:1 a conventional ramp would have forced.
+
+### Fixed — the primary button failed AA in half the themes
+
+`bg-rust-500` with `text-white` occurs at 187 sites. White on it measured 3.30:1
+on Terminal and 3.74:1 on Arctic. Both fills are darkened. Ember keeps its
+signature `#ea580c` — no orange clears 4.5:1 against white above L\* 49.6, an
+exhaustive sRGB scan — and takes **dark ink at 5.41:1** instead, via a compound
+class selector that cannot match the 191 tinted chips.
+
+### Fixed — 168 hover states changed nothing at all
+
+`--color-rust-600` was byte-identical to `--color-rust-500` in three themes, and
+a fourth had 600 and 700 identical, so `hover:bg-rust-600` and `hover:bg-rust-700`
+were visual no-ops for half the fleet.
+
+### Fixed — five token steps were consumed and defined nowhere
+
+`danger-300` (18 uses), `warn-300` (4), `dark-750` (3), `dark-850` (1) and
+`danger-700` (1) emitted no CSS at all: the severity map printed CRITICAL in plain
+body text while MAJOR printed red. The hover steps are now defined per theme; the
+neutral pair and the severity-inverting `warn-300` were resolved at the call site.
+
+### Fixed — the destructive confirm button lightened on hover
+
+22 `bg-danger-500 text-white` buttons hovered to `danger-400`, which measures
+3.80:1 with white text in **every** theme. They now darken to `danger-600` (7.69:1).
+
+### Fixed — 112 stock-Tailwind colours were frozen outside the theme system
+
+All 112 were in `pages/`; `components/` was already 100% token-clean. No theme
+rule remapped any of them, so they rendered emerald-green inside the orange theme
+and the navy one. All 112 are now tokens.
+
+### Fixed — an attribute with four writers and no reader
+
+`data-color-scheme` was written on every theme change and read by nothing, so the
+UA painted autofill, date pickers, native selects, checkboxes and Firefox
+scrollbars light-scheme on the four dark themes. Two CSS declarations.
+
+### Fixed — a public page announced errors at 2.77:1
+
+`PublicStatusPage` rendered its subscribe error in stock red on a `role="alert"`.
+
+### Fixed — form borders never reached the non-text floor
+
+The resting border on inputs, selects and textareas measured 2.56–2.82:1 against
+the field in four of six themes, under the 3.0 floor. `.markdown-body`, live on
+the monitoring page, hardcoded white-on-dark literals that composited to 1.09:1
+on a light ground.
+
+### Added — `theme-contrast-pin-e2e.sh`, 27 assertions
+
+The suite parses the real token blocks out of the stylesheet and computes WCAG
+relative luminance in awk, then asserts the **role** constraints rather than any
+hex: ink clears 4.5 on its own surface, a control boundary clears 3.0, a hover
+step is a different colour from the step it hovers, and every consumed token is
+defined in every theme. Any palette satisfying those passes. All nine sections
+were mutation-tested by planting the original defect and confirming a red run.
+
 ## [2.97.0]
 
 ### Fixed — thirty-one one-click apps could not write the volume the panel mounted for them

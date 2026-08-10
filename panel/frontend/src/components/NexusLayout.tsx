@@ -154,7 +154,7 @@ export default function NexusLayout() {
             >
               {({ isActive }) => (
                 <>
-                  <span className={isActive ? "text-rust-400" : "text-dark-500"}><Icon name={item.iconName} className="w-5 h-5" /></span>
+                  <span className={isActive ? "text-rust-400" : "text-dark-400"}><Icon name={item.iconName} className="w-5 h-5" /></span>
                   <span>{item.label}</span>
                   {item.to === "/monitoring" && state.firingCount > 0 && (
                     <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-danger-500 text-white rounded-full min-w-[20px] text-center">
@@ -185,7 +185,7 @@ export default function NexusLayout() {
             <span className={`text-xs font-medium ${
   state.apiHealthy === true ? "text-rust-400" :
   state.apiHealthy === false ? "text-danger-400" :
-  "text-dark-500"
+  "text-dark-400"
 }`}>
               {state.apiHealthy === true ? "All Systems OK" : state.apiHealthy === false ? "Issues Detected" : "Checking..."}
             </span>
@@ -230,7 +230,7 @@ export default function NexusLayout() {
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
               <span className="flex-1 text-left">Search...</span>
-              <kbd className="text-[10px] px-1.5 py-0.5 border rounded border-dark-700 bg-dark-800 text-dark-500">Ctrl K</kbd>
+              <kbd className="text-[10px] px-1.5 py-0.5 border rounded border-dark-700 bg-dark-800 text-dark-400">Ctrl K</kbd>
             </button>
           </div>
 
@@ -281,7 +281,7 @@ export default function NexusLayout() {
               </div>
               <div className="text-left">
                 <p className="text-sm font-medium leading-none text-dark-100">{state.user.email.split("@")[0]}</p>
-                <p className="text-xs mt-0.5 text-dark-500">{state.user.role}</p>
+                <p className="text-xs mt-0.5 text-dark-400">{state.user.role}</p>
               </div>
             </div>
           </div>

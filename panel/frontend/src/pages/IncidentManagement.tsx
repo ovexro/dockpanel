@@ -236,7 +236,7 @@ export default function IncidentManagement() {
           <span className="text-xs font-mono text-danger-400">{pendingDelete.label}</span>
           <div className="flex items-center gap-2 shrink-0 ml-4">
             <button onClick={() => { const { type, id } = pendingDelete; setPendingDelete(null); type === "incident" ? deleteIncident(id) : deleteComponent(id); }}
-              className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">Confirm</button>
+              className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">Confirm</button>
             <button onClick={() => setPendingDelete(null)}
               className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
           </div>

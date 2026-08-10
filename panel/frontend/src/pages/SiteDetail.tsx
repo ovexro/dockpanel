@@ -452,7 +452,7 @@ export default function SiteDetail() {
           <h1 className="text-sm font-medium text-dark-300 uppercase font-mono tracking-widest">{site.domain}</h1>
           <div className="flex items-center gap-3 mt-2">
             <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${
-              site.enabled === false ? "bg-amber-500/10 text-amber-400" : statusColors[site.status] || "bg-dark-700 text-dark-200"
+              site.enabled === false ? "bg-warn-500/10 text-warn-400" : statusColors[site.status] || "bg-dark-700 text-dark-200"
             }`}>
               {site.enabled === false ? "disabled" : site.status}
             </span>
@@ -504,7 +504,7 @@ export default function SiteDetail() {
                 finally { setToggling(false); }
               }} className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${
                 site?.enabled !== false
-                  ? "bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
+                  ? "bg-warn-500/10 text-warn-400 hover:bg-warn-500/20"
                   : "bg-rust-500/10 text-rust-400 hover:bg-rust-500/20"
               }`}>
                 {toggling ? "..." : site?.enabled !== false ? "Disable" : "Enable"}
@@ -630,7 +630,7 @@ export default function SiteDetail() {
       </div>
       {/* Disabled banner */}
       {site.enabled === false && (
-        <div className="mb-4 px-4 py-3 rounded-lg text-sm bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center justify-between">
+        <div className="mb-4 px-4 py-3 rounded-lg text-sm bg-warn-500/10 text-warn-500 border border-warn-500/20 flex items-center justify-between">
           <span>This site is currently disabled. Visitors see a 503 maintenance page.</span>
           <button disabled={toggling} onClick={async () => {
             setToggling(true);
@@ -1321,7 +1321,7 @@ export default function SiteDetail() {
                 }}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${
                   site.fastcgi_cache
-                    ? "bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
+                    ? "bg-warn-500/10 text-warn-400 hover:bg-warn-500/20"
                     : "bg-rust-500 text-white hover:bg-rust-600"
                 }`}
               >
@@ -1395,7 +1395,7 @@ export default function SiteDetail() {
                 }}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${
                   site.redis_cache
-                    ? "bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
+                    ? "bg-warn-500/10 text-warn-400 hover:bg-warn-500/20"
                     : "bg-rust-500 text-white hover:bg-rust-600"
                 }`}
               >
@@ -1474,7 +1474,7 @@ export default function SiteDetail() {
                 }}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${
                   site.waf_enabled
-                    ? "bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
+                    ? "bg-warn-500/10 text-warn-400 hover:bg-warn-500/20"
                     : "bg-rust-500 text-white hover:bg-rust-600"
                 }`}
               >
@@ -1791,7 +1791,7 @@ export default function SiteDetail() {
                       {pendingConfirm.label}
                     </span>
                     <div className="flex items-center gap-2 shrink-0 ml-4">
-                      <button onClick={executeConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">
+                      <button onClick={executeConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">
                         Confirm
                       </button>
                       <button onClick={() => setPendingConfirm(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">

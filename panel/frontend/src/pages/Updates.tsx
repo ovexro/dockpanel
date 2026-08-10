@@ -335,7 +335,7 @@ export default function Updates() {
               <span className="text-xs text-warn-400 font-mono">Are you sure?</span>
               <button
                 onClick={handleReboot}
-                className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors"
+                className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors"
               >
                 Confirm
               </button>

@@ -609,7 +609,7 @@ export default function Dns() {
         <div className="mb-4 border border-danger-500/30 bg-danger-500/5 rounded-lg px-4 py-3 flex items-center justify-between">
           <span className="text-xs text-danger-400 font-mono">{pendingConfirm.label}</span>
           <div className="flex items-center gap-2 shrink-0 ml-4">
-            <button onClick={executeConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">Confirm</button>
+            <button onClick={executeConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">Confirm</button>
             <button onClick={() => setPendingConfirm(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
           </div>
         </div>
@@ -1289,7 +1289,7 @@ export default function Dns() {
                       <button
                         disabled={cfCachePurging}
                         onClick={() => setPendingConfirm({ type: "purge-everything", data: null, label: "Purge the ENTIRE Cloudflare cache for this zone?" })}
-                        className="px-3 py-1.5 bg-amber-500/10 text-amber-400 rounded-lg text-xs font-medium hover:bg-amber-500/20 disabled:opacity-50 transition-colors"
+                        className="px-3 py-1.5 bg-warn-500/10 text-warn-400 rounded-lg text-xs font-medium hover:bg-warn-500/20 disabled:opacity-50 transition-colors"
                       >
                         {cfCachePurging ? "Purging..." : "Purge Entire Cache"}
                       </button>
@@ -1355,7 +1355,7 @@ export default function Dns() {
                         onClick={() => updateCfSetting("development_mode", cfSettings.development_mode === "on" ? "off" : "on")}
                         className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 ${
                           cfSettings.development_mode === "on"
-                            ? "bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
+                            ? "bg-warn-500/10 text-warn-400 hover:bg-warn-500/20"
                             : "bg-dark-700 text-dark-200 hover:bg-dark-600"
                         }`}
                       >

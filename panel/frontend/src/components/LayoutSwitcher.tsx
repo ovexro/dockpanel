@@ -108,7 +108,7 @@ export default function LayoutSwitcher({ variant = "dark", compact = false }: Pr
               <div className={`text-xs mt-0.5 ${
                 l.id === current
                   ? isDark ? "text-dark-400" : "text-rust-500/70"
-                  : isDark ? "text-dark-500" : "text-dark-500"
+                  : isDark ? "text-dark-400" : "text-dark-400"
               }`}>{l.desc}</div>
             </button>
           ))}

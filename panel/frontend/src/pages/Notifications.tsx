@@ -137,7 +137,7 @@ export default function Notifications() {
       {notifs.length === 0 ? (
         <div className="text-center py-20">
           <svg
-            className="w-12 h-12 mx-auto text-dark-500 mb-4"
+            className="w-12 h-12 mx-auto text-dark-400 mb-4"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -150,7 +150,7 @@ export default function Notifications() {
             />
           </svg>
           <p className="text-dark-400 text-sm">No notifications yet</p>
-          <p className="text-dark-500 text-xs mt-1">
+          <p className="text-dark-400 text-xs mt-1">
             Alerts and system events will appear here
           </p>
         </div>
@@ -196,12 +196,12 @@ export default function Notifications() {
                   </div>
                   <p
                     className={`text-xs leading-relaxed ${
-                      n.read_at ? "text-dark-500" : "text-dark-300"
+                      n.read_at ? "text-dark-400" : "text-dark-300"
                     }`}
                   >
                     {n.message}
                   </p>
-                  <p className="text-[10px] text-dark-500 mt-1.5">
+                  <p className="text-[10px] text-dark-400 mt-1.5">
                     {timeAgo(n.created_at)}
                   </p>
                 </div>
@@ -210,7 +210,7 @@ export default function Notifications() {
                 {!n.read_at && (
                   <button
                     onClick={() => markRead(n.id)}
-                    className="p-1.5 text-dark-500 hover:text-dark-200 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                    className="p-1.5 text-dark-400 hover:text-dark-200 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
                     title="Mark as read"
                   >
                     <svg

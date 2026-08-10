@@ -208,7 +208,7 @@ export default function SecurityHardening() {
             {pendingConfirm.label}
           </span>
           <div className="flex items-center gap-2 shrink-0 ml-4">
-            <button onClick={executeConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">
+            <button onClick={executeConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">
               Confirm
             </button>
             <button onClick={() => setPendingConfirm(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">
@@ -260,7 +260,7 @@ export default function SecurityHardening() {
           <div className="col-span-full bg-dark-800 rounded-lg border border-dark-500 p-5">
             <p className="text-xs font-mono text-dark-400 mb-3 uppercase">Recent Critical Events</p>
             {auditLog.filter(e => e.severity === "critical" || e.severity === "warning").length === 0 ? (
-              <p className="text-sm text-dark-500">No critical events</p>
+              <p className="text-sm text-dark-400">No critical events</p>
             ) : (
               <div className="space-y-2">
                 {auditLog.filter(e => e.severity === "critical" || e.severity === "warning").slice(0, 10).map(e => (
@@ -268,7 +268,7 @@ export default function SecurityHardening() {
                     <span className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase ${severityColor(e.severity)}`}>{e.severity}</span>
                     <span className="text-dark-200 font-mono">{e.event_type}</span>
                     <span className="text-dark-400">{e.actor_email || "-"}</span>
-                    <span className="text-dark-500 ml-auto text-xs">{new Date(e.created_at).toLocaleString()}</span>
+                    <span className="text-dark-400 ml-auto text-xs">{new Date(e.created_at).toLocaleString()}</span>
                   </div>
                 ))}
               </div>
@@ -301,7 +301,7 @@ export default function SecurityHardening() {
                 </button>
               )}
             </div>
-            <div className="text-xs text-dark-500 space-y-1">
+            <div className="text-xs text-dark-400 space-y-1">
               <p>When locked: terminals disabled, registration blocked, non-admin logins blocked</p>
               <p>Auto-expires after 24 hours. Panic button also activates lockdown.</p>
             </div>
@@ -326,7 +326,7 @@ export default function SecurityHardening() {
             </thead>
             <tbody>
               {auditLog.map(e => (
-                <tr key={e.id} className="border-b border-dark-700 hover:bg-dark-750">
+                <tr key={e.id} className="border-b border-dark-700 hover:bg-dark-700">
                   <td className="px-4 py-2.5">
                     <span className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase ${severityColor(e.severity)}`}>{e.severity}</span>
                   </td>
@@ -337,11 +337,11 @@ export default function SecurityHardening() {
                     {e.geo_country ? `${e.geo_country}${e.geo_city ? `, ${e.geo_city}` : ""}` : "-"}
                   </td>
                   <td className="px-4 py-2.5 text-dark-400 text-xs max-w-[200px] truncate">{e.details || "-"}</td>
-                  <td className="px-4 py-2.5 text-dark-500 text-xs whitespace-nowrap">{new Date(e.created_at).toLocaleString()}</td>
+                  <td className="px-4 py-2.5 text-dark-400 text-xs whitespace-nowrap">{new Date(e.created_at).toLocaleString()}</td>
                 </tr>
               ))}
               {auditLog.length === 0 && (
-                <tr><td colSpan={7} className="px-4 py-8 text-center text-dark-500">No audit events yet</td></tr>
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-dark-400">No audit events yet</td></tr>
               )}
             </tbody>
           </table>
@@ -361,14 +361,14 @@ export default function SecurityHardening() {
             </thead>
             <tbody>
               {recordings.map((r, i) => (
-                <tr key={i} className="border-b border-dark-700 hover:bg-dark-750">
+                <tr key={i} className="border-b border-dark-700 hover:bg-dark-700">
                   <td className="px-4 py-2.5 font-mono text-dark-200">{r.filename}</td>
                   <td className="px-4 py-2.5 text-dark-400">{(r.size_bytes / 1024).toFixed(1)} KB</td>
-                  <td className="px-4 py-2.5 text-dark-500 text-xs">{r.created || "-"}</td>
+                  <td className="px-4 py-2.5 text-dark-400 text-xs">{r.created || "-"}</td>
                 </tr>
               ))}
               {recordings.length === 0 && (
-                <tr><td colSpan={3} className="px-4 py-8 text-center text-dark-500">No recordings yet. Recordings are created when terminal sessions start.</td></tr>
+                <tr><td colSpan={3} className="px-4 py-8 text-center text-dark-400">No recordings yet. Recordings are created when terminal sessions start.</td></tr>
               )}
             </tbody>
           </table>
@@ -404,7 +404,7 @@ export default function SecurityHardening() {
                   </tr>
                 ))}
                 {pendingUsers.length === 0 && (
-                  <tr><td colSpan={3} className="px-4 py-8 text-center text-dark-500">No pending approvals</td></tr>
+                  <tr><td colSpan={3} className="px-4 py-8 text-center text-dark-400">No pending approvals</td></tr>
                 )}
               </tbody>
             </table>

@@ -766,7 +766,7 @@ function SiteLogsContent() {
         <div className="mx-4 sm:mx-6 mt-4 border border-danger-500/30 bg-danger-500/5 rounded-lg px-4 py-3 flex items-center justify-between">
           <span className="text-xs text-danger-400 font-mono">Clear log file? This cannot be undone: {pendingTruncate}</span>
           <div className="flex items-center gap-2 shrink-0 ml-4">
-            <button onClick={executeTruncate} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">Confirm</button>
+            <button onClick={executeTruncate} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">Confirm</button>
             <button onClick={() => setPendingTruncate(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
           </div>
         </div>

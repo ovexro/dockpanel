@@ -496,7 +496,7 @@ function SqlBrowser({
                   )}
                   Execute
                 </button>
-                <span className="text-xs text-dark-500">Ctrl+Enter</span>
+                <span className="text-xs text-dark-400">Ctrl+Enter</span>
               </div>
               {result && (
                 <span className="text-xs text-dark-300">
@@ -552,7 +552,7 @@ function SqlBrowser({
                       key={i}
                       className="hover:bg-dark-700/30 transition-colors"
                     >
-                      <td className="px-3 py-1.5 text-[10px] text-dark-500 font-mono">
+                      <td className="px-3 py-1.5 text-[10px] text-dark-400 font-mono">
                         {i + 1}
                       </td>
                       {row.map((val, j) => (
@@ -562,7 +562,7 @@ function SqlBrowser({
                           title={val}
                         >
                           {val === "" || val === "\\N" ? (
-                            <span className="text-dark-500 italic text-xs">
+                            <span className="text-dark-400 italic text-xs">
                               NULL
                             </span>
                           ) : (
@@ -604,7 +604,7 @@ function SqlBrowser({
           {!result && !queryError && !queryLoading && (
             <div className="bg-dark-800 rounded-lg border border-dark-500 p-12 text-center flex-1 flex flex-col items-center justify-center">
               <svg
-                className="w-10 h-10 text-dark-500 mb-3"
+                className="w-10 h-10 text-dark-400 mb-3"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -619,7 +619,7 @@ function SqlBrowser({
               <p className="text-dark-300 text-sm">
                 Select a table or write a query
               </p>
-              <p className="text-dark-500 text-xs mt-1">
+              <p className="text-dark-400 text-xs mt-1">
                 Ctrl+Up/Down to navigate query history
               </p>
             </div>

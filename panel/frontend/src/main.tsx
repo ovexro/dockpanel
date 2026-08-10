@@ -10,7 +10,17 @@ import Setup from "./pages/Setup";
 import Dashboard from "./pages/Dashboard";
 import "./index.css";
 
-// Theme initialization — runs before first paint, migrates old values
+// Theme + layout attributes. This is a `<script type="module">` (index.html), so
+// it is DEFERRED — public/theme-init.js, a render-blocking classic script, has
+// already set data-theme and data-color-scheme before first paint. The writes
+// below are an idempotent backstop for those two, and the only setter for
+// data-layout.
+//
+// It deliberately does NOT persist the resolved theme. Writing dp-theme here on
+// every load turned "the user never chose a theme" into "the user chose
+// midnight" after a single page view, which is why no prefers-color-scheme
+// default could ever be added. Persistence belongs to the user-initiated path
+// only (applyTheme in hooks/useLayoutState.ts).
 (() => {
   const stored = localStorage.getItem("dp-theme");
   let theme = stored || "midnight";
@@ -20,7 +30,6 @@ import "./index.css";
   if (theme === "nexus-dark") theme = "clean-dark";
   // Layout initialization
   const layout = localStorage.getItem("dp-layout") || "command";
-  localStorage.setItem("dp-theme", theme);
   document.documentElement.setAttribute("data-theme", theme);
   document.documentElement.setAttribute("data-layout", layout);
   document.documentElement.setAttribute("data-color-scheme", (theme === "clean" || theme === "arctic") ? "light" : "dark");

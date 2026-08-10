@@ -709,7 +709,7 @@ export default function Security() {
             {pendingConfirm.label}
           </span>
           <div className="flex items-center gap-2 shrink-0 ml-4">
-            <button onClick={executeConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">
+            <button onClick={executeConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">
               Confirm
             </button>
             <button onClick={() => setPendingConfirm(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">
@@ -1669,7 +1669,7 @@ export default function Security() {
               </p>
             )}
 
-            <div className="text-xs text-dark-500 space-y-1">
+            <div className="text-xs text-dark-400 space-y-1">
               <p>When locked: terminals disabled, registration blocked, non-admin logins blocked.</p>
               <p>Auto-expires after 24 hours. Panic button also activates lockdown.</p>
             </div>
@@ -1693,10 +1693,10 @@ export default function Security() {
                       <td className="px-4 py-2 text-dark-300">{e.actor_email || "-"}</td>
                       <td className="px-4 py-2 text-dark-400 font-mono text-xs">{e.actor_ip || "-"}</td>
                       <td className="px-4 py-2 text-dark-400 text-xs">{e.geo_country || "-"}</td>
-                      <td className="px-4 py-2 text-dark-500 text-xs whitespace-nowrap">{new Date(e.created_at).toLocaleString()}</td>
+                      <td className="px-4 py-2 text-dark-400 text-xs whitespace-nowrap">{new Date(e.created_at).toLocaleString()}</td>
                     </tr>
                   ))}
-                  {auditLog.length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-dark-500">No audit events yet</td></tr>}
+                  {auditLog.length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-dark-400">No audit events yet</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -1720,10 +1720,10 @@ export default function Security() {
                 <tr key={i} className="border-b border-dark-700 hover:bg-dark-700">
                   <td className="px-4 py-2 font-mono text-dark-200">{r.filename}</td>
                   <td className="px-4 py-2 text-dark-400">{(r.size_bytes / 1024).toFixed(1)} KB</td>
-                  <td className="px-4 py-2 text-dark-500 text-xs">{r.created || "-"}</td>
+                  <td className="px-4 py-2 text-dark-400 text-xs">{r.created || "-"}</td>
                 </tr>
               ))}
-              {recordings.length === 0 && <tr><td colSpan={3} className="px-4 py-8 text-center text-dark-500">No recordings yet</td></tr>}
+              {recordings.length === 0 && <tr><td colSpan={3} className="px-4 py-8 text-center text-dark-400">No recordings yet</td></tr>}
             </tbody>
           </table>
         </div>
@@ -1749,7 +1749,7 @@ export default function Security() {
                     </td>
                   </tr>
                 ))}
-                {pendingUsers.length === 0 && <tr><td colSpan={3} className="px-4 py-8 text-center text-dark-500">No pending approvals</td></tr>}
+                {pendingUsers.length === 0 && <tr><td colSpan={3} className="px-4 py-8 text-center text-dark-400">No pending approvals</td></tr>}
               </tbody>
             </table>
           </div>
@@ -1785,7 +1785,7 @@ export default function Security() {
                     </td>
                   </tr>
                 ))}
-                {unverifiedUsers.length === 0 && <tr><td colSpan={4} className="px-4 py-8 text-center text-dark-500">No accounts blocked by email verification</td></tr>}
+                {unverifiedUsers.length === 0 && <tr><td colSpan={4} className="px-4 py-8 text-center text-dark-400">No accounts blocked by email verification</td></tr>}
               </tbody>
             </table>
           </div>

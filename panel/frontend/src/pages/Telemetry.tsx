@@ -175,7 +175,7 @@ function FieldDiffTable({ fields }: { fields: FieldDiff[] }) {
     <div className="overflow-x-auto rounded border border-dark-700">
       <table className="w-full text-xs">
         <thead>
-          <tr className="text-dark-500 bg-dark-800/50">
+          <tr className="text-dark-400 bg-dark-800/50">
             <th className="text-left font-normal px-2 py-1">Field</th>
             <th className="text-left font-normal px-2 py-1">Reference</th>
             <th className="text-left font-normal px-2 py-1">This server</th>
@@ -206,22 +206,22 @@ function safeHttpUrl(url: string | undefined): string | null {
 }
 
 const EVENT_TYPE_COLORS: Record<string, string> = {
-  panic: "bg-red-500/20 text-red-400 border-red-500/30",
-  error: "bg-red-500/10 text-red-400 border-red-500/20",
-  warning: "bg-amber-500/10 text-amber-400 border-amber-500/20",
-  info: "bg-blue-500/10 text-blue-400 border-blue-500/20",
+  panic: "bg-danger-500/20 text-danger-400 border-danger-500/30",
+  error: "bg-danger-500/10 text-danger-400 border-danger-500/20",
+  warning: "bg-warn-500/10 text-warn-400 border-warn-500/20",
+  info: "bg-accent-500/10 text-accent-400 border-accent-500/20",
 };
 
 const CATEGORY_COLORS: Record<string, string> = {
-  agent: "text-purple-400",
-  api: "text-blue-400",
-  database: "text-emerald-400",
-  ssl: "text-yellow-400",
-  docker: "text-cyan-400",
-  mail: "text-pink-400",
-  security: "text-red-400",
-  nginx: "text-green-400",
-  backup: "text-orange-400",
+  agent: "text-dark-300",
+  api: "text-dark-300",
+  database: "text-dark-300",
+  ssl: "text-dark-300",
+  docker: "text-dark-300",
+  mail: "text-dark-300",
+  security: "text-dark-300",
+  nginx: "text-dark-300",
+  backup: "text-dark-300",
   general: "text-dark-300",
 };
 
@@ -673,8 +673,8 @@ export default function Telemetry() {
       el: (
         <div key="panel-update" className={`rounded-lg border px-3 py-2 text-xs ${
           updateState.last_panel_update.ok
-            ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
-            : "bg-red-500/10 border-red-500/30 text-red-300"
+            ? "bg-rust-500/10 border-rust-500/30 text-rust-400"
+            : "bg-danger-500/10 border-danger-500/30 text-danger-400"
         }`}>
           <div className="font-medium">
             {updateState.last_panel_update.ok
@@ -682,7 +682,7 @@ export default function Telemetry() {
               : `Last update FAILED at stage "${updateState.last_panel_update.stage}"`}
           </div>
           <div className="mt-1 text-dark-300 break-words">{updateState.last_panel_update.detail}</div>
-          <div className="mt-1 font-mono text-[10px] text-dark-500">
+          <div className="mt-1 font-mono text-[10px] text-dark-400">
             {new Date(updateState.last_panel_update.finished_at).toLocaleString()}
           </div>
         </div>
@@ -693,8 +693,8 @@ export default function Telemetry() {
       el: (
         <div key="restore" className={`rounded-lg border px-3 py-2 text-xs ${
           updateState.last_restore.ok
-            ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
-            : "bg-red-500/10 border-red-500/30 text-red-300"
+            ? "bg-rust-500/10 border-rust-500/30 text-rust-400"
+            : "bg-danger-500/10 border-danger-500/30 text-danger-400"
         }`}>
           <div className="font-medium">
             {updateState.last_restore.ok
@@ -723,7 +723,7 @@ export default function Telemetry() {
               named above, or finish putting the previous binaries back, before starting it.
             </div>
           )}
-          <div className="mt-1 font-mono text-[10px] text-dark-500">
+          <div className="mt-1 font-mono text-[10px] text-dark-400">
             {updateState.last_restore.snapshot_id} · {new Date(updateState.last_restore.finished_at).toLocaleString()}
           </div>
         </div>
@@ -790,7 +790,7 @@ export default function Telemetry() {
           </div>
           <div className="bg-dark-800 border border-dark-600 rounded-lg p-3">
             <div className="text-xs text-dark-400 mb-1">Unsent</div>
-            <div className="text-xl font-mono font-bold text-amber-400">{stats.unsent}</div>
+            <div className="text-xl font-mono font-bold text-warn-400">{stats.unsent}</div>
           </div>
           <div className="bg-dark-800 border border-dark-600 rounded-lg p-3">
             <div className="text-xs text-dark-400 mb-1">Last 24h</div>
@@ -798,7 +798,7 @@ export default function Telemetry() {
           </div>
           <div className="bg-dark-800 border border-dark-600 rounded-lg p-3">
             <div className="text-xs text-dark-400 mb-1">Status</div>
-            <div className={`text-sm font-medium ${enabled ? "text-emerald-400" : "text-dark-400"}`}>
+            <div className={`text-sm font-medium ${enabled ? "text-rust-400" : "text-dark-400"}`}>
               {enabled ? "Sending enabled" : "Local only"}
             </div>
           </div>
@@ -840,7 +840,7 @@ export default function Telemetry() {
               Clear &gt; 30 days
             </button>
             <button onClick={() => clearEvents()} disabled={clearing}
-              className="px-3 py-1.5 text-xs text-red-400 hover:text-red-300 border border-red-500/20 rounded-lg transition-colors disabled:opacity-50">
+              className="px-3 py-1.5 text-xs text-danger-400 hover:bg-danger-500/10 border border-danger-500/20 rounded-lg transition-colors disabled:opacity-50">
               Clear All
             </button>
           </div>
@@ -852,7 +852,7 @@ export default function Telemetry() {
                 {pendingClear === "all" ? "Clear ALL telemetry events?" : `Clear events older than ${pendingClear} days?`}
               </span>
               <div className="flex items-center gap-2 shrink-0 ml-4">
-                <button onClick={executeClear} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">Confirm</button>
+                <button onClick={executeClear} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">Confirm</button>
                 <button onClick={() => setPendingClear(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
               </div>
             </div>
@@ -879,7 +879,7 @@ export default function Telemetry() {
                   {events.map(ev => (
                     <Fragment key={ev.id}>
                       <tr onClick={() => setExpandedEvent(expandedEvent === ev.id ? null : ev.id)}
-                        className="border-b border-dark-700 hover:bg-dark-750 cursor-pointer transition-colors">
+                        className="border-b border-dark-700 hover:bg-dark-700 cursor-pointer transition-colors">
                         <td className="px-3 py-2">
                           <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium border ${EVENT_TYPE_COLORS[ev.event_type] || "text-dark-300"}`}>
                             {ev.event_type}
@@ -891,16 +891,16 @@ export default function Telemetry() {
                         <td className="px-3 py-2 text-dark-200 max-w-xs truncate">{ev.message}</td>
                         <td className="px-3 py-2 hidden sm:table-cell">
                           {ev.sent_at ? (
-                            <span className="text-emerald-400 text-[10px]">Sent</span>
+                            <span className="text-rust-400 text-[10px]">Sent</span>
                           ) : (
-                            <span className="text-amber-400 text-[10px]">Pending</span>
+                            <span className="text-warn-400 text-[10px]">Pending</span>
                           )}
                         </td>
                         <td className="px-3 py-2 text-dark-400 whitespace-nowrap">{formatDate(ev.created_at)}</td>
                       </tr>
                       {expandedEvent === ev.id && (
                         <tr>
-                          <td colSpan={5} className="px-4 py-3 bg-dark-850">
+                          <td colSpan={5} className="px-4 py-3 bg-dark-900">
                             <pre className="text-[10px] font-mono text-dark-300 whitespace-pre-wrap overflow-x-auto max-h-48">
                               {JSON.stringify(ev.context, null, 2)}
                             </pre>
@@ -967,7 +967,7 @@ export default function Telemetry() {
               </div>
               <div>
                 <div className="text-xs text-dark-400 mb-1">Latest Available</div>
-                <div className={`text-sm font-mono ${updateAvailable ? "text-rust-400" : "text-emerald-400"}`}>
+                <div className={`text-sm font-mono ${updateAvailable ? "text-warn-400" : "text-rust-400"}`}>
                   {updateAvailable ? `v${config.update_available_version}` : "Up to date"}
                 </div>
               </div>
@@ -1013,7 +1013,7 @@ export default function Telemetry() {
                 <button key={ch} disabled={savingChannel} onClick={() => changeChannel(ch)}
                   className={`px-3 py-2 rounded-lg text-xs font-medium border transition-colors ${
                     (updateState?.channel || "stable") === ch
-                      ? "bg-rust-500/20 border-rust-500/40 text-rust-200"
+                      ? "bg-rust-500/20 border-rust-500/40 text-rust-300"
                       : "bg-dark-700 border-dark-600 text-dark-300 hover:bg-dark-600 hover:text-dark-100"
                   } disabled:opacity-50`}>
                   {ch === "stable" ? "Stable" : ch === "candidate" ? "Candidate (RC)" : "Hold"}
@@ -1135,26 +1135,26 @@ export default function Telemetry() {
                             <span className="text-dark-400"> → v{s.to_version}</span>
                           )}
                           {s.rolled_back_at && (
-                            <span className="text-amber-400 ml-2">(rolled back)</span>
+                            <span className="text-warn-400 ml-2">(rolled back)</span>
                           )}
                           {isAbandoned && (
-                            <span className="text-dark-500 ml-2">(abandoned)</span>
+                            <span className="text-dark-400 ml-2">(abandoned)</span>
                           )}
                         </div>
                         <div className="text-xs text-dark-400 mt-0.5 flex items-center gap-3">
                           <span>{formatDate(s.created_at)}</span>
                           <span>{(s.size_bytes / 1024 / 1024).toFixed(1)} MB</span>
                           {s.trigger.startsWith("pre-update:") && (
-                            <span className="font-mono text-dark-500">pre-update</span>
+                            <span className="font-mono text-dark-400">pre-update</span>
                           )}
                           {s.trigger === "manual" && (
-                            <span className="font-mono text-dark-500">manual</span>
+                            <span className="font-mono text-dark-400">manual</span>
                           )}
                         </div>
                       </div>
                       {isRollback ? (
                         <Fragment>
-                          <span className="text-xs text-amber-400">
+                          <span className="text-xs text-warn-400">
                             Destructive — the database is reverted to this snapshot. Anything
                             created since (including tables added by a newer version) is removed.
                             A copy of the current database is saved first.
@@ -1176,7 +1176,7 @@ export default function Telemetry() {
                             Roll back
                           </button>
                           <button onClick={() => deleteSnapshot(s.id)}
-                            className="px-2 py-1 text-dark-500 hover:text-danger-400 text-xs">
+                            className="px-2 py-1 text-dark-400 hover:text-danger-400 text-xs">
                             ✕
                           </button>
                         </Fragment>
@@ -1186,7 +1186,7 @@ export default function Telemetry() {
                 })}
               </div>
             )}
-            <div className="text-xs text-dark-500 mt-3">
+            <div className="text-xs text-dark-400 mt-3">
               Retained 7 days (min 3 always kept). Stored under /var/backups/dockpanel/snapshots/.
             </div>
           </div>
@@ -1225,9 +1225,9 @@ export default function Telemetry() {
                   {fleetRuns.slice(0, 5).map(r => {
                     const outcomeColor =
                       r.outcome === "success"
-                        ? "text-emerald-400"
+                        ? "text-rust-400"
                         : r.outcome === "partial"
-                        ? "text-amber-400"
+                        ? "text-warn-400"
                         : r.outcome === "halted"
                         ? "text-danger-400"
                         : "text-dark-300";
@@ -1270,7 +1270,7 @@ export default function Telemetry() {
                             })}
                         {Array.isArray(r.progress) &&
                           r.progress.some(p => p.status === "skipped") && (
-                            <div className="mt-1 text-amber-400">
+                            <div className="mt-1 text-warn-400">
                               {r.progress.filter(p => p.status === "skipped").length} server(s)
                               skipped — the run halted on the first failure
                             </div>
@@ -1319,11 +1319,11 @@ export default function Telemetry() {
                       {driftReport.note ? (
                         <span className="text-dark-400">{driftReport.note}</span>
                       ) : driftReport.total_drifted_servers === 0 ? (
-                        <span className="text-emerald-400">
+                        <span className="text-rust-400">
                           All {driftReport.servers_compared} server(s) match {driftReport.reference.name}.
                         </span>
                       ) : (
-                        <span className="text-rust-300">
+                        <span className="text-warn-400">
                           {driftReport.total_drifted_servers} of {driftReport.servers_compared} server(s)
                           {" "}diverge from {driftReport.reference.name}.
                         </span>
@@ -1337,26 +1337,26 @@ export default function Telemetry() {
                           <button type="button" onClick={() => setDriftEntityOpen(open ? null : ent.entity)}
                             className="w-full flex items-center justify-between px-3 py-2 text-left">
                             <span className="text-xs font-medium text-dark-200">
-                              <span className="text-dark-500 mr-1">{open ? "▾" : "▸"}</span>{ent.label}
+                              <span className="text-dark-400 mr-1">{open ? "▾" : "▸"}</span>{ent.label}
                             </span>
-                            <span className={`text-xs font-medium ${ent.drift_count > 0 ? "text-rust-400" : "text-emerald-400"}`}>
+                            <span className={`text-xs font-medium ${ent.drift_count > 0 ? "text-warn-400" : "text-rust-400"}`}>
                               {ent.drift_count > 0 ? `${ent.drift_count} drifted` : "in sync"}
                             </span>
                           </button>
                           {open && (
                             <div className="px-3 pb-3 space-y-3 border-t border-dark-700 pt-2">
                               {ent.servers.length === 0 && (
-                                <div className="text-xs text-dark-500">No other servers to compare.</div>
+                                <div className="text-xs text-dark-400">No other servers to compare.</div>
                               )}
                               {ent.servers.map(sv => (
                                 <div key={sv.server_id} className="text-xs">
                                   <div className="flex items-center gap-2 mb-1">
                                     <span className="font-medium text-dark-200">{sv.name}</span>
-                                    <span className={sv.in_sync ? "text-emerald-400" : "text-rust-400"}>
+                                    <span className={sv.in_sync ? "text-rust-400" : "text-warn-400"}>
                                       {sv.in_sync ? "in sync" : "drift"}
                                     </span>
                                     {sv.status && sv.status !== "online" && (
-                                      <span className="text-dark-500">({sv.status})</span>
+                                      <span className="text-dark-400">({sv.status})</span>
                                     )}
                                   </div>
                                   {sv.note && <div className="text-dark-400 mb-1">{sv.note}</div>}
@@ -1367,9 +1367,9 @@ export default function Telemetry() {
 
                                   {sv.only_reference && sv.only_reference.length > 0 && (
                                     <div className="mb-1">
-                                      <span className="text-dark-500">Missing here: </span>
+                                      <span className="text-dark-400">Missing here: </span>
                                       {sv.only_reference.map(id => (
-                                        <span key={id} className="inline-block bg-amber-500/10 text-amber-300 rounded px-1.5 py-0.5 mr-1 mb-1 font-mono break-all">
+                                        <span key={id} className="inline-block bg-warn-500/10 text-warn-500 rounded px-1.5 py-0.5 mr-1 mb-1 font-mono break-all">
                                           {id}
                                         </span>
                                       ))}
@@ -1377,9 +1377,9 @@ export default function Telemetry() {
                                   )}
                                   {sv.only_here && sv.only_here.length > 0 && (
                                     <div className="mb-1">
-                                      <span className="text-dark-500">Only here: </span>
+                                      <span className="text-dark-400">Only here: </span>
                                       {sv.only_here.map(id => (
-                                        <span key={id} className="inline-block bg-blue-500/10 text-blue-300 rounded px-1.5 py-0.5 mr-1 mb-1 font-mono break-all">
+                                        <span key={id} className="inline-block bg-accent-500/10 text-accent-500 rounded px-1.5 py-0.5 mr-1 mb-1 font-mono break-all">
                                           {id}
                                         </span>
                                       ))}
@@ -1400,7 +1400,7 @@ export default function Telemetry() {
                                       )}
                                       <span>{sv.coverage.destinations} destination(s)</span>
                                       {sv.reference_coverage && (
-                                        <span className="text-dark-500">
+                                        <span className="text-dark-400">
                                           reference: {sv.reference_coverage.backed_up}/{sv.reference_coverage.total_sites}
                                         </span>
                                       )}
@@ -1445,18 +1445,18 @@ export default function Telemetry() {
                     {updateState.last_log_line}
                   </pre>
                 )}
-                <div className="text-xs text-dark-500 mt-3">
+                <div className="text-xs text-dark-400 mt-3">
                   Services may briefly be unavailable. The UI may also disconnect while binaries swap; refresh once it returns.
                 </div>
               </Fragment>
             )}
             {updateState.state === "succeeded" && (
-              <div className="text-sm text-emerald-300 mb-3">
+              <div className="text-sm text-rust-400 mb-3">
                 v{updateState.from_version} → v{updateState.to_version}
               </div>
             )}
             {updateState.state === "rolled_back" && (
-              <div className="text-sm text-amber-300 mb-3">
+              <div className="text-sm text-warn-500 mb-3">
                 Health check failed; rolled back to v{updateState.attempted_version
                   ? config.current_version
                   : "previous"}

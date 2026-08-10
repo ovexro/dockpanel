@@ -85,7 +85,7 @@ function Confirm({ label, onConfirm, onCancel }: { label: string; onConfirm: () 
     <div className="px-4 py-3 rounded-lg border border-danger-500/30 bg-danger-500/5 flex items-center justify-between">
       <span className="text-xs font-mono text-danger-400">{label}</span>
       <div className="flex items-center gap-2 shrink-0 ml-4">
-        <button onClick={onConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-400 transition-colors">
+        <button onClick={onConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">
           Confirm
         </button>
         <button onClick={onCancel} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">

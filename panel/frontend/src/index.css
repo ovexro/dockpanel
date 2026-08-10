@@ -6,27 +6,31 @@
    ═══════════════════════════════════════════════════════ */
 
 @theme {
-  /* Harmonized green — darkened for WCAG AA contrast with white text */
+  /* Harmonized green — 500 and 600 clear WCAG AA against white text */
   --color-rust-50:  #f0fdf6;
   --color-rust-100: #d6fce4;
   --color-rust-200: #a8f8c4;
   --color-rust-300: #46ec83;
   --color-rust-400: #22c55e;
-  --color-rust-500: #16a34a;
-  --color-rust-600: #16a34a;
-  --color-rust-700: #047857;
-  --color-rust-800: #065f46;
-  --color-rust-900: #064e3b;
+  --color-rust-500: #15803d;
+  --color-rust-600: #166534;
+  --color-rust-700: #14532d;
+  --color-rust-800: #0b411f;
+  --color-rust-900: #093117;
 
   /* Harmonized amber — matched to green at S:71 L:45 / S:81 L:60 */
   --color-warn-400: #ecaf46;
   --color-warn-500: #c48821;
   --color-warn-600: #a37019;
 
-  /* Harmonized red — matched to green at S:71 L:45 / S:81 L:60 */
+  /* Harmonized red — matched to green at S:71 L:45 / S:81 L:60.
+     300 and 700 are hover partners of 400 and 600; both were consumed while
+     defined nowhere, so those 19 call sites emitted no colour at all. */
+  --color-danger-300: #f36f6f;
   --color-danger-400: #ec4646;
   --color-danger-500: #c42121;
   --color-danger-600: #a31b1b;
+  --color-danger-700: #821515;
 
   /* Interactive accent — buttons, links, focus rings */
   --color-accent-50:  #eef2ff;
@@ -86,12 +90,28 @@ body {
   background-image: none;
 }
 
+/* The data-color-scheme attribute has had four writers and no reader since it
+   was introduced. Undeclared, the used value is "light", so on the four dark
+   themes every UA-painted control — autofill, date pickers, native selects,
+   checkboxes, Firefox scrollbars — rendered light-scheme against a dark form.
+   Do NOT add a <meta name="color-scheme">: it would fight the attribute. */
+:root[data-color-scheme="light"] {
+  color-scheme: light;
+}
+:root[data-color-scheme="dark"] {
+  color-scheme: dark;
+}
+
 
 /* ═══════════════════════════════════════════════════════
    THEME: MIDNIGHT — Deep navy, electric blue, modern SaaS
    ═══════════════════════════════════════════════════════ */
 
 [data-theme="midnight"] {
+  /* Status red — the base ramp is tuned for terminal's near-black ground and
+     lands at 4.33 on this theme's card, under AA on every danger ink site */
+  --color-danger-400: #f36f6f;
+
   /* Navy surfaces */
   --color-dark-950: #050a18;
   --color-dark-900: #0a1628;
@@ -105,17 +125,17 @@ body {
   --color-dark-100: #dae6f4;
   --color-dark-50:  #f0f5fb;
 
-  /* Electric blue accent — darkened for WCAG AA contrast with white text */
+  /* Electric blue accent — 500 and 600 clear WCAG AA against white text */
   --color-rust-50:  #eff6ff;
   --color-rust-100: #dbeafe;
   --color-rust-200: #bfdbfe;
   --color-rust-300: #93c5fd;
-  --color-rust-400: #3b82f6;
+  --color-rust-400: #5b9bf8;
   --color-rust-500: #2563eb;
-  --color-rust-600: #2563eb;
-  --color-rust-700: #1d4ed8;
-  --color-rust-800: #1e40af;
-  --color-rust-900: #1e3a8a;
+  --color-rust-600: #1d4ed8;
+  --color-rust-700: #1e40af;
+  --color-rust-800: #1e3a8a;
+  --color-rust-900: #172554;
 
   /* Violet accent */
   --color-accent-50:  #f5f3ff;
@@ -168,44 +188,51 @@ body {
   --color-dark-700: #dce3ed;
   --color-dark-600: #c3cdd9;
   --color-dark-500: #8d9bb0;
-  --color-dark-400: #5f7089;
+  --color-dark-400: #5a6b82;
   --color-dark-300: #3e5068;
   --color-dark-200: #2a3a50;
   --color-dark-100: #172030;
   --color-dark-50:  #0b1220;
 
-  /* Teal accent */
+  /* Teal accent — tuned for ink on a white ground, so the ramp runs dark.
+     The 300 step is deliberately DARKER than 400: it is the hover partner of
+     the 400 step at 42 of 50 sites, and on a light ground a hover must darken.
+     Every step below is measured against #ffffff, the page and the dark-800
+     card; the floors are 4.5 for text and for white-on-fill, 3.0 for borders. */
   --color-rust-50:  #f0fdfa;
   --color-rust-100: #ccfbf1;
   --color-rust-200: #99f6e4;
-  --color-rust-300: #5eead4;
-  --color-rust-400: #2dd4bf;
-  --color-rust-500: #0d9488;
-  --color-rust-600: #0f766e;
-  --color-rust-700: #115e59;
+  --color-rust-300: #0a564f;
+  --color-rust-400: #0c6b63;
+  --color-rust-500: #0d7970;
+  --color-rust-600: #0b655e;
+  --color-rust-700: #09524c;
   --color-rust-800: #134e4a;
   --color-rust-900: #042f2e;
 
-  /* Sky accent */
+  /* Sky accent — same treatment, same reason */
   --color-accent-50:  #f0f9ff;
   --color-accent-100: #e0f2fe;
   --color-accent-200: #bae6fd;
-  --color-accent-300: #7dd3fc;
-  --color-accent-400: #38bdf8;
-  --color-accent-500: #0ea5e9;
-  --color-accent-600: #0284c7;
-  --color-accent-700: #0369a1;
-  --color-accent-800: #075985;
-  --color-accent-900: #0c4a6e;
+  --color-accent-300: #055176;
+  --color-accent-400: #066594;
+  --color-accent-500: #076ea1;
+  --color-accent-600: #065d88;
+  --color-accent-700: #054c70;
+  --color-accent-800: #04405e;
+  --color-accent-900: #033249;
 
-  /* Adjusted status colors for light bg */
-  --color-warn-400: #d97706;
+  /* Adjusted status colors for light bg — 300 and 700 run DARKER than the
+     steps they hover, for the same reason the rust and accent ramps do. */
+  --color-warn-400: #a14a08;
   --color-warn-500: #b45309;
   --color-warn-600: #92400e;
 
-  --color-danger-400: #dc2626;
+  --color-danger-300: #7f1d1d;
+  --color-danger-400: #a81919;
   --color-danger-500: #b91c1c;
   --color-danger-600: #991b1b;
+  --color-danger-700: #661414;
 
   /* Sans-serif typography */
   --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -230,12 +257,38 @@ body {
 }
 
 [data-theme="arctic"] .logo-icon-glow {
-  box-shadow: 0 2px 8px rgba(13, 148, 136, 0.15), 0 1px 3px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 2px 8px rgba(13, 121, 112, 0.15), 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
 [data-theme="arctic"] ::-webkit-scrollbar-track {
   background: var(--color-dark-900);
   border-left: 1px solid var(--color-dark-600);
+}
+
+/* A tint darkens the ground under its own label. The retuned 400 step carries
+   the 5, 10 and 15 percent chips on its own; past that the label needs the
+   darker step. These are the only substring overrides in the arctic block and
+   the pin suite counts them, so the number cannot grow unnoticed. */
+[data-theme="arctic"] [class*="bg-rust-500/20"] [class*="text-rust-"],
+[data-theme="arctic"] [class*="bg-rust-500/25"] [class*="text-rust-"],
+[data-theme="arctic"] [class*="bg-rust-500/30"] [class*="text-rust-"] {
+  color: var(--color-rust-300);
+}
+[data-theme="arctic"] [class*="bg-accent-500/20"] [class*="text-accent-"],
+[data-theme="arctic"] [class*="bg-accent-500/30"] [class*="text-accent-"] {
+  color: var(--color-accent-300);
+}
+
+/* No token value can rescue an alpha border on a light ground: a 20 percent
+   tint of pure black over white tops out at 1.61:1, so the 3.0 non-text floor
+   is structurally unreachable. Drop to the solid token. */
+[data-theme="arctic"] [class*="border-rust-500"] {
+  border-color: var(--color-rust-500);
+}
+[data-theme="arctic"] [class*="border-accent-500"],
+[data-theme="arctic"] [class*="border-accent-400"],
+[data-theme="arctic"] [class*="border-accent-200"] {
+  border-color: var(--color-accent-500);
 }
 
 
@@ -244,6 +297,9 @@ body {
    ═══════════════════════════════════════════════════════ */
 
 [data-theme="ember"] {
+  /* Status red — the base ramp lands at 4.00 on this theme's warm stone card */
+  --color-danger-400: #f36f6f;
+
   /* Warm stone surfaces */
   --color-dark-950: #100e0d;
   --color-dark-900: #1c1917;
@@ -257,17 +313,19 @@ body {
   --color-dark-100: #ebe2d9;
   --color-dark-50:  #faf7f5;
 
-  /* Orange accent — darkened for WCAG AA contrast with white text */
+  /* Orange accent — the 500 fill keeps ember's signature and takes DARK ink
+     (5.41:1); no orange clears 4.5 against white above L* 49.6. The 600/700
+     hover steps darken and hand the text back to white. */
   --color-rust-50:  #fff7ed;
   --color-rust-100: #ffedd5;
   --color-rust-200: #fed7aa;
   --color-rust-300: #fdba74;
   --color-rust-400: #fb923c;
   --color-rust-500: #ea580c;
-  --color-rust-600: #ea580c;
-  --color-rust-700: #c2410c;
-  --color-rust-800: #9a3412;
-  --color-rust-900: #7c2d12;
+  --color-rust-600: #b13f05;
+  --color-rust-700: #943405;
+  --color-rust-800: #782a04;
+  --color-rust-900: #5c2103;
 
   /* Rose accent */
   --color-accent-50:  #fff1f2;
@@ -304,6 +362,19 @@ body {
   background-image: none;
 }
 
+/* The 500 fill stays ember's signature #ea580c, which cannot carry white text
+   (3.56:1). It carries dark ink instead at 5.41:1. The compound class selector
+   is exact — bg-rust-500 and bg-rust-500/10 are different class tokens — so it
+   cannot leak onto the tinted chips. When a hover darkens the fill past where
+   dark ink works, the label is handed back to white. */
+[data-theme="ember"] .bg-rust-500.text-white {
+  color: var(--color-dark-950);
+}
+[data-theme="ember"] .bg-rust-500.text-white[class*="hover:bg-rust-600"]:hover,
+[data-theme="ember"] .bg-rust-500.text-white[class*="hover:bg-rust-700"]:hover {
+  color: #ffffff;
+}
+
 [data-theme="ember"] .logo-glow {
   text-shadow: 0 0 14px rgba(249, 115, 22, 0.4);
 }
@@ -325,7 +396,7 @@ body {
   --color-dark-700: #e2e8f0;
   --color-dark-600: #cbd5e1;
   --color-dark-500: #94a3b8;
-  --color-dark-400: #64748b;
+  --color-dark-400: #5e6d83;
   --color-dark-300: #475569;
   --color-dark-200: #334155;
   --color-dark-100: #1e293b;
@@ -335,8 +406,8 @@ body {
   --color-rust-50:  #eff6ff;
   --color-rust-100: #dbeafe;
   --color-rust-200: #bfdbfe;
-  --color-rust-300: #93c5fd;
-  --color-rust-400: #60a5fa;
+  --color-rust-300: #1249c1;
+  --color-rust-400: #1555e1;
   --color-rust-500: #2563eb;
   --color-rust-600: #1d4ed8;
   --color-rust-700: #1e40af;
@@ -347,22 +418,25 @@ body {
   --color-accent-50:  #eff6ff;
   --color-accent-100: #dbeafe;
   --color-accent-200: #bfdbfe;
-  --color-accent-300: #93c5fd;
-  --color-accent-400: #60a5fa;
+  --color-accent-300: #1249c1;
+  --color-accent-400: #1555e1;
   --color-accent-500: #2563eb;
   --color-accent-600: #1d4ed8;
   --color-accent-700: #1e40af;
   --color-accent-800: #1e3a8a;
   --color-accent-900: #172554;
 
-  /* Adjusted status colors for light bg */
-  --color-warn-400: #d97706;
+  /* Adjusted status colors for light bg — 300 and 700 run DARKER than the
+     steps they hover, for the same reason the rust and accent ramps do. */
+  --color-warn-400: #a14a08;
   --color-warn-500: #b45309;
   --color-warn-600: #92400e;
 
-  --color-danger-400: #dc2626;
+  --color-danger-300: #7f1d1d;
+  --color-danger-400: #a81919;
   --color-danger-500: #b91c1c;
   --color-danger-600: #991b1b;
+  --color-danger-700: #661414;
 
   /* Inter font — clean SaaS look */
   --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -485,7 +559,7 @@ body {
 [data-theme="clean"] textarea {
   background-color: #ffffff;
   color: #111827;
-  border-color: #d1d5db;
+  border-color: var(--color-dark-400);
 }
 
 [data-theme="clean"] input::placeholder,
@@ -495,7 +569,7 @@ body {
 
 [data-theme="clean"] select {
   background-color: #ffffff;
-  border-color: #d1d5db;
+  border-color: var(--color-dark-400);
   color: #374151;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%239ca3af' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
 }
@@ -545,7 +619,7 @@ body {
 [data-theme="clean"] .dp-modal select,
 [data-theme="clean"] .dp-modal textarea {
   background-color: #ffffff !important;
-  border-color: #d1d5db !important;
+  border-color: var(--color-dark-400) !important;
   color: #111827 !important;
 }
 
@@ -698,7 +772,7 @@ body {
 
 /* Secondary/outline buttons */
 [data-theme="clean"] button[class*="border-dark-"] {
-  border-color: #d1d5db !important;
+  border-color: var(--color-dark-400) !important;
   border-radius: var(--radius-md) !important;
   background-color: #ffffff !important;
 }
@@ -712,7 +786,7 @@ body {
 [data-theme="clean"] button[class*="bg-dark-700"],
 [data-theme="clean"] button[class*="bg-dark-800"] {
   background-color: #ffffff !important;
-  border: 1px solid #d1d5db !important;
+  border: 1px solid var(--color-dark-400) !important;
   border-radius: var(--radius-md) !important;
 }
 
@@ -846,12 +920,12 @@ body {
   --color-rust-100: #dbeafe;
   --color-rust-200: #bfdbfe;
   --color-rust-300: #93c5fd;
-  --color-rust-400: #3b82f6;
+  --color-rust-400: #5b9bf8;
   --color-rust-500: #2563eb;
   --color-rust-600: #1d4ed8;
-  --color-rust-700: #1d4ed8;
-  --color-rust-800: #1e40af;
-  --color-rust-900: #1e3a8a;
+  --color-rust-700: #1e40af;
+  --color-rust-800: #1e3a8a;
+  --color-rust-900: #172554;
 
   /* Blue interactive */
   --color-accent-50:  #eff6ff;
@@ -864,6 +938,10 @@ body {
   --color-accent-700: #1d4ed8;
   --color-accent-800: #1e40af;
   --color-accent-900: #1e3a8a;
+
+  /* Status colors — the base ramp is tuned for terminal's #111113 and lands at
+     4.14 on this theme's #1c2333 card, under AA on every text-danger-400 site. */
+  --color-danger-400: #f87171;
 
   /* Sans-serif typography */
   --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -1125,18 +1203,21 @@ body {
    SHARED RULES — form elements, scrollbar, focus, etc.
    ═══════════════════════════════════════════════════════ */
 
-/* Form elements */
+/* Form elements — the resting border is the one control users have to find
+   before they can type. dark-500 measured 2.56-2.82 against the field in four
+   of the six themes, under the 3.0 non-text floor; dark-400 clears it in all
+   six. select:focus already used dark-400, i.e. the step was known-good. */
 input, select, textarea {
   background-color: var(--color-dark-900);
   color: var(--color-dark-50);
-  border-color: var(--color-dark-500);
+  border-color: var(--color-dark-400);
 }
 
 /* Native select */
 select {
   appearance: none;
   background-color: var(--color-dark-800);
-  border: 1px solid var(--color-dark-600);
+  border: 1px solid var(--color-dark-400);
   border-radius: var(--radius-md);
   padding: 0.625rem 2.5rem 0.625rem 0.75rem;
   color: var(--color-dark-100);
@@ -1327,7 +1408,7 @@ select:focus-visible {
   box-shadow: 0 0 8px rgba(59, 130, 246, 0.3);
 }
 [data-theme="arctic"] [class*="rounded-full"][class*="overflow-hidden"] [class*="bg-rust-500"] {
-  box-shadow: 0 0 8px rgba(13, 148, 136, 0.3);
+  box-shadow: 0 0 8px rgba(13, 121, 112, 0.3);
 }
 [data-theme="clean"] [class*="rounded-full"][class*="overflow-hidden"] [class*="bg-rust-500"] {
   box-shadow: 0 0 8px rgba(37, 99, 235, 0.3);
@@ -1354,7 +1435,7 @@ select:focus-visible {
 [data-theme="arctic"] [class*="rounded-full"][class*="bg-rust-"][class*="w-2"] {
   width: 10px !important;
   height: 10px !important;
-  box-shadow: 0 0 6px rgba(13, 148, 136, 0.4);
+  box-shadow: 0 0 6px rgba(13, 121, 112, 0.4);
 }
 [data-theme="clean"] [class*="rounded-full"][class*="bg-rust-"][class*="w-2"] {
   width: 10px !important;
@@ -1418,7 +1499,7 @@ tr.table-row-hover:hover {
 }
 [data-theme="arctic"] .login-bg {
   background-color: var(--color-dark-900);
-  --login-glow-rgb: 13, 148, 136;
+  --login-glow-rgb: 13, 121, 112;
 }
 [data-theme="ember"] .login-bg {
   --login-glow-rgb: 249, 115, 22;
@@ -1507,10 +1588,10 @@ tr.table-row-hover:hover {
 .markdown-body ul { list-style: disc; }
 .markdown-body ol { list-style: decimal; }
 .markdown-body li { margin: 0.2rem 0; }
-.markdown-body code { background: rgba(0,0,0,0.3); padding: 0.1rem 0.35rem; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 0.85em; }
-.markdown-body pre { background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: 6px; overflow-x: auto; margin: 0.75rem 0; }
+.markdown-body code { background: var(--color-dark-700); padding: 0.1rem 0.35rem; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 0.85em; }
+.markdown-body pre { background: var(--color-dark-700); padding: 0.75rem; border-radius: 6px; overflow-x: auto; margin: 0.75rem 0; }
 .markdown-body pre code { background: transparent; padding: 0; }
-.markdown-body a { color: #60a5fa; text-decoration: underline; }
+.markdown-body a { color: var(--color-accent-400); text-decoration: underline; }
 .markdown-body strong { font-weight: 600; color: var(--color-dark-50, #f1f5f9); }
-.markdown-body hr { border: none; border-top: 1px solid rgba(255,255,255,0.08); margin: 1rem 0; }
-.markdown-body blockquote { border-left: 3px solid rgba(255,255,255,0.15); padding-left: 0.75rem; margin: 0.75rem 0; color: rgba(255,255,255,0.7); }
+.markdown-body hr { border: none; border-top: 1px solid var(--color-dark-700); margin: 1rem 0; }
+.markdown-body blockquote { border-left: 3px solid var(--color-dark-600); padding-left: 0.75rem; margin: 0.75rem 0; color: var(--color-dark-300); }
