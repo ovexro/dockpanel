@@ -266,6 +266,35 @@ static GPU_RECOMMENDED_TEMPLATES: &[&str] = &[
     "whisper",
 ];
 
+/// Startup arguments for the templates whose image default `CMD` does not start a
+/// server. Kept as a keyed list rather than a per-template field for the reason
+/// given above `GPU_RECOMMENDED_TEMPLATES` — every static declaration in the
+/// catalogue would otherwise have to be edited to add a field all but one leaves
+/// empty.
+///
+/// Absence is the meaningful default: an image whose entrypoint already serves must
+/// keep deciding its own startup, so upstream can change it without this catalogue
+/// silently overriding them.
+///
+/// `minio` needs it because `minio/minio`'s default `CMD` is `["minio"]`, which
+/// prints usage and **exits 0**. Nothing here crashes — the container simply has no
+/// supervised process, so `unless-stopped` restarts it forever at `ExitCode: 0`
+/// (issue #101). `/data` is the path the template already mounts a volume at, so the
+/// served directory and the persisted directory are the same one; a `server` command
+/// pointed anywhere else would come up healthy and lose every object on restart.
+static TEMPLATE_CMD: &[(&str, &[&str])] = &[(
+    "minio",
+    &["server", "/data", "--console-address", ":9001"],
+)];
+
+/// The `Cmd` to give a template's container, if the catalogue overrides it.
+fn template_cmd(id: &str) -> Option<Vec<String>> {
+    TEMPLATE_CMD
+        .iter()
+        .find(|(template_id, _)| *template_id == id)
+        .map(|(_, args)| args.iter().map(|a| (*a).to_string()).collect())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnvVar {
     pub name: String,
@@ -2654,6 +2683,10 @@ pub async fn deploy_app(
 
     let config = Config {
         image: Some(template.image.to_string()),
+        // None for all but one template, which leaves the image's own CMD in charge.
+        // See TEMPLATE_CMD: without this the container inherits a default that may
+        // print usage and exit 0, which restarts forever instead of serving (#101).
+        cmd: template_cmd(template.id),
         env: if env_list.is_empty() {
             None
         } else {
@@ -3688,6 +3721,51 @@ pub async fn remove_app(container_id: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `minio/minio`'s default `CMD` is `["minio"]`, which prints usage and exits
+    /// 0 — so the container restarts forever at `ExitCode: 0` rather than serving
+    /// (issue #101). Verified against the image s339: without these arguments the
+    /// container reached `restarting` with 7 restarts and exit 0; with them it ran
+    /// with 0 restarts and answered 200 on both the S3 port and the console.
+    #[test]
+    fn minio_overrides_a_cmd_that_would_exit_instead_of_serving() {
+        let cmd = template_cmd("minio").expect("minio must carry startup arguments");
+        assert_eq!(cmd, vec!["server", "/data", "--console-address", ":9001"]);
+
+        // The served path must be the one the template persists, or the container
+        // comes up healthy and silently loses every object on restart.
+        let minio = TEMPLATES
+            .iter()
+            .find(|t| t.id == "minio")
+            .expect("the minio template must exist");
+        assert!(
+            minio.volumes.contains(&"/data"),
+            "minio serves /data but persists {:?}",
+            minio.volumes
+        );
+    }
+
+    /// Absence is the meaningful default — an image whose entrypoint already serves
+    /// must keep deciding its own startup. If this ever fails, a template gained an
+    /// override and the reason belongs next to it in TEMPLATE_CMD.
+    #[test]
+    fn only_the_templates_that_need_a_cmd_carry_one() {
+        let overridden: Vec<&str> = TEMPLATE_CMD.iter().map(|(id, _)| *id).collect();
+        assert_eq!(overridden, vec!["minio"]);
+        assert!(template_cmd("ghost").is_none());
+        assert!(template_cmd("vaultwarden").is_none());
+        assert!(template_cmd("no-such-template").is_none());
+
+        // Every override must name a real template, or it is dead configuration
+        // that looks live.
+        for (id, args) in TEMPLATE_CMD {
+            assert!(
+                TEMPLATES.iter().any(|t| t.id == *id),
+                "TEMPLATE_CMD names '{id}', which is not in the catalogue"
+            );
+            assert!(!args.is_empty(), "'{id}' carries an empty command");
+        }
+    }
 
     #[test]
     fn managed_label_gate() {

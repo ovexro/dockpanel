@@ -6,6 +6,61 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.95.1]
+
+### Fixed — no SFTP backup could reach an SFTP-only server, and MinIO never started (#102, #101)
+
+Both reported by @munoz-dev, both with a source-level root cause, and both
+reproduced here before anything was changed.
+
+**#102 — SFTP destinations behind `ForceCommand internal-sftp`.** That directive is
+OpenSSH's own documented way to run a chrooted, SFTP-only account, and it replaces
+whatever command an exec request carried with the SFTP subsystem. Both SFTP
+operations *were* exec requests: `ssh host "mkdir -p …"` to create the directory,
+then `scp` to transfer. The mkdir was discarded, so Test Connection failed and no
+real upload could complete either.
+
+Both now drive the SFTP subsystem in one batch session. Three things that fix
+turned up, none of them visible from the report:
+
+- **`scp` had to go, not merely move.** OpenSSH 9.0 switched scp to the SFTP
+  protocol, so an agent on a current distro transfers fine and only the mkdir
+  fails — while an agent on RHEL 8 or Ubuntu 20.04 still speaks legacy `scp -t`,
+  which is an exec request and would have kept failing after a mkdir-only fix.
+  Measured against a chrooted sshd: default scp exit 0, `scp -O` exit 1.
+- **`sftp -b` sets `BatchMode` by itself**, and BatchMode disables the password
+  auth `sshpass` exists to answer. The password branch now says `BatchMode=no`
+  out loud; without it every password-authenticated destination would have died at
+  `Permission denied` — the v2.88-era defect, arriving through the flag instead.
+- **Paths are quoted for sftp's parser, which is not a shell.** An unquoted
+  `put local /backups/my dir/f.tgz` does not fail: it writes to `/backups/my`
+  under the *source* filename and exits 0. A remote path carrying a newline is now
+  refused outright, because in a batch script a newline starts a new command.
+
+The error an operator sees is fixed too. `internal-sftp` refuses on **stdout**,
+and the agent built its message from stderr alone — so a failed backup was
+reported as `Warning: Permanently added '[host]:port' … to the list of known
+hosts.`, and on any later connection, with the key already pinned, as `no error
+output from ssh`. Both streams are now reported.
+
+**#101 — the MinIO app template crash-looped on every deploy.** `minio/minio`'s
+default `CMD` is `["minio"]`, which prints usage and **exits 0**. Nothing crashed:
+the container simply had no supervised process, so `unless-stopped` restarted it
+forever at `ExitCode: 0`. Verified against the image — without startup arguments
+it reached `restarting` with 7 restarts; with them it runs at 0 restarts and
+answers on both the S3 port and the console. The template now supplies
+`server /data --console-address ":9001"`, `/data` being the path it already
+mounts a volume at, so the served directory and the persisted one are the same.
+It is the only template in the catalogue of 153 that needs an override, and that
+list is keyed by template id rather than added as a field to all 153 declarations.
+
+**Assertions 1788 → 1801.** `backup-lands` gained the transport invariants — that
+neither operation issues an exec request, that both quote their paths and refuse a
+line break, that scp stays gone, and that both report both output streams — each
+one confirmed red against the pre-fix source. The MinIO fix is guarded by unit
+tests asserting the override exists, that the served path is one the template
+persists, and that no other template silently acquired one.
+
 ### Fixed — six pins were being held green by a comment, and one of them guarded session revocation
 
 v2.95.0 fixed one suite whose arms could be satisfied by prose. This measures the

@@ -165,7 +165,7 @@ pub async fn upload_s3(
     Ok(url)
 }
 
-/// Build the ssh/scp options every SFTP operation shares.
+/// Build the options every SFTP operation shares.
 ///
 /// # Why this is one function
 ///
@@ -176,7 +176,10 @@ pub async fn upload_s3(
 /// invariant between two copies is the thing that keeps failing here — so there is
 /// now one copy and the promise is structural.
 ///
-/// `port_flag` is the single genuine difference: `scp` takes `-P`, `ssh` takes `-p`.
+/// There is no longer a port-flag parameter: both operations speak the SFTP
+/// subsystem now, so both take the same uppercase port flag. When this list served
+/// `ssh` (lowercase flag) as well, that difference was the one argument each caller
+/// had to supply.
 ///
 /// The two settings encoded here each cost a release to find (s288):
 ///
@@ -193,12 +196,12 @@ pub async fn upload_s3(
 ///   is right for a key and fatal for a password: it disables password and
 ///   keyboard-interactive auth outright, so `sshpass` has nothing left to answer.
 ///   Each setting is correct alone and together they made password SFTP impossible.
-fn sftp_opts(
-    port_flag: &str,
-    port: u16,
-    password: Option<&str>,
-    key_path: Option<&str>,
-) -> Vec<String> {
+///
+///   That trap has a second entrance, found s339: **`sftp -b` sets `BatchMode` by
+///   itself**, so the password case has to say `BatchMode=no` out loud or every
+///   password-authenticated destination dies at `Permission denied` — the identical
+///   s288 failure, arriving through the flag instead of through this list.
+fn sftp_opts(port: u16, password: Option<&str>, key_path: Option<&str>) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "-o".into(),
         "StrictHostKeyChecking=accept-new".into(),
@@ -206,18 +209,118 @@ fn sftp_opts(
         "UserKnownHostsFile=/etc/dockpanel/known_hosts".into(),
         "-o".into(),
         "ConnectTimeout=10".into(),
-        port_flag.into(),
+        "-P".into(),
         port.to_string(),
     ];
     if key_path.is_some() || password.is_none() {
         args.push("-o".into());
         args.push("BatchMode=yes".into());
+    } else {
+        args.push("-o".into());
+        args.push("BatchMode=no".into());
     }
     if let Some(key) = key_path {
         args.push("-i".into());
         args.push(key.into());
     }
     args
+}
+
+/// Quote one path as a single `sftp` batch argument.
+///
+/// A batch line is parsed by sftp's own tokeniser, **not by a shell**, and the
+/// difference is not cosmetic: an unquoted space splits the path in two, and
+/// `put local /backups/my dir/f.tgz` then writes to `/backups/my` under the
+/// SOURCE filename and **exits 0**. Measured s339 — a success report for an
+/// archive that landed somewhere else under another name, which is a worse
+/// outcome than the failure this whole change is fixing.
+///
+/// Double quotes carry spaces, single quotes and glob characters literally; a
+/// backslash or a double quote inside must itself be escaped.
+fn sftp_quote(path: &str) -> String {
+    let mut out = String::with_capacity(path.len() + 2);
+    out.push('"');
+    for ch in path.chars() {
+        if ch == '\\' || ch == '"' {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out.push('"');
+    out
+}
+
+/// Reject a path that cannot be expressed as one batch line.
+///
+/// In a batch script a newline **starts a new command**, so a `remote_path`
+/// carrying one appends attacker-chosen sftp operations to the script the agent
+/// built (verified s339 by planting a second `put`). `remote_path` reaches here
+/// straight from the request body with no validation anywhere upstream, so this
+/// is the only place that can refuse it.
+fn reject_unquotable_path(path: &str) -> Result<(), String> {
+    if path.contains('\n') || path.contains('\r') {
+        return Err("Remote path may not contain a line break".to_string());
+    }
+    Ok(())
+}
+
+/// One `-mkdir` per ancestor, deepest last.
+///
+/// `sftp` has no `mkdir -p`: `mkdir /a/b/c` fails outright when `/a/b` is absent,
+/// and the `put` after it then fails too. So each component is created in turn.
+/// The `-` prefix means "continue past this command's failure", which is required
+/// rather than tidy: a plain `mkdir` of an **existing** directory reports Failure
+/// and **aborts the whole batch** (both measured s339), and every component of an
+/// already-provisioned destination exists.
+fn sftp_mkdir_script(dir: &str) -> String {
+    let absolute = dir.starts_with('/');
+    let mut out = String::new();
+    let mut acc = String::new();
+    for comp in dir.split('/').filter(|c| !c.is_empty()) {
+        if acc.is_empty() {
+            if absolute {
+                acc.push('/');
+            }
+        } else {
+            acc.push('/');
+        }
+        acc.push_str(comp);
+        out.push_str("-mkdir ");
+        out.push_str(&sftp_quote(&acc));
+        out.push('\n');
+    }
+    out
+}
+
+/// Makes each Test Connection's local probe filename unique within the process,
+/// so two destinations tested at once cannot delete each other's file.
+static PROBE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Join both of a finished command's streams into one operator-facing detail.
+///
+/// Reading only `stderr` is what made issue #102 unreadable: `internal-sftp`
+/// writes its refusal — *"This service allows sftp connections only."* — to
+/// **stdout**, leaving stderr holding nothing but ssh's known-hosts banner. The
+/// operator was shown `Warning: Permanently added '[host]:port' ...` as the entire
+/// cause of a failed backup, and on any later connection, with the key already
+/// pinned, stderr is empty and the message degraded to "no error output from ssh".
+fn command_detail(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut parts: Vec<&str> = Vec::new();
+    let e = stderr.trim();
+    let o = stdout.trim();
+    if !e.is_empty() {
+        parts.push(e);
+    }
+    if !o.is_empty() {
+        parts.push(o);
+    }
+    if parts.is_empty() {
+        "no output from sftp".to_string()
+    } else {
+        parts.join(" | ")
+    }
 }
 
 /// Run `ssh`/`scp`, routing through `sshpass` when a password is the credential.
@@ -231,6 +334,7 @@ async fn run_sftp(
     key_path: Option<&str>,
     timeout_secs: u64,
     label: &str,
+    batch_script: Option<&str>,
 ) -> Result<std::process::Output, String> {
     let (prog, final_args, pw_env) = match password {
         Some(pw) if key_path.is_none() => {
@@ -247,7 +351,34 @@ async fn run_sftp(
         cmd.env("SSHPASS", pw);
     }
 
-    tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), cmd.output())
+    // `sftp -b -` reads its command script from stdin, which keeps the script out
+    // of the filesystem entirely — no temp file to create under `ProtectSystem=
+    // strict`, and no window where a world-readable batch names the destination.
+    // Writing before reading is safe only because these scripts are a few hundred
+    // bytes: a script large enough to fill the pipe buffer would deadlock against
+    // an sftp that is blocked writing its own progress to a full stdout.
+    let run = async {
+        match batch_script {
+            Some(script) => {
+                cmd.stdin(std::process::Stdio::piped());
+                cmd.stdout(std::process::Stdio::piped());
+                cmd.stderr(std::process::Stdio::piped());
+                let mut child = cmd.spawn()?;
+                if let Some(mut sink) = child.stdin.take() {
+                    use tokio::io::AsyncWriteExt;
+                    sink.write_all(script.as_bytes()).await?;
+                    sink.shutdown().await?;
+                    // Dropped here on purpose: sftp runs its script to completion
+                    // and only then exits, so it needs to see EOF on stdin.
+                    drop(sink);
+                }
+                child.wait_with_output().await
+            }
+            None => cmd.output().await,
+        }
+    };
+
+    tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), run)
         .await
         .map_err(|_| format!("{label} timed out"))?
         .map_err(|e| {
@@ -287,52 +418,61 @@ pub async fn upload_sftp(
         .and_then(|n| n.to_str())
         .ok_or("Invalid filename")?;
 
-    let remote_dest = format!(
-        "{username}@{host}:{}/{}",
-        remote_path.trim_end_matches('/'),
-        filename
-    );
-
-    tracing::info!("Uploading {filename} via SCP to {remote_dest}");
-
-    // Create the destination directory first.
-    //
-    // Nothing ever did. `scp` will not create a missing target directory, so a
-    // destination whose `remote_path` did not already exist failed every upload with
-    // *"dest open ...: No such file or directory"* — while Test Connection, which
-    // never went near `remote_path`, reported success. The default is `/backups`,
-    // an absolute path that exists on almost no server, so this was the common case
-    // rather than an edge one (measured s289).
     let dir = remote_path.trim_end_matches('/');
-    if !dir.is_empty() {
-        let mut mkdir_args = sftp_opts("-p", port, password, key_path);
-        mkdir_args.push(format!("{username}@{host}"));
-        // Single-quoted so a path with spaces survives the remote shell; embedded
-        // single quotes are escaped the POSIX way.
-        mkdir_args.push(format!("mkdir -p '{}'", dir.replace('\'', "'\\''")));
+    reject_unquotable_path(dir)?;
+    reject_unquotable_path(filepath)?;
 
-        let mk = run_sftp("ssh", mkdir_args, password, key_path, 30, "Remote directory creation").await?;
-        if !mk.status.success() {
-            let stderr = String::from_utf8_lossy(&mk.stderr);
-            return Err(format!(
-                "Could not create remote directory '{dir}': {}",
-                stderr.trim()
-            ));
-        }
-    }
+    let remote_file = format!("{dir}/{filename}");
+    let remote_dest = format!("{username}@{host}:{remote_file}");
 
-    let mut cmd_args = sftp_opts("-P", port, password, key_path);
-    cmd_args.push(filepath.into());
-    cmd_args.push(remote_dest.clone());
+    tracing::info!("Uploading {filename} via SFTP to {remote_dest}");
 
-    let output = run_sftp("scp", cmd_args, password, key_path, 600, "Upload").await?;
+    // Create the destination directory, then transfer — both over the SFTP
+    // subsystem, in one connection.
+    //
+    // Both steps used to be SSH **exec** requests (`ssh host "mkdir -p ..."`, then
+    // `scp`), and an sshd with `ForceCommand internal-sftp` — OpenSSH's own
+    // documented way to run a chrooted, SFTP-only account — replaces whatever
+    // command the client asked for with the SFTP subsystem. So the `mkdir` was
+    // discarded and the upload failed for every such destination (issue #102).
+    //
+    // `scp` is gone rather than merely re-ordered, because it carries the same
+    // defect on exactly the hosts that are hardest to notice: OpenSSH 9.0 switched
+    // scp to the SFTP protocol, so a modern agent host transfers fine and only the
+    // `mkdir` fails, while an agent on RHEL 8 or Ubuntu 20.04 still speaks legacy
+    // `scp -t` and would keep failing after a mkdir-only fix. Measured both ways
+    // s339 against a chrooted sshd: default scp exit 0, `scp -O` exit 1.
+    //
+    // Nothing created the directory at all before s289; that fix is preserved here,
+    // one component at a time — see `sftp_mkdir_script` for why it cannot be one call.
+    let mut script = sftp_mkdir_script(dir);
+    script.push_str(&format!(
+        "put {} {}\n",
+        sftp_quote(filepath),
+        sftp_quote(&remote_file)
+    ));
+
+    let mut cmd_args = sftp_opts(port, password, key_path);
+    cmd_args.push("-b".into());
+    cmd_args.push("-".into());
+    cmd_args.push(format!("{username}@{host}"));
+
+    let output = run_sftp(
+        "ssh",
+        cmd_args,
+        password,
+        key_path,
+        600,
+        "Upload",
+        Some(&script),
+    )
+    .await?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("SCP upload failed: {}", stderr.trim()));
+        return Err(format!("SFTP upload failed: {}", command_detail(&output)));
     }
 
-    tracing::info!("SCP upload complete: {filename}");
+    tracing::info!("SFTP upload complete: {filename}");
     Ok(remote_dest)
 }
 
@@ -446,37 +586,73 @@ pub async fn test_sftp(
     remote_path: &str,
 ) -> Result<(), String> {
     let dir = remote_path.trim_end_matches('/');
-    let quoted = dir.replace('\'', "'\\''");
+    reject_unquotable_path(dir)?;
 
-    // mkdir -p, write a probe, remove it — the three things an upload needs, in one
-    // round trip. `cd` first so a relative `remote_path` resolves the same way scp
-    // resolves it (against the login directory).
+    // Create the directory, write a probe, remove it — the three things an upload
+    // does, over the same transport an upload uses. Testing over a DIFFERENT
+    // transport is how issue #102 stayed invisible from the panel: the test and the
+    // upload both spoke SSH exec, so a server that refuses exec failed both, but a
+    // test that had spoken sftp while uploads spoke scp would have been green over a
+    // broken destination — the s289 defect this function was written to end.
+    //
+    // A local file is required: `put /dev/null` is refused outright ("not a regular
+    // file", measured s339), so the probe is a real zero-byte file in the agent's
+    // own tmp. `PrivateTmp=yes` makes that namespace private to the unit and the
+    // sftp child inherits it.
+    let probe_local = std::env::temp_dir().join(format!(
+        ".dockpanel-sftp-probe-{}-{}",
+        std::process::id(),
+        PROBE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let probe_local_str = probe_local.to_string_lossy().to_string();
+
     let script = if dir.is_empty() {
-        "exit 0".to_string()
+        // No path to probe, so this proves only that the SFTP subsystem opens —
+        // which is still more than an auth handshake proves.
+        "pwd\n".to_string()
     } else {
+        tokio::fs::write(&probe_local, b"")
+            .await
+            .map_err(|e| format!("Could not stage a local probe file: {e}"))?;
+        let remote_probe = format!("{dir}/.dockpanel-write-probe");
         format!(
-            "mkdir -p '{quoted}' && : > '{quoted}/.dockpanel-write-probe' && rm -f '{quoted}/.dockpanel-write-probe'"
+            "{}put {} {}\nrm {}\n",
+            sftp_mkdir_script(dir),
+            sftp_quote(&probe_local_str),
+            sftp_quote(&remote_probe),
+            sftp_quote(&remote_probe)
         )
     };
 
-    let mut cmd_args = sftp_opts("-p", port, password, key_path);
+    let mut cmd_args = sftp_opts(port, password, key_path);
+    cmd_args.push("-b".into());
+    cmd_args.push("-".into());
     cmd_args.push(format!("{username}@{host}"));
-    cmd_args.push(script);
 
-    let output = run_sftp("ssh", cmd_args, password, key_path, 20, "Connection test").await?;
+    let output = run_sftp(
+        "ssh",
+        cmd_args,
+        password,
+        key_path,
+        20,
+        "Connection test",
+        Some(&script),
+    )
+    .await;
+
+    // Removed on every path, including the error ones — a probe left in the agent's
+    // tmp for each failed Test Connection is a slow leak nobody would look for.
+    let _ = tokio::fs::remove_file(&probe_local).await;
+
+    let output = output?;
 
     if output.status.success() {
         Ok(())
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let detail = stderr.trim();
         // Authentication failures and permission failures read very differently to
-        // an operator, and the raw stderr distinguishes them — so pass it through
+        // an operator, and the raw output distinguishes them — so pass it through
         // rather than collapsing both into "connection failed".
-        Err(format!(
-            "SFTP test failed: {}",
-            if detail.is_empty() { "no error output from ssh" } else { detail }
-        ))
+        Err(format!("SFTP test failed: {}", command_detail(&output)))
     }
 }
 
@@ -567,5 +743,155 @@ pub async fn delete_s3(
         Ok(())
     } else {
         Err(format!("S3 delete failed: {}", s3_detail(code, &body)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The shell escaping this replaced was correct FOR A SHELL. sftp's batch
+    /// parser is not one, and the failure it produces is silent: measured s339,
+    /// an unquoted `put local /backups/my dir/f.tgz` wrote to `/backups/my`
+    /// under the SOURCE filename and exited 0.
+    #[test]
+    fn quotes_paths_a_batch_parser_would_otherwise_split() {
+        assert_eq!(sftp_quote("/backups"), "\"/backups\"");
+        assert_eq!(sftp_quote("/my backups"), "\"/my backups\"");
+        // Single quotes are literal inside double quotes — the shell form had to
+        // escape these and the batch form must not.
+        assert_eq!(sftp_quote("/od'brien"), "\"/od'brien\"");
+        // These two are the only characters that need escaping.
+        assert_eq!(sftp_quote("/say\"hi"), "\"/say\\\"hi\"");
+        assert_eq!(sftp_quote("/back\\slash"), "\"/back\\\\slash\"");
+        // Glob metacharacters survive literally, so a real directory named with
+        // one is still addressed rather than expanded.
+        assert_eq!(sftp_quote("/we*ird?"), "\"/we*ird?\"");
+    }
+
+    /// `sftp` has no `mkdir -p`, so every ancestor is created in its own command,
+    /// shallowest first, each prefixed with `-` because a `mkdir` of an existing
+    /// directory FAILS and would abort the rest of the batch.
+    #[test]
+    fn mkdir_script_creates_every_ancestor_shallowest_first() {
+        assert_eq!(
+            sftp_mkdir_script("/srv/backups/dockpanel"),
+            "-mkdir \"/srv\"\n-mkdir \"/srv/backups\"\n-mkdir \"/srv/backups/dockpanel\"\n"
+        );
+        assert_eq!(sftp_mkdir_script("/backups"), "-mkdir \"/backups\"\n");
+        // A relative path must not acquire a leading slash.
+        assert_eq!(
+            sftp_mkdir_script("backups/nightly"),
+            "-mkdir \"backups\"\n-mkdir \"backups/nightly\"\n"
+        );
+        assert_eq!(sftp_mkdir_script(""), "");
+        // Every line carries the ignore-failure prefix; one that did not would
+        // abort the batch on an already-provisioned destination.
+        for line in sftp_mkdir_script("/a/b/c").lines() {
+            assert!(line.starts_with("-mkdir "), "unprefixed mkdir: {line}");
+        }
+    }
+
+    /// A newline in a batch script STARTS A NEW COMMAND. `remote_path` arrives
+    /// from the request body with no validation upstream, so this is the only
+    /// place that can refuse one.
+    #[test]
+    fn rejects_a_remote_path_that_would_append_a_second_command() {
+        assert!(reject_unquotable_path("/backups").is_ok());
+        assert!(reject_unquotable_path("/my backups").is_ok());
+        assert!(reject_unquotable_path("/backups\nput /etc/shadow /pub/x").is_err());
+        assert!(reject_unquotable_path("/backups\rrm /pub/x").is_err());
+    }
+
+    /// `sftp -b` sets BatchMode itself, and BatchMode disables the password auth
+    /// `sshpass` exists to answer — the s288 defect, reachable a second way.
+    #[test]
+    fn batchmode_is_turned_off_for_password_auth_and_on_for_keys() {
+        let pw = sftp_opts(22, Some("secret"), None);
+        assert!(
+            pw.windows(2).any(|w| w[0] == "-o" && w[1] == "BatchMode=no"),
+            "password auth must disable BatchMode explicitly: {pw:?}"
+        );
+        let key = sftp_opts(22, None, Some("/etc/dockpanel/id"));
+        assert!(
+            key.windows(2).any(|w| w[0] == "-o" && w[1] == "BatchMode=yes"),
+            "key auth must keep BatchMode on: {key:?}"
+        );
+        // sftp takes -P for the port; -p would be "preserve times".
+        assert!(pw.windows(2).any(|w| w[0] == "-P" && w[1] == "22"));
+    }
+
+    /// Reading only stderr is what made issue #102 unreadable: `internal-sftp`
+    /// refuses an exec request on STDOUT, leaving stderr holding nothing but
+    /// ssh's known-hosts banner.
+    #[test]
+    fn detail_reports_a_refusal_that_arrived_on_stdout() {
+        use std::os::unix::process::ExitStatusExt;
+        let only_stdout = std::process::Output {
+            status: std::process::ExitStatus::from_raw(256),
+            stdout: b"This service allows sftp connections only.".to_vec(),
+            stderr: Vec::new(),
+        };
+        assert!(command_detail(&only_stdout).contains("sftp connections only"));
+
+        let neither = std::process::Output {
+            status: std::process::ExitStatus::from_raw(256),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        assert_eq!(command_detail(&neither), "no output from sftp");
+
+        let both = std::process::Output {
+            status: std::process::ExitStatus::from_raw(256),
+            stdout: b"out".to_vec(),
+            stderr: b"err".to_vec(),
+        };
+        assert_eq!(command_detail(&both), "err | out");
+    }
+
+    /// End-to-end against a real sshd running `ForceCommand internal-sftp`.
+    ///
+    /// Opt-in because it needs that server: export
+    /// `DOCKPANEL_SFTP_LAB=user:password@host:port:/remote/path`. Run s339 against
+    /// a chrooted Debian sshd in a container; without the variable it skips, so CI
+    /// is unaffected.
+    #[tokio::test]
+    async fn lab_upload_and_test_survive_forcecommand() {
+        let Ok(spec) = std::env::var("DOCKPANEL_SFTP_LAB") else {
+            eprintln!("skipping: DOCKPANEL_SFTP_LAB not set");
+            return;
+        };
+        let (creds, rest) = spec.split_once('@').expect("user:pass@host:port:path");
+        let (user, pass) = creds.split_once(':').expect("user:pass");
+        let parts: Vec<&str> = rest.splitn(3, ':').collect();
+        let (host, port, path) = (parts[0], parts[1].parse::<u16>().unwrap(), parts[2]);
+
+        test_sftp(host, port, user, Some(pass), None, path)
+            .await
+            .expect("Test Connection must succeed through ForceCommand internal-sftp");
+
+        let local = std::env::temp_dir().join("dockpanel-sftp-lab-upload.txt");
+        tokio::fs::write(&local, b"s339").await.unwrap();
+        let dest = upload_sftp(
+            local.to_str().unwrap(),
+            host,
+            port,
+            user,
+            Some(pass),
+            None,
+            path,
+        )
+        .await
+        .expect("upload must succeed through ForceCommand internal-sftp");
+        assert!(dest.contains("dockpanel-sftp-lab-upload.txt"));
+        let _ = tokio::fs::remove_file(&local).await;
+
+        // A path that cannot exist must still FAIL — otherwise the arms above only
+        // prove the happy direction, and a function that always returns Ok would
+        // pass every one of them.
+        let err = test_sftp(host, port, user, Some(pass), None, "/proc/nope")
+            .await
+            .expect_err("an uncreatable remote path must fail");
+        assert!(!err.is_empty());
     }
 }

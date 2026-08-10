@@ -41,6 +41,18 @@
 #   F  S3 Test HEADed the bucket ROOT while upload PUTs into the PREFIX — different
 #      permission, different path. Read-only and prefix-scoped keys both read green.
 #
+# and the one s339 added:
+#
+#   G  Both SFTP operations were SSH **exec** requests (`ssh host "mkdir -p ..."`,
+#      then `scp`). `ForceCommand internal-sftp` — OpenSSH's own documented way to
+#      run a chrooted, SFTP-only account — replaces the requested command with the
+#      SFTP subsystem, so the mkdir was discarded and no such destination could
+#      complete a backup (issue #102). The refusal arrives on STDOUT, so an error
+#      built from stderr alone showed the operator nothing but ssh's known-hosts
+#      banner. scp had to go too, not just move: OpenSSH 9.0 switched it to the
+#      SFTP protocol, so a modern box transfers fine while RHEL 8 and Ubuntu 20.04
+#      still speak legacy `scp -t` and would keep failing after a mkdir-only fix.
+#
 # Pure source analysis: no box, no network, no build.
 
 set -uo pipefail
@@ -206,10 +218,13 @@ else
   ok "the S3 test no longer relies on HEAD"
 fi
 
-if has "$(fnbody "$SRC_RB" upload_sftp)" 'mkdir -p'; then
+UPSFTP=$(fnbody "$SRC_RB" upload_sftp)
+SFTPTEST=$(fnbody "$SRC_RB" test_sftp)
+
+if has "$UPSFTP" 'sftp_mkdir_script'; then
   ok "the SFTP upload creates its remote directory"
 else
-  bad "nothing creates the SFTP remote directory — scp will not"
+  bad "nothing creates the SFTP remote directory — a transfer will not"
 fi
 
 if has "$(grep -A8 'test_sftp(' <<< "$SRC_RBR")" 'remote_path'; then
@@ -218,17 +233,72 @@ else
   bad "the SFTP test never receives remote_path — it cannot check the directory"
 fi
 
-SFTPTEST=$(fnbody "$SRC_RB" test_sftp)
-if has "$SFTPTEST" 'mkdir -p'; then
+if has "$SFTPTEST" 'sftp_mkdir_script'; then
   ok "the SFTP test creates and probes the directory an upload will use"
 else
-  bad "the SFTP test does not touch remote_path — green while every scp fails"
+  bad "the SFTP test does not touch remote_path — green while every upload fails"
 fi
 if has "$SFTPTEST" '"exit".into()'; then
   bad "the SFTP test is back to connecting and exiting — it proves only auth"
 else
   ok "the SFTP test does more than authenticate"
 fi
+
+echo
+echo "§4b the transport survives a server that only allows SFTP (G)"
+
+# `ForceCommand internal-sftp` is OpenSSH's own documented way to run a chrooted,
+# SFTP-only account, and it REPLACES whatever command an exec request carried. Both
+# operations used to be exec requests, so the mkdir was silently discarded and no
+# such destination could ever complete a backup (issue #102).
+for pair in "upload_sftp:$UPSFTP" "test_sftp:$SFTPTEST"; do
+  fn=${pair%%:*}; body=${pair#*:}
+  if hasE "$body" 'run_sftp\("(ssh|scp)"'; then
+    bad "$fn issues an SSH exec request — ForceCommand internal-sftp discards it"
+  else
+    ok "$fn does not depend on an SSH exec request"
+  fi
+  if has "$body" '"-b"'; then
+    ok "$fn drives the SFTP subsystem in batch mode"
+  else
+    bad "$fn no longer runs a batch script — the transport moved"
+  fi
+  # A path reaching a batch line unquoted does not fail: sftp splits it and writes
+  # to the wrong place under the source filename, exit 0.
+  if has "$body" 'sftp_quote'; then
+    ok "$fn quotes the paths it puts in a batch line"
+  else
+    bad "$fn passes an unquoted path — a space silently redirects the transfer"
+  fi
+  if has "$body" 'reject_unquotable_path'; then
+    ok "$fn refuses a remote path carrying a line break"
+  else
+    bad "$fn accepts a newline in remote_path — that appends a second sftp command"
+  fi
+done
+
+# scp is not merely unused, it must stay gone: OpenSSH < 9.0 speaks legacy `scp -t`,
+# which is an exec request and dies the same way. A modern dev box hides this.
+if has "$SRC_RB" '"scp"'; then
+  bad "scp is back — on OpenSSH < 9.0 it is an exec request and cannot survive ForceCommand"
+else
+  ok "no scp invocation remains"
+fi
+
+# The refusal arrives on STDOUT; an error built from stderr alone showed the
+# operator ssh's known-hosts banner as the whole cause of a failed backup.
+if has "$SRC_RB" 'fn command_detail'; then
+  ok "a helper exists to report both output streams"
+else
+  bad "nothing joins stdout into the error — a refusal on stdout reads as no error at all"
+fi
+for fn in upload_sftp test_sftp; do
+  if has "$(fnbody "$SRC_RB" "$fn")" 'command_detail'; then
+    ok "$fn reports both streams to the operator"
+  else
+    bad "$fn reports only one stream — the diagnosis is on the other one"
+  fi
+done
 
 echo
 echo "§5 one ssh option builder, not two kept in step by hand (E)"
@@ -251,6 +321,15 @@ if has "$(grep -A3 'if key_path.is_some() || password.is_none()' <<< "$SRC_RB")"
   ok "BatchMode is still applied only when authenticating by key"
 else
   bad "BatchMode is unconditional again — it disables the auth sshpass supplies"
+fi
+
+# The same trap has a second entrance: `sftp -b` turns BatchMode on BY ITSELF, so
+# the password branch has to switch it back off or every password-authenticated
+# destination dies at "Permission denied" exactly as it did before s288.
+if has "$SRC_RB" 'BatchMode=no'; then
+  ok "the password branch disables the BatchMode that -b would impose"
+else
+  bad "nothing says BatchMode=no — sftp -b re-enables it and password auth dies"
 fi
 
 echo
