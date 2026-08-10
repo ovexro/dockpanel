@@ -458,7 +458,7 @@ pub async fn upload_sftp(
     cmd_args.push(format!("{username}@{host}"));
 
     let output = run_sftp(
-        "ssh",
+        "sftp",
         cmd_args,
         password,
         key_path,
@@ -630,7 +630,7 @@ pub async fn test_sftp(
     cmd_args.push(format!("{username}@{host}"));
 
     let output = run_sftp(
-        "ssh",
+        "sftp",
         cmd_args,
         password,
         key_path,
@@ -855,6 +855,12 @@ mod tests {
     /// `DOCKPANEL_SFTP_LAB=user:password@host:port:/remote/path`. Run s339 against
     /// a chrooted Debian sshd in a container; without the variable it skips, so CI
     /// is unaffected.
+    ///
+    /// ⚠ **A skip here is indistinguishable from a pass in the summary line**, and
+    /// v2.95.1 shipped a reverted transport partly because of that. Treat the
+    /// transport arms in `backup-lands-pin-e2e.sh` as the CI-side guard; this test
+    /// is the deeper check you run by hand when touching the transport, and if you
+    /// are touching it, set the variable.
     #[tokio::test]
     async fn lab_upload_and_test_survive_forcecommand() {
         let Ok(spec) = std::env::var("DOCKPANEL_SFTP_LAB") else {

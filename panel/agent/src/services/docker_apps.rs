@@ -3745,15 +3745,23 @@ mod tests {
         );
     }
 
-    /// Absence is the meaningful default — an image whose entrypoint already serves
-    /// must keep deciding its own startup. If this ever fails, a template gained an
-    /// override and the reason belongs next to it in TEMPLATE_CMD.
+    /// Absence is the default for an image whose entrypoint already serves — but
+    /// absence is NOT proof that a template is fine.
+    ///
+    /// ⚠ **MinIO is not the only template in this class.** A catalogue audit found
+    /// at least seven more whose image cannot come up as shipped, verified from
+    /// their image config: `cloudflared` (Cmd `["version"]` — prints a version and
+    /// exits, every time, while the template collects a TUNNEL_TOKEN it has no way
+    /// to use), `ntfy`, `trivy` and `surrealdb` (multi-command CLI entrypoints with
+    /// a null Cmd, so a bare run prints help), plus `keycloak`, `authentik` and
+    /// `vllm`. `keycloak`'s own description says it *"Requires 'start-dev' command
+    /// override"* — written against a struct that then had no way to express one.
+    /// Only MinIO was reported, reproduced and fixed; the rest are unfixed and each
+    /// needs its own arguments established by running the image.
     #[test]
-    fn only_the_templates_that_need_a_cmd_carry_one() {
-        let overridden: Vec<&str> = TEMPLATE_CMD.iter().map(|(id, _)| *id).collect();
-        assert_eq!(overridden, vec!["minio"]);
+    fn every_cmd_override_is_live_and_well_formed() {
+        assert!(template_cmd("minio").is_some());
         assert!(template_cmd("ghost").is_none());
-        assert!(template_cmd("vaultwarden").is_none());
         assert!(template_cmd("no-such-template").is_none());
 
         // Every override must name a real template, or it is dead configuration

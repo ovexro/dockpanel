@@ -253,10 +253,21 @@ echo "§4b the transport survives a server that only allows SFTP (G)"
 # such destination could ever complete a backup (issue #102).
 for pair in "upload_sftp:$UPSFTP" "test_sftp:$SFTPTEST"; do
   fn=${pair%%:*}; body=${pair#*:}
-  if hasE "$body" 'run_sftp\("(ssh|scp)"'; then
+  # Flatten first. grep matches within ONE line, and rustfmt wraps a call whose
+  # argument list is long — `run_sftp(\n    "ssh",` never puts the callee and its
+  # first argument on the same line, so a line-based arm reads a call it cannot
+  # see as absent. s339 shipped exactly that: this arm went red against the
+  # single-line pre-fix source and stayed GREEN over a transport reverted to ssh.
+  flat=$(tr '\n' ' ' <<< "$body" | tr -s ' ')
+  if hasE "$flat" 'run_sftp\( *"(ssh|scp)"'; then
     bad "$fn issues an SSH exec request — ForceCommand internal-sftp discards it"
   else
     ok "$fn does not depend on an SSH exec request"
+  fi
+  if hasE "$flat" 'run_sftp\( *"sftp"'; then
+    ok "$fn names the sftp transport explicitly"
+  else
+    bad "$fn does not call run_sftp with sftp — the transport is not what it claims"
   fi
   if has "$body" '"-b"'; then
     ok "$fn drives the SFTP subsystem in batch mode"

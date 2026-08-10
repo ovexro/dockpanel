@@ -6,6 +6,58 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.95.2]
+
+### Fixed — v2.95.1 shipped with its own SFTP transport reverted, breaking every SFTP upload
+
+**Upgrade immediately if you are on v2.95.1**, and note that the damage is wider
+than the bug it was meant to fix: in v2.95.1 both SFTP operations call `ssh` with
+sftp's batch arguments, which fails on **every** destination, not only the
+`ForceCommand internal-sftp` ones #102 was about. v2.95.0 and earlier are
+unaffected — they work everywhere except behind `ForceCommand`.
+
+The revert was a leftover mutation from testing v2.95.1's own fix, and three
+separate checks failed to catch it in the same reassuring direction:
+
+- The "known-good" copy used to restore the tree after the mutation test had been
+  taken **after** the mutation was applied, so it preserved the defect.
+- The verification grep, `run_sftp("ssh"`, matched nothing — because rustfmt wraps
+  that call across lines, and grep matches within a single line. Zero hits read as
+  "clean" when it meant "this pattern cannot match this formatting".
+- The regression arm carried the **identical** blindness. It went red against the
+  pre-fix source, whose call was on one line, and stayed green over the reverted
+  transport. A pin proven against one formatting is not proven against the other.
+
+The end-to-end test that would have caught it skips silently when its lab server
+is not configured, so a green run and a run that never executed look the same.
+
+Both arms now flatten the function body before matching, so a wrapped call is
+still seen, and each was mutation-tested against **both** the single-line and the
+multi-line spelling. A second arm asserts the transport is named positively —
+`run_sftp` with `sftp` — rather than only asserting `ssh` is absent, so a call to
+some third thing cannot pass by being neither. Assertions 1801 → 1803.
+
+### Corrected — MinIO was not the only app template that cannot start
+
+v2.95.1 said MinIO was "the only template in the catalogue of 153 that needs an
+override". That was wrong, and a catalogue audit found at least seven more whose
+image cannot come up as shipped — verified from each image's own config:
+
+- **`cloudflared`** — default `Cmd` is literally `["version"]`. It prints a version
+  string and exits, every deploy. The template collects a `TUNNEL_TOKEN` as a
+  required secret and has no way to use it.
+- **`ntfy`**, **`trivy`**, **`surrealdb`** — multi-command CLI entrypoints with a
+  null `Cmd`, so a bare run prints help and exits. They need `serve`,
+  `server --listen …` and `start` respectively.
+- **`keycloak`**, **`authentik`**, **`vllm`** — same class. `keycloak`'s own
+  template description already said it *"Requires 'start-dev' command override"*,
+  written against a struct that had no field capable of expressing one.
+
+None of these is fixed here. Each needs its arguments established by running the
+image, the way MinIO's were, rather than guessed from documentation — and
+`cloudflared` needs a way to reach an env var that today goes nowhere. The
+override mechanism this release ships is what they will use. Tracked as unbuilt.
+
 ## [2.95.1]
 
 ### Fixed — no SFTP backup could reach an SFTP-only server, and MinIO never started (#102, #101)
