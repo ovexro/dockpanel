@@ -116,6 +116,29 @@ if [ -f "panel/frontend/dist/index.html" ]; then
   fi
 fi
 
+# Marketing-site build check — BLOCKING (s342)
+#
+# `npm run build` in website/client IS the deploy: nginx serves that dist/
+# directly. Live Surfaces fires ON the push and reads the wire, so a rebuild
+# afterwards is a guaranteed red run plus a manual re-run — which is exactly what
+# happened at s280, s281, s326 and again at s342. A reminder printed after the
+# push cannot prevent that; only a block before it can.
+#
+# ⚠ The trigger is anything that changes what the build EMITS, not just `src/`:
+# the bundle hash is a function of the dependency graph too. s326 bumped only a
+# dependency, touched no source file, and shipped a stale bundle.
+if [ -f "website/client/dist/index.html" ]; then
+  STALE_SITE=$(find website/client/src website/client/package.json \
+                    website/client/package-lock.json website/client/vite.config.ts \
+                    -newer website/client/dist/index.html 2>/dev/null | head -1)
+  if [ -n "$STALE_SITE" ]; then
+    echo -e "${RED}BLOCKED: dockpanel.dev source is newer than website/client/dist/.${NC}"
+    echo -e "${RED}  Stale file: ${STALE_SITE}${NC}"
+    echo -e "${RED}  Run: cd website/client && npm run build   (that build IS the deploy)${NC}"
+    FOUND=1
+  fi
+fi
+
 # Version consistency check — BLOCKING
 echo ""
 echo "=== Version consistency check ==="
@@ -253,8 +276,10 @@ echo "=== Post-push gate reminders ==="
 # Check if website/ or docs/ changed — remind to deploy
 CHANGED_FILES=$(git diff --name-only "$RANGE" 2>/dev/null)
 if echo "$CHANGED_FILES" | grep -cE '^website/|^docs/' >/dev/null; then
-  echo -e "${YELLOW}REMINDER: website/ or docs/ changed — deploy live sites after push${NC}"
-  echo -e "${YELLOW}  → dockpanel.dev and/or docs.dockpanel.dev need rebuild${NC}"
+  echo -e "${YELLOW}REMINDER: website/ or docs/ changed — the rebuild belongs BEFORE the push${NC}"
+  echo -e "${YELLOW}  → 'mdbook build docs/' and 'cd website/client && npm run build' ARE the deploys${NC}"
+  echo -e "${YELLOW}  → Live Surfaces fires ON the push and reads the wire, so a rebuild now still${NC}"
+  echo -e "${YELLOW}    leaves a red run to re-run by hand (s280, s281, s326, s342)${NC}"
 fi
 
 # Check if panel/ source changed — remind about release binaries
