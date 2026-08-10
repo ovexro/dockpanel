@@ -6,6 +6,68 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed — six pins were being held green by a comment, and one of them guarded session revocation
+
+v2.95.0 fixed one suite whose arms could be satisfied by prose. This measures the
+rest of the family instead of arguing about it: all 115 findings from that census
+were executed in a sandbox — plant the mutation, assert it landed, re-run the
+suite ANSI-stripped, compare exit code and marks and totals against a baseline.
+
+**98 of 115 survived.** 95 carry an executed control proving the comment text is
+the sole cause of the green. Six needed no planted prose at all, because a comment
+already shipping in the tree satisfied them:
+
+| pin | fed by | what could be removed unnoticed |
+|---|---|---|
+| `auth-doors` — panic writes the session-revocation watermark | `security.rs:742` | the entire revocation leg: the settings write **and** the cache update |
+| `auth-doors` — `ws_metrics` enforces revocation on its own decode path | a planted `//` | the whole revocation block |
+| `ssl-correctness` — the pre-push hook uses the same gate CI does | `pre-push:180` | the audit gate invocation |
+| `update-rollback` — `update.sh` does not `--wait` on its own unit | `update.sh:43` | the entire `exec systemd-run` re-exec |
+| `update-rollback` — a zero exit is a handoff, not a success | `panel_update.rs:442` | the verdict-file watch loop |
+| `rpm-install` — `setup.sh` sets `httpd_can_network_connect` | `setup.sh:383` | the SELinux boolean, so the panel answers 502 on Enforcing |
+
+The first is the one that matters: the panic button could stop revoking sessions
+entirely and the pin that exists to prevent exactly that stayed green.
+
+Six suites now carry the language-aware stripper proven in v2.95.0 — hoisted
+**above** every call site, because `ssl-correctness` had its own stripper at line
+301 with 18 raw arms above it and `rpm-install` one at line 428 with 15 above.
+Bodies are stripped *before* they are sliced; the stripper blanks rather than
+deletes, so line numbers stay true. Prose subjects (a guide, a lockfile, a
+manifest) are still read raw, deliberately and marked.
+
+**Assertions 1604 → 1788.** Each suite gained hermetic stripper fixtures, an
+encoded mutation asserting every pinned pattern is live in code and then
+commenting it out, a structural arm refusing any future arm that reads a subject
+raw, and — because stripping makes a check see *less* — one planted real defect
+per polarity. Negative arms fail in the quiet direction, so they cannot be covered
+by the same control as positive ones.
+
+### Fixed — nine pins could be turned red by a comment alone
+
+The same blindness runs the other way. On a negative arm (match ⇒ bad) prose that
+merely *names* the forbidden shape trips the grep, so a comment could fail the
+suite on correct code. Nine arms across `ssl-correctness`, `nginx-listen`,
+`auth-doors`, `cpu-metric`, `install-integrity`, `wrong-host-dispatch`,
+`site-transfer-visibility` and `unattended-host-scope` did this. Stripping fixes
+both polarities at once.
+
+### Fixed — a structural guard that a path could walk past
+
+The new raw-read guards matched a subject written as `"$VAR"` but not as
+`"$VAR/file"`, and their subject lists omitted the directory variables, so a
+future arm written in path form was invisible to three of them. Both idioms are
+now unioned and the lists cover the directory vars; each guard is mutation-tested
+in both forms. `access-recovery`'s one legitimate raw read — a file *discovery*
+grep whose every hit is re-read through a stripping helper — is now marked, and
+the number of such marks is itself pinned so the escape hatch cannot widen
+silently.
+
+Also: the comment-out helper in four suites keyed its hit list on `NR == FNR`,
+which breaks on an empty hit list — the whole subject is consumed as hit numbers
+and the empty result reads as "the stripper is not reaching this subject" when the
+truth is "this pattern has no code left to comment out". Keyed on `FILENAME` now.
+
 ## [2.95.0] - 2026-08-09
 
 A release about the web terminal, and about a suite that was reading prose.

@@ -395,7 +395,7 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. Fifty-three suites, **1604 assertions**, all green at the current commit:
+survivable. Fifty-three suites, **1788 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
@@ -403,18 +403,18 @@ survivable. Fifty-three suites, **1604 assertions**, all green at the current co
 | `mail-auth-autosleep-pin-e2e.sh` | 28 |
 | `site-backup-databases-pin-e2e.sh` | 52 |
 | `git-deploy-sandbox-pin-e2e.sh` | 42 |
-| `ssl-correctness-pin-e2e.sh` | 47 |
+| `ssl-correctness-pin-e2e.sh` | 83 |
 | `nginx-listen-pin-e2e.sh` | 17 |
-| `rpm-install-pin-e2e.sh` | 34 |
+| `rpm-install-pin-e2e.sh` | 71 |
 | `mail-rpm-pin-e2e.sh` | 22 |
 | `cpu-metric-pin-e2e.sh` | 17 |
 | `sandbox-paths-pin-e2e.sh` | 94 |
 | `webmail-spam-pin-e2e.sh` | 18 |
 | `registration-gates-pin-e2e.sh` | 14 |
 | `settings-controls-pin-e2e.sh` | 19 |
-| `auth-doors-pin-e2e.sh` | 32 |
+| `auth-doors-pin-e2e.sh` | 70 |
 | `nginx-headers-pin-e2e.sh` | 78 |
-| `update-rollback-pin-e2e.sh` | 36 |
+| `update-rollback-pin-e2e.sh` | 52 |
 | `agent-error-propagation-pin-e2e.sh` | 21 |
 | `backup-destinations-git-env-pin-e2e.sh` | 35 |
 | `agent-sandbox-paths-pin-e2e.sh` | 10 |
@@ -447,11 +447,11 @@ survivable. Fifty-three suites, **1604 assertions**, all green at the current co
 | `passkey-ceremony-pin-e2e.sh` | 21 |
 | `auth-401-meaning-pin-e2e.sh` | 20 |
 | `upgrade-reach-pin-e2e.sh` | 15 |
-| `access-recovery-pin-e2e.sh` | 25 |
+| `access-recovery-pin-e2e.sh` | 66 |
 | `whmcs-config-writable-pin-e2e.sh` | 8 |
 | `system-logs-scope-pin-e2e.sh` | 13 |
 | `pipefail-sigpipe-pin-e2e.sh` | 9 |
-| `install-integrity-pin-e2e.sh` | 30 |
+| `install-integrity-pin-e2e.sh` | 46 |
 
 **On a schedule, from outside** (`live-surfaces.yml`, daily). Every layer above
 runs because something changed, which is exactly why none of them could catch the

@@ -20,7 +20,12 @@
 # Part 1 DRIVES restore-snapshot.sh end to end against a scratch tree with
 # stubbed systemctl/docker/curl — the guard decides whether to leave a panel
 # down, and a guard that has never been executed is a comment. Part 2 is source
-# analysis. Neither needs a box, a network or a build.
+# analysis over CODE ONLY: it strips comments from both subjects and reads the
+# Rust one as production code, because a claim about behaviour that a paragraph
+# of prose can satisfy is not a claim (s338). Its own arms are mutation-tested
+# on every run — commented out for the positive ones, and the real defect
+# planted for each negative one, which is the direction that fails quietly.
+# Neither part needs a box, a network or a build.
 #
 # Usage:   bash tests/update-rollback-pin-e2e.sh
 #          KEEP=1 bash tests/update-rollback-pin-e2e.sh   # keep the scratch tree
@@ -44,6 +49,110 @@ chk() { if [ "$1" = "0" ]; then ok "$2"; else bad "$2"; fi; }
 contains()     { case "$2" in *"$1"*) return 0;; *) return 1;; esac; }
 assert_has()   { if contains "$2" "$3"; then ok "$1"; else bad "$1 — expected to find: $2"; fi; }
 assert_lacks() { if contains "$2" "$3"; then bad "$1 — must NOT contain: $2"; else ok "$1"; fi; }
+
+# ── the comment strippers, ABOVE every arm that needs them (s337) ────────────
+#
+# A check placed below the thing it must run before inherits that position as a
+# defect even when the check itself is perfect — the s336 lesson, and the reason
+# these functions sit here rather than next to the source arms in Part 2.
+#
+# The comment marker is chosen by EXTENSION, never guessed. Getting it wrong is
+# not symmetric: over-stripping turns a positive arm loudly red, but turns a
+# NEGATIVE arm (match ⇒ bad) silently green, which is the direction that ships.
+comment_marker_for() {
+  case "$1" in
+    *.rs|*.mjs|*.js|*.ts|*.tsx)                echo '//' ;;
+    *.json)                                    echo ''   ;;  # JSON has no comments
+    *)                                         echo '#'  ;;  # .sh, .service, .gitignore, .toml
+  esac
+}
+
+# BLANK the comment, do not delete it. An ordering arm below compares line
+# numbers obtained from this stream against each other; a stripper that removes
+# lines renumbers the file and would silently change what that arm measures.
+code_lines() {
+  local f="$1" m
+  m=$(comment_marker_for "$f")
+  if [ -z "$m" ]; then cat "$f"; return; fi
+  if [ "$m" = '//' ]; then
+    # A block comment is recognised ONLY where one is actually written: opening
+    # at the start of a line and closing at the end of one. s294: a `/*` inside a
+    # string literal (a Dockerfile's `COPY … /app/target/release/*`) opened a
+    # comment that swallowed 485 lines of git_build.rs, and every ABSENCE arm
+    # over it passed on code the stripper had merely removed.
+    #
+    # A trailing `//` is stripped, but only when the text before it has BALANCED
+    # double quotes — otherwise `let u = "https://host"` would lose its tail.
+    # Backslash escapes are skipped so `\"` does not flip the parity.
+    awk '
+      /^[[:space:]]*\/\*/ &&  /\*\/[[:space:]]*$/ { print ""; next }
+      /^[[:space:]]*\/\*/                         { inblk = 1; print ""; next }
+      inblk { if ($0 ~ /\*\/[[:space:]]*$/) inblk = 0; print ""; next }
+      /^[[:space:]]*\/\//                         { print ""; next }
+      {
+        line = $0; out = line; n = length(line); q = 0; i = 1
+        while (i <= n) {
+          c = substr(line, i, 1)
+          if (c == "\\") { i += 2; continue }
+          if (c == "\"") { q = 1 - q; i++; continue }
+          if (q == 0 && c == "/" && substr(line, i + 1, 1) == "/") { out = substr(line, 1, i - 1); break }
+          i++
+        }
+        print out
+      }
+    ' "$f"
+  else
+    # Shell keeps to FULL-LINE comments only, and the asymmetry with `//` above is
+    # deliberate. A trailing `#` cannot be stripped safely here: `${VAR#prefix}`,
+    # `$#`, a colour literal and `sed 's/#//'` are all ordinary code. The
+    # convention in this tree is that explanation goes on its own line, and §2c
+    # asserts the stripper leaves a `#` inside a string alone.
+    awk '/^[[:space:]]*#/ { print ""; next } { print }' "$f"
+  fi
+}
+
+# Counted, never `grep -q`, and the reason is a trap this suite walked straight
+# into twice. Under `set -o pipefail`, `code_lines f | grep -q PATTERN` reports
+# FAILURE on a successful match: grep -q exits at the first hit, the producer
+# upstream dies of SIGPIPE (141), and pipefail takes the pipeline's status from
+# it. The effect is silent and selective — a file whose match is near the top gets
+# dropped while one whose match is near the bottom survives, because the producer
+# had already finished. `grep -c` consumes all of its input, so there is no early
+# exit and no signal. (s336 #365 is the same operator lying in the other
+# direction: a failed PRODUCER read as a clean no-match.)
+code_count() { local f="$1"; shift; code_lines "$f" | grep -c "$@" 2>/dev/null || true; }
+has_code()   { local f="$1"; shift; [ "$(code_count "$f" "$@")" -gt 0 ]; }
+
+# True file line numbers, because code_lines blanks rather than deletes.
+code_lineno() { local f="$1"; shift; code_lines "$f" | grep -n "$@" 2>/dev/null | head -1 | cut -d: -f1 || true; }
+
+# ── one addition to the set, for a second kind of blindness ──────────────────
+# The orchestrator's unit-test module quotes, in its own assertions, the very
+# filename the arms below look for. An arm that reads the whole file is
+# therefore satisfied BY THE TESTS even when the production constant has been
+# retargeted at something else entirely — measured against this suite at s338,
+# with nothing commented out at all. So the Rust subject is read as production
+# code: comments stripped as above, then everything from the test attribute to
+# EOF blanked. Height is preserved here too, for the same reason.
+prod_lines() {
+  code_lines "$1" | awk '
+    /^[[:space:]]*#\[cfg\(test\)\]/ { intest = 1 }
+    intest                          { print ""; next }
+                                    { print }'
+}
+prod_count() { local f="$1"; shift; prod_lines "$f" | grep -c "$@" 2>/dev/null || true; }
+has_prod()   { local f="$1"; shift; [ "$(prod_count "$f" "$@")" -gt 0 ]; }
+
+# The source arms in Part 2 are written through these four, so that no arm can
+# quietly go back to reading raw text: the file is named, never `cat`ed.
+pin_code()    { local l="$1" f="$2"; shift 2
+                if has_code "$f" "$@"; then ok "$l"; else bad "$l — expected to find in CODE: $*"; fi; }
+pin_no_code() { local l="$1" f="$2"; shift 2
+                if has_code "$f" "$@"; then bad "$l — must NOT appear in CODE: $*"; else ok "$l"; fi; }
+pin_prod()    { local l="$1" f="$2"; shift 2
+                if has_prod "$f" "$@"; then ok "$l"; else bad "$l — expected to find in PRODUCTION code: $*"; fi; }
+pin_no_prod() { local l="$1" f="$2"; shift 2
+                if has_prod "$f" "$@"; then bad "$l — must NOT appear in PRODUCTION code: $*"; else ok "$l"; fi; }
 
 SCRATCH="$(mktemp -d /tmp/dp-rollback-pin.XXXXXX)"
 cleanup() { [ -n "${KEEP:-}" ] || rm -rf "$SCRATCH"; }
@@ -262,33 +371,282 @@ assert_lacks "and it is NOT reported as left down" 'LEFT STOPPED'               
 echo
 echo "══ Part 2 · the update path, by source ══════════════════════════════════"
 echo
-U="$(cat "$UPDATE_SH")"
-O="$(cat "$ORCHESTRATOR")"
+# Every behavioural arm below reads CODE. This part used to `cat` both files and
+# grep the text, which let a line of DOCUMENTATION satisfy a claim about
+# behaviour — measured against this suite at s338: five separate mutations that
+# disabled the update path outright left all six arms green, because the
+# disabling edits' own comments still spelled the strings the arms looked for,
+# and in one case a pre-existing paragraph did it with nothing planted at all.
+#
+# Each pattern is held in a variable so the mutation section (§2d) can re-use the
+# arm's EXACT text. A mutation test that re-types the pattern proves the copy.
+# Bracket classes rather than backslash escapes throughout: the same strings are
+# handed to both grep -E and awk, and awk eats backslashes in a -v assignment.
+#
+# None of these patterns spells a name declared in the subjects. They match the
+# SHAPE of the declaration and lift the identifier out of the source when one is
+# needed, so that this file can never become the thing that satisfies a pin.
+PAT_VERDICT_PATH='^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="[^"]*last-panel-update[.]json"'
+PAT_EXIT_TRAP='^[[:space:]]*trap[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+EXIT'
+PAT_DETACHED='^[[:space:]]*exec[[:space:]]+systemd-run'
+PAT_RESULT_CONST='^[[:space:]]*(pub[[:space:]]+)?(const|static)[[:space:]]+[A-Z][A-Z0-9_]*[^=]*=[[:space:]]*"[^"]*last-panel-update[.]json"'
+PAT_RESULT_READ='read_to_string[(][A-Z][A-Z0-9_]*[)]'
+PAT_PROMOTED='verdict[[:space:]]*=[[:space:]]*Some[(][(][[:space:]]*true'
+PAT_VERDICT_DECL='^[[:space:]]*let[[:space:]]+mut[[:space:]]+[a-z_]+[[:space:]]*=[[:space:]]*None;'
 
-assert_has "update.sh writes a verdict file"   'last-panel-update.json'          "$U"
-assert_has "it writes one on every exit path"  'trap _dockpanel_on_exit EXIT'    "$U"
-assert_has "the orchestrator reads that file"  'last-panel-update.json'          "$O"
+O="$(cat "$ORCHESTRATOR")"   # raw, and used by exactly one arm — see §2b
+
+echo "§2a · update.sh, read as code"
+# The assignment has to be an assignment: the filename must sit inside the
+# QUOTED VALUE of a statement that starts the line. The census retargeted this
+# variable at /dev/null and left the old path in a trailing comment on the same
+# line; the arm passed, because a substring search cannot tell a value from an
+# apology.
+pin_code "update.sh writes a verdict file"  "$UPDATE_SH" -E "$PAT_VERDICT_PATH"
+pin_code "it writes one on every exit path" "$UPDATE_SH" -E "$PAT_EXIT_TRAP"
+
+# The trap is only worth anything if the handler it names already exists when
+# the trap is registered. Both line numbers come from the stripped stream, which
+# BLANKS rather than deletes — the numbers are the file's real ones. The handler
+# name is lifted out of the source rather than written here.
+HANDLER="$(code_lines "$UPDATE_SH" | grep -oE "$PAT_EXIT_TRAP" | awk 'NR==1{print $2}')"
+TRAP_LN="$(code_lineno "$UPDATE_SH" -E "$PAT_EXIT_TRAP")"
+DEF_LN=""
+[ -n "$HANDLER" ] && DEF_LN="$(code_lineno "$UPDATE_SH" -E "^[[:space:]]*${HANDLER}[(][)]")"
+if [ -n "$HANDLER" ] && [ -n "$TRAP_LN" ] && [ -n "$DEF_LN" ] && [ "$DEF_LN" -lt "$TRAP_LN" ]; then
+    ok "the trap names a handler that is already defined above it"
+else
+    bad "the trap names a handler that is already defined above it — handler='${HANDLER:-none}' defined=${DEF_LN:-none} trapped=${TRAP_LN:-none}"
+fi
 
 # The whole point: systemd-run's exit status describes the handoff, never the
 # work. The agent side learned this at s232 (lesson #49); the local path is the
 # sibling call site that never got it.
 #
-# These two are checked against EXECUTABLE lines only. update.sh documents at
-# length why it uses neither flag, and a negative check that reads raw source
-# fails the moment someone writes that documentation — the comment naming the
-# trap trips the assertion that guards against it.
-U_CODE="$(grep -v '^[[:space:]]*#' "$UPDATE_SH")"
-if contains 'exec systemd-run' "$U"; then
-    assert_lacks "update.sh does not --wait on its own detached unit" '--wait' "$U_CODE"
+# The GATE reads code too, and that is not a detail. It used to read raw text, so
+# when the census BLANKED the entire re-exec block — no comment planted anywhere
+# — a paragraph further down still mentioned the invocation, the gate held, and
+# both arms below printed green over a subject that no longer existed. An
+# absence is only meaningful while the thing it is an absence FROM is present.
+if has_code "$UPDATE_SH" -E "$PAT_DETACHED"; then
+    pin_no_code "update.sh does not --wait on its own detached unit" "$UPDATE_SH" -F -e '--wait'
     # --pipe implies --wait AND wires the unit's stdout to the caller, so when
     # the api is stopped the updater's next write takes SIGPIPE mid-swap.
-    assert_lacks "update.sh does not use --pipe either" '--pipe' "$U_CODE"
+    pin_no_code "update.sh does not use --pipe either"               "$UPDATE_SH" -F -e '--pipe'
 else
     bad "update.sh no longer re-execs into a transient unit"
 fi
 
-assert_has "the orchestrator says a zero exit is a handoff, not a success" \
+echo
+echo "§2b · the orchestrator, read as production code"
+# Read as PRODUCTION code: the file's own test module spells this filename twice
+# in its assertions, and those two lines alone kept this arm green while the
+# constant pointed somewhere else entirely.
+pin_prod "the orchestrator reads that file" "$ORCHESTRATOR" -E "$PAT_RESULT_CONST"
+
+# A constant that nothing reads is a comment with a type. The name is taken from
+# whatever the declaration above actually declares, so the arm cannot drift from
+# the constant it is about.
+const_use_count() {
+    local f="$1" name
+    name="$(prod_lines "$f" | grep -E "$PAT_RESULT_CONST" \
+            | sed -E 's/^[[:space:]]*(pub[[:space:]]+)?(const|static)[[:space:]]+([A-Z][A-Z0-9_]*).*/\3/' \
+            | awk 'NR==1{print}')"
+    if [ -z "$name" ]; then echo 0; return; fi
+    prod_count "$f" -F -e "$name"
+}
+if [ "$(const_use_count "$ORCHESTRATOR")" -ge 2 ]; then
+    ok "the path constant is read, not merely declared"
+else
+    bad "the path constant is read, not merely declared — it appears on fewer than two production lines"
+fi
+
+# THE behavioural claim, and it is a NEGATIVE one: nothing may write a success
+# verdict from the handoff. The census proved the point by promoting a zero exit
+# straight into a recorded success and dead-coding the watch loop; the arm that
+# used to carry this label was satisfied by a paragraph of prose two dozen lines
+# above the code, so it never moved. §2e plants that exact defect and requires
+# this pattern to fire on it.
+pin_no_prod "the orchestrator says a zero exit is a handoff, not a success" \
+            "$ORCHESTRATOR" -E "$PAT_PROMOTED"
+
+# DELIBERATELY RAW, and the only arm here that is. Its subject IS the prose: the
+# explanation of why a zero exit proves nothing has to stay beside the code that
+# depends on it, and stripping comments for this one would be the defect rather
+# than the fix. It makes no claim about behaviour — the arm above does that.
+assert_has "the reason a zero exit proves nothing is still written down beside it" \
            'never "the work succeeded"' "$O"
+
+echo
+echo "§2c · the stripper itself, over and under"
+# The strippers are now load-bearing for eight arms, so they get their own
+# subjects. Over-stripping is the quiet failure on the negative arms above:
+# every `--wait` in update.sh lives in a comment, so a stripper that ate one
+# character too many would leave those two arms green forever.
+PROBES="$SCRATCH/probes"; mkdir -p "$PROBES"
+cat > "$PROBES/probe.sh" <<'PROBE'
+#!/usr/bin/env bash
+# this whole line is explanation and must be blanked
+tag="colour #ffcc00"
+suffix="${tag#colour }"
+argc=$#
+PROBE
+cat > "$PROBES/probe.rs" <<'PROBE'
+// this whole line is explanation and must be blanked
+/* and so is this one,
+   which runs on */
+let endpoint = "https://example.invalid/api";
+let kept = 1; // this tail is explanation and must be blanked
+PROBE
+
+if [ "$(code_lines "$PROBES/probe.sh" | wc -l)" = "$(wc -l < "$PROBES/probe.sh")" ] \
+   && [ "$(code_count "$PROBES/probe.sh" -F -e 'must be blanked')" = "0" ]; then
+    ok "shell: a whole-line comment is blanked, and the file keeps its height"
+else
+    bad "shell: a whole-line comment is blanked, and the file keeps its height"
+fi
+if [ "$(code_count "$PROBES/probe.sh" -F -e '#ffcc00')" = "1" ] \
+   && [ "$(code_count "$PROBES/probe.sh" -F -e '${tag#colour }')" = "1" ] \
+   && [ "$(code_count "$PROBES/probe.sh" -F -e 'argc=$#')" = "1" ]; then
+    ok "shell: a # inside a string, a parameter expansion and \$# all survive"
+else
+    bad "shell: a # inside a string, a parameter expansion and \$# all survive"
+fi
+if [ "$(code_lines "$PROBES/probe.rs" | wc -l)" = "$(wc -l < "$PROBES/probe.rs")" ] \
+   && [ "$(code_count "$PROBES/probe.rs" -F -e 'must be blanked')" = "0" ] \
+   && [ "$(code_count "$PROBES/probe.rs" -F -e 'which runs on')" = "0" ]; then
+    ok "rust: line comments, a block comment and a trailing tail are all blanked"
+else
+    bad "rust: line comments, a block comment and a trailing tail are all blanked"
+fi
+if [ "$(code_count "$PROBES/probe.rs" -F -e 'https://example.invalid/api')" = "1" ] \
+   && [ "$(code_count "$PROBES/probe.rs" -F -e 'let kept = 1;')" = "1" ]; then
+    ok "rust: a // inside a string literal is code, and the line before a tail survives"
+else
+    bad "rust: a // inside a string literal is code, and the line before a tail survives"
+fi
+if [ "$(comment_marker_for x.rs)" = '//' ] && [ "$(comment_marker_for x.sh)" = '#' ] \
+   && [ -z "$(comment_marker_for x.json)" ]; then
+    ok "the marker comes from the extension, so a copy must keep the subject's"
+else
+    bad "the marker comes from the extension, so a copy must keep the subject's"
+fi
+
+echo
+echo "§2d · every pinned pattern, commented out on a copy"
+# An arm that has never been made to fail is a decoration. Each pattern above is
+# commented out in a COPY of its subject and its own predicate is run again: it
+# has to come back blind. The copy KEEPS THE SUBJECT'S EXTENSION, because the
+# stripper picks its language from the filename — a copy called `mutated` is read
+# as shell whatever it holds, and a Rust subject would keep every `//` line.
+MUTANTS="$SCRATCH/mutants"; mkdir -p "$MUTANTS"
+
+mutate_out() {   # subject, ERE, tag  →  path of a copy with matching lines commented
+    local src="$1" pat="$2" tag="$3" marker out
+    out="$MUTANTS/$tag-$(basename "$src")"
+    marker="$(comment_marker_for "$src")"; [ -n "$marker" ] || marker='#'
+    awk -v pat="$pat" -v m="$marker" '$0 ~ pat { print m " " $0; next } { print }' "$src" > "$out"
+    printf '%s\n' "$out"
+}
+
+# Did the plant LAND? Same height, and every changed line is the original with a
+# marker in front of it — nothing added, nothing deleted, nothing else touched.
+# A mutation arm that goes green over a plant which never landed is the blinded
+# arm all over again, one level up.
+plant_landed() {   # marker, subject, mutant  →  lines commented, or -1
+    awk -v m="$1" '
+        NR == FNR { a[FNR] = $0; n = FNR; next }
+        { if (FNR > n) { broke = 1 }
+          else if ($0 != a[FNR]) { if ($0 == m " " a[FNR]) c++; else broke = 1 } }
+        END { if (FNR != n || broke) print -1; else print c + 0 }' "$2" "$3"
+}
+
+mutation_blinds() {   # label, subject, ERE, tag, predicate
+    local label="$1" src="$2" pat="$3" tag="$4" pred="$5" mut marker n
+    mut="$(mutate_out "$src" "$pat" "$tag")"
+    marker="$(comment_marker_for "$src")"; [ -n "$marker" ] || marker='#'
+    n="$(plant_landed "$marker" "$src" "$mut")"
+    if [ "${n:--1}" -lt 1 ]; then
+        bad "$label — the mutation never landed (changed=$n), so a green arm proves nothing"
+    elif "$pred" "$mut" -E "$pat"; then
+        bad "$label — the arm still finds it with the line commented out"
+    else
+        ok "$label"
+    fi
+}
+
+mutation_blinds "commenting out the verdict-path assignment blinds its arm" \
+                "$UPDATE_SH" "$PAT_VERDICT_PATH" vpath has_code
+mutation_blinds "commenting out the exit trap blinds its arm" \
+                "$UPDATE_SH" "$PAT_EXIT_TRAP" trap has_code
+mutation_blinds "commenting out the detached re-exec trips the gate" \
+                "$UPDATE_SH" "$PAT_DETACHED" detach has_code
+mutation_blinds "commenting out the path constant blinds its arm" \
+                "$ORCHESTRATOR" "$PAT_RESULT_CONST" pconst has_prod
+
+MUT_READ="$(mutate_out "$ORCHESTRATOR" "$PAT_RESULT_READ" pread)"
+MUT_READ_N="$(plant_landed '//' "$ORCHESTRATOR" "$MUT_READ")"
+if [ "${MUT_READ_N:--1}" -lt 1 ]; then
+    bad "commenting out the read of the path constant blinds the read-count arm — the mutation never landed (changed=$MUT_READ_N)"
+elif [ "$(const_use_count "$MUT_READ")" -ge 2 ]; then
+    bad "commenting out the read of the path constant blinds the read-count arm — the count did not move"
+else
+    ok "commenting out the read of the path constant blinds the read-count arm"
+fi
+
+echo
+echo "§2e · the negative arms, with the real defect planted"
+# Stripping makes a check see LESS. On a POSITIVE arm that is loud — over-strip
+# and it goes red at HEAD, in front of whoever ran it. On a NEGATIVE arm, where
+# a match means BROKEN, it is silent: the arm goes green over exactly the code it
+# exists to forbid, and nothing anywhere says so. So each negative arm gets the
+# real defect written into a copy and has to FIRE on it.
+plant_line_after() {   # subject, anchor ERE, defect line, tag  →  copy path
+    local src="$1" anchor="$2" line="$3" tag="$4" out
+    out="$MUTANTS/$tag-$(basename "$src")"
+    # The defect text travels in the ENVIRONMENT, not in a -v assignment: awk
+    # interprets escape sequences in -v, and the flag being planted here is a
+    # shell continuation, so its trailing backslash was silently eaten and the
+    # plant landed as a different line than the one this arm then looked for.
+    # The landing check caught it — which is the entire reason it is here.
+    DEFECT_LINE="$line" awk -v a="$anchor" '
+        BEGIN { l = ENVIRON["DEFECT_LINE"] }
+        { print }
+        !done && $0 ~ a { print l; done = 1 }' "$src" > "$out"
+    printf '%s\n' "$out"
+}
+landed_insert() {   # subject, copy, defect line
+    [ "$(wc -l < "$2")" -eq "$(( $(wc -l < "$1") + 1 ))" ] \
+      && [ "$(grep -cxF "$3" "$1")" -eq 0 ] \
+      && [ "$(grep -cxF "$3" "$2")" -eq 1 ]
+}
+
+WAIT_DEFECT='            --wait \'
+CTL="$(plant_line_after "$UPDATE_SH" "$PAT_DETACHED" "$WAIT_DEFECT" ctlwait)"
+if landed_insert "$UPDATE_SH" "$CTL" "$WAIT_DEFECT" && has_code "$CTL" -F -e '--wait'; then
+    ok "planting --wait into the detached unit makes that arm fire"
+else
+    bad "planting --wait into the detached unit makes that arm fire — it did NOT, the arm is blind"
+fi
+
+PIPE_DEFECT='            --pipe \'
+CTL="$(plant_line_after "$UPDATE_SH" "$PAT_DETACHED" "$PIPE_DEFECT" ctlpipe)"
+if landed_insert "$UPDATE_SH" "$CTL" "$PIPE_DEFECT" && has_code "$CTL" -F -e '--pipe'; then
+    ok "planting --pipe into the detached unit makes that arm fire"
+else
+    bad "planting --pipe into the detached unit makes that arm fire — it did NOT, the arm is blind"
+fi
+
+# The census's own inversion, minus the branch surgery: a success verdict
+# recorded from the handoff itself, written one line under the declaration it
+# overwrites so it is in scope and unconditional.
+PROMOTE_DEFECT='        verdict = Some((true, String::from("complete"), String::new()));'
+CTL="$(plant_line_after "$ORCHESTRATOR" "$PAT_VERDICT_DECL" "$PROMOTE_DEFECT" ctlpromote)"
+if landed_insert "$ORCHESTRATOR" "$CTL" "$PROMOTE_DEFECT" && has_prod "$CTL" -E "$PAT_PROMOTED"; then
+    ok "planting a recorded success at the handoff makes that arm fire"
+else
+    bad "planting a recorded success at the handoff makes that arm fire — it did NOT, the arm is blind"
+fi
 
 echo
 echo "─────────────────────────────────────────────────────────────────────────"

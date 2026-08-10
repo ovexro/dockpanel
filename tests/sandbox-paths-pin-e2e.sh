@@ -857,7 +857,12 @@ comment_out_matches() {
   local src="$1" dst="$2" mode="$3" pat="$4" marker
   marker=$(comment_marker_for "$src")
   code_lines "$src" | grep -n "$mode" -e "$pat" 2>/dev/null | cut -d: -f1 > "$FIXDIR/hits" || true
-  awk -v marker="$marker" 'NR==FNR { hit[$1]=1; next } { if (FNR in hit) print marker " " $0; else print }' \
+  # Keyed on FILENAME, not `NR == FNR`: with an EMPTY hit list (a pin that has gone
+  # prose-only) the first record of the SUBJECT also satisfies NR == FNR, the whole
+  # file is consumed as hit numbers, and the empty copy then reads as "the stripper
+  # is not reaching this subject" when the truth is "nothing left to comment out".
+  awk -v marker="$marker" -v hitsfile="$FIXDIR/hits" \
+      'FILENAME == hitsfile { hit[$1]=1; next } { if (FNR in hit) print marker " " $0; else print }' \
       "$FIXDIR/hits" "$src" > "$dst"
 }
 
