@@ -180,7 +180,14 @@ if S=$(subj "$CLAIM"); then
   else
     bad "the Docker-app leg skips an unreachable member without saying so — that is failing open in silence"
   fi
-  if has "$O" 'get\("/apps"\).*unwrap_or'; then
+  # FLATTENED (#383). rustfmt breaks this chain at every `.`, so `get("/apps")`
+  # and the `unwrap_or` that swallows its error land on different lines and a
+  # line-oriented grep sees NEITHER — an ABSENCE arm that cannot match reports
+  # "clean" about code it cannot see. The gap is BOUNDED to one statement
+  # (`[^;]`), never `.*`: flattening widens matching, and a widened absence arm
+  # must still not be able to leap a statement boundary.
+  OFLAT=$(tr '\n' ' ' <<< "$O" | tr -s ' ')
+  if has "$OFLAT" 'get\( *"/apps" *\)[^;]{0,160}unwrap_or'; then
     bad "the Docker-app leg swallows agent errors (fails OPEN)"
   else
     ok "the Docker-app leg does not swallow agent errors"

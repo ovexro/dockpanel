@@ -226,8 +226,17 @@ if grep -qE "u\.role = 'admin'" <<< "$HRAW"; then
 else
   bad "B4 the admin arm reads users.role from the database"
 fi
-if grep -qE 'claims\.role' <<< "$H"; then
-  bad "B5 helpers.rs decides site access without consulting the token's role claim"
+# FLATTENED (#383). rustfmt breaks a long field-access chain at the `.`, emitting
+# `claims` NEWLINE `    .role`, which a line-oriented pattern reads as absence —
+# silently, in the reassuring direction. Flatten $H (the COMMENT-STRIPPED text),
+# never $HRAW: HRAW still carries the `claims.role` doc comment at helpers.rs:129
+# and would pin this arm permanently red on correct code.
+# The failure message also used to be the SUCCESS sentence, so a red described the
+# state it was complaining about the absence of. A red that misnames its cause is
+# a red nobody can act on.
+HFLAT=$(tr '\n' ' ' <<< "$H" | tr -s ' ')
+if grep -qE 'claims *\. *role' <<< "$HFLAT"; then
+  bad "B5 helpers.rs still consults the token's role claim to decide site access — a demoted account keeps its old reach until the session expires"
 else
   ok "B5 helpers.rs decides site access without consulting the token's role claim"
 fi

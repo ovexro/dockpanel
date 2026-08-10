@@ -342,7 +342,11 @@ if S=$(subj "$MIG_SVC"); then
   else
     bad "a path-walking parser no longer makes its doc_root archive-relative"
   fi
-  if has "$S" 'doc_root:[^,]*\.(display\(\)|to_string_lossy\(\)|to_str\(\)|into_os_string\(\))'; then
+  # FLATTENED (#383). rustfmt puts a long method chain on its own indented lines,
+  # so `doc_root:` and its `.display()` land on DIFFERENT lines and a line-oriented
+  # grep sees neither. Gap BOUNDED to one statement (`[^;{}]`), never `.*`.
+  SFLAT=$(tr '\n' ' ' <<< "$S" | tr -s ' ')
+  if has "$SFLAT" 'doc_root: *[^;{}]{0,160}\. *(display\(\)|to_string_lossy\(\)|to_str\(\)|into_os_string\(\))'; then
     bad "a parser hands a filesystem path straight to doc_root — import rejects it as traversal"
   else
     ok "no parser hands a filesystem path straight to doc_root"
@@ -351,7 +355,10 @@ if S=$(subj "$MIG_SVC"); then
   # get past them: an inventory path is joined ONTO the archive root by the
   # importer, so it must never already contain it. Interpolating `{root}` is
   # absolute by another name.
-  if has "$S" '(doc_root|file):[^,]*\{root\}'; then
+  # FLATTENED (#383) — same subject, same reason: rustfmt breaks a long `format!(`
+  # so the field name and its literal land on different lines. `[^,]*` still bounds
+  # the match to the field's own initializer, so no `.*` is introduced.
+  if has "$SFLAT" '(doc_root|file): *[^,]*\{root\}'; then
     bad "a parser embeds the archive root in a path the importer will join onto it"
   else
     ok "no parser embeds the archive root in an inventory path"

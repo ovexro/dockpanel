@@ -195,7 +195,13 @@ else
     bad "C1 the pre-delete backup at body-line $BK runs AFTER a destructive call (db $DB, files $NG) — create_backup refuses once the site root is gone, so it captures nothing"
   fi
 
-  if has "$DEL" 'let _ = agent[[:space:]]*$|let _ = agent\.post\([[:space:]]*&format!\("/backups'; then
+  # FLATTENED (#383). This used to be an alternation of hand-guessed wrap shapes,
+  # which only ever covers the wraps somebody thought of: the `.await` chain break
+  # was covered, the parent-attached wrap rustfmt emits for a chain without one was
+  # not. An ABSENCE arm that cannot match fails SILENTLY. Flatten, then allow the
+  # bounded gaps flattening leaves — ' *' only, never '.*'.
+  DEL_FLAT=$(tr '\n\t' '  ' <<< "$DEL" | tr -s ' ')
+  if has "$DEL_FLAT" 'let _ = agent *\. *post\( *&format!\( *"/backups'; then
     bad "C2 the pre-delete backup's result is discarded again — a permanent failure would be invisible"
   else
     ok "C2 the pre-delete backup's result is not silently discarded"

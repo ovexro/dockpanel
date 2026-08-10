@@ -429,7 +429,13 @@ else
 fi
 
 # G4 — 2FA enforcement must come from a read every role can make.
-if has "$L_FLAT" 'api\.get<Record<string, string>>\("/settings"\)'; then
+# L_FLAT is ALREADY flattened — and that was not enough, which is the whole of
+# lesson #383. Flattening leaves a SPACE at every break point, so the pattern has
+# to absorb it too: prettier breaks a 3-call member chain before `.get` (the head
+# `api` is longer than tabWidth, so it is not merged onto it) and breaks a long
+# call before its argument, adding a trailing comma. Both spellings of this exact
+# call already exist in this tree. Gaps BOUNDED (' *'), never '.*'.
+if has "$L_FLAT" 'api *\. *get<Record<string, *string>> *\( *"/settings" *,? *\)'; then
   bad "G4 useLayoutState still reads enforcement from admin-only /settings — the banner can only render for admins, who are not who it is for"
 elif has "$L_FLAT" 'enforced'; then
   ok "G4 2FA enforcement is read from a per-caller endpoint"

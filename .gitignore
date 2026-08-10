@@ -50,3 +50,11 @@ dist/
 # Staged from scripts/install-agent.sh by the frontend prebuild step — a build
 # artefact, never a second committed copy of the installer.
 panel/frontend/public/install-agent.sh
+
+# Scratch git worktrees created by parallel agent fan-outs. They are full
+# checkouts of this repo living INSIDE it, so `git add -A` during a fan-out
+# would stage six copies of the tree. They also inflate any pin that enumerates
+# files by path rather than by `git ls-files` — s340 saw ssl-correctness report
+# 119 assertions instead of 83 because it counted each worktree's frontend as
+# another frontend. CI is unaffected (fresh checkout), local sweeps are not.
+.claude/worktrees/

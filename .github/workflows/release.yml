@@ -87,8 +87,22 @@ jobs:
           name: release-notes
           path: release-notes.md
 
+  # The same job ci.yml runs. It is here because ci.yml triggers only on
+  # `push: branches: [main]` and pull_request — IT DOES NOT RUN ON A TAG — and
+  # this repo has no rulesets and no required status checks, so until s340 a
+  # release consulted the pin suites exactly never. v2.95.1 published 33 assets
+  # carrying a reverted SFTP transport while its CI run, started five seconds
+  # earlier on a different trigger, raced alongside with no authority to stop it.
+  #
+  # `build` needs it, so a red pin skips build → release → smoke-test and
+  # nothing publishes. The pins were always the instrument; this is what makes
+  # them the gate.
+  regression-pins:
+    name: Every Regression Pin
+    uses: ./.github/workflows/regression-pins.yml
+
   build:
-    needs: changelog
+    needs: [changelog, regression-pins]
     strategy:
       matrix:
         include:

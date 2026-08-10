@@ -1,0 +1,100 @@
+name: Regression Pins
+
+# The pin suites live in ONE place and are called by BOTH the branch CI and the
+# Release workflow.
+#
+# Why this is a reusable workflow rather than a copy in each: this repo has
+# already been bitten by two lists that could disagree and did — the pre-push
+# hook carried its own copy of the npm-audit allowlist and waived an advisory
+# that CI, with no allowlist, failed on for six straight releases. One list, one
+# behaviour, both callers.
+#
+# Why Release calls it at all (s340): `release.yml` triggers on a tag push and
+# `ci.yml` triggers only on `push: branches: [main]`, so CI DOES NOT RUN ON A
+# TAG. There are no rulesets and no required status checks on this repo
+# (`gh api repos/:owner/:repo/rulesets` returns []), so before this change the
+# release pipeline never consulted the pin suites at all: a tag whose pins were
+# red published 33 assets exactly as if they were green. v2.95.1's Release job
+# started five seconds after its CI run, on a different trigger, racing it.
+#
+# The pins are the instrument. Nothing was making them gate the ship.
+
+on:
+  workflow_call:
+
+jobs:
+  # s317: sixteen of the thirty-three suites named in docs/testing.md had no job
+  # here at all — auth-doors, sandbox-paths, site-backup-databases, the three
+  # mail pins, suspend-restore and nine more. They were green on the machine of
+  # whoever last ran them by hand and nothing else executed them, which is the
+  # same shape as the pre-push hook that spent an unknown number of releases in
+  # `.git/hooks/` where git does not look: a safety net nothing runs.
+  #
+  # This job runs EVERY suite, so a new one is covered on the day it is written
+  # rather than on the day somebody remembers to add a job. The suites that have
+  # their own job above keep it — a named job says which invariant broke, and
+  # these cost seconds each — so the overlap is deliberate, not an oversight.
+  #
+  # The two that need a prepared box are excluded and run in their own jobs with
+  # the setup they need: nginx-contract serves configs through a real nginx, and
+  # update-rollback drives restore-snapshot.sh end to end.
+  #
+  # The count guard is the point of the `find` (an arm that enumerates its own
+  # subjects must assert the enumeration first): a glob that matches nothing
+  # would otherwise report a green having run no suite at all.
+  regression-pins:
+    name: Every Regression Pin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Every source-only pin suite runs
+        run: |
+          shopt -s nullglob
+          failed=0
+          ran=0
+          # Collect the NAMES of the suites that fail, and their exit codes.
+          #
+          # This job reported a bare `exit 1` for at least two tags (b429edf and
+          # fef8177) while every suite in its own log printed `FAIL 0`, because
+          # `bash "$s" || failed=1` throws away which `$s` it was. A suite can
+          # exit non-zero without printing a single ✗ — a `set -u` on an unbound
+          # variable, a missing tool on the runner, a stray non-zero at end of
+          # file — and none of that is visible in a wall of green summaries.
+          # A red that cannot name its cause is a red nobody can act on, which
+          # is how this one survived two ships.
+          declare -a broke=()
+          for s in tests/*-pin-e2e.sh; do
+            case "$(basename "$s")" in
+              # NOT source-only — each needs something a runner does not have.
+              # nginx-headers serves configs through a real nginx; update-rollback
+              # drives restore-snapshot.sh end to end.
+              #
+              # tier2 is the one that had been failing every run since it was
+              # added (b0ec6ce): it runs `docker exec dockpanel-postgres psql`,
+              # INSERTs a row into `servers` and reads it back, so on a runner it
+              # dies at `FATAL: Admin user row not found` and exits 1. It passes
+              # on a developer box ONLY because that box has a live panel DB with
+              # that admin row — which is also why a local sweep can never
+              # reproduce this red. It is a LIVE suite living under the
+              # source-only glob, not a broken pin.
+              nginx-headers-pin-e2e.sh|update-rollback-pin-e2e.sh|tier2-pin-e2e.sh) continue ;;
+            esac
+            echo "── $s"
+            if bash "$s"; then :; else
+              rc=$?
+              failed=1
+              broke+=("$(basename "$s") (exit $rc)")
+              echo "::warning::$(basename "$s") exited $rc"
+            fi
+            ran=$((ran + 1))
+          done
+          echo "ran $ran source-only pin suites"
+          if [ "$ran" -lt 30 ]; then
+            echo "::error::only $ran suites ran — the enumeration is wrong, so a green here proves nothing"
+            exit 1
+          fi
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::${#broke[@]} suite(s) exited non-zero: ${broke[*]}"
+          fi
+          exit $failed

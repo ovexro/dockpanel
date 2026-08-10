@@ -852,21 +852,34 @@ mod tests {
     /// End-to-end against a real sshd running `ForceCommand internal-sftp`.
     ///
     /// Opt-in because it needs that server: export
-    /// `DOCKPANEL_SFTP_LAB=user:password@host:port:/remote/path`. Run s339 against
-    /// a chrooted Debian sshd in a container; without the variable it skips, so CI
-    /// is unaffected.
+    /// `DOCKPANEL_SFTP_LAB=user:password@host:port:/remote/path` and run
+    /// `cargo test -- --ignored`. Run s339 against a chrooted Debian sshd in a
+    /// container. CI is unaffected because the test is `#[ignore]`d, not because
+    /// it quietly returns — that distinction is the whole point of the note below.
     ///
-    /// ⚠ **A skip here is indistinguishable from a pass in the summary line**, and
-    /// v2.95.1 shipped a reverted transport partly because of that. Treat the
-    /// transport arms in `backup-lands-pin-e2e.sh` as the CI-side guard; this test
-    /// is the deeper check you run by hand when touching the transport, and if you
-    /// are touching it, set the variable.
+    /// v2.95.1 shipped a reverted transport partly because this test used to
+    /// return early when the variable was unset: a run that executed NOTHING
+    /// printed the same `ok` as a run that proved the transport, and the summary
+    /// line counted it as a pass. Two changes remove that state:
+    ///
+    /// - `#[ignore]` puts it in the summary's `N ignored` column, which is a
+    ///   counted, visible state rather than a silent pass.
+    /// - the variable is now `expect`ed rather than matched, so running it
+    ///   (`cargo test -- --ignored`) without a lab PANICS instead of passing
+    ///   vacuously. A test that cannot run must not be able to report success.
+    ///
+    /// Treat the transport arms in `backup-lands-pin-e2e.sh` as the CI-side
+    /// guard; this is the deeper check you run by hand when touching the
+    /// transport, and if you are touching it, set the variable.
     #[tokio::test]
+    #[ignore = "needs an sshd running ForceCommand internal-sftp; set DOCKPANEL_SFTP_LAB and run with --ignored"]
     async fn lab_upload_and_test_survive_forcecommand() {
-        let Ok(spec) = std::env::var("DOCKPANEL_SFTP_LAB") else {
-            eprintln!("skipping: DOCKPANEL_SFTP_LAB not set");
-            return;
-        };
+        let spec = std::env::var("DOCKPANEL_SFTP_LAB").expect(
+            "DOCKPANEL_SFTP_LAB must be set to run this test \
+             (user:password@host:port:/remote/path). It is #[ignore]d by default; \
+             being asked to run means a lab was expected, so an unset variable is \
+             a configuration error, not a reason to pass.",
+        );
         let (creds, rest) = spec.split_once('@').expect("user:pass@host:port:path");
         let (user, pass) = creds.split_once(':').expect("user:pass");
         let parts: Vec<&str> = rest.splitn(3, ':').collect();
