@@ -287,15 +287,89 @@ jobs:
         continue-on-error: true
         run: |
           cd release
+          # An EXPLICIT identity token, refreshed per asset, rather than letting
+          # cosign detect an ambient one.
+          #
+          # v2.99.0 signed 4 of 11 assets and the step still reported success.
+          # On the 5th, cosign's ambient detection missed and it fell back to
+          # INTERACTIVE device flow — printing "Enter the verification code ... in
+          # your browser" on a headless runner, where no browser will ever arrive.
+          # Supplying the identity explicitly leaves no interactive path to fall
+          # back to, so a token failure fails that asset in seconds instead of
+          # stalling the loop and silently dropping every asset after it.
+          mint_token() {
+            curl -fsSL --retry 3 --retry-delay 2 \
+              -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sigstore" \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])'
+          }
+
+          signed=0; total=0; failed=""
           for f in $(ls | grep -v '\.sig$' | grep -v '\.pem$'); do
-            echo "Signing $f"
-            cosign sign-blob --yes \
-              --output-signature "${f}.sig" \
-              --output-certificate "${f}.pem" \
-              "$f"
+            total=$((total+1))
+            ok=0
+            for attempt in 1 2 3; do
+              echo "Signing $f (attempt $attempt)"
+              if TOK=$(mint_token) && [ -n "$TOK" ] && cosign sign-blob --yes \
+                   --identity-token "$TOK" \
+                   --output-signature "${f}.sig" \
+                   --output-certificate "${f}.pem" \
+                   "$f"; then ok=1; break; fi
+              sleep 5
+            done
+            # A .sig the signer did not finish writing is worse than none: it
+            # would satisfy a coverage count while verifying against nothing.
+            if [ "$ok" = "1" ] && [ -s "${f}.sig" ] && [ -s "${f}.pem" ]; then
+              signed=$((signed+1))
+            else
+              rm -f "${f}.sig" "${f}.pem"
+              failed="${failed} ${f}"
+            fi
           done
+
+          echo "SIGNED_COUNT=${signed}" >> "$GITHUB_ENV"
+          echo "ASSET_COUNT=${total}"  >> "$GITHUB_ENV"
+          echo "::notice::Signed ${signed}/${total} release assets"
+          [ -n "$failed" ] && echo "::warning::UNSIGNED:${failed}"
           echo "Signed assets:"
-          ls -lh *.sig *.pem
+          ls -lh ./*.sig ./*.pem 2>/dev/null || echo "  (none)"
+
+      # The publish must never be lost to a Sigstore outage — that is why the step
+      # above is continue-on-error, and it stays that way. What must not survive is
+      # the release BODY asserting signatures that are not attached: v2.99.0 told
+      # every reader "the .sig/.pem pairs are attached below" over 7 unsigned
+      # artefacts. The claim is now reconciled against what was actually produced,
+      # here, after signing and before publishing.
+      - name: Reconcile the signing claim with what was signed
+        run: |
+          set -euo pipefail
+          NOTES=artifacts/release-notes/release-notes.md
+          [ -f "$NOTES" ] || { echo "no release notes at $NOTES"; exit 1; }
+          A=$(ls release | grep -vc -e '\.sig$' -e '\.pem$')
+          S=$(ls release | grep -c '\.sig$' || true)
+          echo "artefacts=$A signed=$S"
+          if [ "$S" -eq "$A" ] && [ "$A" -gt 0 ]; then
+            echo "::notice::All $A artefacts signed — the published claim stands."
+            exit 0
+          fi
+          echo "::warning::Only $S of $A artefacts are signed — rewriting the claim."
+          python3 - "$NOTES" "$S" "$A" <<'PY'
+          import sys, pathlib, re
+          notes, signed, total = pathlib.Path(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
+          text = notes.read_text()
+          claim = ("Binaries are static musl builds signed with Sigstore; `checksums.txt`\n"
+                   "and the `.sig`/`.pem` pairs are attached below.")
+          if signed:
+              honest = (f"Binaries are static musl builds. **{signed} of {total} assets carry a "
+                        f"Sigstore `.sig`/`.pem` pair**; the rest could not be signed on this run "
+                        f"and are attached unsigned. Verify any asset against `checksums.txt`.")
+          else:
+              honest = ("Binaries are static musl builds. **Signing did not run on this release** — "
+                        "no `.sig`/`.pem` pairs are attached. Verify against `checksums.txt`.")
+          notes.write_text(text.replace(claim, honest) if claim in text
+                           else text.rstrip() + "\n\n" + honest + "\n")
+          print("claim reconciled")
+          PY
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3

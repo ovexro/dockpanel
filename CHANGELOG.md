@@ -6,6 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.99.1]
+
+### Fixed — v2.99.0 published 19 assets and told you all of them were signed
+
+v2.98.0 attached 33 assets. v2.99.0 attached **19**: eleven artefacts, of which
+only four carried a Sigstore `.sig`/`.pem` pair. `checksums.txt` and the two agent
+binaries are signed; the API binaries, the CLI binaries, two SBOMs and the
+frontend archive are not.
+
+The cause is in the signing loop. `cosign sign-blob` was called without an
+explicit identity, so it detected an ambient one — and on the fifth artefact that
+detection missed and cosign fell back to **interactive browser device flow**,
+printing a verification code on a headless runner where no browser will ever
+arrive. The loop stopped there. The step is deliberately `continue-on-error` so a
+Sigstore outage cannot cost the publish, which meant the failure was swallowed and
+the step reported success.
+
+That trade-off is still right and is unchanged. What was wrong is that the release
+body went on asserting *"the `.sig`/`.pem` pairs are attached below"* over seven
+artefacts where they were not.
+
+Three changes: signing now supplies an explicit identity token refreshed per
+asset, so there is no interactive path to fall back to and a token failure costs
+one asset rather than every asset after it; a signature that does not complete has
+its partial pair deleted rather than left to be counted as coverage; and the
+release body is now reconciled against what was actually produced, before the
+release is created — if not everything is signed, it says how many are, and if
+nothing is, it says that.
+
+**v2.99.0's binaries are sound** — they are the same artefacts CI built and
+`checksums.txt` covers all of them and is itself signed. Only the signature
+coverage, and the claim about it, were wrong.
+
 ## [2.99.0]
 
 ### Added — the panel installs `sshpass` on a server that is already running

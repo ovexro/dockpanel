@@ -229,5 +229,58 @@ else
 fi
 
 echo
+echo "── S3 the release cannot CLAIM a signature it did not attach ──"
+
+# v2.99.0 published 19 assets where v2.98.0 published 33. Signing stopped after
+# the 4th artefact: cosign's ambient identity detection missed and it fell back
+# to INTERACTIVE device flow, printing "Enter the verification code ... in your
+# browser" on a headless runner. The step is deliberately continue-on-error so a
+# Sigstore outage cannot cost the publish — that stays — but the release BODY
+# went on asserting that the .sig/.pem pairs were attached, over 7 that were not.
+SRC_REL=$(cat "$REL")
+
+# Keyed on the INVOCATION, not the bare flag name. The first draft of this arm
+# grepped the bare name and stayed green after the flag was deleted from the
+# cosign call — because the comment explaining the flag still spelled it, three
+# lines above. A pin reads raw source, so prose in the subject satisfies it.
+if hasE "$SRC_REL" '\-\-identity-token "\$TOK"'; then
+  ok "signing supplies an explicit identity token, so it cannot prompt for a browser"
+else
+  bad "cosign may fall back to interactive device flow and silently drop every later asset"
+fi
+
+# A partial run must not leave a half-written pair behind: it would satisfy a
+# coverage count while verifying against nothing.
+if hasE "$SRC_REL" 'rm -f "\$\{f\}\.sig"'; then
+  ok "a failed signature removes its own partial pair"
+else
+  bad "a half-written .sig can survive and be counted as coverage"
+fi
+
+# The claim is reconciled against what was produced, and it happens BEFORE the
+# release is created — after it, the body is already published.
+if hasE "$SRC_REL" 'Reconcile the signing claim'; then
+  ok "the signing claim is reconciled against what was actually signed"
+else
+  bad "nothing compares the published signing claim to the assets attached"
+fi
+
+RECON_LINE=$(grep -n 'Reconcile the signing claim' "$REL" | head -1 | cut -d: -f1)
+CREATE_LINE=$(grep -n 'Create GitHub Release' "$REL" | head -1 | cut -d: -f1)
+if [ -n "$RECON_LINE" ] && [ -n "$CREATE_LINE" ] && [ "$RECON_LINE" -lt "$CREATE_LINE" ]; then
+  ok "it runs BEFORE the release is created, while the body can still be corrected"
+else
+  bad "the reconcile runs after publish, where correcting the body is too late"
+fi
+
+# And the publish must still survive a total outage — the property that made the
+# step non-fatal in the first place. Pinned so a future 'fix' cannot trade it away.
+if hasE "$SRC_REL" 'continue-on-error: true'; then
+  ok "signing stays non-fatal, so an outage ships unsigned rather than losing the publish"
+else
+  bad "signing became fatal — a Sigstore outage now costs the release entirely"
+fi
+
+echo
 echo "── ship gate pins: PASS $PASS / FAIL $FAIL ──"
 [ "$FAIL" -eq 0 ] || exit 1
