@@ -376,5 +376,101 @@ else
 fi
 
 echo
+echo "§7 a server that is ALREADY RUNNING can be repaired from the panel (#93)"
+
+# §6 proves a FRESH install gets the binary. That was never the gap: `update.sh`
+# upgrades binaries and installs no packages, so a box that predates §6 stays
+# broken for ever and its operator was told to run a package manager by hand.
+# These arms pin the door that closes it.
+SI=panel/agent/src/routes/service_installer.rs
+SYS=panel/backend/src/routes/system.rs
+MOD=panel/backend/src/routes/mod.rs
+CP=panel/backend/src/services/prerequisites/copy.rs
+for f in "$SI" "$SYS" "$MOD" "$CP"; do
+  [ -f "$f" ] || { echo "missing $f"; exit 1; }
+done
+SRC_SI=$(strip "$SI")
+SRC_SYS=$(strip "$SYS")
+SRC_MOD=$(strip "$MOD")
+SRC_CP=$(strip "$CP")
+
+# Both route arms close on the quote. An unanchored `…/sshpass` is also satisfied
+# by `…/sshpass_DISABLED`, so renaming the route out of service left them green —
+# measured, not guessed.
+if hasE "$SRC_SI" '"/services/install/sshpass"'; then
+  ok "the agent exposes an install route for sshpass"
+else
+  bad "the agent has no sshpass install route — an existing server cannot be repaired"
+fi
+
+if hasE "$SRC_MOD" '"/api/services/install/sshpass"'; then
+  ok "the panel routes through to it"
+else
+  bad "the agent route is unreachable — nothing on the panel calls it"
+fi
+
+# The handler runs a package transaction as root on the target box. It must
+# resolve that box from a scope the caller is PROVEN to hold, never from an id
+# they can type: the fleet resolver behind the alternative carries no ownership
+# predicate at all, so naming a stranger's uuid would install on their machine.
+if hasE "$(fnbody "$SRC_SYS" install_sshpass)" 'ServerScope'; then
+  ok "the install is bound to a server the caller is proven to own"
+else
+  bad "the sshpass install resolves its target without proving ownership"
+fi
+
+if hasE "$SRC_SI" '"sshpass":[[:space:]]*\{[[:space:]]*"installed"'; then
+  ok "install-status reports sshpass, so the panel can show it before it is needed"
+else
+  bad "nothing reports whether sshpass is present — the control cannot render state"
+fi
+
+# The shared fnbody() anchors on `pub async fn`, and this handler is private, so
+# it extracts NOTHING here. An empty window makes a presence arm red for a reason
+# that has nothing to do with the code — and would make an ABSENCE arm green. So
+# match either spelling, and refuse to score an empty extraction at all.
+fnbody_any() { awk "/async fn $2\(/,/^}/" <<< "$1"; }
+TD=$(fnbody_any "$SRC_RBR" test_destination)
+if [ "$(printf '%s' "$TD" | wc -l)" -lt 20 ]; then
+  bad "test_destination did not extract — every arm below it is measuring nothing"
+else
+  ok "test_destination extracted ($(printf '%s' "$TD" | wc -l) lines)"
+
+  # THE defect this ships with the door: the sentence above has existed since s289
+  # and never reached anybody. The panel keeps the body of a 4xx and replaces the
+  # body of a 5xx with an incident reference, so answering 5xx for a missing
+  # package discarded the remedy and told the operator their agent had broken.
+  if hasE "$TD" 'FAILED_DEPENDENCY'; then
+    ok "a missing prerequisite answers 4xx, so its sentence survives the trip"
+  else
+    bad "the missing-sshpass answer is a 5xx again — the panel will eat the remedy"
+  fi
+
+  # ...and it must be that ONE condition, not every SFTP failure. A blanket 4xx
+  # would forward real gateway errors as if the caller could act on them.
+  #
+  # Scoped to the SFTP branch on purpose: test_destination also holds the S3
+  # branch, whose own gateway error satisfied a whole-function arm even after the
+  # SFTP one had been flipped. An arm must be no broader than the property it
+  # defends.
+  SFTP_ARM=$(awk '/"sftp" =>/,/SFTP connection successful/' <<< "$TD")
+  if [ "$(printf '%s' "$SFTP_ARM" | wc -l)" -lt 10 ]; then
+    bad "the sftp branch did not extract — the two status arms measure nothing"
+  elif hasE "$SFTP_ARM" 'BAD_GATEWAY'; then
+    ok "every other SFTP failure is still a gateway error"
+  else
+    bad "the 4xx is unconditional — genuine agent failures now read as user error"
+  fi
+fi
+
+# The guidance is generated from this file, so the instruction to run a package
+# manager by hand cannot survive here without reappearing on both surfaces.
+if hasE "$SRC_CP" '(apt-get|dnf) install sshpass'; then
+  bad "the guidance still tells the operator to install it by hand"
+else
+  ok "the guidance no longer asks the operator to run a package manager"
+fi
+
+echo
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

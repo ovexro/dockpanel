@@ -1042,12 +1042,12 @@ pub static FIELDS: &[Field] = &[
         more: "A backup on the disk it protects covers a bad deploy or a dropped table, and \
                nothing worse. Destinations are S3-compatible storage or any SFTP server. \
                SFTP destinations that authenticate by PASSWORD need sshpass on the server the \
-               backup runs from: fresh installs and servers added since v2.74.0 get it \
-               automatically, but a panel upgraded in place does not, because update.sh \
-               upgrades binaries and installs no packages — run apt-get install sshpass (or \
-               dnf install sshpass) once. Key-authenticated SFTP and every S3 destination are \
-               unaffected, and when it is missing Test Connection names it rather than \
-               failing opaquely.",
+               backup runs from: fresh installs and servers added through the agent installer \
+               get it automatically, but a panel upgraded in place does not, because update.sh \
+               upgrades binaries and installs no packages. When it is missing, Test Connection \
+               now says so in those words and Settings can install it onto that server for \
+               you — you are no longer asked to run a package manager by hand. \
+               Key-authenticated SFTP and every S3 destination are unaffected.",
         escalates_to: "backups.destination_configured",
     },
     Field {

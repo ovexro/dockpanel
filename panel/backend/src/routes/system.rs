@@ -715,6 +715,18 @@ pub async fn install_redis(
     install_service_with_log(&state, agent, claims.sub, &claims.email, "Redis", "/services/install/redis", None).await
 }
 
+/// Install `sshpass` on the scoped server, for password-authenticated SFTP
+/// backup destinations. `ServerScope` rather than a `server_id` in the body:
+/// this runs a package transaction as root, so the target must be a server the
+/// caller is proven to own, not one they can name. Issue #93.
+pub async fn install_sshpass(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    ServerScope(_server_id, agent): ServerScope,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    install_service_with_log(&state, agent, claims.sub, &claims.email, "sshpass", "/services/install/sshpass", None).await
+}
+
 pub async fn install_nodejs(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,

@@ -149,7 +149,18 @@ async fn test_destination(
                 remote_path,
             )
             .await
-            .map_err(|e| err(StatusCode::BAD_GATEWAY, &e))?;
+            .map_err(|e| {
+                // A missing package on this box is a precondition the caller can
+                // act on, not the agent falling over. The panel keeps the body of
+                // a 4xx and replaces the body of a 5xx with an incident id, so
+                // answering 5xx here is what discards the remedy.
+                let status = if e == remote_backup::SSHPASS_MISSING {
+                    StatusCode::FAILED_DEPENDENCY
+                } else {
+                    StatusCode::BAD_GATEWAY
+                };
+                err(status, &e)
+            })?;
 
             Ok(Json(serde_json::json!({ "success": true, "message": "SFTP connection successful" })))
         }

@@ -29,6 +29,7 @@ pub fn router() -> Router<AppState> {
         .route("/services/install/redis", post(install_redis))
         .route("/services/install/nodejs", post(install_nodejs))
         .route("/services/install/composer", post(install_composer))
+        .route("/services/install/sshpass", post(install_sshpass))
         .route("/services/uninstall/php", post(uninstall_php))
         .route("/services/uninstall/certbot", post(uninstall_certbot))
         .route("/services/uninstall/ufw", post(uninstall_ufw))
@@ -87,6 +88,8 @@ async fn install_status() -> Result<Json<serde_json::Value>, ApiErr> {
 
     let cloudflared_installed = which("cloudflared").await;
     let cloudflared_running = is_active("cloudflared").await;
+    // No unit to probe: sshpass is a binary the backup path execs, not a daemon.
+    let sshpass_installed = which("sshpass").await;
 
     Ok(Json(serde_json::json!({
         "php": { "installed": php_installed, "running": php_running, "version": php_version },
@@ -99,6 +102,7 @@ async fn install_status() -> Result<Json<serde_json::Value>, ApiErr> {
         "composer": { "installed": composer_installed },
         "waf": { "installed": waf_installed },
         "cloudflared": { "installed": cloudflared_installed, "running": cloudflared_running },
+        "sshpass": { "installed": sshpass_installed },
     })))
 }
 
@@ -1121,6 +1125,48 @@ async fn is_active(service: &str) -> bool {
         .and_then(|r| r.ok())
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+/// Install `sshpass`, which password-authenticated SFTP backup destinations
+/// shell out to.
+///
+/// Servers added through `install-agent.sh` get it at install time. A box that
+/// was already running when that landed never did, and `update.sh` upgrades
+/// binaries without installing packages — so before this route the only way to
+/// fix such a server was to tell its operator to run a package manager by hand,
+/// which is exactly what issue #93 was left open until we stopped doing.
+async fn install_sshpass() -> Result<Json<serde_json::Value>, ApiErr> {
+    use crate::services::pkg;
+
+    if let Some(why) = pkg::no_installer_reason("Installing sshpass").await {
+        return Err(err(StatusCode::NOT_IMPLEMENTED, &why));
+    }
+    tracing::info!("Installing sshpass...");
+
+    // An already-running server is precisely the box whose package index is
+    // months stale — that is the population this route exists for.
+    pkg::refresh_index().await;
+    pkg::install(&["sshpass"]).await.map_err(|e| {
+        err(StatusCode::INTERNAL_SERVER_ERROR, &format!("sshpass install failed: {e}"))
+    })?;
+
+    // Report the thing the caller actually depends on: whether the binary the
+    // backup path shells out to is now on PATH. A package manager reporting
+    // success is a different claim, and `remote_backup` fails on ENOENT of the
+    // binary, not on the package's absence.
+    if !which("sshpass").await {
+        return Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "The sshpass package reported a successful install but no sshpass binary is on \
+             PATH. Password-authenticated SFTP destinations will still fail from this server.",
+        ));
+    }
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "sshpass installed. Password-authenticated SFTP backup destinations can \
+                    now run from this server."
+    })))
 }
 
 async fn which(cmd: &str) -> bool {

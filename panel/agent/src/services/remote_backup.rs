@@ -1,6 +1,20 @@
 use std::path::Path;
 use crate::safe_cmd::safe_command;
 
+/// Returned when the binary a password-authenticated SFTP destination execs is
+/// absent from the box the backup runs on.
+///
+/// It is a named constant because the caller has to recognise this specific
+/// condition to answer with a 4xx. Reporting it as a 5xx makes the panel replace
+/// the whole sentence with an incident reference, so the operator is told their
+/// agent broke when the agent is working perfectly and the box is simply missing
+/// a package — which is the state s289 measured and the message below was
+/// written to end.
+pub const SSHPASS_MISSING: &str =
+    "sshpass is not installed on this server, and it is required for \
+     password-authenticated SFTP destinations. The panel can install it for you from \
+     Settings, or use an SSH key instead.";
+
 /// RAII guard that deletes a temp file on drop, ensuring cleanup on all code paths.
 struct TempFileGuard {
     path: String,
@@ -388,10 +402,7 @@ async fn run_sftp(
             // the binary nor the remedy — s289 measured exactly that, as an opaque
             // 502, on a fresh install where nothing had installed it.
             if prog == "sshpass" && e.kind() == std::io::ErrorKind::NotFound {
-                "sshpass is not installed on this server, and it is required for \
-                 password-authenticated SFTP destinations. Install it (apt-get install \
-                 sshpass / dnf install sshpass) or use an SSH key instead."
-                    .to_string()
+                SSHPASS_MISSING.to_string()
             } else {
                 format!("Failed to run {prog}: {e}")
             }

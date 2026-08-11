@@ -6,6 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.99.0]
+
+### Added — the panel installs `sshpass` on a server that is already running
+
+Password-authenticated SFTP backup destinations shell out to `sshpass`. Fresh
+installs and servers added through the agent installer get it automatically, but
+a box that was already running when that landed never did — `update.sh` upgrades
+binaries and installs no packages. The only remedy was to tell the operator to
+run a package manager by hand, and issue #93 was left open on our own commitment
+not to leave it that way.
+
+Settings now lists `sshpass` alongside the other optional components, reports
+whether it is present, and installs it onto the selected server with the install
+log streamed, the same way Fail2Ban or Redis are installed.
+
+The install is bound to a server the caller is proven to own rather than to a
+server id supplied in the request: it runs a package transaction as root, and the
+fleet resolver behind the alternative carries no ownership predicate at all.
+
+### Fixed — the reason a password SFTP destination failed never reached anyone
+
+When `sshpass` was absent the agent produced a sentence naming the binary and the
+remedy. It answered with a **502**, and the panel deliberately replaces the body
+of any agent 5xx with an incident reference — that arm exists so an agent fault
+does not leak internals. So the operator was shown `Operation failed. Reference:
+<uuid>`, which says their agent broke, when the agent was working perfectly and
+the box was simply missing a package.
+
+A missing prerequisite is now answered as a **424**, so the sentence survives the
+trip. Every other SFTP failure is still a gateway error. The guidance that told
+operators to run `apt-get install sshpass` by hand is gone, and so is its claim
+that Test Connection already named the problem — it did not.
+
 ## [2.98.0]
 
 ### Fixed — the two light themes could not carry their own text

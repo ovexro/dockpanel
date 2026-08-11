@@ -2228,6 +2228,7 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
     { id: "composer", label: "Composer", desc: "PHP dependency manager for Laravel, Symfony, Drupal", field: "composer", checkInstalled: (s: ServiceStatus) => s?.composer?.installed, checkRunning: () => null, extra: () => null },
     { id: "waf", label: "WAF (ModSecurity)", desc: "Web Application Firewall with OWASP CRS — blocks SQL injection, XSS, and OWASP Top 10", field: "waf", checkInstalled: (s: ServiceStatus) => s?.waf?.installed, checkRunning: () => null, extra: () => null },
     { id: "cloudflared", label: "Cloudflare Tunnel", desc: "Expose sites without port forwarding — zero-trust access via Cloudflare's network", field: "cloudflared", checkInstalled: (s: ServiceStatus) => s?.cloudflared?.installed, checkRunning: (s: ServiceStatus) => s?.cloudflared?.running, extra: () => null },
+    { id: "sshpass", label: "sshpass", desc: "Required for password-authenticated SFTP backup destinations — not needed for SSH-key or S3 destinations", field: "sshpass", checkInstalled: (s: ServiceStatus) => s?.sshpass?.installed, checkRunning: () => null, extra: () => null },
   ];
 
   return (

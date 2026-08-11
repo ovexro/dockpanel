@@ -1286,6 +1286,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/services/install/redis", post(system::install_redis))
         .route("/api/services/install/nodejs", post(system::install_nodejs))
         .route("/api/services/install/composer", post(system::install_composer))
+        .route("/api/services/install/sshpass", post(system::install_sshpass))
         .route("/api/services/install/waf", post(system::install_waf))
         .route("/api/services/install/cloudflared", post(system::install_cloudflared))
         .route("/api/services/install/{install_id}/log", get(system::install_log))
