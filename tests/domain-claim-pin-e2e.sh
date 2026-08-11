@@ -547,6 +547,110 @@ else
   bad "no client-role migration found — the gate refuses a value no account can hold"
 fi
 
+echo "== §G  a mail domain is a domain HOLDER, and only an admin may claim over it =="
+
+# s347 / GitHub #106. Client-scoped mail matches `mail_domains.domain` against the
+# domain of a site the caller owns — which makes `sites.domain` an authorisation
+# key, and that column is writable by the very account being authorised. Before
+# this, the occupancy oracle asked sites, git deploys, stacks and each agent's
+# apps, and never asked about mail: so a non-admin could point a site they already
+# owned at a name whose mailboxes existed and mint their own access to them. The
+# collision had no nginx symptom, which is why it survived — a mail-only domain
+# has no vhost to overwrite.
+
+if S=$(subj "$CLAIM"); then
+  B=$(fnbody "$S" find_occupant)
+  if [ -z "$B" ]; then
+    bad "§G: could not extract find_occupant"
+  else
+    if derives "$B" 'mail_domains'; then
+      ok "the occupancy oracle asks whether a mail domain holds the name"
+    else
+      bad "find_occupant no longer asks about mail domains — a non-admin can claim a name whose mailboxes exist"
+    fi
+
+    # Ordering is load-bearing, not cosmetic. `ensure_claimable` TOLERATES this
+    # occupant for an administrator, so a mail domain reported IN PLACE OF a vhost
+    # holder would let an admin claim over a live site, git deploy, stack or app.
+    # Asking last makes that impossible by construction.
+    m=$(grep -nE 'mail_domains' <<< "$B" | head -1 | cut -d: -f1)
+    a=$(grep -nE '"/apps"' <<< "$B" | head -1 | cut -d: -f1)
+    if [ -n "$m" ] && [ -n "$a" ] && [ "$m" -gt "$a" ]; then
+      ok "the mail question is asked LAST, after every holder that must always refuse"
+    else
+      bad "the mail leg no longer runs last — a tolerated occupant can now mask a vhost collision"
+    fi
+
+    # Fleet-wide and case-folded, like the three SQL legs above it. A server term
+    # here would let the same name be claimed on a second host while its mailboxes
+    # live on the first.
+    q=$(grep -oE 'SELECT id FROM mail_domains[^"]*' <<< "$B" | head -1)
+    if [ -n "$q" ] && ! grep -qE 'server_id' <<< "$q"; then
+      ok "the mail leg is fleet-wide, matching the sites/git/stack legs"
+    else
+      bad "the mail leg grew a server term — a name can be claimed on one host while its mail lives on another"
+    fi
+    if [ -n "$q" ] && grep -qE 'lower\(domain\)' <<< "$q"; then
+      ok "the mail leg folds case rather than trusting the writer's convention"
+    else
+      bad "the mail comparison is case-sensitive — EXAMPLE.com walks past a row holding example.com"
+    fi
+  fi
+
+  E=$(fnbody "$S" ensure_claimable)
+  if [ -z "$E" ]; then
+    bad "§G: could not extract ensure_claimable"
+  else
+    if derives "$E" 'may_claim_mail_held'; then
+      ok "the guard consults the mail-claim rule before tolerating an occupant"
+    else
+      bad "the guard stopped consulting the mail-claim rule — either every claim is refused, or every claim is allowed"
+    fi
+    # The tolerance must name exactly ONE variant. Folding a second occupant into
+    # that branch would let an administrator claim over a live vhost, and it would
+    # look like a one-word change.
+    #
+    # ⚠ OCCURRENCES, not lines. The shared `count` is `grep -c`, which counts
+    # matching LINES — and the natural way to write this regression puts the
+    # second variant on the SAME line (`!= A && != B`), so a line count reports
+    # one and the arm passes. Measured: that mutation SURVIVED this arm until it
+    # was rewritten to count occurrences. `wc -l` on `grep -o` output is safe
+    # under pipefail — wc consumes all input, so there is no SIGPIPE (unlike a
+    # pipe into `grep -q`).
+    n=$(grep -oE 'Occupant::' <<< "$E" | wc -l)
+    if [ "$n" -eq 1 ]; then
+      ok "exactly one occupant is tolerated, and it is named explicitly"
+    else
+      bad "the tolerance branch names $n occupants — it must name only the mail one"
+    fi
+    if derives "$E" 'Occupant::MailDomain'; then
+      ok "the tolerated occupant is the mail domain"
+    else
+      bad "the tolerance is no longer keyed on the mail occupant"
+    fi
+  fi
+
+  # Fails CLOSED, unlike its sibling. `may_claim_new` returns true for a role it
+  # does not recognise, so drift merely un-restricts. This one must return false,
+  # so drift refuses — an unknown role string must never be able to take a mailbox.
+  G=$(fnbody "$S" may_claim_mail_held)
+  if [ -z "$G" ]; then
+    bad "§G: could not extract may_claim_mail_held"
+  elif derives "$G" 'role == "admin"'; then
+    ok "the mail gate admits the administrator role and refuses everything else"
+  else
+    bad "the mail gate stopped failing closed — a role it does not recognise may now claim a name whose mailboxes exist"
+  fi
+
+  # The refusal has to say WHAT holds the name. "In use" with no owner is the
+  # sentence this whole module was written to stop printing.
+  if derives "$S" 'Occupant::MailDomain =>'; then
+    ok "the mail occupant carries a message of its own"
+  else
+    bad "the mail occupant has no message — the refusal cannot name what holds the domain"
+  fi
+fi
+
 echo
 echo "──────────────────────────────────────────"
 echo "PASS: $PASS   FAIL: $FAIL"

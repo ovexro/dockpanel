@@ -41,6 +41,11 @@ use crate::routes::{is_reserved_domain_for, is_valid_domain};
 /// under an existing name is already refused by the name check, so an app-holder
 /// exclusion would be unreachable code. Add it together with the app-rename it
 /// is for (GitHub #95), not before.
+///
+/// There is no mail variant either, for the same reason: nothing renames a mail
+/// domain. `mail::create_domain` is the only writer of `mail_domains.domain` and
+/// `mail::update_domain` changes `catch_all` and `enabled` only, so a mail domain
+/// never needs to be excluded from its own claim.
 #[derive(Debug, Clone, Copy, Default)]
 pub enum Holder {
     /// A brand-new claim — nothing may hold this domain.
@@ -64,6 +69,10 @@ pub enum Occupant {
     GitDeploy,
     DockerApp,
     Stack,
+    /// A `mail_domains` row. Unlike every variant above this one holds no vhost,
+    /// so it is not a nginx collision — it is an AUTHORISATION collision, and it
+    /// is tolerated for an administrator. See [`may_claim_mail_held`].
+    MailDomain,
 }
 
 impl Occupant {
@@ -74,6 +83,11 @@ impl Occupant {
             Occupant::DockerApp => {
                 "Domain already in use by a Docker app. Rename or remove the app \
                  first — deploying over it would replace its nginx configuration."
+            }
+            Occupant::MailDomain => {
+                "Domain already in use by a mail domain. Ask an administrator to \
+                 create the site and transfer it to you — claiming a name whose \
+                 mailboxes already exist would hand you those mailboxes."
             }
             Occupant::Stack => {
                 "Domain already in use by a Compose stack. Change that stack's \
@@ -110,6 +124,36 @@ pub const CLIENT_ROLE: &str = "client";
 /// already fails the build when a new surface does not.
 pub fn may_claim_new(role: &str, holder: Holder) -> bool {
     !(role == CLIENT_ROLE && matches!(holder, Holder::New))
+}
+
+/// Whether `role` may claim a domain that an existing MAIL domain already holds.
+///
+/// Only an administrator may. This is the one rule in this module keyed on the
+/// role ALONE, with no holder term, and the asymmetry is the point.
+///
+/// **Why it exists.** Mail is scoped by matching `mail_domains.domain` against
+/// the domain of a site the caller owns (GitHub #106). That makes `sites.domain`
+/// an authorisation key — and `sites.domain` is WRITABLE by the account being
+/// authorised. Without this, a non-administrator could point a site they already
+/// own at a domain whose mailboxes exist, and the match would then hand them
+/// every mailbox and alias on it, including the power to replace each password
+/// hash. The entitlement would have minted itself.
+///
+/// **Why it is not restricted to `client`.** [`may_claim_new`] can be, because
+/// it refuses only the introduction of a brand-new name. This one cannot: a
+/// plain `user` may create sites freely, so leaving them out would close the
+/// rename door and leave the create door beside it open. Every non-admin role is
+/// refused, which is also why the message points at the transfer flow — an
+/// administrator creating the site and handing it over is the documented way to
+/// give somebody a domain whose mail already exists, and it stays open.
+///
+/// **What it does NOT refuse.** An administrator putting a site and its mail on
+/// the same name is the pairing the entitlement is BUILT on, not a collision, so
+/// tolerating it is required rather than lenient. And this asks only about the
+/// domain being claimed: renaming AWAY from a domain whose mail the caller holds
+/// is untouched, because the mail row is keyed on the name, not on the site.
+pub fn may_claim_mail_held(role: &str) -> bool {
+    role == "admin"
 }
 
 /// Normalise a domain for storage and comparison.
@@ -169,7 +213,18 @@ pub async fn ensure_claimable(
     }
 
     if let Some(occupant) = find_occupant(db, agents, &domain, holder).await? {
-        return Err(err(StatusCode::CONFLICT, occupant.message()));
+        // A mail domain is the one occupant an administrator may claim over,
+        // because a site and its mailboxes SHARING a name is the arrangement the
+        // mail entitlement is built on (#106) — refusing it outright would break
+        // the ordinary "set the mail up first, add the website after" order.
+        //
+        // Reported by `find_occupant` LAST, deliberately, so this tolerance can
+        // never swallow a real vhost collision: if a site, git deploy, stack or
+        // Docker app also holds the name, that is what comes back and this is
+        // never reached.
+        if occupant != Occupant::MailDomain || !may_claim_mail_held(claimant_role) {
+            return Err(err(StatusCode::CONFLICT, occupant.message()));
+        }
     }
 
     Ok(domain)
@@ -282,6 +337,31 @@ pub async fn find_occupant(
         }
     }
 
+    // Mail domains hold a name without holding a vhost, and this function never
+    // asked about them — so a domain could be held by `mail_domains` and claimed
+    // by a site at the same time, which is precisely the two-owners state the
+    // module exists to prevent. It went unnoticed because the collision has no
+    // nginx symptom: a mail-only domain has no vhost to overwrite.
+    //
+    // ⚠ LAST on purpose, after the fleet loop and not beside the other SQL legs.
+    // `ensure_claimable` TOLERATES this occupant for an administrator, and that
+    // tolerance is only sound if a mail domain can never be reported in place of
+    // a holder that must always refuse. Returning it last makes that structural:
+    // every vhost holder has already had its say.
+    //
+    // Fleet-wide like the three legs above, and `lower()` for the same reason —
+    // `mail::create_domain` lowercases before storing, but the comparison must
+    // not depend on a convention enforced somewhere else.
+    let mail: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM mail_domains WHERE lower(domain) = $1")
+            .bind(&domain)
+            .fetch_optional(db)
+            .await
+            .map_err(|e| internal_error("domain availability", e))?;
+    if mail.is_some() {
+        return Ok(Some(Occupant::MailDomain));
+    }
+
     Ok(None)
 }
 
@@ -357,5 +437,71 @@ mod tests {
             );
         }
         assert_eq!(CLIENT_ROLE, "client");
+    }
+
+    // ── the mail gate — s347 / GitHub #106 ──────────────────────────────
+
+    #[test]
+    fn only_an_administrator_may_claim_a_domain_a_mail_domain_holds() {
+        assert!(may_claim_mail_held("admin"));
+        for role in ["client", "user", "reseller", "suspended", ""] {
+            assert!(
+                !may_claim_mail_held(role),
+                "role {role:?} must not claim a name whose mailboxes exist — the \
+                 mail entitlement matches on the site's domain, so allowing it \
+                 would let the account mint its own access to those mailboxes"
+            );
+        }
+    }
+
+    #[test]
+    fn the_mail_gate_fails_closed_where_the_client_gate_fails_open() {
+        // The two gates in this module are deliberately opposite. `may_claim_new`
+        // returns true for a role it does not recognise, so an unknown value is
+        // merely un-restricted. This one returns false, so an unknown value is
+        // refused. A role string that drifts must never silently become able to
+        // take over a mailbox.
+        for near in ["Admin", "ADMIN", "admins", "admin ", " admin", "administrator"] {
+            assert!(
+                !may_claim_mail_held(near),
+                "{near:?} is not the administrator role value; it must be refused, \
+                 not granted"
+            );
+            assert!(may_claim_new(near, Holder::New));
+        }
+    }
+
+    #[test]
+    fn a_mail_domain_is_the_only_occupant_an_administrator_may_claim_over() {
+        // Pins the tolerance in `ensure_claimable` to ONE variant. If a future
+        // occupant is added to the enum and quietly folded into that branch, an
+        // administrator would start claiming over a live vhost.
+        for occupant in [
+            Occupant::Site,
+            Occupant::GitDeploy,
+            Occupant::DockerApp,
+            Occupant::Stack,
+        ] {
+            assert!(
+                occupant != Occupant::MailDomain,
+                "{occupant:?} must keep refusing every caller, administrator included"
+            );
+        }
+    }
+
+    #[test]
+    fn every_occupant_names_what_holds_the_domain() {
+        // "In use" with no owner is the sentence that made these collisions hard
+        // to diagnose — the reason `Occupant` is carried at all.
+        for occupant in [
+            Occupant::Site,
+            Occupant::GitDeploy,
+            Occupant::DockerApp,
+            Occupant::Stack,
+            Occupant::MailDomain,
+        ] {
+            let msg = occupant.message();
+            assert!(!msg.is_empty() && msg.contains("in use by"), "{occupant:?}: {msg}");
+        }
     }
 }

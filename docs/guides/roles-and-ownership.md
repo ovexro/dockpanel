@@ -116,6 +116,28 @@ Compose stack with one. A client attempting any of these gets:
 Renaming a domain the client already holds is **allowed** — that is managing a
 site it owns, not creating a new one.
 
+**With one exception: not onto a name whose mailboxes already exist.** A mail
+domain holds its name the same way a site, a git deployment, a Compose stack or a
+Docker app does, and the occupancy check now says so:
+
+> Domain already in use by a mail domain. Ask an administrator to create the site
+> and transfer it to you — claiming a name whose mailboxes already exist would
+> hand you those mailboxes.
+
+This refuses every non-administrator, not only clients, because a plain `user`
+may create sites freely and would otherwise reach the same place by a different
+door. An **administrator** is not refused: putting a site and its mail on the
+same name is an ordinary arrangement, and "set the mail up first, add the website
+after" has to keep working.
+
+The reason the rule exists is worth stating plainly, because it is about a
+feature that is being built rather than one that shipped: mail is scoped by
+matching a mail domain's name against the domain of a site the caller owns
+(GitHub #106). That makes the site's domain an authorisation key — and it is a
+key the account being authorised can write. Without this rule, an account could
+point a site it already owned at a name whose mailboxes existed and hand itself
+every mailbox on it.
+
 Being a client also means not being an admin, so every administrative surface —
 users, servers, panel settings, updates, the firewall — refuses it, the same way
 it refuses an ordinary `user`.

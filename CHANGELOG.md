@@ -4,7 +4,49 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [2.101.0]
+
+### Security — a mail domain now holds its name, and only an administrator may claim over it
+
+`find_occupant` is the one place the panel answers "who already holds this
+domain?". It asked `sites`, `git_deploys`, `docker_stacks` and every agent's
+Docker-app labels. It never asked `mail_domains` — so a domain could be held by a
+mail domain and claimed by a site at the same time, which is exactly the
+two-owners state this module exists to prevent. It went unnoticed because the
+collision has no visible symptom: a mail-only domain has no vhost to overwrite.
+
+That gap becomes an escalation the moment mail is scoped to site ownership
+(GitHub #106), which is now being built. Scoping matches a mail domain's name
+against the domain of a site the caller owns — which makes `sites.domain` an
+authorisation key, and `sites.domain` is writable by the very account being
+authorised. `PUT /api/sites/{id}/domain` takes any authenticated owner, and the
+claim module deliberately permits a client to re-claim on behalf of a row it
+already holds. So a non-administrator could point a site they owned at a name
+whose mailboxes existed, and the match would then have handed them every mailbox
+and alias on it — including the power to replace each password hash.
+
+Mail domains are now registered as domain holders, and a claim onto one is
+refused for every non-administrator, by name:
+
+> Domain already in use by a mail domain. Ask an administrator to create the site
+> and transfer it to you — claiming a name whose mailboxes already exist would
+> hand you those mailboxes.
+
+- The refusal covers **every** non-administrator rather than only clients. A
+  plain `user` may create sites freely, so a client-only rule would have closed
+  the rename door and left the create door beside it open.
+- An **administrator is not refused**. A site and its mail sharing a name is an
+  ordinary arrangement and the arrangement the mail entitlement is built on, so
+  "set the mail up first, add the website after" keeps working.
+- The mail question is asked **last**, after every holder that must always
+  refuse, so the administrator tolerance can never mask a live vhost collision.
+- The rule **fails closed** — it admits the administrator role and refuses
+  anything else — where its sibling `may_claim_new` fails open. A role string
+  that drifts must never become able to take over a mailbox.
+
+No schema change. Verified end to end against a scratch panel: the rename is
+refused `409` for both a `client` and a plain `user`, an administrator passes,
+and a free domain passes. 9 new regression assertions.
 
 ### Fixed — fourteen assertions about certificate pinning that ran nowhere
 
