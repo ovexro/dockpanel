@@ -395,7 +395,7 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. Fifty-eight suites, **1936 assertions**, all green at the current commit:
+survivable. Fifty-eight suites, **1940 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
@@ -453,7 +453,7 @@ survivable. Fifty-eight suites, **1936 assertions**, all green at the current co
 | `system-logs-scope-pin-e2e.sh` | 13 |
 | `pipefail-sigpipe-pin-e2e.sh` | 9 |
 | `install-integrity-pin-e2e.sh` | 46 |
-| `ship-gate-pin-e2e.sh` | 15 |
+| `ship-gate-pin-e2e.sh` | 19 |
 | `app-template-images-pin-e2e.sh` | 13 |
 | `app-volume-ownership-pin-e2e.sh` | 24 |
 | `theme-contrast-pin-e2e.sh` | 27 |
@@ -489,6 +489,39 @@ its own origin and never see the CDN in front of it. It asserts that:
 
 It is not in the assertion table above because it needs the network and the world,
 so its result is a statement about today rather than about this commit.
+
+**On every push, against a real database** (`ci.yml`, job `tier2-certpin`). Almost
+everything above can be decided by reading source. Certificate pinning cannot:
+whether a server presenting the wrong certificate is actually refused is a
+property of a running panel, a running database, and a request that really gets
+made.
+
+`tests/tier2-certpin-e2e.sh` drives it end to end. A first checkin captures a
+fingerprint; a second carrying the same one is accepted; a third carrying a
+different one is refused with a 403; a malformed one is refused with a 400 and
+leaves the stored pin untouched; an admin rotation clears the pin, is itself
+refused without a CSRF header, and is written to the activity log; and finally a
+pinned TLS dial is made to a port with nothing behind it — not to test the dial,
+which is expected to fail, but to prove the client can be *constructed*. That
+last arm exists because in v2.7.18 it could not: under rustls 0.23 a missing
+CryptoProvider panics while the TLS config is being built, so the panel answered
+500 to a request it had not begun to process.
+
+Fourteen assertions — and until s346 they ran nowhere at all. The suite was
+called `tier2-pin-e2e.sh`, which put it inside the `*-pin-e2e.sh` glob that the
+CI sweep and this page's own census both walk. Being a live suite it could not
+pass there, so it was excluded by name from both — and those two exclusions were
+the whole of its CI story. It had never executed on any machine but its author's,
+while on that machine the local "run all the pins" sweep quietly pointed it at
+the live panel database. It is now named for what it is, and has a job with a
+postgres service of its own.
+
+It is not in the assertion table above for the same reason `live-surfaces-check.sh`
+is not: that table is re-run and re-counted by `docs-claims-pin-e2e.sh` on a
+runner with no database, and a suite that needs one reports nothing there.
+Publishing a row for it would have made the wrong job red. What keeps it honest
+instead is `ship-gate-pin-e2e.sh` §S4, which fails if any test file in this
+repository runs in no job and is not exempt by name with its reason.
 
 **On every release** (`release.yml`, `smoke-test.yml`):
 

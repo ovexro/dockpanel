@@ -7,7 +7,7 @@
 #   GET /api/backup-orchestrator/chain-report/{kind}/{id}/pdf    (PDF, lazy-installs typst)
 # where {kind} ∈ {site, database, volume}.
 #
-# Auth strategy mirrors tier2-pin-e2e.sh: prefer DOCKPANEL_TEST_PASSWORD;
+# Auth strategy mirrors tier2-certpin-e2e.sh: prefer DOCKPANEL_TEST_PASSWORD;
 # otherwise mint a short-lived admin JWT from /etc/dockpanel/api.env.
 #
 # typst lazy-installs on the first PDF render (~30MB tarball, ~30s on a

@@ -6,9 +6,7 @@
 #   - Match no-op on subsequent checkin with same fingerprint
 #   - MITM rejection (HTTP 403) on fingerprint mismatch
 #   - Malformed-fingerprint rejection (HTTP 400)
-#   - Admin rotate-cert-pin (with/without CSRF header when cookie auth
-#     is available — the CSRF-header case is skipped if no login password
-#     is provided)
+#   - Admin rotate-cert-pin, both with and without the CSRF header
 #   - Activity-log capture of the rotate action
 #   - Re-TOFU after rotate (new fingerprint captured cleanly)
 #   - RemoteAgentClient::new_with_pin construction via POST /api/servers/{id}/test
@@ -18,32 +16,63 @@
 #
 # Auth strategy: if DOCKPANEL_TEST_PASSWORD is set, logs in via the panel's
 # /api/auth/login endpoint; otherwise mints a short-lived admin JWT locally
-# from the JWT_SECRET in /etc/dockpanel/api.env. The CSRF-gate sub-test
-# works in either mode because the minted token is equally valid as a
-# cookie. Inserts a synthetic "online" server row so the local server is
-# never disturbed, and always cleans up via an EXIT trap.
+# from the JWT_SECRET in /etc/dockpanel/api.env (which additionally needs
+# python3 with PyJWT — a bare CI runner has neither, so CI sets the password).
+# The CSRF-gate sub-test works in either mode because the minted token is
+# equally valid as a cookie. Inserts a synthetic "online" server row so the
+# local server is never disturbed, and always cleans up via an EXIT trap.
+#
+# ⚠ THIS IS A LIVE SUITE, NOT A SOURCE PIN — it needs a running API, a
+# postgres it can reach, and an admin row, and it MUTATES whichever database
+# it is pointed at. It was named `tier2-pin-e2e.sh` until s346, which put it
+# inside the `tests/*-pin-e2e.sh` glob that the CI sweep, the docs census and
+# every local "run all the pins" one-liner walk. It had to be carved out of
+# all three by name, and the carve-outs were the whole of its CI story: it ran
+# in NO job at all, on any machine but its author's, for its entire life —
+# while on a developer box the local sweep silently pointed it at the live
+# panel database. The name was the trap. It is now a `*-e2e.sh` live suite
+# like its neighbours, with a job of its own (ci.yml `tier2-certpin`).
 set -uo pipefail
 
 API="${DOCKPANEL_API_URL:-http://127.0.0.1:3080}"
 ADMIN_EMAIL="${DOCKPANEL_TEST_EMAIL:-admin@dockpanel.dev}"
 ADMIN_PASSWORD="${DOCKPANEL_TEST_PASSWORD:-}"
 
-PASS=0 FAIL=0 SKIP=0 TOTAL=0
+PASS=0 FAIL=0 TOTAL=0
 
 green() { echo -e "\e[32m  ✓ $1\e[0m"; PASS=$((PASS+1)); TOTAL=$((TOTAL+1)); }
 red()   { echo -e "\e[31m  ✗ $1\e[0m"; FAIL=$((FAIL+1)); TOTAL=$((TOTAL+1)); }
-skip()  { echo -e "\e[33m  ~ $1\e[0m"; SKIP=$((SKIP+1)); TOTAL=$((TOTAL+1)); }
 sect()  { echo; echo "── $1 ──"; }
+
+# The container was hardcoded until s346, which is what made this suite
+# unrunnable anywhere but the box that happens to have a container by that
+# name. The default is unchanged, so a developer box behaves exactly as
+# before; CI points it at its own postgres service.
+DB_CONTAINER="${DOCKPANEL_TEST_DB_CONTAINER:-dockpanel-postgres}"
 
 psql_exec() {
     # -q suppresses psql's command tags (e.g. "INSERT 0 1") so INSERT ... RETURNING
     # returns ONLY the returned row.
-    docker exec dockpanel-postgres psql -U dockpanel -d dockpanel -qtAc "$1" 2>/dev/null
+    docker exec "$DB_CONTAINER" psql -U dockpanel -d dockpanel -qtAc "$1" 2>/dev/null
 }
 
 echo "═══════════════════════════════════════════════"
 echo "  DockPanel Tier 2 Cert Pin E2E Test Suite"
 echo "═══════════════════════════════════════════════"
+
+# ── Prove the database is reachable, before asking it anything ────────────
+# psql_exec swallows stderr so a query's answer is never polluted by a notice.
+# The cost is that EVERY failure — no docker, wrong container, wrong role,
+# wrong database — comes back as the empty string, and the first question we
+# ask is one whose empty answer already means something else entirely. Without
+# this probe a mistyped container name reports "Admin user row not found" and
+# sends whoever is fixing it to the users table.
+if ! DB_ERR=$(docker exec "$DB_CONTAINER" psql -U dockpanel -d dockpanel -qtAc 'SELECT 1' 2>&1); then
+    echo "FATAL: cannot reach the test database through container '$DB_CONTAINER'."
+    echo "       $DB_ERR"
+    echo "       Point DOCKPANEL_TEST_DB_CONTAINER at the postgres container to use."
+    exit 1
+fi
 
 # ── Resolve admin user ────────────────────────────────────────────────────
 ADMIN_UID=$(psql_exec "SELECT id FROM users WHERE email = '$ADMIN_EMAIL' AND role = 'admin' LIMIT 1")
@@ -59,7 +88,8 @@ fi
 #      admin JWT locally using the panel's JWT_SECRET. This lets the test
 #      run as part of dev smoke-checks without hard-coding a password.
 # The token is used as a Bearer header (CSRF-exempt). The CSRF-gate test
-# below additionally requires a cookie, so it runs only in mode (1).
+# below sends the same token as a COOKIE, which is equally valid in either
+# mode — so all 14 assertions run whichever way the token was obtained.
 COOKIE_TOKEN=""
 BEARER_TOKEN=""
 if [ -n "$ADMIN_PASSWORD" ]; then
@@ -253,7 +283,14 @@ HEALTH=$(curl -s -o /dev/null -w "%{http_code}" "$API/api/health" 2>/dev/null)
 # ─────────────────────────────────────────────────────────────────────────
 echo ""
 echo "═══════════════════════════════════════════════"
-echo "  Results: $PASS passed, $FAIL failed, $SKIP skipped ($TOTAL total)"
+echo "  Results: $PASS passed, $FAIL failed ($TOTAL total)"
 echo "═══════════════════════════════════════════════"
+
+# A suite that asserted nothing must not be able to report success — this
+# file's own history is the argument for the guard (ship-gate §S2).
+if [ "$TOTAL" -eq 0 ]; then
+    echo "FATAL: no assertions ran, so a green here would mean nothing"
+    exit 1
+fi
 
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

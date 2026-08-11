@@ -147,23 +147,26 @@ else
   # hypothetical: s288 shipped two new suites, neither was added here, and the
   # published total was wrong until s289 caught it from the other direction.
   # Count the tree and compare.
-  # Two deliberate exclusions, each named with its reason rather than absorbed
-  # into a fudge factor, so a THIRD unpublished suite still fails:
+  # ONE deliberate exclusion, named with its reason rather than absorbed into a
+  # fudge factor, so a second unpublished suite still fails:
   #
   #   docs-claims  — this suite. It re-runs the others; a row for itself would
   #                  recurse.
-  #   tier2        — despite the `-pin-e2e.sh` name it is a LIVE-BOX suite: it
-  #                  drives /api/agent/checkin against a running API and mints a
-  #                  JWT, so it reports no tally on a CI runner and its
-  #                  assertion count is not derivable here. The name is the trap
-  #                  — the glob says "source pin", the file is an e2e test.
+  #
+  # There were two until s346. The other was tier2, excluded because despite its
+  # `-pin-e2e.sh` name it is a LIVE-BOX suite — the arm below EXECUTES every
+  # suite it publishes, and tier2 needs a running API and a database, so on this
+  # runner it exits before printing any tally at all. That is still true, which
+  # is exactly why publishing a row for it would have been wrong: it was renamed
+  # out of the glob instead, and is described in prose on the page beside
+  # live-surfaces-check.sh, which is excluded for the same reason.
   on_disk=$(find tests -maxdepth 1 -name '*-pin-e2e.sh' \
-              ! -name 'docs-claims-pin-e2e.sh' ! -name 'tier2-pin-e2e.sh' | wc -l)
+              ! -name 'docs-claims-pin-e2e.sh' | wc -l)
   if [ "$on_disk" -eq "$rows" ]; then
     ok "every pin suite on disk has a row in the table ($on_disk)"
   else
     missing=$(comm -23 \
-      <(find tests -maxdepth 1 -name '*-pin-e2e.sh' ! -name 'docs-claims-pin-e2e.sh' ! -name 'tier2-pin-e2e.sh' -printf '%f\n' | sort) \
+      <(find tests -maxdepth 1 -name '*-pin-e2e.sh' ! -name 'docs-claims-pin-e2e.sh' -printf '%f\n' | sort) \
       <(grep -oE '^\| *`[a-z0-9-]+\.sh`' "$TESTING" | tr -d '|` ' | sort) | tr '\n' ' ')
     bad "$on_disk pin suites on disk but $rows rows in docs/testing.md — unpublished: ${missing:-?}"
   fi

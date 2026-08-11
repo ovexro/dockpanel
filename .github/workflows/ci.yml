@@ -633,6 +633,118 @@ jobs:
       - name: Stacks share a network, scope their names, and report real status
         run: bash tests/compose-stack-pin-e2e.sh
 
+  # This suite had fourteen assertions and no job. It was excluded from the pin
+  # sweep for a legitimate reason — a live suite wearing a `-pin-e2e.sh` name —
+  # and the exclusion was then the whole of its CI story, so TOFU cert-pin
+  # capture, MITM rejection, the malformed-fingerprint gate, the CSRF gate on
+  # rotate and the v2.7.18 rustls CryptoProvider panic guard had executed
+  # nowhere but their author's box since b0ec6ce. `update-rollback` above states
+  # the principle: a guard whose only execution is on one developer's machine is
+  # a guard nobody has tested. The MITM arm is the sharp one — it asserts that a
+  # server presenting the wrong certificate is REFUSED, which is the whole value
+  # of pinning.
+  #
+  # ⚠ Like nginx-contract and update-rollback, this job lives in ci.yml, so it
+  # runs on every push to main and every PR and DOES NOT run on a tag. Only the
+  # shared regression-pins workflow gates a release.
+  tier2-certpin:
+    name: A Pinned Agent Identity Refuses An Impostor
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dockpanel
+          POSTGRES_PASSWORD: dockpanel
+          POSTGRES_DB: dockpanel
+        # The port map is load-bearing, not decoration: this job runs directly
+        # on the runner rather than in a container, so without it the service is
+        # reachable only by container name and the API's DATABASE_URL, which
+        # dials localhost, cannot connect at all.
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # The same cache key as `build-rust` on purpose: this job wants that job's
+      # artifacts, not a second copy of them.
+      - name: Cache Rust dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            panel/backend/target/
+          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-build-
+
+      - name: Build the API
+        run: cargo build --release --manifest-path panel/backend/Cargo.toml
+
+      # No agent socket and no /etc/dockpanel here. The API needs exactly three
+      # variables, all hard `.expect()`s with no default (config.rs:96,119,124),
+      # and applies its own migrations on boot (main.rs:192) — so a bare runner
+      # with an empty postgres is enough.
+      - name: Start the API
+        env:
+          DATABASE_URL: postgresql://dockpanel:dockpanel@localhost:5432/dockpanel
+          JWT_SECRET: ci-only-not-a-secret-0123456789abcdef0123456789abcdef
+          AGENT_TOKEN: ci-only-agent-token-not-a-secret
+          AGENT_SOCKET: /tmp/dockpanel-agent-absent.sock
+        run: |
+          ./panel/backend/target/release/dockpanel-api > /tmp/api.log 2>&1 &
+          API_PID=$!
+          for i in $(seq 1 60); do
+            # The liveness check is not belt-and-braces. If postgres is
+            # unreachable the API retries five times and then RETURNS FROM MAIN
+            # (main.rs:166) — it exits ZERO, having never bound a port. Polling
+            # only the port would burn the whole timeout and then blame the
+            # health endpoint for a database that was never reachable, which is
+            # the wrong sentence to hand whoever has to fix it.
+            if ! kill -0 "$API_PID" 2>/dev/null; then
+              echo "::error::the API exited during startup — almost always the database"
+              cat /tmp/api.log; exit 1
+            fi
+            if [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3080/api/health)" = "200" ]; then
+              echo "API healthy after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::API is running but never answered /api/health"
+          cat /tmp/api.log; exit 1
+
+      # The suite resolves its admin straight out of the DB and exits if there is
+      # no row. Creating it through the product's own front door rather than an
+      # INSERT means a broken setup endpoint fails this job too.
+      - name: Create the admin through the panel's own setup endpoint
+        run: |
+          code=$(curl -s -o /tmp/setup.json -w '%{http_code}' \
+            -X POST http://127.0.0.1:3080/api/auth/setup \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"admin@dockpanel.dev","password":"DockPanelCI!2026"}')
+          [ "$code" = "201" ] || { echo "::error::setup returned $code"; cat /tmp/setup.json; exit 1; }
+
+      - name: A pinned agent identity refuses an impostor
+        env:
+          DOCKPANEL_TEST_DB_CONTAINER: ${{ job.services.postgres.id }}
+          DOCKPANEL_TEST_EMAIL: admin@dockpanel.dev
+          DOCKPANEL_TEST_PASSWORD: DockPanelCI!2026
+        run: bash tests/tier2-certpin-e2e.sh
+
+      - name: The API log, on failure
+        if: failure()
+        run: cat /tmp/api.log || true
+
   # The pin suites moved to .github/workflows/regression-pins.yml so the RELEASE
   # workflow can call the same job. ci.yml runs only on `push: branches: [main]`
   # and pull_request, so it never fires on a tag — before s340 nothing ran the

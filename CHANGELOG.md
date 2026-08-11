@@ -6,6 +6,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed — fourteen assertions about certificate pinning that ran nowhere
+
+`tests/tier2-pin-e2e.sh` proves that a server presenting the wrong certificate
+is refused: it captures a fingerprint on first checkin, accepts a matching one,
+rejects a mismatched one with `403`, rejects a malformed one with `400`, checks
+the pin survives both rejections, exercises the CSRF gate on rotation, and dials
+a pinned TLS connection to prove the client can still be *constructed* — the
+regression guard for v2.7.18, where a missing rustls `CryptoProvider` panicked
+while building the TLS config and answered `500` to a request the panel had not
+begun to process.
+
+**None of it had executed on any machine but its author's, since the suite
+landed.** It is a live suite — it needs a running API, a database and an admin
+row — but it was named `tier2-pin-e2e.sh`, which put it inside the
+`tests/*-pin-e2e.sh` glob that the CI sweep, the documentation census and every
+local "run all the pins" one-liner walk. It could not pass there, so it was
+excluded by name from each of them; and those exclusions were then the whole of
+its CI story, because nothing else ran it either. Worse, on a developer box the
+local sweep *did* run it — against the live panel database.
+
+The name was the trap, so the name is the fix:
+
+- Renamed to **`tests/tier2-certpin-e2e.sh`**, which the source-pin glob does not
+  match. That single change removes it from all three carve-outs at once and
+  stops the local pin sweep from writing to a live database.
+- New CI job **`tier2-certpin`** brings up a `postgres:16` service, builds the
+  API, boots it, creates the admin through the panel's own `/api/auth/setup`
+  endpoint, and runs the suite. This is the repository's first service container.
+  Like `nginx-contract` and `update-rollback`, it runs on pushes to `main` and on
+  pull requests; only the shared `regression-pins` workflow gates a release.
+- The suite reaches its database through `DOCKPANEL_TEST_DB_CONTAINER` instead of
+  a hardcoded container name. The default is unchanged.
+- It now says which of those two things failed. Every database error was
+  swallowed, so a wrong container name reported `Admin user row not found` and
+  sent whoever was fixing it to the users table.
+- Removed a dead `skip()` helper and two comments describing a skip path that
+  does not exist; all fourteen assertions have always run in both auth modes.
+
+### Added — a test that runs nowhere is a test that cannot fail
+
+`ship-gate-pin-e2e.sh` §S4 (4 assertions). The suite already pins that a red pin
+can stop a release; this is the quieter half of the same failure. Every file in
+`tests/` must now be run by the shared sweep, named in a workflow, or listed as
+exempt with the reason it needs a provisioned box — and an exemption that names a
+deleted file, or one that is already covered, fails too, so the list cannot decay
+into a fudge factor. Against the tree before this change, it names
+`tier2-pin-e2e.sh`.
+
 ## [2.100.0]
 
 ### Fixed — the panel told you your agent had broken, for twelve things you could fix yourself

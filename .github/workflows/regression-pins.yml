@@ -68,17 +68,17 @@ jobs:
             case "$(basename "$s")" in
               # NOT source-only — each needs something a runner does not have.
               # nginx-headers serves configs through a real nginx; update-rollback
-              # drives restore-snapshot.sh end to end.
+              # drives restore-snapshot.sh end to end. Both have their own job.
               #
-              # tier2 is the one that had been failing every run since it was
-              # added (b0ec6ce): it runs `docker exec dockpanel-postgres psql`,
-              # INSERTs a row into `servers` and reads it back, so on a runner it
-              # dies at `FATAL: Admin user row not found` and exits 1. It passes
-              # on a developer box ONLY because that box has a live panel DB with
-              # that admin row — which is also why a local sweep can never
-              # reproduce this red. It is a LIVE suite living under the
-              # source-only glob, not a broken pin.
-              nginx-headers-pin-e2e.sh|update-rollback-pin-e2e.sh|tier2-pin-e2e.sh) continue ;;
+              # tier2 used to be a third name here. It was never a broken pin: it
+              # was a LIVE suite that had been given a `-pin-e2e.sh` name, so this
+              # glob picked it up, so it had to be carved out — and the carve-out
+              # then WAS its CI story, because nothing else ran it either. s346
+              # renamed it `tier2-certpin-e2e.sh`, which this glob does not match,
+              # and gave it the job it had been missing since b0ec6ce. An
+              # exclusion that is not paired with a home is a deletion nobody
+              # wrote down; ship-gate §D now fails if any test file has neither.
+              nginx-headers-pin-e2e.sh|update-rollback-pin-e2e.sh) continue ;;
             esac
             echo "── $s"
             if bash "$s"; then :; else

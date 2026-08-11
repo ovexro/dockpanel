@@ -244,7 +244,7 @@ fi
 
 echo ""
 echo "── Tier 2 Cert Pin (sub-suite) ──"
-TIER2_SCRIPT="$(dirname "$0")/tier2-pin-e2e.sh"
+TIER2_SCRIPT="$(dirname "$0")/tier2-certpin-e2e.sh"
 if [ -x "$TIER2_SCRIPT" ]; then
     if bash "$TIER2_SCRIPT" > /tmp/tier2_output 2>&1; then
         TIER2_LINE=$(grep -oP '\d+ passed, \d+ failed(?:, \d+ skipped)?' /tmp/tier2_output | tail -1)
