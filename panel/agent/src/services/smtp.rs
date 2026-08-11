@@ -2,6 +2,23 @@ use crate::safe_cmd::{safe_command, safe_command_sync, safe_command_sync_unsandb
 
 const MSMTP_CONFIG: &str = "/etc/msmtprc";
 
+/// Named so the route can answer it as a precondition rather than a fault.
+///
+/// Test Email spawned msmtp and reported a failed spawn as a 5xx, which the
+/// panel replaces with an incident id — so an operator whose host simply has no
+/// msmtp concluded their credentials or their relay were wrong and went to debug
+/// the mail provider. Two things make it ordinary rather than exotic: the binary
+/// is installed only by `ensure_msmtp` below, which runs on `configure`, so a
+/// member that was offline when SMTP was saved never got it; and that installer
+/// is **apt-get only**, so on the RHEL family it is never installed at all. The
+/// panel's own precondition check reads a panel-global setting, not per-host
+/// state, so it passes while this host has nothing.
+pub const MSMTP_MISSING: &str =
+    "This server has no msmtp binary, so it cannot send mail yet — your SMTP \
+     settings are not the problem. Save the SMTP settings again while this server \
+     is online to install and configure it. On RHEL-family systems the panel \
+     cannot install msmtp automatically; install it with your package manager.";
+
 /// Install msmtp if not already present.
 fn ensure_msmtp() -> Result<(), String> {
     let status = safe_command_sync("which")
@@ -154,7 +171,13 @@ pub async fn send_test(to: &str, from: &str, from_name: &str) -> Result<String, 
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| format!("Failed to spawn msmtp: {e}"))?;
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                MSMTP_MISSING.to_string()
+            } else {
+                format!("Failed to spawn msmtp: {e}")
+            }
+        })?;
 
     if let Some(mut stdin) = child.stdin.take() {
         use tokio::io::AsyncWriteExt;

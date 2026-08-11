@@ -6,6 +6,75 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.100.0]
+
+### Fixed — the panel told you your agent had broken, for twelve things you could fix yourself
+
+The panel deliberately hides agent faults behind an incident reference: any
+non-4xx answer from an agent has its body replaced with `Operation failed.
+Reference: <uuid>`, so an internal failure cannot leak internals. A 4xx is
+treated as an *answer* and passed through with its sentence intact.
+
+That rule is right. The bug is what happens when an agent answers 5xx for
+something that is not a fault at all — a missing package, a name already taken,
+a file above the editor's size cap. The reason is destroyed on the way out, and
+the operator is told their agent is broken while it is working perfectly.
+
+v2.99.0 fixed exactly one instance of this and wrote the rule down in its own
+comment. This release fixes the rest of the family, found by sweeping for it:
+
+- **Scheduled backups.** The nightly upload answered `500` for every SFTP
+  failure, including the missing-`sshpass` case whose whole purpose is to name
+  the remedy — fifteen lines above the handler v2.99.0 corrected. This is the
+  path where it mattered most: nobody is watching at 03:00, so the incident
+  reference *is* the entire message.
+- **Testing a backup destination created in the panel.** Destinations created
+  through the UI carry no server, so they are tested from the whole fleet — and
+  that summary flattened every member's answer into a gateway error. When every
+  host refuses for the same reason you can act on, you now get that reason.
+- **The file manager.** Opening a binary file or one over the 2 MB cap, creating
+  a folder whose name is taken, renaming onto an existing file, or deleting
+  something already gone — all six answered `502` with an incident id. They now
+  answer `404`, `409`, `413` and `415` with the sentence that explains them.
+- **Restores.** `restic` restore never checked that restic was installed, though
+  its own sibling in the same file has done so for months — so a rebuilt host
+  whose repository survived but whose package did not was told its agent was
+  broken *during a recovery*. It now refuses up front, and says so when there is
+  no repository to restore from. Restoring a volume archive the panel listed but
+  the host no longer has now answers `404` instead of minting a fresh incident
+  id on every retry.
+- **Staging sync and push.** Both directions run through one endpoint whose
+  refusals already spelled out the full path they could not find. That sentence
+  was being thrown away.
+- **The firewall page, on every RHEL-family server.** The rule list is read from
+  firewalld, so every row has a working delete button — backed by `ufw`, which
+  the panel will never install there. Add, delete and apply-fix all answered
+  `502`. Each handler had been sorting its errors with its own substring test,
+  so the package refusal matched neither; they now share one classifier keyed on
+  a named constant.
+- **Test Email.** A host without `msmtp` reported a spawn failure as `500`, so
+  operators concluded their credentials or their relay were wrong. The installer
+  is `apt-get`-only, which means this is permanent on the RHEL family — the new
+  message says exactly that instead of implicating the mail provider.
+
+### Fixed — two stale licence claims from one commit
+
+DockPanel has been AGPL-3.0 since the relicense. That commit updated five
+manifests and stopped: `website/server/package.json` still declared `ISC`, and
+`COMPARISON.md` still told readers the project was MIT. Both corrected, and both
+now pinned — nothing had ever checked a licence claim, which is why one commit
+could leave two behind.
+
+### Added
+
+- `agent-refusal-status-pin-e2e.sh` (38 assertions) pins each fixed path from
+  **both** ends: that the route classifies the refusal, and that the service
+  still raises the constant the route matches. A route matching a sentence
+  nothing produces is a test that cannot fail.
+- `docs-claims-pin-e2e.sh` grew a licence section: `LICENSE` is the AGPL text,
+  every first-party manifest is enumerated from disk and must declare
+  `AGPL-3.0-only`, and no reader-facing table may claim MIT for DockPanel.
+
 ## [2.99.1]
 
 ### Fixed — v2.99.0 published 19 assets and told you all of them were signed

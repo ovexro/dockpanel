@@ -472,5 +472,104 @@ else
 fi
 
 echo
+echo "── 8. the remedy reaches the path nobody is watching ──"
+
+# v2.99.0 taught ONE of the two callers that can hit a missing prerequisite to
+# answer a client error, and the sentence it protects is worth least on that one.
+# `test_destination` runs while an operator is looking at the screen; `upload`
+# runs from the scheduler at 03:00. Both were reachable, both mapped the same
+# service error, and only the watched one was fixed — so the unattended failure
+# still arrived as an incident reference for a box that merely lacked a package.
+ERR=panel/backend/src/error.rs
+BDST=panel/backend/src/routes/backup_destinations.rs
+for f in "$ERR" "$BDST"; do
+  [ -f "$f" ] || { echo "missing $f"; exit 1; }
+done
+SRC_ERR=$(strip "$ERR")
+SRC_BDST=$(strip "$BDST")
+
+UP=$(fnbody_any "$SRC_RBR" upload)
+if [ "$(printf '%s' "$UP" | wc -l)" -lt 20 ]; then
+  bad "upload did not extract — every arm below it is measuring nothing"
+else
+  ok "upload extracted ($(printf '%s' "$UP" | wc -l) lines)"
+
+  # Scoped to upload's OWN sftp branch. The file holds four other arms that map a
+  # status, and `upload` itself also holds the S3 branch — a whole-function match
+  # is satisfied by any of them, which is how a flipped arm stays green.
+  UP_SFTP=$(awk '/"sftp" =>/,/"destination": dest/' <<< "$UP")
+  if [ "$(printf '%s' "$UP_SFTP" | wc -l)" -lt 10 ]; then
+    bad "upload's sftp branch did not extract — its two status arms measure nothing"
+  else
+    if hasE "$UP_SFTP" 'FAILED_DEPENDENCY'; then
+      ok "a scheduled upload blocked by a missing package answers 4xx, so its sentence survives"
+    else
+      bad "the unattended upload path answers 5xx again — the nightly failure loses its remedy"
+    fi
+
+    # ...and only for that one condition. A blanket 4xx here would tell an
+    # operator to go fix their box when the remote host is the thing that broke.
+    if hasE "$UP_SFTP" 'INTERNAL_SERVER_ERROR'; then
+      ok "every other upload failure is still a server error"
+    else
+      bad "upload's 4xx is unconditional — real transfer failures now read as user error"
+    fi
+  fi
+fi
+
+# The rule itself lives in exactly one place. Two callers deriving "is this a
+# client error" independently is how they drift apart, which is the whole shape
+# of this section.
+if hasE "$SRC_ERR" 'pub fn agent_actionable'; then
+  ok "the actionable-status rule is exposed once, for callers that summarise many agents"
+else
+  bad "no shared rule — a fan-out has to re-derive which agent statuses are answers"
+fi
+
+FLEET=$(fnbody_any "$SRC_BDST" test_from_whole_fleet)
+if [ "$(printf '%s' "$FLEET" | wc -l)" -lt 20 ]; then
+  bad "test_from_whole_fleet did not extract — its arms measure nothing"
+else
+  ok "test_from_whole_fleet extracted ($(printf '%s' "$FLEET" | wc -l) lines)"
+
+  if hasE "$FLEET" 'agent_actionable'; then
+    ok "the fleet summariser asks whether the refusal was actionable"
+  else
+    bad "the fleet summariser stringifies its errors again — a unanimous 4xx dies here"
+  fi
+
+  # The defect precisely: a hard-coded gateway status on the nothing-reached exit.
+  # Every UI-created destination has a NULL server_id and therefore takes this
+  # branch, so this is the common path, not the exotic one.
+  #
+  # Keyed on the ARGUMENT the exit passes, on its own line. The obvious spelling
+  # — one regex spanning `err(` and the status and the format! — cannot ever
+  # match: `hasE` is grep, grep is line-based, and that call is four lines. It
+  # was written that way here first and the mutation battery reported it
+  # SURVIVED, which is the only reason it is not still in the file.
+  EXIT_ARG=$(awk '/if reachable.is_empty\(\) \{/,/^    \}/' <<< "$FLEET" \
+             | awk '/return Err\(err\(/{getline; print; exit}')
+  if [ -z "$EXIT_ARG" ]; then
+    bad "the nothing-reached exit did not extract — its status arm measures nothing"
+  elif grep -qE '^[[:space:]]*status,[[:space:]]*$' <<< "$EXIT_ARG"; then
+    ok "the nothing-reached exit carries a computed status rather than asserting one"
+  else
+    bad "the nothing-reached exit asserts its own status — a unanimous 4xx is flattened again"
+  fi
+
+  # ...but the fallback must survive: a mixed bag, or a genuine agent fault, has
+  # no single answer to propagate and must still read as a gateway failure.
+  #
+  # Keyed on the match arm, NOT on the token anywhere in the function: this
+  # function holds a SECOND gateway status for the no-members-online case, and a
+  # whole-function grep stayed green with the fallback deleted. Measured.
+  if hasE "$FLEET" '_ =>[[:space:]]*StatusCode::BAD_GATEWAY'; then
+    ok "a fleet with no shared answer still reports a gateway failure"
+  else
+    bad "the gateway fallback is gone — an agent that genuinely broke now reads as user error"
+  fi
+fi
+
+echo
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

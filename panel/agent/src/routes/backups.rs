@@ -156,6 +156,28 @@ async fn remove(
 use crate::safe_cmd::safe_command;
 
 /// POST /backups/{domain}/restic/backup — Run incremental backup with Restic.
+/// Refuse before running restic when the binary is not on this box.
+///
+/// Shared by backup AND restore. It was inline in `restic_backup` and restore
+/// simply did not have it, so a host whose repo survived a rebuild but whose
+/// package did not answered the spawn failure as a 500 — which the panel
+/// replaces with an incident id. The operator was told their agent was broken
+/// in the middle of a restore, on a working agent, with the remedy being one
+/// `apt install` they were never shown.
+async fn ensure_restic() -> Result<(), ApiErr> {
+    let has_restic = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        safe_command("which").arg("restic").output()
+    ).await.ok().and_then(|r| r.ok()).map(|o| o.status.success()).unwrap_or(false);
+
+    if !has_restic {
+        return Err(err(StatusCode::PRECONDITION_FAILED,
+            "Restic not installed. Install it with your system package manager \
+             (apt install restic / dnf install restic)."));
+    }
+    Ok(())
+}
+
 async fn restic_backup(
     Path(domain): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
@@ -171,17 +193,7 @@ async fn restic_backup(
         return Err(err(StatusCode::NOT_FOUND, "Site directory not found"));
     }
 
-    // Ensure restic is installed
-    let has_restic = tokio::time::timeout(
-        std::time::Duration::from_secs(3),
-        safe_command("which").arg("restic").output()
-    ).await.ok().and_then(|r| r.ok()).map(|o| o.status.success()).unwrap_or(false);
-
-    if !has_restic {
-        return Err(err(StatusCode::PRECONDITION_FAILED,
-            "Restic not installed. Install it with your system package manager \
-             (apt install restic / dnf install restic)."));
-    }
+    ensure_restic().await?;
 
     // Ensure password file exists
     if !std::path::Path::new(password_file).exists() {
@@ -295,8 +307,18 @@ async fn restic_restore(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid snapshot ID"));
     }
 
+    ensure_restic().await?;
+
     let repo = format!("/var/backups/dockpanel/restic/{}", domain.replace('.', "_"));
     let password_file = "/etc/dockpanel/restic-password";
+
+    // The repository has to exist before a restore can name a snapshot in it.
+    // `restic_snapshots` already checks this and answers an empty list; restore
+    // checked nothing and let restic fail, which arrived as an incident id.
+    if !std::path::Path::new(&repo).join("config").exists() {
+        return Err(err(StatusCode::NOT_FOUND,
+            "No restic repository for this site on this server — nothing to restore from."));
+    }
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(600),

@@ -100,7 +100,20 @@ async fn upload(
                 remote_path,
             )
             .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+            .map_err(|e| {
+                // The same rule `test_destination` states below, applied to the
+                // path that matters more. A scheduled upload runs unattended, so
+                // the redacted body IS the whole message an operator ever gets:
+                // v2.99.0 taught the test handler to answer a precondition as a
+                // 4xx and left this one answering 5xx, which means the nightly
+                // failure still reads "your agent broke" on a working agent.
+                let status = if e == remote_backup::SSHPASS_MISSING {
+                    StatusCode::FAILED_DEPENDENCY
+                } else {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                };
+                err(status, &e)
+            })?;
 
             Ok(Json(serde_json::json!({ "success": true, "destination": dest })))
         }

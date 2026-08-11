@@ -86,6 +86,26 @@ fn agent_message(body: &str) -> String {
     }
 }
 
+/// The status and sentence an agent failure should reach the caller as, or
+/// `None` when it is one only an incident id should describe.
+///
+/// [`agent_error`] below is the whole answer whenever ONE agent call decides the
+/// response. A caller that asks SEVERAL members and has to summarise them cannot
+/// use it — it holds N errors and must pick one status — and the way that has
+/// gone wrong is by stringifying each error and hand-rolling a 502, which throws
+/// away precisely the 4xx this module exists to preserve. Exposing the rule lets
+/// a fan-out apply it per member instead of re-deriving it, and keeps both the
+/// client-error boundary and the message extraction in one place, not two.
+pub fn agent_actionable(e: &AgentError) -> Option<(StatusCode, String)> {
+    match e {
+        AgentError::Status(code, body) if (400..500).contains(code) => Some((
+            StatusCode::from_u16(*code).unwrap_or(StatusCode::BAD_REQUEST),
+            agent_message(body),
+        )),
+        _ => None,
+    }
+}
+
 /// Convert an agent-call failure into a client-facing error.
 ///
 /// The distinction this function exists to preserve: a **4xx from the agent is

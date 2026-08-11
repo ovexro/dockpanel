@@ -69,7 +69,18 @@ async fn test_email(
 
     let message = smtp::send_test(&body.to, &body.from, from_name)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+        .map_err(|e| {
+            // A host with no msmtp is a precondition, not a fault, and the panel
+            // only preserves the sentence when the status says so.
+            let status = if e == smtp::MSMTP_MISSING {
+                StatusCode::FAILED_DEPENDENCY
+            } else if e.contains("must not contain newlines") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            err(status, &e)
+        })?;
 
     Ok(Json(serde_json::json!({ "ok": true, "message": message })))
 }

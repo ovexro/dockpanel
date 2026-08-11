@@ -64,7 +64,18 @@ async fn sync_files(Json(body): Json<SyncRequest>) -> Result<Json<serde_json::Va
 
     let msg = staging::sync_files(&body.source, &body.target)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+        .map_err(|e| {
+            // Both refusals already name the fully-resolved path they could not
+            // find, which is the whole answer — and answering 5xx threw exactly
+            // that sentence away. This one endpoint backs both panel directions,
+            // sync AND push, and neither of them pre-checks the directories.
+            let status = if e.contains("directory not found") {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            err(status, &e)
+        })?;
 
     Ok(Json(serde_json::json!({ "ok": true, "message": msg })))
 }

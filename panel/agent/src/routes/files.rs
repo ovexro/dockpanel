@@ -61,6 +61,35 @@ async fn list_dir(
     Ok(Json(entries))
 }
 
+/// Status for a file-service error: a refusal the operator can act on, or a
+/// fault only an incident id should describe.
+///
+/// Every sentence below is a decision the service made deliberately — a size
+/// cap, a text-vs-binary test, a name that is already taken, a path that is
+/// already gone. The agent stat'd the file successfully and refused; nothing
+/// broke. As 5xx the panel replaced all of them with "Operation failed.
+/// Reference: {uuid}", so "New Folder" onto an existing name and a genuine agent
+/// outage were the same screen, and opening a .png in the editor looked like
+/// infrastructure failure. The path refusals four lines up were already 400 and
+/// already survived — these are the ones that did not.
+fn file_status(e: String) -> ApiErr {
+    let status = if e.starts_with("File not found")
+        || e == "Source does not exist"
+        || e == "Path does not exist"
+    {
+        StatusCode::NOT_FOUND
+    } else if e == "Path already exists" || e == "Destination already exists" {
+        StatusCode::CONFLICT
+    } else if e == "File too large (max 2MB)" {
+        StatusCode::PAYLOAD_TOO_LARGE
+    } else if e == "File is binary or not readable as text" {
+        StatusCode::UNSUPPORTED_MEDIA_TYPE
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    };
+    err(status, &e)
+}
+
 /// GET /files/{domain}/read?path=
 async fn read_file(
     Path(domain): Path<String>,
@@ -75,7 +104,7 @@ async fn read_file(
 
     let content = files::read_file(&safe)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+        .map_err(file_status)?;
     Ok(Json(content))
 }
 
@@ -112,7 +141,7 @@ async fn create_entry(
 
     files::create_entry(&safe, is_dir)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+        .map_err(file_status)?;
 
     Ok(Json(serde_json::json!({ "success": true })))
 }
@@ -132,7 +161,7 @@ async fn rename_entry(
 
     files::rename_entry(&from, &to)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+        .map_err(file_status)?;
 
     Ok(Json(serde_json::json!({ "success": true })))
 }
@@ -151,7 +180,7 @@ async fn delete_entry(
 
     files::delete_entry(&safe)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+        .map_err(file_status)?;
 
     Ok(Json(serde_json::json!({ "success": true })))
 }

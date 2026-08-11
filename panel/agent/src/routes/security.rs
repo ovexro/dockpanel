@@ -42,19 +42,38 @@ async fn firewall_status() -> Result<Json<security::FirewallStatus>, ApiErr> {
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))
 }
 
+/// Status for a firewall-service error: a refusal the caller can act on, or a
+/// fault only an incident id should describe.
+///
+/// Both handlers used to sort these with their own substring test — `"Invalid"`
+/// in one, `"must be"` in the other — and each test only ever recognised the
+/// refusal its author had in mind. The package sentence matched neither, so on
+/// every RHEL-family box (where the rules on screen come from firewalld and ufw
+/// is never installed) both buttons answered 5xx, and the panel replaced the
+/// reason with an incident reference. Matching a named constant instead means a
+/// reworded sentence moves the constant and this follows it.
+fn security_status(e: String) -> ApiErr {
+    let status = if e == security::UFW_MISSING {
+        StatusCode::FAILED_DEPENDENCY
+    } else if e.starts_with("Invalid")
+        || e.contains("must be")
+        || e.starts_with("Can only")
+        || e.starts_with("Unknown fix type")
+    {
+        StatusCode::BAD_REQUEST
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    };
+    err(status, &e)
+}
+
 /// POST /security/firewall/rules
 async fn add_rule(
     Json(body): Json<AddRuleRequest>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
     security::add_firewall_rule(body.port, &body.proto, &body.action, body.from.as_deref())
         .await
-        .map_err(|e| {
-            if e.contains("Invalid") {
-                err(StatusCode::BAD_REQUEST, &e)
-            } else {
-                err(StatusCode::INTERNAL_SERVER_ERROR, &e)
-            }
-        })?;
+        .map_err(security_status)?;
 
     Ok(Json(serde_json::json!({ "success": true })))
 }
@@ -63,13 +82,7 @@ async fn add_rule(
 async fn delete_rule(Path(number): Path<usize>) -> Result<Json<serde_json::Value>, ApiErr> {
     security::remove_firewall_rule(number)
         .await
-        .map_err(|e| {
-            if e.contains("must be") {
-                err(StatusCode::BAD_REQUEST, &e)
-            } else {
-                err(StatusCode::INTERNAL_SERVER_ERROR, &e)
-            }
-        })?;
+        .map_err(security_status)?;
 
     Ok(Json(serde_json::json!({ "success": true })))
 }
@@ -156,7 +169,7 @@ struct FixRequest {
 /// POST /security/fix — Apply a recommended security fix.
 async fn apply_fix(Json(body): Json<FixRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
     let result = security::apply_fix(&body.fix_type, &body.target).await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+        .map_err(security_status)?;
     Ok(Json(serde_json::json!({ "success": true, "message": result })))
 }
 

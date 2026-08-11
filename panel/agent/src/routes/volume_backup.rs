@@ -71,7 +71,21 @@ async fn restore(
     }
     volume_backup::restore_volume(&req.volume_name, &container_name, &filename)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+        .map_err(|e| {
+            // The panel serves the operator this list from its own DB and the
+            // archive lives on a different host, so "gone since you were shown
+            // it" is the expected disagreement, not an agent fault. As a 5xx it
+            // arrived as an incident id, and a retry produced a fresh id and no
+            // new information.
+            let status = if e == "Backup file not found" {
+                StatusCode::NOT_FOUND
+            } else if e == "Invalid backup filename" {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            err(status, &e)
+        })?;
     Ok(Json(serde_json::json!({ "success": true })))
 }
 

@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AdminUser;
-use crate::error::{internal_error, err, agent_error, ApiError};
+use crate::error::{internal_error, err, agent_actionable, agent_error, ApiError};
 use crate::AppState;
 
 #[derive(serde::Serialize, serde::Deserialize, sqlx::FromRow, Clone)]
@@ -376,6 +376,12 @@ async fn test_from_whole_fleet(
 
     let mut reachable: Vec<String> = Vec::new();
     let mut failed: Vec<(String, String)> = Vec::new();
+    // Tracked beside the display strings so a refusal every member agrees on can
+    // keep its own status. `unanimous` drops to false the moment one member fails
+    // for a reason the operator cannot act on, or for a different one than the
+    // rest — either way there is no single answer left to propagate.
+    let mut shared: Option<StatusCode> = None;
+    let mut unanimous = true;
     for member in &fleet {
         match member
             .agent
@@ -385,7 +391,18 @@ async fn test_from_whole_fleet(
             Ok(_) => reachable.push(member.name.clone()),
             Err(e) => {
                 tracing::warn!("Destination {dest_name}: {} could not reach it: {e}", member.name);
-                failed.push((member.name.clone(), e.to_string()));
+                match agent_actionable(&e) {
+                    Some((status, msg)) => {
+                        if *shared.get_or_insert(status) != status {
+                            unanimous = false;
+                        }
+                        failed.push((member.name.clone(), msg));
+                    }
+                    None => {
+                        unanimous = false;
+                        failed.push((member.name.clone(), e.to_string()));
+                    }
+                }
             }
         }
     }
@@ -396,8 +413,17 @@ async fn test_from_whole_fleet(
             .map(|(server, e)| format!("{server}: {e}"))
             .collect::<Vec<_>>()
             .join("; ");
+        // Every host refused for the same thing the operator can fix, so answer
+        // with THAT — the single-server path above already does, via
+        // `agent_error`. Flattening it here is what tells somebody their fleet
+        // broke while every host in it is working and saying the same actionable
+        // sentence. A mixed bag, or any genuine agent fault, still reads 502.
+        let status = match shared {
+            Some(s) if unanimous => s,
+            _ => StatusCode::BAD_GATEWAY,
+        };
         return Err(err(
-            StatusCode::BAD_GATEWAY,
+            status,
             &format!("No server could reach \"{dest_name}\" — {detail}"),
         ));
     }

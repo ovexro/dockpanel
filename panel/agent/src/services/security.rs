@@ -1,6 +1,18 @@
 use serde::Serialize;
 use crate::safe_cmd::safe_command;
 
+/// Named so the route can match it instead of guessing at its wording.
+///
+/// Both firewall handlers used to sort their errors with an ad-hoc substring
+/// test — one looked for "Invalid", the other for "must be" — so this sentence,
+/// which neither author had in mind, fell to the 5xx arm and was replaced by an
+/// incident id before the operator saw it. It is reachable on every RHEL-family
+/// box: the Firewall page lists rules read from firewalld, and every one of them
+/// gets a working delete button whose backing command is ufw, which the panel
+/// will never install there. Same shape, and same fix, as
+/// [`crate::services::remote_backup::SSHPASS_MISSING`].
+pub const UFW_MISSING: &str = "ufw is not installed";
+
 #[derive(Serialize)]
 pub struct LoginEntry {
     pub time: String,
@@ -257,7 +269,7 @@ pub async fn add_firewall_rule(
     )
     .await
     .map_err(|_| "ufw command timed out".to_string())?
-    .map_err(|_| "ufw is not installed".to_string())?;
+    .map_err(|_| UFW_MISSING.to_string())?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -282,7 +294,7 @@ pub async fn remove_firewall_rule(rule_num: usize) -> Result<(), String> {
     )
     .await
     .map_err(|_| "ufw command timed out".to_string())?
-    .map_err(|_| "ufw is not installed".to_string())?;
+    .map_err(|_| UFW_MISSING.to_string())?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

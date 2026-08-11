@@ -8,7 +8,7 @@ An honest comparison. We're not shy about where DockPanel leads — and we're up
 |---------|-----------|----------|------------|----------|------------|------|
 | **Price** | Free | Free | Free | $8/mo+ | Free | $8/mo+ |
 | **Self-hosted** | Yes | Yes | Yes | No (SaaS) | Yes | No (SaaS) |
-| **Open source** | MIT | GPLv3 | No | No | GPLv3 | No |
+| **Open source** | AGPLv3 | GPLv3 | No | No | GPLv3 | No |
 | **Language** | Rust | PHP/Bash | PHP | PHP | Python | PHP |
 | **Docker native** | Yes | No | No | No | Docker option | No |
 | **Multi-server** | Yes | No | No | Yes | No | Yes |

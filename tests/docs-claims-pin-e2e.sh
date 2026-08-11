@@ -647,6 +647,52 @@ else
   ok "the guide no longer publishes the forecast — claim withdrawn, arm moot"
 fi
 
+echo "── 7. The licence the project ships under is the one it claims ──"
+
+# Nothing has ever checked this, which is why it rotted twice from ONE commit.
+# `3274a8c` relicensed to AGPL: it rewrote LICENSE, updated five manifests and
+# the ToS — and missed `website/server/package.json`, which kept declaring ISC,
+# and `COMPARISON.md`, whose comparison table kept telling readers MIT. Both
+# survived every review since, because a licence claim looks like prose and
+# nothing derived it from the file that decides it.
+
+if grep -q "GNU AFFERO GENERAL PUBLIC LICENSE" LICENSE; then
+  ok "LICENSE is the AGPL text"
+else
+  bad "LICENSE is not the AGPL text — every claim below is measured against nothing"
+fi
+
+# Enumerated from disk, not listed by hand: a hand-written list cannot fail when
+# somebody adds a seventh manifest, which is the failure this arm exists for. And
+# the enumeration is asserted before it is trusted — an empty find would print a
+# clean green having examined nothing.
+mapfile -t MANIFESTS < <(find . -maxdepth 4 \( -name Cargo.toml -o -name package.json \) \
+  -not -path '*/node_modules/*' -not -path '*/target/*' -not -path '*/dist/*' \
+  -not -path './.git/*' | sort)
+if [ "${#MANIFESTS[@]}" -lt 6 ]; then
+  bad "only ${#MANIFESTS[@]} first-party manifests enumerated — the sweep went blind"
+else
+  ok "${#MANIFESTS[@]} first-party manifests enumerated"
+  wrong=""
+  for m in "${MANIFESTS[@]}"; do
+    grep -qE '"?license"?[[:space:]]*[:=][[:space:]]*"AGPL-3.0-only"' "$m" \
+      || wrong="$wrong ${m#./}"
+  done
+  if [ -z "$wrong" ]; then
+    ok "every first-party manifest declares AGPL-3.0-only"
+  else
+    bad "manifest(s) not declaring AGPL-3.0-only:$wrong"
+  fi
+fi
+
+# The reader-facing half. Scoped to DockPanel's OWN column so a comparison table
+# may still say a competitor is MIT — the defect was a row asserting it about us.
+if grep -qE '^\|[^|]*[Oo]pen source[^|]*\|[[:space:]]*MIT' COMPARISON.md; then
+  bad "COMPARISON.md still tells readers DockPanel is MIT"
+else
+  ok "COMPARISON.md does not claim MIT for DockPanel"
+fi
+
 echo
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
