@@ -837,8 +837,29 @@ setup_database() {
     # container was created with — the one value guaranteed to still work — and
     # ALTER the role. Both values are hex, from `openssl rand -hex`, so neither
     # can carry a quote into the SQL.
-    if ! docker exec -e PGPASSWORD="$DB_PASSWORD" "$DB_CONTAINER" \
-            psql -U dockpanel -d dockpanel -c 'SELECT 1' >/dev/null 2>&1; then
+    # ⚠ THE PROBE MUST ACTUALLY AUTHENTICATE, and the obvious way of writing it
+    # does not. The official Postgres image ships a pg_hba that trusts BOTH
+    # `local` and `host 127.0.0.1/32`, so `docker exec … psql -U dockpanel`
+    # connects over the container's own socket and succeeds with ANY password —
+    # including the wrong one this check exists to detect. Written that way, the
+    # branch below never ran, and a box left with mismatched credentials by an
+    # interrupted install stayed broken exactly as it did before this check was
+    # added: the API crash-looping on "password authentication failed".
+    #
+    # Only the trailing `host all all all scram-sha-256` rule demands a password,
+    # and the way to land on it from here is the container's own BRIDGE address —
+    # the same rule the API's TCP connection to the published port lands on.
+    # Verified as a two-cell experiment on a real box: over the local socket a
+    # deliberately wrong password is ACCEPTED; over the bridge address it is
+    # REJECTED while the right one succeeds.
+    local db_probe_host
+    db_probe_host=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+        "$DB_CONTAINER" 2>/dev/null | awk '{print $1}')
+    # No bridge address ⇒ we cannot verify, so fall through to the reconcile
+    # rather than assume health. Re-setting the role to the password we are about
+    # to write is idempotent when it already matches.
+    if [ -z "$db_probe_host" ] || ! docker exec -e PGPASSWORD="$DB_PASSWORD" "$DB_CONTAINER" \
+            psql -h "$db_probe_host" -U dockpanel -d dockpanel -c 'SELECT 1' >/dev/null 2>&1; then
         warn "Database rejects this install's password — reconciling"
         local container_pw
         container_pw=$(docker inspect "$DB_CONTAINER" \
@@ -871,14 +892,42 @@ INSTALLED_VERSION=""
 # must not brick an install, integrity must). Sets FETCH_VERIFIED=1/0 so the
 # caller can report honestly whether a checksum was actually compared.
 FETCH_VERIFIED=0
+
+# dp_fetch <url> <out> — download, retrying the failures curl's own --retry will
+# not.
+#
+# `--retry` covers connection refusals, timeouts and some HTTP codes. It does NOT
+# cover a connection dropped MID-TRANSFER, which exits 56 — and 56 is precisely
+# what the release CDN has now returned on three separate installs across two
+# sessions, each time aborting the install at the binary download. `curl` grew
+# `--retry-all-errors` for exactly this, but it landed in 7.71 and Ubuntu 20.04,
+# which this installer supports, ships 7.68 — so the loop lives in shell, where
+# every supported box can run it.
+#
+# ⚠ `rc=$?` on the line after a bare `if` reads 0, because a false `if` with no
+# `else` is itself a success — the bug that shipped inside the last fix written
+# for this same failure. Capture with `|| rc=$?` on the command itself.
+dp_fetch() {
+    local url="$1" out="$2" attempt=1 rc=0
+    while [ "$attempt" -le 3 ]; do
+        rc=0
+        curl --retry 3 --retry-delay 2 -sfL "$url" -o "$out" || rc=$?
+        [ "$rc" -eq 0 ] && return 0
+        plog "  fetch attempt ${attempt}/3 exited ${rc} — $url"
+        rm -f "$out"
+        attempt=$((attempt + 1))
+        [ "$attempt" -le 3 ] && sleep 3
+    done
+    return "$rc"
+}
+
 fetch_asset() {
     local asset="$1" dest="$2"
     local tmp="${dest}.dpdl.$$"
     FETCH_VERIFIED=0
-    if ! run "Downloading ${asset}" \
-        curl --retry 3 --retry-delay 2 -sfL "${BASE_URL}/${asset}" -o "$tmp"; then
+    if ! run "Downloading ${asset}" dp_fetch "${BASE_URL}/${asset}" "$tmp"; then
         rm -f "$tmp"
-        error "Download failed: ${asset} — see $INSTALL_LOG"
+        error "Download failed after 3 attempts: ${asset} — see $INSTALL_LOG"
         exit 1
     fi
     if [ -s "$CHECKSUMS_FILE" ]; then

@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 struct MonitorRow {
     id: uuid::Uuid,
     user_id: uuid::Uuid,
+    site_id: Option<uuid::Uuid>,
     url: String,
     name: String,
     status: String,
@@ -64,7 +65,7 @@ pub async fn run(pool: PgPool, mut shutdown_rx: tokio::sync::broadcast::Receiver
 
         // Get monitors due for checking (HTTP/TCP/ping) + all heartbeat monitors (checked separately)
         let monitors: Vec<MonitorRow> = match sqlx::query_as(
-            "SELECT id, user_id, url, name, status, alert_email, alert_slack_url, alert_discord_url, \
+            "SELECT id, user_id, site_id, url, name, status, alert_email, alert_slack_url, alert_discord_url, \
              monitor_type, port, keyword, keyword_must_contain, check_interval, last_checked_at, custom_headers \
              FROM monitors WHERE enabled = TRUE AND \
              (monitor_type = 'heartbeat' OR last_checked_at IS NULL OR last_checked_at < NOW() - (check_interval || ' seconds')::interval)",
@@ -172,19 +173,44 @@ async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &Pg
 
     // GAP 29: Response time degradation alerting
     // If the site is technically up but very slow (>5s), fire a warning alert
+    //
+    // This statement could not succeed in any database, and its error was
+    // discarded, so from the day it was written until it was rewritten no
+    // slow-response alert has ever existed: no Dashboard count, no row on the
+    // Alerts page, no Prometheus sample. Three independent faults — it named a
+    // column `subject` that the table does not have (the column is `title`),
+    // omitted `title` which is NOT NULL with no default, and bound a `$2` the
+    // SQL never referenced. It also attributed the alert to whichever server was
+    // created first on the panel rather than to the monitor's own site.
+    //
+    // The title is deliberately free of the measured value: it is what the
+    // NOT EXISTS clause dedupes on, so a site that is slow for an hour raises
+    // one alert rather than one per check. The varying figure lives in the
+    // message, which is not part of the key.
     if new_status == "up" && response_time > 5000 {
-        let _ = sqlx::query(
-            "INSERT INTO alerts (user_id, server_id, alert_type, subject, message, severity, status) \
-             SELECT $1, s.id, 'slow_response', $3, $4, 'warning', 'firing' \
-             FROM servers s ORDER BY s.created_at ASC LIMIT 1 \
-             ON CONFLICT DO NOTHING"
+        if let Err(e) = sqlx::query(
+            // The casts are load-bearing, and `PREPARE` is the only thing that
+            // says so. `$3` appears both as a SELECT-list value, where an
+            // unadorned parameter resolves to `text`, and in `title = $3`,
+            // where it resolves to the column's `varchar` — "inconsistent types
+            // deduced for parameter $3", and the statement never prepares. The
+            // first rewrite of this fix had exactly that fault and looked
+            // perfectly correct on the page.
+            "INSERT INTO alerts (user_id, site_id, alert_type, severity, title, message, status) \
+             SELECT $1, $2, 'slow_response', 'warning', $3::text, $4::text, 'firing' \
+             WHERE NOT EXISTS ( \
+                 SELECT 1 FROM alerts \
+                 WHERE alert_type = 'slow_response' AND status = 'firing' \
+                   AND user_id = $1 AND title = $3::text)"
         )
         .bind(monitor.user_id)
-        .bind(monitor.id) // unused but keeps param numbering clean
-        .bind(format!("Slow response: {} ({}ms)", monitor.name, response_time))
+        .bind(monitor.site_id)
+        .bind(format!("Slow response: {}", monitor.name))
         .bind(format!("Response time {}ms exceeds 5000ms threshold for {}", response_time, monitor.url))
         .execute(pool)
-        .await;
+        .await {
+            tracing::error!("Failed to record slow-response alert for {}: {e}", monitor.name);
+        }
 
         tracing::warn!("Monitor {} ({}) slow response: {}ms", monitor.name, monitor.url, response_time);
         crate::services::system_log::log_event(

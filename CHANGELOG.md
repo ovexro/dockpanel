@@ -4,6 +4,86 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.107.0]
+
+### Fixed — re-running the mail installer could refuse every authenticated send
+
+v2.106.0 added a sender-identity check: Postfix consults a table of which login
+may use which envelope sender. The table is an **allow-list** — an address it
+does not list is refused — but the code that armed it was written believing the
+opposite, that an unlisted address is simply not checked. Under that reading an
+empty table is the harmless case. Under the real one it is the total case: it
+authorises nobody, so it refuses everybody.
+
+`mail_install` armed the check against whatever the table file already held, and
+on a server upgrading into v2.106.0 that file does not exist yet — so it held
+nothing. Re-running the mail installer, which is the ordinary thing to do when
+mail looks wrong, would arm an empty allow-list and every authenticated
+submission on the server would be refused with `553` until the next mailbox,
+alias or domain change rebuilt the table. Nothing surfaced the cause.
+
+The installer now declines to arm an allow-list that authorises nobody, and says
+so in the log. A server with no mailboxes has nobody who can authenticate and so
+nothing to protect; its first mailbox arms the check through the normal sync.
+An existing table is still preserved and re-armed across an installer re-run,
+which is what that call was for.
+
+### Fixed — the sender rule is stricter than v2.106.0's own documentation said
+
+Because the premise was wrong in the source, it was wrong in the guide too. The
+rule is: an authenticated client may use an envelope sender only if it is a
+mailbox on this server, or sits at a domain hosted on this server. Anything else
+is refused, including **a subdomain you have not added as its own mail domain**
+(`shop.example.com` is not `example.com`) and any external address — so this
+server cannot be used as an authenticated relay for a domain it does not host.
+That was already the behaviour in v2.106.0; only the documentation was wrong.
+`docs/guides/email.md` now states it, including the subdomain case and what it
+means when the panel's own SMTP relay points at the same server.
+
+### Fixed — the installer's database-credential check could not fail
+
+v2.106.0 added a check that catches an interrupted install leaving the database
+holding one password while `api.env` holds another. The check asked the question
+correctly and asked it down a pipe that cannot answer: `docker exec … psql`
+connects over the container's own socket, and the PostgreSQL image trusts both
+`local` and `host 127.0.0.1/32`, so it succeeds with **any** password — including
+the wrong one the check exists to find. It therefore never fired, and a server in
+that state stayed exactly as broken as before the check existed, with the API
+crash-looping on `password authentication failed`.
+
+Reproduced on a fresh server: a transient download failure aborted the install,
+the documented-safe re-run completed, and the panel could not start. The check is
+now made against the container's own network address, the only path that reaches
+the rule requiring a password — the same rule the API's connection uses. On the
+same broken server, the corrected check reports *"Database rejects this install's
+password — reconciling"* and the panel starts.
+
+### Fixed — the installer gave up on the download error it actually hits
+
+Binaries were fetched with `curl --retry 3`, which does not retry a connection
+dropped mid-transfer. That is exit 56, and it is precisely what the release CDN
+returned on three separate installs across two sessions, each time aborting the
+install. `--retry-all-errors` would cover it but needs curl 7.71, and Ubuntu
+20.04 — which this installer supports — ships 7.68, so the retry is now a shell
+loop: three attempts on any failure, reporting the real exit code when it gives
+up. All three paths were driven before shipping, including the one where the
+error is permanent.
+
+### Fixed — slow-response alerts have never once been recorded
+
+A monitor that is up but responding slower than 5s was meant to raise a warning
+alert. The statement that recorded it could not succeed against any schema: it
+named a column `subject` where the table has `title`, omitted `title` (which is
+`NOT NULL`), and bound a parameter the statement never referenced. Its error was
+discarded, so the failure was silent and total — no Dashboard count, no row on
+the Alerts page, no Prometheus sample, for the whole life of the feature. It
+also attributed the alert to whichever server was registered first rather than
+to the monitor's own site.
+
+Rewritten against the real schema, attributed to the monitor's site, deduplicated
+so an hour of slowness raises one alert instead of one per check, and its error
+is now logged instead of dropped.
+
 ## [2.106.0]
 
 ### Fixed — any mailbox could send as any other tenant, DKIM-signed

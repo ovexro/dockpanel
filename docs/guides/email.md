@@ -99,12 +99,26 @@ customer cannot send mail claiming to be another, and cannot borrow the other's
 DKIM signature by doing so. Postfix answers such an attempt with
 `553 5.7.1 Sender address rejected: not owned by user`.
 
-Two consequences worth knowing before you design around it:
+The rule is an **allow-list**, and that is the part worth reading twice: an
+authenticated client may use an envelope sender only if it is a mailbox on this
+server, or sits at a domain hosted on this server. Anything the server does not
+host is refused -- not ignored.
+
+The case that trips people is a **subdomain**. `shop.example.com` is a different
+domain from `example.com`. If you host `example.com` and try to send as
+`orders@shop.example.com` without adding the subdomain as its own mail domain,
+that send is refused. Add it as a mail domain, or send as an address at a domain
+you already host.
+
+Consequences worth knowing before you design around it:
 
 - Mailboxes **inside one domain** may send as each other, and as any address at
   that domain. They belong to the same customer, so this is not a boundary
   DockPanel tries to enforce -- if you need per-mailbox sender restrictions
   within a single domain, that is not something this provides.
+- You cannot use this server as an authenticated relay for a domain it does not
+  host. If you need that, host the domain here or relay through a provider that
+  is authoritative for it.
 - The check applies only to **authenticated** submission. Mail arriving from the
   internet with one of your domains in the envelope sender is unaffected, which
   is what keeps mailing lists, forwarders and third-party senders working. Use
@@ -117,7 +131,11 @@ Two consequences worth knowing before you design around it:
   any other customer.
 
 This is applied automatically. A server already hosting mail picks it up the
-next time you add or change a mailbox, alias or domain.
+next time you add or change a mailbox, alias or domain. Re-running the mail
+installer is safe: it keeps the sender list a running server already has, and on
+a server with no mailboxes yet it leaves the check disarmed rather than arming
+it against an empty list -- which would have refused every authenticated send on
+the box until the next mailbox change.
 
 ## Test Sending and Receiving
 

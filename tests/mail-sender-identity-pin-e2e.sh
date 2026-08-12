@@ -186,14 +186,22 @@ fi
 # ── §B the wildcard row ─────────────────────────────────────────────────
 echo "§B the per-domain row"
 
-# reject_sender_login_mismatch does not reject a sender it can find no owner
-# for. So the per-domain row is what makes the control total rather than
-# mailbox-shaped: without it, every alias, every catch-all and every invented
-# local part at a hosted domain stays forgeable.
+# ⚠ This comment used to say the map is consulted permissively — that an address
+# it does not mention is allowed through, making the per-domain row the thing
+# that closed the hole. The parameter's own manual page says the opposite: the
+# authenticated form refuses a SASL client whose MAIL FROM "is not listed in
+# $smtpd_sender_login_maps". The table is an ALLOW-LIST.
+#
+# So the row is not what stops a forge — an invented local part at another
+# tenant's domain is unlisted and refused with or without it. The row is what
+# keeps a domain's OWN logins able to send as their aliases, catch-alls and role
+# addresses. Deleting it would not open a hole; it would break every alias on
+# the box. Same arm, opposite reason, and the reason is the part that has to be
+# right, because it is what the next person edits against.
 if hasre "$AGENT_PROD" 'lines\.push\(format!\("@\{\}'; then
-  ok "a per-domain row is emitted"
+  ok "a per-domain row is emitted, so a domain's own logins keep their aliases"
 else
-  bad "no per-domain row — aliases, catch-alls and invented local parts are unowned, therefore permitted"
+  bad "no per-domain row — a mailbox could send only as the exact address it authenticated with, and every alias on the box would stop working"
 fi
 
 # The line above pins that the row is WRITTEN; this pins that the loop writing it
@@ -280,6 +288,21 @@ else
   else
     bad "the restriction is written before the map is hashed — this is the ordering that takes smtpd down"
   fi
+  # The trap the refuted premise hid. An allow-list armed against a table with no
+  # rows authorises nobody, so it refuses EVERY authenticated submission on the
+  # box — 553, no other symptom. `mail_install` calls this helper with whatever
+  # the map file already held, and on a box upgrading into the release that
+  # introduced that file it holds nothing. Re-running the installer is the
+  # ordinary response to mail looking broken, so without this guard the retry
+  # path takes the box's own authenticated mail off the air until the next
+  # mailbox change. Pin that the guard exists AND that it precedes the key: a
+  # check placed after the arming is decoration.
+  empty_at=$(grep -nE 'map_content\.trim\(\)\.is_empty\(\)' <<< "$helper" | head -1 | cut -d: -f1)
+  if [ -n "$empty_at" ] && [ -n "$key_at" ] && [ "$empty_at" -lt "$key_at" ]; then
+    ok "a map that authorises nobody is refused (line $empty_at) before the restriction is written (line $key_at)"
+  else
+    bad "nothing stops an empty map from arming the restriction — every authenticated submission on the box would be refused with 553"
+  fi
 fi
 
 # ── §D the restriction form ─────────────────────────────────────────────
@@ -340,11 +363,15 @@ else
   bad "sync_config does not arm enforcement — no existing install would ever receive this"
 fi
 
+# What this carrier is actually for, now that the helper refuses an empty map:
+# preserving and re-arming an EXISTING map across an installer re-run. A box with
+# no mailboxes has nothing to protect and nobody who can authenticate, and its
+# first mailbox goes through sync_config, which arms it there.
 install_fn="$_inst"
 if [ -n "$install_fn" ] && has "$install_fn" 'ensure_sender_login_enforcement'; then
-  ok "mail_install arms enforcement, so a fresh box is protected before its first mailbox"
+  ok "mail_install re-arms enforcement, so an installer re-run keeps an existing map armed"
 else
-  bad "mail_install does not arm enforcement — a new box is unprotected until its first mailbox change"
+  bad "mail_install does not arm enforcement — an installer re-run would leave an existing map unenforced"
 fi
 
 # The keys must NOT be added to the appended config block: that block is written

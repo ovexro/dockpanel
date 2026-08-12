@@ -2167,17 +2167,38 @@ const NO_AUTHORISED_SENDER: &str = "dockpanel-no-authorised-sender";
 ///
 /// 1. every enabled mailbox, owned by itself;
 /// 2. one `@domain` row per enabled domain, owned by that domain's own enabled
-///    logins. This is the row that matters. `reject_sender_login_mismatch` does
-///    not reject a sender it can find no owner for, so without the wildcard the
-///    control would only cover addresses that happen to be mailboxes — leaving
-///    every alias, every catch-all and every made-up local part at a hosted
-///    domain forgeable, which is most of the attack surface and all of the
-///    DKIM-signed part.
+///    logins.
+///
+/// ⚠ THIS TABLE IS AN ALLOW-LIST, and the first version of this comment said
+/// the opposite. postconf(5), the authenticated form armed below: reject when
+/// the client is SASL-authenticated but "either the MAIL FROM address is not
+/// listed in $smtpd_sender_login_maps, or the SASL login name is not an owner
+/// for that address". An address this table does not mention is REFUSED, not
+/// permitted. The variant that checks only already-listed addresses is a
+/// different parameter, and it is deliberately not the one used.
+///
+/// So the `@domain` row does not close a forgery hole — the allow-list closes
+/// it, because an invented local part at another tenant's domain is unlisted
+/// and refused either way. The row is what keeps a domain's own logins able to
+/// send as their aliases, catch-alls and role addresses. Without it a mailbox
+/// could send only as the exact string it authenticated with, and every alias
+/// on the box would stop working.
+///
+/// The consequence an operator needs, written here rather than left to be
+/// discovered from a bounce: an authenticated client may use an envelope sender
+/// only if it is a mailbox on this box, or sits at a domain hosted on it. A
+/// subdomain that was never added as its own mail domain is a different domain
+/// and is refused; so is any external address. That includes the panel's own
+/// notification sender when it relays through this box — `smtp_from` and
+/// `smtp_username` are independent settings, so a `smtp_from` the authenticated
+/// mailbox does not own is refused like any other unowned sender.
 ///
 /// A domain with no enabled mailbox is owned by [`NO_AUTHORISED_SENDER`], so
-/// nobody may send as it. That is deliberate: a domain on which no one holds a
-/// mailbox must not become sendable-as by whoever happens to hold one elsewhere
-/// on the same box.
+/// nobody may send as it. Under the allow-list that row is belt-and-braces
+/// rather than load-bearing — omitting it would leave the domain unlisted and
+/// therefore refused anyway — but it states the intent inside the table, and it
+/// keeps the answer correct if the restriction is ever changed to the variant
+/// that only consults listed addresses.
 ///
 /// The bound this does NOT claim, stated here rather than left to be discovered
 /// from behaviour: two mailboxes in the SAME domain may still send as each
@@ -2254,6 +2275,33 @@ async fn ensure_sender_login_enforcement(map_content: &str) {
             );
             return;
         }
+    }
+
+    // A map with no rows authorises NOBODY, and the restriction is an
+    // allow-list, so arming against one does not leave the box unprotected — it
+    // refuses EVERY authenticated submission on it, 553, with no other symptom.
+    // This is the trap the old "an unowned sender is permitted" reading hid: it
+    // made an empty map look like the harmless case when it is the total one.
+    //
+    // `mail_install` reaches here with whatever the map file already held, and
+    // on every box upgrading into the release that introduced that file it held
+    // nothing. Re-running the installer is the ordinary response to mail looking
+    // broken, so without this the installer's own retry path would take the
+    // box's authenticated mail off the air until the next mailbox change.
+    //
+    // Declining costs nothing. The map is empty only when the box has no enabled
+    // mailbox and no enabled domain, and a mailbox that does not exist cannot
+    // authenticate — so there is no send to refuse and no forge to prevent. The
+    // first domain or account mutation calls this again through `sync_config`
+    // with a populated map, and that is what arms it. The map itself is still
+    // written above, so the table on disk keeps telling the truth either way.
+    if map_content.trim().is_empty() {
+        tracing::info!(
+            "Sender-login map is empty (no enabled mailbox or domain) — writing it but NOT \
+             arming the restriction. Arming an allow-list against an empty table would refuse \
+             every authenticated submission on this box. The next mail sync arms it."
+        );
+        return;
     }
 
     // Written with `postconf`, not added to the config block in `mail_install`:
@@ -2334,10 +2382,6 @@ async fn write_file_atomic(path: &str, content: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Like `write_file_atomic` but sets `mode` on the temp file before it is renamed into place,
-/// so a secret file (e.g. the Dovecot users file, which holds mail-account password hashes) is
-/// never even briefly world-readable. Without this, `write_file_atomic` leaves the file at the
-/// process umask (0644 under root's default 022) — the s236 mail-audit finding.
 /// Write the Dovecot passwd-file so that Dovecot can actually read it.
 ///
 /// The file holds every mail account's password hash, so it must not be
@@ -2462,10 +2506,15 @@ mod tests {
     fn may_send_as(table: &str, login: &str, sender: &str) -> bool {
         owners_of(table, sender)
             .map(|v| v.split(',').any(|o| o == login))
-            // Postfix does not reject a sender it can find no owner for. An
-            // absent key is therefore permission, which is exactly why the
-            // `@domain` rows have to exist.
-            .unwrap_or(true)
+            // An absent key is REFUSAL, not permission: the armed restriction
+            // rejects an authenticated client whose MAIL FROM "is not listed in
+            // $smtpd_sender_login_maps". This model asserted the opposite until
+            // the parameter's own manual page was read against it — and not one
+            // of the tests below moved when it was corrected, because every one
+            // of them names an address at a hosted domain, which is listed under
+            // either reading. The two tests that DO discriminate were written
+            // afterwards, and are the only reason this line is now testable.
+            .unwrap_or(false)
     }
 
     fn two_tenants() -> SyncRequest {
@@ -2552,6 +2601,28 @@ mod tests {
         // through the `@domain` row, on an invented local part — so that is
         // where it has to be asked. (Found by mutation, not by writing.)
         assert!(!may_send_as(&t, "b@mail.example.com", "invented@example.com"));
+    }
+
+    /// The two tests the original eight could not express, because all eight
+    /// named addresses at hosted domains and those are listed under either
+    /// reading of the restriction. These are the ones that fail if `may_send_as`
+    /// goes back to treating an absent key as permission — i.e. they are the
+    /// tests that would have caught the premise being wrong.
+    #[test]
+    fn an_address_at_no_hosted_domain_is_refused() {
+        let t = build_sender_login_map(&two_tenants());
+        assert!(owners_of(&t, "anyone@external.example").is_none());
+        assert!(!may_send_as(&t, "sales@tenant-a.com", "anyone@external.example"));
+    }
+
+    /// The cheapest way a legitimate operator meets the bound: a shop or app on
+    /// a subdomain that was never added as its own mail domain. Refused, and
+    /// the fix is to add the subdomain — not to widen the map.
+    #[test]
+    fn a_subdomain_that_was_never_added_is_refused() {
+        let t = build_sender_login_map(&two_tenants());
+        assert!(owners_of(&t, "orders@shop.tenant-a.com").is_none());
+        assert!(!may_send_as(&t, "sales@tenant-a.com", "orders@shop.tenant-a.com"));
     }
 
     /// Two mailboxes in the SAME domain belong to the same site owner, so this
