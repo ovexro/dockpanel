@@ -25,15 +25,16 @@ promotion. A client manages the sites it holds — PHP version, settings, files,
 backups, SSL, and a shell inside each site it owns — and cannot bring a new
 domain into service.
 
-**Two capabilities this sentence used to list are not a client's, and never
-were.** *Mail* is administrator-only end to end: every handler in `routes/mail.rs`
-takes the `AdminUser` extractor and the Mail page redirects anybody else away, so
-a client cannot add, edit or remove a mailbox on its own domain — an admin does it
-for them. *Containers* likewise: every handler in `routes/docker_apps.rs` calls
-`require_admin`, because a container on this box belongs to the box rather than to
-a site. Corrected in v2.77.0 after an operator followed the list and found two of
-its seven items missing from the panel; the capability is what changed here, not
-the description — see *Withdrawn Claims* in `FEATURES.md`.
+**One capability this sentence used to list is not a client's, and never was.**
+*Containers*: every handler in `routes/docker_apps.rs` calls `require_admin`,
+because a container on this box belongs to the box rather than to a site.
+Corrected in v2.77.0 after an operator followed the list and found items missing
+from the panel; the capability is what changed there, not the description — see
+*Withdrawn Claims* in `FEATURES.md`.
+
+*Mail* was in the same position until v2.102.0 and is no longer. A client now
+manages the mailboxes and aliases of a mail domain **whose name matches a site it
+owns on the same server** — see *Mail follows the site* below.
 
 What a client's shell is, precisely: selecting one of your sites in **Terminal**
 opens a session **inside that site's directory, as `www-data`**, under a
@@ -130,13 +131,38 @@ door. An **administrator** is not refused: putting a site and its mail on the
 same name is an ordinary arrangement, and "set the mail up first, add the website
 after" has to keep working.
 
-The reason the rule exists is worth stating plainly, because it is about a
-feature that is being built rather than one that shipped: mail is scoped by
-matching a mail domain's name against the domain of a site the caller owns
-(GitHub #106). That makes the site's domain an authorisation key — and it is a
-key the account being authorised can write. Without this rule, an account could
-point a site it already owned at a name whose mailboxes existed and hand itself
-every mailbox on it.
+The reason the rule exists is worth stating plainly: mail is scoped by matching a
+mail domain's name against the domain of a site the caller owns (GitHub #106,
+shipped in v2.102.0). That makes the site's domain an authorisation key — and it
+is a key the account being authorised can write. Without this rule, an account
+could point a site it already owned at a name whose mailboxes existed and hand
+itself every mailbox on it.
+
+## Mail follows the site (v2.102.0)
+
+A mail domain is managed by whoever owns the site of the same name **on the same
+server**. That account can list the domain, read its DNS records, and create,
+edit and delete its mailboxes and aliases — including setting passwords and
+forwards. No new column and no new setting: ownership of the site *is* the grant,
+so transferring a site transfers its mailboxes with it.
+
+Three limits are worth knowing before you plan around them:
+
+- **Same server.** `sites` is unique on `(domain, server_id)`, not on the domain
+  alone, so the match carries the server too. **A domain whose website and
+  mailboxes live on different hosts stays administrator-only** — the panel cannot
+  tell that arrangement apart from two unrelated customers holding one name on two
+  machines, and it refuses rather than guess.
+- **One owner.** If two accounts hold different casings of the same name on one
+  server — possible only on installs predating v2.52.0 — neither gets the mail.
+  It fails closed.
+- **The domain itself stays administrative.** Creating, renaming and deleting a
+  mail domain, and setting its catch-all, remain administrator-only. A catch-all
+  redirects an entire domain's mail, which is not a per-mailbox decision.
+
+Creating a mail domain over a name a customer already holds a site on is how you
+give them their mail — and because that single action hands over every mailbox and
+password on it, the activity record now names the account it granted.
 
 Being a client also means not being an admin, so every administrative surface —
 users, servers, panel settings, updates, the firewall — refuses it, the same way
@@ -160,8 +186,9 @@ returned (v2.82.0):
 - **Monitoring → Maintenance.** A client can schedule a maintenance window, which
   silences its own alerts while it works on its own site.
 
-Still administrator-only, and correctly so: mail, containers, DNS, CDN, the server
-shell, and everything under the Admin group.
+Still administrator-only, and correctly so: containers, DNS, CDN, the server
+shell, and everything under the Admin group. Mail is now partly a client's — the
+mailboxes on a domain it owns a site for; the mail domain itself is not.
 
 ## Every account owns its own security (v2.83.0)
 

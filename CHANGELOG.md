@@ -4,6 +4,80 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.102.0]
+
+### Added — client-scoped mail: the owner of a site manages its mailboxes (GitHub #106)
+
+A mail domain is now reachable by the account that owns the site of the same name
+**on the same server**, not only by an administrator. Nine endpoints changed hands:
+the domain list, the DNS-record view, and full CRUD over mailboxes and aliases.
+`mail_domains` has no owner column, so ownership is answered through `sites` —
+which is why v2.101.0 had to make mail domains domain holders first.
+
+Two clauses do the safety work, and both are load-bearing:
+
+- **The site and the mail domain must be on the same server.** `sites` is unique
+  on `(domain, server_id)` and *not* on domain; so is `mail_domains`. Without the
+  server term, creating a mail domain on any machine in the fleet would hand every
+  mailbox on it to whoever held a site of that name on some *other* machine.
+  Consequence, stated rather than left to be discovered: **a domain whose website
+  and mailboxes live on different hosts stays administrator-only.**
+- **No other account may hold a case-variant of the name.** `mail_domains.domain`
+  has always been stored lowercase; `sites.domain` only since v2.52.0, so legacy
+  rows may hold mixed case. Folding one side alone would let two rows differing
+  only in case both match, so the entitlement additionally requires that the
+  caller is the *only* owner among case-variants. It fails closed on exactly the
+  legacy data that could otherwise widen it.
+
+A normalising migration was considered and **deliberately not written**: the unique
+index is on the raw column, so lowercasing in bulk raises a duplicate key on
+precisely the installs that have the problem — and a failed migration aborts panel
+startup. `sites.domain` is also the on-disk vhost key, which SQL cannot rename.
+
+Still administrator-only, and now asserted rather than merely intended: creating,
+updating and deleting a mail domain (`catch_all` is a mail-interception primitive),
+and the two DNS-verification endpoints.
+
+Creating a mail domain over a name a non-administrator already holds a site on is
+an entitlement-granting write. It is still allowed — it is how an operator gives a
+customer their mail — but it is no longer silent: the activity record now names the
+account that was granted.
+
+### Security — an empty or dotted mailbox local part was a path component and a map key
+
+The address validator tested the whole string for non-emptiness, never the local
+part, so `@example.com` and `..@example.com` were both accepted. Measured effects,
+each reproduced rather than reasoned about:
+
+- `@example.com` becomes a `virtual_mailbox_maps` key byte-identical to the
+  domain's catch-all key. The agent writes account lines before catch-all lines,
+  `postmap` keeps the first and reports the collision on a stderr the agent
+  discards — so creating that mailbox **silently voided the domain's catch-all**,
+  a setting only an administrator can write, and returned 201 with no warning.
+- `..@example.com` becomes the maildir `/var/vmail/{domain}/..`, which resolves one
+  level above the domain directory; the `chown -R` beside it then walked the whole
+  tree on every sync. The agent already refused a *domain* component containing
+  `..`; that guard had simply never been applied to the half of the path the local
+  part supplies.
+
+Both doors are administrator-only in 2.101.0 and open to a site owner in this
+release, which is why the fix ships with the entitlement rather than after it. One
+structural check now covers all five address doors — catch-all, mailbox address,
+forward, alias source and alias destination — and the agent refuses the same shapes
+independently, because the agent is what builds the path. Comma-separated alias
+destinations are checked per element: `root,user@example.com` was previously
+accepted whole.
+
+### Fixed — the guard on the mail claim had a test that could not fail
+
+`domain-claim-pin-e2e.sh` asserted that the mail gate "admits the administrator
+role and refuses everything else" by checking that the administrator comparison was
+*present*. The regression that matters does not remove that comparison, it adds one
+beside it — so opening the gate to clients left the string intact and the suite
+printed green. Measured: the whole corpus (59 suites, 338 unit tests) also failed to
+notice the administrator role term being deleted from the mail authorisation
+predicate outright. Both are now covered, and every arm was mutation-tested.
+
 ## [2.101.0]
 
 ### Security — a mail domain now holds its name, and only an administrator may claim over it

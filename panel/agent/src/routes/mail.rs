@@ -974,6 +974,32 @@ async fn domain_remove(
 
 // ── Full sync (rebuild all Postfix/Dovecot config) ──────────────────────
 
+/// True if the local part of `addr` is safe to use as a PATH COMPONENT and a MAP KEY.
+///
+/// `domain_configure` already refuses a domain component containing `..`, `/` or
+/// `\` before it joins it onto `VMAIL_DIR`. The local part is the other half of
+/// exactly the same path — `format!("{VMAIL_DIR}/{}/{}", parts[1], parts[0])` in
+/// step 7 below — and nothing checked it, so:
+///
+/// * `..@example.com` produced `/var/vmail/example.com/..`, i.e. `/var/vmail`,
+///   one level above the domain directory, and the `chown -R` beside it then
+///   walked the entire tree on every sync;
+/// * `@example.com` produced the map key `@example.com`, which is byte-identical
+///   to the domain's catch-all key. Account lines are written before catch-all
+///   lines, `postmap` keeps the first, and its duplicate-entry warning goes to a
+///   stderr this file discards — so the mailbox silently replaced the catch-all.
+///
+/// The panel refuses these too (`is_wellformed_address`), but the agent builds
+/// the path, so the agent checks independently.
+fn local_part_is_safe(addr: &str) -> bool {
+    match addr.split_once('@') {
+        Some((local, domain)) => {
+            !local.is_empty() && !domain.is_empty() && local.chars().any(|c| c != '.')
+        }
+        None => false,
+    }
+}
+
 async fn sync_config(
     Json(body): Json<SyncRequest>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
@@ -985,6 +1011,9 @@ async fn sync_config(
         }
         if !acc.email.contains('@') || acc.email.matches('@').count() != 1 {
             return Err(err(StatusCode::BAD_REQUEST, "Invalid email format"));
+        }
+        if !local_part_is_safe(&acc.email) {
+            return Err(err(StatusCode::BAD_REQUEST, "Invalid email local part"));
         }
         // Dovecot users file uses ':' as field separator — reject in password hash
         if acc.password_hash.contains(':') || acc.password_hash.contains('\n')
@@ -1003,6 +1032,11 @@ async fn sync_config(
         if !alias.source.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '@' | '.' | '_' | '-' | '+'))
             || !alias.destination.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '@' | '.' | '_' | '-' | '+' | ',')) {
             return Err(err(StatusCode::BAD_REQUEST, "Invalid characters in alias data"));
+        }
+        // An alias source is a virtual_alias_maps KEY, so `@example.com` collides
+        // with the catch-all key the same way an account address does.
+        if !local_part_is_safe(&alias.source) {
+            return Err(err(StatusCode::BAD_REQUEST, "Invalid alias source local part"));
         }
     }
     // Validate catch-all entries

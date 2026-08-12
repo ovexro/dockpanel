@@ -5,7 +5,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::{AdminUser, Claims, ServerScope};
+use crate::auth::{AdminUser, AuthUser, Claims, ServerScope};
 use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
@@ -235,11 +235,26 @@ pub async fn mail_uninstall(
 /// handlers behind it now refuse — [`MAIL_DOMAIN_CALLER_PREDICATE`] draws that
 /// line for every per-domain route, and the list that feeds them drew none.
 ///
-/// The filter is the row's own `server_id` rather than that predicate, because a
-/// list has no `{id}` to bind `$1` to. `ServerScope` has already proved the caller
-/// owns the server it names (`SELECT id FROM servers WHERE id = $1 AND user_id = $2`),
-/// so here the server term IS the authorisation — the same shape
-/// `sites::list_for_admin` uses for the equivalent fleet-wide read.
+/// TWO BRANCHES, and they authorise differently on purpose — the house pattern
+/// from `sites::list` versus `sites::list_for_admin`, where OWNERSHIP authorises
+/// and the server term only SCOPES.
+///
+/// * **Administrator**: unchanged from before. `ServerScope` has already proved
+///   the caller owns the server it names (`SELECT id FROM servers WHERE id = $1
+///   AND user_id = $2`), so the server term is the authorisation for this branch.
+/// * **Site owner** (GitHub #106): the same ownership test
+///   [`MAIL_DOMAIN_CALLER_PREDICATE`] applies per row, inlined because a list has
+///   no `{id}` to bind. It is deliberately NOT scoped by `$1`. `ServerScope`'s
+///   header-absent branch resolves the LOCAL server with no ownership check, and
+///   a non-administrator never sends the header, so constraining this branch by
+///   `$1` would blank the list for a client whose site is on a fleet member —
+///   while all eight per-domain handlers, which resolve the host from the ROW,
+///   would happily serve them. The list must agree with the handlers behind it.
+///
+/// ⚠ The `OR` between the branches is parenthesised, and that is load-bearing.
+/// `AND` binds tighter than `OR` in SQL, so the previous shape
+/// (`server_id = $1 OR server_id IS NULL`) would have silently attached any
+/// appended `AND <owner term>` to the second disjunct alone.
 ///
 /// ⚠ `server_id IS NULL` stays visible, deliberately, for the same reason the
 /// predicate admits it. `20260807000000_sleep_and_destination_server_scope.sql`
@@ -253,15 +268,24 @@ pub async fn mail_uninstall(
 /// answer 409 naming the problem instead of 404 naming nothing.
 pub async fn list_domains(
     State(state): State<AppState>,
-    AdminUser(_claims): AdminUser,
+    AuthUser(claims): AuthUser,
     ServerScope(server_id, _agent): ServerScope,
 ) -> Result<Json<Vec<MailDomain>>, ApiError> {
     let domains: Vec<MailDomain> = sqlx::query_as(
-        "SELECT id, domain, dkim_selector, dkim_public_key, catch_all, enabled, created_at \
-         FROM mail_domains WHERE server_id = $1 OR server_id IS NULL \
-         ORDER BY domain LIMIT 500",
+        "SELECT md.id, md.domain, md.dkim_selector, md.dkim_public_key, md.catch_all, \
+         md.enabled, md.created_at FROM mail_domains md WHERE (\
+         EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.role = 'admin') \
+         AND (md.server_id = $1 OR md.server_id IS NULL)) \
+         OR (EXISTS (\
+         SELECT 1 FROM sites s WHERE s.server_id = md.server_id \
+         AND lower(s.domain) = md.domain AND s.user_id = $2) \
+         AND NOT EXISTS (\
+         SELECT 1 FROM sites s2 WHERE s2.server_id = md.server_id \
+         AND lower(s2.domain) = md.domain AND s2.user_id <> $2)) \
+         ORDER BY md.domain LIMIT 500",
     )
     .bind(server_id)
+    .bind(claims.sub)
     .fetch_all(&state.db)
     .await
     .map_err(|e| internal_error("list domains", e))?;
@@ -363,9 +387,44 @@ pub async fn create_domain(
         }
     });
 
+    // ── Say who this just handed the mailboxes to ────────────────────────
+    //
+    // The claim system is DIRECTIONAL and only one direction was guarded.
+    // `may_claim_mail_held` stops a site being pointed at a name whose mail
+    // already exists; nothing stops mail being created over a name a site
+    // already holds — `ensure_claimable` is not called from this module at all.
+    // Since #106 derives mailbox control from site ownership, this INSERT is now
+    // an entitlement-granting write: the moment the row lands, whoever owns the
+    // same-named site on this server holds every mailbox and every password hash
+    // on it.
+    //
+    // That is the intended flow — it is how an operator gives a customer their
+    // mail — so this must NOT refuse. `ensure_claimable` verbatim would 409 the
+    // ordinary "site first, mail after" pairing that the entitlement is built
+    // around. What was missing is that the grant was SILENT. It is now named in
+    // the activity record the operator can actually read, and in the log.
+    let grantee: Option<(String,)> = sqlx::query_as(
+        "SELECT u.email FROM sites s JOIN users u ON u.id = s.user_id \
+         WHERE s.server_id = $1 AND lower(s.domain) = $2 AND u.role <> 'admin' LIMIT 1",
+    )
+    .bind(server_id)
+    .bind(&domain)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
+    if let Some((ref who,)) = grantee {
+        tracing::info!(
+            "Mail domain {domain} created over a site owned by {who} — that account now \
+             manages its mailboxes (GitHub #106)"
+        );
+    }
+
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "mail.domain.create",
-        Some("mail"), Some(&domain), None, None,
+        Some("mail"), Some(&domain),
+        grantee.as_ref().map(|(w,)| w.as_str()), None,
     ).await;
 
     Ok((StatusCode::CREATED, Json(mail_domain)))
@@ -386,7 +445,7 @@ pub async fn update_domain(
     let (domain, server_id, agent) = mail_domain_agent_for_caller(&state, id, &claims).await?;
 
     if let Some(catch_all) = &body.catch_all {
-        if !catch_all.is_empty() && (!catch_all.contains('@') || !is_valid_mail_address(catch_all, "/")) {
+        if !catch_all.is_empty() && !is_wellformed_address(catch_all, "/") {
             return Err(err(StatusCode::BAD_REQUEST, "Invalid catch-all email address"));
         }
         sqlx::query("UPDATE mail_domains SET catch_all = $1, updated_at = NOW() WHERE id = $2")
@@ -481,7 +540,7 @@ pub async fn delete_domain(
 /// GET /api/mail/domains/{id}/dns — Required DNS records for email
 pub async fn domain_dns(
     State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
+    AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // The same read the two DNS-verification endpoints use, so the tab that tells
@@ -554,7 +613,7 @@ pub async fn domain_dns(
 /// handlers already do.
 pub async fn list_accounts(
     State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
+    AuthUser(claims): AuthUser,
     Path(domain_id): Path<Uuid>,
 ) -> Result<Json<Vec<MailAccount>>, ApiError> {
     mail_domain_identity(&state.db, domain_id, &claims).await?;
@@ -575,7 +634,7 @@ pub async fn list_accounts(
 /// POST /api/mail/domains/{id}/accounts
 pub async fn create_account(
     State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
+    AuthUser(claims): AuthUser,
     Path(domain_id): Path<Uuid>,
     Json(body): Json<CreateAccountRequest>,
 ) -> Result<(StatusCode, Json<MailAccount>), ApiError> {
@@ -591,7 +650,7 @@ pub async fn create_account(
     if !email.ends_with(&format!("@{domain}")) {
         return Err(err(StatusCode::BAD_REQUEST, &format!("Email must end with @{domain}")));
     }
-    if email.matches('@').count() != 1 || !is_valid_mail_address(&email, "") {
+    if !is_wellformed_address(&email, "") {
         return Err(err(StatusCode::BAD_REQUEST, "Email address contains invalid characters"));
     }
 
@@ -648,7 +707,7 @@ pub async fn create_account(
 /// PUT /api/mail/domains/{domain_id}/accounts/{id}
 pub async fn update_account(
     State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
+    AuthUser(claims): AuthUser,
     Path((domain_id, account_id)): Path<(Uuid, Uuid)>,
     Json(body): Json<UpdateAccountRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -706,7 +765,7 @@ pub async fn update_account(
     }
 
     if let Some(forward) = &body.forward_to {
-        if !forward.is_empty() && (!forward.contains('@') || !is_valid_mail_address(forward, "")) {
+        if !forward.is_empty() && !is_wellformed_address(forward, "") {
             return Err(err(StatusCode::BAD_REQUEST, "Invalid forwarding email address"));
         }
         sqlx::query("UPDATE mail_accounts SET forward_to = $1, updated_at = NOW() WHERE id = $2")
@@ -757,7 +816,7 @@ pub async fn update_account(
 /// DELETE /api/mail/domains/{domain_id}/accounts/{id}
 pub async fn delete_account(
     State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
+    AuthUser(claims): AuthUser,
     Path((domain_id, account_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Resolved before the DELETE, so the host is taken from the row while the row
@@ -792,7 +851,7 @@ pub async fn delete_account(
 /// belonging to whoever runs that domain.
 pub async fn list_aliases(
     State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
+    AuthUser(claims): AuthUser,
     Path(domain_id): Path<Uuid>,
 ) -> Result<Json<Vec<MailAlias>>, ApiError> {
     mail_domain_identity(&state.db, domain_id, &claims).await?;
@@ -812,7 +871,7 @@ pub async fn list_aliases(
 /// POST /api/mail/domains/{id}/aliases
 pub async fn create_alias(
     State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
+    AuthUser(claims): AuthUser,
     Path(domain_id): Path<Uuid>,
     Json(body): Json<CreateAliasRequest>,
 ) -> Result<(StatusCode, Json<MailAlias>), ApiError> {
@@ -845,11 +904,12 @@ pub async fn create_alias(
             &format!("Alias source must end with @{domain}"),
         ));
     }
-    if source.matches('@').count() != 1 || !is_valid_mail_address(&source, "") {
+    if !is_wellformed_address(&source, "") {
         return Err(err(StatusCode::BAD_REQUEST, "Alias source contains invalid characters"));
     }
-    // Destination may be a comma-separated list of targets (matches the agent's alias validation).
-    if !destination.contains('@') || !is_valid_mail_address(&destination, ",") {
+    // Destination may be a comma-separated list of targets (matches the agent's
+    // alias validation) — so every ELEMENT is checked, not the string as a whole.
+    if !is_wellformed_address_list(&destination, "") {
         return Err(err(StatusCode::BAD_REQUEST, "Alias destination contains invalid characters"));
     }
 
@@ -883,7 +943,7 @@ pub async fn create_alias(
 /// DELETE /api/mail/domains/{domain_id}/aliases/{id}
 pub async fn delete_alias(
     State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
+    AuthUser(claims): AuthUser,
     Path((domain_id, alias_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Scoping the alias to the {domain_id} path segment — otherwise a mismatched (domain, alias)
@@ -1827,13 +1887,16 @@ pub async fn tls_enforce(
 /// so a query that joins another table onto `mail_domains` can add its own bind
 /// as `$3` and drop this in unchanged.
 ///
-/// ⚠ There is no owner arm, and that is not an oversight: `mail_domains` has no
-/// `user_id` column at all (`migrations/20260315200000_mail_management.sql`). A
-/// mail domain belongs to a SERVER and to nothing else, so the server is the only
-/// boundary there is to draw. `is_local` is this box; `sv.user_id` is a member
-/// this same administrator registered. An administrator therefore reaches every
-/// mail domain on the hardware they operate, and no mail domain on a machine
-/// somebody else added — the same line `SITE_CALLER_PREDICATE`'s admin arm draws.
+/// There are TWO ways to satisfy it: administer the machine the row names, or
+/// own the site of the same name on that machine. `mail_domains` still has no
+/// `user_id` column (`migrations/20260315200000_mail_management.sql`) — the
+/// second arm answers ownership through `sites`, which is what GitHub #106 asks
+/// for and is documented on the arm itself below.
+///
+/// On the administrator arm, `is_local` is this box and `sv.user_id` is a member
+/// this same administrator registered. So an administrator reaches every mail
+/// domain on the hardware they operate and none on a machine somebody else
+/// added — the same line `SITE_CALLER_PREDICATE`'s admin arm draws.
 ///
 /// Before this, the mail handlers drew no line whatsoever. Each loaded its row
 /// with a bare `WHERE id = $1` and the only thing standing between an
@@ -1842,20 +1905,70 @@ pub async fn tls_enforce(
 /// putting this in its place would have WIDENED the surface while appearing to
 /// narrow it.
 ///
-/// ⚠ `md.server_id IS NULL` is admitted DELIBERATELY, and it is not a hole. A row
-/// that names no server names no owner either, so there is nothing here to test;
+/// ⚠ A row naming NO server is admitted DELIBERATELY, and it is not a hole — but
+/// it now sits INSIDE the administrator arm rather than in front of both, because
+/// as a free-standing disjunct it carried no caller term at all and would have
+/// admitted every site owner in the installation the moment the second arm
+/// existed. It is still admitted for an administrator, and it must stay that way:
 /// admitting it hands the row to [`crate::helpers::agent_for_site_server`], which
-/// refuses it by name with a 409 that says what is wrong. Excluding it here would
-/// instead collapse it into "Domain not found" — a 404 for a domain that plainly
-/// exists, which is the failure that gets read as "already cleaned up".
+/// refuses it by name with a 409 that says what is wrong, and
+/// [`sync_mail_config`]'s precondition counts exactly these rows and tells the
+/// operator to backfill them. Excluding it would collapse both into "Domain not
+/// found" — a 404 for a domain that plainly exists, read as "already cleaned up".
 ///
 /// ⚠ The role is read from `users.role` in the DATABASE, not from `claims.role`
 /// in the token, for the reason spelled out on `SITE_CALLER_PREDICATE`: a JWT
 /// keeps asserting whatever role it was minted with until it expires, so a
 /// demoted account would keep administering mail for the rest of its session.
-const MAIL_DOMAIN_CALLER_PREDICATE: &str = "md.id = $1 AND (md.server_id IS NULL OR EXISTS (\
-    SELECT 1 FROM users u, servers sv WHERE u.id = $2 AND u.role = 'admin' \
-    AND sv.id = md.server_id AND (sv.is_local OR sv.user_id = u.id)))";
+/// That mattered more once the handlers stopped taking an admin-only extractor:
+/// the token no longer decides anything here, the database does.
+///
+/// ── The site-owner arm (GitHub #106) ────────────────────────────────────
+///
+/// A mail domain is also reachable by the account that owns the SITE of the same
+/// name on the SAME server. `mail_domains` has no owner column, so the site is
+/// where the ownership question is answered; this is the entitlement itself.
+///
+/// **The server term is not a hardening nicety — it is the whole boundary.**
+/// `sites` is unique on `(domain, server_id)` and NOT on domain, and
+/// `mail_domains` likewise. Without it, an administrator creating a mail domain
+/// on ANY machine in the fleet hands every mailbox on it to whichever account
+/// happens to hold a site of that name on some other machine. With it, both
+/// sides are keyed identically and the join is 1:1 — which is exactly the
+/// same-name-same-host pairing `may_claim_mail_held` is written around.
+/// Consequence worth stating rather than discovering: a domain whose website and
+/// mailboxes live on DIFFERENT hosts stays administrator-only.
+///
+/// **`lower(s.domain)` compares, and the second clause is why that is safe.**
+/// `mail_domains.domain` is lowercased by its only writer; `sites.domain` only
+/// has been since the domain-claim module landed, so legacy rows may hold mixed
+/// case. Folding one side alone would let two rows differing only in case both
+/// match — so the arm additionally requires that NO OTHER account owns a
+/// case-variant of the name on that server. One owner, or nobody: it fails
+/// CLOSED on exactly the legacy data that could otherwise widen it.
+///
+/// A normalising migration was considered and deliberately REJECTED. The unique
+/// index is on the raw column, so lowercasing in bulk raises a duplicate key on
+/// precisely the installs that have the problem — and a failed migration aborts
+/// startup. `sites.domain` is also the on-disk vhost key, which SQL cannot
+/// rename. The quantifier below costs two clauses and touches no rows.
+///
+/// ⚠ Site ownership alone authorises; there is deliberately no role term on this
+/// arm. Ownership of the row IS the grant, exactly as it is for the site itself,
+/// and adding one would leave the same state reachable through a role that lacks
+/// it. What a non-administrator may not do is CREATE the pairing — that is
+/// `may_claim_mail_held`'s job, and it refuses every non-admin, not just clients.
+const MAIL_DOMAIN_CALLER_PREDICATE: &str = "md.id = $1 AND (EXISTS (\
+    SELECT 1 FROM users u WHERE u.id = $2 AND u.role = 'admin' AND (\
+    md.server_id IS NULL OR EXISTS (\
+    SELECT 1 FROM servers sv WHERE sv.id = md.server_id \
+    AND (sv.is_local OR sv.user_id = u.id)))) \
+    OR (EXISTS (\
+    SELECT 1 FROM sites s WHERE s.server_id = md.server_id \
+    AND lower(s.domain) = md.domain AND s.user_id = $2) \
+    AND NOT EXISTS (\
+    SELECT 1 FROM sites s2 WHERE s2.server_id = md.server_id \
+    AND lower(s2.domain) = md.domain AND s2.user_id <> $2)))";
 
 /// Resolve a mail domain the caller may act on, AND the agent for the host it is
 /// actually configured on.
@@ -2125,6 +2238,60 @@ fn is_valid_mail_address(addr: &str, extra_allowed: &str) -> bool {
         })
 }
 
+/// [`is_valid_mail_address`] plus the structure the address must actually have.
+///
+/// **The character-set check above tests the WHOLE STRING for non-emptiness, not
+/// the local part**, and that one gap is the root of two separate defects. Both
+/// were measured, not theorised:
+///
+/// * `"@example.com"` passes. The agent writes account lines into
+///   `virtual_mailbox_maps` BEFORE catch-all lines (`agent/routes/mail.rs:1035`
+///   then `:1045`), and both key on the literal string `@example.com`. `postmap`
+///   keeps the FIRST entry and reports the collision on stderr, which the agent
+///   discards (`let _ = safe_command("postmap")`). So creating that mailbox
+///   silently VOIDS the domain's catch-all — a setting only an administrator can
+///   write — and returns 201 with no warning on any surface.
+/// * `"..@example.com"` passes. The agent builds `/var/vmail/{domain}/{local}`
+///   (`:1105`), so the maildir resolves to `/var/vmail`, one level ABOVE the
+///   domain directory, and the `chown -R` beside it then walks the whole tree on
+///   every sync. `domain_configure` (`:932`) rejects a component containing `..`
+///   — that guard was simply never applied to the half of the path the local part
+///   supplies. (Depth is capped at one level: `/` is outside the character set.)
+///
+/// Both doors are administrator-only today and open to a site's owner under
+/// GitHub #106, which is why this lands with that change rather than after it.
+///
+/// The rule is deliberately narrow — non-empty local part, non-empty domain,
+/// exactly one `@`, and a local part that is not made only of dots. It refuses
+/// the three degenerate forms that are path components or map keys and nothing
+/// else, so it cannot reject a mailbox an install already has.
+fn is_wellformed_address(addr: &str, extra_allowed: &str) -> bool {
+    if !is_valid_mail_address(addr, extra_allowed) || addr.matches('@').count() != 1 {
+        return false;
+    }
+    let Some((local, domain)) = addr.split_once('@') else {
+        return false;
+    };
+    !local.is_empty()
+        && !domain.is_empty()
+        // "." and ".." are directory entries, not mailboxes; "" is a map key.
+        && local.chars().any(|c| c != '.')
+}
+
+/// Every element of a comma-separated destination list must be a real address.
+///
+/// `is_valid_mail_address(dest, ",")` accepted `"root,a@b.com"` and
+/// `"a@b.com,root"` because it only ever asked whether the STRING contained an
+/// `@` somewhere — so a bare local name rode along beside a valid address and was
+/// written into `virtual_alias_maps` verbatim. Checking per element is the only
+/// form of the question that means anything for a list.
+fn is_wellformed_address_list(list: &str, extra_allowed: &str) -> bool {
+    !list.trim().is_empty()
+        && list
+            .split(',')
+            .all(|e| is_wellformed_address(e.trim(), extra_allowed))
+}
+
 /// Hash a mailbox password for Dovecot using Argon2id.
 ///
 /// Returns the credential in Dovecot's `{ARGON2ID}` scheme form, e.g.
@@ -2208,6 +2375,95 @@ async fn agent_password_schemes(agent: &crate::services::agent::AgentHandle) -> 
             })
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod address_shape_tests {
+    use super::{is_valid_mail_address, is_wellformed_address, is_wellformed_address_list};
+
+    /// ⚠ THE ARM THIS MODULE EXISTS FOR. Both of these were ACCEPTED before, and
+    /// each produced a concrete effect that was measured, not argued:
+    ///
+    /// * `@d` — the account line and the domain's catch-all line become the SAME
+    ///   `virtual_mailbox_maps` key. `postmap` keeps whichever was written first
+    ///   (accounts are), and the agent discards its duplicate-entry warning, so
+    ///   creating the mailbox silently deleted an administrator-only setting.
+    /// * `..@d` — the agent joins the local part into
+    ///   `/var/vmail/{domain}/{local}`, which resolves one level ABOVE the domain
+    ///   directory, and `chown -R` then walks the whole tree on every sync.
+    ///
+    /// If this test ever goes green on those inputs again, both are back.
+    #[test]
+    fn the_degenerate_local_parts_are_refused() {
+        for addr in ["@example.com", ".@example.com", "..@example.com", "...@example.com"] {
+            assert!(
+                !is_wellformed_address(addr, ""),
+                "{addr:?} must be refused: an empty or all-dots local part is a path \
+                 component and a map key, not a mailbox"
+            );
+            // The control that gives the assertion above its meaning: the OLD
+            // check passes every one of them, so this is a real change in
+            // behaviour and not a test that was always going to be green.
+            assert!(
+                is_valid_mail_address(addr, ""),
+                "{addr:?} must still satisfy the character-set check — if it does \
+                 not, this test has stopped measuring the gap it was written for"
+            );
+        }
+    }
+
+    /// The other half: refusing the degenerate forms must not refuse real mail.
+    /// A rule that rejected ordinary addresses would be caught in production, but
+    /// only after an install had already failed to sync.
+    #[test]
+    fn ordinary_addresses_are_still_accepted() {
+        for addr in [
+            "user@example.com",
+            "first.last@example.com",
+            "user+tag@example.com",
+            "u@example.com",
+            "under_score-dash@sub.example.co.uk",
+            "0@1.com",
+            // A local part containing dots beside other characters is fine — it
+            // is only a path component problem when it is NOTHING but dots.
+            "a..b@example.com",
+            ".leading@example.com",
+            "trailing.@example.com",
+        ] {
+            assert!(is_wellformed_address(addr, ""), "{addr:?} must still be accepted");
+        }
+    }
+
+    #[test]
+    fn the_structural_rules_hold() {
+        // No '@' at all, more than one '@', empty domain.
+        for addr in ["nobody", "a@b.com@c.com", "user@", "@", ""] {
+            assert!(!is_wellformed_address(addr, ""), "{addr:?} must be refused");
+        }
+        // The character set is still enforced through this door.
+        assert!(!is_wellformed_address("usér@example.com", ""));
+        assert!(!is_wellformed_address("a/b@example.com", ""));
+        // ...unless the caller allows the character, as the catch-all door does.
+        assert!(is_wellformed_address("a/b@example.com", "/"));
+    }
+
+    /// A list is checked ELEMENT BY ELEMENT. Checking the string as a whole is
+    /// what let a bare local name ride along beside a valid address and reach
+    /// `virtual_alias_maps` verbatim.
+    #[test]
+    fn every_element_of_a_destination_list_must_be_an_address() {
+        assert!(is_wellformed_address_list("a@b.com", ""));
+        assert!(is_wellformed_address_list("a@b.com,c@d.com", ""));
+        assert!(is_wellformed_address_list(" a@b.com , c@d.com ", ""));
+
+        // Both orders — the old check accepted each, because it only ever asked
+        // whether an '@' appeared SOMEWHERE in the string.
+        assert!(!is_wellformed_address_list("root,a@b.com", ""));
+        assert!(!is_wellformed_address_list("a@b.com,root", ""));
+        assert!(!is_wellformed_address_list("a@b.com,@b.com", ""));
+        assert!(!is_wellformed_address_list("", ""));
+        assert!(!is_wellformed_address_list(",", ""));
+    }
 }
 
 #[cfg(test)]

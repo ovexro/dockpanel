@@ -79,6 +79,15 @@ subj() { local t; t=$(code "$1"); [ -n "$t" ] || return 1; printf '%s' "$t"; }
 has()   { grep -qE -- "$2" <<< "$1"; }
 count() { grep -cE -- "$2" <<< "$1" || true; }
 
+# Counts OCCURRENCES, not lines — and comments are stripped first, because a pin
+# greps raw source and would otherwise match the sentence describing the check.
+#
+# `count()` above is `grep -c`, which counts matching LINES. Any arm asking "how
+# many of X" is therefore wrong by default, because the natural way to write the
+# regression puts both variants on ONE line (`a == x || a == y`) and the line
+# count stays 1. Measured SURVIVING at s347 (#420) — this is not hypothetical.
+occurrences() { grep -oE -- "$2" <<< "$(sed 's://.*::' <<< "$1")" | wc -l; }
+
 # Only DEAD-CODE markers belong here. An earlier suite also forbade `let _ =` and
 # `return false;` and immediately reded three arms on code verified by hand
 # minutes earlier — both are ordinary Rust (lesson #133). A guard added to make a
@@ -633,13 +642,24 @@ if S=$(subj "$CLAIM"); then
   # Fails CLOSED, unlike its sibling. `may_claim_new` returns true for a role it
   # does not recognise, so drift merely un-restricts. This one must return false,
   # so drift refuses — an unknown role string must never be able to take a mailbox.
+  #
+  # ⚠ s348: this arm USED TO BE A FALSE GREEN, and it was measured as one. It
+  # asked only whether the body `derives` the administrator comparison — a
+  # PRESENCE test. The regression that matters here does not REMOVE that
+  # comparison, it ADDS one beside it, so `role == "admin" || role == "client"`
+  # still contained the string the arm looked for and the suite printed 60/60
+  # green while the gate admitted clients. A presence test cannot see a widening;
+  # only a count can. So the arm now asserts BOTH halves of the sentence it has
+  # always claimed to make: the administrator is admitted, and NOTHING else is.
   G=$(fnbody "$S" may_claim_mail_held)
   if [ -z "$G" ]; then
     bad "§G: could not extract may_claim_mail_held"
-  elif derives "$G" 'role == "admin"'; then
-    ok "the mail gate admits the administrator role and refuses everything else"
-  else
+  elif ! derives "$G" 'role == "admin"'; then
     bad "the mail gate stopped failing closed — a role it does not recognise may now claim a name whose mailboxes exist"
+  elif [ "$(occurrences "$G" 'role[[:space:]]*==')" -ne 1 ]; then
+    bad "the mail gate compares the role more than once — a second admitted role would hand a name whose mailboxes exist to a non-administrator, which is the escalation this gate exists to refuse"
+  else
+    ok "the mail gate admits the administrator role and NOTHING else — exactly one role comparison"
   fi
 
   # The refusal has to say WHAT holds the name. "In use" with no owner is the

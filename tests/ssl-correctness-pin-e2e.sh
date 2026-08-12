@@ -532,17 +532,45 @@ echo "── F: a renewal records the certificate it installed (s306) ──"
 # membership decision made on prose: a file could join the class on the strength
 # of a commented-out call, or — worse, because it is the quiet direction — be
 # excluded from it because its only `sites` reference had been commented out.
+#
+# ⚠ s348: `mail.rs`'s exclusion is now EXPLICIT, and it had to become explicit.
+# The paragraph above always intended it out of the class, but the mechanism was
+# incidental — mail.rs simply happened to contain no `sites` reference. GitHub
+# #106 gave it one: `create_domain` reads `sites` to name the account that a new
+# mail domain hands its mailboxes to. The membership test then pulled mail.rs in
+# and this suite went red on correct code, for a cert it has nowhere to record.
+# An exclusion that depends on a file NOT mentioning a table is an exclusion that
+# any unrelated feature can revoke. Named, and its premise re-asserted below.
 RENEW_CALLERS=()
 RENEW_SKIPPED=0
+RENEW_EXCLUDED=0
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   has_code "$f" -E -e 'format!\("/ssl/(provision/|\{)' || continue
+  case "$(basename "$f")" in
+    mail.rs)
+      RENEW_EXCLUDED=$((RENEW_EXCLUDED + 1))
+      echo "  · mail.rs excluded by name: it provisions for a mail host and has no sites row to record an expiry on"
+      continue
+      ;;
+  esac
   if has_code "$f" -E -e 'FROM sites|UPDATE sites|INTO sites'; then
     RENEW_CALLERS+=("$f")
   else
     RENEW_SKIPPED=$((RENEW_SKIPPED + 1))
   fi
 done < <(find "$REPO/panel/backend/src" -name '*.rs' 2>/dev/null | sort)
+
+# The exclusion asserts its own premise, so it cannot outlive its reason. If
+# `mail_domains` ever grows a place to put an expiry, mail.rs stops being a file
+# with nowhere to write one and belongs back in the class above.
+if [ "$RENEW_EXCLUDED" -eq 0 ]; then
+  bad "mail.rs no longer calls an agent SSL route — remove its exclusion above rather than leaving a carve-out for a file that left the class"
+elif grep -rqE 'mail_domains[^;]*ssl_expiry|ssl_expiry[^;]*mail_domains' "$REPO/panel/backend/migrations/" 2>/dev/null; then
+  bad "mail_domains now carries an expiry column — mail.rs has somewhere to record its certificate, so its exclusion from the renewal class is stale"
+else
+  ok "mail.rs is excluded for a reason that still holds: no expiry column exists for a mail domain"
+fi
 [ "$RENEW_SKIPPED" -gt 0 ] && \
   echo "  · $RENEW_SKIPPED agent SSL caller(s) hold no sites row and are out of this class"
 
