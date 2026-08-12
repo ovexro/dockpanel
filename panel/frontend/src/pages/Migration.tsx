@@ -287,7 +287,13 @@ export default function Migration() {
     <div className="p-6 space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-dark-50 font-mono">Migration Wizard</h1>
-        <p className="text-sm text-dark-300 mt-1">Import sites, databases, and email from cPanel, Plesk, or HestiaCP</p>
+        {/* "and email" used to be here. It was never true: there is no mail import
+            route and no mail import function — the request body carries only `sites`
+            and `databases`. cPanel archives are PARSED for mail accounts so the
+            wizard can list them, and Plesk and HestiaCP do not even do that. The
+            screen already said so 160 lines below, under the inventory. A header
+            that promises what its own body retracts is worse than silence. #107. */}
+        <p className="text-sm text-dark-300 mt-1">Import sites and databases from cPanel, Plesk, or HestiaCP — mail accounts are listed for reference, not moved</p>
       </div>
 
       {/* Step indicator */}

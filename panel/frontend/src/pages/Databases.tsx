@@ -57,6 +57,7 @@ function SchemaBrowser({ database, onClose }: { database: Database; onClose: () 
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [tableSchema, setTableSchema] = useState<QueryResult | null>(null);
   const [tableIndexes, setTableIndexes] = useState<QueryResult | null>(null);
+  const [detailError, setDetailError] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -71,16 +72,36 @@ function SchemaBrowser({ database, onClose }: { database: Database; onClose: () 
     })();
   }, [database.id]);
 
+  // Settled, not all-or-nothing, and never silent. These are two independent
+  // endpoints against two independent statements; sharing one `Promise.all` meant
+  // the first rejection discarded the other's result, so when the columns query
+  // broke in `29d959b` it took the working index pane down with it. And the
+  // rejection landed in a bare `catch {}`, which is why five months of a dead pane
+  // produced not one report: the panes render empty either way, so an empty pane
+  // could mean "no columns", "request failed" or "never asked".
   const loadTableDetails = async (table: string) => {
     setSelectedTable(table);
-    try {
-      const [schema, indexes] = await Promise.all([
-        api.get<QueryResult>(`/databases/${database.id}/tables/${encodeURIComponent(table)}`),
-        api.get<QueryResult>(`/databases/${database.id}/indexes/${encodeURIComponent(table)}`),
-      ]);
-      setTableSchema(schema);
-      setTableIndexes(indexes);
-    } catch { /* ignore */ }
+    setTableSchema(null);
+    setTableIndexes(null);
+    setDetailError("");
+
+    const [schema, indexes] = await Promise.allSettled([
+      api.get<QueryResult>(`/databases/${database.id}/tables/${encodeURIComponent(table)}`),
+      api.get<QueryResult>(`/databases/${database.id}/indexes/${encodeURIComponent(table)}`),
+    ]);
+
+    if (schema.status === "fulfilled") setTableSchema(schema.value);
+    if (indexes.status === "fulfilled") setTableIndexes(indexes.value);
+
+    const failed = [
+      schema.status === "rejected" ? "columns" : null,
+      indexes.status === "rejected" ? "indexes" : null,
+    ].filter(Boolean);
+    if (failed.length) {
+      const reason = [schema, indexes].find(r => r.status === "rejected") as PromiseRejectedResult;
+      const detail = reason.reason instanceof Error ? reason.reason.message : "request failed";
+      setDetailError(`Could not load ${failed.join(" or ")} for ${table}: ${detail}`);
+    }
   };
 
   const tables = overview?.tables?.rows || [];
@@ -143,8 +164,15 @@ function SchemaBrowser({ database, onClose }: { database: Database; onClose: () 
 
           {/* Right: Table detail + relationships */}
           <div className="flex-1 space-y-4">
-            {selectedTable && tableSchema ? (
+            {selectedTable && (tableSchema || tableIndexes || detailError) ? (
               <>
+                {detailError && (
+                  <div className="bg-danger-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-danger-500/20">
+                    {detailError}
+                  </div>
+                )}
+
+                {tableSchema && (
                 <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
                   <div className="px-4 py-3 border-b border-dark-600 flex items-center justify-between">
                     <h3 className="text-sm font-medium text-dark-100 font-mono">{selectedTable}</h3>
@@ -173,8 +201,10 @@ function SchemaBrowser({ database, onClose }: { database: Database; onClose: () 
                     </tbody>
                   </table>
                 </div>
+                )}
 
-                {/* Indexes */}
+                {/* Indexes. Rendered independently of the columns pane above — they are
+                    separate endpoints and one must not be able to blank the other. */}
                 {tableIndexes && tableIndexes.rows?.length > 0 && (
                   <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
                     <div className="px-4 py-3 border-b border-dark-600">
@@ -1172,16 +1202,27 @@ export default function Databases() {
                     </div>
                   </div>
 
-                  {/* Individual fields */}
+                  {/* Individual fields.
+                      Two of these carry a `hint`, because two of them are the reason
+                      this panel generates support questions. A managed database is
+                      published on the host's loopback only and sits on a bridge with
+                      container-to-container traffic switched off — so "Host" does not
+                      work from inside a container, and "Internal Host" is a container
+                      NAME rather than a hostname anything can resolve. Stating that
+                      here is the whole fix: the field was inviting a connection
+                      attempt that cannot succeed, and then saying nothing when it
+                      failed. GitHub #107. */}
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                     {[
-                      { label: "Host", value: credentials.host, key: "host" },
+                      { label: "Host", value: credentials.host, key: "host",
+                        hint: "From a shell on this server. The port is published on the host's loopback only, so this will not work from inside another container or from off-box." },
                       { label: "Port", value: String(credentials.port), key: "port" },
                       { label: "Database", value: credentials.database, key: "database" },
                       { label: "Username", value: credentials.username, key: "username" },
                       { label: "Password", value: credentials.password, key: "password" },
-                      { label: "Internal Host", value: credentials.internal_host, key: "internal_host" },
-                    ].map((field) => (
+                      { label: "Internal Host", value: credentials.internal_host, key: "internal_host",
+                        hint: "The Docker container's name — for docker exec, docker logs and the CLI. It is not a hostname you can connect to." },
+                    ].map((field: { label: string; value: string; key: string; hint?: string }) => (
                       <div key={field.key}>
                         <label className="block text-xs font-medium text-dark-200 mb-1">
                           {field.label}
@@ -1206,6 +1247,9 @@ export default function Databases() {
                             )}
                           </button>
                         </div>
+                        {field.hint && (
+                          <p className="text-xs text-dark-400 mt-1 leading-snug">{field.hint}</p>
+                        )}
                       </div>
                     ))}
                   </div>

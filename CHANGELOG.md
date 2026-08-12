@@ -4,6 +4,84 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.104.0]
+
+### Fixed — the schema browser has not worked since March, and nothing said so
+
+Opening a table in **Databases → Schema Browser** listed no columns. It has
+behaved that way since `29d959b` (2026-03-23, v2.0.6), a commit titled *"Security
+hardening: fix 117 vulnerabilities across 45 files"* — and the hardening is what
+broke it.
+
+That commit rewrote the two column-listing statements to use bound placeholders
+(`?` and `$1`) and sent the values to the agent under a `"params"` key. The agent
+has never had a field to receive them: its request struct for `/databases/query`
+carries `sql` and nothing else, so serde discarded the key and the statement
+reached `mariadb -e` / `psql -c` with an unbound placeholder. Every column
+listing failed from that commit until this one.
+
+Three things kept it invisible for five months:
+
+- The caller discarded the rejection in a bare `catch {}`, so nothing was logged
+  and nothing was shown.
+- The columns pane and the **indexes** pane shared one all-or-nothing `Promise.all`,
+  so the index listing — whose endpoint was correct the whole time — was blanked
+  as collateral.
+- An empty pane looks the same as a table with nothing to report, so the failure
+  mode was indistinguishable from a boring result.
+
+The fix interpolates the already-validated table name, which is what the
+neighbouring `table_indexes` handler has always done — and it keeps the change
+backend-only, where a bind channel would have required the agent to ship in
+lockstep and would still have failed against any older agent.
+
+Two supporting changes came out of it. The two table-name validators have been
+replaced by **one**: they had drifted to different character sets, and the looser
+one guarded the statement that is interpolated — a validator diverging from the
+statement it protects is the shape of the original defect. And the two panes are
+now fetched independently and a failure is **shown**, so neither can silently
+blank the other again.
+
+New `db-schema-browser-pin-e2e.sh` (23 assertions) pins all of it, including a
+cross-tree arm asserting that every key the panel sends to `/databases/query` is
+a field the agent actually declares — the invariant `29d959b` broke. Before this
+release, no test referenced any `/databases` browser route.
+
+### Fixed — the Migration wizard promised to import email, and never could
+
+The wizard's header read *"Import sites, databases, and email"* while its own
+inventory section, further down the same screen, said email accounts must be
+recreated by hand. The header was wrong: there is no mail import route and no
+mail import function, and the import request carries only sites and databases.
+cPanel archives are parsed for mail accounts so the wizard can **list** them;
+Plesk and HestiaCP do not do even that. The header and the feature manifest now
+say what the code does.
+
+### Added — a database guide and a file-upload guide (GitHub #107)
+
+Neither existed, which made "there is nothing in the docs for this" a literally
+accurate report.
+
+- **Databases** — why a managed database is reachable from the server and nowhere
+  else, what each credential field is actually for, and why a containerised
+  database GUI cannot connect to one no matter what is typed into it. Also the
+  built-in SQL browser's real limits: 1000 rows, 15 seconds, a 5 MB output cap
+  that **fails** rather than truncating, and a query runner that is not read-only.
+- **Getting files onto a site** — the file manager's real ceiling is about
+  **1.5 MB per file**, not the 2 MB that gets quoted: uploads are base64-encoded
+  into a JSON body capped at 2 MiB, and base64 costs a third. Two larger limits
+  in the code (100 MB, 50 MB) are unreachable and should be ignored. Also the
+  document-root table, because copying a WordPress install to `/var/www/<domain>/`
+  instead of `/var/www/<domain>/public/` puts every file one level too high.
+
+### Changed — the credentials panel says what its fields can reach
+
+**Internal Host** now states that it is the Docker container's name, for
+`docker exec` and the CLI, and not a hostname anything can connect to. **Host**
+states that it works from a shell on the server and not from inside another
+container. The panel was handing out a value that cannot work and saying nothing
+when it did not.
+
 ## [2.103.0]
 
 ### Added — the mail console a site owner actually sees (GitHub #106, second half)

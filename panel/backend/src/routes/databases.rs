@@ -482,19 +482,32 @@ pub async fn tables(
         .map_err(sql_error)
 }
 
+/// The one charset any table name is interpolated under.
+///
+/// `/databases/query` has no bind-parameter channel — the agent's `QueryDbRequest`
+/// carries `sql` and nothing else, and the statement is handed verbatim to
+/// `mariadb -e` / `psql -c`. So every table name that reaches a statement is
+/// interpolated, and this predicate is the only thing standing between a path
+/// segment and that statement. It admits no quote, no backslash and no shell
+/// metacharacter, which is what makes `'{table}'` safe to build.
+///
+/// It lives here as ONE function on purpose. There were two copies with two
+/// different charsets — the interpolating one refused `-`, the other allowed it —
+/// and a divergence between a validator and the statement it guards is the bug
+/// this file already shipped once.
+fn is_safe_table_name(table: &str) -> bool {
+    !table.is_empty()
+        && table.len() <= 128
+        && table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 /// GET /api/databases/{id}/tables/{table} — Get table schema (columns, types).
 pub async fn table_schema(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path((id, table)): Path<(Uuid, String)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // Validate table name to prevent injection
-    if table.is_empty()
-        || table.len() > 128
-        || !table
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
+    if !is_safe_table_name(&table) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid table name"));
     }
 
@@ -502,22 +515,26 @@ pub async fn table_schema(
         get_db_info(&state, id, claims.sub).await?;
     let agent = crate::helpers::agent_for_site_server(&state, site_server_id, &name).await?;
 
-    let (sql, params) = match engine.as_str() {
-        "mysql" | "mariadb" => (
+    // Interpolated, not bound. `29d959b` rewrote these two statements to use `?`/`$1`
+    // for injection safety and sent the values under a `"params"` key — but the agent
+    // has never had a `params` field to receive them, so serde dropped it and the
+    // placeholder reached the engine unbound. Every column listing 400'd from
+    // 2026-03-23 until this fix, invisibly, because the caller swallowed the error.
+    // The sibling `table_indexes` below always interpolated and always worked; this
+    // now matches it, which also keeps the fix backend-only — a bind channel would
+    // need the agent to ship in lockstep, and an old agent would still fail.
+    let sql = match engine.as_str() {
+        "mysql" | "mariadb" => format!(
             "SELECT column_name, column_type, is_nullable, column_default, column_key, extra \
              FROM information_schema.columns \
-             WHERE table_schema = DATABASE() AND table_name = ? \
+             WHERE table_schema = DATABASE() AND table_name = '{table}' \
              ORDER BY ordinal_position"
-                .to_string(),
-            vec![table.clone()],
         ),
-        _ => (
+        _ => format!(
             "SELECT column_name, data_type, character_maximum_length, is_nullable, column_default \
              FROM information_schema.columns \
-             WHERE table_schema = 'public' AND table_name = $1 \
+             WHERE table_schema = 'public' AND table_name = '{table}' \
              ORDER BY ordinal_position"
-                .to_string(),
-            vec![table.clone()],
         ),
     };
 
@@ -529,7 +546,6 @@ pub async fn table_schema(
         "password": password,
         "database": name,
         "sql": sql,
-        "params": params,
     });
 
     agent
@@ -594,7 +610,7 @@ pub async fn table_indexes(
     AuthUser(claims): AuthUser,
     Path((id, table)): Path<(Uuid, String)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    if table.is_empty() || table.len() > 128 || !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+    if !is_safe_table_name(&table) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid table name"));
     }
 
