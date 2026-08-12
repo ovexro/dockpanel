@@ -176,11 +176,29 @@ jobs:
 
       - name: Download published binaries (amd64)
         run: |
-          set -eux
+          set -eu
           TAG='${{ needs.resolve.outputs.tag }}'
           BASE="https://github.com/${{ github.repository }}/releases/download/${TAG}"
+          # Retried in a shell loop rather than with `curl --retry`: a connection
+          # reset by the asset CDN is not one of the "transient errors" plain
+          # --retry covers, and --retry-all-errors needs curl 7.71 while
+          # ubuntu:20.04 in this same matrix ships 7.68. v2.106.0's release ran
+          # red on exactly this — `curl: (35) OpenSSL SSL_connect: Connection
+          # reset by peer` against release-assets.githubusercontent.com — on the
+          # step directly BELOW the package install that was given retries in
+          # bfbad47. The hardening stopped one step short.
           for b in agent api cli; do
-            curl -fsSL "${BASE}/dockpanel-${b}-linux-amd64" -o "dockpanel-${b}"
+            n=0
+            until curl -fsSL --connect-timeout 20 --max-time 300 \
+                       "${BASE}/dockpanel-${b}-linux-amd64" -o "dockpanel-${b}"; do
+              n=$((n+1))
+              if [ "$n" -ge 5 ]; then
+                echo "FAIL: could not download dockpanel-${b}-linux-amd64 after ${n} attempts."
+                exit 1
+              fi
+              echo "::warning::download of dockpanel-${b}-linux-amd64 failed (attempt ${n}) - retrying"
+              sleep $((n * 3))
+            done
             chmod +x "dockpanel-${b}"
           done
 
@@ -245,11 +263,29 @@ jobs:
 
       - name: Download published binaries (arm64)
         run: |
-          set -eux
+          set -eu
           TAG='${{ needs.resolve.outputs.tag }}'
           BASE="https://github.com/${{ github.repository }}/releases/download/${TAG}"
+          # Retried in a shell loop rather than with `curl --retry`: a connection
+          # reset by the asset CDN is not one of the "transient errors" plain
+          # --retry covers, and --retry-all-errors needs curl 7.71 while
+          # ubuntu:20.04 in this same matrix ships 7.68. v2.106.0's release ran
+          # red on exactly this — `curl: (35) OpenSSL SSL_connect: Connection
+          # reset by peer` against release-assets.githubusercontent.com — on the
+          # step directly BELOW the package install that was given retries in
+          # bfbad47. The hardening stopped one step short.
           for b in agent api cli; do
-            curl -fsSL "${BASE}/dockpanel-${b}-linux-arm64" -o "dockpanel-${b}"
+            n=0
+            until curl -fsSL --connect-timeout 20 --max-time 300 \
+                       "${BASE}/dockpanel-${b}-linux-arm64" -o "dockpanel-${b}"; do
+              n=$((n+1))
+              if [ "$n" -ge 5 ]; then
+                echo "FAIL: could not download dockpanel-${b}-linux-arm64 after ${n} attempts."
+                exit 1
+              fi
+              echo "::warning::download of dockpanel-${b}-linux-arm64 failed (attempt ${n}) - retrying"
+              sleep $((n * 3))
+            done
             chmod +x "dockpanel-${b}"
           done
 
