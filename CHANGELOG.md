@@ -4,6 +4,62 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.103.0]
+
+### Added — the mail console a site owner actually sees (GitHub #106, second half)
+
+v2.102.0 opened nine mail endpoints to the owner of the matching site and changed
+nothing in the panel, so the state it shipped was "live API, hidden UI": a client
+could call those endpoints with their own session and saw no way in. This release
+is the console in front of them.
+
+**The nav entry is unrestricted rather than newly flagged.** The obvious change —
+a "client-visible" flag — would have been wrong. `MAIL_DOMAIN_CALLER_PREDICATE`
+carries no role term: a `client`, a plain `user` and a `reseller` all reach a mail
+domain by the same route, whichever of them owns the site. The registry only ever
+sees a role string, and ownership is not knowable when the sidebar renders, so any
+single-role flag would contradict the API in one direction or the other. The row
+simply stops being `adminOnly`, which is what `/sites` and `/databases` already do.
+
+**The page is split by what the backend will answer, not by what looks tidy.**
+Mail.tsx is a host-level console — install, rspamd, webmail, relay, blacklist,
+rate limit, TLS, queue, logs, backups — and all of that stays with the
+administrator. A site owner gets their own domains, mailboxes, aliases and DNS
+records: the nine `AuthUser` endpoints, and nothing else.
+
+**Hiding the panels was not enough; the requests had to stop.** The mount effect
+fired nine requests, eight of them against admin-only handlers. Each `.catch`
+swallowed its 403 into an empty state — so a client would have been shown
+**"Mail Server Not Installed", with a button to `/settings`**, a page the nav
+deliberately hides from them, for a mail server that was running perfectly well.
+Those eight requests now sit behind the role test and are never made.
+
+The empty state says something a site owner can act on. "Add a mail domain to get
+started" is advice `create_domain` refuses; mail reaches them when an
+administrator adds a domain matching a site they already own, so it says that.
+
+Also removed a pre-existing hooks-order hazard: the admin redirect sat above forty
+`useState` calls, so the number of hooks the component rendered depended on
+whether the user had loaded yet.
+
+### Fixed
+
+- The Verify DNS button, the per-mailbox Backup button, the Add Domain and Delete
+  Domain controls and the Queue and Logs tabs are no longer offered to accounts
+  whose requests the backend refuses.
+
+### Testing
+
+- New `tests/mail-client-view-pin-e2e.sh`, 23 assertions. Every arm was checked
+  against the **widened** form of its subject rather than against deletion, and
+  the suite was mutation-tested end to end: 19 mutations, 19 killed. Two arms are
+  cross-tree — they read the extractors in `panel/backend/src/routes/mail.rs`, so
+  flipping a handler between `AuthUser` and `AdminUser` turns the frontend suite
+  red rather than letting the two copies of one rule drift apart.
+- Driven in a browser on an isolated scratch panel: a client's mail page makes
+  exactly four requests, all 200, where it previously made nine and eight were
+  refused.
+
 ## [2.102.0]
 
 ### Added — client-scoped mail: the owner of a site manages its mailboxes (GitHub #106)

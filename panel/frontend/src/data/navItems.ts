@@ -78,7 +78,16 @@ export const navGroups: NavGroup[] = [
     items: [
       { to: "/dns", label: "DNS", iconName: "dns", adminOnly: true },
       { to: "/cdn", label: "CDN", iconName: "dns", adminOnly: true },
-      { to: "/mail", label: "Mail", iconName: "mail", adminOnly: true },
+      // Unrestricted since v2.103.0, and the flag's absence is the whole point.
+      // The backend admits a mail domain to whoever owns the site of the same
+      // name on the same server (`MAIL_DOMAIN_CALLER_PREDICATE`, backend
+      // routes/mail.rs), and that test carries NO role term — a `client`, a
+      // plain `user` and a `reseller` all reach it by the same route. There is
+      // no flag here meaning "owner", because the registry only ever sees a
+      // role string; ownership is not knowable at nav-render time. Restricting
+      // this row to any single role would contradict the API in one direction
+      // or the other. What the page SHOWS is decided in Mail.tsx, per caller.
+      { to: "/mail", label: "Mail", iconName: "mail" },
       { to: "/backup-orchestrator", label: "Backup Manager", iconName: "backups", adminOnly: true },
       { to: "/monitoring", label: "Monitoring", iconName: "monitoring" },
       { to: "/notifications", label: "Notifications", iconName: "notifications" },

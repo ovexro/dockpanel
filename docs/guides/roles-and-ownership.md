@@ -164,6 +164,25 @@ Creating a mail domain over a name a customer already holds a site on is how you
 give them their mail — and because that single action hands over every mailbox and
 password on it, the activity record now names the account it granted.
 
+### Where they find it (v2.103.0)
+
+v2.102.0 opened the endpoints; the panel showed nothing, so the grant was real but
+invisible. **Mail** now appears in the sidebar for every role, and what the page
+shows depends on what you own:
+
+| | administrator | owner of the matching site |
+|---|---|---|
+| Domains, mailboxes, aliases, DNS records | all | their own |
+| Add / delete a mail domain, catch-all, Verify DNS | yes | no |
+| Mail server install, Rspamd, webmail, relay, blacklist, rate limit, TLS | yes | no |
+| Queue and Logs tabs, mailbox backups | yes | no |
+
+The entry is not restricted to the `client` role, because the grant is not either:
+a plain `user` and a `reseller` reach a mail domain by exactly the same route if
+they hold the matching site. An account that owns no matching domain sees the page
+and an explanation of how mail arrives, rather than an invitation to create a
+domain the panel would refuse it.
+
 Being a client also means not being an admin, so every administrative surface —
 users, servers, panel settings, updates, the firewall — refuses it, the same way
 it refuses an ordinary `user`.

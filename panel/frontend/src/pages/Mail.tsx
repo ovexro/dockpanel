@@ -1,5 +1,4 @@
 import { useAuth } from "../context/AuthContext";
-import { Navigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { api } from "../api";
 import ProvisionLog from "../components/ProvisionLog";
@@ -103,7 +102,22 @@ interface TlsStatus {
 
 export default function Mail() {
   const { user } = useAuth();
-  if (!user || user.role !== "admin") return <Navigate to="/" replace />;
+  /**
+   * Every role may open this page now; what it shows is decided per caller.
+   *
+   * This deliberately has NO early `return <Navigate>`. The one that used to be
+   * here sat ABOVE the forty `useState` calls below it, so the number of hooks
+   * this component rendered depended on whether `user` had arrived yet — the
+   * hazard was pre-existing and is removed by adopting the house pattern rather
+   * than by patching it. Sites.tsx has always done it this way: read the role,
+   * render conditionally, let the backend scope the data.
+   *
+   * `isAdmin` gates the HOST-level console — the mail server itself, and every
+   * service that belongs to the machine rather than to a domain. A non-admin
+   * gets the part the backend will actually answer: their own domains, and the
+   * mailboxes, aliases and DNS records under them.
+   */
+  const isAdmin = user?.role === "admin";
   const [domains, setDomains] = useState<MailDomain[]>([]);
   const [selectedDomain, setSelectedDomain] = useState<MailDomain | null>(null);
   const [tab, setTab] = useState<"accounts" | "aliases" | "dns" | "queue" | "logs">("accounts");
@@ -254,9 +268,21 @@ export default function Mail() {
     catch { setBackups([]); }
   };
 
+  // GET /api/mail/domains is the only call on this page that is not AdminUser.
+  // It answers 200 with [] for a caller who owns no matching site, so it is safe
+  // to fire unconditionally and it is what decides whether there is anything
+  // here at all.
+  useEffect(() => { loadDomains(); }, []);
+
+  // The HOST-level console. Every call below is AdminUser in the backend, so for
+  // any other role this block is eight guaranteed 403s — and they would not even
+  // read as failures: each `.catch` swallows into an empty state, which is how a
+  // client would have been shown "Mail Server Not Installed" for a mail server
+  // that is running perfectly well. Not firing them is the fix; hiding the
+  // panels they populate is not enough.
   useEffect(() => {
+    if (!isAdmin) return;
     loadMailStatus();
-    loadDomains();
     loadStorage();
     api.get<{ installed: boolean; running: boolean }>("/mail/rspamd/status").then(setRspamd).catch(() => {});
     api.get<{ installed: boolean; running: boolean; port: number }>("/mail/webmail/status").then(setWebmail).catch(() => {});
@@ -264,9 +290,14 @@ export default function Mail() {
     api.get<{ configured: boolean; rate: string }>("/mail/rate-limit/status").then(setRateLimit).catch(() => {});
     api.get<TlsStatus>("/mail/tls/status").then(setTls).catch(() => {});
     loadBackups();
-  }, []);
-  useEffect(() => { if (tab === "queue") loadQueue(); }, [tab]);
-  useEffect(() => { if (tab === "logs") loadMailLogs(); }, [tab]);
+  }, [isAdmin]);
+
+  // Both tabs are admin-only and are not offered below, so these are already
+  // unreachable for anyone else. The role test is here anyway: a tab strip is a
+  // render decision, and a render decision must never be the only thing standing
+  // between a caller and a request they cannot make.
+  useEffect(() => { if (isAdmin && tab === "queue") loadQueue(); }, [tab, isAdmin]);
+  useEffect(() => { if (isAdmin && tab === "logs") loadMailLogs(); }, [tab, isAdmin]);
 
   const handleAddDomain = async () => {
     setSavingDomain(true);
@@ -447,7 +478,10 @@ export default function Mail() {
           <p className="page-header-subtitle">Manage email domains, mailboxes, and aliases</p>
         </div>
         <div className="flex items-center gap-2">
-          {showAddDomain ? (
+          {/* Creating a mail domain is `create_domain`, which stays AdminUser.
+              Offering the button to someone the backend will refuse is the same
+              broken promise Sites.tsx names in its own empty state. */}
+          {!isAdmin ? null : showAddDomain ? (
             <button onClick={() => setShowAddDomain(false)} className="px-4 py-2 text-dark-300 border border-dark-600 rounded-lg text-sm font-medium hover:text-dark-100 hover:border-dark-400 transition-colors">
               Cancel
             </button>
@@ -491,8 +525,15 @@ export default function Mail() {
         </div>
       )}
 
-      {/* Mail Server Not Installed — redirect to Services */}
-      {mailStatus && !mailStatus.installed && (
+      {/* Mail Server Not Installed — redirect to Services.
+          ADMIN ONLY, and not merely because installing is an admin action. This
+          block links to /settings, which is `adminOnly` in the nav registry, so
+          for anybody else it is a call to action pointing at a door that is not
+          on their map. It reached them by accident, too: `mail_status` is
+          AdminUser, its 403 is caught into {installed:false}, and this is what
+          that renders. A client's mail server is not uninstalled — it is simply
+          none of their business, and the honest answer is to say nothing. */}
+      {isAdmin && mailStatus && !mailStatus.installed && (
         <div className="mb-6 bg-dark-800 border border-dark-500 p-5">
           <div className="flex items-center justify-between">
             <div>
@@ -509,14 +550,19 @@ export default function Mail() {
         </div>
       )}
 
-      {mailStatus && mailStatus.installed && !mailStatus.running && (
+      {isAdmin && mailStatus && mailStatus.installed && !mailStatus.running && (
         <div className="mb-4 px-4 py-3 rounded-lg text-sm border bg-warn-500/10 text-warn-400 border-warn-500/20">
           Mail server is installed but not running. Check Postfix and Dovecot services.
         </div>
       )}
 
-      {/* Mail Services */}
-      {mailStatus?.installed && (
+      {/* Mail Services — rspamd, webmail, relay, blacklist, rate limit, TLS.
+          All six belong to the machine, not to a domain, and all six are
+          AdminUser. The `isAdmin` term is not redundant beside
+          `mailStatus?.installed`: mailStatus is null for a non-admin because the
+          request is never made, and a render gate that depends on a fetch not
+          having happened is a gate that a future refactor silently removes. */}
+      {isAdmin && mailStatus?.installed && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
           {/* Spam Filter (Rspamd) */}
           {rspamd && (
@@ -772,9 +818,14 @@ export default function Mail() {
                       <span className="text-sm font-medium text-dark-50 truncate font-mono block">{d.domain}</span>
                       <span className="text-[10px] text-dark-300">{d.dkim_public_key ? "DKIM ready" : "No DKIM"}</span>
                     </div>
+                    {/* `delete_domain` is AdminUser. A site owner manages the
+                        mailboxes under a domain; the domain itself is the
+                        administrator's to grant and to take away. */}
+                    {isAdmin && (
                     <button onClick={(e) => { e.stopPropagation(); handleDeleteDomain(d); }} className="text-dark-300 hover:text-danger-400 shrink-0 ml-2">
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" /></svg>
                     </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -788,7 +839,28 @@ export default function Mail() {
             !showAddDomain && (
               <div className="bg-dark-800 border border-dark-500 p-12 text-center">
                 <svg className="w-12 h-12 text-dark-300 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75" /></svg>
-                <p className="text-dark-300">{domains.length === 0 ? "Add a mail domain to get started" : "Select a domain"}</p>
+                {/* The empty state has to say something different to the roles
+                    that cannot act on it — the rule Sites.tsx states in its own
+                    empty state, and this is the same screen for the same people.
+                    "Add a mail domain to get started" is advice a non-admin
+                    cannot take: `create_domain` is AdminUser, and mail reaches
+                    them only when an administrator creates a domain matching a
+                    site they already own. Telling them to do it themselves is
+                    the broken promise; telling them who can is the answer. */}
+                {domains.length > 0 ? (
+                  <p className="text-dark-300">Select a domain</p>
+                ) : isAdmin ? (
+                  <p className="text-dark-300">Add a mail domain to get started</p>
+                ) : (
+                  <>
+                    <p className="text-dark-200 font-medium">No mail domains yet</p>
+                    <p className="text-dark-300 text-sm mt-2 max-w-md mx-auto">
+                      Mail follows your sites. When your administrator adds a mail domain
+                      matching one of your site names, it appears here and you can manage its
+                      mailboxes and aliases yourself.
+                    </p>
+                  </>
+                )}
               </div>
             )
           ) : (
@@ -799,7 +871,14 @@ export default function Mail() {
                 <p className="text-xs text-dark-200">{accounts.length} mailbox{accounts.length !== 1 ? "es" : ""} · {aliases.length} alias{aliases.length !== 1 ? "es" : ""}</p>
               </div>
               <div className="flex border-b border-dark-600 px-5">
-                {(["accounts", "aliases", "dns", "queue", "logs"] as const).map((t) => (
+                {/* Queue and Logs are the machine's mail queue and the whole
+                    host's mail log — `get_queue` and `mail_logs`, both
+                    AdminUser. They are not a filtered view of this domain, so
+                    there is nothing to scope them down to. */}
+                {(isAdmin
+                  ? (["accounts", "aliases", "dns", "queue", "logs"] as const)
+                  : (["accounts", "aliases", "dns"] as const)
+                ).map((t) => (
                   <button key={t} onClick={() => setTab(t)} className={`px-4 py-2.5 text-xs font-medium uppercase tracking-wider transition-colors ${tab === t ? "text-dark-50 border-b-2 border-dark-50" : "text-dark-300 hover:text-dark-100"}`}>
                     {t === "dns" ? "DNS Records" : t === "queue" ? "Queue" : t === "logs" ? "Logs" : t.charAt(0).toUpperCase() + t.slice(1)}
                   </button>
@@ -946,6 +1025,13 @@ export default function Mail() {
                               </div>
                             </div>
                             <div className="flex items-center gap-1 shrink-0 ml-2">
+                              {/* `mailbox_backup` is AdminUser and writes to the
+                                  host's backup directory, so it sits in the
+                                  admin half even though the mailbox beside it
+                                  does not. Edit and Delete on the same row are
+                                  `update_account` / `delete_account`, both
+                                  AuthUser — they stay. */}
+                              {isAdmin && (
                               <button disabled={backingUp === acc.email} onClick={async () => {
                                 setBackingUp(acc.email);
                                 try { await api.post("/mail/backup", { email: acc.email }); setMessage({ text: `Backup created for ${acc.email}`, type: "success" }); loadBackups(); }
@@ -958,6 +1044,7 @@ export default function Mail() {
                                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5m8.25 3v6.75m0 0l-3-3m3 3l3-3M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" /></svg>
                                 )}
                               </button>
+                              )}
                               <button onClick={() => openEditAccount(acc)} className="p-1.5 text-dark-300 hover:text-accent-400" title="Edit">
                                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125" /></svg>
                               </button>
@@ -1014,8 +1101,13 @@ export default function Mail() {
                       </div>
                     )}
 
-                    {/* Mailbox Backups */}
-                    {backups.length > 0 && (
+                    {/* Mailbox Backups — `mailbox_backups`, `mailbox_restore`
+                        and `mailbox_backup_delete` are all AdminUser, and the
+                        list is host-wide rather than scoped to this domain.
+                        `backups` is already empty for a non-admin because the
+                        fetch is not made, but an emptiness that depends on a
+                        request not happening is not a permission check. */}
+                    {isAdmin && backups.length > 0 && (
                       <div className="mt-4 bg-dark-900 border border-dark-500 rounded-lg overflow-hidden">
                         <div className="px-4 py-2 border-b border-dark-600">
                           <h4 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Mailbox Backups</h4>
@@ -1120,6 +1212,12 @@ export default function Mail() {
                         Required DNS Records
                         <InfoTip id="mail.domain.records" />
                       </h3>
+                      {/* The RECORDS come from `domain_dns`, which is AuthUser —
+                          a site owner needs to see what to publish, and that is
+                          the whole point of the tab. VERIFYING them is
+                          `dns_check`, which is AdminUser, so the button goes and
+                          the records stay. */}
+                      {isAdmin && (
                       <button disabled={checkingDns} onClick={async () => {
                         if (!selectedDomain) return;
                         setCheckingDns(true);
@@ -1131,6 +1229,7 @@ export default function Mail() {
                       }} className="px-3 py-1.5 bg-rust-500 text-white rounded text-xs font-medium hover:bg-rust-600 disabled:opacity-50">
                         {checkingDns ? "Checking..." : "Verify DNS"}
                       </button>
+                      )}
                     </div>
 
                     {dnsCheck && (
