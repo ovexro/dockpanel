@@ -4,6 +4,77 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.106.0]
+
+### Fixed — any mailbox could send as any other tenant, DKIM-signed
+
+On a box hosting mail for more than one customer, nothing tied the address a
+client authenticated as to the address they put in `MAIL FROM`. Postfix was
+configured with `smtpd_recipient_restrictions` only, which decides who may be
+written *to*; the sender was never checked. So a customer holding one mailbox
+could send mail as any address on any other customer's hosted domain.
+
+It was worse than plain spoofing. OpenDKIM's signing table is keyed on the
+sender's domain alone (`*@{domain}`), and the milter runs on submission as well
+as inbound, so the forged message left the server carrying a **valid DKIM
+signature for the victim's domain**. SPF passed because the mail genuinely came
+from the right host, and DKIM passed because it genuinely was signed by the
+victim's key — so DMARC passed on both legs, at the recipient, on a message the
+victim never sent.
+
+DockPanel now generates `/etc/postfix/sender_login_maps` and enforces
+`reject_authenticated_sender_login_mismatch`. Every mailbox owns its own
+address, and each hosted domain is owned by the mailboxes inside it — which is
+what also covers aliases, catch-alls and invented local parts, since Postfix
+does not reject a sender it can find no owner for. A domain holding no mailbox
+is owned by nobody. Mailboxes **within one domain** may still send as each
+other: they belong to the same customer, so that is not a tenant boundary.
+
+Deliberately the *authenticated* form of the check, so unauthenticated inbound
+mail on port 25 is untouched — a mailing list, a forwarder or a customer's
+external SaaS may legitimately arrive with one of your domains in the envelope
+sender.
+
+Sites' PHP `mail()` and anything else using the local `sendmail` command are
+unaffected: local submission does not pass through these restrictions at all.
+The one configuration that changes behaviour is a panel whose **SMTP relay
+points at its own server** and authenticates as one mailbox while sending as a
+different address — that will now be refused, and should be corrected by
+authenticating as an address on the domain you send from.
+
+**Existing installations are repaired automatically.** The restriction is
+applied with `postconf` from the mail-sync path, so any server already hosting
+mail picks it up on its next mailbox, alias or domain change; a new server is
+protected from the moment mail is installed. The map is always written and
+hashed *before* the restriction naming it is enabled, and if the hash fails the
+restriction is not armed at all — an unopenable lookup table would take SMTP
+off the air, so this fails towards delivery rather than towards silence.
+
+Upgrade note: on a fleet, agents receive this with their binary. Members only
+self-update when **Settings → agent auto-update** is on; otherwise run a fleet
+update.
+
+### Fixed — re-running a failed install left the panel unable to reach its database
+
+The PostgreSQL container is created early, with the password that run generated;
+`api.env` is not written until several steps later. An install that died in
+between — a single failed download is enough — left a container holding one
+password and no `api.env` at all. The next run found no `api.env`, generated a
+*new* password, found the container already present, started it unchanged, and
+wrote the new password. The panel then crash-looped for ever on
+`password authentication failed for user "dockpanel"`, and re-running never
+helped, because each run only minted another password the container had never
+heard of.
+
+The installer's own failure message says re-running is safe, so this was
+reachable by following the instructions after any transient network error. Found
+by hitting it on a fresh Ubuntu 24.04 box.
+
+The installer now checks that the database actually accepts the password it is
+about to write, and reconciles the role if it does not. A healthy install does
+no extra work. If the password cannot be recovered, it stops with the exact
+commands to fix it by hand rather than leaving a panel that will not start.
+
 ## [2.105.0]
 
 ### Fixed — six screens offered a client controls the server would refuse

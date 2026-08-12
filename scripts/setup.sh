@@ -816,6 +816,48 @@ setup_database() {
         error "PostgreSQL did not become ready within 30s"
         exit 1
     fi
+
+    # Make the database agree with the password this install is about to write.
+    #
+    # The container is created ONCE, here, with whatever password this run holds;
+    # api.env is not written until several steps later. So an install that dies
+    # in between — a transient download failure is enough, and the failure
+    # message tells the operator "re-running the installer is safe" — leaves a
+    # container holding password A and no api.env at all. The next run finds no
+    # api.env, generates password B, finds the container already present, starts
+    # it unchanged, and writes B. The panel then crash-loops for ever on
+    # `password authentication failed for user "dockpanel"`, and re-running never
+    # helps because each run only mints another password the container has never
+    # heard of. The reuse branch above cannot catch it: it keys on api.env
+    # existing, which in this window it does not.
+    #
+    # Probe first with the target password, so a healthy install does no work and
+    # an operator who has already fixed this by hand is not second-guessed. Only
+    # when the database genuinely refuses it do we recover the password the
+    # container was created with — the one value guaranteed to still work — and
+    # ALTER the role. Both values are hex, from `openssl rand -hex`, so neither
+    # can carry a quote into the SQL.
+    if ! docker exec -e PGPASSWORD="$DB_PASSWORD" "$DB_CONTAINER" \
+            psql -U dockpanel -d dockpanel -c 'SELECT 1' >/dev/null 2>&1; then
+        warn "Database rejects this install's password — reconciling"
+        local container_pw
+        container_pw=$(docker inspect "$DB_CONTAINER" \
+            --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+            | sed -n 's/^POSTGRES_PASSWORD=//p' | head -1)
+        if [ -n "$container_pw" ] && docker exec -e PGPASSWORD="$container_pw" "$DB_CONTAINER" \
+                psql -U dockpanel -d dockpanel \
+                -c "ALTER USER dockpanel WITH PASSWORD '${DB_PASSWORD}';" >/dev/null 2>&1; then
+            log "Database password reconciled with $CONFIG_DIR/api.env"
+        else
+            error "The database will not accept this install's password, and the password"
+            error "it was created with could not be recovered. The panel cannot start."
+            error "To keep your data, set the role's password by hand:"
+            error "  docker exec -it $DB_CONTAINER psql -U dockpanel -d dockpanel"
+            error "  ALTER USER dockpanel WITH PASSWORD '<the DATABASE_URL password in $CONFIG_DIR/api.env>';"
+            error "To start over and LOSE the data: docker rm -f $DB_CONTAINER && docker volume rm dockpanel-pgdata"
+            exit 1
+        fi
+    fi
 }
 
 # ── Download Pre-built Binaries ──────────────────────────────────────────

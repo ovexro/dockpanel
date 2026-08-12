@@ -80,6 +80,11 @@ const VMAIL_DIR: &str = "/var/vmail";
 const POSTFIX_VIRTUAL_DOMAINS: &str = "/etc/postfix/virtual_domains";
 const POSTFIX_VIRTUAL_MAILBOX: &str = "/etc/postfix/virtual_mailbox_maps";
 const POSTFIX_VIRTUAL_ALIAS: &str = "/etc/postfix/virtual_alias_maps";
+/// Which SASL login may use which envelope sender. Nothing bound the two until
+/// this file existed, so any mailbox on the box could send as any address on
+/// any other tenant's hosted domain — and leave DKIM-signed with that tenant's
+/// key, because the signing table is keyed on the sender domain alone.
+const POSTFIX_SENDER_LOGIN: &str = "/etc/postfix/sender_login_maps";
 const DOVECOT_USERS: &str = "/etc/dovecot/users";
 const DKIM_KEYS_DIR: &str = "/etc/dockpanel/dkim";
 /// OpenDKIM's own config lives under the DockPanel data dir, not at the
@@ -459,6 +464,17 @@ service auth {
     }
     let _ = safe_command("postmap").arg(POSTFIX_VIRTUAL_MAILBOX).output().await;
     let _ = safe_command("postmap").arg(POSTFIX_VIRTUAL_ALIAS).output().await;
+
+    // 7a. Arm sender-identity enforcement, so a box is protected from its first
+    // mailbox rather than from its first mailbox CHANGE. Deliberately not part
+    // of the create-if-missing loop above: that loop discards postmap's exit
+    // status, and this is the one map whose hash must be known good before the
+    // restriction naming it is written. Reading the file first is what makes a
+    // re-run of the installer preserve an existing map — the same reason the
+    // loop above never truncates.
+    let existing_sender_login =
+        tokio::fs::read_to_string(POSTFIX_SENDER_LOGIN).await.unwrap_or_default();
+    ensure_sender_login_enforcement(&existing_sender_login).await;
 
     // 8. Configure OpenDKIM. Its config and the drop-in that points the daemon
     // at it both live inside ReadWritePaths — writing the distro's
@@ -1116,11 +1132,19 @@ async fn sync_config(
     write_dovecot_users(&dovecot_lines.join("\n")).await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to write dovecot users: {e}")))?;
 
-    // 5. Run postmap to rebuild hash tables
+    // 5. Bind each SASL login to the senders it may use, and arm the
+    // restriction. Done here rather than at install time because this is the
+    // only code path that runs again on a box already carrying mail: it fires
+    // on every domain, account and alias mutation, so an existing install
+    // repairs itself on the next mailbox change without a heal of its own.
+    // Self-contained and fail-safe — see `ensure_sender_login_enforcement`.
+    ensure_sender_login_enforcement(&build_sender_login_map(&body)).await;
+
+    // 6. Run postmap to rebuild hash tables
     let _ = safe_command("postmap").arg(POSTFIX_VIRTUAL_MAILBOX).output().await;
     let _ = safe_command("postmap").arg(POSTFIX_VIRTUAL_ALIAS).output().await;
 
-    // 6. Reload Postfix and Dovecot
+    // 7. Reload Postfix and Dovecot
     for service in &["postfix", "dovecot"] {
         if let Ok(out) = safe_command("systemctl").args(["reload", service]).output().await {
             if !out.status.success() {
@@ -1131,7 +1155,7 @@ async fn sync_config(
         }
     }
 
-    // 7. Create maildir directories for each account
+    // 8. Create maildir directories for each account
     for acc in &body.accounts {
         if !acc.enabled { continue; }
         let parts: Vec<&str> = acc.email.splitn(2, '@').collect();
@@ -2120,6 +2144,162 @@ async fn tls_status() -> Json<serde_json::Value> {
     }))
 }
 
+/// A value no SASL login can ever equal, used as the owner of a hosted domain
+/// that holds no mailbox. Every login on this box is a full address (Dovecot's
+/// passwd-file key is the address itself), so a token with no `@` is
+/// unmatchable by construction rather than by convention.
+const NO_AUTHORISED_SENDER: &str = "dockpanel-no-authorised-sender";
+
+/// Build the Postfix `smtpd_sender_login_maps` table: which SASL login may use
+/// which envelope sender.
+///
+/// Neither existing map can serve this, and reusing one would MANUFACTURE the
+/// defect this closes. `virtual_mailbox_maps` values are maildir paths, so
+/// pointing the restriction at it would refuse every authenticated send on the
+/// box. `virtual_alias_maps` values are FORWARD TARGETS — so a mailbox that
+/// merely set forwarding would lose the right to send as itself while the
+/// forward target gained it, and any tenant could create
+/// `sales@theirs -> victim@other-tenant` and thereby hand that tenant send-as
+/// rights over their own address. The map has to be built, not borrowed.
+///
+/// Two kinds of entry. Postfix looks up the full address first and `@domain`
+/// second, so the exact rows win where they exist:
+///
+/// 1. every enabled mailbox, owned by itself;
+/// 2. one `@domain` row per enabled domain, owned by that domain's own enabled
+///    logins. This is the row that matters. `reject_sender_login_mismatch` does
+///    not reject a sender it can find no owner for, so without the wildcard the
+///    control would only cover addresses that happen to be mailboxes — leaving
+///    every alias, every catch-all and every made-up local part at a hosted
+///    domain forgeable, which is most of the attack surface and all of the
+///    DKIM-signed part.
+///
+/// A domain with no enabled mailbox is owned by [`NO_AUTHORISED_SENDER`], so
+/// nobody may send as it. That is deliberate: a domain on which no one holds a
+/// mailbox must not become sendable-as by whoever happens to hold one elsewhere
+/// on the same box.
+///
+/// The bound this does NOT claim, stated here rather than left to be discovered
+/// from behaviour: two mailboxes in the SAME domain may still send as each
+/// other. They belong to the same site owner, so that is not a tenant crossing.
+/// The control is per-domain.
+fn build_sender_login_map(body: &SyncRequest) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    for acc in body.accounts.iter().filter(|a| a.enabled) {
+        lines.push(format!("{}\t{}", acc.email, acc.email));
+    }
+
+    for domain in body.domains.iter().filter(|d| d.enabled) {
+        // `ends_with("@example.com")` is an exact-domain test, not a suffix
+        // one: it does not match `user@sub.example.com`, which is a different
+        // domain and may belong to a different tenant.
+        let suffix = format!("@{}", domain.domain);
+        let owners: Vec<&str> = body.accounts.iter()
+            .filter(|a| a.enabled && a.email.ends_with(&suffix))
+            .map(|a| a.email.as_str())
+            .collect();
+        let owners = if owners.is_empty() {
+            NO_AUTHORISED_SENDER.to_string()
+        } else {
+            owners.join(",")
+        };
+        lines.push(format!("@{}\t{}", domain.domain, owners));
+    }
+
+    lines.join("\n")
+}
+
+/// Write the sender-login map, rebuild its hash, and arm the restriction that
+/// consults it — strictly in that order.
+///
+/// The order is the whole of the risk in this change. A `hash:` table named by
+/// an smtpd restriction is opened when smtpd initialises: if the `.db` is
+/// missing or stale, smtpd exits fatal and master throttles it — a total outage
+/// on 25 and 587, not a per-message deferral. So the map is written and
+/// postmapped first, its exit status is CHECKED — the four other `postmap` call
+/// sites in this file discard theirs — and the keys are written only if that
+/// succeeded. A failure here leaves the box exactly as it was: unprotected, and
+/// still carrying mail. For a control being added underneath a running system
+/// that is the correct direction to fail, and it is the reason this is not
+/// simply two more lines in the config block.
+///
+/// `relay_configure` already keeps this discipline for `sasl_passwd` (map,
+/// postmap, then the reference). Nothing asserted it; this makes it explicit.
+async fn ensure_sender_login_enforcement(map_content: &str) {
+    if let Err(e) = write_file_atomic(POSTFIX_SENDER_LOGIN, map_content).await {
+        tracing::error!(
+            "Sender-login map not written ({e}) — leaving sender identity unenforced rather \
+             than arming a restriction against a map that is not there"
+        );
+        return;
+    }
+
+    match safe_command("postmap").arg(POSTFIX_SENDER_LOGIN).output().await {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => {
+            tracing::error!(
+                "postmap {POSTFIX_SENDER_LOGIN} failed ({}) — leaving sender identity \
+                 unenforced; arming the restriction against an unopenable map would take \
+                 smtpd down on 25 and 587. stderr: {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            return;
+        }
+        Err(e) => {
+            tracing::error!(
+                "postmap {POSTFIX_SENDER_LOGIN} could not be run ({e}) — leaving sender \
+                 identity unenforced"
+            );
+            return;
+        }
+    }
+
+    // Written with `postconf`, not added to the config block in `mail_install`:
+    // that block is appended once and skipped for ever after (the same reason
+    // `mydestination` is re-applied there), so a template edit would reach new
+    // installs only and no box already running mail. These two keys reach every
+    // box that has mail installed, on its next mailbox change.
+    //
+    // No `-e`: Postfix assumes it whenever a value is given (2.8 and later), as
+    // the `inet_interfaces` / `myhostname` / TLS calls in `mail_install` do.
+    let _ = safe_command("postconf")
+        .arg(format!("smtpd_sender_login_maps=hash:{POSTFIX_SENDER_LOGIN}"))
+        .output()
+        .await;
+    // NO `permit_mynetworks` in front of this, and that is the whole difference
+    // between a control and a decoration.
+    //
+    // The first cut of this fix wrote `permit_mynetworks, reject_…`, reasoning
+    // that it protected the panel's own notifications and every site's PHP
+    // mail(). Driven on a real two-tenant box, that version was INERT: every
+    // forge was accepted, because `mynetworks_style = host` still covers
+    // 127.0.0.0/8, and a `permit` matches before the reject is ever reached. On
+    // a hosting box "connections from this machine" is not a trusted set — it
+    // is every tenant's own code. Isolated by experiment: plain `hash:` with no
+    // `permit_mynetworks` rejects the forge; `proxy:hash:` WITH it accepts.
+    //
+    // And it protected nothing. Local submission — `sendmail`, which is what
+    // PHP mail() invokes — is `non_smtpd` and never passes through
+    // `smtpd_sender_restrictions` at all. Measured on the same box: after this
+    // parameter was removed, `sendmail -f anything@hosted.domain` was still
+    // accepted, queued and delivered. The only thing the permit exempted was an
+    // authenticated SMTP session from localhost, which is exactly the thing
+    // being defended against.
+    //
+    // The AUTHENTICATED form of the check, though. The bare
+    // `reject_sender_login_mismatch` would also refuse UNAUTHENTICATED inbound
+    // mail on 25 whose envelope sender is a hosted address — ordinary for a
+    // mailing list, a forwarder, or a tenant's own address used by an external
+    // SaaS. The threat is an authenticated co-tenant; restricting more than
+    // that would break delivery to pay for nothing.
+    let _ = safe_command("postconf")
+        .arg("smtpd_sender_restrictions=reject_authenticated_sender_login_mismatch")
+        .output()
+        .await;
+}
+
 /// POST /mail/tls/enforce — Set TLS enforcement level.
 async fn tls_enforce(Json(body): Json<serde_json::Value>) -> Result<Json<serde_json::Value>, ApiErr> {
     let inbound = body.get("inbound").and_then(|v| v.as_str()).unwrap_or("may");
@@ -2241,5 +2421,168 @@ mod tests {
         let out = add_milter("smtpd_milters =\n", RSPAMD_MILTER).unwrap();
         assert!(out.contains(&format!("smtpd_milters = {RSPAMD_MILTER}")), "got: {out}");
         assert!(!out.contains(", "), "got: {out}");
+    }
+
+    // ── Sender identity ────────────────────────────────────────────────
+    //
+    // The property under test is the one no source grep can reach: given a
+    // payload, does the generated table let tenant A claim tenant B's domain?
+    // Proving the RESTRICTION rejects the forge needs a real Postfix and two
+    // authenticated tenants — that is the fresh-VPS leg, not these.
+
+    fn domain(name: &str, enabled: bool) -> SyncDomain {
+        SyncDomain { domain: name.into(), enabled, catch_all: None }
+    }
+
+    fn account(email: &str, enabled: bool) -> SyncAccount {
+        SyncAccount {
+            email: email.into(),
+            password_hash: "{PLAIN}x".into(),
+            quota_mb: 100,
+            enabled,
+            forward_to: None,
+        }
+    }
+
+    /// Look up a key the way Postfix does: the full address first, then
+    /// `@domain`. Encoding the lookup order here is deliberate — a table is
+    /// only correct with respect to how it is read, and every assertion below
+    /// asks a question an SMTP session would actually ask.
+    fn owners_of(table: &str, sender: &str) -> Option<String> {
+        let domain_key = sender.split_once('@').map(|(_, d)| format!("@{d}"));
+        let find = |key: &str| {
+            table.lines()
+                .filter_map(|l| l.split_once('\t'))
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.to_string())
+        };
+        find(sender).or_else(|| domain_key.and_then(|k| find(&k)))
+    }
+
+    fn may_send_as(table: &str, login: &str, sender: &str) -> bool {
+        owners_of(table, sender)
+            .map(|v| v.split(',').any(|o| o == login))
+            // Postfix does not reject a sender it can find no owner for. An
+            // absent key is therefore permission, which is exactly why the
+            // `@domain` rows have to exist.
+            .unwrap_or(true)
+    }
+
+    fn two_tenants() -> SyncRequest {
+        SyncRequest {
+            domains: vec![domain("tenant-a.com", true), domain("tenant-b.com", true)],
+            accounts: vec![account("sales@tenant-a.com", true), account("info@tenant-b.com", true)],
+            aliases: vec![],
+        }
+    }
+
+    #[test]
+    fn a_mailbox_may_send_as_itself() {
+        let t = build_sender_login_map(&two_tenants());
+        assert!(may_send_as(&t, "sales@tenant-a.com", "sales@tenant-a.com"));
+        assert!(may_send_as(&t, "info@tenant-b.com", "info@tenant-b.com"));
+    }
+
+    /// The defect, stated as a test: before this map existed, both of these
+    /// were permitted, and the forged message left the box DKIM-signed with the
+    /// victim's key.
+    #[test]
+    fn a_tenant_may_not_send_as_another_tenants_domain() {
+        let t = build_sender_login_map(&two_tenants());
+        assert!(!may_send_as(&t, "sales@tenant-a.com", "info@tenant-b.com"));
+        assert!(!may_send_as(&t, "sales@tenant-a.com", "ceo@tenant-b.com"));
+        assert!(!may_send_as(&t, "info@tenant-b.com", "sales@tenant-a.com"));
+    }
+
+    /// The `@domain` row is what covers every address that is not itself a
+    /// mailbox — aliases, catch-alls, and any local part a forger invents.
+    /// Without it the control would only defend addresses that already exist,
+    /// which is the smaller half of the surface.
+    #[test]
+    fn an_invented_local_part_at_a_hosted_domain_is_still_owned() {
+        let t = build_sender_login_map(&two_tenants());
+        assert!(owners_of(&t, "no-such-mailbox@tenant-b.com").is_some());
+        assert!(!may_send_as(&t, "sales@tenant-a.com", "no-such-mailbox@tenant-b.com"));
+    }
+
+    /// A domain nobody holds a mailbox on must not become sendable-as by
+    /// whoever happens to hold one elsewhere on the box.
+    #[test]
+    fn a_domain_with_no_mailbox_is_owned_by_nobody() {
+        let mut req = two_tenants();
+        req.domains.push(domain("parked.com", true));
+        let t = build_sender_login_map(&req);
+        assert_eq!(owners_of(&t, "anyone@parked.com").as_deref(), Some(NO_AUTHORISED_SENDER));
+        assert!(!may_send_as(&t, "sales@tenant-a.com", "anyone@parked.com"));
+        assert!(!may_send_as(&t, "info@tenant-b.com", "anyone@parked.com"));
+    }
+
+    /// Disabled accounts are already excluded from the Dovecot users file, so
+    /// they hold no login at all. Listing one as an owner would grant an
+    /// identity to a credential that cannot authenticate — and, worse, would
+    /// leave a domain looking owned when its only mailbox is switched off.
+    #[test]
+    fn a_disabled_mailbox_owns_neither_itself_nor_its_domain() {
+        let req = SyncRequest {
+            domains: vec![domain("tenant-a.com", true)],
+            accounts: vec![account("sales@tenant-a.com", false)],
+            aliases: vec![],
+        };
+        let t = build_sender_login_map(&req);
+        assert!(!t.contains("sales@tenant-a.com\tsales@tenant-a.com"));
+        assert_eq!(owners_of(&t, "sales@tenant-a.com").as_deref(), Some(NO_AUTHORISED_SENDER));
+    }
+
+    /// `ends_with("@example.com")` is an exact-domain test, not a suffix one.
+    /// A subdomain is a different domain and may belong to a different tenant,
+    /// so its mailboxes must not be counted among the parent's owners.
+    #[test]
+    fn a_subdomain_is_not_its_parent_domain() {
+        let req = SyncRequest {
+            domains: vec![domain("example.com", true), domain("mail.example.com", true)],
+            accounts: vec![account("a@example.com", true), account("b@mail.example.com", true)],
+            aliases: vec![],
+        };
+        let t = build_sender_login_map(&req);
+        assert!(!may_send_as(&t, "b@mail.example.com", "a@example.com"));
+        assert!(!may_send_as(&t, "a@example.com", "anything@mail.example.com"));
+        // The one that actually bites, and the one the first two cannot reach:
+        // both of those name addresses the exact rows already cover, so they
+        // pass even when the WILDCARD is wrong. A relaxed domain test leaks
+        // through the `@domain` row, on an invented local part — so that is
+        // where it has to be asked. (Found by mutation, not by writing.)
+        assert!(!may_send_as(&t, "b@mail.example.com", "invented@example.com"));
+    }
+
+    /// Two mailboxes in the SAME domain belong to the same site owner, so this
+    /// is not a tenant crossing. Pinned so the bound is a decision on the
+    /// record rather than something a later reader has to infer.
+    #[test]
+    fn mailboxes_within_one_domain_may_send_as_each_other() {
+        let req = SyncRequest {
+            domains: vec![domain("tenant-a.com", true)],
+            accounts: vec![account("sales@tenant-a.com", true), account("ceo@tenant-a.com", true)],
+            aliases: vec![],
+        };
+        let t = build_sender_login_map(&req);
+        assert!(may_send_as(&t, "sales@tenant-a.com", "invoices@tenant-a.com"));
+    }
+
+    /// Every line must be exactly `key<TAB>value`, or `postmap` builds a table
+    /// that does not answer the question the restriction asks — and a bad hash
+    /// is the failure mode that takes smtpd down.
+    #[test]
+    fn every_line_is_a_well_formed_two_column_row() {
+        let mut req = two_tenants();
+        req.domains.push(domain("disabled.com", false));
+        let t = build_sender_login_map(&req);
+        assert!(!t.is_empty());
+        for line in t.lines() {
+            let cols: Vec<&str> = line.split('\t').collect();
+            assert_eq!(cols.len(), 2, "not two columns: {line:?}");
+            assert!(!cols[0].is_empty() && !cols[1].is_empty(), "empty column: {line:?}");
+            assert!(!cols[1].contains(",,"), "empty owner in list: {line:?}");
+        }
+        assert!(!t.contains("@disabled.com"), "a disabled domain must get no row");
     }
 }
