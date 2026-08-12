@@ -251,7 +251,14 @@ else
   ok "the destination check no longer inner-joins on a column that is always NULL"
 fi
 
-if hasre "$BSCHEDR_RS" 'bd\.server_id IS NULL'; then
+# s351 repointed this arm rather than relaxing it. The rule moved into a shared
+# constant next to the route that LISTS the same set, because the writer admitted
+# unscoped destinations while the only reader was administrator-only, so a site
+# owner was granted a choice nothing could show them. The arm follows the code
+# (lesson #150) and keeps asking the same question of it; that the writer still
+# REACHES the constant is asserted next door, in client-surface-gating.
+DEST_RS=panel/backend/src/routes/backup_destinations.rs
+if hasre "$DEST_RS" 'DESTINATION_CALLER_PREDICATE.*bd\.server_id IS NULL'; then
   ok "an unscoped (shared) destination is accepted"
 else
   bad "the check does not accept a NULL server_id — destinations created through the API have no server"

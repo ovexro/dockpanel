@@ -92,13 +92,19 @@ pub async fn set_schedule(
     // routes, so the operator choosing them is the same person who owns the bucket,
     // and a site owner can upload to it but never read it. A destination that IS
     // pinned to a server still has to belong to this user.
-    let dest_check: Option<(Uuid,)> = sqlx::query_as(
+    //
+    // The rule now lives once, next to the route that LISTS the same set, because
+    // granting a caller a choice it cannot enumerate is the defect this pairing
+    // closes: for four months the picker feeding this check could not be filled
+    // for the very callers the paragraph above deliberately admits.
+    let dest_check: Option<(Uuid,)> = sqlx::query_as(&format!(
         "SELECT bd.id FROM backup_destinations bd \
          LEFT JOIN servers s ON bd.server_id = s.id \
-         WHERE bd.id = $1 AND (bd.server_id IS NULL OR s.user_id = $2)",
-    )
-    .bind(&body.destination_id)
+         WHERE {} AND bd.id = $2",
+        crate::routes::backup_destinations::DESTINATION_CALLER_PREDICATE
+    ))
     .bind(claims.sub)
+    .bind(&body.destination_id)
     .fetch_optional(&state.db)
     .await
     .ok()

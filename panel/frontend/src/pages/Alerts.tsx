@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { api } from "../api";
+import { useAuth } from "../context/AuthContext";
 import { logger } from "../utils/logger";
 import { renderMarkdown } from "../utils/markdown";
 
@@ -97,6 +98,13 @@ const SEVERITY_STYLES: Record<string, { bg: string; text: string; dot: string }>
 type TabId = "alerts" | "runbooks" | "on-call" | "policies";
 
 export default function Alerts() {
+  // Alerts themselves are user-scoped and every action on them is open to the
+  // owner, which is why this whole surface sits on a nav row with no role flag.
+  // The other three tabs are not: their endpoints are administrator-only to the
+  // last handler, so showing their triggers to a client offered three lists that
+  // could only ever come back refused.
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [tab, setTab] = useState<TabId>("alerts");
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [summary, setSummary] = useState<AlertSummary>({ firing: 0, acknowledged: 0, resolved: 0 });
@@ -117,7 +125,11 @@ export default function Alerts() {
       return;
     }
     setExpanded(alert.id);
-    if (runbookCache[alert.alert_type] === undefined) {
+    // Runbooks are administrator-only to read. Asking anyway would spend a
+    // guaranteed 403 and cache `null`, which this component renders exactly like
+    // "no runbook has been written for this alert type" — a refusal a client
+    // could never tell from an ordinary absence, and so could never report.
+    if (isAdmin && runbookCache[alert.alert_type] === undefined) {
       try {
         const rb = await api.get<Runbook>(`/alerts/runbooks/${alert.alert_type}`);
         setRunbookCache((prev) => ({ ...prev, [alert.alert_type]: rb }));
@@ -238,36 +250,42 @@ export default function Alerts() {
         >
           Alerts
         </button>
-        <button
-          onClick={() => setTab("runbooks")}
-          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-            tab === "runbooks"
-              ? "border-rust-500 text-rust-400"
-              : "border-transparent text-dark-200 hover:text-dark-100"
-          }`}
-        >
-          Runbooks
-        </button>
-        <button
-          onClick={() => setTab("on-call")}
-          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-            tab === "on-call"
-              ? "border-rust-500 text-rust-400"
-              : "border-transparent text-dark-200 hover:text-dark-100"
-          }`}
-        >
-          On-call
-        </button>
-        <button
-          onClick={() => setTab("policies")}
-          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-            tab === "policies"
-              ? "border-rust-500 text-rust-400"
-              : "border-transparent text-dark-200 hover:text-dark-100"
-          }`}
-        >
-          Escalation policies
-        </button>
+        {isAdmin && (
+          <button
+            onClick={() => setTab("runbooks")}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              tab === "runbooks"
+                ? "border-rust-500 text-rust-400"
+                : "border-transparent text-dark-200 hover:text-dark-100"
+            }`}
+          >
+            Runbooks
+          </button>
+        )}
+        {isAdmin && (
+          <button
+            onClick={() => setTab("on-call")}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              tab === "on-call"
+                ? "border-rust-500 text-rust-400"
+                : "border-transparent text-dark-200 hover:text-dark-100"
+            }`}
+          >
+            On-call
+          </button>
+        )}
+        {isAdmin && (
+          <button
+            onClick={() => setTab("policies")}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              tab === "policies"
+                ? "border-rust-500 text-rust-400"
+                : "border-transparent text-dark-200 hover:text-dark-100"
+            }`}
+          >
+            Escalation policies
+          </button>
+        )}
       </div>
 
       {message && (
@@ -514,9 +532,13 @@ export default function Alerts() {
         </>
       )}
 
-      {tab === "runbooks" && <RunbooksTab onMessage={(m) => { setMessage(m); setTimeout(() => setMessage(null), 3000); }} />}
-      {tab === "on-call" && <OnCallTab onMessage={(m) => { setMessage(m); setTimeout(() => setMessage(null), 3000); }} />}
-      {tab === "policies" && <PoliciesTab onMessage={(m) => { setMessage(m); setTimeout(() => setMessage(null), 3000); }} />}
+      {/* The `isAdmin` term is repeated on each body deliberately. Hiding a trigger
+          decides what is OFFERED; the mount decides what is REQUESTED, and only the
+          second one stops the refused calls. Whoever adds the next way to set `tab`
+          gets the guard for free. */}
+      {tab === "runbooks" && isAdmin && <RunbooksTab onMessage={(m) => { setMessage(m); setTimeout(() => setMessage(null), 3000); }} />}
+      {tab === "on-call" && isAdmin && <OnCallTab onMessage={(m) => { setMessage(m); setTimeout(() => setMessage(null), 3000); }} />}
+      {tab === "policies" && isAdmin && <PoliciesTab onMessage={(m) => { setMessage(m); setTimeout(() => setMessage(null), 3000); }} />}
 
       </div>
     </div>

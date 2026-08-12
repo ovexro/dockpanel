@@ -800,8 +800,12 @@ export default function Terminal() {
               Copy Output
             </button>
 
-            {/* Share */}
-            <button
+            {/* Share — administrator-only, like the SSH Info button below it. The
+                endpoint calls `require_admin`, so for anyone else this offered a
+                link that could only ever answer "Failed to create share link".
+                Copy Output above is deliberately NOT gated: it never leaves the
+                browser. */}
+            {isAdmin && <button
               onClick={async () => {
                 if (!xtermRef.current) return;
                 const buffer = xtermRef.current.buffer.active;
@@ -834,7 +838,7 @@ export default function Terminal() {
               title="Share terminal output (1hr link)"
             >
               Share
-            </button>
+            </button>}
 
             {/* SSH Info — the credentials it prints are for the ROOT account on
                 the host (`server_utils.rs` reads /root/.ssh/authorized_keys), so

@@ -4,6 +4,67 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.105.0]
+
+### Fixed — six screens offered a client controls the server would refuse
+
+v2.103.0 gave site owners their own mail console. Driving the rest of the panel
+the same way found six more places where a non-administrator is shown a control,
+a tab or a link whose request can only come back refused — the same shape, on
+screens a client reaches by ordinary navigation.
+
+- **Monitoring → Alerts** showed all four of its tabs to everyone. Three of them
+  — Runbooks, On-call and Escalation policies — are administrator-only to the
+  last handler: 15 of the page's 19 requests are. A client clicking any of them
+  got an error banner over three lists that could never fill. The Alerts tab
+  itself is user-scoped and stays open, because those alerts are the client's own.
+- **Monitoring → Certificates** listed a client's own certificates correctly —
+  that read is deliberately open — and then offered **Renew** and **Delete**, the
+  only two controls on the page, both of which are administrator-only.
+- **A site's Backups page** offered a Destination picker that could never be
+  filled. This one was a severed pair rather than a missing gate: the endpoint
+  that *accepts* a destination for a site schedule takes any authenticated
+  caller, and says in its own comment that a site owner is meant to use it — but
+  the only route that could tell that caller which destinations exist was
+  administrator-only, and its refusal was swallowed into an empty list. So the
+  form said "No destinations yet" and linked to a page that bounces a client
+  straight back to the dashboard. There is now a caller-scoped route returning
+  id, name and type — and no credentials, which the struct cannot carry — and the
+  rule deciding which destinations a caller may use lives in **one** constant that
+  the reader and the writer both interpolate, so the set you are offered cannot
+  drift from the set that will be accepted.
+- **The Dashboard's Recommendations** resolved each row's link straight out of an
+  action map, and three of its six destinations are administrator-only. The
+  message stays — a client whose own site has no recent backup should be told —
+  but the link is now resolved through the same nav registry the sidebar and the
+  command palette use, so a row whose destination is not for this caller simply
+  is not a link.
+- **The Terminal's Share button** posts to an endpoint that requires an
+  administrator. Its neighbour, SSH Info, was already gated; Share was not. Copy
+  Output is deliberately left open — it never leaves the browser.
+- **Security, Users and Container Policies** each refused non-administrators
+  *after* registering their loaders. A redirect is itself an effect, so it does
+  not out-run them: the page fired its whole request burst — 11 to 12 of them on
+  Security — and collected a refusal for each before the redirect landed. Nothing
+  was disclosed, but every one was a refused request in the audit log. The guard
+  now sits above the first hook, where the other nineteen administrator pages
+  already put it.
+
+### Why these six were missed when the mail equivalent was fixed
+
+The sweep that followed the v2.103.0 fix enumerated administrator-gated handlers
+by searching for `AdminUser(`. Two route modules — the two behind the On-call and
+Escalation tabs — bind that extractor without destructuring it, so they never
+write that spelling and a search anchored on the open paren returns **zero** on
+both. Ten handlers were invisible to the count, and the surfaces in front of them
+stayed broken for two more releases.
+
+`client-surface-gating-pin-e2e.sh` (39 assertions) pins all six fixes, and its
+first section pins the cause: it detects any signature naming the extractor
+regardless of how it is written, then requires each one to match a known
+spelling. A fourth idiom makes it red rather than quietly shrinking the next
+census.
+
 ## [2.104.0]
 
 ### Fixed — the schema browser has not worked since March, and nothing said so

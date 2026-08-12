@@ -5,9 +5,36 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::AdminUser;
+use crate::auth::{AdminUser, AuthUser};
 use crate::error::{internal_error, err, agent_actionable, agent_error, ApiError};
 use crate::AppState;
+
+/// Which destinations a caller may send a site's backups to. `$1` is the caller.
+///
+/// The writer decided this first: `backup_schedules::set_schedule` accepts an
+/// unscoped destination from any authenticated caller, on the stated grounds
+/// that destinations are created and deleted through admin-only routes, so a
+/// site owner can upload to one but never read it. That was the right call and
+/// it shipped — but the only route that could tell a caller WHICH destinations
+/// those are stayed `AdminUser`, so a non-admin's picker was empty and the
+/// permission the writer granted could not be exercised. Reader and writer now
+/// interpolate this one string, the way every site route shares
+/// [`crate::helpers::SITE_CALLER_PREDICATE`], so the set a caller may CHOOSE
+/// from cannot drift from the set the writer will ACCEPT.
+///
+/// Requires `LEFT JOIN servers s ON bd.server_id = s.id` in scope.
+pub const DESTINATION_CALLER_PREDICATE: &str = "(bd.server_id IS NULL OR s.user_id = $1)";
+
+/// The subset of a destination a non-admin needs to pick one: enough to choose,
+/// nothing to steal. `config` holds the bucket credentials and is absent from
+/// this struct BY CONSTRUCTION rather than by a masking pass — a field that does
+/// not exist cannot be forgotten in a future edit.
+#[derive(serde::Serialize, sqlx::FromRow)]
+pub struct SelectableDestination {
+    pub id: Uuid,
+    pub name: String,
+    pub dtype: String,
+}
 
 #[derive(serde::Serialize, serde::Deserialize, sqlx::FromRow, Clone)]
 pub struct BackupDestination {
@@ -68,6 +95,32 @@ pub async fn list(
         .collect();
 
     Ok(Json(masked))
+}
+
+/// GET /api/backup-destinations/selectable — the destinations this caller may
+/// schedule a site backup to, id/name/type only.
+///
+/// `AuthUser`, deliberately: the per-site schedule form is reachable by a site
+/// owner and its writer already admits one, so refusing to name the choices was
+/// the half that had never been connected. An administrator gets the same rows
+/// this returns to anyone else plus their own servers' pinned destinations —
+/// the predicate does the deciding, so there is no role branch to keep in step.
+pub async fn selectable(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<Json<Vec<SelectableDestination>>, ApiError> {
+    let dests: Vec<SelectableDestination> = sqlx::query_as(&format!(
+        "SELECT bd.id, bd.name, bd.dtype FROM backup_destinations bd \
+         LEFT JOIN servers s ON bd.server_id = s.id \
+         WHERE {DESTINATION_CALLER_PREDICATE} \
+         ORDER BY bd.name ASC LIMIT 200"
+    ))
+    .bind(claims.sub)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| internal_error("list selectable backup_destinations", e))?;
+
+    Ok(Json(dests))
 }
 
 /// POST /api/backup-destinations — Create a new backup destination.

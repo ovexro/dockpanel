@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
 import { api } from "../api";
+import { useAuth } from "../context/AuthContext";
 import { formatSize, formatDate } from "../utils/format";
 import ProvisionLog from "../components/ProvisionLog";
 
@@ -100,12 +101,20 @@ export default function Backups() {
   const [schedDestId, setSchedDestId] = useState("");
   const [schedRetention, setSchedRetention] = useState("7");
   const [savingSchedule, setSavingSchedule] = useState(false);
+  // Whether the destination list came back at all. An empty picker and a picker
+  // that failed to load render the same way unless something remembers which
+  // happened, and the honest sentence to show is different for each.
+  const [destinationsFailed, setDestinationsFailed] = useState(false);
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
 
   useEffect(() => {
     api.get<Site>(`/sites/${id}`).then(setSite).catch(() => {});
     loadBackups();
     loadSchedule();
-    api.get<BackupDestination[]>("/backup-destinations").then(setDestinations).catch(() => {});
+    api.get<BackupDestination[]>("/backup-destinations/selectable")
+      .then((d) => { setDestinations(d); setDestinationsFailed(false); })
+      .catch(() => setDestinationsFailed(true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -315,12 +324,23 @@ export default function Backups() {
                       <option key={d.id} value={d.id}>{d.name} ({d.dtype})</option>
                     ))}
                   </select>
-                  {destinations.length === 0 && (
+                  {destinationsFailed ? (
+                    <p className="text-xs text-danger-400 mt-1">
+                      Could not load destinations. Reload the page, or contact your
+                      administrator if it keeps happening.
+                    </p>
+                  ) : destinations.length === 0 && (
                     <p className="text-xs text-warn-500 mt-1">
+                      {/* Backup Manager is administrator-only, so a client is told who
+                          can act rather than handed a door that bounces them back. */}
                       No destinations yet —{" "}
-                      <Link to="/backup-orchestrator?tab=destinations" className="underline hover:text-warn-400">
-                        add one in Backup Manager
-                      </Link>
+                      {isAdmin ? (
+                        <Link to="/backup-orchestrator?tab=destinations" className="underline hover:text-warn-400">
+                          add one in Backup Manager
+                        </Link>
+                      ) : (
+                        "ask your administrator to add one"
+                      )}
                     </p>
                   )}
                 </div>

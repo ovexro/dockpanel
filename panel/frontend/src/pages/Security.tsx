@@ -255,6 +255,13 @@ function WarningStrip({
 
 export default function Security() {
   const { user } = useAuth();
+  // Ahead of every hook, which is where the other nineteen administrator pages
+  // put it. A redirect is itself an effect, so a guard placed BELOW the loaders
+  // does not out-run them: the mount fires its whole request burst and collects
+  // a 403 for each before the navigation lands. Nothing was disclosed — the
+  // server refused every one — but a refused request is a line in the audit log
+  // and a fright for whoever reads it.
+  if (user?.role !== "admin") return <Navigate to="/" replace />;
   const [overview, setOverview] = useState<SecurityOverview | null>(null);
   const [firewall, setFirewall] = useState<FirewallStatus | null>(null);
   const [fail2ban, setFail2ban] = useState<Fail2banStatus | null>(null);
@@ -498,8 +505,6 @@ export default function Security() {
     if (tab === "audit") loadLoginAudit();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
-
-  if (user?.role !== "admin") return <Navigate to="/" replace />;
 
   const handleScan = async () => {
     setScanning(true);

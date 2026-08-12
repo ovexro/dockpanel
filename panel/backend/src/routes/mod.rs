@@ -828,6 +828,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/sites/{id}/restic/restore/{snapshot_id}", post(backups::restic_restore))
         // Backup Destinations (admin)
         .route("/api/backup-destinations", get(backup_destinations::list).post(backup_destinations::create))
+        .route("/api/backup-destinations/selectable", get(backup_destinations::selectable))
         .route("/api/backup-destinations/{id}", put(backup_destinations::update).delete(backup_destinations::remove))
         .route("/api/backup-destinations/{id}/test", post(backup_destinations::test_connection))
         // Backup Schedules

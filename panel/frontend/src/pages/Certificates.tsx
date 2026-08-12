@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { api } from "../api";
+import { useAuth } from "../context/AuthContext";
 
 interface Certificate {
   site_id: string;
@@ -17,6 +18,13 @@ const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }>
 };
 
 export default function Certificates() {
+  // The LIST is open on purpose — it is `AuthUser` and filtered to the caller's
+  // own sites, so a site owner seeing their own certificates here is the
+  // intended behaviour and must not be gated. Renewing and deleting are not:
+  // both are administrator-only, so an owner was shown a row whose only two
+  // controls were the two things they would be refused.
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [certs, setCerts] = useState<Certificate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -127,7 +135,7 @@ export default function Certificates() {
                 <th className="text-left px-4 py-3 text-xs font-medium text-dark-300 uppercase font-mono">Expiry</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-dark-300 uppercase font-mono">Days Left</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-dark-300 uppercase font-mono">Status</th>
-                <th className="text-right px-4 py-3 text-xs font-medium text-dark-300 uppercase font-mono">Actions</th>
+                {isAdmin && <th className="text-right px-4 py-3 text-xs font-medium text-dark-300 uppercase font-mono">Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -149,6 +157,7 @@ export default function Certificates() {
                         {style.label}
                       </span>
                     </td>
+                    {isAdmin && (
                     <td className="px-4 py-3 text-right">
                       {deleteTarget === cert.site_id ? (
                         <div className="flex items-center justify-end gap-1">
@@ -190,6 +199,7 @@ export default function Certificates() {
                         </div>
                       )}
                     </td>
+                    )}
                   </tr>
                 );
               })}

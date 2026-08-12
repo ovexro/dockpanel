@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { useServer } from "../context/ServerContext";
 import { useAuth } from "../context/AuthContext";
+import { isNavVisible, navFlagsFor } from "../data/navItems";
 import { formatSize, formatRate, formatUptime, timeAgo } from "../utils/format";
 
 interface SiteDetail {
@@ -1264,7 +1265,17 @@ export default function Dashboard() {
               </div>
               <div className="divide-y divide-dark-600">
                 {intel.recommendations.map((rec, i) => {
-                  const route = REC_ACTION_ROUTES[rec.action];
+                  // The recommendation itself is worth showing to whoever it is
+                  // about — a client whose own site has no recent backup should
+                  // hear that. Its ACTION is a different question: three of these
+                  // six routes are administrator-only, and a chevron into one of
+                  // them lands the caller straight back on this page with nothing
+                  // said. Ask the same registry the sidebar and the command
+                  // palette ask, so the answer cannot drift from theirs; a row
+                  // whose destination is not for this caller keeps the message
+                  // and loses the link.
+                  const target = REC_ACTION_ROUTES[rec.action];
+                  const route = target && isNavVisible(navFlagsFor(target), user?.role ?? "") ? target : undefined;
                   const inner = (
                     <>
                       <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${

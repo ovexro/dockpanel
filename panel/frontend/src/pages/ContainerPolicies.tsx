@@ -23,6 +23,9 @@ interface User {
 
 export default function ContainerPolicies() {
   const { user: authUser } = useAuth();
+  // Ahead of the loader effect: a redirect is an effect too, so a guard below it
+  // lets the mount spend its requests on a 403 first.
+  if (authUser?.role !== "admin") return <Navigate to="/" replace />;
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -60,8 +63,6 @@ export default function ContainerPolicies() {
     loadPolicies();
     loadUsers();
   }, []);
-
-  if (authUser?.role !== "admin") return <Navigate to="/" replace />;
 
   const resetForm = () => {
     setEditUserId("");

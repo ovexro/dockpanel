@@ -14,6 +14,9 @@ interface User {
 
 export default function Users() {
   const { user: authUser } = useAuth();
+  // Ahead of the loader effect: a redirect is an effect too, so a guard below it
+  // lets the mount spend its requests on a 403 first.
+  if (authUser?.role !== "admin") return <Navigate to="/" replace />;
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -48,8 +51,6 @@ export default function Users() {
   useEffect(() => {
     loadUsers();
   }, []);
-
-  if (authUser?.role !== "admin") return <Navigate to="/" replace />;
 
   const handleCreate = async () => {
     setCreating(true);
