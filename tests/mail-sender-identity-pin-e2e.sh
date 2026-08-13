@@ -405,6 +405,43 @@ else
   done
 fi
 
+# ── §G the installer arms the control on the box it just installed ──────
+# The agent half can only arm what the panel sends it. Until s354 `mail_install`
+# was the ONE writer of mail state that never called the sync, so a box that
+# re-ran the installer kept whatever the sender-login table already held — on any
+# box upgrading past v2.106.0, nothing — and stayed unprotected until its next
+# mailbox or domain change.
+#
+# What makes that state easy to miss is the agent's own empty-table guard: it
+# renders the box SAFE rather than ARMED, so nothing breaks and nothing warns.
+# §A-§F can all be green while no install path ever reaches them.
+echo "§G the install path applies mail configuration"
+
+BACKEND="$REPO/panel/backend/src/routes/mail.rs"
+if [ ! -f "$BACKEND" ]; then
+  bad "§G missing $BACKEND — refusing to report a clean sweep"
+else
+  BACKEND_CODE=$(code "$BACKEND")
+  # Bound the window on the handler's OWN closing brace. A fixed `-A n` window
+  # would bleed into the next function, and the next function here is
+  # `mail_uninstall`, whose first twenty lines are byte-identical to this one's.
+  INSTALL_FN=$(awk '/^pub async fn mail_install\(/{i=1} i{print} i&&/^\}/{exit}' <<< "$BACKEND_CODE")
+  # `grep -c` counts LINES; the call sites are what is being counted here.
+  SYNC_SITES=$(grep -oE 'sync_mail_config\(' <<< "$BACKEND_CODE" | wc -l)
+  if [ "$(grep -c '[^[:space:]]' <<< "$INSTALL_FN")" -lt 10 ]; then
+    bad "§G could not extract mail_install() — the arm has no subject"
+  elif [ "$SYNC_SITES" -lt 5 ]; then
+    bad "§G CONTROL only $SYNC_SITES sync_mail_config occurrences in the backend — this grep is pointed wrong"
+  else
+    ok "§G CONTROL the backend still carries $SYNC_SITES sync_mail_config occurrences"
+    if has "$INSTALL_FN" "sync_mail_config("; then
+      ok "§G mail_install applies mail configuration after a successful install"
+    else
+      bad "§G mail_install never applies mail configuration — a box that re-runs the installer stays unarmed until its next mailbox change"
+    fi
+  fi
+fi
+
 echo
 echo "PASS $PASS FAIL $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

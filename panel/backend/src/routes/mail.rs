@@ -103,7 +103,7 @@ pub async fn mail_status(
 pub async fn mail_install(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let install_id = Uuid::new_v4();
 
@@ -117,6 +117,7 @@ pub async fn mail_install(
 
     let logs = state.provision_logs.clone();
     let db = state.db.clone();
+    let sync_state = state.clone();
     let user_id = claims.sub;
     let email = claims.email.clone();
 
@@ -138,6 +139,47 @@ pub async fn mail_install(
         match agent.post("/mail/install", None).await {
             Ok(_) => {
                 emit("install", "Installing mail server", "done", None);
+
+                // Rebuild the maps the installer just armed against.
+                //
+                // Every OTHER writer of mail state syncs; the installer was the one
+                // path that did not, so a box that re-ran it kept whatever the map
+                // file already held — on any box upgrading past v2.106.0, nothing —
+                // and stayed unprotected until its next mailbox or domain change.
+                //
+                // The 202 went out before this task started, so there is no response
+                // left to carry a failure. It has to surface as a step, and that is
+                // also why the CONFLICT precondition (mail domains naming no server)
+                // is reported rather than fatal here: the install itself succeeded,
+                // and the operator's remedy is to assign those domains and retry.
+                emit("sync", "Applying mail configuration", "in_progress", None);
+                match sync_mail_config(&sync_state, server_id, &agent).await {
+                    Ok(()) => emit("sync", "Applying mail configuration", "done", None),
+                    Err(e) => {
+                        let reason = e
+                            .1
+                             .0
+                            .get("error")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("the panel could not apply it")
+                            .to_string();
+                        tracing::warn!(
+                            "Mail server installed on {server_id}, but its configuration was \
+                             not applied: {reason}"
+                        );
+                        emit(
+                            "sync",
+                            "Applying mail configuration",
+                            "error",
+                            Some(format!(
+                                "Mail server installed, but its configuration was not applied: \
+                                 {reason} Mail stays as it was until this is resolved or the \
+                                 next mailbox or domain change re-applies it."
+                            )),
+                        );
+                    }
+                }
+
                 emit("complete", "Mail server installed", "done", None);
                 activity::log_activity(
                     &db, user_id, &email, "mail.server.install",

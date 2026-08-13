@@ -257,7 +257,12 @@ fi
 
 for what in 'download' 'checksum' 'linkage' 'swap'; do
   case "$what" in
-    download) NEED='curl -fsSL -o "$TMP/$a"' ;;
+    # Repinned s354: the download moved behind dp_fetch when the retry loop
+    # reached this script. The property is unchanged — the step must still
+    # iterate the shared list — so the arm follows the code rather than freezing
+    # the old call text. S9 below is its pair: it asserts the helper this now
+    # names actually exists here and that nothing fetches around it.
+    download) NEED='dp_fetch "$BASE/$a" "$TMP/$a"' ;;
     checksum) NEED='sha256sum "$TMP/$a"' ;;
     linkage)  NEED='require_static_musl "$TMP/$a"' ;;
     swap)     NEED='install -m 0755 "$TMP/$a"' ;;
@@ -591,6 +596,39 @@ done
   || bad "a scratch copy of $MARKER_BAD is read in a different language than the subject, so every mutation above was applied with the wrong comment marker"
 
 rm -rf "$M_TMP"
+
+# ── S9. THE SAME OPERATION IN EVERY PROGRAM THAT PERFORMS IT ────────────────
+# This suite's founding shape (S1) is a guard applied to one of several. s354
+# found the same shape in the fix for it: s353 gave the INSTALLER a shell retry
+# loop for the one failure `curl --retry` does not cover — a connection dropped
+# mid-transfer, exit 56, which had aborted three real installs against the
+# release CDN — and gave it to the installer only. Three other programs download
+# the same assets from the same host and were all still bare, and one bare call
+# was left eleven lines below the new function inside setup.sh itself.
+#
+# Two arms, because either alone is satisfiable the wrong way: the function must
+# EXIST in each consumer, and no bare curl may fetch a release asset behind its
+# back. dp_fetch's own curl names `"$url"`, never the release base, so a line
+# holding both `curl` and a release base variable is by construction a download
+# that bypassed it.
+RELEASE_CONSUMERS="scripts/setup.sh scripts/update.sh scripts/agent-self-update.sh scripts/deploy-demo.sh"
+for consumer in $RELEASE_CONSUMERS; do
+  if [ ! -f "$consumer" ]; then
+    bad "S9 $consumer is missing — refusing to report a clean sweep"
+    continue
+  fi
+  if grep -qE '^dp_fetch\(\) \{' "$consumer"; then
+    ok "S9 $consumer fetches release assets through a retrying dp_fetch"
+  else
+    bad "S9 $consumer has no dp_fetch — its release downloads cannot survive a mid-transfer drop (exit 56)"
+  fi
+  BARE=$(code_lines "$consumer" | grep -E 'curl' | grep -cE '\$\{?BASE(_URL)?\}?/' || true)
+  if [ "$BARE" -eq 0 ]; then
+    ok "S9 $consumer has no bare curl fetching a release asset"
+  else
+    bad "S9 $consumer has $BARE bare curl download(s) of a release asset — they bypass dp_fetch's retry"
+  fi
+done
 
 echo
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"

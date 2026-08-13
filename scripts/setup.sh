@@ -993,7 +993,14 @@ download_binaries() {
     # mktemp (root-owned, O_EXCL, unpredictable) so a local user can't pre-seed
     # a manifest that would make a tampered binary "verify".
     CHECKSUMS_FILE=$(umask 077; mktemp /tmp/dockpanel-checksums.XXXXXX 2>/dev/null || echo "")
-    if [ -z "$CHECKSUMS_FILE" ] || ! curl --retry 3 --retry-delay 2 -sfL "${BASE_URL}/checksums.txt" -o "$CHECKSUMS_FILE" 2>/dev/null; then
+    # Through dp_fetch like every other release download, including this file's
+    # own. This line kept a bare `curl --retry` after dp_fetch was written eleven
+    # lines above it, so the one fetch that decides whether ANY binary gets
+    # verified was the one still exposed to a mid-transfer drop — and its failure
+    # is a warning, so a transient blip silently downgraded the whole install to
+    # unverified. The fail-open policy is deliberate and is unchanged: three
+    # attempts, then warn and continue.
+    if [ -z "$CHECKSUMS_FILE" ] || ! dp_fetch "${BASE_URL}/checksums.txt" "$CHECKSUMS_FILE" 2>/dev/null; then
         warn "checksums.txt not available — skipping integrity verification"
         : > "$CHECKSUMS_FILE" 2>/dev/null || CHECKSUMS_FILE=""
     fi

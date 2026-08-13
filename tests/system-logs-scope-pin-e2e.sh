@@ -223,10 +223,48 @@ else
 fi
 
 # ── S10. CONTROL, green at both tags. The endpoints stay admin-only. ─────────
-if [ "$(code "$SL" | grep -c 'require_admin')" -ge 2 ]; then
-  ok "S10 CONTROL both endpoints are still admin-only"
+# ⚠ THIS ARM WAS BLIND UNTIL s354, and blind in the reassuring direction. It
+# counted the gate's name over the WHOLE FILE against a threshold of two — but
+# `code()` strips comments and NOT the import line, so a correct tree counts
+# THREE. Deleting either handler's gate left two, and an arm labelled CONTROL
+# stayed green while the endpoint that returns every tenant's rows answered
+# anyone holding a token. It could only fire when BOTH gates went at once, which
+# is the one case nobody was worried about — it missed the exact single-gate
+# deletion it names itself as controlling for.
+#
+# Two rules it now obeys. Assert each handler SEPARATELY, because a file-wide
+# count is satisfied by whichever occurrence you did not break (#408). And
+# assert the ENUMERATION before trusting it, because an arm that discovers its
+# own subjects reports a confident green over an empty list (#143).
+SL_CODE=$(code "$SL")
+
+# Body from a handler's signature to its own column-0 closing brace. A fixed
+# `grep -A n` window is not a declaration and bleeds into the next function,
+# which is how an arm confidently answers a question about code it never read.
+fnbody() {
+  awk -v want="$1" '
+    $0 ~ ("^pub async fn " want "\\(") { inside = 1 }
+    inside                            { print }
+    inside && /^\}/                   { exit }
+  '
+}
+
+HANDLERS=$(printf '%s\n' "$SL_CODE" | perl -ne 'print "$1\n" if /^pub async fn (\w+)\(/')
+HANDLER_N=$(printf '%s\n' "$HANDLERS" | grep -c '[a-z]')
+if [ "$HANDLER_N" -lt 2 ]; then
+  bad "S10 enumerated $HANDLER_N handlers in system_logs.rs, expected at least 2 — the arm has no subject"
 else
-  bad "S10 CONTROL an endpoint lost its admin gate — the fix widened access"
+  ok "S10 enumerated $HANDLER_N request handlers in system_logs.rs"
+  for fn in $HANDLERS; do
+    BODY=$(printf '%s\n' "$SL_CODE" | fnbody "$fn")
+    if [ "$(printf '%s\n' "$BODY" | grep -c '[^[:space:]]')" -lt 3 ]; then
+      bad "S10 could not extract the body of $fn() — the arm has no subject"
+    elif printf '%s\n' "$BODY" | qgrep -E 'require_admin\(&claims\.role\)'; then
+      ok "S10 CONTROL $fn() is still admin-only"
+    else
+      bad "S10 CONTROL $fn() lost its admin gate — that endpoint answers any authenticated caller"
+    fi
+  done
 fi
 
 # ── S11. CONTROL, green at both tags. The metric must KEEP being written. ────

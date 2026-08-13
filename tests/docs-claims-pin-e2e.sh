@@ -418,6 +418,29 @@ fi
 # below is a FAILURE rather than a skip: otherwise adding a metric would quietly
 # create the blind spot this suite exists to prevent.
 
+# Count axum route registrations under a source tree.
+#
+# ⚠ s354: this used to be `grep -oE '\.route\("[^"]+"'`, which requires the path
+# to sit on the SAME LINE as `.route(`. rustfmt is free to wrap a registration
+# whose path and handlers exceed 100 columns, and NINE routes in this tree are
+# wrapped that way — `/api/ssl/contact-email`, four nginx routes and four
+# wordpress routes. Every one was invisible, so the published figure read 813
+# against a real 821, and it drifted further every time a handler list grew long
+# enough to wrap. A line-anchored count of a construct the formatter may wrap is
+# not a count of that construct.
+#
+# Slurped per file with `perl -0777` so the newline between `.route(` and its
+# path stops mattering. Per FILE, never a concatenated stream: on one stream a
+# file ending in `.route(` could match the next file's opening string literal.
+route_count() {
+  local total=0 n f
+  while IFS= read -r f; do
+    n=$(perl -0777 -ne '$c++ while /\.route\(\s*"[^"]+"/gs; END{print $c+0}' "$f")
+    total=$((total + n))
+  done < <(find "$1" -name '*.rs')
+  echo "$total"
+}
+
 derive() {
   case "$1" in
     "App templates")
@@ -426,8 +449,7 @@ derive() {
       # Routes registered on the two axum routers. The published figure used to
       # be "776 API endpoints (496 backend + 280 agent)" — a decomposition that
       # summed correctly and matched source on neither side.
-      echo $(( $(grep -rhoE '\.route\("[^"]+"' panel/backend/src --include='*.rs' 2>/dev/null | wc -l) \
-              + $(grep -rhoE '\.route\("[^"]+"' panel/agent/src   --include='*.rs' 2>/dev/null | wc -l) )) ;;
+      echo $(( $(route_count panel/backend/src) + $(route_count panel/agent/src) )) ;;
     "Regression-pin assertions")
       # Re-summed from docs/testing.md's own table, independently of §3.
       awk -F'|' '/^\| *`[a-z0-9-]+\.sh` *\|/ { gsub(/ /,"",$3); s+=$3 } END { print s+0 }' docs/testing.md ;;
@@ -530,9 +552,15 @@ fi
 # keeps finding elsewhere.
 
 declare -A SURFACES=(
-  ["Panel services RAM (agent + API)"]="README.md COMPARISON.md docs/getting-started.md"
+  ["Panel services RAM (agent + API)"]="README.md COMPARISON.md docs/getting-started.md website/client/index.html"
   ["Full-stack RAM (with bundled PostgreSQL)"]="COMPARISON.md docs/getting-started.md"
-  ["Panel binaries, all three"]="README.md COMPARISON.md"
+  ["Panel binaries, all three"]="README.md COMPARISON.md website/client/index.html"
+  # s354: the two agent metrics had NO row here at all, so `docs/guides` — the
+  # only surface that publishes them — could not have been checked even if it had
+  # been listed. It published ~20MB/~30MB against a register reading 21/~35 for
+  # 146 days, live on docs.dockpanel.dev, and no arm could see it.
+  ["Agent binary"]="docs/guides/multi-server.md"
+  ["Agent RAM (RSS)"]="docs/guides/multi-server.md"
   ["App templates"]="README.md"
   ["HTTP routes"]="README.md"
   ["Regression-pin assertions"]="README.md docs/testing.md"
@@ -589,11 +617,20 @@ declare -A SUPERSEDED=(
   ["776 API endpoints"]="a count whose own decomposition matched source on neither side; it is 809 routes"
   ["454 E2E tests"]="a total nothing derived; the derived figure is 302 regression assertions"
   ["11 background services"]="there are 15 supervised background services"
+  ["~20MB, ~30MB RAM"]="the agent's size and footprint, published on docs.dockpanel.dev for 146 days against a register reading 21 MB / ~35 MB"
+  ["22 MB on disk"]="binaries on disk in the site's meta tags; the register totals 46 MB, and the tags matched no register row in either figure"
+  ["~52 MB of memory"]="the panel's footprint in the site's meta tags; the two services measure ~49 MB"
 )
 
+# s354 added the last two. `index.html` was the sharpest gap in this list: it is
+# served on EVERY request to dockpanel.dev and is what a search engine and a
+# social preview render, it hardcodes figures instead of quoting
+# `measurements.ts` like the rest of the site, and it sat in neither this list
+# nor the surface map above while both of its neighbours were in both.
 STALE_SURFACES=(README.md COMPARISON.md FEATURES.md docs/getting-started.md
                 docs/testing.md website/client/src/measurements.ts
-                website/client/src/pages/Landing.tsx)
+                website/client/src/pages/Landing.tsx
+                website/client/index.html docs/guides/multi-server.md)
 
 stale_hits=0
 stale_checked=0

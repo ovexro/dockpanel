@@ -124,9 +124,20 @@ Visitors can subscribe to status updates by entering their email on the status p
 
 ### Unsubscribe
 
-Subscribers can unsubscribe by:
-- Using the unsubscribe link in notification emails
-- Sending a DELETE request to `/api/status-page/unsubscribe`
+Subscribers unsubscribe by calling the public endpoint with their address:
+
+```bash
+curl -X DELETE https://your-panel/api/status-page/unsubscribe \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"someone@example.com"}'
+```
+
+`POST` is accepted at the same path and does the same thing.
+
+> **Note:** notification emails do not yet carry a one-click unsubscribe link,
+> so this endpoint is currently the only way off the list. This guide promised
+> such a link until v2.108.0; it was never implemented, and the sentence was
+> removed rather than left standing.
 
 To hide the subscribe form from the public page, disable **Show Subscribe** in the status page config.
 
@@ -188,7 +199,7 @@ To serve the status page on a custom domain (e.g., `status.example.com`), set up
 | `POST` | `/api/status-page/components` | Admin | Create a component |
 | `DELETE` | `/api/status-page/components/{id}` | Admin | Delete a component |
 | `POST` | `/api/status-page/subscribe` | No | Subscribe an email to updates |
-| `DELETE` | `/api/status-page/unsubscribe` | No | Unsubscribe an email |
+| `DELETE` or `POST` | `/api/status-page/unsubscribe` | No | Unsubscribe an email |
 | `GET` | `/api/status-page/subscribers` | Admin | List all subscribers |
 
 The `/api/status-page/public` endpoint returns everything needed to render the status page: config, components with computed status, active/recent incidents with timelines, and auto-detected monitor incidents.

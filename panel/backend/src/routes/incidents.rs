@@ -717,7 +717,11 @@ pub async fn subscribe(
     Ok(Json(serde_json::json!({ "ok": true, "message": "Subscribed to status updates" })))
 }
 
-/// DELETE /api/status-page/unsubscribe — Unsubscribe (public).
+/// DELETE (or POST) /api/status-page/unsubscribe — Unsubscribe (public).
+///
+/// Registered for both methods. This comment said DELETE while the router
+/// accepted POST only, and the published guide followed the comment — so the
+/// documented call 405'd and the working call was written down nowhere.
 pub async fn unsubscribe(
     State(state): State<AppState>,
     Json(req): Json<SubscribeRequest>,

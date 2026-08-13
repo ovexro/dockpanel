@@ -112,6 +112,36 @@ log()    { echo -e "${GREEN}[+]${NC} $1"; }
 warn()   { echo -e "${YELLOW}[!]${NC} $1"; }
 error()  { echo -e "${RED}[x]${NC} $1" >&2; }
 
+# dp_fetch <url> <out> — download, retrying the failures curl's own --retry does
+# not. Same shape as setup.sh's dp_fetch, deliberately: four programs in this
+# repo perform the identical operation against the identical host, and until
+# s354 only the installer retried it at all.
+#
+# `--retry` covers connection refusals, timeouts and some HTTP codes. It does
+# NOT cover a connection dropped MID-TRANSFER, which exits 56 — the error that
+# has aborted real installs against the release CDN. curl grew
+# `--retry-all-errors` for exactly this, but it landed in 7.71 and the installer
+# supports Ubuntu 20.04, which ships 7.68 — so the loop lives in shell, and the
+# four copies stay identical rather than drifting apart.
+#
+# ⚠ `rc=$?` on the line after a bare `if` reads 0, because a false `if` with no
+# `else` is itself a success. Capture with `|| rc=$?` on the command itself.
+# ⚠ Written as explicit `if` blocks, not `[ … ] && …`: under `set -e` a false
+# test at statement level aborts the script.
+dp_fetch() {
+    local url="$1" out="$2" attempt=1 rc=0
+    while [ "$attempt" -le 3 ]; do
+        rc=0
+        curl --retry 3 --retry-delay 2 -sfL "$url" -o "$out" || rc=$?
+        if [ "$rc" -eq 0 ]; then return 0; fi
+        warn "  fetch attempt ${attempt}/3 exited ${rc} — $url"
+        rm -f "$out"
+        attempt=$((attempt + 1))
+        if [ "$attempt" -le 3 ]; then sleep 3; fi
+    done
+    return "$rc"
+}
+
 # ── Checks ────────────────────────────────────────────────────────────────
 if [ "$EUID" -ne 0 ]; then
     error "Run as root"
@@ -348,7 +378,7 @@ if [ "$INSTALL_FROM_RELEASE" = "1" ]; then
     # checksums.txt, a missing entry, or a hash mismatch aborts the upgrade —
     # never install unverified bytes (lesson #25/#48).
     CHECKSUMS=/tmp/dockpanel-checksums.txt
-    if ! curl -sfL "${BASE_URL}/checksums.txt" -o "$CHECKSUMS"; then
+    if ! dp_fetch "${BASE_URL}/checksums.txt" "$CHECKSUMS"; then
         error "Could not download ${BASE_URL}/checksums.txt — refusing to install unverified binaries"
         exit 1
     fi
@@ -369,23 +399,23 @@ if [ "$INSTALL_FROM_RELEASE" = "1" ]; then
     }
 
     log "Downloading agent (${DL_ARCH})..."
-    curl -sfL "${BASE_URL}/dockpanel-agent-linux-${DL_ARCH}" -o /tmp/dockpanel-agent-new
+    dp_fetch "${BASE_URL}/dockpanel-agent-linux-${DL_ARCH}" /tmp/dockpanel-agent-new
     verify_checksum /tmp/dockpanel-agent-new "dockpanel-agent-linux-${DL_ARCH}"
     chmod +x /tmp/dockpanel-agent-new
 
     log "Downloading API (${DL_ARCH})..."
-    curl -sfL "${BASE_URL}/dockpanel-api-linux-${DL_ARCH}" -o /tmp/dockpanel-api-new
+    dp_fetch "${BASE_URL}/dockpanel-api-linux-${DL_ARCH}" /tmp/dockpanel-api-new
     verify_checksum /tmp/dockpanel-api-new "dockpanel-api-linux-${DL_ARCH}"
     chmod +x /tmp/dockpanel-api-new
 
     log "Downloading CLI (${DL_ARCH})..."
-    curl -sfL "${BASE_URL}/dockpanel-cli-linux-${DL_ARCH}" -o /tmp/dockpanel-cli-new
+    dp_fetch "${BASE_URL}/dockpanel-cli-linux-${DL_ARCH}" /tmp/dockpanel-cli-new
     verify_checksum /tmp/dockpanel-cli-new "dockpanel-cli-linux-${DL_ARCH}"
     chmod +x /tmp/dockpanel-cli-new
 
     # Download and extract frontend
     log "Downloading frontend..."
-    curl -sfL "${BASE_URL}/dockpanel-frontend.tar.gz" -o /tmp/dockpanel-frontend.tar.gz
+    dp_fetch "${BASE_URL}/dockpanel-frontend.tar.gz" /tmp/dockpanel-frontend.tar.gz
     verify_checksum /tmp/dockpanel-frontend.tar.gz "dockpanel-frontend.tar.gz"
     FE_DIR="/opt/dockpanel/frontend"
     mkdir -p "$FE_DIR"

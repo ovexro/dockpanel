@@ -94,6 +94,39 @@ log() {
     command -v systemd-cat >/dev/null 2>&1 && echo "[agent-update] $*" | systemd-cat -t "$LOG_TAG" || true
 }
 
+# dp_fetch <url> <out> [max-time] — download, retrying the failures curl's own
+# --retry does not. Same shape as setup.sh's dp_fetch, deliberately: four
+# programs in this repo perform the identical operation against the identical
+# host, and until s354 only the installer retried it at all.
+#
+# `--retry` covers connection refusals, timeouts and some HTTP codes. It does
+# NOT cover a connection dropped MID-TRANSFER, which exits 56 — the error that
+# has aborted real installs against the release CDN. curl grew
+# `--retry-all-errors` for exactly this, but it landed in 7.71 and the installer
+# supports Ubuntu 20.04, which ships 7.68 — so the loop lives in shell, and the
+# four copies stay identical rather than drifting apart.
+#
+# The per-attempt `--max-time` is the caller's, not a new policy: this is the
+# one consumer that already bounded its downloads, and those bounds are kept.
+#
+# ⚠ `rc=$?` on the line after a bare `if` reads 0, because a false `if` with no
+# `else` is itself a success. Capture with `|| rc=$?` on the command itself.
+# ⚠ Written as explicit `if` blocks, not `[ … ] && …`: under `set -e` a false
+# test at statement level aborts the script.
+dp_fetch() {
+    local url="$1" out="$2" maxtime="${3:-600}" attempt=1 rc=0
+    while [ "$attempt" -le 3 ]; do
+        rc=0
+        curl --retry 3 --retry-delay 2 -fsSL --max-time "$maxtime" "$url" -o "$out" || rc=$?
+        if [ "$rc" -eq 0 ]; then return 0; fi
+        log "fetch attempt ${attempt}/3 exited ${rc} — $url"
+        rm -f "$out"
+        attempt=$((attempt + 1))
+        if [ "$attempt" -le 3 ]; then sleep 3; fi
+    done
+    return "$rc"
+}
+
 # Written by every exit path. `ok` is the only field a caller should trust:
 # an exit status can be the status of the wrong process (which is exactly the
 # defect this file was written to fix), a file on disk cannot.
@@ -171,14 +204,14 @@ BASE="https://github.com/${GITHUB_REPO}/releases/download/${TARGET}"
 stage="download"
 WORK="$(mktemp -d "${STATE_DIR}/agent-update-XXXXXX")"
 
-curl -fsSL --max-time 600 "${BASE}/${ASSET}" -o "$WORK/agent" \
+dp_fetch "${BASE}/${ASSET}" "$WORK/agent" 600 \
     || fail download "could not download ${BASE}/${ASSET} (does the release exist?)"
 
 SIZE=$(stat -c %s "$WORK/agent" 2>/dev/null || echo 0)
 [ "$SIZE" -gt 1000000 ] || fail download "downloaded agent is only ${SIZE} bytes"
 
 stage="verify"
-if curl -fsSL --max-time 60 "${BASE}/checksums.txt" -o "$WORK/checksums.txt"; then
+if dp_fetch "${BASE}/checksums.txt" "$WORK/checksums.txt" 60; then
     EXPECT=$(awk -v a="$ASSET" '$2 == a {print $1}' "$WORK/checksums.txt" | head -1)
     if [ -z "$EXPECT" ]; then
         fail verify "checksums.txt for $TARGET has no entry for $ASSET"

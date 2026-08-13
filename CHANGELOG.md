@@ -4,6 +4,78 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.108.0]
+
+### Fixed — a control labelled CONTROL could not see the deletion it named
+
+`system-logs-scope-pin-e2e.sh`'s S10 arm asserted "both endpoints are still
+admin-only" by counting the gate's name across the whole file against a
+threshold of two. The comment stripper it counts through removes comments but
+not the `use` line, so a correct tree counted three. Deleting either handler's
+gate left two, and the arm stayed green — it could only fire when *both* went at
+once, which is the one case nobody was worried about. It missed precisely the
+single-gate deletion it named itself as controlling for, on `GET
+/api/system-logs`, the endpoint that returns every tenant's log rows.
+
+Each handler is now asserted separately, and the enumeration is asserted before
+it is trusted. Proven by deleting each gate in turn: the old arm reported 13
+passed / 0 failed and exit 0 both times; the new one exits 1 and names the
+handler.
+
+### Fixed — the mail installer never applied the configuration it had installed
+
+Every other writer of mail state calls `sync_mail_config`. `mail_install` did
+not, so a box that re-ran the installer kept whatever the sender-login table
+already held — on any box upgrading past v2.106.0, nothing — and stayed
+unprotected until its next mailbox or domain change. The agent's empty-table
+guard is what made this easy to miss: it renders such a box *safe* rather than
+*armed*, so nothing breaks and nothing warns.
+
+The install now applies the configuration as a reported step. It cannot fail the
+install: the `202` is returned before the work starts, so there is no response
+left to carry an error, and the precondition that refuses a rebuild while any
+mail domain names no server is surfaced as a step rather than swallowed.
+
+### Fixed — three of the four programs that download a release never retried
+
+v2.107.0 gave the installer a retry loop for the one failure `curl --retry` does
+not cover: a connection dropped mid-transfer, exit 56, which had aborted three
+real installs against the release CDN. It gave it to the installer only.
+`update.sh`, `agent-self-update.sh` and `deploy-demo.sh` download the same assets
+from the same host and were all still bare — and one bare call was left eleven
+lines below the new function inside `setup.sh` itself, the fetch that decides
+whether any binary gets verified at all.
+
+All four now share the same loop, driven against a server that drops connections
+mid-transfer: an immediate success, a recovery after two exit-56 failures, and a
+permanent failure that gives up after three attempts and leaves no partial file.
+
+### Fixed — published figures that were wrong where readers could see them
+
+- `docs/guides/multi-server.md` described the agent as `~20MB, ~30MB RAM`
+  against a register reading 21 MB / ~35 MB — served on docs.dockpanel.dev for
+  146 days. Neither agent metric had a row in the pin suite's surface map, so no
+  arm could have caught it even if the file had been listed.
+- The marketing site's four meta tags hardcoded `22 MB on disk, ~52 MB of
+  memory`, matching no register row in either figure, while the rest of the site
+  quotes a shared module. They are the first thing a search engine or a social
+  preview renders, and they were in neither the surface map nor the
+  superseded-figures list that already covered both of their neighbours.
+- The route census counted `.route("path"` on a single line, so nine
+  registrations that rustfmt had wrapped were invisible: the published figure
+  read **813 against a real 821**, and drifted further every time a handler list
+  grew long enough to wrap.
+
+### Fixed — the documented way to unsubscribe returned 405
+
+`/api/status-page/unsubscribe` was registered for `POST` only, while the
+handler's own doc comment, the guide's prose and the guide's API table all
+published `DELETE`. Every reader who followed the documentation got a 405, and
+the one method that worked was named on no published surface. The route now
+accepts both. The guide also promised a one-click unsubscribe link in
+notification emails; no such link has ever existed, and the sentence has been
+removed rather than left standing.
+
 ## [2.107.0]
 
 ### Fixed — re-running the mail installer could refuse every authenticated send

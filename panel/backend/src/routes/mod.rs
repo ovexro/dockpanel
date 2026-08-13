@@ -1084,7 +1084,16 @@ pub fn router() -> Router<AppState> {
         .route("/api/status-page/public", get(incidents::public_status_page))
         .route("/api/webhooks/gateway/{token}", post(webhook_gateway::receive_webhook))
         .route("/api/status-page/subscribe", post(incidents::subscribe))
-        .route("/api/status-page/unsubscribe", post(incidents::unsubscribe))
+        // Both methods on purpose. The handler's own doc comment, the guide's
+        // prose and the guide's API table have all published DELETE since this
+        // shipped, while the route accepted POST only — so every reader who
+        // followed the documentation got a 405, and the one method that worked
+        // was named on no published surface. POST stays because the repo's own
+        // e2e calls it and removing it would break a working caller.
+        .route(
+            "/api/status-page/unsubscribe",
+            post(incidents::unsubscribe).delete(incidents::unsubscribe),
+        )
         .route("/api/terminal/shared/{id}", get(terminal::view_shared))
         // Heartbeat endpoint (no auth — monitor validates by ID)
         .route("/api/heartbeat/{monitor_id}/{token}", post(monitors::heartbeat))

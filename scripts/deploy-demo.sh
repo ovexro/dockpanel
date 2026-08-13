@@ -72,9 +72,39 @@ echo "=== BEFORE ==="
 curl -s -m 8 "https://$DEMO_HOST/api/health"; echo
 dockpanel --version || true
 
+# dp_fetch <url> <out> — download, retrying the failures curl's own --retry does
+# not. Same shape as setup.sh's dp_fetch, deliberately: four programs in this
+# repo perform the identical operation against the identical host, and until
+# s354 only the installer retried it at all.
+#
+# `--retry` covers connection refusals, timeouts and some HTTP codes. It does
+# NOT cover a connection dropped MID-TRANSFER, which exits 56 — the error that
+# has aborted real installs against the release CDN. curl grew
+# `--retry-all-errors` for exactly this, but it landed in 7.71 and the installer
+# supports Ubuntu 20.04, which ships 7.68 — so the loop lives in shell, and the
+# four copies stay identical rather than drifting apart.
+#
+# ⚠ `rc=$?` on the line after a bare `if` reads 0, because a false `if` with no
+# `else` is itself a success. Capture with `|| rc=$?` on the command itself.
+# ⚠ Written as explicit `if` blocks, not `[ … ] && …`: under `set -e` a false
+# test at statement level aborts the script.
+dp_fetch() {
+    local url="$1" out="$2" attempt=1 rc=0
+    while [ "$attempt" -le 3 ]; do
+        rc=0
+        curl --retry 3 --retry-delay 2 -fsSL "$url" -o "$out" || rc=$?
+        if [ "$rc" -eq 0 ]; then return 0; fi
+        echo "  fetch attempt ${attempt}/3 exited ${rc} — $url" >&2
+        rm -f "$out"
+        attempt=$((attempt + 1))
+        if [ "$attempt" -le 3 ]; then sleep 3; fi
+    done
+    return "$rc"
+}
+
 echo "=== download $TAG assets ==="
 for a in "${ASSETS[@]}"; do
-    curl -fsSL -o "$TMP/$a" "$BASE/$a"
+    dp_fetch "$BASE/$a" "$TMP/$a"
     echo "  $a $(stat -c%s "$TMP/$a") bytes"
 done
 
@@ -86,8 +116,8 @@ done
 # published tag, so a manifest that will not fetch is a reason to stop rather
 # than a reason to shrug.
 CHECKSUMS="$TMP/checksums.txt"
-if ! curl -fsSL -o "$CHECKSUMS" "$BASE/checksums.txt"; then
-    echo "REFUSING: could not fetch $BASE/checksums.txt — will not install unverified binaries"; exit 1
+if ! dp_fetch "$BASE/checksums.txt" "$CHECKSUMS"; then
+    echo "REFUSING: could not fetch $BASE/checksums.txt after 3 attempts — will not install unverified binaries"; exit 1
 fi
 for a in "${ASSETS[@]}"; do
     want=$(awk -v n="$a" '$2 == n {print $1; exit}' "$CHECKSUMS")
