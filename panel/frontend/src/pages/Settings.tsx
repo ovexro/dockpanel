@@ -135,6 +135,7 @@ export default function Settings() {
 
   // Form state
   const [panelName, setPanelName] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
   const [panelIps, setPanelIps] = useState("");
   const [smtpProvider, setSmtpProvider] = useState("custom");
   const [smtpHost, setSmtpHost] = useState("");
@@ -221,6 +222,7 @@ export default function Settings() {
       const data = await api.get<Record<string, string>>("/settings");
       setSettings(data);
       setPanelName(data.panel_name || "");
+      setBaseUrl(data.base_url || "");
       setPanelIps(data.allowed_panel_ips || "");
       setSmtpHost(data.smtp_host || "");
       setSmtpPort(data.smtp_port || "");
@@ -349,7 +351,7 @@ export default function Settings() {
     setSaving("general");
     setMessage({ text: "", type: "" });
     try {
-      await api.put("/settings", { panel_name: panelName });
+      await api.put("/settings", { panel_name: panelName, base_url: baseUrl.trim() });
       setMessage({ text: "General settings saved", type: "success" });
     } catch (e) {
       setMessage({
@@ -535,6 +537,22 @@ export default function Settings() {
                 className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
                 placeholder="DockPanel"
               />
+            </div>
+            <div>
+              <label htmlFor="base_url" className="block text-sm font-medium text-dark-100 mb-1">Panel URL</label>
+              <input
+                id="base_url"
+                type="url"
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
+                placeholder="https://panel.example.com"
+              />
+              <p className="text-xs text-dark-200 mt-1">
+                Where this panel is reachable. Alert notifications use it to link to the
+                matching runbook — leave it empty and alerts are still delivered, but
+                without the link.
+              </p>
             </div>
             <div className="flex justify-end">
               <button

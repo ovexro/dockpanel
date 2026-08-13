@@ -30,10 +30,16 @@ use crate::routes::is_valid_domain;
 use crate::routes::reseller_dashboard::check_reseller_quota;
 use crate::services::domain_claim;
 
-/// Effective per-user site-creation ceiling per hour, shared by `create` and
-/// `clone` so the two cannot drift apart. `security_site_rate_limit` holds the
-/// count; 0 means no limit. Absent row falls back to the seeded default of 3.
-async fn site_rate_limit(pool: &sqlx::PgPool) -> i64 {
+/// Effective per-user site-creation ceiling per hour, shared by every handler
+/// that writes a `sites` row so they cannot drift apart. `security_site_rate_limit`
+/// holds the count; 0 means no limit. Absent row falls back to the seeded default of 3.
+///
+/// Visible to the crate since v2.110.0, when the staging module became the third
+/// caller. It was private while two of the four site-creating handlers lived in
+/// this file, which is precisely why the third one — in another module, and
+/// therefore unable to call this even had its author looked — was written with a
+/// ceiling of its own: none.
+pub(crate) async fn site_rate_limit(pool: &sqlx::PgPool) -> i64 {
     match crate::services::security_hardening::get_setting_i64(pool, "security_site_rate_limit", 3)
         .await
     {

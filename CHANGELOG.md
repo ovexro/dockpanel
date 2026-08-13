@@ -4,6 +4,79 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.110.0]
+
+### Fixed — the lockdown blocked the terminal, said so on the page, and left a second shell open
+
+DockPanel has two surfaces that hand an operator a live shell. The Terminal page
+is one. The other is the shell console on the Apps page, which posts a command
+string the agent runs as `docker exec <container> sh -c <command>`.
+
+A lockdown refused the first at three doors and the second at none. It could not
+have refused it: the handler bound its application state as `_state`, so it was
+structurally incapable of asking whether a lockdown was in force. Meanwhile
+`GET /api/security/lockdown` reported `terminals_blocked: true`, and the Security
+page rendered that as a reassurance — a field introduced specifically so that
+"the page and the gate cannot drift apart".
+
+`require_admin` was not the mitigation it resembled. A lockdown is declared
+precisely when an admin session is believed compromised — that is what the
+suspicious-event threshold detects — so the role gate is the credential the
+intruder is assumed to hold. The reasoning was already written down at the
+terminal mint: refusing one live session on the host while permitting another
+"would leave the flag half-honoured in the direction that helps an intruder".
+
+Both container-shell doors now consult the terminal module's own predicate,
+before dispatching to the agent, so they cannot answer differently from the three
+that already did. The shell-availability probe is included: the agent answers it
+by running `docker exec <container> which bash`, which is execution on the host
+and the step the console takes immediately before opening a shell.
+
+### Fixed — a staging environment could be created during a lockdown, without limit
+
+Four handlers write a `sites` row. Two of them refuse during a lockdown and
+enforce the per-hour creation ceiling; when a previous release gave the second of
+those the guards the first already had, it recorded the rule in general terms —
+that a handler creating a site "must enforce the SAME admission controls
+`create()` does — otherwise it is a `create()` with none of the guards" — and
+reached only as far as the sibling in its own file.
+
+Staging creation, in another module, had neither guard. A per-parent uniqueness
+check bounds a tenant to one staging environment per site, which is why this
+never resembled mass creation, but the bound is per parent rather than per
+tenant: an account holding many sites could mint that many more rows, each with a
+vhost and a cloned document root, while the panel was locked down.
+
+It now carries both, using the same predicate and reading the ceiling from the
+one definition rather than a second copy of the number. The bulk importer — the
+fourth door, and the only one that writes sites in bulk — gains the lockdown
+refusal at its entry point and is deliberately exempt from the ceiling, with the
+reason recorded: an import is an operator asking for many sites from a source
+they named, and a limit of three would break the feature rather than guard it.
+
+### Fixed — the panel's own URL could be read but never set
+
+Alert notifications build an "Open runbook" link from a `base_url` setting. The
+key was read from the settings table, absent from the list of keys the settings
+API accepts, and absent from the settings page — so the lookup fell through to an
+environment variable no interface mentions and then to the empty string, and the
+payload builder answers an empty base by omitting the link rather than by
+failing.
+
+Every alert therefore shipped without its runbook link, on every install that had
+not set that variable, with nothing to tell an operator it was missing. `base_url`
+is now settable, validated as an absolute HTTP(S) URL, and has a field on the
+General settings tab. Empty remains legal and is the documented "no link" state.
+
+### Added — a regression pin that censuses the doors rather than listing them
+
+`lockdown-door-census-pin-e2e.sh` enumerates every handler that proxies to a
+container-execution endpoint and every handler that writes a `sites` row, then
+judges each one, so a door added later is judged too. It also asserts that the
+execution handlers remain *able* to consult the lockdown, because the defect
+above shipped as a binding rather than as a missing call, and an arm that checks
+only for the call would have stayed green on it.
+
 ## [2.109.0]
 
 ### Fixed — one container recovering resolved every other container's alert

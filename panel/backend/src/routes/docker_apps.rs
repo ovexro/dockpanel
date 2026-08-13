@@ -1107,12 +1107,26 @@ pub async fn update_limits(
 }
 
 /// GET /api/apps/{container_id}/shell-info — Get shell availability.
+///
+/// Gated on the lockdown for the same reason the exec below is: the agent
+/// answers this by running `docker exec <id> which bash` inside the container,
+/// so it is command execution on the host, and it is the step the Apps console
+/// takes immediately before opening a shell. Closing the exec and leaving its
+/// own probe open would be hardening that stops one step short.
 pub async fn shell_info(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    if crate::routes::terminal::terminals_locked_down(&state.db).await {
+        return Err(err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "System is in lockdown mode. Container shell access is disabled until \
+             an administrator unlocks the panel (Security → Lockdown).",
+        ));
+    }
+
     require_admin(&claims.role)?;
     if !is_valid_container_id(&container_id) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
@@ -1125,13 +1139,42 @@ pub async fn shell_info(
 }
 
 /// POST /api/apps/{container_id}/exec — Execute a command inside a container.
+///
+/// The panel has two surfaces that hand an operator a live shell, and until
+/// v2.110.0 the lockdown only closed one of them. The Terminal page is refused
+/// at three doors; this one — the Apps console, which posts an arbitrary string
+/// the agent runs as `docker exec <id> sh -c <cmd>` — read no lockdown state at
+/// all, and could not have: `State` was bound as `_state`, so the handler was
+/// structurally incapable of asking. Meanwhile `GET /api/security/lockdown`
+/// reported `terminals_blocked: true` to the page, under a comment saying that
+/// field exists so "the page and the gate cannot drift apart".
+///
+/// `require_admin` is not the mitigation it looks like here. A lockdown is
+/// declared precisely when an admin session is believed compromised — it is
+/// what the suspicious-event threshold detects — so the role gate is the
+/// credential the intruder is assumed to hold. The reasoning is the sibling's,
+/// written at the terminal mint: refusing one live session on the host while
+/// permitting another "would leave the flag half-honoured in the direction that
+/// helps an intruder".
+///
+/// Placed above the role gate for the same reason it is there, and calling the
+/// terminal module's own predicate rather than re-deriving it, so this door and
+/// the three it joins cannot answer differently.
 pub async fn exec_command(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     ServerScope(_server_id, agent): ServerScope,
     Path(container_id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    if crate::routes::terminal::terminals_locked_down(&state.db).await {
+        return Err(err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "System is in lockdown mode. Container shell access is disabled until \
+             an administrator unlocks the panel (Security → Lockdown).",
+        ));
+    }
+
     require_admin(&claims.role)?;
     if !is_valid_container_id(&container_id) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));

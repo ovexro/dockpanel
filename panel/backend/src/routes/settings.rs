@@ -61,6 +61,16 @@ pub const ALLOWED_KEYS: &[&str] = &[
     // (routes/terminal.rs). Both were documented or relied upon while no API
     // accepted them and no control existed.
     "allowed_panel_ips", "server_terminal_disabled",
+    // The same class again, found in the v2.110.0 door census: the panel's own
+    // public URL, read by services/notifications.rs to build the "Open runbook"
+    // link every alert carries. It was read from this table, absent from this
+    // list, and absent from the settings page — so the lookup fell through to a
+    // BASE_URL env var and then to the empty string, and the payload builder
+    // answers an empty base by omitting the link rather than by failing. Every
+    // alert therefore shipped without its runbook link, on every install that
+    // did not happen to set an environment variable no UI mentions, with no way
+    // for an operator to notice or correct it.
+    "base_url",
 ];
 
 /// GET /api/settings — Returns all settings as a key/value map (admin only).
@@ -134,6 +144,23 @@ pub async fn update(
     if let Some(url) = body.get("logo_url") {
         if !url.is_empty() && !url.starts_with("https://") && !url.starts_with("http://") && !url.starts_with("/") {
             return Err(err(StatusCode::BAD_REQUEST, "logo_url must be an HTTP(S) URL or relative path"));
+        }
+    }
+
+    // Validate base_url. Unlike `logo_url` a relative value is useless here: the
+    // reader concatenates this with a runbook path to build a link that leaves
+    // the panel, in an email or a chat message, where nothing supplies an origin.
+    // Empty stays legal and is the documented "no link" state, so an operator can
+    // clear it deliberately.
+    if let Some(url) = body.get("base_url") {
+        let trimmed = url.trim();
+        if !trimmed.is_empty()
+            && !(trimmed.starts_with("https://") || trimmed.starts_with("http://"))
+        {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "base_url must be an absolute HTTP(S) URL, e.g. https://panel.example.com",
+            ));
         }
     }
 

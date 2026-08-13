@@ -367,6 +367,24 @@ pub async fn import(
     Json(body): Json<ImportRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     require_admin(&claims.role)?;
+
+    // The fourth handler that writes `sites` rows, and the only one that writes
+    // them in bulk: this starts a background job that imports every analysed
+    // domain at once. Gated here, at the entry point, rather than in that loop —
+    // a lockdown declared mid-import should not tear down a run already in
+    // flight and leave half a migration behind, and the loop's own domain claim
+    // stays the authority on individual rows.
+    //
+    // Deliberately WITHOUT the per-hour ceiling the other three carry. That
+    // ceiling exists to bound how many sites an account can conjure; a bulk
+    // import is an operator asking for exactly that, from a source they named,
+    // and applying a limit of three would break the feature rather than guard it.
+    // A lockdown is the different question — whether the panel should be creating
+    // anything at all right now — and the answer there is the same as everywhere.
+    if crate::services::security_hardening::is_locked_down(&state.db).await {
+        return Err(err(StatusCode::SERVICE_UNAVAILABLE, "System is in lockdown mode"));
+    }
+
     // Verify migration exists, belongs to user, and is analyzed
     let migration: Migration = sqlx::query_as(
         "SELECT * FROM migrations WHERE id = $1 AND user_id = $2",

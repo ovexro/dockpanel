@@ -98,6 +98,52 @@ pub async fn create(
     headers: axum::http::HeaderMap,
     Json(body): Json<CreateStagingRequest>,
 ) -> Result<(StatusCode, Json<Site>), ApiError> {
+    // A staging environment is a `sites` row. The panel has four handlers that
+    // write one, and the admission controls the other three enforce were written
+    // into `sites::clone_site` with a comment stating the rule in general terms —
+    // that a handler creating a site "must enforce the SAME admission controls
+    // create() does — otherwise it is a create() with none of the guards". That
+    // fix reached the sibling in its own file and stopped there.
+    //
+    // So this door stayed open. The per-site uniqueness check below bounds a
+    // tenant to one staging environment per parent, which is why this never read
+    // as mass creation — but the bound is per parent, not per tenant, so an
+    // account holding N sites could mint N more rows, each with a vhost and a
+    // cloned document root, during a declared lockdown.
+    //
+    // Both guards are the sibling's own: the same predicate, the same status, and
+    // the shared ceiling rather than a second copy of the number.
+    if crate::services::security_hardening::is_locked_down(&state.db).await {
+        return Err(err(StatusCode::SERVICE_UNAVAILABLE, "System is in lockdown mode"));
+    }
+    {
+        let max_sites: i64 = crate::routes::sites::site_rate_limit(&state.db).await;
+        let recent: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sites WHERE user_id = $1 AND created_at > NOW() - INTERVAL '1 hour'",
+        )
+        .bind(claims.sub)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or((0,));
+        if recent.0 >= max_sites {
+            let _ = crate::services::security_hardening::record_suspicious_event(
+                &state.db,
+                "site.rate_limit_hit",
+                Some(&claims.email),
+                None,
+                Some(&format!(
+                    "User tried to create staging site #{} in 1 hour",
+                    recent.0 + 1
+                )),
+            )
+            .await;
+            return Err(err(
+                StatusCode::TOO_MANY_REQUESTS,
+                &format!("Site creation rate limit: max {max_sites} sites per hour"),
+            ));
+        }
+    }
+
     let parent = get_site(&state, id, &claims).await?;
 
     if parent.status != "active" {
