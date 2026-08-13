@@ -411,6 +411,7 @@ async fn auto_restart_services(pool: &PgPool, agents: &AgentRegistry) {
                 Some(server_id),
                 None,
                 "service_down",
+                service_name,
                 &format!("Service {} auto-healed on {}", service_name, server_name),
                 &format!(
                     "The {} service was automatically restarted by auto-healer on server {}.",
@@ -647,6 +648,7 @@ async fn auto_clean_disk(pool: &PgPool, agents: &AgentRegistry) {
             Some(server_id),
             None,
             "disk",
+            "",
             &format!("DISK recovered on {server_name}"),
             &format!("Automatic disk cleanup freed space on server {server_name}"),
         )
@@ -720,6 +722,7 @@ async fn ssl_renewal_blocked(
         None,
         Some(site_id),
         "ssl_renewal_failure",
+        "",
         "critical",
         &format!("SSL renewal blocked: {domain}"),
         &format!(
@@ -1043,6 +1046,7 @@ async fn auto_renew_ssl(pool: &PgPool, agents: &AgentRegistry) {
                 Some(*server_id),
                 Some(*site_id),
                 "ssl_renewal_failure",
+                "",
                 "critical",
                 &format!("SSL renewal failed: {domain}"),
                 &format!(

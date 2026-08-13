@@ -219,6 +219,7 @@ pub async fn trigger_scan(
             Some(server_id),
             None,
             "security",
+            "",
             severity,
             &alert_title,
             &alert_message,

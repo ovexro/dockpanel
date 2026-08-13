@@ -338,6 +338,7 @@ pub async fn run_now(
             None,
             Some(id),
             "cron_failure",
+            "",
             "warning",
             &alert_subject,
             &alert_message,

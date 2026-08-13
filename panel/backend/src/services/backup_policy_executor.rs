@@ -732,6 +732,7 @@ async fn execute_policy(db: &PgPool, agents: &AgentRegistry, policy: &PolicyRow,
         notifications::fire_alert(
             db, policy.user_id, policy.server_id, None,
             "backup_failure",
+            "",
             // An off-site copy that didn't happen is serious but recoverable on the
             // next run, and the data is still on disk. Don't page at the same
             // urgency as "the backup did not happen at all".

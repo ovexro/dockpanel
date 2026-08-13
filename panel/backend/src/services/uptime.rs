@@ -196,17 +196,23 @@ async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &Pg
             // deduced for parameter $3", and the statement never prepares. The
             // first rewrite of this fix had exactly that fault and looked
             // perfectly correct on the page.
-            "INSERT INTO alerts (user_id, site_id, alert_type, severity, title, message, status) \
-             SELECT $1, $2, 'slow_response', 'warning', $3::text, $4::text, 'firing' \
+            //
+            // Dedup keys on `state_key` (the monitor's id) rather than on the
+            // title, because the title carries the monitor's NAME: renaming a
+            // slow monitor used to raise a second firing alert for the same
+            // subject, and the rename made the first one unreachable.
+            "INSERT INTO alerts (user_id, site_id, alert_type, state_key, severity, title, message, status) \
+             SELECT $1, $2, 'slow_response', $5::text, 'warning', $3::text, $4::text, 'firing' \
              WHERE NOT EXISTS ( \
                  SELECT 1 FROM alerts \
                  WHERE alert_type = 'slow_response' AND status = 'firing' \
-                   AND user_id = $1 AND title = $3::text)"
+                   AND user_id = $1 AND state_key = $5::text)"
         )
         .bind(monitor.user_id)
         .bind(monitor.site_id)
         .bind(format!("Slow response: {}", monitor.name))
         .bind(format!("Response time {}ms exceeds 5000ms threshold for {}", response_time, monitor.url))
+        .bind(monitor.id.to_string())
         .execute(pool)
         .await {
             tracing::error!("Failed to record slow-response alert for {}: {e}", monitor.name);
@@ -220,6 +226,34 @@ async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &Pg
             &format!("Slow response: {} ({}ms)", monitor.name, response_time),
             Some(&format!("URL: {}, threshold: 5000ms", monitor.url)),
         ).await;
+    } else if new_status == "up" {
+        // The recovery half, absent since the alert was first written.
+        //
+        // A firing row with no resolve path is worse than no alert at all: the
+        // dedup guard above reads it and suppresses every subsequent
+        // slow-response alert for this monitor, so the one stuck row also
+        // blinds the check that created it. Meanwhile it stays visible to
+        // `check_escalations` through `idx_alerts_escalation_sweep`
+        // (status = 'firing' AND acknowledged_at IS NULL), which keeps paging
+        // on-call about a site that got faster hours ago.
+        //
+        // `resolve_alert` no-ops when nothing was firing, so the common case —
+        // a fast site staying fast — costs one indexed UPDATE returning zero
+        // rows and sends nothing.
+        crate::services::notifications::resolve_alert(
+            pool,
+            monitor.user_id,
+            None,
+            monitor.site_id,
+            "slow_response",
+            &monitor.id.to_string(),
+            &format!("Slow response resolved: {}", monitor.name),
+            &format!(
+                "Response time is back to {}ms, under the 5000ms threshold, for {}",
+                response_time, monitor.url
+            ),
+        )
+        .await;
     }
 
     // Handle status transitions

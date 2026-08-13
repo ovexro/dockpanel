@@ -702,6 +702,22 @@ pub async fn dispatch_escalation_step(
     }
 }
 
+/// Is this alert type on the user's suppression list (Gap #69)?
+///
+/// Single-sourced because the mute has to mean the same thing on both edges of
+/// an alert's life. It was applied on the firing path and skipped on the resolve
+/// path, so muting a type silenced the page and still delivered the recovery —
+/// a suppression that only half-suppresses is worse than none, because the
+/// operator sees "Resolved: X" for an X they were never told about.
+fn is_type_muted(channels: &NotifyChannels, alert_type: &str) -> bool {
+    !channels.muted_types.is_empty()
+        && channels
+            .muted_types
+            .split(',')
+            .map(|s| s.trim())
+            .any(|t| t == alert_type)
+}
+
 /// Phase 4 W3: send to one user's channels with that user's own mute
 /// preference applied. Used by `dispatch_escalation_step` to honour the
 /// routed user's per-type mute even when escalation routes them in.
@@ -730,16 +746,7 @@ async fn fanout_to_user(
         );
         return false;
     };
-    let is_muted = if !channels.muted_types.is_empty() {
-        channels
-            .muted_types
-            .split(',')
-            .map(|s| s.trim())
-            .any(|t| t == alert_type)
-    } else {
-        false
-    };
-    if is_muted {
+    if is_type_muted(&channels, alert_type) {
         tracing::debug!(
             "Alert type '{alert_type}' muted for routed user {user_id} — skipping external channels"
         );
@@ -920,17 +927,26 @@ pub async fn get_gpu_thresholds(
 
 /// Fire an alert: check cooldown, record in alerts table, send notification.
 /// Convenience wrapper that ignores errors (for callers that don't need retry).
+///
+/// `state_key` names the entity this alert is about — the container name, the
+/// service name, the GPU index — and MUST be the same key the caller writes to
+/// `alert_state.state_key`. Pass `""` for a condition about the server as a
+/// whole (disk, CPU, memory). It is a required argument rather than an
+/// `Option` with a default precisely so that a new alert type cannot inherit
+/// the unscoped behaviour by saying nothing: see `resolve_alert`, where the
+/// absence of this key resolved every sibling alert on the server.
 pub async fn fire_alert(
     pool: &PgPool,
     user_id: Uuid,
     server_id: Option<Uuid>,
     site_id: Option<Uuid>,
     alert_type: &str,
+    state_key: &str,
     severity: &str,
     title: &str,
     message: &str,
 ) {
-    let _ = try_fire_alert(pool, user_id, server_id, site_id, alert_type, severity, title, message).await;
+    let _ = try_fire_alert(pool, user_id, server_id, site_id, alert_type, state_key, severity, title, message).await;
 }
 
 /// Fire an alert unless one of the same type already fired for the same site
@@ -947,6 +963,7 @@ pub async fn fire_alert_deduped(
     server_id: Option<Uuid>,
     site_id: Option<Uuid>,
     alert_type: &str,
+    state_key: &str,
     severity: &str,
     title: &str,
     message: &str,
@@ -954,13 +971,19 @@ pub async fn fire_alert_deduped(
 ) {
     // within_hours is a typed i64 — safe to interpolate, and it keeps Postgres
     // from having to infer a parameter type inside an interval expression.
+    //
+    // The dedup window is scoped by `state_key` too: two different certificates
+    // on the same site are two different subjects, and suppressing the second
+    // because the first fired is the same conflation `resolve_alert` used to
+    // make in the other direction.
     let recent: Option<(i64,)> = sqlx::query_as(&format!(
         "SELECT COUNT(*) FROM alerts \
-         WHERE alert_type = $1 AND site_id IS NOT DISTINCT FROM $2 \
+         WHERE alert_type = $1 AND site_id IS NOT DISTINCT FROM $2 AND state_key = $3 \
          AND created_at > NOW() - INTERVAL '{within_hours} hours'",
     ))
     .bind(alert_type)
     .bind(site_id)
+    .bind(state_key)
     .fetch_optional(pool)
     .await
     .ok()
@@ -970,7 +993,7 @@ pub async fn fire_alert_deduped(
         return;
     }
 
-    fire_alert(pool, user_id, server_id, site_id, alert_type, severity, title, message).await;
+    fire_alert(pool, user_id, server_id, site_id, alert_type, state_key, severity, title, message).await;
 }
 
 /// Fire an alert with Result return for retry support.
@@ -980,6 +1003,7 @@ pub async fn try_fire_alert(
     server_id: Option<Uuid>,
     site_id: Option<Uuid>,
     alert_type: &str,
+    state_key: &str,
     severity: &str,
     title: &str,
     message: &str,
@@ -989,15 +1013,18 @@ pub async fn try_fire_alert(
         return Ok(());
     }
 
-    // Record in alerts table
+    // Record in alerts table. `state_key` mirrors `alert_state.state_key` so the
+    // resolve path can target this exact entity's row rather than every row of
+    // this type on the server.
     sqlx::query(
-        "INSERT INTO alerts (user_id, server_id, site_id, alert_type, severity, title, message) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO alerts (user_id, server_id, site_id, alert_type, state_key, severity, title, message) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(user_id)
     .bind(server_id)
     .bind(site_id)
     .bind(alert_type)
+    .bind(state_key)
     .bind(severity)
     .bind(title)
     .bind(message)
@@ -1124,49 +1151,101 @@ pub async fn notify_panel(
 }
 
 /// Resolve a firing alert and send recovery notification.
+///
+/// `state_key` MUST be the key the matching fire used, and the same one the
+/// caller clears in `alert_state`. Scoping is not a refinement here, it is the
+/// correctness property: `alert_state` is keyed
+/// `(server_id, alert_type, state_key)` while this UPDATE was keyed only
+/// `(user_id, server_id, alert_type)`, so one container recovering resolved the
+/// alert rows of every other container down on that server. Those siblings kept
+/// `alert_state.current_state = 'firing'`, and a transition-triggered engine
+/// never re-announces a condition it believes it already announced — so the
+/// remaining outages went silent permanently.
+///
+/// The recovery page is sent only if this call actually resolved something.
+/// "Resolved: X" for a condition that was never firing is a false all-clear, and
+/// two live callers (`auto_healer`'s service and disk heals) reach here without
+/// checking first.
 pub async fn resolve_alert(
     pool: &PgPool,
     user_id: Uuid,
     server_id: Option<Uuid>,
     site_id: Option<Uuid>,
     alert_type: &str,
+    state_key: &str,
     title: &str,
     message: &str,
 ) {
-    // Resolve firing alerts of this type
+    // Resolve firing alerts of this type FOR THIS ENTITY.
+    //
+    // The third arm exists because `monitors.site_id` is nullable: a monitor
+    // that watches a bare URL fires with both ids NULL, and before `state_key`
+    // there was no way to name what such an alert was about, so this function
+    // could only refuse. A non-empty key IS the scope — it identifies one
+    // subject inside one user's alerts — so that case is now resolvable. Both
+    // ids NULL *and* an empty key is still a refusal: that would match every
+    // server-wide alert the user has.
     let query = if server_id.is_some() {
         "UPDATE alerts SET status = 'resolved', resolved_at = NOW() \
-         WHERE user_id = $1 AND server_id = $2 AND alert_type = $3 AND status = 'firing'"
+         WHERE user_id = $1 AND server_id = $2 AND alert_type = $3 AND state_key = $4 AND status = 'firing'"
     } else if site_id.is_some() {
         "UPDATE alerts SET status = 'resolved', resolved_at = NOW() \
-         WHERE user_id = $1 AND site_id = $2 AND alert_type = $3 AND status = 'firing'"
+         WHERE user_id = $1 AND site_id = $2 AND alert_type = $3 AND state_key = $4 AND status = 'firing'"
+    } else if !state_key.is_empty() {
+        // `$2::uuid` is cast because this arm never references it for anything
+        // else, and an unadorned parameter Postgres cannot type is precisely how
+        // the slow-response INSERT stayed dead for months (see `uptime.rs`).
+        // Keeping the bind keeps one `.bind()` chain for all three arms.
+        "UPDATE alerts SET status = 'resolved', resolved_at = NOW() \
+         WHERE user_id = $1 AND $2::uuid IS NULL AND alert_type = $3 AND state_key = $4 AND status = 'firing'"
     } else {
-        return;
-    };
-
-    let Some(id) = server_id.or(site_id) else {
-        tracing::warn!("resolve_alert called with no server_id or site_id");
-        return;
-    };
-    let _ = sqlx::query(query)
-        .bind(user_id)
-        .bind(id)
-        .bind(alert_type)
-        .execute(pool)
-        .await;
-
-    // Send recovery notification
-    if let Some(channels) = get_user_channels(pool, user_id, server_id).await {
-        let subject = format!("DockPanel Resolved: {title}");
-        let html = format!(
-            "<div style=\"font-family:sans-serif;max-width:600px;margin:0 auto\">\
-             <h2 style=\"color:#10b981\">{title}</h2>\
-             <p>{message}</p>\
-             <p style=\"color:#6b7280;font-size:14px\">Time: {}</p>\
-             </div>",
-            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+        tracing::warn!(
+            "resolve_alert called for '{alert_type}' with no server_id, no site_id and no state_key — refusing to resolve unscoped"
         );
-        send_notification(pool, &channels, &subject, message, &html).await;
+        return;
+    };
+
+    let resolved = match sqlx::query(query)
+        .bind(user_id)
+        .bind(server_id.or(site_id))
+        .bind(alert_type)
+        .bind(state_key)
+        .execute(pool)
+        .await
+    {
+        Ok(r) => r.rows_affected(),
+        Err(e) => {
+            // A failed UPDATE must not become a recovery page: the condition may
+            // well still be firing, and this is the direction that reassures.
+            tracing::warn!("resolve_alert UPDATE failed for '{alert_type}' key '{state_key}': {e}");
+            return;
+        }
+    };
+
+    if resolved == 0 {
+        tracing::debug!(
+            "resolve_alert: nothing firing for '{alert_type}' key '{state_key}' — no recovery notice sent"
+        );
+        return;
+    }
+
+    // Send recovery notification, honouring the same per-type mute the firing
+    // path honours. A muted type that pages on recovery is still a page.
+    if let Some(channels) = get_user_channels(pool, user_id, server_id).await {
+        if is_type_muted(&channels, alert_type) {
+            tracing::debug!("Alert type '{alert_type}' muted for user {user_id} — skipping recovery notice");
+        } else {
+            let subject = format!("DockPanel Resolved: {title}");
+            let html = format!(
+                "<div style=\"font-family:sans-serif;max-width:600px;margin:0 auto\">\
+                 <h2 style=\"color:#10b981\">{title}</h2>\
+                 <p>{message}</p>\
+                 <p style=\"color:#6b7280;font-size:14px\">Time: {}</p>\
+                 </div>",
+                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+            );
+            send_notification(pool, &channels, &subject, message, &html).await;
+        }
     }
 
     // Panel notification center

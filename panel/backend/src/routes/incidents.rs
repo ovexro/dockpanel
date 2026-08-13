@@ -248,10 +248,20 @@ pub async fn update(
     }
 
     // Handle resolved_at
-    let resolved_at_clause = if req.status.as_deref() == Some("resolved") {
-        ", resolved_at = NOW()"
-    } else {
-        ""
+    //
+    // Reopening had to clear it and did not. The stamp survived the transition
+    // back to a live status, so the public status page rendered "Resolved <n>
+    // ago" (PublicStatusPage.tsx) for an incident whose own status said
+    // `investigating` — the page contradicted itself, and the more prominent
+    // half was the reassuring one.
+    //
+    // `postmortem` follows a resolution rather than undoing it, so it keeps the
+    // stamp. `None` and `""` mean the caller is editing something else (a
+    // description, a severity) and must not disturb the timestamp at all.
+    let resolved_at_clause = match req.status.as_deref() {
+        Some("resolved") => ", resolved_at = NOW()",
+        Some("investigating") | Some("identified") | Some("monitoring") => ", resolved_at = NULL",
+        _ => "",
     };
 
     let query = format!(
@@ -419,7 +429,16 @@ pub async fn post_update(
             notifications::notify_panel(&state.db, Some(claims.sub), &format!("Resolved: {}", title), "Incident has been resolved", "info", "incident", Some("/incidents")).await;
         }
     } else {
-        let _ = sqlx::query("UPDATE managed_incidents SET status = $2, updated_at = NOW() WHERE id = $1")
+        // Same reopen rule as the PUT path: a move back to a live status clears
+        // the resolution stamp, `postmortem` keeps it. Both entry points write
+        // this column, so fixing one and not the other would leave the defect
+        // reachable through whichever endpoint the UI happens to call.
+        let sql = if matches!(req.status.as_str(), "investigating" | "identified" | "monitoring") {
+            "UPDATE managed_incidents SET status = $2, resolved_at = NULL, updated_at = NOW() WHERE id = $1"
+        } else {
+            "UPDATE managed_incidents SET status = $2, updated_at = NOW() WHERE id = $1"
+        };
+        let _ = sqlx::query(sql)
             .bind(id).bind(&req.status).execute(&state.db).await;
     }
 

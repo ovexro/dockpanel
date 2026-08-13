@@ -214,7 +214,7 @@ async fn verify_one(
                 ).fetch_optional(db).await {
                     notifications::fire_alert(
                         db, user_id, None, None,
-                        "backup_verification_failed", "warning",
+                        "backup_verification_failed", "", "warning",
                         &format!("Backup verification failed: {name}"),
                         &format!("The {backup_type} backup '{filename}' for {name} failed verification ({checks_passed}/{checks_run} checks passed)."),
                     ).await;

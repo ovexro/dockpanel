@@ -88,13 +88,14 @@ async fn fire_alert_with_retry(
     server_id: Option<Uuid>,
     site_id: Option<Uuid>,
     alert_type: &str,
+    state_key: &str,
     severity: &str,
     title: &str,
     message: &str,
 ) -> bool {
     for attempt in 0..2 {
         match notifications::try_fire_alert(
-            pool, user_id, server_id, site_id, alert_type, severity, title, message,
+            pool, user_id, server_id, site_id, alert_type, state_key, severity, title, message,
         )
         .await
         {
@@ -315,6 +316,7 @@ async fn check_resource_thresholds(pool: &PgPool) {
                         Some(server.id),
                         None,
                         "disk_forecast",
+                        "",
                         severity,
                         &format!("Disk will be full in {:.0} hours on {}", hours_to_full, server.name),
                         &format!(
@@ -360,6 +362,7 @@ async fn check_resource_thresholds(pool: &PgPool) {
                         Some(server.id),
                         None,
                         "memory_leak",
+                        "",
                         "warning",
                         &format!("Possible memory leak detected on {}", server.name),
                         &format!(
@@ -508,6 +511,9 @@ async fn check_threshold(
                 Some(server.id),
                 None,
                 alert_type,
+                // check_threshold's own alert_state rows are keyed '' — these are
+                // conditions of the server as a whole, not of an entity on it.
+                "",
                 severity,
                 title,
                 message,
@@ -541,6 +547,7 @@ async fn check_threshold(
             Some(server.id),
             None,
             alert_type,
+            "",
             &format!("{} recovered on {}", alert_type.to_uppercase(), server.name),
             &format!(
                 "{} usage has returned to normal ({:.0}%) on server {}",
@@ -664,6 +671,7 @@ async fn clear_trend_alert(
             Some(server_id),
             None,
             alert_type,
+            "",
             title,
             message,
         )
@@ -790,7 +798,7 @@ async fn check_gpu_metric(
         if new_count >= required_duration && (current_state != "firing" || past_cooldown(last_notified, cooldown_minutes)) {
             let severity = if current_value > threshold * 1.1 { "critical" } else { "warning" };
 
-            fire_alert_with_retry(pool, user_id, Some(server_id), None, alert_type, severity, title, message).await;
+            fire_alert_with_retry(pool, user_id, Some(server_id), None, alert_type, state_key, severity, title, message).await;
 
             let _ = sqlx::query(
                 "UPDATE alert_state SET last_notified_at = NOW() \
@@ -820,7 +828,7 @@ async fn check_gpu_metric(
             _ => alert_type,
         };
         notifications::resolve_alert(
-            pool, user_id, Some(server_id), None, alert_type,
+            pool, user_id, Some(server_id), None, alert_type, state_key,
             &format!("{type_label} recovered on {server_name}"),
             &format!("{type_label} has returned to normal ({current_value:.0}) on server {server_name}"),
         ).await;
@@ -874,6 +882,7 @@ async fn check_server_offline(pool: &PgPool) {
             Some(*server_id),
             None,
             "offline",
+            "",
             "critical",
             &format!("Server {} is offline", name),
             &format!(
@@ -912,6 +921,7 @@ async fn check_server_offline(pool: &PgPool) {
             Some(*server_id),
             None,
             "offline",
+            "",
             &format!("Server {} is back online", name),
             &format!("Server {} has reconnected and is responding normally.", name),
         )
@@ -1068,6 +1078,7 @@ async fn check_ssl_expiry(pool: &PgPool) {
                 None,
                 Some(*site_id),
                 "ssl_expiry",
+                "",
                 &format!("SSL certificate renewed for {domain}"),
                 &format!(
                     "The SSL certificate for {domain} is valid again — {days_left} days remaining."
@@ -1164,7 +1175,7 @@ async fn fire_ssl_alert(
     };
 
     fire_alert_with_retry(
-        pool, user_id, None, Some(site_id), "ssl_expiry", severity, &title, &message,
+        pool, user_id, None, Some(site_id), "ssl_expiry", "", severity, &title, &message,
     )
     .await
 }
@@ -1254,6 +1265,7 @@ async fn check_service_health(pool: &PgPool, member: &FleetMember) {
                     Some(server_id),
                     None,
                     "service_down",
+                    name,
                     "critical",
                     &format!("Service {} is {} on {}", name, status, server_name),
                     &format!(
@@ -1292,6 +1304,7 @@ async fn check_service_health(pool: &PgPool, member: &FleetMember) {
                     Some(server_id),
                     None,
                     "service_down",
+                    name,
                     &format!("Service {} recovered on {}", name, server_name),
                     &format!("The {} service is running again on server {}.", name, server_name),
                 )
@@ -1365,6 +1378,7 @@ async fn check_container_health(pool: &PgPool, member: &FleetMember) {
                     Some(server_id),
                     None,
                     "container_down",
+                    name,
                     "critical",
                     &format!("Container '{}' is {}", name, state),
                     &format!(
@@ -1405,6 +1419,7 @@ async fn check_container_health(pool: &PgPool, member: &FleetMember) {
                     Some(server_id),
                     None,
                     "container_crashloop",
+                    name,
                     "critical",
                     &format!("Container '{}' is crash-looping", name),
                     &format!(
@@ -1445,6 +1460,7 @@ async fn check_container_health(pool: &PgPool, member: &FleetMember) {
                     Some(server_id),
                     None,
                     "container_unhealthy",
+                    name,
                     "warning",
                     &format!("Container '{}' is unhealthy", name),
                     &format!("Docker container '{}' health check is failing.", name),
@@ -1483,6 +1499,7 @@ async fn check_container_health(pool: &PgPool, member: &FleetMember) {
                         Some(server_id),
                         None,
                         alert_type,
+                        name,
                         &format!("Container '{}' recovered", name),
                         &format!("Docker container '{}' is running and healthy again.", name),
                     )
@@ -1536,6 +1553,7 @@ async fn check_container_health(pool: &PgPool, member: &FleetMember) {
             Some(server_id),
             None,
             alert_type,
+            state_key,
             &format!("Container '{}' is no longer present", state_key),
             &format!(
                 "Docker container '{}' is no longer reported by {}. Its alert state has been \

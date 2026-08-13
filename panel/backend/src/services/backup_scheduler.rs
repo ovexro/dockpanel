@@ -113,6 +113,7 @@ async fn tick(db: &PgPool, agents: &AgentRegistry, jwt_secret: &str) -> Result<(
                     None,
                     Some(row.site_id),
                     "backup_failure",
+                    "",
                     "critical",
                     &format!("Backup failed: {}", row.domain),
                     &format!(
@@ -188,6 +189,7 @@ async fn run_scheduled_backup(
                     None,
                     Some(row.site_id),
                     "backup_failure",
+                    "",
                     "warning",
                     &format!("Backup skipped (low disk): {}", row.domain),
                     &format!(

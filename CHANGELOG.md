@@ -4,6 +4,77 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.109.0]
+
+### Fixed — one container recovering resolved every other container's alert
+
+`alert_state` is keyed `(server_id, alert_type, state_key)`, and every
+per-entity caller passes a real key: the service name, the container name, the
+GPU index. The `alerts` table had no such column, so `resolve_alert` could only
+scope its UPDATE to `(user_id, server_id, alert_type)`.
+
+With two containers down on one server there are two firing `container_down`
+rows. The first container to recover cleared its own `alert_state` row
+correctly — and then resolved **both** alert rows. The second container was
+still down, its alert now read `resolved`, and because its `alert_state` row
+stayed `firing` the engine never re-announced it: a transition-triggered engine
+cannot re-fire a condition it believes it has already fired. The remaining
+outage became invisible to the panel, to `check_escalations`, and to the
+operator, permanently.
+
+`alerts` now carries `state_key`, every firing path records it, and the resolve
+path targets one entity. The argument is required rather than defaulted, so a
+new alert type cannot inherit the unscoped behaviour by saying nothing.
+
+### Fixed — a slow-response alert could never be resolved
+
+v2.107.0 gave `slow_response` title-keyed deduplication and no clearing
+counterpart. The identifier appeared exactly twice in the whole tree, both
+inside the one INSERT that created it. So a single slow check fired a row that
+stayed `firing` for ever: visible to `check_escalations` through
+`idx_alerts_escalation_sweep`, which kept paging on-call about a site that had
+recovered hours earlier, while the dedup guard read that same stuck row and
+suppressed every future slow-response alert for that monitor. One row both paged
+for ever and blinded the check that produced it.
+
+The recovery path now clears it when the response time returns under the
+threshold, and deduplication keys on the monitor's id rather than on its title —
+renaming a slow monitor used to raise a second alert for the same subject and
+leave the first unreachable. A migration retires the rows that could never be
+cleared; a monitor that is genuinely still slow re-fires within one interval.
+
+### Fixed — a recovery notice for something that was never firing
+
+`resolve_alert` discarded the result of its own UPDATE and notified
+unconditionally, and two auto-healer callers reach it without checking whether
+anything was firing first. A successful heal on a server that had raised no
+alert still sent "DockPanel Resolved: …" on every channel. The notice is now
+sent only when the UPDATE actually resolved something, and a failed UPDATE is no
+longer treated as a recovery.
+
+### Fixed — muting an alert type silenced the page but not the recovery
+
+The per-type mute was applied on the firing path and skipped on the resolve
+path, so a muted type delivered "Resolved: X" for an X the operator was never
+told about. Both paths now share one mute check.
+
+### Fixed — reopening an incident kept its resolution timestamp
+
+`resolved_at` survived the transition back to a live status, on both write
+paths, so the public status page rendered "Resolved *n* ago" for an incident
+whose own status read `investigating` — the page contradicted itself and the
+more prominent half was the reassuring one. Reopening now clears the stamp;
+`postmortem`, which follows a resolution rather than undoing it, keeps it.
+
+### Fixed — the published endpoint count disagreed with its own stated owner
+
+`docs/api-reference.md` opened by advertising 807 REST endpoints (525 backend +
+282 agent) in the same sentence that named `FEATURES.md` §Verified Metrics as
+the figure's owner — while that register said 821 (533 + 288), which is what the
+routers actually contain. v2.108.0 corrected the register and the derived
+surface never caught up. This is the class that release shipped a fix for,
+recurring one file over.
+
 ## [2.108.0]
 
 ### Fixed — a control labelled CONTROL could not see the deletion it named

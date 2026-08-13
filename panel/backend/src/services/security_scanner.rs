@@ -264,6 +264,7 @@ async fn ssl_renewal_alert(
         None,
         Some(site_id),
         "ssl_renewal_failure",
+        "",
         "critical",
         &format!("SSL renewal failed: {domain}"),
         &format!(
@@ -537,6 +538,7 @@ async fn send_scan_alerts(pool: &PgPool, member: &FleetMember, critical: i32, wa
             Some(member.id),
             None,
             "security",
+            "",
             severity,
             &title,
             &message,
