@@ -642,7 +642,12 @@ pub async fn install_powerdns(
 
         emit("install", "Installing PowerDNS", "in_progress", None);
 
-        match agent.post("/services/install/powerdns", forward_body).await {
+        // `post_long` for the same reason as the mail installers — this is an apt install
+        // plus a service start, and 60s is not a budget for that.
+        match agent
+            .post_long("/services/install/powerdns", forward_body, 900)
+            .await
+        {
             Ok(result) => {
                 // Auto-save API URL and key to settings
                 if let (Some(url), Some(key)) = (

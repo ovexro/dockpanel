@@ -303,6 +303,36 @@ impl AgentClient {
         self.request("PUT", path, Some(body)).await
     }
 
+    /// PUT with an explicit timeout, for the same reason `post_long` exists: some PUTs
+    /// do real work. Editing an app's environment recreates its container and may copy
+    /// the app's data onto a bind mount first, which does not fit the default budget.
+    pub async fn put_long(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+        timeout_secs: u64,
+    ) -> Result<serde_json::Value, AgentError> {
+        self.cb.check()?;
+        let _permit = self.cb.long_semaphore.acquire().await.map_err(|e| {
+            AgentError::Connection(format!("long operation semaphore closed: {e}"))
+        })?;
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(timeout_secs),
+            self.request_inner("PUT", path, Some(body)),
+        )
+        .await
+        .map_err(|_| AgentError::Request(format!("agent request timed out after {timeout_secs}s")))?;
+
+        match &result {
+            Ok(_) => self.cb.record_success(),
+            Err(AgentError::Connection(_)) => self.cb.record_failure(),
+            _ => {}
+        }
+
+        result
+    }
+
     pub async fn delete(&self, path: &str) -> Result<serde_json::Value, AgentError> {
         self.request("DELETE", path, None).await
     }
@@ -783,6 +813,51 @@ impl RemoteAgentClient {
         self.request(reqwest::Method::PUT, path, Some(body)).await
     }
 
+    /// PUT with an explicit timeout — the remote twin of [`AgentClient::put_long`].
+    pub async fn put_long(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+        timeout_secs: u64,
+    ) -> Result<serde_json::Value, AgentError> {
+        self.cb.check()?;
+        let _permit = self.cb.semaphore.acquire().await.map_err(|e| {
+            AgentError::Connection(format!("connection semaphore closed: {e}"))
+        })?;
+
+        let url = format!("{}{}", self.base_url, path);
+        let result = self
+            .http
+            .put(&url)
+            .header("authorization", format!("Bearer {}", self.token))
+            .timeout(Duration::from_secs(timeout_secs))
+            .json(&body)
+            .send()
+            .await;
+
+        match result {
+            Ok(resp) => {
+                self.cb.record_success();
+                let status = resp.status();
+                let bytes = resp
+                    .bytes()
+                    .await
+                    .map_err(|e| AgentError::Response(e.to_string()))?;
+
+                if !status.is_success() {
+                    let msg = String::from_utf8_lossy(&bytes).to_string();
+                    return Err(AgentError::Status(status.as_u16(), msg));
+                }
+
+                serde_json::from_slice(&bytes).map_err(|e| AgentError::Parse(e.to_string()))
+            }
+            Err(e) => {
+                self.cb.record_failure();
+                Err(AgentError::Connection(e.to_string()))
+            }
+        }
+    }
+
     pub async fn delete(&self, path: &str) -> Result<serde_json::Value, AgentError> {
         self.request(reqwest::Method::DELETE, path, None).await
     }
@@ -999,6 +1074,18 @@ impl AgentHandle {
         match self {
             Self::Local(c) => c.put(path, body).await,
             Self::Remote(c) => c.put(path, body).await,
+        }
+    }
+
+    pub async fn put_long(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+        timeout_secs: u64,
+    ) -> Result<serde_json::Value, AgentError> {
+        match self {
+            Self::Local(c) => c.put_long(path, body, timeout_secs).await,
+            Self::Remote(c) => c.put_long(path, body, timeout_secs).await,
         }
     }
 

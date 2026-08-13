@@ -5,6 +5,26 @@ import ProvisionLog from "../components/ProvisionLog";
 import { PrereqCallout, type PrereqResult } from "../components/Prerequisite";
 import { InfoTip } from "../components/FieldHelp";
 
+interface MailServiceState {
+  installed: boolean;
+  running: boolean;
+}
+
+/** The full shape `/mail/status` returns.
+ *
+ * The agent computes `running` as `postfix && dovecot && opendkim && configured` —
+ * four terms. A banner that names two of them sends the operator to check services
+ * that may both be perfectly healthy, which is what GitHub #110's reporter hit.
+ * `configured` is the term with no service to check at all: it means opendkim.conf
+ * and its trusted-hosts file are on disk, and it is the one an interrupted install
+ * leaves false. */
+interface MailStatus extends MailServiceState {
+  configured?: boolean;
+  postfix?: MailServiceState;
+  dovecot?: MailServiceState;
+  opendkim?: MailServiceState;
+}
+
 interface MailDomain {
   id: string;
   domain: string;
@@ -154,7 +174,11 @@ export default function Mail() {
   const [editAutoBody, setEditAutoBody] = useState("");
 
   // Mail server status
-  const [mailStatus, setMailStatus] = useState<{ installed: boolean; running: boolean } | null>(null);
+  /* `/mail/status` has always returned a per-service breakdown AND a `configured`
+     flag; this page used to destructure only `installed`/`running` and throw the rest
+     away, which is why the "not running" banner could name nothing more specific than
+     the two services an operator was most likely to already be looking at. */
+  const [mailStatus, setMailStatus] = useState<MailStatus | null>(null);
   const [installing, setInstalling] = useState(false);
   const [installId, setInstallId] = useState<string | null>(null);
   const [showSetupGuide, setShowSetupGuide] = useState(false);
@@ -200,7 +224,7 @@ export default function Mail() {
 
   const loadMailStatus = async () => {
     try {
-      const data = await api.get<{ installed: boolean; running: boolean }>("/mail/status");
+      const data = await api.get<MailStatus>("/mail/status");
       setMailStatus(data);
     } catch { setMailStatus({ installed: false, running: false }); }
   };
@@ -552,7 +576,41 @@ export default function Mail() {
 
       {isAdmin && mailStatus && mailStatus.installed && !mailStatus.running && (
         <div className="mb-4 px-4 py-3 rounded-lg text-sm border bg-warn-500/10 text-warn-400 border-warn-500/20">
-          Mail server is installed but not running. Check Postfix and Dovecot services.
+          {(() => {
+            /* Name the term that is actually false. The old copy said "Check Postfix
+               and Dovecot services" for every cause, including the two it does not
+               mention — so an operator whose services were both `active` was told to
+               look at them, found nothing wrong, and had learned nothing (#110). */
+            const stopped = (["postfix", "dovecot", "opendkim"] as const).filter(
+              (s) => mailStatus[s] && !mailStatus[s]!.running
+            );
+            const unconfigured = mailStatus.configured === false;
+            const label = { postfix: "Postfix", dovecot: "Dovecot", opendkim: "OpenDKIM" };
+            if (stopped.length === 0 && unconfigured) {
+              return (
+                <>
+                  Mail server packages are installed but the setup did not finish — OpenDKIM
+                  is not configured yet. The services themselves are fine; re-run{" "}
+                  <span className="font-medium">Settings &rarr; Services &rarr; Install Mail Server</span>{" "}
+                  to complete it.
+                </>
+              );
+            }
+            if (stopped.length > 0) {
+              const names = stopped.map((s) => label[s]).join(", ");
+              return (
+                <>
+                  Mail server is installed but not running &mdash;{" "}
+                  <span className="font-medium">{names}</span>{" "}
+                  {stopped.length === 1 ? "is" : "are"} stopped
+                  {unconfigured ? ", and OpenDKIM is not configured yet" : ""}.
+                </>
+              );
+            }
+            /* No per-service detail in the response (an older agent). Say that, rather
+               than inventing a cause. */
+            return "Mail server is installed but not running. Check the Postfix, Dovecot and OpenDKIM services.";
+          })()}
         </div>
       )}
 

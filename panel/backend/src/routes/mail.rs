@@ -136,7 +136,12 @@ pub async fn mail_install(
 
         emit("install", "Installing mail server", "in_progress", None);
 
-        match agent.post("/mail/install", None).await {
+        // `post_long`, not `post`. This installs six apt packages and then restarts three
+        // services; the default 60s budget is shorter than the work on any ordinary
+        // uplink, so the operator was told the install had FAILED while apt carried on
+        // underneath and finished. Reported as the second half of #110: the box ends up
+        // half-installed, and the status banner then reports "installed but not running".
+        match agent.post_long("/mail/install", None, 900).await {
             Ok(_) => {
                 emit("install", "Installing mail server", "done", None);
 
@@ -240,7 +245,7 @@ pub async fn mail_uninstall(
 
         emit("uninstall", "Uninstalling mail server", "in_progress", None);
 
-        match agent.post("/mail/uninstall", None).await {
+        match agent.post_long("/mail/uninstall", None, 900).await {
             Ok(_) => {
                 emit("uninstall", "Uninstalling mail server", "done", None);
                 emit("complete", "Mail server uninstalled", "done", None);
@@ -1407,7 +1412,7 @@ pub async fn rspamd_install(
     AdminUser(claims): AdminUser,
     ServerScope(_server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    agent.post("/mail/rspamd/install", None).await
+    agent.post_long("/mail/rspamd/install", None, 900).await
         .map_err(|e| agent_error("Rspamd", e))?;
     activity::log_activity(&state.db, claims.sub, &claims.email, "mail.rspamd_install", None, None, None, None).await;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -1445,7 +1450,7 @@ pub async fn webmail_install(
     ServerScope(_server_id, agent): ServerScope,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = agent.post("/mail/webmail/install", Some(body)).await
+    let result = agent.post_long("/mail/webmail/install", Some(body), 900).await
         .map_err(|e| agent_error("Webmail", e))?;
     activity::log_activity(&state.db, claims.sub, &claims.email, "mail.webmail_install", None, None, None, None).await;
     Ok(Json(result))

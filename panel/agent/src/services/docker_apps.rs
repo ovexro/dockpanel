@@ -324,6 +324,11 @@ pub struct DeployResult {
 pub struct UpdateResult {
     pub container_id: String,
     pub blue_green: bool,
+    /// Container paths this update moved out of the writable layer and onto a bind
+    /// mount. Non-empty only for an app deployed before its template declared the
+    /// path — see `migrate_unmounted_volumes`. Reported so the operator learns their
+    /// app just became durable rather than having it happen silently.
+    pub migrated_volumes: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -363,7 +368,11 @@ static TEMPLATES: &[AppTemplateDef] = &[
             required: false,
             secret: false,
         }],
-        volumes: &[],
+        // Ghost keeps its SQLite database, themes and uploaded images here, and the
+        // image declares it as a VOLUME. Undeclared, Docker satisfied that with an
+        // ANONYMOUS volume — which `docker rm` leaves behind but the replacement
+        // container never sees, so an update read as total data loss (#110).
+        volumes: &["/var/lib/ghost/content"],
     },
     AppTemplateDef {
         id: "azuracast",
@@ -385,7 +394,10 @@ static TEMPLATES: &[AppTemplateDef] = &[
         default_port: 6379,
         container_port: "6379/tcp",
         env_vars: &[],
-        volumes: &[],
+        // The image declares /data as a VOLUME and Redis writes its RDB/AOF snapshots
+        // there. This template is in the "Database" category and was the only one in it
+        // with nothing declared, so every recreate started it from an empty dataset.
+        volumes: &["/data"],
     },
     AppTemplateDef {
         id: "adminer",
@@ -428,23 +440,19 @@ static TEMPLATES: &[AppTemplateDef] = &[
         image: "n8nio/n8n:1",
         default_port: 5678,
         container_port: "5678/tcp",
-        env_vars: &[
-            EnvVarDef {
-                name: "N8N_BASIC_AUTH_USER",
-                label: "Admin Username",
-                default: "admin",
-                required: false,
-                secret: false,
-            },
-            EnvVarDef {
-                name: "N8N_BASIC_AUTH_PASSWORD",
-                label: "Admin Password",
-                default: "",
-                required: false,
-                secret: true,
-            },
-        ],
-        volumes: &[],
+        // `N8N_BASIC_AUTH_USER` / `N8N_BASIC_AUTH_PASSWORD` used to live here. n8n
+        // REMOVED basic auth in 1.0 and this template pins `n8nio/n8n:1`, so both were
+        // inert — the deploy form offered an "Admin Password" field that protected
+        // nothing and told the operator their instance was credentialed when it was
+        // not. Ownership is established by creating the owner account on first visit.
+        env_vars: &[],
+        // THE #110 PATH. n8n defaults to SQLite and keeps everything here —
+        // database.sqlite (workflows, executions, the owner account), the credential
+        // encryption key in .n8n/config, and any community nodes. The image declares NO
+        // volume of its own, so with nothing declared here the whole lot lived in the
+        // container's writable layer and `docker rm` deleted it: the reporter's n8n came
+        // back at first-run state after pressing Update, and none of it was recoverable.
+        volumes: &["/home/node/.n8n"],
     },
     AppTemplateDef {
         id: "gitea",
@@ -697,7 +705,11 @@ static TEMPLATES: &[AppTemplateDef] = &[
         default_port: 8086,
         container_port: "8080/tcp",
         env_vars: &[],
-        volumes: &[],
+        // SearXNG generates settings.yml — including its `secret_key` — into /etc/searxng
+        // on first boot, and the image declares that path as a VOLUME. Only the config
+        // half is declared here: /var/cache/searxng is a rebuildable cache and does not
+        // need to survive anything.
+        volumes: &["/etc/searxng"],
     },
     AppTemplateDef {
         id: "jellyfin",
@@ -1599,8 +1611,17 @@ static TEMPLATES: &[AppTemplateDef] = &[
             EnvVarDef { name: "AP_ENGINE_EXECUTABLE_PATH", label: "Engine Path", default: "dist/packages/engine/main.js", required: false, secret: false },
             EnvVarDef { name: "AP_ENCRYPTION_KEY", label: "Encryption Key", default: "", required: true, secret: true },
             EnvVarDef { name: "AP_JWT_SECRET", label: "JWT Secret", default: "", required: true, secret: true },
+            // Activepieces defaults to POSTGRES + a standalone Redis, neither of which
+            // this single-container template deploys, so it could not start at all. The
+            // embedded pair is what upstream documents for the one-container install —
+            // and it is what makes the volume below meaningful, since PGLite is the
+            // thing that writes into it. Both halves or neither.
+            EnvVarDef { name: "AP_DB_TYPE", label: "Database Mode", default: "PGLITE", required: false, secret: false },
+            EnvVarDef { name: "AP_REDIS_TYPE", label: "Queue Mode", default: "MEMORY", required: false, secret: false },
         ],
-        volumes: &[],
+        // PGLite's embedded Postgres and the local settings live here (AP_CONFIG_PATH
+        // defaults to ~/.activepieces, and the image runs as root, so HOME is /root).
+        volumes: &["/root/.activepieces"],
     },
     // ─── CMS (additional) ───────────────────────────────────────
     AppTemplateDef {
@@ -3234,6 +3255,204 @@ pub(crate) fn extract_host_port(
         .ok()
 }
 
+/// The mount destinations this container already has, read from BOTH spellings.
+///
+/// A container may express a mount as a `Binds` entry (`"src:dst[:opts]"`) or as a
+/// `Mounts` entry carrying a `target`, and Docker accepts either. A census keyed on one
+/// of them is blind to the other, so this reads both and returns the union.
+fn mounted_destinations(host_config: &bollard::service::HostConfig) -> Vec<String> {
+    let mut dests = Vec::new();
+    if let Some(binds) = &host_config.binds {
+        for bind in binds {
+            // "<source>:<destination>[:<options>]" — the destination is the second
+            // field, so split from the left and take index 1.
+            if let Some(dest) = bind.split(':').nth(1) {
+                if !dest.is_empty() {
+                    dests.push(dest.to_string());
+                }
+            }
+        }
+    }
+    if let Some(mounts) = &host_config.mounts {
+        for m in mounts {
+            if let Some(target) = m.target.as_ref().filter(|t| !t.is_empty()) {
+                dests.push(target.clone());
+            }
+        }
+    }
+    dests
+}
+
+/// Paths this container's own template calls persistent that nothing actually mounts.
+///
+/// Returns empty for anything we are not entitled to touch: a container without
+/// `dockpanel.managed=true`, one whose `dockpanel.app.template` names no template we
+/// ship, or one whose declared paths are all mounted already.
+fn unmounted_declared_volumes(
+    config: &bollard::models::ContainerConfig,
+    host_config: &bollard::service::HostConfig,
+) -> Vec<&'static str> {
+    let Some(labels) = config.labels.as_ref() else {
+        return Vec::new();
+    };
+    if labels.get("dockpanel.managed").map(String::as_str) != Some("true") {
+        return Vec::new();
+    }
+    let Some(template_id) = labels.get("dockpanel.app.template") else {
+        return Vec::new();
+    };
+    let Some(template) = TEMPLATES.iter().find(|t| t.id == template_id) else {
+        return Vec::new();
+    };
+    let mounted = mounted_destinations(host_config);
+    template
+        .volumes
+        .iter()
+        .copied()
+        .filter(|vol| !mounted.iter().any(|d| d == vol))
+        .collect()
+}
+
+/// Carry an app's data out of the container's writable layer and onto a bind mount,
+/// on the way through a recreate.
+///
+/// Every recreate path stops the container, `docker rm`s it and rebuilds the replacement
+/// from a `docker inspect` of the original — and `docker rm` deletes the writable layer.
+/// For a container with no mount covering the directory its app writes to, that layer IS
+/// the storage, so the recreate is unrecoverable deletion. GitHub #110 is exactly this: an
+/// n8n deployed while the template declared `volumes: &[]` came back at first-run state
+/// the first time its operator pressed Update, account and workflows gone.
+///
+/// Declaring the volume fixes the NEXT deploy and does nothing for the containers already
+/// running. This closes that half — the destructive step becomes the repair. Limits, all
+/// deliberate:
+///
+/// - Only paths the container's OWN template declares and the container does not mount.
+///   An operator who arranged their own bind keeps it.
+/// - Only into a host directory that is absent or empty. A non-empty one is somebody's
+///   data and this declines rather than merging into it.
+/// - **Any failure is returned, and every caller must abort the recreate before removing
+///   the container.** A migration that half-worked followed by a `docker rm` would destroy
+///   the very data it was called to save.
+async fn migrate_unmounted_volumes(
+    docker: &Docker,
+    container_id: &str,
+    name: &str,
+    image: &str,
+    missing: &[&'static str],
+    host_config: &mut bollard::service::HostConfig,
+) -> Result<Vec<String>, String> {
+    if missing.is_empty() {
+        return Ok(Vec::new());
+    }
+    let owner = resolve_volume_owner(docker, image).await;
+    let mut binds = host_config.binds.clone().unwrap_or_default();
+    let mut migrated = Vec::new();
+
+    for vol in missing {
+        let host_dir = format!("{APP_DATA_DIR}/{name}{vol}");
+        if let Ok(mut entries) = std::fs::read_dir(&host_dir) {
+            if entries.next().is_some() {
+                return Err(format!(
+                    "Refusing to migrate {vol} for {name}: {host_dir} already exists and is \
+                     not empty. Move it aside and retry, or mount it yourself."
+                ));
+            }
+        }
+        std::fs::create_dir_all(&host_dir)
+            .map_err(|e| format!("Failed to create {host_dir}: {e}"))?;
+        // Canonicalize then re-check the prefix, exactly as `deploy_app` does — the
+        // check is what proves the path is one of ours, and it has to happen after
+        // symlinks are resolved.
+        let resolved = std::fs::canonicalize(&host_dir)
+            .map_err(|e| format!("Volume path {host_dir} inaccessible: {e}"))?;
+        let resolved_str = resolved.to_string_lossy().to_string();
+        if !resolved_str.starts_with(&format!("{APP_DATA_DIR}/")) {
+            return Err(format!(
+                "Volume path {host_dir} escapes allowed prefix after canonicalization"
+            ));
+        }
+
+        // `<container>:<path>/.` copies the CONTENTS of the directory, so the data lands
+        // directly in the host directory instead of one level down inside a copy of it.
+        // `docker cp` preserves the numeric uid/gid the files carry in the container, so
+        // a non-root app keeps ownership of its own data.
+        let out = crate::safe_cmd::safe_command("docker")
+            .args(["cp", &format!("{container_id}:{vol}/."), &resolved_str])
+            .output()
+            .await
+            .map_err(|e| format!("Failed to run docker cp for {vol}: {e}"))?;
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr);
+            // A path the image never created carries nothing to lose. That is not a
+            // failure — but the bind is still added, so the NEXT recreate has somewhere
+            // durable to write.
+            let absent = err.contains("No such container:path")
+                || err.contains("no such file or directory")
+                || err.contains("Could not find the file");
+            if !absent {
+                return Err(format!(
+                    "Failed to copy {vol} out of {name}: {}",
+                    err.trim()
+                ));
+            }
+            tracing::info!(
+                "Nothing to migrate at {vol} for {name} — the path does not exist in the \
+                 container; mounting it empty so future updates preserve it"
+            );
+        }
+
+        if let Some(owner) = &owner {
+            if let Err(e) = chown_to(&resolved_str, owner) {
+                tracing::warn!(
+                    "Could not chown migrated volume {resolved_str} to {}: {e}. The app runs \
+                     as {:?} and may be unable to write its data directory.",
+                    owner.uid,
+                    owner.spec
+                );
+            }
+        }
+        binds.push(format!("{resolved_str}:{vol}"));
+        migrated.push((*vol).to_string());
+        tracing::info!("Migrated {name}{vol} onto {resolved_str} — it now survives recreates");
+    }
+
+    host_config.binds = Some(binds);
+    Ok(migrated)
+}
+
+/// Does this container hold state that a second copy of it would fight over?
+///
+/// Blue-green starts the replacement while the original is still serving, and only
+/// stops the original after the health check and the nginx swap have both succeeded.
+/// For that window — up to 30s of health checking plus an nginx test and reload — two
+/// processes are running against the SAME host paths, because `blue_green_update`
+/// clones the old `HostConfig` and rewrites only its port bindings.
+///
+/// That is harmless when the container's only state is its own writable layer: the
+/// replacement gets a fresh one and nothing is shared. It is data corruption when the
+/// state is a single-writer database sitting in a bind mount. Postgres, MySQL and Mongo
+/// self-protect with a pidfile lock, so they merely fail to start and the caller falls
+/// back to stop/start — noisy, but safe. **SQLite has no such lock**, so Ghost, Gitea,
+/// Bookstack and Vaultwarden would interleave writes from two processes silently.
+///
+/// There is no way to ask an image whether it tolerates two writers, so the only sound
+/// reading of "this container has a mount" is "assume it does not". Zero-downtime is
+/// worth having; it is not worth a corrupted database, and the stop/start path this
+/// falls back to is the same one every blue-green failure already takes.
+fn shares_persistent_state(host_config: &bollard::service::HostConfig) -> bool {
+    let has_binds = host_config.binds.as_ref().is_some_and(|b| !b.is_empty());
+    let has_mounts = host_config.mounts.as_ref().is_some_and(|m| !m.is_empty());
+    // `volumes_from` points at another container's mounts, which are shared by
+    // definition. Anonymous volumes are deliberately NOT counted: Docker gives the
+    // replacement its own, so there is nothing for the two to contend over.
+    let has_volumes_from = host_config
+        .volumes_from
+        .as_ref()
+        .is_some_and(|v| !v.is_empty());
+    has_binds || has_mounts || has_volumes_from
+}
+
 /// Blue-green update: start new container → health check → swap nginx → remove old.
 /// Returns UpdateResult on success. On ANY failure, rolls back and returns Err
 /// so the caller can fall back to stop/start.
@@ -3483,6 +3702,8 @@ async fn blue_green_update(
     Ok(UpdateResult {
         container_id: new_container.id,
         blue_green: true,
+        // Blue-green is only reached when nothing needed migrating — see `update_app`.
+        migrated_volumes: Vec::new(),
     })
 }
 
@@ -3500,13 +3721,19 @@ pub async fn update_app(container_id: &str) -> Result<UpdateResult, String> {
         .map_err(|e| format!("Failed to inspect container: {e}"))?;
 
     let config = info.config.ok_or("No container config found")?;
-    let host_config = info.host_config.ok_or("No host config found")?;
+    let mut host_config = info.host_config.ok_or("No host config found")?;
     let name = info
         .name
         .unwrap_or_default()
         .trim_start_matches('/')
         .to_string();
     let image = config.image.clone().ok_or("No image found")?;
+
+    // Anything this app's template calls persistent that the container does not mount is
+    // living in the writable layer, which the recreate below deletes (#110). Decide that
+    // BEFORE choosing a strategy: migrating needs the container stopped, which only the
+    // stop/start path gives us.
+    let unmounted = unmounted_declared_volumes(&config, &host_config);
 
     // Check if this app has a domain (nginx reverse proxy) for blue-green
     let domain = config
@@ -3532,11 +3759,26 @@ pub async fn update_app(container_id: &str) -> Result<UpdateResult, String> {
         }
     }
 
-    // Try blue-green if app has a domain and a known port
+    // Try blue-green if app has a domain and a known port — and only if running two
+    // copies of it at once cannot corrupt anything. See `shares_persistent_state`.
     if let (Some(domain), Some(old_port)) = (&domain, old_port) {
         // Check that nginx config exists for this domain
         let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
-        if std::path::Path::new(&config_path).exists() {
+        if !unmounted.is_empty() {
+            tracing::info!(
+                "Not using blue-green for {name}: {} declared path(s) are unmounted and have \
+                 to be migrated out of the writable layer first, which needs the container \
+                 stopped. Using stop/start instead.",
+                unmounted.len()
+            );
+        } else if shares_persistent_state(&host_config) {
+            tracing::info!(
+                "Not using blue-green for {name}: it has persistent mounts, and blue-green \
+                 would run the old and new containers against the same host paths for the \
+                 length of the health check. Using stop/start instead (brief downtime, no \
+                 concurrent writers)."
+            );
+        } else if std::path::Path::new(&config_path).exists() {
             match blue_green_update(
                 &docker,
                 container_id,
@@ -3558,11 +3800,25 @@ pub async fn update_app(container_id: &str) -> Result<UpdateResult, String> {
         }
     }
 
-    // Fallback: stop old → remove → create new → start (causes brief downtime)
+    // Fallback: stop old → migrate → remove → create new → start (brief downtime)
     docker
         .stop_container(container_id, Some(StopContainerOptions { t: 10 }))
         .await
         .ok();
+
+    // Stopped, so the app has flushed; not yet removed, so the data is still reachable.
+    // This is the only window in which it can be rescued, and a failure here MUST abort
+    // before the remove below — the whole point is to not destroy what we came to save.
+    let migrated =
+        migrate_unmounted_volumes(&docker, container_id, &name, &image, &unmounted, &mut host_config)
+            .await
+            .map_err(|e| {
+                format!(
+                    "Aborting update of {name} without removing it: {e}. The container is \
+                     stopped and intact; start it again with `docker start {name}`."
+                )
+            })?;
+
     docker
         .remove_container(
             container_id,
@@ -3607,10 +3863,20 @@ pub async fn update_app(container_id: &str) -> Result<UpdateResult, String> {
         .await
         .map_err(|e| format!("Failed to start updated container: {e}"))?;
 
-    tracing::info!("App updated (stop/start): {name} ({image})");
+    if migrated.is_empty() {
+        tracing::info!("App updated (stop/start): {name} ({image})");
+    } else {
+        tracing::info!(
+            "App updated (stop/start): {name} ({image}) — and {} path(s) migrated onto \
+             persistent storage: {}",
+            migrated.len(),
+            migrated.join(", ")
+        );
+    }
     Ok(UpdateResult {
         container_id: container.id,
         blue_green: false,
+        migrated_volumes: migrated,
     })
 }
 
@@ -3637,7 +3903,7 @@ pub async fn change_container_image(container_id: &str, new_image: &str) -> Resu
         .map_err(|e| format!("Failed to inspect container: {e}"))?;
 
     let config = info.config.ok_or("No container config found")?;
-    let host_config = info.host_config.ok_or("No host config found")?;
+    let mut host_config = info.host_config.ok_or("No host config found")?;
     let name = info
         .name
         .unwrap_or_default()
@@ -3646,6 +3912,8 @@ pub async fn change_container_image(container_id: &str, new_image: &str) -> Resu
     if name.is_empty() {
         return Err("Container not found".to_string());
     }
+    let old_image = config.image.clone().unwrap_or_default();
+    let unmounted = unmounted_declared_volumes(&config, &host_config);
 
     // Pull the new image. create_image's stream may emit non-fatal warnings, so verify the
     // image exists locally afterwards rather than trusting the stream's per-chunk results.
@@ -3671,10 +3939,29 @@ pub async fn change_container_image(container_id: &str, new_image: &str) -> Resu
     }
 
     // Stop + remove the old container, KEEPING its volumes (v: false) so data persists.
+    // ⚠ `v: false` preserves VOLUMES, which is not the same as preserving DATA: a
+    // container with no mount keeps its state in the writable layer, and `docker rm`
+    // deletes that whatever `v` says (#110). Migrate first, in the window where the
+    // container is stopped but still exists, and abort without removing if that fails.
     docker
         .stop_container(container_id, Some(StopContainerOptions { t: 10 }))
         .await
         .ok();
+    migrate_unmounted_volumes(
+        &docker,
+        container_id,
+        &name,
+        &old_image,
+        &unmounted,
+        &mut host_config,
+    )
+    .await
+    .map_err(|e| {
+        format!(
+            "Aborting image change for {name} without removing it: {e}. The container is \
+             stopped and intact; start it again with `docker start {name}`."
+        )
+    })?;
     docker
         .remove_container(
             container_id,
@@ -3844,12 +4131,14 @@ pub async fn update_env(
         .map_err(|e| format!("Failed to inspect container: {e}"))?;
 
     let config = info.config.ok_or("No container config found")?;
-    let host_config = info.host_config.ok_or("No host config found")?;
+    let mut host_config = info.host_config.ok_or("No host config found")?;
     let name = info
         .name
         .unwrap_or_default()
         .trim_start_matches('/')
         .to_string();
+    let image = config.image.clone().unwrap_or_default();
+    let unmounted = unmounted_declared_volumes(&config, &host_config);
 
     // Build new env list, carrying over anything the caller sent back masked.
     let (env_list, kept) = merge_env_preserving_masked(&new_env, config.env.as_deref().unwrap_or(&[]));
@@ -3862,11 +4151,30 @@ pub async fn update_env(
         );
     }
 
-    // Stop and remove old container
+    // Stop, migrate anything living in the writable layer, then remove.
+    // Editing one environment variable recreates the container, so this door destroys an
+    // unmounted app's data exactly as thoroughly as Update does (#110) — it just does not
+    // sound like it. The migration has to happen before the remove, and a failure has to
+    // abort before it.
     docker
         .stop_container(container_id, Some(StopContainerOptions { t: 10 }))
         .await
         .ok();
+    migrate_unmounted_volumes(
+        &docker,
+        container_id,
+        &name,
+        &image,
+        &unmounted,
+        &mut host_config,
+    )
+    .await
+    .map_err(|e| {
+        format!(
+            "Aborting environment update for {name} without removing it: {e}. The container \
+             is stopped and intact; start it again with `docker start {name}`."
+        )
+    })?;
     docker
         .remove_container(
             container_id,

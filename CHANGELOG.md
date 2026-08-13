@@ -4,6 +4,99 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.111.0]
+
+### Fixed — pressing Update on a Docker App could destroy the app's data
+
+Reported as [#110](https://github.com/ovexro/dockpanel/issues/110): an operator
+installed n8n, created an account, pressed **Update** under Running Apps, and got
+back an n8n at first-run state. The account, the workflows and the stored
+credentials were gone, and nothing in the panel had warned that they would be.
+
+The guard that was already there is correct and was never the problem. Every
+recreate path removes the old container with `RemoveContainerOptions { v: false }`
+— *keep the volumes* — under a comment saying the data therefore persists. That
+is true of volumes. It is not true of data: a container with no mount keeps its
+state in its own writable layer, and `docker rm` deletes the writable layer
+whatever `v` says. n8n's template declared no volume and the `n8nio/n8n:1` image
+declares none of its own, so there was nowhere for that data to be except the
+layer being deleted.
+
+Four things changed.
+
+- **The templates whose state lives inside the container now say where it is.**
+  `n8n` → `/home/node/.n8n`, `ghost` → `/var/lib/ghost/content`, `redis` →
+  `/data`, `searxng` → `/etc/searxng`, `activepieces` → `/root/.activepieces`.
+  Each path was taken from the project's own documentation or its official
+  compose file, not inferred. Templates whose durable state genuinely lives in an
+  external database — plausible, shynet, litellm, huginn — are deliberately left
+  with none; a volume there would be decoration.
+
+- **Updating an app deployed *before* this release repairs it instead of
+  destroying it.** On the way through a recreate, any path the app's template
+  calls persistent that the container does not mount is copied out of the
+  writable layer onto a bind mount, and the replacement is created with that
+  mount. It runs while the container is stopped but not yet removed — the only
+  window in which the data can still be rescued — and any failure aborts the
+  update **without** removing the container, which is then left stopped and
+  intact. This is the half that reaches boxes already in the field: declaring a
+  volume fixes the next deploy and does nothing for the container already
+  running. The migration declines rather than merging if the destination
+  directory already holds data, and touches only DockPanel-managed template apps.
+
+- **Blue-green no longer runs two containers against one mount.** It starts the
+  replacement while the original is still serving and only stops the original
+  after the health check and the nginx swap, cloning the old host config and
+  rewriting just the port bindings — so for up to thirty seconds both held the
+  same host paths. Postgres, MySQL and Mongo self-protect with a pidfile lock and
+  merely fail; SQLite has no such lock, so Ghost, Gitea, Bookstack and Vaultwarden
+  could interleave writes from two processes. An app with any mount now takes the
+  brief-downtime path, which is the same one every blue-green failure already
+  fell back to.
+
+- **The recreate endpoints moved onto long verbs.** `/apps/{id}/update`,
+  `/apps/{id}/env` and `/apps/{id}/change-image` pull an image and may now copy
+  data, neither of which fits the default 60-second budget; on the short verb a
+  slow-but-successful update was reported to the operator as a failure while it
+  completed behind them.
+
+Also removed: n8n's `N8N_BASIC_AUTH_USER` / `N8N_BASIC_AUTH_PASSWORD` fields. n8n
+removed basic auth in 1.0 and this template pins `:1`, so the deploy form was
+offering an "Admin Password" that protected nothing. Activepieces gained
+`AP_DB_TYPE=PGLITE` and `AP_REDIS_TYPE=MEMORY`, without which it targets an
+external Postgres and Redis that this single-container template does not deploy —
+and without which its new volume would have been inert.
+
+### Fixed — the mail installer's 60-second budget, and a banner that named half the causes
+
+The same reporter, on the same issue: *"Mail server is installed but not running.
+Check Postfix and Dovecot services."*
+
+`POST /mail/install` installs six apt packages and restarts three services, and it
+was dispatched on the 60-second verb — shorter than the work on any ordinary
+uplink. The panel reported failure while apt carried on and finished, leaving a
+box that is genuinely half-installed. The same was true of the mail uninstaller,
+the rspamd installer, the webmail installer and the PowerDNS installer; all five
+now use the long verb.
+
+The banner itself was the second half. The agent computes `running` from **four**
+terms — Postfix, Dovecot, OpenDKIM and whether OpenDKIM's config was ever
+written — and the sentence named two of them. An operator whose Postfix and
+Dovecot were both `active` was sent to check them, found nothing wrong, and had
+learned nothing. The response already carried the per-service detail; the page
+was discarding it. The banner now names the component that is actually stopped,
+or says the setup did not finish when that is what happened.
+
+### Testing
+
+New `app-data-persistence-pin-e2e.sh`, 38 assertions. §A is a census rather than
+a list: it enumerates from source every function that both removes and creates a
+container, and requires each to either migrate before it removes or carry a
+written exemption — so a fourth recreate path added later is judged too. That
+census immediately found three paths beyond the three under repair, each
+adjudicated in the suite. 21 mutations, 21 killed, each by the arm it names; two
+of those mutations found real defects in the suite's own arms first.
+
 ## [2.110.0]
 
 ### Fixed — the lockdown blocked the terminal, said so on the page, and left a second shell open

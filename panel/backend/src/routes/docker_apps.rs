@@ -899,13 +899,40 @@ pub async fn update_app(
         emit("pull", "Pulling latest image", "in_progress", None);
 
         let agent_path = format!("/apps/{}/update", cid);
-        match agent.post(&agent_path, None).await {
+        // `post_long`, not `post`: this call pulls an image AND may copy an app's data out
+        // of its writable layer onto a bind mount, neither of which fits a 60s budget on a
+        // modest uplink. On the plain verb a slow-but-succeeding update reports failure to
+        // the operator while completing behind them.
+        match agent.post_long(&agent_path, None, 900).await {
             Ok(result) => {
                 let blue_green = result
                     .get("blue_green")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
+                let migrated: Vec<String> = result
+                    .get("migrated_volumes")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 emit("pull", "Pulling latest image", "done", None);
+                if !migrated.is_empty() {
+                    emit(
+                        "migrate",
+                        "Moved app data onto persistent storage",
+                        "done",
+                        Some(format!(
+                            "This app was deployed before DockPanel gave it a persistent \
+                             volume, so its data lived inside the container and would have \
+                             been lost on this update. It has been copied to durable storage \
+                             and will survive future updates: {}",
+                            migrated.join(", ")
+                        )),
+                    );
+                }
                 if blue_green {
                     emit("health", "Health check passed", "done", None);
                     emit("swap", "Traffic swapped (zero-downtime)", "done", None);
@@ -974,8 +1001,10 @@ pub async fn update_env(
     if !is_valid_container_id(&container_id) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
     }
+    // Long verb: saving env recreates the container, and may first copy the app's data
+    // out of its writable layer onto a bind mount (#110).
     let result = agent
-        .put(&format!("/apps/{container_id}/env"), body)
+        .put_long(&format!("/apps/{container_id}/env"), body, 900)
         .await
         .map_err(|e| agent_error("Update env", e))?;
     activity::log_activity(
@@ -1037,10 +1066,13 @@ pub async fn update_image(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid image format"));
     }
 
+    // Long verb: this pulls an image and recreates the container, and may first copy the
+    // app's data out of its writable layer onto a bind mount (#110).
     let result = agent
-        .post(
+        .post_long(
             &format!("/apps/{container_id}/change-image"),
             Some(serde_json::json!({ "image": image })),
+            900,
         )
         .await
         .map_err(|e| agent_error("Change image", e))?;
