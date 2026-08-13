@@ -24,6 +24,7 @@ pub mod notifications;
 pub mod on_call;
 pub mod panel_snapshot;
 pub mod panel_update;
+pub mod credential_reencrypt;
 pub mod secrets_crypto;
 pub mod security_scanner;
 pub mod server_monitor;

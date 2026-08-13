@@ -603,7 +603,12 @@ async fn execute_deploy(
             // only log line both sit inside `if !env_pairs.is_empty()`. A
             // feature on the README, in FEATURES.md, in the guide and behind a
             // UI checkbox was inert and silent at the same time.
-            let encryption_key = crate::routes::secrets::get_encryption_key(&jwt_secret);
+            // Read path — `decrypt_vault` tries every source the value could have
+            // been written under. Deriving ONE source and handing it to
+            // `secrets_crypto::decrypt` is the shape that made adding
+            // SECRETS_ENCRYPTION_KEY strand every vault secret; this call site
+            // already carries the scar tissue from the last time it read with the
+            // wrong key and could not say so.
 
             let inject_rows: Vec<(String, String)> = sqlx::query_as(
                 "SELECT s.key, s.encrypted_value FROM secrets s \
@@ -617,7 +622,7 @@ async fn execute_deploy(
                 let mut env_pairs = Vec::new();
                 let mut undecryptable = 0usize;
                 for (key, encrypted_value) in &inject_rows {
-                    match crate::services::secrets_crypto::decrypt(encrypted_value, &encryption_key) {
+                    match crate::services::secrets_crypto::decrypt_vault(encrypted_value, &jwt_secret) {
                         Ok(value) => {
                             env_pairs.push(serde_json::json!({ "key": key, "value": value }));
                         }

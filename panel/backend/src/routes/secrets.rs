@@ -105,20 +105,24 @@ pub struct PaginationQuery {
 
 const VALID_TYPES: &[&str] = &["env", "api_key", "password", "certificate", "custom"];
 
-/// Derive a dedicated encryption key separate from the JWT secret.
-/// Uses SECRETS_ENCRYPTION_KEY env var if set, otherwise derives one via SHA-256.
-/// Derive the vault encryption key. `pub(crate)` so provisioning paths that
-/// generate credentials (site creation writing the CMS admin password into the
-/// site's auto-created vault) encrypt with the SAME key the Secrets Manager
-/// decrypts with — a second derivation here would store values the UI can't read.
+/// Derive the vault encryption key to WRITE with. `pub(crate)` so provisioning
+/// paths that generate credentials (site creation writing the CMS admin password
+/// into the site's auto-created vault) encrypt with the SAME key the Secrets
+/// Manager decrypts with — a second derivation here would store values the UI
+/// can't read.
+///
+/// ⚠ READERS MUST NOT USE THIS. It returns one source, and a value written
+/// before `SECRETS_ENCRYPTION_KEY` was set is not readable under it. Decrypt
+/// through `secrets_crypto::decrypt_vault`, which tries every source the value
+/// could have been written under. Handing this single string to
+/// `secrets_crypto::decrypt` is what made setting that variable a one-way door
+/// for the whole vault.
+///
+/// The empty-string case (`SECRETS_ENCRYPTION_KEY=` exported but blank) is
+/// handled inside `vault_key_primary` and treated as unset, matching what the
+/// credential path has always done — carried as an open nit since s328.
 pub(crate) fn get_encryption_key(jwt_secret: &str) -> String {
-    std::env::var("SECRETS_ENCRYPTION_KEY").unwrap_or_else(|_| {
-        use sha2::{Sha256, Digest};
-        let mut hasher = Sha256::new();
-        hasher.update(b"dockpanel-secrets-encryption:");
-        hasher.update(jwt_secret.as_bytes());
-        hex::encode(hasher.finalize())
-    })
+    secrets_crypto::vault_key_primary(jwt_secret)
 }
 
 fn mask_value(value: &str) -> String {
@@ -249,7 +253,8 @@ pub async fn list_secrets(
 ) -> Result<Json<Vec<SecretEntry>>, ApiError> {
     verify_vault(&state, vault_id, claims.sub).await?;
 
-    let encryption_key = get_encryption_key(&state.config.jwt_secret);
+    // Read path: every key source, not just the one we would write with.
+    let jwt = &state.config.jwt_secret;
     let reveal = params.reveal.unwrap_or(false);
 
     let rows: Vec<SecretRow> = sqlx::query_as(
@@ -261,9 +266,9 @@ pub async fn list_secrets(
 
     let entries: Vec<SecretEntry> = rows.into_iter().map(|r| {
         let value = if reveal {
-            secrets_crypto::decrypt(&r.encrypted_value, &encryption_key).unwrap_or_else(|_| "••••••••".into())
+            secrets_crypto::decrypt_vault(&r.encrypted_value, jwt).unwrap_or_else(|_| "••••••••".into())
         } else {
-            let decrypted = secrets_crypto::decrypt(&r.encrypted_value, &encryption_key).unwrap_or_default();
+            let decrypted = secrets_crypto::decrypt_vault(&r.encrypted_value, jwt).unwrap_or_default();
             mask_value(&decrypted)
         };
 
@@ -412,7 +417,9 @@ pub async fn update_secret(
         .bind(secret_id).fetch_one(&state.db).await
         .map_err(|e| internal_error("update secret", e))?;
 
-    let decrypted = secrets_crypto::decrypt(&row.encrypted_value, &encryption_key).unwrap_or_default();
+    let decrypted =
+        secrets_crypto::decrypt_vault(&row.encrypted_value, &state.config.jwt_secret)
+            .unwrap_or_default();
 
     Ok(Json(SecretEntry {
         id: row.id, vault_id: row.vault_id, key: row.key,
@@ -479,8 +486,6 @@ pub async fn inject_to_site(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     verify_vault(&state, vault_id, claims.sub).await?;
 
-    let encryption_key = get_encryption_key(&state.config.jwt_secret);
-
     // This writes DECRYPTED secrets into a site's nginx env on whichever host the
     // handle points at. Taking that from the caller's selection meant one tenant's
     // secrets could be written into the env of a machine their site does not run on
@@ -504,7 +509,7 @@ pub async fn inject_to_site(
     // Decrypt and build env content
     let mut env_pairs = Vec::new();
     for row in &rows {
-        let value = secrets_crypto::decrypt(&row.encrypted_value, &encryption_key)
+        let value = secrets_crypto::decrypt_vault(&row.encrypted_value, &state.config.jwt_secret)
             .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
         env_pairs.push(serde_json::json!({ "key": row.key, "value": value }));
     }
@@ -540,7 +545,7 @@ pub async fn pull(
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
     verify_vault(&state, vault_id, claims.sub).await?;
 
-    let encryption_key = get_encryption_key(&state.config.jwt_secret);
+    let jwt = &state.config.jwt_secret;
 
     let rows: Vec<SecretRow> = sqlx::query_as(
         "SELECT * FROM secrets WHERE vault_id = $1 ORDER BY key"
@@ -550,7 +555,7 @@ pub async fn pull(
     .map_err(|e| internal_error("pull", e))?;
 
     let entries: Vec<serde_json::Value> = rows.into_iter().map(|r| {
-        let value = secrets_crypto::decrypt(&r.encrypted_value, &encryption_key).unwrap_or_default();
+        let value = secrets_crypto::decrypt_vault(&r.encrypted_value, jwt).unwrap_or_default();
         serde_json::json!({ "key": r.key, "value": value, "type": r.secret_type })
     }).collect();
 

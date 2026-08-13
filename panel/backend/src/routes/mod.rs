@@ -1012,6 +1012,10 @@ pub fn router() -> Router<AppState> {
         .route("/api/settings/smtp/test", post(settings::test_email))
         .route("/api/settings/test-webhook", post(settings::test_webhook))
         .route("/api/settings/health", get(settings::health))
+        .route(
+            "/api/settings/credentials/reencrypt",
+            post(settings::reencrypt_credentials),
+        )
         .route("/api/settings/oauth-redirects", get(oauth::redirect_uris))
         // DNS Management
         // CDN Integration (BunnyCDN + Cloudflare CDN)

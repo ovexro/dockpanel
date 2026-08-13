@@ -1112,3 +1112,63 @@ pub async fn health(
         "uptime": uptime,
     })))
 }
+
+/// POST /api/settings/credentials/reencrypt — rewrite every stored credential
+/// under the current primary encryption key.
+///
+/// The operator-facing half of the `SECRETS_ENCRYPTION_KEY` story. Since
+/// v2.112.0 the decrypt chain tries every derivation a value could have been
+/// written under, so changing that variable is survivable — but until the rows
+/// are rewritten the install is leaning on a fallback arm and the old
+/// derivation can never be retired. This endpoint does the rewriting.
+///
+/// Idempotent and safe to re-run: a row already under the primary key is
+/// counted and skipped, and a row no candidate key can open is reported as
+/// `unreadable` and **left exactly as it is** — overwriting the only copy of a
+/// ciphertext we cannot read would turn a recoverable state into a permanent
+/// one, which is the failure this whole change exists to prevent.
+pub async fn reencrypt_credentials(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let reports =
+        crate::services::credential_reencrypt::reencrypt_all(&state.db, &state.config.jwt_secret)
+            .await;
+
+    let rewritten: i64 = reports.iter().map(|r| r.rewritten).sum();
+    let unreadable: i64 = reports.iter().map(|r| r.unreadable).sum();
+    let examined: i64 = reports.iter().map(|r| r.examined).sum();
+
+    activity::log_activity(
+        &state.db,
+        claims.sub,
+        &claims.email,
+        "settings.credentials.reencrypt",
+        Some("settings"),
+        None,
+        Some(&format!(
+            "examined {examined}, rewritten {rewritten}, unreadable {unreadable}"
+        )),
+        None,
+    )
+    .await;
+
+    if unreadable > 0 {
+        tracing::error!(
+            "credential re-encryption finished with {unreadable} unreadable value(s) — those rows \
+             were left untouched. They were encrypted with a key this process cannot derive; \
+             restoring the previous {} is the way back.",
+            crate::services::secrets_crypto::ENCRYPTION_KEY_ENV
+        );
+    }
+
+    Ok(Json(serde_json::json!({
+        "examined": examined,
+        "rewritten": rewritten,
+        "unreadable": unreadable,
+        "subjects": reports,
+        // Which surfaces this sweep claims to cover, so the answer to "did it
+        // touch my X?" is in the response rather than in someone's memory.
+        "covered_modules": crate::services::credential_reencrypt::COVERED_MODULES,
+    })))
+}

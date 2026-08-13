@@ -4,6 +4,65 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.112.0]
+
+### Fixed — setting `SECRETS_ENCRYPTION_KEY` destroyed every stored credential
+
+The panel supports a dedicated `SECRETS_ENCRYPTION_KEY` so that credential
+encryption does not depend on `JWT_SECRET`. Setting it on an install that
+already held data was silent, irreversible data loss.
+
+Key derivation was an if/else, not a union. With the variable unset the panel
+encrypts with `HKDF(jwt_secret)`; the moment the variable was set, derivation
+returned `HKDF(env)` instead — and `HKDF(jwt_secret)`, the key everything on
+disk had actually been encrypted with, was in **no arm of the decrypt chain at
+all**. Decryption then failed for every stored credential at once.
+
+What that failure did depended on where it landed, and neither half was
+visible:
+
+- Nineteen call sites take the decrypted value and use it as a password. The
+  fallback handed back the stored ciphertext verbatim, so those sites
+  authenticated with base64 text. Every remote service rejected it, and nothing
+  was logged panel-side — the failure looked like the remote service's fault.
+- The five TOTP sites failed closed, locking out every account with 2FA on.
+
+The same variable independently keys the Secrets Manager vault through a second
+derivation, which had only two decrypt arms and both were computed from
+whatever that one key source was — so setting the variable also stranded every
+vault secret, including the CMS admin password site creation stores there and
+any value marked for injection into a site's environment. That half failed
+quieter still: most vault reads render a mask or return an empty string rather
+than an error, so an injected `.env` would simply arrive blank.
+
+Nothing in the documentation, the installer or the sample config mentioned the
+variable, which is the only reason this has not happened to anyone.
+
+Four things changed.
+
+- **Key derivation is now an ordered union rather than an if/else**, in both
+  subsystems. Every derivation a value could have been written under stays in
+  the decrypt chain, so adding, changing or removing `SECRETS_ENCRYPTION_KEY`
+  is survivable and reversible — put the old value back and the data reads
+  again. New writes still use the operator's key when they have set one.
+- **A failed decrypt can now tell the two cases apart.** A legacy plaintext
+  credential and a ciphertext no key opens produced the identical error, which
+  is why the fallback was silent. Values we wrote are recognisable by shape, so
+  a key failure is logged at error level naming the variable, while a genuine
+  legacy plaintext is passed through as before.
+- **A re-encryption path**, which did not previously exist in any form:
+  `POST /api/settings/credentials/reencrypt` (admin) rewrites every stored
+  credential and vault secret under the current key, with a matching control in
+  Settings. It is idempotent, reports per-store counts, and a value it cannot
+  read is reported and **left untouched** rather than overwritten.
+- **`SECRETS_ENCRYPTION_KEY` is documented**, including the explicit warning
+  that on v2.111.0 and earlier setting it was irreversible, and that operators
+  on those versions must upgrade before they set it.
+
+Also fixed: `SECRETS_ENCRYPTION_KEY=` exported but blank was treated as a real
+key by the vault while the credential path treated it as unset, so the two
+subsystems disagreed about what had been configured. Both now read it as unset.
+
 ## [2.111.0]
 
 ### Fixed — pressing Update on a Docker App could destroy the app's data

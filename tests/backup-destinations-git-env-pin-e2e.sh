@@ -343,24 +343,68 @@ echo "§10 a vault read derives its key — the raw JWT secret is not the vault 
 # in scope. A hardcoded list of its call sites is precisely the arm that cannot
 # see the next one (lesson #182) — this defect sat in a file such a list would
 # never have named.
+#
+# s358 SPLIT THE READ PATH, so this section's subject moved (lesson #150) and
+# the shape it used to require of a reader is now itself the defect. A vault
+# READ goes through `secrets_crypto::decrypt_vault`, which tries every key
+# source a value could have been written under. Deriving ONE source with
+# `get_encryption_key` and handing it to the low-level `decrypt` is exactly what
+# made adding `SECRETS_ENCRYPTION_KEY` strand every vault secret on an install
+# that already held data — so writers must still derive, and readers must not.
 VAULT_CALL='secrets_crypto::(encrypt|decrypt)\('
+VAULT_SURFACE='secrets_crypto::(encrypt|decrypt|decrypt_vault)\('
 VAULT_FILES=()
 while IFS= read -r f; do
   [ -n "$f" ] && VAULT_FILES+=("$f")
-done < <(grep -rlE "$VAULT_CALL" panel/backend/src --include=*.rs 2>/dev/null | sort)
+done < <(grep -rlE "$VAULT_SURFACE" panel/backend/src --include=*.rs 2>/dev/null | sort)
 
 if [ "${#VAULT_FILES[@]}" -lt 3 ]; then
-  bad "enumerated only ${#VAULT_FILES[@]} files calling the vault cipher — implausible, so every arm below would pass having examined nothing"
+  bad "enumerated only ${#VAULT_FILES[@]} files on the vault surface — implausible, so every arm below would pass having examined nothing"
 else
-  ok "enumerated ${#VAULT_FILES[@]} files calling the vault cipher"
+  ok "enumerated ${#VAULT_FILES[@]} files on the vault surface"
 
   for f in "${VAULT_FILES[@]}"; do
-    if [ "$(countre "$f" 'get_encryption_key')" -gt 0 ]; then
-      ok "$(basename "$f") derives the vault key"
+    writes=$(countre "$f" 'secrets_crypto::encrypt\(')
+    if [ "$writes" -gt 0 ]; then
+      if [ "$(countre "$f" 'get_encryption_key')" -gt 0 ]; then
+        ok "$(basename "$f") derives the vault key before writing"
+      else
+        bad "$(basename "$f") writes with the vault cipher without ever deriving the key — its values are unreadable by every other caller"
+      fi
     else
-      bad "$(basename "$f") calls the vault cipher without ever deriving the key — its reads decrypt to Err and its writes are unreadable by every other caller"
+      ok "$(basename "$f") does not write to the vault, so it owes no derivation"
     fi
   done
+
+  # THE NEW INVARIANT, as an absence over the whole backend: outside the crypto
+  # module itself, nothing may call the SINGLE-SOURCE `decrypt`. That call
+  # cannot see a value written under a different key source, which is the
+  # one-way door this section now exists to keep shut.
+  SINGLE_SOURCE_READ='secrets_crypto::decrypt\('
+  SS_HITS=0
+  for f in "${VAULT_FILES[@]}"; do
+    case "$f" in *services/secrets_crypto.rs) continue ;; esac
+    n=$(countre "$f" "$SINGLE_SOURCE_READ")
+    if [ "$n" -gt 0 ]; then
+      SS_HITS=$((SS_HITS + n))
+      bad "$(basename "$f") reads the vault with the single-source cipher — a value written under any other key source is invisible to it"
+    fi
+  done
+  # POSITIVE CONTROL for the absence above: the same matcher, same corpus, must
+  # still find the multi-source read. Otherwise "found no violations" and "the
+  # grep never ran" are the same output (lesson #480).
+  MS_HITS=0
+  for f in "${VAULT_FILES[@]}"; do
+    MS_HITS=$((MS_HITS + $(countre "$f" 'secrets_crypto::decrypt_vault\(')))
+  done
+  if [ "$MS_HITS" -lt 1 ]; then
+    bad "control failed: found 0 multi-source vault reads, so the absence arm above proves nothing"
+  else
+    ok "control: $MS_HITS multi-source vault read(s) found, so the matcher works"
+  fi
+  if [ "$SS_HITS" -eq 0 ]; then
+    ok "no caller outside secrets_crypto reads the vault single-source"
+  fi
 fi
 
 # The defect itself, as a negative over the whole backend rather than over the
